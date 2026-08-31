@@ -47,6 +47,7 @@
     getInlineFolderTypeIconDataUri
   } from '../files/file-type-icons'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { visionModels } from '$lib/stores/vision-models.svelte'
   import { attachmentPreviewKind, fileUrlToPath, mimeFromPath, pathToFileUrl } from '$lib/mime'
   import { placeCaretAtEnd } from '../shared/rich-markdown'
   import AttachmentPreview from './AttachmentPreview.svelte'
@@ -709,8 +710,11 @@
 
   /** True when the selected harness cannot accept any prompt attachments. */
   let selectedHarnessLacksAttachments = $derived(selectedProvider?.supportsAttachments === false)
-  /** True when the catalog reports this model cannot see images. */
-  let selectedModelLacksVision = $derived(selectedModel?.attachment === false)
+  /** True when the catalog reports this model cannot see images and the app's
+   *  own vision record does not say otherwise. */
+  let selectedModelLacksVision = $derived(
+    selectedModel?.attachment === false && !visionModels.has(selectedModel.id)
+  )
   let hasImageAttachments = $derived(attachments.some(isImageAttachment))
   let attachmentBlockedNotice = $state(false)
   let textAttachmentError = $state('')

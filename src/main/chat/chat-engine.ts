@@ -8250,6 +8250,15 @@ export class ChatEngine {
         error,
         kind,
         selection,
+        ...(owningThread?.settings
+          ? {
+              requestingModel: {
+                harnessId: owningThread.settings.harnessId,
+                providerId: owningThread.settings.providerId,
+                modelId: owningThread.settings.modelId
+              }
+            }
+          : {}),
         partialOutput: '',
         imageCount: request.images.length,
         createdAt: Date.now()
@@ -9288,7 +9297,9 @@ export class ChatEngine {
    * Resolve a pending image-descriptor error card. `retry` re-runs the vision
    * model (with the supplied selection, persisting it to the thread when it
    * differs); `ignore` forwards whatever partial output exists to the text-only
-   * model so it can work with it or explain what is missing.
+   * model so it can work with it or explain what is missing; `false_positive`
+   * records the model that was executing the turn as vision-capable so the
+   * image descriptor never runs for it again, then continues like `ignore`.
    */
   async replyImageDescriptor(
     projectId: string,
@@ -9301,8 +9312,21 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     requestId = validateEntityId(requestId, 'Image descriptor request ID', 256)
-    if (action !== 'retry' && action !== 'ignore') {
+    if (action !== 'retry' && action !== 'ignore' && action !== 'false_positive') {
       throw new TypeError('Invalid image descriptor reply')
+    }
+    if (action === 'false_positive') {
+      const requestingModel =
+        this.pendingImageDescriptorDecisions.get(requestId)?.request.requestingModel
+      if (!requestingModel) {
+        throw new Error('This report needs the model that was executing the turn')
+      }
+      await this.storage.addVisionModel(requestingModel.modelId)
+      Logger.info('Vision capability recorded from user report', {
+        modelId: requestingModel.modelId,
+        providerId: requestingModel.providerId,
+        harnessId: requestingModel.harnessId
+      })
     }
     if (action === 'retry' && selection !== undefined) {
       selection = {
@@ -16249,7 +16273,11 @@ export class ChatEngine {
     return projectPath
   }
 
-  /** True when the selected model is explicitly marked as text-only by its catalog. */
+  /** True when the selected model is explicitly marked as text-only by its catalog
+   *  and the app's own vision record does not say otherwise. A model the user
+   *  reported as seeing images (e.g. a provider misreports vision) is treated as
+   *  vision-capable across every harness and provider, so the image descriptor
+   *  never runs for it and its context stays unpolluted. */
   private async modelLacksVision(projectId: string, settings: ThreadSettings): Promise<boolean> {
     const catalogs =
       this.providerCache.get(projectId) ??
@@ -16261,7 +16289,8 @@ export class ChatEngine {
           candidate.harnessId === settings.harnessId && candidate.id === settings.providerId
       ) ?? catalogs?.find((candidate) => candidate.id === settings.providerId)
     const model = provider?.models.find((candidate) => candidate.id === settings.modelId)
-    return model?.attachment === false
+    if (model?.attachment !== false) return false
+    return !(await this.storage.hasVisionModel(settings.modelId))
   }
 
   /** Last-resort image-descriptor model: the first vision-capable model in the

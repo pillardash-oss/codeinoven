@@ -1194,7 +1194,18 @@ export interface PermissionRequest {
 }
 
 /** How the user resolved a failed image-descriptor vision-model call. */
-export type ImageDescriptorReplyAction = 'retry' | 'ignore'
+export type ImageDescriptorReplyAction = 'retry' | 'ignore' | 'false_positive'
+
+/** A model identity without thinking preferences, e.g. the model executing a turn. */
+export type ModelIdentity = Pick<AgentModelSelection, 'harnessId' | 'providerId' | 'modelId'>
+
+/** A model the app recorded as vision-capable, reported by the user. */
+export interface VisionModelRecord {
+  /** Normalized model id (trimmed, lowercased); matches across harnesses and providers. */
+  id: string
+  /** When the model was reported as vision-capable. */
+  addedAt: number
+}
 
 /**
  * A failed image-descriptor vision-model call that needs a user decision.
@@ -1219,6 +1230,8 @@ export interface ImageDescriptorErrorRequest {
   kind: AgentProviderIssueKind
   /** Vision model that produced the failure. */
   selection?: AgentModelSelection
+  /** Model that was executing the turn and was assumed to lack vision, when known. */
+  requestingModel?: ModelIdentity
   /** Partial description generated before the failure, if any. */
   partialOutput: string
   /** Number of images that failed in this descriptor call. */

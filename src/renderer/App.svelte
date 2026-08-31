@@ -55,6 +55,7 @@
   import { updaterState } from '$lib/stores/updater.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
+  import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { clearDraftLabelCookie } from '$lib/stores/draft-label'
@@ -1638,6 +1639,9 @@
     }
     observeNavigationLocation()
     void loadConfig()
+    // Fire-and-forget: the app's own record of models reported as
+    // vision-capable, consulted before any vision-capability gate.
+    void visionModels.load().catch(() => {})
     // Fire-and-forget: probes opted-in harnesses and docks quiet auto-updates.
     void harnessLifecycleStore.autoUpdateOnStartup()
     // Workspace owns the initial project/thread hydration. Keeping this signal

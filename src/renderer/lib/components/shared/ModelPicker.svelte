@@ -24,6 +24,7 @@
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import { visionModels } from '$lib/stores/vision-models.svelte'
   import { getVendorSlug } from '$lib/vendor-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type { ProviderCatalog, ProviderModel, ThinkingLevel, ThinkingPreset } from '$shared/types'
@@ -394,10 +395,12 @@
   }
 
   /** Models able to see images. When the catalog does not report the flag,
-   *  the model is treated as vision-capable so it is never hidden incorrectly. */
+   *  the model is treated as vision-capable so it is never hidden incorrectly;
+   *  a model recorded in the app's own vision report also passes even when the
+   *  catalog claims text-only. */
   function passesVisionFilter(model: ProviderModel): boolean {
     if (!visionOnly) return true
-    return model.attachment !== false
+    return model.attachment !== false || visionModels.has(model.id)
   }
 
   function filterEntries(entries: ModelEntry[], value: string): ModelEntry[] {

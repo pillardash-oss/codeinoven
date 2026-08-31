@@ -22,6 +22,7 @@ import type {
   NativeSkillContent,
   AppConfig,
   AppConfigPatch,
+  VisionModelRecord,
   BaseUrlProvider,
   BaseUrlProviderCopyClipboardRequest,
   BaseUrlProviderCreateRequest,
@@ -1066,6 +1067,7 @@ export interface IpcInvokeContract {
   >
   'config:get': Contract<[], AppConfig>
   'config:update': Contract<[patch: AppConfigPatch], AppConfig>
+  'visionModels:list': Contract<[], VisionModelRecord[]>
   'config:syncAgentRole': Contract<[role: AgentRole, selection: AgentModelSelection], AppConfig>
   'cioPrompts:list': Contract<[], CioPromptSetting[]>
   'cioPrompts:save': Contract<[id: CioPromptId, template: string], CioPromptSetting[]>

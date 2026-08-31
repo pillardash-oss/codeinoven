@@ -148,6 +148,7 @@
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { visionModels } from '$lib/stores/vision-models.svelte'
   import {
     responseReferencesState,
     type ResponseReferenceAnchor
@@ -4271,6 +4272,22 @@
     } catch (error) {
       errorMessage =
         error instanceof Error ? error.message : 'The image descriptor could not be retried.'
+      throw error
+    }
+  }
+
+  /** Record the model executing the turn as vision-capable (the descriptor ran
+   *  for it by mistake) and continue the blocked turn without a description. */
+  async function reportImageDescriptorFalsePositive(requestId: string): Promise<void> {
+    const { projectId, id } = thread
+    const reportedModel = pendingImageDescriptorError?.requestingModel?.modelId
+    try {
+      await invoke('agent:replyImageDescriptor', projectId, id, requestId, 'false_positive')
+      if (reportedModel) visionModels.markReported(reportedModel)
+      pendingImageDescriptorError = null
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The vision report could not be saved.'
       throw error
     }
   }
@@ -10586,6 +10603,7 @@
                     await replyImageDescriptor(requestId, 'retry', selection)
                   }}
                   onIgnore={(requestId) => replyImageDescriptor(requestId, 'ignore')}
+                  onFalsePositive={(requestId) => reportImageDescriptorFalsePositive(requestId)}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                   onReorderFavorite={(draggedKey, targetKey, position) =>

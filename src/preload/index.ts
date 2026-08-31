@@ -577,7 +577,8 @@ const INVOKE_CHANNELS = [
   'heartbeat:create',
   'heartbeat:update',
   'heartbeat:delete',
-  'heartbeat:toggle'
+  'heartbeat:toggle',
+  'visionModels:list'
 ] as const satisfies readonly InvokeChannel[]
 
 type MissingInvokeChannel = Exclude<InvokeChannel, (typeof INVOKE_CHANNELS)[number]>

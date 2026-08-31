@@ -2504,6 +2504,7 @@ export function registerIpcHandlers(
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('config:get', () => storage.getConfig())
+    ipcMain.handle('visionModels:list', () => storage.getVisionModels())
   }
   const projectActionsPath = (projectId: string): string =>
     `projects/${validateEntityId(projectId, 'Project ID')}/actions.json`

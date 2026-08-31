@@ -953,7 +953,7 @@ export class RemoteRpcDispatcher {
           this.string(args[0]),
           this.string(args[1]),
           this.string(args[2]),
-          args[3] as 'retry' | 'ignore',
+          args[3] as 'retry' | 'ignore' | 'false_positive',
           args[4] as import('../../lib/types').AgentModelSelection | undefined
         )
       case 'agent:listQuestions':
