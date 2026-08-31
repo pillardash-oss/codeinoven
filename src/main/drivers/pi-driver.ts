@@ -966,6 +966,11 @@ export function mapPiRecord(
   }
 
   if (type === 'auto_retry_start') {
+    const message = stringValue(entry['errorMessage']) ?? 'Pi is waiting to retry'
+    // When the retry is driven by a usage window, the message carries a
+    // parseable reset so the card can show a concrete countdown and the
+    // scheduler can resume at the right moment instead of guessing.
+    const retryAt = parseUsageResetAt(message)
     return {
       events: [
         {
@@ -975,9 +980,10 @@ export function mapPiRecord(
             state: 'waiting',
             issue: {
               kind: 'provider_unavailable',
-              message: stringValue(entry['errorMessage']) ?? 'Pi is waiting to retry',
+              message,
               harnessId: 'pi',
-              retryable: true
+              retryable: true,
+              ...(retryAt === undefined ? {} : { retryAt })
             }
           }
         }
@@ -998,6 +1004,18 @@ export function mapPiRecord(
         ]
       }
     }
+    const finalError =
+      stringValue(entry['finalError']) ??
+      stringValue(entry['errorMessage']) ??
+      'Pi retries failed'
+    // When the retries were exhausted against a usage window, the final error
+    // still classifies as a reset wait — surface it with a concrete retryAt so
+    // the engine converts it into the will-retry card and auto-resumes later,
+    // instead of parking the thread on a terminal error.
+    const kind = classifyProviderIssue(finalError)
+    const message = extractProviderErrorEnvelope(finalError).message
+    const retryAt =
+      kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
     return {
       events: [
         {
@@ -1006,13 +1024,12 @@ export function mapPiRecord(
           status: {
             state: 'error',
             issue: {
-              kind: 'provider_unavailable',
-              message:
-                stringValue(entry['finalError']) ??
-                stringValue(entry['errorMessage']) ??
-                'Pi retries failed',
+              kind,
+              message,
+              rawError: finalError,
               harnessId: 'pi',
-              retryable: false,
+              retryable: retryAt !== undefined,
+              ...(retryAt === undefined ? {} : { retryAt }),
               ...(numberValue(entry['attempt']) ? { attempt: numberValue(entry['attempt']) } : {})
             }
           }

@@ -16681,6 +16681,22 @@ export class ChatEngine {
     this.observeChildSession(driverId, event)
 
     if (event.type === 'session.status') {
+      // A terminal status carrying a usage/rate-limit reset is the unified
+      // will-retry wait, not an error. Some harnesses (pi's `agent_settled`)
+      // report the exhausted usage window through `session.status` instead of
+      // `session.error`, and that path never reached the provider-failure
+      // pipeline — the card counted down but no scheduler record existed, so
+      // nothing resumed at zero and the thread sat on an error status.
+      if (
+        event.status.state === 'error' &&
+        eventOwner &&
+        !eventOwner.ephemeral &&
+        !this.userAbortedSessions.has(event.sessionId) &&
+        isUsageResetWaitIssue(event.status.issue)
+      ) {
+        this.enterRetryWait(event.sessionId, event.status.issue, event.status.issue.message)
+        return
+      }
       const currentStatus = this.sessionStatuses.get(event.sessionId)
       if (event.status.state !== 'idle' || currentStatus?.state !== 'error') {
         this.sessionStatuses.set(event.sessionId, event.status)
