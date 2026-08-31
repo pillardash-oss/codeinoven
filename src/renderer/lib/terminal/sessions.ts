@@ -140,7 +140,8 @@ class TerminalSessionManager {
     container: HTMLDivElement,
     projectId: string,
     script: string,
-    variables: Record<string, string>
+    variables: Record<string, string>,
+    scopeBucketId?: string
   ): Promise<void> {
     if (session.host.parentElement !== container) container.replaceChildren(session.host)
     session.fitAddon.fit()
@@ -155,7 +156,8 @@ class TerminalSessionManager {
           script,
           variables,
           session.term.cols,
-          session.term.rows
+          session.term.rows,
+          scopeBucketId
         )
       } catch (error) {
         session.ptySpawned = false

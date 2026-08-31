@@ -109,8 +109,9 @@ export class PtyService {
         script: string,
         variables: Record<string, string>,
         cols: number,
-        rows: number
-      ) => this.createAction(id, projectId, script, variables, cols, rows)
+        rows: number,
+        scopeBucketId?: string
+      ) => this.createAction(id, projectId, script, variables, cols, rows, scopeBucketId)
     )
     ipcMain.on('pty:write', (_, id: string, data: string) => this.write(id, data))
     ipcMain.on('pty:resize', (_, id: string, cols: number, rows: number) =>
@@ -293,7 +294,8 @@ export class PtyService {
     script: string,
     variables: Record<string, string>,
     cols: number,
-    rows: number
+    rows: number,
+    scopeBucketId?: string
   ): Promise<{ id: string; pid: number }> {
     const project = await this.projectManager.getProject(projectId)
     if (!project || project.hidden || project.source !== 'local' || !project.path) {
@@ -305,6 +307,18 @@ export class PtyService {
         ([name, value]) => /^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) && typeof value === 'string'
       )
     )
+
+    // Resolve the action root through the active thread's scope when one is
+    // supplied, so scripts run inside the checked-out worktree instead of the
+    // main project directory — matching interactive terminal behavior.
+    const cwd =
+      scopeBucketId && this.scopeRoots
+        ? await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
+        : project.path
+    if (!cwd || !existsSync(cwd)) {
+      throw new Error(`Project directory is unavailable`)
+    }
+
     this.destroy(id)
     const shell = resolveShell()
     const createdAt = Date.now()
@@ -312,7 +326,7 @@ export class PtyService {
       name: 'xterm-256color',
       cols,
       rows,
-      cwd: project.path,
+      cwd,
       env: { ...buildShellEnv(), ...safeVariables }
     })
     proc.onData((data) => sendToRenderer(this.sender, `pty:data:${id}`, data))
@@ -323,19 +337,19 @@ export class PtyService {
         type: 'exit',
         terminalId: id,
         projectId,
-        cwd: project.path,
+        cwd,
         shell,
         pid: proc.pid,
         exitCode,
         timestamp: Date.now()
       })
     })
-    this.sessions.set(id, { id, process: proc, projectId, cwd: project.path, shell, createdAt })
+    this.sessions.set(id, { id, process: proc, projectId, cwd, shell, createdAt })
     await this.recordEvent({
       type: 'create',
       terminalId: id,
       projectId,
-      cwd: project.path,
+      cwd,
       shell,
       pid: proc.pid,
       source: 'project_action',

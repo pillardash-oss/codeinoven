@@ -7,9 +7,10 @@
     projectId: string
     script: string
     variables: Record<string, string>
+    scopeBucketId?: string
   }
 
-  let { terminalId, projectId, script, variables }: Props = $props()
+  let { terminalId, projectId, script, variables, scopeBucketId }: Props = $props()
   let error = $state<string | null>(null)
 
   const attachTerminal: Attachment<HTMLDivElement> = (container) => {
@@ -17,7 +18,14 @@
     void terminalSessions.getOrCreateAction(terminalId).then(async (session: TerminalSession) => {
       if (cancelled) return
       try {
-        await terminalSessions.attachAction(session, container, projectId, script, variables)
+        await terminalSessions.attachAction(
+          session,
+          container,
+          projectId,
+          script,
+          variables,
+          scopeBucketId
+        )
       } catch (reason) {
         if (!cancelled) error = reason instanceof Error ? reason.message : String(reason)
       }

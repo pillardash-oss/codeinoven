@@ -2008,7 +2008,8 @@ export interface IpcInvokeContract {
       script: string,
       variables: Record<string, string>,
       columns: number,
-      rows: number
+      rows: number,
+      scopeBucketId?: string
     ],
     { id: string; pid: number }
   >

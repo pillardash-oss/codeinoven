@@ -169,8 +169,14 @@
     updateConfig?: (patch: AppConfigPatch) => Promise<void>
   }
 
-  let { mode, active = true, scopeViewActive = false, navigate, config, updateConfig }: Props =
-    $props()
+  let {
+    mode,
+    active = true,
+    scopeViewActive = false,
+    navigate,
+    config,
+    updateConfig
+  }: Props = $props()
 
   const INITIAL_THREAD_LIMIT = 100
   const HISTORY_PAGE_LIMIT = 50
@@ -4028,7 +4034,10 @@
                   />
                 {/if}
               {:else if activeContextTab.kind === 'actions'}
-                <ActionsPanel projectId={activeContextTab.projectId} />
+                <ActionsPanel
+                  projectId={activeContextTab.projectId}
+                  scopeBucketId={selectedThread?.scopeBucketId}
+                />
               {:else if activeContextTab.kind === 'browser'}
                 {#if browserFullscreenTabId === activeContextTab.id}
                   <div class="flex h-full items-center justify-center text-xs text-muted">
