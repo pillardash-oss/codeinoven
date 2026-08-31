@@ -51,6 +51,64 @@ export function extractProviderErrorEnvelope(raw: string): ProviderErrorEnvelope
 }
 
 /**
+ * A harness-emitted usage-cap notice is a short, plain-text system message —
+ * anything longer or formatted is agent prose, not a notice.
+ */
+const USAGE_LIMIT_NOTICE_MAX_LENGTH = 300
+/** The limit phrasing must lead the notice; mid-prose mentions are agent prose. */
+const USAGE_LIMIT_NOTICE_LEAD_LENGTH = 120
+/**
+ * Sentence/line terminator used to isolate a notice's leading phrase. Real
+ * notices lead with the limit phrasing in their first short sentence or line;
+ * agent prose buries it mid-sentence.
+ */
+const USAGE_LIMIT_NOTICE_SENTENCE_SPLIT = /[.!?\n]/
+
+/**
+ * True when a plain assistant message actually IS a harness usage/rate-limit
+ * notice rather than an ordinary agent answer that merely discusses limits.
+ *
+ * Some harnesses (opencode observed in the wild) emit their usage-cap notice
+ * as a completed assistant message ("5-hour usage limit reached. Resets in
+ * 1hr 53min."), which the chat engine re-classifies into a retry wait. But an
+ * agent's ordinary answer can also talk about usage limits at length — and
+ * classifying that prose as a limit notice splashes the entire agent output
+ * into the usage-limit card. A genuine notice is short, unformatted text whose
+ * limit phrasing leads the message; agent prose is long, markdown-formatted,
+ * or only mentions limits mid-sentence.
+ */
+export function isUsageLimitNoticeText(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed || trimmed.length > USAGE_LIMIT_NOTICE_MAX_LENGTH) return false
+  // Agent answers are markdown; harness notices are plain text.
+  if (
+    /(^|\n)#{1,6}\s/.test(trimmed) ||
+    trimmed.includes('**') ||
+    trimmed.includes('```') ||
+    /(^|\n)\s*(?:[-*+]|\d+\.)\s/.test(trimmed) ||
+    trimmed.includes('](')
+  ) {
+    return false
+  }
+  // The limit phrasing must lead the notice: within a short first sentence
+  // or line. Agent prose that merely mentions limits mid-sentence (even early
+  // in the text) does not qualify.
+  const lead = (trimmed.split(USAGE_LIMIT_NOTICE_SENTENCE_SPLIT, 1)[0] ?? trimmed)
+    .trim()
+    .toLowerCase()
+  if (!lead || lead.length > USAGE_LIMIT_NOTICE_LEAD_LENGTH) return false
+  return (
+    lead.includes('usage limit') ||
+    lead.includes('rate limit') ||
+    lead.includes('session limit') ||
+    lead.includes('quota') ||
+    lead.includes('too many requests') ||
+    lead.includes('limit reached') ||
+    lead.includes('limit exceeded')
+  )
+}
+
+/**
  * Usage/quota errors commonly embed an ISO-8601 reset time in prose (e.g. "Your
  * limit resets at 2026-09-04T17:52:23.222Z."). Extract it so the retry
  * scheduler and UI get a concrete, authoritative `retryAt` instead of guessing
