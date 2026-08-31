@@ -16,7 +16,7 @@ describe('cio-utility contract', () => {
   })
 
   it('documents the diagnostics actions and read-only guarantee in the prompt', () => {
-    expect(CIO_UTILITY_SETUP_PROMPT).toContain('utility_diagnostics')
+    expect(CIO_UTILITY_SETUP_PROMPT).toContain(UTILITY_DIAGNOSTICS_TOOL_NAME)
     for (const action of ['lookup_thread', 'search_threads', 'read_messages', 'read_log']) {
       expect(CIO_UTILITY_SETUP_PROMPT).toContain(action)
     }

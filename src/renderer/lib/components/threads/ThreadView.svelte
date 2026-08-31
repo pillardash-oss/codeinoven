@@ -16,8 +16,6 @@
   /** Messages mounted on the very first frame after a thread switch — only the
    *  newest tail; the rest of the loaded page reveals across the next frames. */
   const TAIL_RENDER_INITIAL_LIMIT = 12
-  /** How many more messages mount per frame while the tail window grows. */
-  const TAIL_RENDER_GROW_STEP = 16
   /** Delay between tail-window growth steps — one frame lets each batch paint. */
   const TAIL_RENDER_GROW_DELAY_MS = 16
   const HISTORY_WINDOW_SIZE = 40
@@ -463,6 +461,8 @@
   // dropped by the exact-match gate below — that used to require leaving and
   // returning to the thread (forcing a remount) before the permission card
   // would appear.
+  // Non-reactive bookkeeping: only read inside event handlers, never in the template.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
   const knownEphemeralSessionIds = new Set<string>()
   // Intentional initial-value capture — the view is remounted (keyed) per thread.
   // For controller-driven conversations, the controller owns the settings proxy.

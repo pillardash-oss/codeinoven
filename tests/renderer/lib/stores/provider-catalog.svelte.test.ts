@@ -53,7 +53,7 @@ function makeStorage(initial: Record<string, string> = {}): Map<string, string> 
  * at startup. Returns the store plus the agent:event handler captured from the
  * mocked subscribe so tests can fire main-process broadcasts.
  */
-async function loadStore(mirror: Record<string, string>): Promise<{
+async function loadStore(mirror: Record<string, ProviderCatalog[]>): Promise<{
   providerCatalog: typeof import('$lib/stores/provider-catalog.svelte').providerCatalog
   fireAgentEvent: (event: AgentEvent) => void
   storage: Map<string, string>

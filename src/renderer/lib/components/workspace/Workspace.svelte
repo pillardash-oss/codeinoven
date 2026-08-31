@@ -36,7 +36,6 @@
     History,
     Info,
     Loader2,
-    Minimize2,
     MessageCircleDashed,
     Pause,
     Play,
@@ -113,7 +112,6 @@
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
@@ -4763,17 +4761,15 @@
     {#snippet icon()}
       <SquareTerminal size={11} class="shrink-0" />
     {/snippet}
-    {#snippet children()}
-      {#if terminalTab?.kind === 'terminal'}
-        {#key terminalFullscreenTabId}
-          <TerminalPanel
-            terminalId={terminalTab.terminalId}
-            projectId={terminalTab.projectId}
-            scopeBucketId={workspaceState.activeScopeBucketIdFor(terminalTab.projectId)}
-          />
-        {/key}
-      {/if}
-    {/snippet}
+    {#if terminalTab?.kind === 'terminal'}
+      {#key terminalFullscreenTabId}
+        <TerminalPanel
+          terminalId={terminalTab.terminalId}
+          projectId={terminalTab.projectId}
+          scopeBucketId={workspaceState.activeScopeBucketIdFor(terminalTab.projectId)}
+        />
+      {/key}
+    {/if}
   </FullscreenPanelDialog>
 {/if}
 
@@ -4796,11 +4792,9 @@
       {#snippet icon()}
         <Globe2 size={11} class="shrink-0" />
       {/snippet}
-      {#snippet children()}
-        {#key browserFullscreenTabId}
-          <BrowserPanel tab={browserTab} fullscreen />
-        {/key}
-      {/snippet}
+      {#key browserFullscreenTabId}
+        <BrowserPanel tab={browserTab} fullscreen />
+      {/key}
     </FullscreenPanelDialog>
   {/if}
 {/if}

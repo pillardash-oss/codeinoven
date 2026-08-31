@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Dialog } from 'bits-ui'
-  import { Maximize2, Minimize2, Plus, X } from '@lucide/svelte'
+  import { Minimize2, Plus, X } from '@lucide/svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import type { Snippet } from 'svelte'
 
