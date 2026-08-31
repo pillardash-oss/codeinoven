@@ -314,6 +314,10 @@ interface AntigravityTurnState {
   started: boolean
   /** Latest normalized usage metadata reported for this turn, when any. */
   normalizedUsage?: NormalizedUsage
+  /** Wall-clock anchor for the reconstructed step timeline (first stream event). */
+  timelineAnchor: number
+  /** Cumulative reported step durations, advancing in agy's step order. */
+  elapsedMs: number
 }
 
 function antigravityMessage(state: AntigravityTurnState): AgentMessage {
@@ -324,6 +328,26 @@ function antigravityMessage(state: AntigravityTurnState): AgentMessage {
     createdAt: state.createdAt,
     harnessId: 'antigravity',
     ...(state.normalizedUsage ? { normalizedUsage: state.normalizedUsage } : {})
+  }
+}
+
+/**
+ * A textless, timed reasoning part. Antigravity strips thought summaries from
+ * headless streams, so the duration is the only observable trace of a thinking
+ * phase; the block renders as a timed "Thinking" entry with no expandable text.
+ */
+function reasoningPart(
+  state: AntigravityTurnState,
+  stepIndex: number | undefined,
+  start: number,
+  end: number
+): Extract<AgentPart, { type: 'reasoning' }> {
+  return {
+    type: 'reasoning',
+    id: `${state.messageId}:thinking:${stepIndex ?? state.parts.length}`,
+    messageID: state.messageId,
+    text: '',
+    time: { start, end }
   }
 }
 
@@ -376,6 +400,9 @@ export function mapAntigravityRecord(
 ): CliLineParseResult | null {
   const entry = record(value)
   if (!entry) return null
+  // The step timeline is reconstructed from per-step `duration_seconds`, so it
+  // must be anchored to the wall clock when the very first event arrives.
+  if (state.timelineAnchor === 0) state.timelineAnchor = Date.now()
   const eventType = stringValue(entry['event'])
   const conversationId = stringValue(entry['conversation_id'])
   const base: CliLineParseResult = conversationId ? { nativeSessionId: conversationId } : {}
@@ -470,10 +497,39 @@ export function mapAntigravityRecord(
   const terminal = step['state'] === 'DONE' || step['state'] === 'ERROR'
   const stepIndex = numberValue(step['step_index'])
   const stepUsage = usageEvent(state, step['usage'], context.sessionId)
+  // Each DONE/ERROR step reports the wall-clock time that step alone consumed.
+  // Accumulating them in arrival order reconstructs a per-step timeline so
+  // thinking phases can carry an honest start/end even though agy emits no
+  // timestamps.
+  const durationMs = (numberValue(step['duration_seconds']) ?? 0) * 1000
+  const stepStart = state.timelineAnchor + state.elapsedMs
+  if (terminal) state.elapsedMs += durationMs
 
   if (stepType === 'agent_response') {
     const delta = stringValue(step['text_delta'])
-    if (!delta) return { ...base, events: stepUsage ? [stepUsage] : [] }
+    if (!delta) {
+      // Antigravity strips thought summaries from headless streams: the
+      // concatenated `text_delta` stream always equals the final `response`,
+      // even when the step consumed hundreds of thinking tokens. A completed
+      // agent_response step that carries thinking tokens but no text is the
+      // only stream-level trace of inter-tool reasoning, so surface it as a
+      // timed reasoning part; the working trace renders it as a Thinking entry.
+      const thinkingTokens =
+        numberProperty(record(step['usage']) ?? {}, 'thinking_tokens', 'thinkingTokens') ?? 0
+      if (terminal && thinkingTokens > 0 && durationMs > 0) {
+        const part = reasoningPart(state, stepIndex, stepStart, stepStart + durationMs)
+        upsertPart(state, part)
+        return {
+          ...base,
+          messages: [antigravityMessage(state)],
+          events: [
+            { type: 'message.part.updated', sessionId: context.sessionId, part },
+            ...(stepUsage ? [stepUsage] : [])
+          ]
+        }
+      }
+      return { ...base, events: stepUsage ? [stepUsage] : [] }
+    }
     state.text += delta
     upsertPart(state, textPart(state))
     const events: SessionAgentEvent[] = [
@@ -705,7 +761,9 @@ export class AntigravityDriver extends PersistentCliDriver {
       createdAt: Date.now(),
       text: '',
       parts: [],
-      started: false
+      started: false,
+      timelineAnchor: 0,
+      elapsedMs: 0
     })
     return { command: 'agy', args, env: buildProcessEnvironment() }
   }
