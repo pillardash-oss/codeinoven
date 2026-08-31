@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MessageCircleDashed, MessageCirclePlus, MessageSquareDashed } from '@lucide/svelte'
+  import { GitFork, MessageCircleDashed, MessageCirclePlus, MessageSquareDashed } from '@lucide/svelte'
 
   interface Props {
     text: string
@@ -10,10 +10,12 @@
     onElaborate?: () => void
     /** Opening a nested temp chat makes no sense inside one; hidden when omitted. */
     onQuickChat?: () => void
+    /** Spinning the selection off into a fresh thread is always valid. */
+    onNewThread?: () => void
     onClose: () => void
   }
 
-  let { text, x, y, onAdd, onElaborate, onQuickChat, onClose }: Props = $props()
+  let { text, x, y, onAdd, onElaborate, onQuickChat, onNewThread, onClose }: Props = $props()
 </script>
 
 <button
@@ -59,6 +61,17 @@
     >
       <MessageSquareDashed size={13} />
       Quick chat
+    </button>
+  {/if}
+  {#if onNewThread}
+    <button
+      type="button"
+      class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+      title="Start a new thread with this selection already in the composer"
+      onclick={onNewThread}
+    >
+      <GitFork size={13} />
+      New thread
     </button>
   {/if}
 </div>

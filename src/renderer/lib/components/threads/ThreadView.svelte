@@ -155,7 +155,7 @@
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
+  import { DEFAULT_SCOPE_BUCKET_ID, DEFAULT_THREAD_TITLE } from '$shared/types'
   import type {
     Thread,
     ThreadMessageCursor,
@@ -2051,6 +2051,31 @@
       settings,
       false
     )
+  }
+
+  /** Spin the selection off into a brand-new thread in the same project: the
+   *  text is seeded as the fresh composer's draft so the user can immediately
+   *  kick off a task from it. */
+  function openSelectionInNewThread(): void {
+    const selection = responseSelection
+    if (!selection) return
+    closeResponseSelection()
+    const project = scopeState.projectRecords.find((p) => p.id === thread.projectId) ?? null
+    invoke('thread:create', {
+      projectId: thread.projectId,
+      providerId: thread.providerId,
+      title: DEFAULT_THREAD_TITLE,
+      workingDirectory: thread.workingDirectory,
+      settings: thread.settings,
+      scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
+    })
+      .then((newThread) => {
+        rendererRecovery.setDraft(newThread.projectId, newThread.id, selection.text)
+        workspaceState.openThread(newThread, project)
+      })
+      .catch((error) => {
+        reportError(error, 'The new thread could not be created.')
+      })
   }
 
   let spec = $state<EngineeringSpec | null>(null)
@@ -9206,6 +9231,7 @@
     onAdd={addResponseReference}
     onElaborate={hasController ? undefined : () => openTemporarySelectionChat('elaborate')}
     onQuickChat={hasController ? undefined : () => openTemporarySelectionChat('quick')}
+    onNewThread={openSelectionInNewThread}
     onClose={closeResponseSelection}
   />
 {/if}
