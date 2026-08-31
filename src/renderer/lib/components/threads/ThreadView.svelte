@@ -2054,12 +2054,16 @@
   }
 
   /** Spin the selection off into a brand-new thread in the same project: the
-   *  text is seeded as the fresh composer's draft so the user can immediately
-   *  kick off a task from it. */
+   *  text is seeded as the fresh composer's draft, wrapped in a txt code block
+   *  with breathing room above and below so the user can add context around
+   *  it, and immediately kick off a task from it. The fence widens when the
+   *  selection itself contains triple backticks so the block stays intact. */
   function openSelectionInNewThread(): void {
     const selection = responseSelection
     if (!selection) return
     closeResponseSelection()
+    const fence = selection.text.includes('```') ? '````' : '```'
+    const draft = `\n${fence}txt\n${selection.text}\n${fence}\n`
     const project = scopeState.projectRecords.find((p) => p.id === thread.projectId) ?? null
     invoke('thread:create', {
       projectId: thread.projectId,
@@ -2070,7 +2074,7 @@
       scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
     })
       .then((newThread) => {
-        rendererRecovery.setDraft(newThread.projectId, newThread.id, selection.text)
+        rendererRecovery.setDraft(newThread.projectId, newThread.id, draft)
         workspaceState.openThread(newThread, project)
       })
       .catch((error) => {
