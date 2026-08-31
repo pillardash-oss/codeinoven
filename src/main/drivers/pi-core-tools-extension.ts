@@ -585,7 +585,14 @@ export default function codeInOvenCoreToolsExtension(pi) {
     const available = registry.getAvailable()
     const byId = available.find(function (candidate) { return candidate.id === reference })
     if (byId) return byId
-    return registry.getAll().find(function (candidate) { return candidate.id === reference })
+    const all = registry.getAll()
+    return (
+      all.find(function (candidate) { return candidate.id === reference }) ??
+      // Case-insensitive fallback: model ids arrive from free-form tool args.
+      all.find(function (candidate) {
+        return candidate.id.toLowerCase() === reference.toLowerCase()
+      })
+    )
   }
 
   /** Built-in worker tools wrapped with the same permission gate as the primary. */
@@ -663,6 +670,9 @@ export default function codeInOvenCoreToolsExtension(pi) {
     }
     subAgentCounter += 1
     const agentId = 'cio-subagent-' + subAgentCounter
+    // Declared before the session is built: gatedWorkerTools receives this
+    // array at creation time, so it must not sit in the temporal dead zone.
+    const touchedFiles = []
     let session
     try {
       const sessionDir = process.env.CIO_SUBAGENT_SESSION_DIR
@@ -694,7 +704,6 @@ export default function codeInOvenCoreToolsExtension(pi) {
         session.modelRuntime.registerProvider(providerId, config)
       } catch {}
     }
-    const touchedFiles = []
     const record = {
       agentId,
       purpose: spec.purpose,

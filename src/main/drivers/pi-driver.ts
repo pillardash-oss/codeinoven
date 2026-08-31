@@ -441,6 +441,28 @@ function subagentActivityFromPayload(
   }
 }
 
+/**
+ * Activity patch for a spawn call whose tool result is a plain failure object
+ * (`{ spawned: false, error }`) instead of a `cio-subagent:` marker payload.
+ * Failed spawns carry no agentId, so subagentActivityFromPayload skips them —
+ * without this patch the driver would mark the card 'completed' with no error,
+ * hiding why the sub-agent never ran.
+ */
+function spawnFailurePatch(output: string | undefined): AgentSubagentActivity | undefined {
+  if (!output) return undefined
+  const payload = parseRecord(output)
+  if (!payload || stringValue(payload['agentId'])) return undefined
+  const error = stringValue(payload['error'])
+  if (!error) return undefined
+  return {
+    status: 'error',
+    agent: 'sub-agent',
+    description: 'sub-agent',
+    background: false,
+    error
+  }
+}
+
 /** Map one Pi content block into a CodeInOven AgentPart. */
 function mapPiContentBlock(
   blockValue: unknown,
@@ -712,6 +734,7 @@ export function mapPiRecord(
         existing?.activity ?? cioSubagentPart(messageId, callId, record(entry['args'])).activity
       // The final result carries the full structured sub-agent payload.
       const payloadPatch = subagentActivityFromPayload(parseRecord(output ?? ''))
+      const failurePatch = payloadPatch ? undefined : spawnFailurePatch(output)
       return {
         events: [
           {
@@ -724,8 +747,10 @@ export function mapPiRecord(
               callID: callId,
               activity: {
                 ...base,
-                ...(payloadPatch ?? {}),
-                status: failed ? 'error' : (payloadPatch?.status ?? 'completed'),
+                ...(payloadPatch ?? failurePatch ?? {}),
+                status: failed
+                  ? 'error'
+                  : (payloadPatch?.status ?? failurePatch?.status ?? 'completed'),
                 time: { start: base.time?.start ?? Date.now(), end: Date.now() }
               }
             }
@@ -783,6 +808,7 @@ export function mapPiRecord(
         const base =
           existingSubagent?.activity ?? cioSubagentPart(messageId, callId, undefined).activity
         const payloadPatch = subagentActivityFromPayload(parseRecord(output ?? ''))
+        const failurePatch = payloadPatch ? undefined : spawnFailurePatch(output)
         events.push({
           type: 'message.part.updated',
           sessionId: context.sessionId,
@@ -793,8 +819,10 @@ export function mapPiRecord(
             callID: callId,
             activity: {
               ...base,
-              ...(payloadPatch ?? {}),
-              status: failed ? 'error' : (payloadPatch?.status ?? 'completed'),
+              ...(payloadPatch ?? failurePatch ?? {}),
+              status: failed
+                ? 'error'
+                : (payloadPatch?.status ?? failurePatch?.status ?? 'completed'),
               time: { start: base.time?.start ?? Date.now(), end: Date.now() }
             }
           }
