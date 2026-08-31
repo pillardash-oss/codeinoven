@@ -150,4 +150,4 @@ Release builds are available for:
 
 CodeInOven is licensed under the [PolyForm Noncommercial 1.0.0](LICENSE) license.
 
-You are free to use, modify, and redistribute CodeInOven for **personal, educational, and non-commercial** purposes. Commercial use — including use by companies or organizations in the course of business — requires a separate commercial license from [Pillardash Solutions Limited](mailto:hey@pillardash.com).
+You are free to use, modify, and redistribute CodeInOven for **personal, educational, and non-commercial** purposes. Commercial use — including use by companies or organizations in the course of business — requires a separate commercial license from [Pillardash Solutions Limited](mailto:sales@pillardash.com).
