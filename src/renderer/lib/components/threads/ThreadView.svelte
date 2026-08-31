@@ -5747,6 +5747,30 @@
     assignmentBusy = true
     assignmentError = ''
     try {
+      // The main process only generates an Assignment from an approved Spec.
+      // Sign the active Spec in place (draft -> in_review -> approved) so the
+      // explicit "Generate Assignment" action never fails on an unapproved Spec.
+      let signingSpec = spec
+      if (signingSpec.status === 'draft') {
+        signingSpec = await invoke(
+          'spec:setReview',
+          signingSpec.projectId,
+          signingSpec.threadId,
+          signingSpec.id,
+          signingSpec.version
+        )
+        spec = signingSpec
+      }
+      if (signingSpec.status === 'in_review') {
+        signingSpec = await invoke(
+          'spec:approve',
+          signingSpec.projectId,
+          signingSpec.threadId,
+          signingSpec.id,
+          signingSpec.version
+        )
+        await setActiveSpec(signingSpec)
+      }
       assignment = await invoke(
         'agent:generateAssignmentDraft',
         thread.projectId,
