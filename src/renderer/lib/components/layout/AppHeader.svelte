@@ -823,7 +823,7 @@
             {@const isActiveProject = scopeState.activeProjectId === project.id}
             <button
               class="flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors {isActiveProject
-                ? 'bg-elevated font-medium text-foreground'
+                ? 'bg-foreground font-medium text-app'
                 : 'text-muted hover:bg-elevated hover:text-foreground'}"
               role="tab"
               aria-selected={isActiveProject}
@@ -831,12 +831,9 @@
               onclick={() => void switchProject(project.id)}
             >
               <span
-                class="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-raised {isActiveProject ? 'ring-1' : ''}"
-                style:border-color={isActiveProject
-                  ? projectColor
-                  : `color-mix(in srgb, ${projectColor} 45%, transparent)`}
-                style:background-color={`color-mix(in srgb, ${projectColor} ${isActiveProject ? '22' : '6'}%, var(--color-raised))`}
-                style:--tw-ring-color={`color-mix(in srgb, ${projectColor} 30%, transparent)`}
+                class="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-raised"
+                style:border-color={`color-mix(in srgb, ${projectColor} 45%, transparent)`}
+                style:background-color={`color-mix(in srgb, ${projectColor} 6%, var(--color-raised))`}
                 aria-hidden="true"
               >
                 {#if project.iconUrl}
