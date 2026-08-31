@@ -1,21 +1,149 @@
-MIT License
+# PolyForm Noncommercial License 1.0.0
 
-Copyright (c) 2026 Pillardash Solutions - Open Source Software
+<https://polyformproject.org/licenses/noncommercial/1.0.0>
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+## Acceptance
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+In order to get any license under these terms, you must agree to them as
+both strict obligations and conditions on all licenses granted to you
+under these terms.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+As a condition of granting you a license under these terms, you accept the
+terms of this license and agree that the terms of this license apply to
+your use and any redistribution and relicensing, regardless of the form of
+that redistribution or relicensing.
+
+## Licenses Grant
+
+Subject to your compliance with these terms and the conditions below, the
+licensor grants you a copyright license for the software to do everything
+you might with the software that would otherwise infringe the licensor's
+copyright patents claims, that is limited to, or for the benefit of, a
+noncommercial purpose or noncommercial purpose related use.
+
+## Conditions and Restrictions
+
+### Notice
+
+You must ensure that anyone who gets a copy of any part of the software
+from you also gets a copy of these terms.
+
+If you modify the software, you must include in any modification copies
+of the above notice, a copy of this license, and any licensing notices
+that were included in the original distribution of the software.
+
+### Noncommercial Purposes Only
+
+The licensor grants you a copyright license for the software to do
+everything you might with the software that would otherwise infringe the
+licensor's copyright patents claims, that is limited to, or for the
+benefit of, a noncommercial purpose or noncommercial purpose related use.
+
+Noncommercial purposes include:
+
+- Software services provided on a volunteer basis to charities or
+  nonprofits without charging for the service.
+- Personal use for pleasure or hobby without charging for the software or
+  services it provides.
+- Education or research without charging for the software or services it
+  provides.
+- Testing and evaluation of the software without charging for the software
+  or services it provides.
+
+Everything else is commercial. You may not use the software for commercial
+purposes, including:
+
+- Charging for the software or services it provides.
+- Bundling the software with commercial products or services.
+- Using the software inside a company or organization, in the course of
+  its business, even without charging.
+
+## Personal Uses
+
+Personal use for pleasure or hobby is noncommercial use. Personal use does
+not include use of the software for the benefit of a company or
+organization, or use of the software by an employee or contractor in the
+course of employment or engagement for a company or organization.
+
+## Fair Use
+
+You may have "fair use" rights for the software under the law. These terms
+are not intended to restrict fair use rights.
+
+## Patents
+
+Each contributor licenses you to do everything with the software that
+would otherwise infringe any patent claims it can cover or license, that
+would be infringed by the software alone or by use of the software as part
+of a larger software, for the noncommercial purpose or purposes for which
+you have a license under these terms.
+
+Each contributor disclaims any implied licenses or warranties under patent
+law, and disclaims that it licenses you to do everything with the software
+that would otherwise infringe patent claims outside the scope of the
+noncommercial purpose or purposes for which you have a license under
+these terms.
+
+## Notices
+
+You must ensure that anyone who gets a copy of any part of the software
+from you also gets these terms.
+
+If you modify the software, you must include in any modification copies of
+the above notice, a copy of these terms, and any licensing notices that
+were included with the original distribution of the software.
+
+## No Other Rights
+
+These terms do not allow you to sublicense or transfer any of your
+licenses to anyone else. You may distribute the software only under these
+terms, or a modified version of these terms that includes at least all of
+the present terms, with the exception of the prohibition on sublicensing.
+
+## Patent Defense
+
+If you make a written claim that the software infringes or contributes to
+infringement of any patent, your license for the software covered by that
+claim ends immediately.
+
+## Breach
+
+If you violate the conditions or restrictions of this license, your
+licenses under this license end immediately and automatically.
+
+## No Liability
+
+**As far as the law allows, the software comes as is, without any warranty
+or condition, and the contributor will not be liable to anyone for any
+damages related to the software or this license, under any kind of legal
+claim.**
+
+## Definitions
+
+**"commercial use"** means use of the software for the benefit of a
+company, organization, or individual with a commercial purpose, or in the
+course of business.
+
+A company or organization has a commercial purpose if it seeks or obtains
+commercial gain or advantage. An individual has a commercial purpose if
+the individual seeks or obtains commercial gain or advantage from use of
+the software.
+
+**"noncommercial purpose"** means a purpose other than a commercial
+purpose.
+
+**"you"** means a person or legal entity exercising rights under this
+license.
+
+**"the software"** means the software made available under these terms, or
+the software being distributed under these terms, as the case may be.
+
+---
+
+## Commercial Licensing
+
+Use of this software by companies, organizations, or for any commercial
+purpose requires a separate commercial license. To obtain a commercial
+license, contact:
+
+**Pillardash Solutions Limited** — <hey@pillardash.com>

@@ -16,7 +16,7 @@ The repo must be clean before it goes public — no stale config pointing at pri
 - [x] **Scan git history for leaked secrets before going public** — `gitleaks` or `trufflehog` over the full history. You cannot un-leak a secret once the repo is public; if anything is found, rotate it and scrub history before the first push.
 - [x] **Confirm `.gitignore` covers every local/private artifact**: `node_modules/`, `out/`, `dist/`, `.env*`, `agent-out/`, `.cio/`, `.opencode/`, logs, `.DS_Store`. Already present — verify nothing private is force-added.
 - [x] **Add `.env.example`** (see Phase 4) with placeholder values so CI and contributors know which env vars exist.
-- [x] **Verify `LICENSE` matches `package.json` `"license": "MIT"`** (currently both MIT — confirm the copyright holder string is what you want public).
+- [x] **Verify `LICENSE` matches `package.json` `"license"`** (PolyForm Noncommercial 1.0.0 — commercial use requires a separate license from Pillardash Solutions).
 - [x] **Add `SECURITY.md`** — how to report vulnerabilities privately (security@email or GitHub private vulnerability reporting), expected response SLA, and scope (app, website, auto-update feed, server).
 - [x] **Add `CODE_OF_CONDUCT.md`** — short, enforceable contributor covenant; link it from `README.md` and the issue templates.
 - [x] **Add issue templates** (Phase 5) and a **PR template**.
