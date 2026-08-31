@@ -3897,8 +3897,18 @@
         } else if (event.status.state === 'waiting') {
           restoredBusy = false
           acknowledgeLocalTurn()
-          setIdleFromSession()
+          if (!setIdleFromSession()) return
           errorMessage = ''
+          // 'waiting' is the status a paused permission/question turn reports,
+          // but the only other update this triggers is the raw
+          // permission.asked/question.asked push, gated on an exact sessionId
+          // match. If that push is missed (or its sessionId no longer matches
+          // this view's current session), the request card never appears
+          // until the view remounts and re-fetches from scratch. Reconcile the
+          // authoritative pending queues the same way the 'idle' transition
+          // already does below, so a missed push self-heals instead of
+          // requiring the user to leave and come back.
+          scheduleIdleAttention()
         } else if (event.status.state === 'idle') {
           const interruptedCompaction = compactionInterrupted()
           if (!setIdleFromSession()) return
