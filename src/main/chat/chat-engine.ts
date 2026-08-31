@@ -6704,7 +6704,14 @@ export class ChatEngine {
           settings
         })
       }
-      this.registerSession(sessionId, projectId, threadId, projectPath, 'auto_review', driverId)
+      this.registerSession(
+        sessionId,
+        projectId,
+        threadId,
+        projectPath,
+        settings.permissionLevel,
+        driverId
+      )
       const planningSession = this.sessionRegistry.get(sessionId)
       if (planningSession) planningSession.estimatedContextUsed = composition.totalTokens
       this.markSessionWorking(sessionId)
@@ -6777,10 +6784,7 @@ export class ChatEngine {
           : ''
         const prompt: SendPromptOptions = {
           sessionId,
-          settings: {
-            ...settings,
-            permissionLevel: 'auto_review'
-          },
+          settings,
           text: driverText,
           attachments,
           systemPrompt: composeBrainstormSystemPrompt({
