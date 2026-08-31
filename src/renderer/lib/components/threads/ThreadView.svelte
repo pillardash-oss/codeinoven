@@ -10064,7 +10064,7 @@
             />
           {/if}
 
-          {#if brainstormReportRefreshing || delegatedWorkBusy || (!activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
+          {#if brainstormReportRefreshing || delegatedWorkBusy || (!pendingLiveTurn && !activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
             <div class="flex items-center gap-2 text-sm text-dimmed">
               <Loader2 size={14} class="animate-spin text-info" />
               <span>
