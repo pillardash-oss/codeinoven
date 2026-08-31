@@ -2890,7 +2890,10 @@
   // images finish rendering, cards resolve, a sent message lands — re-anchor
   // to the latest message, but only while the reader is still at the bottom.
   // Their first upward scroll or wheel tick sets `userScrolledAway` and the
-  // viewport is never touched again until they jump back. This is purely
+  // viewport is never touched again until they jump back. Native browser
+  // anchoring is disabled on the scroller because a changing trace descendant
+  // is an unstable anchor; the fixed scrollTop preserves the reader's viewport.
+  // This is purely
   // event-driven: no timers, no animation-frame loops, so scrolling can never
   // be interrupted by a competing writer.
   $effect(() => {
@@ -9323,7 +9326,7 @@
     <!-- Scrollable conversation area -->
     <div
       bind:this={scrollEl}
-      class="conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20"
+      class="conversation-scroll conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20"
       onscroll={onScroll}
       onwheel={onWheel}
       onpointerup={captureResponseSelection}
@@ -11040,6 +11043,10 @@
 <style>
   .thread-view {
     container-type: inline-size;
+  }
+
+  .conversation-scroll {
+    overflow-anchor: none;
   }
 
   @container (max-width: 480px) {
