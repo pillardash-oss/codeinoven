@@ -228,19 +228,12 @@ export class CheckpointManager {
         allChanges.length > 0 ? await this.foreignClaimedPaths(checkpoint, options) : undefined
       const precisePaths = options.precisePaths ?? new Set<string>()
       const keepChange = (path: string): boolean =>
-        foreign === undefined ||
-        !foreign.has(path) ||
-        precisePaths.has(path) ||
-        (changedPaths?.has(path) ?? false)
-      // An empty path filter is no evidence at all: it must not hide real
-      // before/after changes (e.g. edits made through tools that reported no
-      // paths). Only a non-empty set restricts the recorded diff; otherwise the
-      // authoritative snapshot diff stays visible.
-      const filterChangedPaths = changedPaths && changedPaths.size > 0 ? changedPaths : undefined
-      const changes = filterChangedPaths
-        ? allChanges.filter(
-            (change) => filterChangedPaths.has(change.path) && keepChange(change.path)
-          )
+        foreign === undefined || !foreign.has(path) || precisePaths.has(path)
+      // `undefined` preserves the project-wide snapshot behavior used by
+      // recovery and direct checkpoint callers. A supplied empty set means the
+      // owning turn reported no mutations and must record no workspace diff.
+      const changes = changedPaths
+        ? allChanges.filter((change) => changedPaths.has(change.path) && keepChange(change.path))
         : allChanges.filter((change) => keepChange(change.path))
       const lineStats = await this.calculateLineStats(tracker, changes)
       const contentUnavailable = new Set([
@@ -257,8 +250,7 @@ export class CheckpointManager {
         status,
         after,
         changes,
-        changeFilterApplied:
-          filterChangedPaths !== undefined || changes.length !== allChanges.length,
+        changeFilterApplied: changedPaths !== undefined || changes.length !== allChanges.length,
         lineStats: lineStats.stats,
         completedAt: Date.now(),
         ...(completionFailure ? { failure: completionFailure } : {})
@@ -877,10 +869,14 @@ export class CheckpointManager {
    * paths. The full maps duplicate the per-change snapshots and dominate the
    * row size (each entry is a tracked repo file), so a finished checkpoint only
    * retains what rollback, summaries, diffs, and blob pruning actually need.
-   * Checkpoints with an empty change list keep their full maps for inspection.
+   * Unfiltered empty checkpoints keep their maps for legacy recovery. A
+   * filtered empty checkpoint has proved that it owns no paths, so retaining
+   * two full project maps would waste storage on every read-only turn.
    */
   private compactCheckpoint(checkpoint: TurnCheckpoint): TurnCheckpoint {
-    if (checkpoint.changes.length === 0) return checkpoint
+    if (checkpoint.changes.length === 0 && checkpoint.changeFilterApplied !== true) {
+      return checkpoint
+    }
     const paths = new Set(checkpoint.changes.map((change) => change.path))
     const trimFiles = (snapshot: ProjectCheckpoint): ProjectCheckpoint => {
       const files: Record<string, CheckpointFile> = {}

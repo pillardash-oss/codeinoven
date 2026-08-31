@@ -540,7 +540,7 @@ function patchPaths(patch: string): string[] {
 export function changedPathsFromTool(
   projectPath: string,
   part: Extract<AgentPart, { type: 'tool' }>
-): string[] | null {
+): string[] {
   if (!MUTATING_FILE_TOOLS.has(normalizedToolName(part.tool))) return []
   const candidates: string[] = []
   const input = part.state.input
@@ -571,10 +571,7 @@ export function changedPathsFromTool(
         .filter((candidate): candidate is string => candidate !== null)
     )
   ]
-  // A known file-mutating tool with no usable path cannot safely prove that
-  // the turn touched nothing. Returning null tells the caller to use the
-  // snapshot diff instead of filtering real changes out of the checkpoint.
-  return paths.length > 0 ? paths : null
+  return paths
 }
 
 function historyMirrorFailureMessage(rawError: string): string {
@@ -1114,7 +1111,6 @@ interface SessionInfo {
   changedPaths?: Set<string>
   /** Paths claimed by precise file-mutating tools this turn, path → last claimed ms. */
   preciseChangedPaths?: Map<string, number>
-  changeFilterReliable?: boolean
   /** Shell-like tool part ids currently in flight for the active turn. */
   openUnboundedTools?: Set<string>
   /** Filesystem fingerprint taken when the first of those tools started. */
@@ -16715,9 +16711,7 @@ export class ChatEngine {
             this.trackUnboundedToolWindow(session, part.id, part.state.status)
           }
           const precisePaths = changedPathsFromTool(session.projectPath, part)
-          if (precisePaths === null) {
-            session.changeFilterReliable = false
-          } else if (precisePaths.length > 0) {
+          if (precisePaths.length > 0) {
             session.changedPaths ??= new Set()
             session.preciseChangedPaths ??= new Map()
             const claimedAt = Date.now()
@@ -19634,22 +19628,13 @@ export class ChatEngine {
           .fingerprint(session.projectId, session.projectPath)
           .catch((error) => {
             Logger.error('turn change window scan failed:', error)
-            session.changeFilterReliable = false
             return null
           })
       }
       openTools.add(toolPartId)
       return
     }
-    if (!openTools.delete(toolPartId)) {
-      // Some providers only emit a terminal tool event. There is no reliable
-      // before-snapshot for that event, so preserve visibility by falling back
-      // to the complete turn snapshot at checkpoint completion.
-      if (openTools.size === 0 && session.unboundedWindowStart === undefined) {
-        session.changeFilterReliable = false
-      }
-      return
-    }
+    if (!openTools.delete(toolPartId)) return
     if (openTools.size > 0) return
     this.closeUnboundedToolWindow(session)
   }
@@ -19680,7 +19665,6 @@ export class ChatEngine {
         }
       } catch (error) {
         Logger.error('turn change window scan failed:', error)
-        session.changeFilterReliable = false
       }
     })()
     pendingScans.add(scan)
@@ -19713,16 +19697,11 @@ export class ChatEngine {
         info.projectPath,
         status,
         failure,
-        // Only apply a path filter when a mutating tool or bounded shell window
-        // actually produced one. No observed mutation event is not proof that
-        // the harness touched nothing: some providers omit or rename those
-        // events, so the authoritative before/after snapshot must remain visible.
-        // An empty path set is the same as no evidence — passing it would hide
-        // every real change (edits made through tools that reported no paths),
-        // so it must not restrict the recorded diff either.
-        info.changeFilterReliable !== false && (info.changedPaths?.size ?? 0) > 0
-          ? info.changedPaths
-          : undefined,
+        // A thread owns only mutations attributed through its tool events or a
+        // bounded shell window. An empty set is intentional: falling back to
+        // the project-wide before/after diff would claim concurrent work from
+        // every other thread sharing this scope.
+        info.changedPaths ?? new Set<string>(),
         {
           precisePaths: new Set(info.preciseChangedPaths?.keys() ?? []),
           foreignClaimedPaths: this.liveForeignClaimedPaths(info, ownThreadIds),
@@ -19736,7 +19715,6 @@ export class ChatEngine {
       info.activeTurnUserMessageId = undefined
       info.changedPaths = undefined
       info.preciseChangedPaths = undefined
-      info.changeFilterReliable = undefined
       info.openUnboundedTools = undefined
       info.unboundedWindowStart = undefined
       info.pendingWindowScans = undefined
@@ -20006,7 +19984,6 @@ export class ChatEngine {
       estimatedContextUsed: activeTurnId ? undefined : existing?.estimatedContextUsed,
       changedPaths: activeTurnId ? undefined : existing?.changedPaths,
       preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
-      changeFilterReliable: activeTurnId ? true : existing?.changeFilterReliable,
       openUnboundedTools: activeTurnId ? new Set() : existing?.openUnboundedTools,
       unboundedWindowStart: activeTurnId ? undefined : existing?.unboundedWindowStart,
       pendingWindowScans: activeTurnId ? new Set() : existing?.pendingWindowScans,

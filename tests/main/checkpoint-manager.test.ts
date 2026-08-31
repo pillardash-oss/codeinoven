@@ -336,7 +336,13 @@ describe('CheckpointManager', () => {
       // A worker sub-agent thread of this coordinator completes a turn inside
       // the window. The sub-turn file diff can be empty when snapshots are
       // cached, so seed its recorded changes the way a real editing turn does.
-      const workerTurn = await manager.beginTurn('project1', 'worker-a', projectRoot, 'Worker turn', false)
+      const workerTurn = await manager.beginTurn(
+        'project1',
+        'worker-a',
+        projectRoot,
+        'Worker turn',
+        false
+      )
       await writeFile(join(projectRoot, 'worker.txt'), 'worker-edit', 'utf-8')
       const workerDone = await manager.completeTurn(
         'project1',
@@ -394,8 +400,11 @@ describe('CheckpointManager', () => {
       family.projectRoot,
       'completed',
       undefined,
-      undefined,
-      { ownThreadIds: new Set(['coordinator', 'worker-a']) }
+      new Set(['mine.txt', 'worker.txt', 'unrelated.txt']),
+      {
+        precisePaths: new Set(['mine.txt']),
+        ownThreadIds: new Set(['coordinator', 'worker-a'])
+      }
     )
     expect(familyDone.changes.map((change) => change.path)).toEqual(['mine.txt', 'worker.txt'])
 
