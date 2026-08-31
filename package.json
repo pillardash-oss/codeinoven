@@ -19,7 +19,9 @@
     "ffmpeg-static"
   ],
   "overrides": {
-    "nanoid": "3.3.18"
+    "nanoid": "3.3.18",
+    "uuid": "11.1.1",
+    "echarts": "6.1.0"
   },
   "scripts": {
     "postinstall": "bun scripts/patch-binary-data.ts && electron-builder install-app-deps",
