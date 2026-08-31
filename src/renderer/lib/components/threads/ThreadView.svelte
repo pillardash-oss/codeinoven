@@ -1488,6 +1488,15 @@
    *  don't hammer the harness CLIs. */
   let accountUsageFetchedAt = 0
   const ACCOUNT_USAGE_CACHE_MS = 5000
+  /** Fast drivers (pi answers over an in-memory RPC session in a few ms)
+   *  would make the loading bar flash imperceptibly, reading as "nothing
+   *  happened". Hold the fetching state briefly so the hover always gives
+   *  the same visible feedback the slower harness CLIs produce naturally. */
+  const ACCOUNT_USAGE_MIN_LOADING_MS = 800
+
+  function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+  }
 
   function revealContextUsage(): void {
     if (contextUsage) commitContextUsage(contextUsage)
@@ -1551,6 +1560,9 @@
     } catch {
       // Best-effort quota refresh — never surface a transient harness failure.
     } finally {
+      const elapsed = Date.now() - accountUsageFetchedAt
+      const wait = Math.max(0, ACCOUNT_USAGE_MIN_LOADING_MS - elapsed)
+      if (wait > 0) await delay(wait)
       refreshingAccountUsage = false
     }
   }

@@ -1276,6 +1276,12 @@ export class PiDriver extends PersistentCliDriver {
   private usageExtensionFailed = false
   /** Latest provider rate-limit windows reported by the usage extension, per session. */
   private latestRateLimits = new Map<string, AgentRateLimitWindow[]>()
+  /** Latest windows per project, persisted to storage so hovers after an app
+   *  restart (no live RPC session, no in-memory cache) still show bars. */
+  private persistedRateLimits: Map<string, AgentRateLimitWindow[]> | null = null
+  private persistedRateLimitsWrite: Promise<void> | null = null
+  private static readonly USAGE_WINDOWS_PATH = 'runtime/pi-usage/windows.json'
+  private static readonly USAGE_WINDOWS_MAX_PROJECTS = 50
   /** Session-keyed absolute path to the materialized core-tools extension module, passed to `--extension`. */
   private coreToolsExtensionPaths = new Map<string, string>()
   /**
@@ -1797,7 +1803,9 @@ export class PiDriver extends PersistentCliDriver {
       ([, clientProject]) => clientProject === projectPath
     )?.[0]
     const client = sessionId ? this.rpcClients.get(sessionId) : undefined
-    const cachedRateLimits = this.latestRateLimits.get(sessionId ?? '') ?? []
+    const cachedRateLimits =
+      (sessionId !== undefined ? this.latestRateLimits.get(sessionId) : undefined) ??
+      (await this.loadPersistedRateLimits()).get(projectPath) ?? []
     if (!client) {
       // No live session — but recently reported quota windows still answer
       // the hover contract, mirroring how codex/claude-code serve cached bars.
@@ -2493,7 +2501,7 @@ export class PiDriver extends PersistentCliDriver {
    */
   private handleExtensionStatus(record: Record<string, unknown>, sessionId: string): void {
     if (stringValue(record['statusKey']) === PI_USAGE_EXTENSION_KEY) {
-      this.handleUsageStatus(record, sessionId)
+      void this.handleUsageStatus(record, sessionId)
       return
     }
     if (stringValue(record['statusKey']) !== PI_STATUS_EXTENSION_KEY) return
@@ -2517,7 +2525,7 @@ export class PiDriver extends PersistentCliDriver {
    * provider response's rate-limit headers. Mapped into display windows and
    * cached per session until the next provider response refreshes them.
    */
-  private handleUsageStatus(record: Record<string, unknown>, sessionId: string): void {
+  private async handleUsageStatus(record: Record<string, unknown>, sessionId: string): Promise<void> {
     const text = stringValue(record['statusText'])
     if (!text) return
     let payload: unknown
@@ -2529,6 +2537,62 @@ export class PiDriver extends PersistentCliDriver {
     const windows = mapPiRateLimitHeaders(payload)
     if (windows.length === 0) return
     this.latestRateLimits.set(sessionId, windows)
+    const projectPath = this.sessionProjects.get(sessionId)
+    if (projectPath) await this.rememberPersistedRateLimits(projectPath, windows)
+  }
+
+  /** Load the persisted per-project windows map once per driver lifetime. */
+  private async loadPersistedRateLimits(): Promise<Map<string, AgentRateLimitWindow[]>> {
+    if (this.persistedRateLimits) return this.persistedRateLimits
+    const map = new Map<string, AgentRateLimitWindow[]>()
+    try {
+      const raw = await this.storage.readRaw(PiDriver.USAGE_WINDOWS_PATH)
+      if (raw) {
+        const parsed: unknown = JSON.parse(raw)
+        if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          for (const [key, value] of Object.entries(parsed)) {
+            if (Array.isArray(value)) {
+              map.set(
+                key,
+                value.filter(
+                  (entry): entry is AgentRateLimitWindow =>
+                    entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+                )
+              )
+            }
+          }
+        }
+      }
+    } catch (error) {
+      Logger.dev('Pi usage windows read failed:', error)
+    }
+    this.persistedRateLimits = map
+    return map
+  }
+
+  /** Store the latest windows for a project; writes are serialized and
+   *  bounded so a long-lived driver never grows the file without bound. */
+  private async rememberPersistedRateLimits(
+    projectPath: string,
+    windows: AgentRateLimitWindow[]
+  ): Promise<void> {
+    const map = await this.loadPersistedRateLimits()
+    map.delete(projectPath)
+    map.set(projectPath, windows)
+    while (map.size > PiDriver.USAGE_WINDOWS_MAX_PROJECTS) {
+      const oldest = map.keys().next().value
+      if (oldest === undefined) break
+      map.delete(oldest)
+    }
+    if (this.persistedRateLimitsWrite) return
+    const snapshot = JSON.stringify(Object.fromEntries(map))
+    this.persistedRateLimitsWrite = this.storage
+      .writeRaw(PiDriver.USAGE_WINDOWS_PATH, snapshot)
+      .catch((error: unknown) => Logger.dev('Pi usage windows write failed:', error))
+      .finally(() => {
+        this.persistedRateLimitsWrite = null
+      })
+    await this.persistedRateLimitsWrite
   }
 
   private handleUiRequest(record: Record<string, unknown>, sessionId: string): void {
