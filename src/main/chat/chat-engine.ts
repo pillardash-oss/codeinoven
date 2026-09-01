@@ -1550,6 +1550,11 @@ export class ChatEngine {
   private childSessionOwners = new Map<string, ChildSessionInfo>()
   private childCaptureTasks = new Map<string, Promise<AgentMessage[]>>()
   private pendingPermissions = new Map<string, PendingPermissionInfo>()
+  /** Memoized attachment allowlist per chat thread id. Invalidated whenever a
+   *  user message is persisted (attachments may have changed) and dropped when
+   *  the thread is deleted, avoiding a full message-record scan on every
+   *  permission request. Rebuilt lazily on first access. */
+  private chatAttachmentAllowlists = new Map<string, string[]>()
   private pendingQuestions = new Map<string, PendingQuestionInfo>()
   private pendingImageDescriptorDecisions = new Map<string, PendingImageDescriptorDecision>()
   private completionWaiters = new Map<string, SessionCompletionWaiter>()
@@ -1846,6 +1851,7 @@ export class ChatEngine {
       database,
       broadcastThreadUpdate,
       async (thread) => {
+        this.chatAttachmentAllowlists.delete(thread.id)
         await this.deleteThreadSession(thread.projectId, thread.id)
         await this.memoryService.deleteThreadMemory(thread.projectId, thread.id)
         await this.storage.remove(this.coordinatorHandoffQueuePath(thread.projectId, thread.id))
@@ -8494,6 +8500,9 @@ export class ChatEngine {
     presentation?: UserMessagePresentation,
     dispatchOrigin: 'user' | 'internal' = 'user'
   ): Promise<AgentMessage> {
+    // Attachments enter the thread here, so drop any memoized allowlist and let
+    // the next permission request rebuild it from the latest message records.
+    this.chatAttachmentAllowlists.delete(threadId)
     const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
     const existing = mirror.find((message) => message.id === messageId)
     if (existing) return existing
@@ -18180,8 +18189,16 @@ export class ChatEngine {
 
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
     const fileSystemMode = thread?.settings?.fileSystemMode === true
-    const allowedPaths = await this.collectChatAttachmentPaths(info)
-    return { allowedPaths, restrictToAllowed: !fileSystemMode }
+    // Read the cached allowlist when present; otherwise build it once from the
+    // message records and memoize it. New user messages invalidate the entry, so
+    // this stays correct without re-scanning on every permission request.
+    const cached = this.chatAttachmentAllowlists.get(info.threadId)
+    if (cached === undefined) {
+      const allowedPaths = await this.collectChatAttachmentPaths(info)
+      this.chatAttachmentAllowlists.set(info.threadId, allowedPaths)
+      return { allowedPaths, restrictToAllowed: !fileSystemMode }
+    }
+    return { allowedPaths: cached, restrictToAllowed: !fileSystemMode }
   }
 
   /** Absolute local paths of every file the user attached to a chat thread. */
