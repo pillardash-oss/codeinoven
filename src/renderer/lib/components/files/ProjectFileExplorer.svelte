@@ -1448,7 +1448,7 @@
 
   {#if filterOpen}
     <div
-      class="absolute left-2 right-2 -top-10 z-20 rounded-xl border border-border bg-surface shadow-xl"
+      class="absolute left-2 right-2 top-10 z-20 rounded-xl border border-border bg-surface shadow-xl"
       role="search"
       aria-label="Search project files"
     >
