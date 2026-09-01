@@ -11,6 +11,7 @@ import { broadcastAgentProcessesChanged } from '../chat/thread-events'
 const execFileAsync = promisify(execFile)
 const PROCESS_SCAN_INTERVAL_MS = 750
 const PROCESS_EXIT_GRACE_MS = 1_500
+const PORT_SCAN_TIMEOUT_MS = 2_000
 /** Key under which app-wide roots (e.g. the shared opencode server) are tracked. */
 const APP_SCOPE = '__codeinoven_app_scope__'
 
@@ -321,7 +322,10 @@ export class AgentProcessService implements AgentProcessObserver {
   }
 
   private async snapshotUnixListeningPorts(): Promise<Array<[number, number]>> {
-    const { stdout } = await execFileAsync('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-F', 'pfn'])
+    const { stdout } = await execFileAsync('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-F', 'pfn'], {
+      timeout: PORT_SCAN_TIMEOUT_MS,
+      windowsHide: true
+    })
     const result: Array<[number, number]> = []
     let currentPid = 0
     for (const line of stdout.split(/\r?\n/u)) {
@@ -341,6 +345,7 @@ export class AgentProcessService implements AgentProcessObserver {
 
   private async snapshotWindowsListeningPorts(): Promise<Array<[number, number]>> {
     const { stdout } = await execFileAsync('netstat.exe', ['-ano', '-p', 'TCP'], {
+      timeout: PORT_SCAN_TIMEOUT_MS,
       windowsHide: true
     })
     const result: Array<[number, number]> = []

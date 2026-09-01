@@ -64,7 +64,13 @@
 
   // Initial load on open.
   $effect(() => {
-    if (open) void load()
+    if (!open) return
+    // Run outside the effect's synchronous tracking window. Calling load()
+    // directly here would subscribe this effect to `checking`, causing every
+    // completed request to immediately start another one.
+    queueMicrotask(() => {
+      if (open) void load()
+    })
   })
 
   // Keep the process list live: quiet reload every 5s and re-render durations
@@ -246,7 +252,7 @@
       {#if checking}
         <div class="flex h-full flex-col items-center justify-center gap-3" aria-live="polite">
           <span
-            class="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-transparent"
+            class="task-manager-spinner h-5 w-5 shrink-0 rounded-full border-2 border-transparent"
             style="border-top-color: var(--color-primary); border-right-color: var(--color-primary);"
             role="status"
             aria-label="Checking running processes"
@@ -372,7 +378,7 @@
         >
           {#if checking}
             <span
-              class="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-transparent"
+              class="task-manager-spinner h-3.5 w-3.5 shrink-0 rounded-full border-2 border-transparent"
               style="border-top-color: currentColor; border-right-color: currentColor;"
               aria-hidden="true"
             ></span>
@@ -391,7 +397,7 @@
           >
             {#if ending}
               <span
-                class="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-transparent"
+                class="task-manager-spinner h-3.5 w-3.5 shrink-0 rounded-full border-2 border-transparent"
                 style="border-top-color: currentColor; border-right-color: currentColor;"
                 aria-hidden="true"
               ></span>
@@ -451,7 +457,7 @@
     >
       {#if forceEnding}
         <span
-          class="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-transparent"
+          class="task-manager-spinner h-3.5 w-3.5 shrink-0 rounded-full border-2 border-transparent"
           style="border-top-color: currentColor; border-right-color: currentColor;"
           aria-hidden="true"
         ></span>
@@ -462,3 +468,15 @@
     </button>
   {/snippet}
 </Modal>
+
+<style>
+  .task-manager-spinner {
+    animation: task-manager-spin 650ms linear infinite;
+  }
+
+  @keyframes task-manager-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+</style>

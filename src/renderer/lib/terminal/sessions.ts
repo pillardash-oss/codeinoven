@@ -126,13 +126,14 @@ class TerminalSessionManager {
     session: TerminalSession,
     container: HTMLDivElement,
     projectId: string,
+    threadId: string,
     scopeBucketId?: string
   ): Promise<void> {
     if (session.host.parentElement !== container) {
       container.replaceChildren(session.host)
     }
     session.fitAddon.fit()
-    await this.ensurePty(session, projectId, scopeBucketId)
+    await this.ensurePty(session, projectId, threadId, scopeBucketId)
     session.term.focus()
   }
 
@@ -140,6 +141,7 @@ class TerminalSessionManager {
     session: TerminalSession,
     container: HTMLDivElement,
     projectId: string,
+    threadId: string,
     script: string,
     variables: Record<string, string>,
     scopeBucketId?: string
@@ -154,6 +156,7 @@ class TerminalSessionManager {
           'pty:createAction',
           session.id,
           projectId,
+          threadId,
           script,
           variables,
           session.term.cols,
@@ -184,6 +187,7 @@ class TerminalSessionManager {
   private async ensurePty(
     session: TerminalSession,
     projectId: string,
+    threadId: string,
     scopeBucketId?: string
   ): Promise<void> {
     if (session.ptySpawned) return
@@ -194,6 +198,7 @@ class TerminalSessionManager {
         'pty:create',
         session.id,
         projectId,
+        threadId,
         session.term.cols,
         session.term.rows,
         scopeBucketId

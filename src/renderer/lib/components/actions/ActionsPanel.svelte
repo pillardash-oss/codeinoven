@@ -13,9 +13,10 @@
 
   interface Props {
     projectId: string
+    threadId: string
     scopeBucketId?: string
   }
-  let { projectId, scopeBucketId }: Props = $props()
+  let { projectId, threadId, scopeBucketId }: Props = $props()
   let editorOpen = $state(false)
   let editing = $state<ProjectAction | null>(null)
   let name = $state('')
@@ -278,6 +279,7 @@
                 {#key run.terminalId}<ActionTerminal
                     terminalId={run.terminalId}
                     {projectId}
+                    {threadId}
                     {scopeBucketId}
                     script={run.script}
                     variables={run.variables}

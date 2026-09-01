@@ -2073,7 +2073,14 @@ export interface IpcInvokeContract {
   'computerUse:pipBringToFront': Contract<[], void>
   'computerUse:pipDismiss': Contract<[], void>
   'pty:create': Contract<
-    [id: string, projectId: string, columns: number, rows: number, scopeBucketId?: string],
+    [
+      id: string,
+      projectId: string,
+      threadId: string,
+      columns: number,
+      rows: number,
+      scopeBucketId?: string
+    ],
     { id: string; pid: number }
   >
   'pty:createCommand': Contract<
@@ -2084,6 +2091,7 @@ export interface IpcInvokeContract {
     [
       id: string,
       projectId: string,
+      threadId: string,
       script: string,
       variables: Record<string, string>,
       columns: number,

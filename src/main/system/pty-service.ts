@@ -22,6 +22,15 @@ interface PtySession {
   process: pty.IPty
 }
 
+export interface PtyTrackedProcess {
+  scopeId?: string
+  projectId?: string
+  threadId?: string
+  pid: number
+  command: string
+  cwd: string
+}
+
 function buildShellEnv(): Record<string, string> {
   const harnessEnv = buildProcessEnvironment()
   const env = Object.fromEntries(
@@ -75,7 +84,8 @@ export class PtyService {
   constructor(
     private storage: StorageEngine,
     _database: Database,
-    scopeResolver?: ScopeRootResolver
+    scopeResolver?: ScopeRootResolver,
+    private readonly trackProcess?: (process: PtyTrackedProcess) => void
   ) {
     this.projectManager = new ProjectManager(_database)
     this.scopeRoots = scopeResolver ? scopeRootProvider(scopeResolver) : undefined
@@ -92,8 +102,15 @@ export class PtyService {
   register(): void {
     ipcMain.handle(
       'pty:create',
-      (_, id: string, projectId: string, cols: number, rows: number, scopeBucketId?: string) =>
-        this.create(id, projectId, cols, rows, scopeBucketId)
+      (
+        _,
+        id: string,
+        projectId: string,
+        threadId: string,
+        cols: number,
+        rows: number,
+        scopeBucketId?: string
+      ) => this.create(id, projectId, threadId, cols, rows, scopeBucketId)
     )
     ipcMain.handle(
       'pty:createCommand',
@@ -106,12 +123,13 @@ export class PtyService {
         _,
         id: string,
         projectId: string,
+        threadId: string,
         script: string,
         variables: Record<string, string>,
         cols: number,
         rows: number,
         scopeBucketId?: string
-      ) => this.createAction(id, projectId, script, variables, cols, rows, scopeBucketId)
+      ) => this.createAction(id, projectId, threadId, script, variables, cols, rows, scopeBucketId)
     )
     ipcMain.on('pty:write', (_, id: string, data: string) => this.write(id, data))
     ipcMain.on('pty:resize', (_, id: string, cols: number, rows: number) =>
@@ -123,6 +141,7 @@ export class PtyService {
   private async create(
     id: string,
     projectId: string,
+    threadId: string,
     cols: number,
     rows: number,
     scopeBucketId?: string
@@ -155,6 +174,14 @@ export class PtyService {
       rows,
       cwd,
       env: buildShellEnv()
+    })
+    this.trackProcess?.({
+      scopeId: `pty:${id}`,
+      projectId,
+      threadId,
+      pid: proc.pid,
+      command: shell,
+      cwd
     })
 
     proc.onData((data) => {
@@ -249,6 +276,11 @@ export class PtyService {
       cwd,
       env: buildShellEnv()
     })
+    this.trackProcess?.({
+      pid: proc.pid,
+      command: [command, ...args].join(' '),
+      cwd
+    })
 
     proc.onData((data) => {
       sendToRenderer(this.sender, `pty:data:${id}`, data)
@@ -291,6 +323,7 @@ export class PtyService {
   private async createAction(
     id: string,
     projectId: string,
+    threadId: string,
     script: string,
     variables: Record<string, string>,
     cols: number,
@@ -328,6 +361,14 @@ export class PtyService {
       rows,
       cwd,
       env: { ...buildShellEnv(), ...safeVariables }
+    })
+    this.trackProcess?.({
+      scopeId: `pty:${id}`,
+      projectId,
+      threadId,
+      pid: proc.pid,
+      command: script,
+      cwd
     })
     proc.onData((data) => sendToRenderer(this.sender, `pty:data:${id}`, data))
     proc.onExit(({ exitCode }) => {

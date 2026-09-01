@@ -4036,6 +4036,7 @@
                   <TerminalPanel
                     terminalId={activeContextTab.terminalId}
                     projectId={activeContextTab.projectId}
+                    threadId={activeContextTab.threadId}
                     scopeBucketId={workspaceState.activeScopeBucketIdFor(
                       activeContextTab.projectId
                     )}
@@ -4044,6 +4045,7 @@
               {:else if activeContextTab.kind === 'actions'}
                 <ActionsPanel
                   projectId={activeContextTab.projectId}
+                  threadId={activeContextTab.threadId}
                   scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
                 />
               {:else if activeContextTab.kind === 'browser'}
@@ -4147,6 +4149,7 @@
                 <TerminalPanel
                   terminalId={activeDockTab.terminalId}
                   projectId={activeDockTab.projectId}
+                  threadId={activeDockTab.threadId}
                   scopeBucketId={workspaceState.activeScopeBucketIdFor(activeDockTab.projectId)}
                 />
               {/key}
@@ -4778,6 +4781,7 @@
         <TerminalPanel
           terminalId={terminalTab.terminalId}
           projectId={terminalTab.projectId}
+          threadId={terminalTab.threadId}
           scopeBucketId={workspaceState.activeScopeBucketIdFor(terminalTab.projectId)}
         />
       {/key}

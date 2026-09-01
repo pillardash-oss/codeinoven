@@ -4688,6 +4688,22 @@ export class ChatEngine {
     return this.agentProcesses.killProcessGlobal(pid, force)
   }
 
+  /** Register a PTY-backed terminal or action and its descendants with the
+   * same process tracker used by agent harnesses. */
+  trackPtyProcess(
+    scopeId: string | undefined,
+    projectId: string | undefined,
+    threadId: string | undefined,
+    pid: number,
+    command: string,
+    cwd: string
+  ): void {
+    if (scopeId && projectId && threadId) {
+      this.agentProcesses.claimSession(scopeId, projectId, threadId)
+    }
+    this.agentProcesses.watchProcess(scopeId, pid, command, cwd)
+  }
+
   /** Delete a harness-native or app-managed skill. */
   deleteSkill(source: AgentCapabilitySource): Promise<boolean> {
     return this.capabilityDiscovery.deleteSkill(source)
