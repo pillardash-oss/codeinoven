@@ -217,27 +217,34 @@ export interface UsageCostCoverage {
 export class HarnessUsageRepo {
   constructor(private db: Database) {}
 
-  /**
-   * Persist one usage attempt. Replaying its stable identity is a no-op.
-   * Usage telemetry is best-effort: a stale `parentTurnId` (e.g. the owning
-   * `agent_messages` row was deleted, edited, or not yet committed) can trip
-   * the FK constraint. Swallow that instead of letting it mask the real
-   * error in whatever `finally` block called us.
-   */
+  /** Persist one immutable usage attempt. Replaying its stable identity is a no-op. */
   recordEvent(event: UsageEvent): void {
     try {
       this.db.run(
         `INSERT OR IGNORE INTO usage_events(
-          id, thread_id, parent_turn_id, feature_call_id, attempt, feature,
+          id, thread_id, parent_turn_id, project_id, project_name,
+          feature_call_id, attempt, feature,
           harness_id, provider_id, model_id, thinking_level, utility_id, raw_provider_usage_json,
           tokens_uncached_input, tokens_cached_input, tokens_cache_write,
           tokens_output, tokens_reasoning, tokens_total, raw_total, total_semantics,
           cost_usd, cost_status, pricing_provenance_json, tool_fee_usd,
           success, retry_cause, duration_ms, created_at
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        ) VALUES(
+          ?,?,?,
+          (SELECT project_id FROM threads WHERE id = ?),
+          (SELECT projects.name FROM threads JOIN projects ON projects.id = threads.project_id WHERE threads.id = ?),
+          ?,?,?,
+          ?,?,?,?,?,
+          ?,
+          ?,?,?,?,?,?,?,?,
+          ?,?,?,?,
+          ?,?,?,?
+        )`,
         event.id,
         event.threadId,
         event.parentTurnId,
+        event.threadId,
+        event.threadId,
         event.featureCallId,
         event.attempt,
         event.feature,
@@ -701,7 +708,6 @@ export class HarnessUsageRepo {
       utilityRows,
       activityRows,
       dailyRows,
-      responseRows,
       hourlyRows
     ] = await Promise.all([
       this.aggregate<LocalUsageAggregateRow>(
@@ -753,20 +759,19 @@ export class HarnessUsageRepo {
         [...params]
       ),
       this.aggregate<LocalProjectAggregateRow>(
-        `SELECT p.id,
-                  p.name,
+        `SELECT usage_events.project_id AS id,
+                  COALESCE(p.name, MAX(usage_events.project_name), usage_events.project_id) AS name,
                   p.color,
                   p.icon_type,
                   p.icon,
                   ${aggregateSelect},
-                  COUNT(DISTINCT t.id) AS thread_count,
+                  COUNT(DISTINCT usage_events.thread_id) AS thread_count,
                   COUNT(DISTINCT strftime('%Y-%m-%d', usage_events.created_at / 1000, 'unixepoch', 'localtime')) AS active_days,
                   MAX(usage_events.created_at) AS last_active_at
            FROM usage_events
-           JOIN threads t ON t.id = usage_events.thread_id
-           JOIN projects p ON p.id = t.project_id
-           WHERE ${modelRange}
-           GROUP BY p.id
+           LEFT JOIN projects p ON p.id = usage_events.project_id
+           WHERE ${modelRange} AND usage_events.project_id IS NOT NULL
+           GROUP BY usage_events.project_id
            ORDER BY message_count DESC, last_active_at DESC`,
         [...params]
       ),
@@ -814,18 +819,6 @@ export class HarnessUsageRepo {
            GROUP BY date
            ORDER BY date ASC`,
         [...PROFILE_UTILITY_FEATURES, ...params]
-      ),
-      // Real agent responses: count durable assistant messages (not usage
-      // events) within the range, and sum their wall-clock turn runtime.
-      this.aggregate<{ message_count: number; duration_ms: number }>(
-        `SELECT COUNT(*) AS message_count,
-                COALESCE(SUM(COALESCE(completed_at, created_at) - created_at), 0) AS duration_ms
-         FROM agent_messages
-         WHERE role = 'assistant'
-           AND harness_id IS NOT NULL
-           AND created_at >= ?
-           AND created_at < ?`,
-        [range.startAt, range.endAt]
       ),
       this.aggregate<LocalUsageHourRow>(
         `SELECT CAST(hour_key AS INTEGER) AS id,
@@ -905,10 +898,8 @@ export class HarnessUsageRepo {
     return {
       range,
       activityRange,
-      // Real agent responses come from the durable assistant-message ledger,
-      // not from usage events, so retries never inflate the count.
-      messageCount: responseRows[0]?.message_count ?? 0,
-      responseDurationMs: responseRows[0]?.duration_ms ?? 0,
+      messageCount: harnessRows.reduce((sum, row) => sum + row.message_count, 0),
+      responseDurationMs: harnessRows.reduce((sum, row) => sum + row.duration_ms, 0),
       costUsd: harnessCost + utilityCost,
       tokens: harnessTokens + utilityTokens,
       durationMs:

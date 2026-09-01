@@ -684,6 +684,58 @@ CREATE TABLE IF NOT EXISTS maintenance_meta (
   value TEXT NOT NULL
 );`
 
+export const USAGE_EVENTS_COLUMNS_SQL = `
+  id                    TEXT PRIMARY KEY NOT NULL,
+  thread_id             TEXT NOT NULL,
+  parent_turn_id        TEXT NOT NULL,
+  project_id            TEXT,
+  project_name          TEXT,
+  feature_call_id       TEXT NOT NULL,
+  attempt               INTEGER NOT NULL CHECK(attempt >= 1),
+  feature               TEXT NOT NULL CHECK(feature IN ('main','title','turn_grade','memory','image_descriptor','search_nudge','computer_use','web','audit','assignment')),
+  harness_id            TEXT,
+  provider_id           TEXT,
+  model_id              TEXT,
+  thinking_level        TEXT,
+  utility_id            TEXT,
+  raw_provider_usage_json TEXT NOT NULL DEFAULT '{}',
+  tokens_uncached_input INTEGER CHECK(tokens_uncached_input IS NULL OR tokens_uncached_input >= 0),
+  tokens_cached_input   INTEGER CHECK(tokens_cached_input IS NULL OR tokens_cached_input >= 0),
+  tokens_cache_write    INTEGER CHECK(tokens_cache_write IS NULL OR tokens_cache_write >= 0),
+  tokens_output         INTEGER CHECK(tokens_output IS NULL OR tokens_output >= 0),
+  tokens_reasoning      INTEGER CHECK(tokens_reasoning IS NULL OR tokens_reasoning >= 0),
+  tokens_total          INTEGER CHECK(tokens_total IS NULL OR tokens_total >= 0),
+  raw_total             INTEGER CHECK(raw_total IS NULL OR raw_total >= 0),
+  total_semantics       TEXT NOT NULL CHECK(total_semantics IN ('includes_cache','excludes_cache','categories_may_overlap','provider_defined','unavailable')),
+  cost_usd              REAL,
+  cost_status           TEXT NOT NULL CHECK(cost_status IN ('known','estimated','unavailable')),
+  pricing_provenance_json TEXT,
+  tool_fee_usd          REAL CHECK(tool_fee_usd IS NULL OR tool_fee_usd >= 0),
+  success               INTEGER NOT NULL CHECK(success IN (0, 1)),
+  retry_cause           TEXT,
+  duration_ms           INTEGER NOT NULL DEFAULT 0 CHECK(duration_ms >= 0),
+  created_at            INTEGER NOT NULL,
+  CHECK(
+    (cost_status = 'unavailable' AND cost_usd IS NULL AND pricing_provenance_json IS NULL)
+    OR
+    (cost_status IN ('known','estimated') AND cost_usd IS NOT NULL AND cost_usd >= 0 AND pricing_provenance_json IS NOT NULL)
+  ),
+  UNIQUE (parent_turn_id, feature, feature_call_id, attempt)
+`
+
+export const USAGE_EVENTS_INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS idx_usage_events_thread
+  ON usage_events(thread_id, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_parent_turn
+  ON usage_events(parent_turn_id, feature, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
+  ON usage_events(feature, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_analytics_range
+  ON usage_events(created_at, feature, harness_id, provider_id, model_id, thinking_level);`
+
 export const HARNESS_USAGE_SQL = `
 -- ─── Harness Usage Analytics ────────────────────────────────────────────
 -- Cumulative per-harness analytics for a thread's session. Rows are upserted
@@ -741,62 +793,12 @@ CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread
 CREATE INDEX IF NOT EXISTS idx_harness_usage_models_harness
   ON harness_usage_models(harness_id);
 
--- Event-level source of truth for model and utility usage. Every nullable token
--- category means "not reported" rather than zero. The caller-provided
--- feature_call_id separates distinct calls of the same feature, while attempt
--- keeps legitimate retries distinct and makes replayed writes idempotent.
-CREATE TABLE IF NOT EXISTS usage_events (
-  id                    TEXT PRIMARY KEY NOT NULL,
-  thread_id             TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  parent_turn_id        TEXT NOT NULL REFERENCES agent_messages(id) ON DELETE CASCADE,
-  feature_call_id       TEXT NOT NULL,
-  attempt               INTEGER NOT NULL CHECK(attempt >= 1),
-  feature               TEXT NOT NULL CHECK(feature IN ('main','title','memory','image_descriptor','computer_use','web','audit','assignment')),
-  harness_id            TEXT,
-  provider_id           TEXT,
-  model_id              TEXT,
-  thinking_level        TEXT,
-  utility_id            TEXT,
-  raw_provider_usage_json TEXT NOT NULL DEFAULT '{}',
-  tokens_uncached_input INTEGER CHECK(tokens_uncached_input IS NULL OR tokens_uncached_input >= 0),
-  tokens_cached_input   INTEGER CHECK(tokens_cached_input IS NULL OR tokens_cached_input >= 0),
-  tokens_cache_write    INTEGER CHECK(tokens_cache_write IS NULL OR tokens_cache_write >= 0),
-  tokens_output         INTEGER CHECK(tokens_output IS NULL OR tokens_output >= 0),
-  tokens_reasoning      INTEGER CHECK(tokens_reasoning IS NULL OR tokens_reasoning >= 0),
-  tokens_total          INTEGER CHECK(tokens_total IS NULL OR tokens_total >= 0),
-  raw_total             INTEGER CHECK(raw_total IS NULL OR raw_total >= 0),
-  total_semantics       TEXT NOT NULL CHECK(total_semantics IN ('includes_cache','excludes_cache','categories_may_overlap','provider_defined','unavailable')),
-  cost_usd              REAL,
-  cost_status           TEXT NOT NULL CHECK(cost_status IN ('known','estimated','unavailable')),
-  pricing_provenance_json TEXT,
-  tool_fee_usd          REAL CHECK(tool_fee_usd IS NULL OR tool_fee_usd >= 0),
-  success               INTEGER NOT NULL CHECK(success IN (0, 1)),
-  retry_cause           TEXT,
-  duration_ms           INTEGER NOT NULL DEFAULT 0 CHECK(duration_ms >= 0),
-  created_at            INTEGER NOT NULL,
-  CHECK(
-    (cost_status = 'unavailable' AND cost_usd IS NULL AND pricing_provenance_json IS NULL)
-    OR
-    (cost_status IN ('known','estimated') AND cost_usd IS NOT NULL AND cost_usd >= 0 AND pricing_provenance_json IS NOT NULL)
-  ),
-  UNIQUE (parent_turn_id, feature, feature_call_id, attempt)
-);
+-- Event-level source of truth for model and utility usage. Identity fields are
+-- immutable snapshots, not foreign keys. Thread, message, project, or provider
+-- deletion must never alter historical usage totals.
+CREATE TABLE IF NOT EXISTS usage_events (${USAGE_EVENTS_COLUMNS_SQL});
 
-CREATE INDEX IF NOT EXISTS idx_usage_events_thread
-  ON usage_events(thread_id, created_at, id);
-
-CREATE INDEX IF NOT EXISTS idx_usage_events_parent_turn
-  ON usage_events(parent_turn_id, feature, created_at);
-
--- Profile utility-usage and efficiency-KPI scans filter feature + created_at.
-CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
-  ON usage_events(feature, created_at);
-
--- Profile analytics always bound reads by event time. The covering identity
--- fields keep range/group queries on the dedicated ledger instead of scanning
--- the transcript table.
-CREATE INDEX IF NOT EXISTS idx_usage_events_analytics_range
-  ON usage_events(created_at, feature, harness_id, provider_id, model_id, thinking_level);
+${USAGE_EVENTS_INDEXES_SQL}
 
 -- ─── Turn outcome feedback (LLM-judged session scoring) ──────────────────
 -- One row per completed user turn, opened "pending" with the captured grading

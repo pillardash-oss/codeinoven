@@ -18640,7 +18640,8 @@ export class ChatEngine {
       // filtered out of the persisted mirror. Usage events and turn outcomes
       // reference the durable parent turn, so anchor them to the persisted set.
       const parentTurnId =
-        classifiedMessages.findLast((message) => message.role === 'user')?.id ?? null
+        merged.findLast((message) => message.role === 'user' && message.origin === 'user')?.id ??
+        null
       memoryParentTurnId = parentTurnId
       if (turnAssistant) {
         this.recordMessageUsageEvent(
@@ -18666,7 +18667,7 @@ export class ChatEngine {
           sessionId,
           thread,
           info.threadId,
-          mirror,
+          merged,
           parentTurnId,
           turnAssistant,
           awaitingUser
