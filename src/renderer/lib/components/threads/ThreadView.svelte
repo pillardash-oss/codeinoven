@@ -13,6 +13,10 @@
 
   /** Persists each thread's scroll position across component remounts. */
   const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
+  /** Small first paint for a cached long thread. The rest mounts after the
+   * browser has displayed the selected thread once. */
+  const INITIAL_THREAD_PAINT_LIMIT = 12
+  const INITIAL_THREAD_PAINT_BATCH_SIZE = 6
   const HISTORY_WINDOW_SIZE = 40
   const HISTORY_PRELOAD_THRESHOLD = 240
 
@@ -301,6 +305,7 @@
   let messages = $derived(
     controller?.messages ?? threadMessages.messages(thread.projectId, thread.id)
   )
+  let loaded = $derived(controller?.loaded ?? threadMessages.loaded(thread.projectId, thread.id))
   /** The conversation identity for held-steer tracking: temporary chats use
    *  their own id, threads use the thread id. */
   let conversationId = $derived(controller?.conversationId ?? thread.id)
@@ -308,10 +313,37 @@
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
   let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
-  // The store owns cold-load batching. Once messages reach this mounted view,
-  // keep its DOM continuous: a live append must never slice an older message
-  // out, shrink the scroll surface, then restore it a frame later.
-  let visibleMessages = $derived(messages)
+  /** Stage only this component's initial mount. Streaming and optimistic
+   * appends never restart this window or remove an existing message afterward. */
+  let initialThreadPaintComplete = $state(false)
+  let initialThreadPaintLimit = $state(INITIAL_THREAD_PAINT_LIMIT)
+  let initialThreadPaintFrame = 0
+  let visibleMessages = $derived(
+    initialThreadPaintComplete ? messages : messages.slice(-initialThreadPaintLimit)
+  )
+
+  function revealInitialThreadMessages(): void {
+    if (!alive || initialThreadPaintComplete) return
+    const targetMessageCount = messages.length
+    const revealBatch = (): void => {
+      if (!alive) return
+      const nextLimit = Math.min(
+        targetMessageCount,
+        initialThreadPaintLimit + INITIAL_THREAD_PAINT_BATCH_SIZE
+      )
+      initialThreadPaintLimit = nextLimit
+      if (nextLimit >= targetMessageCount) {
+        initialThreadPaintComplete = true
+        return
+      }
+      initialThreadPaintFrame = requestAnimationFrame(revealBatch)
+    }
+    // The second frame guarantees Chromium can paint the newest tail before
+    // older message blocks begin mounting in bounded batches.
+    initialThreadPaintFrame = requestAnimationFrame(() => {
+      initialThreadPaintFrame = requestAnimationFrame(revealBatch)
+    })
+  }
   /** The latest turn that already has an assistant message. A newly submitted
    *  user follow-up is handled separately until its first assistant message is
    *  mirrored, so it can never lend live state to the preceding trace. */
@@ -349,7 +381,6 @@
       .map((msg) => messageText(msg))
       .filter((text) => text.trim().length > 0)
   )
-  let loaded = $derived(controller?.loaded ?? threadMessages.loaded(thread.projectId, thread.id))
   let busy = $derived(controller?.busy ?? agentRuns.isBusy(thread.projectId, thread.id))
   let conversationBusy = $derived(
     (controller?.busy ?? false) || agentRuns.isConversationBusy(thread.projectId, thread.id)
@@ -3230,7 +3261,7 @@
 
     if (controller) {
       controller.mount()
-      void controller.load()
+      void Promise.resolve(controller.load()).then(revealInitialThreadMessages)
       localReady = Promise.resolve()
       sessionReady = Promise.resolve('')
       void refreshCommands()
@@ -3246,6 +3277,7 @@
           })
         }
         window.removeEventListener('resize', onResize)
+        cancelAnimationFrame(initialThreadPaintFrame)
         clearTimeout(copyResetTimer)
         // Controller-driven views never published the global state below, so
         // their teardown must not clear it either — clearing would clobber the
@@ -3354,6 +3386,8 @@
         void sendMessage(draft, files, undefined, undefined, undefined, [], [], undefined, [], true)
       }
     })
+    if (loaded) revealInitialThreadMessages()
+    else void localReady.then(revealInitialThreadMessages)
 
     return () => {
       alive = false
@@ -3369,6 +3403,7 @@
       unsubscribeThreadUpdated?.()
       unsubscribeLifecycleInheritance?.()
       window.removeEventListener('resize', onResize)
+      cancelAnimationFrame(initialThreadPaintFrame)
       clearTimeout(copyResetTimer)
       workspaceState.sources = []
       workspaceState.jumpToMessage = null
