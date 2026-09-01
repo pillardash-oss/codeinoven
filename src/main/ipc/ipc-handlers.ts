@@ -919,6 +919,7 @@ const AGENT_DEFAULT_FIELDS = new Set([
   'worker',
   'auditor',
   'imageDescriptor',
+  'imageDescriptorFallback',
   'syncFromThreadChanges'
 ])
 
@@ -1016,6 +1017,14 @@ function validateAgentDefaults(value: unknown): AgentDefaultsConfig {
           imageDescriptor: validateAgentModelSelection(
             value.imageDescriptor,
             'Image descriptor default'
+          )
+        }),
+    ...(value.imageDescriptorFallback === undefined
+      ? {}
+      : {
+          imageDescriptorFallback: validateAgentModelSelection(
+            value.imageDescriptorFallback,
+            'Image descriptor fallback default'
           )
         })
   }

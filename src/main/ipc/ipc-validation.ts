@@ -131,7 +131,8 @@ const THREAD_SETTINGS_FIELDS = new Set([
   'loopMode',
   'fileSystemMode',
   'loopAuditor',
-  'imageDescriptor'
+  'imageDescriptor',
+  'imageDescriptorFallback'
 ])
 const AGENT_MODEL_SELECTION_FIELDS = new Set([
   'harnessId',
@@ -1083,6 +1084,34 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
               descriptor.thinkingLevel,
               THINKING_LEVELS,
               'image descriptor thinking level'
+            )
+          })
+    }
+  }
+  if (input.imageDescriptorFallback !== undefined) {
+    const descriptor = assertRecord(input.imageDescriptorFallback, 'Image descriptor fallback')
+    rejectUnknownFields(descriptor, AGENT_MODEL_SELECTION_FIELDS, 'image descriptor fallback')
+    settings.imageDescriptorFallback = {
+      harnessId: validateEntityId(descriptor.harnessId, 'Image descriptor fallback harness ID'),
+      providerId: validateBoundedString(
+        descriptor.providerId,
+        'Image descriptor fallback provider ID',
+        1,
+        128
+      ),
+      modelId: validateBoundedString(
+        descriptor.modelId,
+        'Image descriptor fallback model ID',
+        1,
+        256
+      ),
+      ...(descriptor.thinkingLevel === undefined
+        ? {}
+        : {
+            thinkingLevel: assertEnum(
+              descriptor.thinkingLevel,
+              THINKING_LEVELS,
+              'image descriptor fallback thinking level'
             )
           })
     }

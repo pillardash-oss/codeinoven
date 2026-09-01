@@ -1117,6 +1117,8 @@ export interface AgentDefaultsConfig {
   auditor?: AgentModelSelection
   /** Vision model used to describe images for text-only models. */
   imageDescriptor?: AgentModelSelection
+  /** Fallback vision model tried automatically when the primary image descriptor fails. */
+  imageDescriptorFallback?: AgentModelSelection
   /** When enabled, role changes made inside a thread replace the matching global default. */
   syncFromThreadChanges: boolean
 }
@@ -1144,6 +1146,8 @@ export interface ThreadSettings {
   loopAuditor?: AgentModelSelection
   /** Vision model used to describe images for this thread's text-only model. */
   imageDescriptor?: AgentModelSelection
+  /** Fallback vision model tried automatically when the primary image descriptor fails. */
+  imageDescriptorFallback?: AgentModelSelection
 }
 
 /**

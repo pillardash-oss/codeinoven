@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { BrainCircuit, Eye, Hammer, Loader2, ShieldCheck, X } from '@lucide/svelte'
+  import { BrainCircuit, Eye, Hammer, Loader2, RefreshCw, ShieldCheck, X } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -166,6 +166,49 @@
     await updateConfig({ agentDefaults: next })
   }
 
+  async function selectImageDescriptorFallback(
+    providerId: string,
+    modelId: string,
+    nextHarnessId?: string
+  ): Promise<void> {
+    const provider = providers.find(
+      (candidate) =>
+        candidate.id === providerId &&
+        (nextHarnessId ? candidate.harnessId === nextHarnessId : true)
+    )
+    if (!provider) return
+    const harnessId = nextHarnessId ?? provider.harnessId
+    const next: AgentDefaultsConfig = {
+      ...defaults,
+      imageDescriptorFallback: {
+        harnessId,
+        providerId,
+        modelId,
+        thinkingLevel: defaults.imageDescriptorFallback?.thinkingLevel
+      }
+    }
+    defaults = next
+    rendererRecovery.addRecentModel(modelKey(harnessId, providerId, modelId))
+    await updateConfig({ agentDefaults: next })
+  }
+
+  async function selectImageDescriptorFallbackThinking(level: ThinkingLevel): Promise<void> {
+    if (!defaults.imageDescriptorFallback) return
+    const next: AgentDefaultsConfig = {
+      ...defaults,
+      imageDescriptorFallback: { ...defaults.imageDescriptorFallback, thinkingLevel: level }
+    }
+    defaults = next
+    await updateConfig({ agentDefaults: next })
+  }
+
+  async function clearImageDescriptorFallback(): Promise<void> {
+    const next = { ...defaults }
+    delete next.imageDescriptorFallback
+    defaults = next
+    await updateConfig({ agentDefaults: next })
+  }
+
   async function toggleThreadSync(): Promise<void> {
     const next = { ...defaults, syncFromThreadChanges: !defaults.syncFromThreadChanges }
     defaults = next
@@ -284,7 +327,9 @@
           <ModelPicker
             {providers}
             projectId={rendererRecovery.selectedProjectId}
-            harnessId={defaults.imageDescriptor?.harnessId ?? providers[0]?.harnessId ?? DEFAULT_HARNESS}
+            harnessId={defaults.imageDescriptor?.harnessId ??
+              providers[0]?.harnessId ??
+              DEFAULT_HARNESS}
             providerId={defaults.imageDescriptor?.providerId ?? ''}
             modelId={defaults.imageDescriptor?.modelId ?? ''}
             favoriteModels={rendererRecovery.favoriteModels}
@@ -312,6 +357,58 @@
             title="Clear image descriptor default"
             aria-label="Clear image descriptor default"
             onclick={() => void clearImageDescriptor()}
+          >
+            <X size={14} />
+          </button>
+        {/if}
+      </div>
+    </div>
+    <div class="flex items-center gap-4 border-t p-4">
+      <div class="rounded-lg bg-elevated p-2 text-muted"><RefreshCw size={18} /></div>
+      <div class="min-w-0 flex-1">
+        <h2 class="text-sm font-semibold text-foreground">Fallback</h2>
+        <p class="mt-0.5 text-xs text-muted">
+          Tried automatically when the primary vision model fails.
+        </p>
+        {#if !defaults.imageDescriptorFallback}
+          <p class="mt-1 text-[11px] text-dimmed">Not set · primary failures ask you for a model</p>
+        {/if}
+      </div>
+      <div class="flex w-60 shrink-0 items-center gap-1.5">
+        <div class="min-w-0 flex-1">
+          <ModelPicker
+            {providers}
+            projectId={rendererRecovery.selectedProjectId}
+            harnessId={defaults.imageDescriptorFallback?.harnessId ??
+              providers[0]?.harnessId ??
+              DEFAULT_HARNESS}
+            providerId={defaults.imageDescriptorFallback?.providerId ?? ''}
+            modelId={defaults.imageDescriptorFallback?.modelId ?? ''}
+            favoriteModels={rendererRecovery.favoriteModels}
+            recentModels={rendererRecovery.recentModels}
+            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+            visionOnly
+            side="bottom"
+            variant="field"
+            label={defaults.imageDescriptorFallback ? undefined : 'Choose fallback model'}
+            disabled={!settingsReady || loading || providers.length === 0}
+            onSelect={(providerId, modelId, harnessId) =>
+              void selectImageDescriptorFallback(providerId, modelId, harnessId)}
+            thinkingLevel={defaults.imageDescriptorFallback?.thinkingLevel}
+            onSelectThinking={(level) => void selectImageDescriptorFallbackThinking(level)}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+          />
+        </div>
+        {#if defaults.imageDescriptorFallback}
+          <button
+            type="button"
+            class="rounded-lg p-2 text-dimmed hover:bg-elevated hover:text-foreground"
+            title="Clear image descriptor fallback default"
+            aria-label="Clear image descriptor fallback default"
+            onclick={() => void clearImageDescriptorFallback()}
           >
             <X size={14} />
           </button>

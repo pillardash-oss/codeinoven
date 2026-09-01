@@ -120,7 +120,8 @@ import {
   imageDescriptorBatchCapability,
   imageDescriptorBatchPrompt,
   runImageDescriptorBatch,
-  type ImageDescriptorBatchCapability
+  type ImageDescriptorBatchCapability,
+  type ImageDescriptorBatchRun
 } from '../services/image-descriptor'
 import type {
   AgentAccountUsage,
@@ -310,6 +311,19 @@ const MEMORY_RESPONSE_BOUNDARY_INSTRUCTION = [
 
 /** Guidance injected for models that cannot see images (attachment: false). */
 const IMAGE_DESCRIPTOR_SYSTEM_NOTE = `You cannot directly see images. The application describes images attached to the user turn with the configured vision model before dispatch and supplies that evidence in the prompt. For follow-up inspection, the image descriptor is available on demand through the app gateway: search for it with ${UTILITY_SEARCH_TOOL_NAME} using kinds ["image_descriptor"], activate the result with ${UTILITY_ACTIVATE_TOOL_NAME}, then invoke its describe operation with ${UTILITY_INVOKE_TOOL_NAME} passing {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]} (or "type":"binary" with base64 data when the bytes cannot be referenced by path). The operation accepts several images per call, so batch frames at once. If the media is a video file you cannot read directly, check whether ffmpeg is available on the system (e.g., ffmpeg -version or which ffmpeg); if no system ffmpeg is found, this app bundles ffmpeg via ffmpeg-static — resolve its path and use it.`
+
+/** Whether two agent model selections identify the same vision model. */
+function isSameImageDescriptorModel(
+  a: AgentModelSelection | undefined,
+  b: AgentModelSelection
+): boolean {
+  return (
+    a !== undefined &&
+    a.harnessId === b.harnessId &&
+    a.providerId === b.providerId &&
+    a.modelId === b.modelId
+  )
+}
 
 function isImagePromptAttachment(attachment: PromptAttachment): boolean {
   if (attachment.mime.toLocaleLowerCase().startsWith('image/')) return true
@@ -8027,6 +8041,10 @@ export class ChatEngine {
       thread?.settings?.imageDescriptor ??
       config.agentDefaults.imageDescriptor ??
       this.firstVisionModelFromCache(request.projectId)
+    // A configured fallback vision model is tried automatically when the
+    // primary fails, before the user is asked to pick another one.
+    const fallback =
+      thread?.settings?.imageDescriptorFallback ?? config.agentDefaults.imageDescriptorFallback
     if (!selection) {
       const decision = await this.requestImageDescriptorDecision(
         request,
@@ -8054,11 +8072,17 @@ export class ChatEngine {
          ORDER BY created_at DESC, id DESC LIMIT 1`,
         request.threadId
       )?.id
-      const capability = await this.imageDescriptorBatchCapability(request, selection)
-      try {
-        const run = await runImageDescriptorBatch(
+      // Try the whole request as one candidate run against the currently
+      // selected model; a failed batch retries once on the fallback before
+      // degrading to one safe call per image.
+      const runBatch = async (): Promise<ImageDescriptorBatchRun> => {
+        const currentCapability = await this.imageDescriptorBatchCapability(
+          request,
+          selectionRef.current
+        )
+        return runImageDescriptorBatch(
           request.images,
-          capability,
+          currentCapability,
           (images, featureCallId) =>
             this.describeImagesOnVisionModelBatch(
               request,
@@ -8068,17 +8092,43 @@ export class ChatEngine {
               featureCallId
             ),
           (image) =>
-            this.describeWithImageDescriptorRecovery(request, selectionRef, image, parentTurnId)
+            this.describeWithImageDescriptorRecovery(
+              request,
+              selectionRef,
+              fallback,
+              image,
+              parentTurnId
+            )
         )
+      }
+      try {
+        const run = await runBatch()
         return run.results
       } catch (error) {
         Logger.dev('Image descriptor batch failed; falling back to per-image calls:', error)
+        // The batch call failed before producing results: retry the whole
+        // batch once on the configured fallback model when one exists, then
+        // degrade to the per-image recovery path which itself tries the
+        // fallback and only then notifies the user.
+        if (fallback && !isSameImageDescriptorModel(fallback, selectionRef.current)) {
+          selectionRef.current = fallback
+          try {
+            const run = await runBatch()
+            return run.results
+          } catch (fallbackError) {
+            Logger.dev(
+              'Image descriptor batch failed on the fallback model; degrading to per-image calls:',
+              fallbackError
+            )
+          }
+        }
         const results: ImageDescriptorResult[] = []
         for (const image of request.images) {
           results.push(
             await this.describeWithImageDescriptorRecovery(
               request,
               selectionRef,
+              fallback,
               image,
               parentTurnId
             )
@@ -8229,8 +8279,10 @@ export class ChatEngine {
   }
 
   /**
-   * Describe one image with the vision model. When the vision call fails, the
-   * first attempt surfaces a user decision card (change model / retry / ignore)
+   * Describe one image with the vision model. When the primary vision model
+   * fails, a configured fallback model is tried automatically before the user
+   * is involved. If the fallback also fails (or none was configured), the
+   * failure surfaces a user decision card (change model / retry / ignore)
    * instead of silently handing the error to the text-only model. The decision
    * drives the retry: a new selection is persisted to the thread, and `ignore`
    * forwards whatever partial output exists (usually nothing) plus the error so
@@ -8239,10 +8291,17 @@ export class ChatEngine {
   private async describeWithImageDescriptorRecovery(
     request: ImageDescriptorExecutorRequest,
     selection: { current: AgentModelSelection },
+    fallback: AgentModelSelection | undefined,
     image: ResolvedImageEntry,
     parentTurnId?: string
   ): Promise<ImageDescriptorResult> {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    let next: AgentModelSelection = selection.current
+    let usedFallback = false
+    // One try for the primary, one automatic try for the fallback, and one
+    // try for a model picked from the user decision card — enough rounds to
+    // cover the configured pair without ever hanging the turn in a loop.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const active = next
       // A reply to the error card briefly re-arms the parent watchdog. The
       // descriptor owns its own adaptive inactivity deadline while retrying.
       this.clearSessionWatchdog(request.sessionId)
@@ -8251,7 +8310,7 @@ export class ChatEngine {
           request.projectId,
           request.threadId,
           request.projectPath,
-          selection.current,
+          active,
           image,
           attempt,
           parentTurnId
@@ -8264,47 +8323,52 @@ export class ChatEngine {
             ? 'network'
             : classifyProviderIssue(message)
         Logger.dev('Image description failed', {
-          harnessId: selection.current.harnessId,
-          providerId: selection.current.providerId,
-          modelId: selection.current.modelId,
+          harnessId: active.harnessId,
+          providerId: active.providerId,
+          modelId: active.modelId,
           error: message
         })
         const attributedMessage = `The vision model (${this.visionModelLabel(
           request.projectId,
-          selection.current
+          active
         )}) failed: ${message}`
-        if (attempt === 0) {
-          const decision = await this.requestImageDescriptorDecision(
-            request,
-            selection.current,
-            attributedMessage,
-            kind
-          )
-          if (decision.action === 'retry') {
-            if (decision.selection) {
-              selection.current = decision.selection
-              await this.persistImageDescriptorSelection(
-                request.projectId,
-                request.threadId,
-                selection.current
-              )
-            }
-            continue
+        // Automatic fallback: switch to the configured fallback model and
+        // retry silently, before interrupting the user with a decision card.
+        if (!usedFallback && fallback && !isSameImageDescriptorModel(fallback, active)) {
+          usedFallback = true
+          next = fallback
+          // Keep the shared selection on the working model so the remaining
+          // images in the same run start from it; never persist it as a
+          // permanent override of the user's configured primary.
+          selection.current = fallback
+          continue
+        }
+        const decision = await this.requestImageDescriptorDecision(
+          request,
+          active,
+          attributedMessage,
+          kind
+        )
+        if (decision.action === 'retry') {
+          if (decision.selection) {
+            selection.current = decision.selection
+            await this.persistImageDescriptorSelection(
+              request.projectId,
+              request.threadId,
+              selection.current
+            )
+            next = decision.selection
+          } else {
+            next = active
           }
-          return {
-            id: image.id,
-            source: image.source,
-            type: image.type,
-            description: '',
-            error: `${attributedMessage} You chose to continue. Work with the partial description above if it is usable; otherwise tell the user what is missing and suggest how to fix it.`
-          }
+          continue
         }
         return {
           id: image.id,
           source: image.source,
           type: image.type,
           description: '',
-          error: `${attributedMessage} The description still failed after retry. Tell the user what is missing and suggest how to fix it.`
+          error: `${attributedMessage} You chose to continue. Work with the partial description above if it is usable; otherwise tell the user what is missing and suggest how to fix it.`
         }
       }
     }
