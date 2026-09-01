@@ -855,6 +855,22 @@ class ScopeState {
     return invoke('scope:worktree:mergePreflight', source, dest, mode)
   }
 
+  /**
+   * Consume a delete-scope token to fully remove a managed scope: worktree,
+   * scope bucket, and (by default) its branch. Threads are handled by the
+   * caller before this runs.
+   */
+  async confirmDeleteScope(
+    projectId: string,
+    bucketId: string,
+    confirmationId: string,
+    deleteBranch = true
+  ): Promise<void> {
+    const target = { projectId, scopeBucketId: bucketId }
+    await invoke('scope:worktree:confirmDeleteScope', target, confirmationId, deleteBranch)
+    await this.reloadBoard(projectId)
+  }
+
   /** Consume a merge token to merge a scope and apply its post-merge mode. */
   async confirmScopeMerge(
     projectId: string,

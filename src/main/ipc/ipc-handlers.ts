@@ -4758,6 +4758,15 @@ export function registerIpcHandlers(
     return scopeWorktreeService.runSetupFromFailure(validatedTarget, { runSetup })
   })
   ipcMain.handle(
+    'scope:worktree:confirmDeleteScope',
+    (_, target: unknown, confirmationId: unknown, deleteBranch: unknown) =>
+      scopeWorktreeService.confirmDeleteScope(
+        validateScopeTarget(target),
+        validateConfirmationToken(confirmationId),
+        validateBoolean(deleteBranch, 'Delete branch')
+      )
+  )
+  ipcMain.handle(
     'scope:worktree:mergePreflight',
     (_, target: unknown, mergeTarget: unknown, mode: unknown) =>
       scopeWorktreeService.mergePreflight(

@@ -1135,6 +1135,42 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     })
   }
 
+  /**
+   * Consume a delete-scope token and fully remove a managed scope: the
+   * worktree checkout, the scope bucket, and — unless `deleteBranch` is false
+   * — the `cio/` branch. This is the single destructive entry point for
+   * deleting a worktree-backed scope (the renderer handles the thread choice,
+   * delete or move to Default, before calling it). Always forceful: the user
+   * already confirmed the preflight that reported dirty/unpushed work.
+   */
+  async confirmDeleteScope(
+    target: ScopeTarget,
+    token: string,
+    deleteBranch: boolean
+  ): Promise<void> {
+    await this.enqueue(target.projectId, async () => {
+      this.requireFreshSnapshot(token, target, 'delete-scope')
+      const descriptor = this.requireManaged(target)
+      const project = await this.projects.getProject(target.projectId)
+      const repoPath = project?.path
+      await this.removeManagedWorktree(
+        target,
+        descriptor,
+        repoPath ?? getScopeRootPath(target.projectId, descriptor.directoryName)
+      )
+      if (deleteBranch && repoPath) {
+        await runGit(['branch', '-D', descriptor.branch], {
+          cwd: repoPath,
+          timeoutMs: 60_000
+        }).catch((cause) => {
+          const detail = cause instanceof Error ? cause.message : String(cause)
+          Logger.error(`Branch removal during scope deletion failed: ${detail}`)
+        })
+      }
+      this.scopes.deleteBucket(target.projectId, target.scopeBucketId)
+    })
+  }
+
   async confirmDeleteBranch(target: ScopeTarget, token: string): Promise<void> {
     await this.enqueue(target.projectId, async () => {
       this.requireFreshSnapshot(token, target, 'delete-branch')

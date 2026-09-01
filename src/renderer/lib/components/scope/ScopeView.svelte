@@ -24,7 +24,7 @@
   import ScopeMergeModal from './ScopeMergeModal.svelte'
   import ScopeCreateModal from './ScopeCreateModal.svelte'
   import ScopeAdoptModal from './ScopeAdoptModal.svelte'
-  import type { ScopeLifecycleAction } from '$shared/types'
+  import type { ScopeLifecycleAction, ScopeLifecyclePreflight } from '$shared/types'
 
   interface Props {
     navigateToProjects?: () => void
@@ -38,6 +38,8 @@
   let editBucketIconType = $state<string | undefined>()
   let deleteBucketTarget = $state<ScopeBucket | null>(null)
   let deleteThreads = $state(false)
+  /** Display-only preflight warnings shown in the Delete Scope dialog for managed scopes. */
+  let deleteScopePreflight = $state<ScopeLifecyclePreflight | null>(null)
   let actionError = $state<string | null>(null)
   let lifecycleAction = $state<{ action: ScopeLifecycleAction; bucket: ScopeBucket } | null>(null)
   let mergeTarget = $state<ScopeBucket | null>(null)
@@ -409,13 +411,44 @@
           workspaceState.updateThread(thread)
         }
       }
-      await scopeState.removeBucket(deleteBucketTarget.id)
+      if (deleteBucketTarget.root.kind === 'worktree' && scopeState.activeProjectId) {
+        // Full cleanup for worktree-backed scopes — the worktree and its branch
+        // are removed through the guarded lifecycle. The token is minted here
+        // (fresh) rather than reusing the dialog's display preflight, so it can
+        // never be stale by the time the user confirms.
+        const preflight = await scopeState.preflightWorktree(
+          scopeState.activeProjectId,
+          deleteBucketTarget.id,
+          'delete-scope'
+        )
+        await scopeState.confirmDeleteScope(
+          scopeState.activeProjectId,
+          deleteBucketTarget.id,
+          preflight.confirmationId,
+          true
+        )
+      } else {
+        await scopeState.removeBucket(deleteBucketTarget.id)
+      }
       deleteBucketTarget = null
       deleteThreads = false
     } catch (error) {
       actionError = errorMessage(error, 'The scope could not be deleted.')
     }
   }
+
+  /** Refresh the display-only preflight warnings when the delete dialog opens on a managed scope. */
+  $effect(() => {
+    const bucket = deleteBucketTarget
+    if (!bucket || bucket.root.kind !== 'worktree' || !scopeState.activeProjectId) {
+      deleteScopePreflight = null
+      return
+    }
+    void scopeState
+      .preflightWorktree(scopeState.activeProjectId, bucket.id, 'delete-scope')
+      .then((preflight) => (deleteScopePreflight = preflight))
+      .catch(() => (deleteScopePreflight = null))
+  })
 
   function toggleBucket(bucketId: string): void {
     void scopeState.toggleBucket(bucketId).catch((error: unknown) => {
@@ -483,8 +516,6 @@
               onRepairWorktree={() => void repairWorktree(bucket)}
               onMerge={() => (mergeTarget = bucket)}
               onDetach={() => openLifecycle(bucket, 'detach')}
-              onRemoveWorktree={() => openLifecycle(bucket, 'remove-worktree')}
-              onDeleteBranch={() => openLifecycle(bucket, 'delete-branch')}
               onMoveBucket={moveBucket}
               onCreateThread={() => void createThread(bucket.id)}
               onOpen={(thread) => void openThread(thread)}
@@ -582,6 +613,9 @@
     Delete <span class="font-medium text-foreground">{deleteBucketTarget?.name}</span>? {deleteThreads
       ? 'Its threads will be permanently deleted.'
       : 'Its threads will return to Default.'}
+    {#if deleteBucketTarget?.root.kind === 'worktree'}
+      The worktree and its branch are also removed.
+    {/if}
   </p>
 
   <div class="mt-4 flex items-center justify-between rounded-lg border bg-elevated/50 px-3 py-2.5">
@@ -596,6 +630,33 @@
       aria-label="Delete associated threads"
     />
   </div>
+
+  {#if deleteBucketTarget?.root.kind === 'worktree' && deleteScopePreflight}
+    <div class="mt-4 space-y-2 text-xs">
+      {#if (deleteScopePreflight.dirtyFiles.length ?? 0) > 0}
+        <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-warning">
+          <p class="font-medium">
+            Uncommitted changes will be lost ({deleteScopePreflight.dirtyFiles.length})
+          </p>
+          <ul class="mt-1 max-h-24 list-inside list-disc overflow-y-auto">
+            {#each deleteScopePreflight.dirtyFiles.slice(0, 20) as file (file)}
+              <li class="truncate">{file}</li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+      {#if (deleteScopePreflight.unpushedCommits ?? 0) > 0}
+        <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-warning">
+          {deleteScopePreflight.unpushedCommits} unpushed commit(s) are not reachable from any remote.
+        </div>
+      {/if}
+      {#if deleteScopePreflight.hasActiveProcesses}
+        <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-warning">
+          Active agent processes are still running in this scope.
+        </div>
+      {/if}
+    </div>
+  {/if}
 </Modal>
 
 {#if mergeTarget && scopeState.activeProjectId}

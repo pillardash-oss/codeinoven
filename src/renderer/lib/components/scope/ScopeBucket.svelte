@@ -47,8 +47,6 @@
     onRepairWorktree?: () => void
     onMerge?: () => void
     onDetach?: () => void
-    onRemoveWorktree?: () => void
-    onDeleteBranch?: () => void
   }
 
   let {
@@ -76,9 +74,7 @@
     onRetrySetup,
     onRepairWorktree,
     onMerge,
-    onDetach,
-    onRemoveWorktree,
-    onDeleteBranch
+    onDetach
   }: Props = $props()
 
   let scopeDropPosition = $state<'before' | 'after' | null>(null)
@@ -253,8 +249,6 @@
       hasRepairableIssue={repairable}
       {onMerge}
       {onDetach}
-      {onRemoveWorktree}
-      {onDeleteBranch}
     />
   </div>
 

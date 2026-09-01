@@ -27,8 +27,6 @@
     | 'repair-worktree'
     | 'merge'
     | 'detach'
-    | 'remove-worktree'
-    | 'delete-branch'
     | 'delete'
 
   interface Props {
@@ -47,8 +45,6 @@
     hasRepairableIssue?: boolean
     onMerge?: () => void
     onDetach?: () => void
-    onRemoveWorktree?: () => void
-    onDeleteBranch?: () => void
   }
 
   let {
@@ -64,9 +60,7 @@
     onRepairWorktree,
     hasRepairableIssue = false,
     onMerge,
-    onDetach,
-    onRemoveWorktree,
-    onDeleteBranch
+    onDetach
   }: Props = $props()
 
   let showMenu = $state(false)
@@ -175,20 +169,6 @@
             closeMenu()
           }
         })
-        list.push({
-          label: 'Remove worktree',
-          run: () => {
-            onRemoveWorktree?.()
-            closeMenu()
-          }
-        })
-        list.push({
-          label: 'Delete branch',
-          run: () => {
-            onDeleteBranch?.()
-            closeMenu()
-          }
-        })
       }
       if (bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
         list.push({
@@ -245,7 +225,7 @@
             <Archive size={13} class="text-muted" />
           {:else if item.label === 'Restore'}
             <ArchiveRestore size={13} class="text-muted" />
-          {:else if item.label === 'Delete scope' || item.label === 'Delete branch'}
+          {:else if item.label === 'Delete scope'}
             <Trash2 size={13} class="text-muted" />
           {:else if item.label === 'Edit'}
             <Pencil size={13} class="text-muted" />

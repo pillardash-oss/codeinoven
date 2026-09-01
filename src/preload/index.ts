@@ -374,6 +374,7 @@ const INVOKE_CHANNELS = [
   'scope:worktree:confirmDetach',
   'scope:worktree:confirmRemove',
   'scope:worktree:confirmDeleteBranch',
+  'scope:worktree:confirmDeleteScope',
   'scope:worktree:retrySetup',
   'scope:worktree:mergePreflight',
   'scope:worktree:confirmMerge',

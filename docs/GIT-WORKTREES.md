@@ -171,16 +171,26 @@ active processes in the scope, and branch ownership, and mints one
 confirmation ID bound to that snapshot. The ID is consumed at execution;
 stale or mismatched IDs are rejected.
 
-- **Detach:** returns the scope to the project directory. Refused when the
-  worktree is dirty or unpushed.
-- **Remove worktree:** deletes the scope and removes the worktree. Refused for
-  dirty or unpushed state unless a second **force** confirmation is completed.
-- **Delete branch:** removes the scope's branch. Never implied by scope or
-  worktree removal; it is always a separate, dedicated confirmation.
-- **Delete scope:** removes the bucket from the board. Worktree removal and
-  branch deletion remain separate confirmed actions.
+- **Detach:** returns the scope to the project directory — removes the
+  worktree checkout while keeping the scope, its threads and the branch.
+  Refused when the worktree is dirty or unpushed.
+- **Delete scope:** full cleanup for a managed scope — removes the worktree
+  checkout, deletes the scope bucket and the `cio/` branch in one confirmed
+  action. The dialog also offers to permanently delete the scope's threads
+  (otherwise they return to the Default scope). Deleting a project-rooted
+  scope just removes the bucket; its threads follow the same choice.
+- **Archive / Restore:** never destructive. Hides or restores the scope on the
+  board without touching Git, the worktree, or threads; archiving never
+  implies removal.
 - **Delete project:** refuses while managed worktree scopes exist rather than
   silently orphaning a registered worktree.
+
+The scope actions menu intentionally exposes only the non-overlapping
+operations (merge, detach, archive, delete). `Remove worktree` and `Delete
+branch` are not separate menu entries: removing a worktree while keeping the
+scope is *Detach*, and permanently removing a scope is *Delete scope* (which
+also removes the worktree and branch). Branch-level maintenance that keeps the
+worktree lives in the Git panel.
 
 Archiving and restoring a scope never mutate Git, the worktree, environment
 files, setup status, or thread assignments.

@@ -422,6 +422,72 @@ describe.skipIf(process.platform === 'win32')('ScopeWorktreeService', () => {
     expect(existsSync(worktreePath)).toBe(false)
   }, 60_000)
 
+  it('delete-scope fully removes the worktree, the branch and the bucket', async () => {
+    const { service, scopes, bucketA } = await setup()
+    const descriptor = await service.createManagedWorktree(
+      { projectId: 'p1', scopeBucketId: bucketA },
+      { title: 'Cleanup', runSetup: false, environmentMode: 'copy' }
+    )
+    const worktreePath = getScopeRootPath('p1', descriptor.directoryName)
+
+    // A commit makes the branch deletable and demonstrates full cleanup.
+    const worktreeGit = simpleGit(worktreePath)
+    writeFileSync(join(worktreePath, 'cleanup.txt'), 'cleanup\n')
+    await worktreeGit.add('.')
+    await worktreeGit.commit('cleanup work')
+
+    const preflight = await service.preflight('delete-scope', {
+      projectId: 'p1',
+      scopeBucketId: bucketA
+    })
+    await service.confirmDeleteScope(
+      { projectId: 'p1', scopeBucketId: bucketA },
+      preflight.confirmationId,
+      true
+    )
+
+    expect(scopes.getBoard('p1').buckets.some((candidate) => candidate.id === bucketA)).toBe(false)
+    expect(existsSync(worktreePath)).toBe(false)
+    await expect(simpleGit(repoPath).branch(['--list', descriptor.branch])).resolves.not.toContain(
+      descriptor.branch
+    )
+  }, 60_000)
+
+  it('delete-scope can keep the branch when asked', async () => {
+    const { service, scopes, bucketA } = await setup()
+    const descriptor = await service.createManagedWorktree(
+      { projectId: 'p1', scopeBucketId: bucketA },
+      { title: 'KeepBranch', runSetup: false, environmentMode: 'copy' }
+    )
+    const worktreePath = getScopeRootPath('p1', descriptor.directoryName)
+
+    const preflight = await service.preflight('delete-scope', {
+      projectId: 'p1',
+      scopeBucketId: bucketA
+    })
+    await service.confirmDeleteScope(
+      { projectId: 'p1', scopeBucketId: bucketA },
+      preflight.confirmationId,
+      false
+    )
+
+    expect(scopes.getBoard('p1').buckets.some((candidate) => candidate.id === bucketA)).toBe(false)
+    expect(existsSync(worktreePath)).toBe(false)
+    const branches = await simpleGit(repoPath).branch()
+    expect(branches.all).toContain(descriptor.branch)
+  }, 60_000)
+
+  it('rejects delete-scope with a stale or mismatched token', async () => {
+    const { service, bucketA } = await setup()
+    await service.createManagedWorktree(
+      { projectId: 'p1', scopeBucketId: bucketA },
+      { title: 'StaleTok', runSetup: false, environmentMode: 'copy' }
+    )
+    await expect(
+      service.confirmDeleteScope({ projectId: 'p1', scopeBucketId: bucketA }, 'bogus', true)
+    ).rejects.toThrow(/token is stale/)
+  }, 60_000)
+
   describe('merge back into the project', () => {
     async function createFeatureWorktree(): Promise<{
       service: ScopeWorktreeService
@@ -512,7 +578,8 @@ describe.skipIf(process.platform === 'win32')('ScopeWorktreeService', () => {
         false
       )
       expect(existsSync(f.directory)).toBe(false)
-      await expect(mainGit.branch(['--list', f.branch])).resolves.not.toContain(f.branch)
+      const branches = await mainGit.branch()
+      expect(branches.all).not.toContain(f.branch)
     }, 60_000)
 
     it('merge-move-to-default moves threads and evicts', async () => {

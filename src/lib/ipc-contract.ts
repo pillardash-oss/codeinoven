@@ -1822,6 +1822,11 @@ export interface IpcInvokeContract {
     [target: ScopeTarget, confirmationId: string],
     void
   >
+  /** Fully delete a managed scope: worktree, bucket, and optionally branch. */
+  'scope:worktree:confirmDeleteScope': Contract<
+    [target: ScopeTarget, confirmationId: string, deleteBranch: boolean],
+    void
+  >
   /** Retry a failed/interrupted setup from its failed command. */
   'scope:worktree:retrySetup': Contract<
     [target: ScopeTarget, options: { runSetup: boolean }],
