@@ -81,6 +81,13 @@
           "label": "Delete active thread",
           "description": "Opens the delete confirmation for the open thread; Enter on the focused Delete button confirms, Escape cancels.",
           "scenario": "When a thread is open."
+        },
+        {
+          "id": "nav-toggle-left-sidebar",
+          "keys": ["mod", "s"],
+          "label": "Toggle left sidebar",
+          "description": "Folds or unfolds the Projects/Chats/Threads sidebar on the plain workspace, where the save chord is otherwise unused.",
+          "scenario": "Projects, Chats, or Threads view with no studio and no dirty file tab open."
         }
       ]
     },

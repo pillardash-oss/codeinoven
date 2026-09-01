@@ -48,6 +48,7 @@
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
@@ -1554,6 +1555,21 @@
       e.preventDefault()
       if (e.repeat) return
       handleFind()
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+      // On the plain workspace (no studio, no dirty file tab) the Cmd/Ctrl+S
+      // save chord is otherwise unused, so it folds/unfolds the left sidebar.
+      // Anywhere a save binding owns the chord (a Spec/Assignment/Brainstorm
+      // studio, or a file tab with unsaved changes) it keeps priority: we return
+      // without preventDefault so that handler saves instead of toggling.
+      if (e.repeat) return
+      const leftSidebarViews = ['projects', 'chats', 'threads']
+      const studioOpen = Boolean(document.querySelector('[data-region="spec-studio"]'))
+      const dirtyFiles = projectFilesWorkspace.getUnsavedFiles().length > 0
+      if (!leftSidebarViews.includes(activeView) || studioOpen || dirtyFiles) return
+      e.preventDefault()
+      sidebarState.toggle()
       return
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
