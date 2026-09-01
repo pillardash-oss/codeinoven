@@ -9,7 +9,6 @@ import { OwnedProcessJournal } from '../system/owned-process-journal'
 import { broadcastAgentProcessesChanged } from '../chat/thread-events'
 
 const execFileAsync = promisify(execFile)
-const PROCESS_SCAN_INTERVAL_MS = 750
 const PROCESS_EXIT_GRACE_MS = 1_500
 const PORT_SCAN_TIMEOUT_MS = 2_000
 /** Key under which app-wide roots (e.g. the shared opencode server) are tracked. */
@@ -130,8 +129,7 @@ export class AgentProcessService implements AgentProcessObserver {
   private readonly owners = new Map<string, ProcessOwner>()
   private readonly roots = new Map<string, Map<number, HarnessRoot>>()
   private readonly tracked = new Map<string, Map<number, TrackedProcess>>()
-  private scanTimer: ReturnType<typeof setInterval> | null = null
-  private scanInFlight = false
+  private scanInFlight: Promise<void> | null = null
   private journal: OwnedProcessJournal | null = null
 
   constructor(private readonly snapshotter: ProcessSnapshotter = defaultSnapshotter) {}
@@ -164,11 +162,10 @@ export class AgentProcessService implements AgentProcessObserver {
     }
     sessionRoots.set(pid, { pid, command, cwd, startedAt: Date.now() })
     this.journal?.register(pid, command, cwd)
-    this.ensureScanner()
-    void this.scan()
   }
 
-  list(projectId: string, threadId: string): AgentRunningProcess[] {
+  async list(projectId: string, threadId: string, refresh = true): Promise<AgentRunningProcess[]> {
+    if (refresh) await this.scan()
     const unique = new Map<number, AgentRunningProcess>()
     for (const [sessionId, owner] of this.owners) {
       if (owner.projectId !== projectId || owner.threadId !== threadId) continue
@@ -224,6 +221,7 @@ export class AgentProcessService implements AgentProcessObserver {
    * TCP ports it is listening on (best-effort OS detection).
    */
   async listAll(): Promise<TaskManagerProcess[]> {
+    await this.scan()
     const pids = new Set<number>()
     for (const processes of this.tracked.values()) {
       for (const process of processes.values()) pids.add(process.pid)
@@ -394,7 +392,6 @@ export class AgentProcessService implements AgentProcessObserver {
     for (const owner of changedOwners.values()) {
       broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
     }
-    this.stopScannerWhenIdle()
   }
 
   async releaseThread(projectId: string, threadId: string): Promise<void> {
@@ -404,7 +401,6 @@ export class AgentProcessService implements AgentProcessObserver {
       this.roots.delete(sessionId)
       this.owners.delete(sessionId)
     }
-    this.stopScannerWhenIdle()
   }
 
   async killAll(): Promise<void> {
@@ -427,7 +423,6 @@ export class AgentProcessService implements AgentProcessObserver {
     for (const owner of owners.values()) {
       broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
     }
-    this.stopScanner()
   }
 
   /**
@@ -545,23 +540,18 @@ export class AgentProcessService implements AgentProcessObserver {
     return false
   }
 
-  private ensureScanner(): void {
-    if (this.scanTimer) return
-    this.scanTimer = setInterval(() => void this.scan(), PROCESS_SCAN_INTERVAL_MS)
-  }
-
-  private stopScannerWhenIdle(): void {
-    if (this.roots.size === 0 && this.tracked.size === 0) this.stopScanner()
-  }
-
-  private stopScanner(): void {
-    if (this.scanTimer) clearInterval(this.scanTimer)
-    this.scanTimer = null
-  }
-
   private async scan(): Promise<void> {
-    if (this.scanInFlight) return
-    this.scanInFlight = true
+    if (this.scanInFlight) return this.scanInFlight
+    const request = this.performScan()
+    this.scanInFlight = request
+    try {
+      await request
+    } finally {
+      if (this.scanInFlight === request) this.scanInFlight = null
+    }
+  }
+
+  private async performScan(): Promise<void> {
     try {
       const snapshot = await this.snapshotter()
       const currentByPid = new Map(snapshot.map((entry) => [entry.pid, entry]))
@@ -633,11 +623,8 @@ export class AgentProcessService implements AgentProcessObserver {
       for (const owner of changedOwners.values()) {
         broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
       }
-      this.stopScannerWhenIdle()
     } catch (error) {
       Logger.dev('Agent process scan failed:', error)
-    } finally {
-      this.scanInFlight = false
     }
   }
 

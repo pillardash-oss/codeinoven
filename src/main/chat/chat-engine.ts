@@ -4609,7 +4609,7 @@ export class ChatEngine {
   }
 
   /** Running processes owned by a thread (and app-scoped pooled harness shares). */
-  listProcesses(projectId: string, threadId: string): AgentRunningProcess[] {
+  listProcesses(projectId: string, threadId: string): Promise<AgentRunningProcess[]> {
     return this.agentProcesses.list(
       validateEntityId(projectId, 'Project ID'),
       validateEntityId(threadId, 'Thread ID')
@@ -4624,6 +4624,7 @@ export class ChatEngine {
   async hasActiveProcessesInScope(projectId: string, scopeBucketId?: string): Promise<boolean> {
     projectId = validateEntityId(projectId, 'Project ID')
     const threads = await this.threadManager.listThreads(projectId)
+    let inspected = false
     for (const thread of threads) {
       if (thread.archived) continue
       if (
@@ -4632,7 +4633,9 @@ export class ChatEngine {
       ) {
         continue
       }
-      if (this.agentProcesses.list(projectId, thread.id).length > 0) return true
+      const processes = await this.agentProcesses.list(projectId, thread.id, !inspected)
+      inspected = true
+      if (processes.length > 0) return true
     }
     return false
   }
