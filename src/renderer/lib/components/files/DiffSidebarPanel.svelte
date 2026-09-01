@@ -1,3 +1,388 @@
+<script module lang="ts">
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+  import type { TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { LatestRequestGuard } from '$lib/refresh-guard'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+
+  type ChangesMode = 'diffs' | 'files'
+
+  /** Durable per-thread state that survives the panel's remount cycle. */
+  interface DiffPanelCache {
+    checkpoints: TurnCheckpointSummary[]
+    selectedCheckpointId: string | null
+    fileDiffsByCheckpoint: SvelteMap<string, TurnCheckpointFileDiff[]>
+  }
+
+  const panelCache = new SvelteMap<string, DiffPanelCache>()
+
+  function cacheKeyFor(projectId: string, threadId: string): string {
+    return `${projectId}:${threadId}`
+  }
+
+  function getOrCreateCache(projectId: string, threadId: string): DiffPanelCache {
+    const key = cacheKeyFor(projectId, threadId)
+    let entry = panelCache.get(key)
+    if (!entry) {
+      entry = {
+        checkpoints: [],
+        selectedCheckpointId: null,
+        fileDiffsByCheckpoint: new SvelteMap()
+      }
+      panelCache.set(key, entry)
+    }
+    return entry
+  }
+
+  /**
+   * Owns the panel's complete state for one mounted instance. The identity is
+   * the `projectId:threadId` pair; switching identity re-seeds durable state
+   * from the shared cache and resets every transient field, so the panel stays
+   * correct when a parent reuses this instance across threads instead of keying
+   * it. A generation counter invalidates any in-flight async work from a prior
+   * identity so stale results can never overwrite the current thread.
+   */
+  export class DiffSidebarController {
+    projectId = $state('')
+    threadId = $state('')
+    checkpoints = $state<TurnCheckpointSummary[]>([])
+    /** The running turn's live change summary — absent once the turn completes. */
+    liveTurn = $state<TurnCheckpointSummary | null>(null)
+    liveRevision = $state(0)
+    selectedCheckpointId = $state<string | null>(null)
+    loading = $state(false)
+    error = $state('')
+    restoringId = $state<string | null>(null)
+    selections = $state<Record<string, string[]>>({})
+    mode = $state<ChangesMode>('diffs')
+    fileDiffs = $state<TurnCheckpointFileDiff[]>([])
+    loadingDiffs = $state(false)
+    expandedDiffs = $state<Record<string, boolean>>({})
+    flashPath = $state<string | null>(null)
+    loadedDiffKey: string | null = null
+    scrollContainer = $state<HTMLElement | null>(null)
+
+    private refreshGuard = new LatestRequestGuard()
+    private generation = 0
+    private cache: DiffPanelCache | null = null
+    private revealTarget: string | null = null
+    private revealNonce = 0
+    private preferredCheckpointId: string | null = null
+    private pollTimer: ReturnType<typeof setInterval> | null = null
+    private unsubscribeEvents: (() => void) | null = null
+
+    constructor() {
+      this.setIdentity('', '')
+    }
+
+    setIdentity(projectId: string, threadId: string): void {
+      if (projectId === this.projectId && threadId === this.threadId) return
+      this.generation += 1
+      this.projectId = projectId
+      this.threadId = threadId
+      this.cache = getOrCreateCache(projectId, threadId)
+      this.checkpoints = this.cache.checkpoints
+      this.selectedCheckpointId = this.cache.selectedCheckpointId
+      const cachedDiffs = this.cache.selectedCheckpointId
+        ? (this.cache.fileDiffsByCheckpoint.get(this.cache.selectedCheckpointId) ?? null)
+        : null
+      this.fileDiffs = cachedDiffs ?? []
+      this.loadedDiffKey = cachedDiffs ? this.cache.selectedCheckpointId : null
+      this.liveTurn = null
+      this.liveRevision = 0
+      this.loading = false
+      this.error = ''
+      this.restoringId = null
+      this.selections = {}
+      this.mode = 'diffs'
+      this.loadingDiffs = false
+      this.expandedDiffs = {}
+      this.flashPath = null
+      this.revealTarget = null
+      this.revealNonce = 0
+      this.preferredCheckpointId = null
+    }
+
+    /** Runs on every prop update; no-ops unless the identity actually changed. */
+    syncIdentity(projectId: string, threadId: string): string {
+      this.setIdentity(projectId, threadId)
+      return `${projectId}:${threadId}`
+    }
+
+    /** Adopts the parent-preferred checkpoint and pulls it into view when it changes. */
+    syncPreferredCheckpoint(checkpointId: string | null): string | null {
+      if (checkpointId === this.preferredCheckpointId) return checkpointId
+      this.preferredCheckpointId = checkpointId
+      if (checkpointId && this.projectId) void this.refresh(checkpointId)
+      return checkpointId
+    }
+
+    /** Records the latest reveal request so the next diff render applies it. */
+    requestReveal(path: string | null, nonce: number): string | null {
+      if (!path || nonce <= 0) return null
+      this.revealTarget = path
+      this.revealNonce = nonce
+      this.applyReveal()
+      return path
+    }
+
+    private applyReveal(): void {
+      const target = this.revealTarget
+      if (!target || this.revealNonce <= 0) return
+      if (!this.fileDiffs.some((diff) => diff.path === target)) return
+      const el = this.scrollContainer?.querySelector<HTMLElement>(
+        `[data-reveal-path="${CSS.escape(target)}"]`
+      )
+      if (!el) return
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      this.flashPath = target
+      const nonce = this.revealNonce
+      setTimeout(() => {
+        if (this.revealNonce === nonce && this.flashPath === target) this.flashPath = null
+      }, 1600)
+    }
+
+    private diffCacheKeyFor(checkpoint: TurnCheckpointSummary): string {
+      // Live and final views share one checkpoint id; keeping the live diffs under
+      // a distinct key makes completion swap in the authoritative persisted diffs.
+      return checkpoint.status === 'active' ? `${checkpoint.id}:live` : checkpoint.id
+    }
+
+    private writeback(): void {
+      if (!this.cache) return
+      this.cache.checkpoints = this.checkpoints
+      this.cache.selectedCheckpointId = this.selectedCheckpointId
+    }
+
+    async refreshLive(): Promise<void> {
+      const generation = this.generation
+      try {
+        const next = await invoke('checkpoint:activeSummary', this.projectId, this.threadId)
+        if (generation !== this.generation) return
+        const finished = this.liveTurn !== null && next === null
+        this.liveTurn = next
+        if (next) this.liveRevision += 1
+        if (finished) {
+          // The turn just completed — pull its authoritative checkpoint in.
+          void this.refresh(this.selectedCheckpointId)
+        } else if (next && !this.selectedCheckpointId) {
+          this.selectedCheckpointId = next.id
+          void this.loadDiffs()
+        }
+      } catch {
+        // Live tracking is supplementary; the completed history stays available.
+      }
+    }
+
+    async refresh(preferredCheckpointId = this.selectedCheckpointId): Promise<void> {
+      const request = this.refreshGuard.begin()
+      const generation = this.generation
+      this.loading = true
+      this.error = ''
+      try {
+        const [nextCheckpoints, nextLive] = await Promise.all([
+          invoke('checkpoint:list', this.projectId, this.threadId),
+          invoke('checkpoint:activeSummary', this.projectId, this.threadId).catch(() => null)
+        ])
+        if (generation !== this.generation || !this.refreshGuard.isCurrent(request)) return
+        this.checkpoints = nextCheckpoints
+        this.liveTurn = nextLive
+        const nextTurns = nextLive
+          ? [nextLive, ...nextCheckpoints.filter((checkpoint) => checkpoint.status !== 'active')]
+          : nextCheckpoints.filter((checkpoint) => checkpoint.status !== 'active')
+        this.selectedCheckpointId =
+          nextTurns.find((checkpoint) => checkpoint.id === preferredCheckpointId)?.id ??
+          nextTurns[0]?.id ??
+          null
+        this.writeback()
+        void this.loadDiffs()
+      } catch (reason) {
+        if (generation !== this.generation || !this.refreshGuard.isCurrent(request)) return
+        this.error = reason instanceof Error ? reason.message : 'Change history could not be loaded.'
+      } finally {
+        if (generation === this.generation && this.refreshGuard.isCurrent(request)) {
+          this.loading = false
+        }
+      }
+    }
+
+    private async loadDiffs(): Promise<void> {
+      const generation = this.generation
+      const checkpoint = this.selectedCheckpoint
+      if (!checkpoint) {
+        this.fileDiffs = []
+        this.loadedDiffKey = null
+        return
+      }
+      const key =
+        checkpoint.status === 'active'
+          ? `${this.diffCacheKeyFor(checkpoint)}#${this.liveRevision}`
+          : this.diffCacheKeyFor(checkpoint)
+      if (this.loadedDiffKey === key) {
+        this.applyReveal()
+        return
+      }
+      const isLive = checkpoint.status === 'active'
+      this.loadedDiffKey = key
+      this.fileDiffs = []
+      this.loadingDiffs = true
+      const results = await Promise.allSettled(
+        checkpoint.changes.map((change) =>
+          invoke(
+            isLive ? 'checkpoint:liveDiff' : 'checkpoint:diff',
+            this.projectId,
+            this.threadId,
+            checkpoint.id,
+            change.path
+          )
+        )
+      )
+      if (generation !== this.generation) return
+      this.fileDiffs = results.flatMap((result) =>
+        result.status === 'fulfilled' ? [result.value as TurnCheckpointFileDiff] : []
+      )
+      this.expandedDiffs = results.reduce<Record<string, boolean>>(
+        (next, result) => {
+          if (result.status === 'fulfilled') {
+            const path = (result.value as TurnCheckpointFileDiff).path
+            if (!(path in next)) next[path] = true
+          }
+          return next
+        },
+        { ...this.expandedDiffs }
+      )
+      this.loadingDiffs = false
+      this.cache?.fileDiffsByCheckpoint.set(key, this.fileDiffs)
+      this.applyReveal()
+    }
+
+    selectTurn(index: number): void {
+      const checkpoint = this.turns[index]
+      if (!checkpoint) return
+      this.selectedCheckpointId = checkpoint.id
+      this.writeback()
+      void this.loadDiffs()
+    }
+
+    setMode(mode: ChangesMode): void {
+      this.mode = mode
+    }
+
+    async openChange(checkpointId: string, path: string): Promise<void> {
+      await projectFilesWorkspace.loadDirectory(this.projectId, '')
+      contextSidebarState.openFiles(this.projectId, this.threadId)
+      await projectFilesWorkspace.openCheckpointFile(this.projectId, checkpointId, path, 'diff')
+    }
+
+    toggleSelection(checkpointId: string, path: string): void {
+      const selected = new SvelteSet(this.selections[checkpointId] ?? [])
+      if (selected.has(path)) selected.delete(path)
+      else selected.add(path)
+      this.selections = { ...this.selections, [checkpointId]: [...selected] }
+    }
+
+    async restoreSelected(checkpointId: string): Promise<void> {
+      const paths = this.selections[checkpointId] ?? []
+      if (paths.length === 0) return
+      const generation = this.generation
+      this.restoringId = checkpointId
+      this.error = ''
+      try {
+        const next = await invoke(
+          'checkpoint:rollbackPaths',
+          this.projectId,
+          this.threadId,
+          checkpointId,
+          paths
+        )
+        if (generation !== this.generation) return
+        this.checkpoints = next
+        this.selections = { ...this.selections, [checkpointId]: [] }
+        this.writeback()
+      } catch (reason) {
+        if (generation !== this.generation) return
+        this.error = reason instanceof Error ? reason.message : 'Selected files could not be restored.'
+      } finally {
+        if (generation === this.generation) this.restoringId = null
+      }
+    }
+
+    async restoreRun(checkpointId: string): Promise<void> {
+      if (!window.confirm('Restore every file in this run to its pre-run state?')) return
+      const generation = this.generation
+      this.restoringId = checkpointId
+      this.error = ''
+      try {
+        const next = await invoke(
+          'checkpoint:rollback',
+          this.projectId,
+          this.threadId,
+          checkpointId
+        )
+        if (generation !== this.generation) return
+        this.checkpoints = next
+        this.selections = { ...this.selections, [checkpointId]: [] }
+        this.writeback()
+      } catch (reason) {
+        if (generation !== this.generation) return
+        this.error = reason instanceof Error ? reason.message : 'The run could not be restored.'
+      } finally {
+        if (generation === this.generation) this.restoringId = null
+      }
+    }
+
+    toggleDiff(path: string): void {
+      this.expandedDiffs = { ...this.expandedDiffs, [path]: !(this.expandedDiffs[path] ?? true) }
+    }
+
+    get completedCheckpoints(): TurnCheckpointSummary[] {
+      return this.checkpoints.filter((checkpoint) => checkpoint.status !== 'active')
+    }
+
+    // The in-progress turn leads the list so opening Changes during a run lands
+    // on its live edits instead of the last completed turn.
+    get turns(): TurnCheckpointSummary[] {
+      return this.liveTurn ? [this.liveTurn, ...this.completedCheckpoints] : this.completedCheckpoints
+    }
+
+    get selectedIndex(): number {
+      return Math.max(
+        0,
+        this.turns.findIndex((checkpoint) => checkpoint.id === this.selectedCheckpointId)
+      )
+    }
+
+    get selectedCheckpoint(): TurnCheckpointSummary | null {
+      return this.turns[this.selectedIndex] ?? null
+    }
+
+    start(): void {
+      this.pollTimer = setInterval(() => void this.refreshLive(), 2_500)
+      this.unsubscribeEvents = subscribe('agent:event', (...args: unknown[]) => {
+        const raw = args[0] as Record<string, unknown>
+        if (raw['projectId'] !== this.projectId || raw['threadId'] !== this.threadId) return
+        const type = raw['type'] as string | undefined
+        if (type === 'checkpoint.updated') {
+          void this.refresh()
+          return
+        }
+        if (type === 'checkpoint.liveUpdated') {
+          void this.refreshLive()
+        }
+      })
+      void this.refresh()
+    }
+
+    stop(): void {
+      if (this.pollTimer) clearInterval(this.pollTimer)
+      this.pollTimer = null
+      this.unsubscribeEvents?.()
+      this.unsubscribeEvents = null
+    }
+  }
+</script>
+
 <script lang="ts">
   import {
     ChevronDown,
@@ -9,21 +394,12 @@
     RefreshCw
   } from '@lucide/svelte'
   import { onMount } from 'svelte'
-  import { SvelteSet } from 'svelte/reactivity'
   import FileTypeIcon from './FileTypeIcon.svelte'
   import FileDiffView from './FileDiffView.svelte'
   import Switch from '../ui/Switch.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { diffDetails } from './file-diff'
-  import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { LatestRequestGuard } from '$lib/refresh-guard'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import type { AgentEvent as _AgentEvent, TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
-  import { cacheKeyFor, getOrCreateCache } from './diff-sidebar-cache.svelte'
-
-  type ChangesMode = 'diffs' | 'files'
 
   interface Props {
     projectId: string
@@ -37,74 +413,24 @@
 
   let { projectId, threadId, checkpointId, revealPath = null, revealNonce = 0 }: Props = $props()
 
-  const checkpointRefreshGuard = new LatestRequestGuard()
-  // The cache is keyed by the thread identity and survives remounts. Reading
-  // the props through a closure keeps the seeding reactive to a parent that
-  // reuses this instance across threads instead of keying it.
-  const seedCache = () => getOrCreateCache(projectId, threadId)
-  const initialCache = seedCache()
-  const initialCheckpointId = initialCache.selectedCheckpointId
-  const initialFileDiffs = initialCheckpointId
-    ? (initialCache.fileDiffsByCheckpoint.get(initialCheckpointId) ?? null)
-    : null
+  // One owner per mounted instance, selected by the current thread identity. When
+  // the parent reuses this instance across threads (no `{#key}`), syncIdentity
+  // re-seeds the correct thread's cache and resets transient state.
+  const controller = new DiffSidebarController()
+  // Reactive identity/reveal sync without $effect: these re-run when their prop
+  // dependencies change and re-seed/reset the shared controller accordingly.
+  const _identity = $derived(controller.syncIdentity(projectId, threadId))
+  const _preferred = $derived(controller.syncPreferredCheckpoint(checkpointId))
+  const _reveal = $derived(controller.requestReveal(revealPath, revealNonce))
 
-  let checkpoints = $state<TurnCheckpointSummary[]>(initialCache.checkpoints)
-  /** The running turn's live change summary — absent once the turn completes. */
-  let liveTurn = $state<TurnCheckpointSummary | null>(null)
-  let liveRevision = $state(0)
-  let selectedCheckpointId = $state<string | null>(initialCheckpointId)
-  let loading = $state(false)
-  let error = $state('')
-  let restoringId = $state<string | null>(null)
-  let selections = $state<Record<string, string[]>>({})
-  let mode = $state<ChangesMode>('diffs')
-  let fileDiffs = $state<TurnCheckpointFileDiff[]>(initialFileDiffs ?? [])
-  let loadingDiffs = $state(false)
-  let expandedDiffs = $state<Record<string, boolean>>({})
-  let flashPath = $state<string | null>(null)
-  let scrollContainer = $state<HTMLElement | null>(null)
-  let loadedDiffKey: string | null = initialFileDiffs ? initialCheckpointId : null
-  const panelKey = $derived(cacheKeyFor(projectId, threadId))
-  // Re-seed from the correct thread's cache whenever the identity changes.
-  // Without a keyed parent the same instance is reused across threads, so the
-  // mount-time seed above must be refreshed for the new project/thread pair.
-  let lastSeededKey: string | null = null
-  $effect(() => {
-    const key = panelKey
-    if (key === lastSeededKey) return
-    lastSeededKey = key
-    const entry = getOrCreateCache(projectId, threadId)
-    checkpoints = entry.checkpoints
-    selectedCheckpointId = entry.selectedCheckpointId
-    const cachedDiffs = entry.selectedCheckpointId
-      ? (entry.fileDiffsByCheckpoint.get(entry.selectedCheckpointId) ?? null)
-      : null
-    fileDiffs = cachedDiffs ?? []
-    loadedDiffKey = cachedDiffs ? entry.selectedCheckpointId : null
-    liveTurn = null
-    liveRevision = 0
-    loading = false
-    error = ''
-    restoringId = null
-    selections = {}
-    mode = 'diffs'
-    loadingDiffs = false
-    expandedDiffs = {}
-    flashPath = null
+  function bindScrollContainer(node: HTMLElement): void {
+    controller.scrollContainer = node
+  }
+
+  onMount(() => {
+    controller.start()
+    return () => controller.stop()
   })
-  const completedCheckpoints = $derived(
-    checkpoints.filter((checkpoint) => checkpoint.status !== 'active')
-  )
-  // The in-progress turn leads the list so opening Changes during a run lands
-  // on its live edits instead of the last completed turn.
-  const turns = $derived(liveTurn ? [liveTurn, ...completedCheckpoints] : completedCheckpoints)
-  const selectedIndex = $derived(
-    Math.max(
-      0,
-      turns.findIndex((checkpoint) => checkpoint.id === selectedCheckpointId)
-    )
-  )
-  const selectedCheckpoint = $derived(turns[selectedIndex] ?? null)
 
   function filename(path: string): string {
     return path.split('/').at(-1) ?? path
@@ -122,241 +448,31 @@
       minute: '2-digit'
     }).format(timestamp)
   }
-
-  function diffCacheKeyFor(checkpoint: TurnCheckpointSummary): string {
-    // Live and final views share one checkpoint id; keeping the live diffs under
-    // a distinct key makes completion swap in the authoritative persisted diffs.
-    return checkpoint.status === 'active' ? `${checkpoint.id}:live` : checkpoint.id
-  }
-
-  async function refreshLive(): Promise<void> {
-    try {
-      const next = await invoke('checkpoint:activeSummary', projectId, threadId)
-      const finished = liveTurn !== null && next === null
-      liveTurn = next
-      if (next) liveRevision += 1
-      if (finished) {
-        // The turn just completed — pull its authoritative checkpoint in.
-        void refresh(selectedCheckpointId)
-      } else if (next && !selectedCheckpointId) {
-        selectedCheckpointId = next.id
-      }
-    } catch {
-      // Live tracking is supplementary; the completed history stays available.
-    }
-  }
-
-  async function refresh(preferredCheckpointId = selectedCheckpointId): Promise<void> {
-    const request = checkpointRefreshGuard.begin()
-    loading = true
-    error = ''
-    try {
-      const [nextCheckpoints, nextLive] = await Promise.all([
-        invoke('checkpoint:list', projectId, threadId),
-        invoke('checkpoint:activeSummary', projectId, threadId).catch(() => null)
-      ])
-      if (!checkpointRefreshGuard.isCurrent(request)) return
-      checkpoints = nextCheckpoints
-      liveTurn = nextLive
-      const nextTurns = nextLive
-        ? [nextLive, ...nextCheckpoints.filter((checkpoint) => checkpoint.status !== 'active')]
-        : nextCheckpoints.filter((checkpoint) => checkpoint.status !== 'active')
-      selectedCheckpointId =
-        nextTurns.find((checkpoint) => checkpoint.id === preferredCheckpointId)?.id ??
-        nextTurns[0]?.id ??
-        null
-    } catch (reason) {
-      if (!checkpointRefreshGuard.isCurrent(request)) return
-      error = reason instanceof Error ? reason.message : 'Change history could not be loaded.'
-    } finally {
-      if (checkpointRefreshGuard.isCurrent(request)) loading = false
-    }
-  }
-
-  function selectTurn(index: number): void {
-    const checkpoint = turns[index]
-    if (checkpoint) selectedCheckpointId = checkpoint.id
-  }
-
-  async function openChange(checkpointId: string, path: string): Promise<void> {
-    await projectFilesWorkspace.loadDirectory(projectId, '')
-    contextSidebarState.openFiles(projectId, threadId)
-    await projectFilesWorkspace.openCheckpointFile(projectId, checkpointId, path, 'diff')
-  }
-
-  function toggleSelection(checkpointId: string, path: string): void {
-    const selected = new SvelteSet(selections[checkpointId] ?? [])
-    if (selected.has(path)) selected.delete(path)
-    else selected.add(path)
-    selections = { ...selections, [checkpointId]: [...selected] }
-  }
-
-  async function restoreSelected(checkpointId: string): Promise<void> {
-    const paths = selections[checkpointId] ?? []
-    if (paths.length === 0) return
-    restoringId = checkpointId
-    error = ''
-    try {
-      checkpoints = await invoke(
-        'checkpoint:rollbackPaths',
-        projectId,
-        threadId,
-        checkpointId,
-        paths
-      )
-      selections = { ...selections, [checkpointId]: [] }
-    } catch (reason) {
-      error = reason instanceof Error ? reason.message : 'Selected files could not be restored.'
-    } finally {
-      restoringId = null
-    }
-  }
-
-  async function restoreRun(checkpointId: string): Promise<void> {
-    if (!window.confirm('Restore every file in this run to its pre-run state?')) return
-    restoringId = checkpointId
-    error = ''
-    try {
-      checkpoints = await invoke('checkpoint:rollback', projectId, threadId, checkpointId)
-      selections = { ...selections, [checkpointId]: [] }
-    } catch (reason) {
-      error = reason instanceof Error ? reason.message : 'The run could not be restored.'
-    } finally {
-      restoringId = null
-    }
-  }
-
-  function toggleDiff(path: string): void {
-    expandedDiffs = { ...expandedDiffs, [path]: !(expandedDiffs[path] ?? true) }
-  }
-
-  $effect(() => {
-    const checkpoint = selectedCheckpoint
-    if (!checkpoint) {
-      fileDiffs = []
-      loadedDiffKey = null
-      return
-    }
-    const key =
-      checkpoint.status === 'active'
-        ? `${diffCacheKeyFor(checkpoint)}#${liveRevision}`
-        : diffCacheKeyFor(checkpoint)
-    if (loadedDiffKey === key) return
-    const isLive = checkpoint.status === 'active'
-    loadedDiffKey = key
-    fileDiffs = []
-    loadingDiffs = true
-    let cancelled = false
-    void Promise.allSettled(
-      checkpoint.changes.map((change) =>
-        invoke(
-          isLive ? 'checkpoint:liveDiff' : 'checkpoint:diff',
-          projectId,
-          threadId,
-          checkpoint.id,
-          change.path
-        )
-      )
-    ).then((results) => {
-      if (cancelled) return
-      fileDiffs = results.flatMap((result) =>
-        result.status === 'fulfilled' ? [result.value as TurnCheckpointFileDiff] : []
-      )
-      expandedDiffs = results.reduce<Record<string, boolean>>(
-        (next, result) => {
-          if (result.status === 'fulfilled') {
-            const path = (result.value as TurnCheckpointFileDiff).path
-            if (!(path in next)) next[path] = true
-          }
-          return next
-        },
-        { ...expandedDiffs }
-      )
-      loadingDiffs = false
-      getOrCreateCache(projectId, threadId).fileDiffsByCheckpoint.set(key, fileDiffs)
-    })
-    return () => {
-      cancelled = true
-      loadingDiffs = false
-    }
-  })
-
-  $effect(() => {
-    const preferredCheckpointId = checkpointId
-    void refresh(preferredCheckpointId)
-  })
-
-  // Keeps the module-level cache current so the next remount (e.g. toggling
-  // the sidebar closed and back open) seeds from here instead of starting
-  // empty.
-  $effect(() => {
-    const entry = getOrCreateCache(projectId, threadId)
-    entry.checkpoints = checkpoints
-    entry.selectedCheckpointId = selectedCheckpointId
-  })
-
-  $effect(() => {
-    const target = revealPath
-    if (!target || revealNonce <= 0) return
-    if (!fileDiffs.some((diff) => diff.path === target)) return
-    const el = scrollContainer?.querySelector<HTMLElement>(
-      `[data-reveal-path="${CSS.escape(target)}"]`
-    )
-    if (!el) return
-    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-    flashPath = target
-    const timer = setTimeout(() => {
-      if (flashPath === target) flashPath = null
-    }, 1600)
-    return () => clearTimeout(timer)
-  })
-
-  onMount(() => {
-    // Light poll keeps the live turn current while the panel is open; the
-    // main-process side only validates claimed paths that actually changed.
-    const liveTimer = setInterval(() => void refreshLive(), 2_500)
-    const unsubscribeEvents = subscribe('agent:event', (...args: unknown[]) => {
-      const raw = args[0] as Record<string, unknown>
-      if (raw['projectId'] !== projectId || raw['threadId'] !== threadId) return
-      const type = raw['type'] as string | undefined
-      if (type === 'checkpoint.updated') {
-        void refresh()
-        return
-      }
-      if (type === 'checkpoint.liveUpdated') {
-        void refreshLive()
-      }
-    })
-    return () => {
-      clearInterval(liveTimer)
-      unsubscribeEvents()
-    }
-  })
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-app">
-  {#if turns.length > 0}
+  {#if controller.turns.length > 0}
     <div class="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-border px-2">
       <button
         type="button"
         class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
         aria-label="Show previous turn"
         title="Previous turn"
-        disabled={selectedIndex >= turns.length - 1}
-        onclick={() => selectTurn(selectedIndex + 1)}
+        disabled={controller.selectedIndex >= controller.turns.length - 1}
+        onclick={() => controller.selectTurn(controller.selectedIndex + 1)}
       >
         <ChevronLeft size={13} />
       </button>
       <span class="text-[10px] font-medium tabular-nums text-muted">
-        Turn {turns.length - selectedIndex} of {turns.length}
+        Turn {controller.turns.length - controller.selectedIndex} of {controller.turns.length}
       </span>
       <button
         type="button"
         class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
         aria-label="Show next turn"
         title="Next turn"
-        disabled={selectedIndex <= 0}
-        onclick={() => selectTurn(selectedIndex - 1)}
+        disabled={controller.selectedIndex <= 0}
+        onclick={() => controller.selectTurn(controller.selectedIndex - 1)}
       >
         <ChevronRight size={13} />
       </button>
@@ -373,11 +489,11 @@
         type="button"
         class={[
           'flex h-6 items-center gap-1.5 rounded px-2.5 text-[10px] font-medium transition-colors',
-          mode === 'diffs' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
+          controller.mode === 'diffs' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
         ]}
-        aria-pressed={mode === 'diffs'}
+        aria-pressed={controller.mode === 'diffs'}
         title="Show each file's diff stacked by file"
-        onclick={() => (mode = 'diffs')}
+        onclick={() => controller.setMode('diffs')}
       >
         Diffs
       </button>
@@ -385,11 +501,11 @@
         type="button"
         class={[
           'flex h-6 items-center gap-1.5 rounded px-2.5 text-[10px] font-medium transition-colors',
-          mode === 'files' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
+          controller.mode === 'files' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
         ]}
-        aria-pressed={mode === 'files'}
+        aria-pressed={controller.mode === 'files'}
         title="Show the list of changed files with restore options"
-        onclick={() => (mode = 'files')}
+        onclick={() => controller.setMode('files')}
       >
         File List
       </button>
@@ -401,24 +517,24 @@
       class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       aria-label="Refresh change history"
       title="Refresh changes"
-      disabled={loading}
-      onclick={() => void refresh()}
+      disabled={controller.loading}
+      onclick={() => void controller.refresh()}
     >
-      <RefreshCw size={13} class={loading ? 'animate-spin' : ''} />
+      <RefreshCw size={13} class={controller.loading ? 'animate-spin' : ''} />
     </button>
   </div>
 
-  <div bind:this={scrollContainer} class="min-h-0 flex-1 overflow-auto p-2">
-    {#if loading && turns.length === 0}
+  <div {@attach bindScrollContainer} class="min-h-0 flex-1 overflow-auto p-2">
+    {#if controller.loading && controller.turns.length === 0}
       <div class="flex items-center justify-center gap-2 py-8 text-xs text-dimmed">
         <Loader2 size={14} class="animate-spin" />
         Loading changes
       </div>
-    {:else if error}
+    {:else if controller.error}
       <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2">
-        <p class="text-[11px] leading-relaxed text-danger">{error}</p>
+        <p class="text-[11px] leading-relaxed text-danger">{controller.error}</p>
       </div>
-    {:else if turns.length === 0}
+    {:else if controller.turns.length === 0}
       <div class="flex h-full items-center justify-center px-6 text-center">
         <div>
           <FileDiff size={22} class="mx-auto mb-2 text-dimmed" />
@@ -429,9 +545,9 @@
         </div>
       </div>
     {:else}
-      {@const checkpoint = selectedCheckpoint}
+      {@const checkpoint = controller.selectedCheckpoint}
       {#if checkpoint}
-        {#if mode === 'diffs'}
+        {#if controller.mode === 'diffs'}
           <div class="space-y-2">
             {#if checkpoint.status === 'active'}
               <p class="px-1 pb-1 text-[10px] leading-relaxed text-dimmed">
@@ -445,29 +561,29 @@
                 {checkpoint.failure}
               </p>
             {/if}
-            {#if loadingDiffs && fileDiffs.length === 0}
+            {#if controller.loadingDiffs && controller.fileDiffs.length === 0}
               <div class="flex items-center justify-center gap-2 py-8 text-xs text-dimmed">
                 <Loader2 size={14} class="animate-spin" />
                 Loading diffs
               </div>
-            {:else if fileDiffs.length === 0}
+            {:else if controller.fileDiffs.length === 0}
               <p class="px-3 py-4 text-center text-[10px] text-dimmed">
                 {checkpoint.changes.length === 0
                   ? 'No file changes detected.'
                   : 'No file diffs are available.'}
               </p>
             {:else}
-              {#each fileDiffs as fileDiff (fileDiff.path)}
+              {#each controller.fileDiffs as fileDiff (fileDiff.path)}
                 {@const details = fileDiff.binary
                   ? null
                   : diffDetails(fileDiff.before, fileDiff.after)}
                 {@const stats = details}
-                {@const expanded = expandedDiffs[fileDiff.path] ?? true}
+                {@const expanded = controller.expandedDiffs[fileDiff.path] ?? true}
                 <section
                   data-reveal-path={fileDiff.path}
                   class={[
                     'overflow-hidden rounded-md border transition-colors',
-                    flashPath === fileDiff.path
+                    controller.flashPath === fileDiff.path
                       ? 'border-primary bg-primary/5'
                       : 'border-border bg-surface'
                   ]}
@@ -480,7 +596,7 @@
                       title={expanded
                         ? `Collapse diff for ${fileDiff.path}`
                         : `Show diff for ${fileDiff.path}`}
-                      onclick={() => toggleDiff(fileDiff.path)}
+                      onclick={() => controller.toggleDiff(fileDiff.path)}
                     >
                       <FileTypeIcon path={fileDiff.path} size={13} />
                       <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
@@ -508,7 +624,7 @@
                         class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                         aria-label={`Open ${fileDiff.path} in the changes sidebar`}
                         title={`Open ${fileDiff.path} in the changes sidebar`}
-                        onclick={() => void openChange(checkpoint.id, fileDiff.path)}
+                        onclick={() => void controller.openChange(checkpoint.id, fileDiff.path)}
                       >
                         <Eye size={13} />
                       </button>
@@ -569,10 +685,10 @@
                     >
                       {#if checkpoint.status !== 'rolled_back' && checkpoint.status !== 'active'}
                         <Switch
-                          checked={(selections[checkpoint.id] ?? []).includes(change.path)}
+                          checked={(controller.selections[checkpoint.id] ?? []).includes(change.path)}
                           disabled={checkpoint.rolledBackPaths?.includes(change.path)}
                           aria-label={`Select ${change.path} to restore`}
-                          onchange={() => toggleSelection(checkpoint.id, change.path)}
+                          onchange={() => controller.toggleSelection(checkpoint.id, change.path)}
                         />
                       {/if}
                       <span
@@ -597,7 +713,7 @@
                           type="button"
                           class="min-w-0 flex-1 truncate text-left font-mono text-[10px] text-muted hover:text-foreground"
                           title={`Open ${change.path}`}
-                          onclick={() => void openChange(checkpoint.id, change.path)}
+                          onclick={() => void controller.openChange(checkpoint.id, change.path)}
                         >
                           {isMarkdown(change.path) ? filename(change.path) : change.path}
                         </button>
@@ -612,19 +728,19 @@
                       <button
                         type="button"
                         class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                        disabled={restoringId === checkpoint.id ||
-                          (selections[checkpoint.id] ?? []).length === 0}
-                        onclick={() => void restoreSelected(checkpoint.id)}
+                        disabled={controller.restoringId === checkpoint.id ||
+                          (controller.selections[checkpoint.id] ?? []).length === 0}
+                        onclick={() => void controller.restoreSelected(checkpoint.id)}
                       >
                         Restore selected
                       </button>
                       <button
                         type="button"
                         class="rounded-md px-2 py-1 text-[10px] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
-                        disabled={restoringId === checkpoint.id}
-                        onclick={() => void restoreRun(checkpoint.id)}
+                        disabled={controller.restoringId === checkpoint.id}
+                        onclick={() => void controller.restoreRun(checkpoint.id)}
                       >
-                        {restoringId === checkpoint.id ? 'Restoring…' : 'Restore run'}
+                        {controller.restoringId === checkpoint.id ? 'Restoring…' : 'Restore run'}
                       </button>
                     </div>
                   {/if}

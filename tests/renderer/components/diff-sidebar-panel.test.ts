@@ -1,22 +1,33 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// DiffSidebarPanel's dependency graph (stores, IPC) assumes a browser
-// `window.api` bridge at module load. This focused test only exercises the
-// module-level cache lifecycle, so stub the IPC module before importing the
-// component to keep it DOM-free and deterministic.
+// DiffSidebarPanel's module script imports the renderer store graph, which
+// assumes a browser `window.api` bridge at load. This focused test only
+// exercises the DiffSidebarController lifecycle, so stub the IPC and the
+// two stores the controller touches (openChange) to keep it DOM-free.
 vi.mock('$lib/ipc.svelte', () => ({
   invoke: vi.fn(),
   subscribe: vi.fn(() => () => {})
 }))
 
-import { cacheKeyFor, getOrCreateCache } from '$lib/components/files/diff-sidebar-cache.svelte'
+vi.mock('$lib/stores/context-sidebar.svelte', () => ({
+  contextSidebarState: { openFiles: vi.fn() }
+}))
+
+vi.mock('$lib/stores/project-files.svelte', () => ({
+  projectFilesWorkspace: {
+    loadDirectory: vi.fn(),
+    openCheckpointFile: vi.fn()
+  }
+}))
+
+import { DiffSidebarController } from '$lib/components/files/DiffSidebarPanel.svelte'
 import type { TurnCheckpointSummary } from '$shared/types'
 
-function checkpoint(id: string): TurnCheckpointSummary {
+function checkpoint(id: string, threadId: string): TurnCheckpointSummary {
   return {
     id,
     projectId: 'project-a',
-    threadId: 'thread-1',
+    threadId,
     label: `Run ${id}`,
     status: 'completed',
     changes: [],
@@ -24,36 +35,79 @@ function checkpoint(id: string): TurnCheckpointSummary {
   }
 }
 
-describe('DiffSidebarPanel cache state lifecycle (REL-08)', () => {
+describe('DiffSidebarController state lifecycle (REL-08)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('keys each thread cache independently so switching threads never shares state', () => {
-    const first = getOrCreateCache('project-a', 'thread-1')
-    const second = getOrCreateCache('project-a', 'thread-2')
+  it('reuses one owner and re-seeds durable state from the thread cache on identity change', () => {
+    const controller = new DiffSidebarController()
 
-    first.checkpoints = [checkpoint('cp-1')]
-    first.selectedCheckpointId = 'cp-1'
+    controller.setIdentity('project-a', 'thread-1')
+    controller.checkpoints = [checkpoint('cp-1', 'thread-1')]
+    controller.selectedCheckpointId = 'cp-1'
 
-    // A different thread must resolve to its own untouched entry.
-    expect(second.checkpoints).toEqual([])
-    expect(second.selectedCheckpointId).toBeNull()
+    // Same owner, new thread: durable state is isolated (thread-2 has none),
+    // and transient fields reset.
+    controller.setIdentity('project-a', 'thread-2')
+    expect(controller.projectId).toBe('project-a')
+    expect(controller.threadId).toBe('thread-2')
+    expect(controller.checkpoints).toEqual([])
+    expect(controller.selectedCheckpointId).toBeNull()
+    expect(controller.fileDiffs).toEqual([])
   })
 
-  it('returns the same cache entry for the same thread (survives remount)', () => {
-    const a = getOrCreateCache('project-b', 'thread-7')
-    const b = getOrCreateCache('project-b', 'thread-7')
-    expect(a).toBe(b)
+  it('resets transient state on identity change without relying on a keyed parent', () => {
+    const controller = new DiffSidebarController()
+    controller.setIdentity('project-a', 'thread-1')
+
+    controller.mode = 'files'
+    controller.selections = { 'cp-1': ['a.ts'] }
+    controller.expandedDiffs = { 'a.ts': false }
+    controller.liveTurn = checkpoint('cp-1', 'thread-1')
+    controller.loading = true
+    controller.error = 'boom'
+
+    controller.setIdentity('project-a', 'thread-2')
+    expect(controller.mode).toBe('diffs')
+    expect(controller.selections).toEqual({})
+    expect(controller.expandedDiffs).toEqual({})
+    expect(controller.liveTurn).toBeNull()
+    expect(controller.loading).toBe(false)
+    expect(controller.error).toBe('')
   })
 
-  it('discriminates on the project id too, not just the thread id', () => {
-    const projectA = getOrCreateCache('project-a', 'thread-1')
-    const projectC = getOrCreateCache('project-c', 'thread-1')
-    expect(projectA).not.toBe(projectC)
-  })
+  it('rejects stale in-flight async results after the identity changes', async () => {
+    const controller = new DiffSidebarController()
+    controller.setIdentity('project-a', 'thread-1')
 
-  it('builds a stable, project-qualified key for the seeded identity', () => {
-    expect(cacheKeyFor('project-a', 'thread-1')).toBe('project-a:thread-1')
+    let resolveList: (value: TurnCheckpointSummary[]) => void = () => {}
+    const list = new Promise<TurnCheckpointSummary[]>((resolve) => {
+      resolveList = resolve
+    })
+    let resolveLive: (value: TurnCheckpointSummary | null) => void = () => {}
+    const live = new Promise<TurnCheckpointSummary | null>((resolve) => {
+      resolveLive = resolve
+    })
+
+    const invoke = (await import('$lib/ipc.svelte')).invoke as ReturnType<typeof vi.fn>
+    invoke.mockImplementation((channel: string) =>
+      channel === 'checkpoint:list'
+        ? list
+        : channel === 'checkpoint:activeSummary'
+          ? live
+          : Promise.resolve([])
+    )
+
+    const pending = controller.refresh()
+    // Identity changes before the refresh resolves.
+    controller.setIdentity('project-a', 'thread-2')
+    resolveList([checkpoint('cp-stale', 'thread-1')])
+    resolveLive(null)
+    await pending
+
+    // The stale thread-1 payload must not leak into thread-2.
+    expect(controller.checkpoints).toEqual([])
+    expect(controller.selectedCheckpointId).toBeNull()
   })
 })
