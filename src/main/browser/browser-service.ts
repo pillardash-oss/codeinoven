@@ -195,6 +195,21 @@ export class BrowserService {
         const tab = this.ensureTab(tabId, projectId, threadId)
 
         if (this.activeTabId && this.activeTabId !== tabId) this.detachActiveView()
+        if (this.permissionModalPending()) {
+          // A permission modal is open in the renderer. A native WebContentsView
+          // floats above every DOM surface of this window, so attaching it here
+          // would cover the DOM permission dialog and swallow its Allow/Deny
+          // clicks (e.g. the browser is fullscreen and the tab calls a mic). Keep
+          // the native view detached for the whole permission lifetime; the panel
+          // re-shows it through `browser:show` once the modal is gone.
+          this.activeTabId = null
+          tab.view.setBounds(bounds)
+          if (!tab.initialNavigationStarted) {
+            tab.initialNavigationStarted = true
+            this.load(tabId, initialUrl)
+          }
+          return this.stateFor(tabId, tab)
+        }
         if (this.activeTabId !== tabId) {
           this.window.contentView.addChildView(tab.view)
           this.activeTabId = tabId
@@ -570,7 +585,7 @@ export class BrowserService {
       }
       const timer = setTimeout(() => this.resolvePermission(id, false), PERMISSION_TIMEOUT_MS)
       this.pendingPermissions.set(id, { request, callback, timer })
-      this.suspendTabForPermission(tabId)
+      this.suspendActiveViewForPermission()
       sendToRenderer(this.window.webContents, 'browser:permissionRequested', request)
     })
     browserSession.on('will-download', (event, item, contents) => {
@@ -707,19 +722,31 @@ export class BrowserService {
     if (restoreView) this.restoreTabAfterPermission(pending.request.tabId)
   }
 
-  private suspendTabForPermission(tabId: string): void {
-    if (this.activeTabId !== tabId || this.permissionSuspendedTabs.has(tabId)) return
-    const tab = this.tabs.get(tabId)
+  /** Detach whatever native browser view is currently on screen so a DOM
+   *  permission modal is never covered by a native surface. This suspends the
+   *  ACTIVE view even when the permission belongs to a background/popup tab
+   *  (e.g. a fullscreen tab triggers a popup tab's mic request) — the old
+   *  per-tab suspension only detached when the requesting tab was active. */
+  private suspendActiveViewForPermission(): void {
+    if (!this.activeTabId || this.permissionSuspendedTabs.has(this.activeTabId)) return
+    const tab = this.tabs.get(this.activeTabId)
     if (!tab) return
     this.window.contentView.removeChildView(tab.view)
-    this.permissionSuspendedTabs.add(tabId)
+    this.permissionSuspendedTabs.add(this.activeTabId)
+  }
+
+  /** True while a browser permission modal is pending in the renderer. While
+   *  set, no native browser view may be attached — a WebContentsView floats above
+   *  every DOM surface, so restoring one would cover the permission dialog. */
+  private permissionModalPending(): boolean {
+    return this.pendingPermissions.size > 0
   }
 
   private restoreTabAfterPermission(tabId: string): void {
     if (
       this.activeTabId !== tabId ||
       !this.permissionSuspendedTabs.has(tabId) ||
-      [...this.pendingPermissions.values()].some((pending) => pending.request.tabId === tabId)
+      this.permissionModalPending()
     ) {
       return
     }
