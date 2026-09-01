@@ -1,41 +1,3 @@
-<script module lang="ts">
-  import { SvelteMap } from 'svelte/reactivity'
-  import type { TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
-
-  /** The panel unmounts every time the sidebar is hidden (same as every
-   *  other context-sidebar tab), which used to reset all local state —
-   *  checkpoint list, selected turn, loaded diffs — back to empty, forcing
-   *  a full refetch and a spinner flash on every single toggle. Module-level
-   *  state survives that remount, so reopening seeds instantly from the last
-   *  known data while `refresh()` still quietly re-validates in the
-   *  background. */
-  interface DiffPanelCache {
-    checkpoints: TurnCheckpointSummary[]
-    selectedCheckpointId: string | null
-    fileDiffsByCheckpoint: SvelteMap<string, TurnCheckpointFileDiff[]>
-  }
-
-  const panelCache = new SvelteMap<string, DiffPanelCache>()
-
-  function cacheKeyFor(projectId: string, threadId: string): string {
-    return `${projectId}:${threadId}`
-  }
-
-  function getOrCreateCache(projectId: string, threadId: string): DiffPanelCache {
-    const key = cacheKeyFor(projectId, threadId)
-    let entry = panelCache.get(key)
-    if (!entry) {
-      entry = {
-        checkpoints: [],
-        selectedCheckpointId: null,
-        fileDiffsByCheckpoint: new SvelteMap()
-      }
-      panelCache.set(key, entry)
-    }
-    return entry
-  }
-</script>
-
 <script lang="ts">
   import {
     ChevronDown,
@@ -58,7 +20,8 @@
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import type { AgentEvent as _AgentEvent } from '$shared/types'
+  import type { AgentEvent as _AgentEvent, TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
+  import { cacheKeyFor, getOrCreateCache } from './diff-sidebar-cache.svelte'
 
   type ChangesMode = 'diffs' | 'files'
 
@@ -75,7 +38,11 @@
   let { projectId, threadId, checkpointId, revealPath = null, revealNonce = 0 }: Props = $props()
 
   const checkpointRefreshGuard = new LatestRequestGuard()
-  const initialCache = getOrCreateCache(projectId, threadId)
+  // The cache is keyed by the thread identity and survives remounts. Reading
+  // the props through a closure keeps the seeding reactive to a parent that
+  // reuses this instance across threads instead of keying it.
+  const seedCache = () => getOrCreateCache(projectId, threadId)
+  const initialCache = seedCache()
   const initialCheckpointId = initialCache.selectedCheckpointId
   const initialFileDiffs = initialCheckpointId
     ? (initialCache.fileDiffsByCheckpoint.get(initialCheckpointId) ?? null)
@@ -97,6 +64,34 @@
   let flashPath = $state<string | null>(null)
   let scrollContainer = $state<HTMLElement | null>(null)
   let loadedDiffKey: string | null = initialFileDiffs ? initialCheckpointId : null
+  const panelKey = $derived(cacheKeyFor(projectId, threadId))
+  // Re-seed from the correct thread's cache whenever the identity changes.
+  // Without a keyed parent the same instance is reused across threads, so the
+  // mount-time seed above must be refreshed for the new project/thread pair.
+  let lastSeededKey: string | null = null
+  $effect(() => {
+    const key = panelKey
+    if (key === lastSeededKey) return
+    lastSeededKey = key
+    const entry = getOrCreateCache(projectId, threadId)
+    checkpoints = entry.checkpoints
+    selectedCheckpointId = entry.selectedCheckpointId
+    const cachedDiffs = entry.selectedCheckpointId
+      ? (entry.fileDiffsByCheckpoint.get(entry.selectedCheckpointId) ?? null)
+      : null
+    fileDiffs = cachedDiffs ?? []
+    loadedDiffKey = cachedDiffs ? entry.selectedCheckpointId : null
+    liveTurn = null
+    liveRevision = 0
+    loading = false
+    error = ''
+    restoringId = null
+    selections = {}
+    mode = 'diffs'
+    loadingDiffs = false
+    expandedDiffs = {}
+    flashPath = null
+  })
   const completedCheckpoints = $derived(
     checkpoints.filter((checkpoint) => checkpoint.status !== 'active')
   )
