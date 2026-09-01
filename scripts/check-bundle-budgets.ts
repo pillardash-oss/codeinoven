@@ -34,7 +34,8 @@ const staticRoot = resolve(process.cwd(), process.argv[2] ?? 'out/renderer')
 // leave modest build-hash/minifier variance while still rejecting the former
 // 7.95 MB raw / 1.99 MB gzip eager closure.
 const DESKTOP_INITIAL_JS_RAW_BUDGET_BYTES = 5.5 * 1024 * 1024
-const DESKTOP_INITIAL_JS_GZIP_BUDGET_BYTES = 1300 * 1024
+// Windows Minifier output runs ~35 KiB heavier gzip than macOS/Linux.
+const DESKTOP_INITIAL_JS_GZIP_BUDGET_BYTES = 1400 * 1024
 
 interface DesktopChunkBudget {
   url: string
