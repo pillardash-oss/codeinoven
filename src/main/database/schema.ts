@@ -245,45 +245,93 @@ export const HARNESS_USAGE_MODELS_COLUMNS_SQL = `
   PRIMARY KEY (thread_id, harness_id, provider_id, model_id, thinking_level)`
 
 /**
- * Column definitions for the canonical `turn_feedback` table. thread_id
- * deliberately does NOT cascade-delete: graded outcomes are the long-term
- * analytics record for "best model by feedback", so rows keep their own
- * attribution when the owning thread is deleted.
+ * Column definitions for the canonical `model_rankings` table — the permanent
+ * "best model" aggregate. One row per harness + provider + model + thinking
+ * level + rubric version combination; distinct attribution values never merge.
  *
- * Rows are captured pending when a turn answers a visible user message and are
- * graded exactly once by the cheap-model LLM judge. The captured texts,
- * project identity, and one due_at queue checkpoint survive restarts and
- * thread deletion without reloading harness sessions.
+ * Scores live as running sums and sample counts per shot category so averages
+ * are always recomputed as sum ÷ count (never averages of averages), and a
+ * future rubric change opens a fresh row under the new `rubric_version`
+ * instead of silently reinterpreting old sums. Processed snapshots are
+ * hard-deleted by design, so these aggregates are the only surviving record.
  */
-export const TURN_FEEDBACK_COLUMNS_SQL = `
+export const MODEL_RANKINGS_COLUMNS_SQL = `
+  id             TEXT PRIMARY KEY NOT NULL,
+  harness_id     TEXT NOT NULL,
+  provider_id    TEXT NOT NULL DEFAULT '',
+  model_id       TEXT NOT NULL,
+  thinking_level TEXT NOT NULL DEFAULT '',
+  one_shot_score_sum       REAL    NOT NULL DEFAULT 0 CHECK(one_shot_score_sum >= 0),
+  one_shot_samples         INTEGER NOT NULL DEFAULT 0 CHECK(one_shot_samples >= 0),
+  one_shot_duration_sum_ms INTEGER NOT NULL DEFAULT 0 CHECK(one_shot_duration_sum_ms >= 0),
+  one_shot_cost_usd        REAL    NOT NULL DEFAULT 0 CHECK(one_shot_cost_usd >= 0),
+  multi_shot_score_sum       REAL    NOT NULL DEFAULT 0 CHECK(multi_shot_score_sum >= 0),
+  multi_shot_samples         INTEGER NOT NULL DEFAULT 0 CHECK(multi_shot_samples >= 0),
+  multi_shot_duration_sum_ms INTEGER NOT NULL DEFAULT 0 CHECK(multi_shot_duration_sum_ms >= 0),
+  multi_shot_cost_usd        REAL    NOT NULL DEFAULT 0 CHECK(multi_shot_cost_usd >= 0),
+  rubric_version  TEXT NOT NULL,
+  calc_version    TEXT NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  UNIQUE (harness_id, provider_id, model_id, thinking_level, rubric_version)`
+
+/** Rubric version stamped on aggregates folded in from the legacy 1–5 ledger. */
+export const LEGACY_RUBRIC_VERSION = 'legacy-1to5-map-v1'
+
+/**
+ * Version tag of the aggregation arithmetic itself (running sum ÷ count).
+ * Bump when the incremental-math semantics change so mixed-version rows stay
+ * distinguishable in analytics.
+ */
+export const MODEL_RANKING_CALC_VERSION = 'sum-count-v1'
+
+export const MODEL_RANKING_INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS idx_model_rankings_updated
+  ON model_rankings(updated_at DESC);`
+
+export const MODEL_RANKING_SNAPSHOT_INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_due
+  ON model_ranking_snapshots(status, due_at_ms);
+
+CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_thread
+  ON model_ranking_snapshots(thread_id, closed_at_ms);
+
+CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_attribution
+  ON model_ranking_snapshots(harness_id, provider_id, model_id, thinking_level);`
+
+/**
+ * Column definitions for the canonical `model_ranking_snapshots` table — the
+ * transient grading queue. At most one open snapshot per conversation window
+ * (first user message + response, upgraded by one substantive follow-up).
+ *
+ * thread_id deliberately does NOT cascade-delete: thread deletion is the close
+ * signal, and the raw prompt/response payload must survive deletion long
+ * enough for the judge to score it. Once scored, the row is hard-deleted and
+ * only its contribution to `model_rankings` remains (agreed product decision,
+ * not data loss). Timing is captured as started_at/ended_at timestamps; no
+ * pre-rounded duration column is persisted.
+ */
+export const MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL = `
   id             TEXT PRIMARY KEY NOT NULL,
   thread_id      TEXT REFERENCES threads(id) ON DELETE SET NULL,
-  project_id     TEXT,
-  parent_turn_id TEXT NOT NULL UNIQUE,
-  session_id     TEXT,
-  created_at     INTEGER NOT NULL,
-  resolved_at    INTEGER,
-  status         TEXT NOT NULL CHECK(status IN ('pending','graded')),
-  basis          TEXT CHECK(basis IN ('deleted','general_timeout','read_timeout','draft_timeout')),
-  grade          INTEGER CHECK(grade IS NULL OR (grade BETWEEN 1 AND 5)),
-  feature        TEXT CHECK(feature IN ('main','audit','assignment')),
-  task_slug      TEXT,
-  harness_id     TEXT,
-  provider_id    TEXT,
-  model_id       TEXT,
-  thinking_level TEXT,
-  cost_usd       REAL,
-  cost_status    TEXT CHECK(cost_status IN ('known','estimated','unavailable')),
-  tokens_total   INTEGER,
+  project_id     TEXT NOT NULL,
+  shot_category  TEXT NOT NULL CHECK(shot_category IN ('first_shot','multi_shot')),
+  status         TEXT NOT NULL CHECK(status IN ('pending','processing','scored','failed')),
+  harness_id     TEXT NOT NULL,
+  provider_id    TEXT NOT NULL DEFAULT '',
+  model_id       TEXT NOT NULL,
+  thinking_level TEXT NOT NULL DEFAULT '',
+  started_at     INTEGER NOT NULL,
+  ended_at       INTEGER NOT NULL,
+  closed_at_ms   INTEGER,
+  due_at_ms      INTEGER NOT NULL,
   user_message_text     TEXT NOT NULL DEFAULT '',
   assistant_output_text TEXT NOT NULL DEFAULT '',
   follow_up_text        TEXT,
-  reading_deadline_ms   INTEGER,
-  draft_deadline_ms     INTEGER,
-  general_deadline_ms   INTEGER,
-  due_at_ms             INTEGER,
-  attempt_count         INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
-  last_attempt_at_ms    INTEGER`
+  cost_usd       REAL,
+  cost_status    TEXT CHECK(cost_status IN ('known','estimated','unavailable')),
+  attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+  last_attempt_at_ms  INTEGER,
+  created_at     INTEGER NOT NULL`
 
 export const ATTACHMENT_GRANTS_SQL = `
 -- ─── Durable attachment grants ──────────────────────────────────────────
@@ -800,27 +848,28 @@ CREATE TABLE IF NOT EXISTS usage_events (${USAGE_EVENTS_COLUMNS_SQL});
 
 ${USAGE_EVENTS_INDEXES_SQL}
 
--- ─── Turn outcome feedback (LLM-judged session scoring) ──────────────────
--- One row per completed user turn, opened "pending" with the captured grading
--- payload when an agent answer finishes, and graded exactly once (1–5) by the
--- cheap-model judge when a deadline fires: thread deletion, the post-read
--- window, draft window, or general fallback deadline. One durable due_at
--- checkpoint drives every trigger and survives restarts. Grades feed the "best model by feedback"
--- profile section, keyed by harness/provider/model/thinking level and task
--- kind. A follow-up message sent while pending is stored as extra context.
-CREATE TABLE IF NOT EXISTS turn_feedback (${TURN_FEEDBACK_COLUMNS_SQL});
+-- ─── Model ranking aggregates (LLM-judged 0–10 scoring) ────────────────
+-- Permanent "best model" analytics, keyed by harness/provider/model/
+-- thinking level + rubric version. Snapshot grading (below) adds exact
+-- score/duration/cost sums per shot category in one statement; averages are
+-- always sum ÷ count. Snapshots are transient and hard-deleted after scoring,
+-- so this table is the single surviving record of every graded conversation.
+CREATE TABLE IF NOT EXISTS model_rankings (${MODEL_RANKINGS_COLUMNS_SQL});
 
-CREATE INDEX IF NOT EXISTS idx_turn_feedback_thread
-  ON turn_feedback(thread_id, created_at);
+${MODEL_RANKING_INDEXES_SQL}
 
-CREATE INDEX IF NOT EXISTS idx_turn_feedback_pending
-  ON turn_feedback(status, created_at);
+-- ─── Model ranking snapshot queue (transient grading queue) ─────────────
+-- One row per bounded conversation window (first user message + response,
+-- upgraded to multi_shot by one substantive follow-up). Captured when the
+-- agent answers a visible substantive user message; closed for grading by
+-- thread deletion or the inactivity deadline. Greeting-only prompts never
+-- insert a row. The cheap-model judge scores the closed conversation 0–10,
+-- the aggregate is updated exactly once, and the row is hard-deleted.
+-- Judge failures retry with bounded backoff and remain as status='failed'
+-- for recovery — never deleted unscored.
+CREATE TABLE IF NOT EXISTS model_ranking_snapshots (${MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL});
 
-CREATE INDEX IF NOT EXISTS idx_turn_feedback_deadline
-  ON turn_feedback(status, due_at_ms);
-
-CREATE INDEX IF NOT EXISTS idx_turn_feedback_attribution
-  ON turn_feedback(harness_id, provider_id, model_id, thinking_level, feature);`
+${MODEL_RANKING_SNAPSHOT_INDEXES_SQL}`
 
 /**
  * Private user-only notes attached to threads. The row cascade-deletes with

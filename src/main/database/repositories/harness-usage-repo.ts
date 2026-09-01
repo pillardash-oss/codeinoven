@@ -917,16 +917,13 @@ export class HarnessUsageRepo {
       activityDays,
       dailyUsage,
       hourlyUsage,
-      // Feedback scoring and its cost live in TurnFeedbackRepo; the IPC layer
-      // overlays them.
-      modelPerformance: [],
-      feedbackCost: {
-        outcomes: 0,
-        pricedOutcomes: 0,
+      // Model ranking aggregates and grading spend live in ModelRankingRepo;
+      // the IPC layer overlays them.
+      modelRankings: [],
+      gradingSpend: {
         costUsd: 0,
         knownCostUsd: 0,
-        estimatedCostUsd: 0,
-        tokensTotal: 0
+        estimatedCostUsd: 0
       },
       generatedAt: Date.now()
     }

@@ -7,7 +7,12 @@ import { getConfigRoot } from '../../lib/utils'
 import { Logger } from '../system/logger'
 import {
   DATABASE_SCHEMA_SQL,
-  TURN_FEEDBACK_COLUMNS_SQL,
+  LEGACY_RUBRIC_VERSION,
+  MODEL_RANKINGS_COLUMNS_SQL,
+  MODEL_RANKING_CALC_VERSION,
+  MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL,
+  MODEL_RANKING_SNAPSHOT_INDEXES_SQL,
+  MODEL_RANKING_INDEXES_SQL,
   USAGE_EVENTS_COLUMNS_SQL,
   USAGE_EVENTS_INDEXES_SQL
 } from './schema'
@@ -646,7 +651,7 @@ export class Database {
   private applySchema(): void {
     const connection = this.requireDb()
     connection.transaction(() => {
-      this.migrateTurnFeedbackGrades(connection)
+      this.migrateModelRankingTables(connection)
       connection.exec(DATABASE_SCHEMA_SQL)
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
@@ -655,76 +660,69 @@ export class Database {
   }
 
   /**
-   * Databases predating LLM-graded turn feedback carry the useless binary
-   * pass/fail ledger (status 'success'/'corrected', regex-driven). The metric
-   * was unreliable by construction, so the history is wiped rather than
-   * translated: drop the table and let the canonical schema recreate it.
+   * One-time replacement of the legacy per-turn `turn_feedback` ledger (1–5
+   * grades) with the `model_rankings` aggregate + `model_ranking_snapshots`
+   * queue. Graded legacy rows are folded into the aggregate with the linear
+   * map grade → (grade − 1) × 2.5 under `rubric_version = 'legacy-1to5-map-v1'`
+   * (no duration information existed, so duration sums stay 0), and only then
+   * is the legacy table dropped. Idempotent: without a legacy table this is a
+   * no-op. The fold-in is a single grouped INSERT … SELECT, so large ledgers
+   * stay one bounded pass rather than per-row inserts.
    */
-  private migrateTurnFeedbackGrades(connection: DatabaseType): void {
+  migrateModelRankingTables(connection?: DatabaseType): void {
+    const target = connection ?? this.requireDb()
     const columns = new Set<string>(
-      (connection.prepare('PRAGMA table_info(turn_feedback)').all() as Array<{ name: string }>).map(
+      (target.prepare('PRAGMA table_info(turn_feedback)').all() as Array<{ name: string }>).map(
         (column) => column.name
       )
     )
-    if (columns.size > 0 && !columns.has('grade')) {
-      connection.exec('DROP TABLE turn_feedback')
+    if (columns.size === 0) return
+    if (!columns.has('grade')) {
+      // Databases predating LLM-graded turn feedback carry the useless binary
+      // pass/fail ledger (status 'success'/'corrected', regex-driven). The
+      // metric was unreliable by construction: nothing is worth translating.
+      target.exec('DROP TABLE turn_feedback')
       return
     }
-    if (columns.size === 0 || columns.has('due_at_ms')) return
-
-    // Replace the deadline-per-trigger table with one durable queue deadline.
-    // Existing grades and captured payloads survive; pending rows inherit the
-    // earliest old deadline, or a bounded general deadline when none existed.
-    connection.exec('ALTER TABLE turn_feedback RENAME TO turn_feedback_legacy')
-    connection.exec(`CREATE TABLE turn_feedback (${TURN_FEEDBACK_COLUMNS_SQL})`)
-    connection.exec(`
-      INSERT INTO turn_feedback(
-        id, thread_id, project_id, parent_turn_id, session_id, created_at,
-        resolved_at, status, basis, grade, feature, task_slug,
-        harness_id, provider_id, model_id, thinking_level,
-        cost_usd, cost_status, tokens_total,
-        user_message_text, assistant_output_text, follow_up_text,
-        reading_deadline_ms, draft_deadline_ms,
-        general_deadline_ms, due_at_ms, attempt_count, last_attempt_at_ms
+    // The aggregate must exist before the fold-in; the canonical schema's
+    // CREATE IF NOT EXISTS below stays a no-op afterwards.
+    target.exec(
+      `CREATE TABLE IF NOT EXISTS model_rankings (${MODEL_RANKINGS_COLUMNS_SQL});
+       CREATE TABLE IF NOT EXISTS model_ranking_snapshots (${MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL});`
+    )
+    target.exec(MODEL_RANKING_INDEXES_SQL)
+    target.exec(MODEL_RANKING_SNAPSHOT_INDEXES_SQL)
+    target.exec(`
+      INSERT INTO model_rankings(
+        id, harness_id, provider_id, model_id, thinking_level,
+        one_shot_score_sum, one_shot_samples, one_shot_duration_sum_ms, one_shot_cost_usd,
+        multi_shot_score_sum, multi_shot_samples, multi_shot_duration_sum_ms, multi_shot_cost_usd,
+        rubric_version, calc_version, updated_at
       )
       SELECT
-        legacy.id,
-        legacy.thread_id,
-        (SELECT project_id FROM threads WHERE id = legacy.thread_id),
-        legacy.parent_turn_id,
-        legacy.session_id,
-        legacy.created_at,
-        legacy.resolved_at,
-        legacy.status,
-        legacy.basis,
-        legacy.grade,
-        legacy.feature,
-        legacy.task_slug,
+        'legacy-' || MIN(legacy.rowid),
         legacy.harness_id,
-        legacy.provider_id,
+        COALESCE(legacy.provider_id, ''),
         legacy.model_id,
-        legacy.thinking_level,
-        legacy.cost_usd,
-        legacy.cost_status,
-        legacy.tokens_total,
-        legacy.user_message_text,
-        legacy.assistant_output_text,
-        legacy.follow_up_text,
-        legacy.reading_deadline_ms,
-        legacy.draft_deadline_ms,
-        legacy.created_at + 1800000,
-        CASE
-          WHEN legacy.status <> 'pending' THEN NULL
-          WHEN legacy.reading_deadline_ms IS NULL THEN
-            COALESCE(legacy.draft_deadline_ms, legacy.created_at + 1800000)
-          WHEN legacy.draft_deadline_ms IS NULL THEN legacy.reading_deadline_ms
-          ELSE MIN(legacy.reading_deadline_ms, legacy.draft_deadline_ms)
-        END,
+        COALESCE(legacy.thinking_level, ''),
+        SUM((legacy.grade - 1) * 2.5),
+        COUNT(*),
         0,
-        NULL
-      FROM turn_feedback_legacy AS legacy
+        COALESCE(SUM(CASE WHEN legacy.cost_status <> 'unavailable' AND legacy.cost_usd IS NOT NULL
+                          THEN legacy.cost_usd ELSE 0 END), 0),
+        0, 0, 0, 0,
+        '${LEGACY_RUBRIC_VERSION}',
+        '${MODEL_RANKING_CALC_VERSION}',
+        MAX(legacy.created_at)
+      FROM turn_feedback AS legacy
+      WHERE legacy.status = 'graded'
+        AND legacy.grade IS NOT NULL
+        AND legacy.harness_id IS NOT NULL
+        AND legacy.model_id IS NOT NULL
+      GROUP BY legacy.harness_id, COALESCE(legacy.provider_id, ''), legacy.model_id,
+               COALESCE(legacy.thinking_level, '')
     `)
-    connection.exec('DROP TABLE turn_feedback_legacy')
+    target.exec('DROP TABLE turn_feedback')
   }
 
   /**

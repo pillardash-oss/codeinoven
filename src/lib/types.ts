@@ -2209,54 +2209,95 @@ export interface LocalProfileAnalytics {
   dailyUsage: LocalProfileUsageDay[]
   /** Total model and utility consumption by local hour of day. */
   hourlyUsage: LocalProfileUsageHour[]
-  /** Harness/provider/model/thinking-level performance scored on session outcomes. */
-  modelPerformance: LocalProfileModelPerformance[]
-  /** What the scored sessions cost to gather in this period. */
-  feedbackCost: LocalProfileFeedbackCost
+  /** Harness/provider/model/thinking-level 0–10 ranking aggregates. */
+  modelRankings: LocalProfileModelRanking[]
+  /** What the ranked sessions cost to gather in this period. */
+  gradingSpend: LocalProfileGradingSpend
   generatedAt: number
 }
 
-/** Lifecycle of one scored user session: captured pending, graded exactly once. */
-export type TurnOutcomeStatus = 'pending' | 'graded'
+/** Shot category of one ranked conversation window. */
+export type RankingShotCategory = 'first_shot' | 'multi_shot'
 
-/** What triggered the judge for a pending turn outcome. */
-export type TurnOutcomeBasis = 'deleted' | 'general_timeout' | 'read_timeout' | 'draft_timeout'
+/** Queue processing state of a ranking snapshot (workflow state, not quality). */
+export type RankingSnapshotStatus = 'pending' | 'processing' | 'scored' | 'failed'
 
-/** Task kind recorded with a turn outcome, mirroring usage_events.feature. */
-export type TurnOutcomeTaskType = 'main' | 'audit' | 'assignment'
+/** One persisted ranking snapshot row (transient grading queue entry). */
+export interface ModelRankingSnapshotRow {
+  id: string
+  /** Null after the owning thread is deleted (ON DELETE SET NULL). */
+  thread_id: string | null
+  project_id: string
+  shot_category: RankingShotCategory
+  status: RankingSnapshotStatus
+  harness_id: string
+  provider_id: string
+  model_id: string
+  thinking_level: string
+  started_at: number
+  ended_at: number
+  /** Set when the conversation window closed; null while follow-ups may land. */
+  closed_at_ms: number | null
+  due_at_ms: number
+  user_message_text: string
+  assistant_output_text: string
+  follow_up_text: string | null
+  cost_usd: number | null
+  cost_status: 'known' | 'estimated' | 'unavailable' | null
+  attempt_count: number
+  last_attempt_at_ms: number | null
+  created_at: number
+}
 
-/** Aggregated LLM-judge performance for one (harness, provider, model, thinking level). */
-export interface LocalProfileModelPerformance {
+/** One persisted model-ranking aggregate row (permanent analytics record). */
+export interface ModelRankingRow {
+  id: string
+  harness_id: string
+  provider_id: string
+  model_id: string
+  thinking_level: string
+  one_shot_score_sum: number
+  one_shot_samples: number
+  one_shot_duration_sum_ms: number
+  one_shot_cost_usd: number
+  multi_shot_score_sum: number
+  multi_shot_samples: number
+  multi_shot_duration_sum_ms: number
+  multi_shot_cost_usd: number
+  rubric_version: string
+  calc_version: string
+  updated_at: number
+}
+
+/** Per-shot-category ranking statistics; averages are always sum ÷ count. */
+export interface LocalProfileRankingModeStats {
+  /** Average judge score on the 0–10 rubric, or null before the first sample. */
+  averageScore: number | null
+  samples: number
+  /** Average agent window duration in milliseconds, or null before the first sample. */
+  averageDurationMs: number | null
+  /** Sum of priced session cost in USD for this category. */
+  costUsd: number
+}
+
+/** Aggregated LLM-judge ranking for one (harness, provider, model, thinking level). */
+export interface LocalProfileModelRanking {
   harnessId: string
   providerId: string
   modelId: string
   thinkingLevel: ThinkingLevel | null
-  taskType: TurnOutcomeTaskType
-  /** Number of graded session outcomes for this combination. */
-  outcomes: number
-  /** Average of the 1–5 judge grades, or null when nothing was graded yet. */
-  averageGrade: number | null
-  /** averageGrade / 5 expressed as a fraction (0–1), or null before grading. */
-  successRate: number | null
-  /** Outcomes whose provider cost was known or estimated (priced). */
-  pricedOutcomes: number
-  /** Sum of priced outcome cost in USD for this combination. */
-  costUsd: number
-  /** Sum of reported tokens across the outcomes. */
-  tokensTotal: number
-  lastUsedAt: number
+  /** Rubric that produced these sums; migrated legacy data carries a legacy tag. */
+  rubricVersion: string
+  oneShot: LocalProfileRankingModeStats
+  multiShot: LocalProfileRankingModeStats
+  updatedAt: number
 }
 
-/** What a resolved feedback session cost to gather (scoped to a period). */
-export interface LocalProfileFeedbackCost {
-  /** Resolved session outcomes in the period. */
-  outcomes: number
-  /** Outcomes whose provider cost was known or estimated (priced). */
-  pricedOutcomes: number
+/** What the ranked sessions cost to gather (scoped to a period). */
+export interface LocalProfileGradingSpend {
   costUsd: number
   knownCostUsd: number
   estimatedCostUsd: number
-  tokensTotal: number
 }
 
 /** Account identity plus the cloud-backed workstation profile data. */
