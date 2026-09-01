@@ -5,7 +5,7 @@ import { join } from 'path'
 import { createTestDb, destroyTestDb } from '../../main/database/test-helper'
 import { ProjectRepo } from '../../../src/main/database/repositories/project-repo'
 import type { Database } from '../../../src/main/database/database'
-import type { AgentMessage, ThreadSettings } from '../../../src/lib/types'
+import type { AgentMessage, ThreadSettings, ScopeBucket } from '../../../src/lib/types'
 import { AllThreadsProtectedError, ThreadManager } from '../../../src/lib/engines/thread-manager'
 import { ensureFeatureSlug } from '../../../src/lib/project-artifacts'
 import { AgentMessageRepo } from '../../../src/main/database/repositories/agent-message-repo'
@@ -487,5 +487,141 @@ describe('ThreadManager scope-root propagation', () => {
     const fork = await manager.forkThread('project1', parent.id, 'Fork')
     expect(fork.scopeBucketId).toBe('scope-a')
     expect(fork.workingDirectory).toBe('/worktrees/feature-a')
+  })
+})
+
+describe('ThreadManager per-scope thread buckets', () => {
+  /** Persist a board with a pinned bucket and a worktree bucket alongside the default. */
+  async function persistBucketedBoard(db: Database, scopes: { id: string; pinned?: boolean; worktree?: boolean }[]) {
+    const buckets: ScopeBucket[] = scopes.map((s) => ({
+      id: s.id,
+      name: s.id,
+      sortOrder: 0,
+      collapsed: false,
+      collapsedSlices: [],
+      pinned: s.pinned === true ? true : undefined,
+      root:
+        s.worktree === true
+          ? {
+              kind: 'worktree',
+              directoryName: s.id,
+              branch: 'feature-' + s.id,
+              baseBranch: 'main',
+              baseCommit: 'abc123',
+              createdAt: Date.now(),
+              environmentMode: 'copy',
+              setup: { state: 'not_run', commands: [] }
+            }
+          : { kind: 'project' }
+    }))
+    // Ensure the Default scope is present and project-rooted.
+    if (!buckets.some((b) => b.id === 'default')) {
+      buckets.unshift({
+        id: 'default',
+        name: 'Default',
+        sortOrder: 0,
+        collapsed: false,
+        collapsedSlices: [],
+        root: { kind: 'project' }
+      })
+    }
+    db.run(
+      'INSERT OR REPLACE INTO scope_boards(project_id, data, updated_at) VALUES(?,?,?)',
+      'project1',
+      JSON.stringify({
+        version: 2,
+        buckets: buckets.map((b, i) => ({ ...b, sortOrder: i })),
+        worktreeDefaults: { setupCommands: [], runSetupByDefault: true, environmentMode: 'copy' }
+      }),
+      Date.now()
+    )
+  }
+
+  it('isolates eviction to the same scope bucket (worktree scope does not evict the regular bucket)', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-01T10:00:00.000Z'))
+    const { manager, db } = await createManager(2)
+    await persistBucketedBoard(db, [{ id: 'scratch', worktree: true }])
+
+    vi.setSystemTime(new Date('2026-08-01T10:01:00.000Z'))
+    const regular = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Regular one',
+      scopeBucketId: 'default'
+    })
+    vi.setSystemTime(new Date('2026-08-01T10:02:00.000Z'))
+    const wtA = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Worktree A',
+      scopeBucketId: 'scratch'
+    })
+    vi.setSystemTime(new Date('2026-08-01T10:03:00.000Z'))
+    const wtB = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Worktree B',
+      scopeBucketId: 'scratch'
+    })
+    // Worktree bucket is full (2). Adding a third evicts the oldest worktree thread...
+    vi.setSystemTime(new Date('2026-08-01T10:04:00.000Z'))
+    const wtC = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Worktree C',
+      scopeBucketId: 'scratch'
+    })
+    expect(await manager.getThread('project1', wtA.id)).toBeNull()
+    expect(await manager.getThread('project1', wtB.id)).not.toBeNull()
+    expect(await manager.getThread('project1', wtC.id)).not.toBeNull()
+    // ...but never touches the regular bucket.
+    expect(await manager.getThread('project1', regular.id)).not.toBeNull()
+
+    expect(await manager.getThreadCapacity('project1')).toMatchObject({
+      limit: 2,
+      activeCount: 1,
+      pinnedScopeCount: 2
+    })
+  })
+
+  it('pinned and worktree scopes each keep independent buckets', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-02T10:00:00.000Z'))
+    const { manager, db } = await createManager(2)
+    await persistBucketedBoard(db, [
+      { id: 'pinned-a', pinned: true },
+      { id: 'scratch', worktree: true }
+    ])
+
+    const step = vi.setSystemTime
+    const pa = await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'PA', scopeBucketId: 'pinned-a' })
+    step(new Date('2026-08-02T10:00:01.000Z'))
+    const pb = await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'PB', scopeBucketId: 'pinned-a' })
+    step(new Date('2026-08-02T10:00:02.000Z'))
+    const sa = await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'SA', scopeBucketId: 'scratch' })
+    step(new Date('2026-08-02T10:00:03.000Z'))
+    const sb = await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'SB', scopeBucketId: 'scratch' })
+    expect(await manager.getThread('project1', pa.id)).not.toBeNull()
+    expect(await manager.getThread('project1', sa.id)).not.toBeNull()
+
+    // Each bucket is full at 2; the next create only ever evicts its own bucket's thread.
+    step(new Date('2026-08-02T10:00:04.000Z'))
+    const pc = await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'PC', scopeBucketId: 'pinned-a' })
+    // The worktree bucket is untouched: still both of its threads.
+    expect(await manager.getThread('project1', sa.id)).not.toBeNull()
+    expect(await manager.getThread('project1', sb.id)).not.toBeNull()
+    expect(await manager.getThread('project1', pa.id)).toBeNull()
+    expect(await manager.getThread('project1', pb.id)).not.toBeNull()
+    expect(await manager.getThread('project1', pc.id)).not.toBeNull()
+
+    step(new Date('2026-08-02T10:00:05.000Z'))
+    const sc = await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'SC', scopeBucketId: 'scratch' })
+    // The pinned bucket is untouched by the worktree bucket's own eviction.
+    expect(await manager.getThread('project1', pb.id)).not.toBeNull()
+    expect(await manager.getThread('project1', pc.id)).not.toBeNull()
+    expect(await manager.getThread('project1', sa.id)).toBeNull()
+    expect(await manager.getThread('project1', sb.id)).not.toBeNull()
+    expect(await manager.getThread('project1', sc.id)).not.toBeNull()
   })
 })

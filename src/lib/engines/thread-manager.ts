@@ -44,7 +44,9 @@ import {
   type ThreadMessageCursor,
   type ThreadMessagePage,
   type UserMessageSummary,
-  isOrchestrationChildThread
+  isOrchestrationChildThread,
+  isManagedScopeRoot,
+  type ScopeBoard
 } from '../types'
 
 /**
@@ -75,23 +77,36 @@ function isProtectedFromAutomaticCleanup(thread: Pick<Thread, 'pinned' | 'status
 }
 
 /**
- * Scope-bucket ids whose threads live outside the regular bucket. Reads the
- * board lazily per use; the scope board is a single JSON row, so this is cheap.
+ * Sentinel bucket id for threads that do not belong to a pinned-like scope.
+ * All non-pinned-like scopes (including the default scope) share this single
+ * regular bucket, capped at the project thread limit.
  */
-function pinnedScopeIdsFromBoard(board: import('../types').ScopeBoard): Set<string> {
+const REGULAR_BUCKET = '__regular_bucket__'
+
+/**
+ * A scope gets its own thread bucket when it is pinned on the board OR its
+ * root is an app-managed Git worktree. Reads the board lazily per use; the
+ * scope board is a single JSON row, so this is cheap.
+ */
+function scopedBucketIdsFromBoard(board: ScopeBoard): Set<string> {
   const ids = new Set<string>()
   for (const bucket of board.buckets) {
-    if (bucket.pinned === true) ids.add(bucket.id)
+    if (bucket.pinned === true || isManagedScopeRoot(bucket.root)) ids.add(bucket.id)
   }
   return ids
 }
 
-/** Threads in pinned scopes never count toward the project thread limit. */
-function isInPinnedScope(
+/**
+ * The bucket a thread belongs to: its own scope id when the scope is
+ * pinned-like, otherwise the shared regular bucket.
+ */
+function bucketForThread(
   candidate: Pick<ThreadCapacityCandidate, 'scopeBucketId'>,
-  pinnedScopes: Set<string>
-): boolean {
-  return pinnedScopes.has(candidate.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+  scopedBuckets: Set<string>
+): string {
+  return scopedBuckets.has(candidate.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+    ? (candidate.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+    : REGULAR_BUCKET
 }
 
 /** Deterministic view of a project's thread capacity for the UI. */
@@ -101,7 +116,7 @@ export interface ThreadCapacity {
   pinnedCount: number
   protectedCount: number
   deletableCount: number
-  /** Threads in pinned scopes, kept outside the regular bucket. */
+  /** Threads in pinned-like scopes, each kept in its own per-scope bucket. */
   pinnedScopeCount: number
 }
 
@@ -393,26 +408,25 @@ export class ThreadManager {
       if (!project) {
         throw new Error(`Project not found: ${input.projectId}`)
       }
-      const pinnedScopes = pinnedScopeIdsFromBoard(this.scopeManager.getBoard(input.projectId))
-      const newThreadInPinnedScope = pinnedScopes.has(input.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+      const scopedBuckets = scopedBucketIdsFromBoard(this.scopeManager.getBoard(input.projectId))
+      // The new thread lands in its own bucket: either its pinned-like scope's
+      // bucket or the shared regular bucket. Capacity is enforced per bucket,
+      // so eviction only ever displaces threads from the same bucket.
+      const newThreadBucket = bucketForThread({ scopeBucketId: input.scopeBucketId }, scopedBuckets)
       const active = await this.threadRepo.listCapacityCandidatesViaWorker(input.projectId)
-      // Threads in pinned scopes sit outside the regular bucket: they neither
-      // fill it nor are they eligible for automatic eviction.
-      const regularCount = active.filter((candidate) => !isInPinnedScope(candidate, pinnedScopes))
-        .length
+      const bucketCount = active.filter(
+        (candidate) => bucketForThread(candidate, scopedBuckets) === newThreadBucket
+      ).length
       let toEvictId: string | undefined
-      if (
-        !creatingOrchestrationChild &&
-        !newThreadInPinnedScope &&
-        regularCount >= project.threadLimit
-      ) {
+      if (!creatingOrchestrationChild && bucketCount >= project.threadLimit) {
         const toEvict = active.find(
           (candidate) =>
-            !isInPinnedScope(candidate, pinnedScopes) && !isProtectedFromAutomaticCleanup(candidate)
+            bucketForThread(candidate, scopedBuckets) === newThreadBucket &&
+            !isProtectedFromAutomaticCleanup(candidate)
         )
         toEvictId = toEvict?.id
         if (!toEvictId) {
-          throw new AllThreadsProtectedError(input.projectId, project.threadLimit, regularCount)
+          throw new AllThreadsProtectedError(input.projectId, project.threadLimit, bucketCount)
         }
       }
 
@@ -1236,11 +1250,11 @@ export class ThreadManager {
     const threads = this.threadRepo.listByProject(projectId)
     const logicalThreads = threads.filter((thread) => !isOrchestrationChildThread(thread))
     const active = logicalThreads.filter((thread) => !thread.archived)
-    const pinnedScopes = pinnedScopeIdsFromBoard(this.scopeManager.getBoard(projectId))
-    // Pinned-scope threads live outside the regular bucket and are reported
-    // separately so the UI can explain the capacity numbers.
+    const scopedBuckets = scopedBucketIdsFromBoard(this.scopeManager.getBoard(projectId))
+    // Threads in pinned-like scopes live in their own per-scope buckets and are
+    // reported separately; the regular bucket holds every other thread.
     const regular = active.filter(
-      (thread) => !isInPinnedScope({ scopeBucketId: thread.scopeBucketId }, pinnedScopes)
+      (thread) => bucketForThread({ scopeBucketId: thread.scopeBucketId }, scopedBuckets) === REGULAR_BUCKET
     )
     return {
       limit: project.threadLimit,
