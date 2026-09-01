@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
-    Battery,
+    BatteryCharging,
+    BatteryMedium,
     Cpu,
     ExternalLink,
     MemoryStick,
@@ -165,10 +166,6 @@
     return `${percent.toFixed(percent < 10 ? 1 : 0)}%`
   }
 
-  function powerLabel(): string {
-    return power.source === 'battery' ? 'On battery' : 'Plugged in'
-  }
-
   function thermalLabel(): string {
     const state = power.thermalState
     return `${state.slice(0, 1).toUpperCase()}${state.slice(1)} thermal pressure`
@@ -325,14 +322,6 @@
       <div
         class="flex min-h-9 shrink-0 items-center gap-3 border-b border-border bg-raised px-5 text-[10px] text-muted tabular-nums"
       >
-        <span class="inline-flex items-center gap-1.5" title="Current system power source">
-          {#if power.source === 'battery'}
-            <Battery size={13} class="text-dimmed" />
-          {:else}
-            <Plug size={13} class="text-dimmed" />
-          {/if}
-          {powerLabel()}
-        </span>
         {#if power.thermalState !== 'unknown' && power.thermalState !== 'nominal'}
           <span
             class="inline-flex items-center gap-1.5 text-danger"
@@ -489,13 +478,30 @@
 
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-4">
-      <p class="min-w-0 flex-1 truncate text-xs text-dimmed tabular-nums">
-        {#if selected.size > 0}
-          {selected.size} of {processes.length} selected
+      <div class="flex min-w-0 flex-1 items-center gap-2">
+        {#if power.source === 'battery'}
+          <BatteryMedium
+            size={14}
+            class="shrink-0 text-muted"
+            title="On battery"
+            aria-label="On battery"
+          />
         {:else}
-          {processes.length} running
+          <BatteryCharging
+            size={14}
+            class="shrink-0 text-success"
+            title="Plugged in"
+            aria-label="Plugged in"
+          />
         {/if}
-      </p>
+        <p class="min-w-0 truncate text-xs text-dimmed tabular-nums">
+          {#if selected.size > 0}
+            {selected.size} of {processes.length} selected
+          {:else}
+            {processes.length} running
+          {/if}
+        </p>
+      </div>
       <div class="flex shrink-0 items-center gap-1.5">
         <button
           type="button"
