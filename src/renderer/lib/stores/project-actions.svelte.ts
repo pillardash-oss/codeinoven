@@ -39,15 +39,26 @@ class ProjectActionsState {
     this.loading.set(projectId, request)
     return request
   }
-  async save(projectId: string, actionId: string | null, input: ProjectActionInput): Promise<void> {
-    const saved = await invoke('projectActions:save', projectId, actionId, input)
+  async save(
+    projectId: string,
+    actionId: string | null,
+    input: ProjectActionInput,
+    insertAfterId?: string | null
+  ): Promise<void> {
+    const saved = await invoke('projectActions:save', projectId, actionId, input, insertAfterId)
     const current = this.actions(projectId)
-    this.actionsByProject.set(
-      projectId,
-      actionId
-        ? current.map((action) => (action.id === saved.id ? saved : action))
-        : [...current, saved]
-    )
+    if (actionId) {
+      this.actionsByProject.set(
+        projectId,
+        current.map((action) => (action.id === saved.id ? saved : action))
+      )
+      return
+    }
+    const next = [...current]
+    const anchorIndex = insertAfterId ? next.findIndex((action) => action.id === insertAfterId) : -1
+    if (anchorIndex === -1) next.push(saved)
+    else next.splice(anchorIndex + 1, 0, saved)
+    this.actionsByProject.set(projectId, next)
   }
   async delete(projectId: string, actionId: string): Promise<void> {
     if (this.run(actionId)?.running) await this.stop(actionId)

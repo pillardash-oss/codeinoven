@@ -2538,12 +2538,25 @@ export function registerIpcHandlers(
     })
     if (new Set(variables.map((variable) => variable.name)).size !== variables.length)
       throw new TypeError('Variable names must be unique')
-    return { name, script, variables }
+    let color: string | null = null
+    const rawColor = record['color']
+    if (rawColor !== undefined && rawColor !== null && rawColor !== '') {
+      if (typeof rawColor !== 'string' || !/^#[0-9a-fA-F]{6}$/u.test(rawColor))
+        throw new TypeError('Action color is invalid')
+      color = rawColor.toLowerCase()
+    }
+    return { name, script, variables, color }
   }
   ipcMain.handle('projectActions:list', (_, projectId: string) => readProjectActions(projectId))
   ipcMain.handle(
     'projectActions:save',
-    async (_, projectId: string, actionId: string | null, value: unknown) => {
+    async (
+      _,
+      projectId: string,
+      actionId: string | null,
+      value: unknown,
+      insertAfterId?: string | null
+    ) => {
       const input = validateProjectActionInput(value)
       const actions = await readProjectActions(projectId)
       const now = Date.now()
@@ -2554,9 +2567,18 @@ export function registerIpcHandlers(
         createdAt: existing?.createdAt ?? now,
         updatedAt: now
       }
-      const next = existing
-        ? actions.map((item) => (item.id === action.id ? action : item))
-        : [...actions, action]
+      let next: ProjectAction[]
+      if (existing) {
+        next = actions.map((item) => (item.id === action.id ? action : item))
+      } else if (insertAfterId) {
+        // Duplicates land directly beneath the source action, not at the end.
+        const anchorIndex = actions.findIndex((item) => item.id === insertAfterId)
+        next = [...actions]
+        if (anchorIndex === -1) next.push(action)
+        else next.splice(anchorIndex + 1, 0, action)
+      } else {
+        next = [...actions, action]
+      }
       await storage.write(projectActionsPath(projectId), { actions: next })
       return action
     }

@@ -2059,7 +2059,8 @@ export interface IpcInvokeContract {
     [
       projectId: string,
       actionId: string | null,
-      input: import('./project-actions').ProjectActionInput
+      input: import('./project-actions').ProjectActionInput,
+      insertAfterId?: string | null
     ],
     import('./project-actions').ProjectAction
   >

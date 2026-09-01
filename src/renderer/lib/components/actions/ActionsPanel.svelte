@@ -12,6 +12,7 @@
   } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
+  import { PROJECT_COLORS } from '$lib/project-colors'
   import ActionTerminal from './ActionTerminal.svelte'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import type {
@@ -31,6 +32,7 @@
   let script = $state('')
   const SCRIPT_PLACEHOLDER = `bun install\ncd apps/mobile\nbun run deploy --message "$m"`
   let variables = $state<ProjectActionVariable[]>([])
+  let color = $state<string | null>(null)
   let runTarget = $state<ProjectAction | null>(null)
   let runValues = $state<Record<string, string>>({})
   let deleteTarget = $state<ProjectAction | null>(null)
@@ -47,6 +49,7 @@
     name = action?.name ?? ''
     script = action?.script ?? ''
     variables = action?.variables.map((variable) => ({ ...variable })) ?? []
+    color = action?.color ?? null
     error = null
     editorOpen = true
   }
@@ -65,7 +68,7 @@
     saving = true
     error = null
     try {
-      const input: ProjectActionInput = { name, script, variables }
+      const input: ProjectActionInput = { name, script, variables, color }
       await projectActionsState.save(projectId, editing?.id ?? null, input)
       editorOpen = false
     } catch (reason) {
@@ -88,11 +91,17 @@
     runTarget = null
   }
   function duplicate(action: ProjectAction): void {
-    void projectActionsState.save(projectId, null, {
-      name: action.name ? `${action.name} (copy)` : '',
-      script: action.script,
-      variables: action.variables.map((variable) => ({ ...variable }))
-    })
+    void projectActionsState.save(
+      projectId,
+      null,
+      {
+        name: action.name ? `${action.name} (copy)` : '',
+        script: action.script,
+        variables: action.variables.map((variable) => ({ ...variable })),
+        color: action.color ?? null
+      },
+      action.id
+    )
   }
   let draggingId = $state<string | null>(null)
   let dragStartOrder: string[] | null = null
@@ -182,6 +191,7 @@
             action.id
               ? 'opacity-50'
               : ''}"
+            style={action.color ? `border-left: 3px solid ${action.color}` : undefined}
             draggable="true"
             ondragstart={(event) => dragStart(action, event)}
             ondragover={(event) => dragOver(action, event)}
@@ -311,6 +321,37 @@
         bind:value={script}
         placeholder={SCRIPT_PLACEHOLDER}></textarea></label
     >
+    <div>
+      <p class="text-xs font-semibold">Label colour</p>
+      <div class="mt-2 flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          class="flex h-5 w-5 items-center justify-center rounded-full border-2 transition-transform hover:scale-110 {color ===
+          null
+            ? 'border-foreground'
+            : 'border-border'}"
+          title="No colour"
+          aria-label="No colour"
+          onclick={() => (color = null)}><X size={11} class="text-muted" /></button
+        >
+        {#each PROJECT_COLORS as option (option.value)}
+          <button
+            type="button"
+            class="h-5 w-5 rounded-full border-2 transition-transform hover:scale-110 {color ===
+            option.value
+              ? 'border-foreground'
+              : 'border-transparent'}"
+            style="background-color: {option.value}"
+            title={option.name}
+            aria-label={`${option.name} label colour`}
+            onclick={() => (color = option.value)}
+          ></button>
+        {/each}
+      </div>
+      <p class="mt-1.5 text-[11px] text-muted">
+        The colour shows as the entry's left border — group similar scripts together.
+      </p>
+    </div>
     <div>
       <div class="flex items-center justify-between">
         <div>
