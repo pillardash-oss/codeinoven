@@ -6,6 +6,7 @@ import type {
   BrowserDownload,
   BrowserDownloadState,
   BrowserPageState,
+  BrowserPermissionDecision,
   BrowserPermissionRequest,
   BrowserViewBounds
 } from '../../lib/ipc-contract'
@@ -76,6 +77,16 @@ function validatePermissionRequestId(value: unknown): string {
   return value
 }
 
+function validatePermissionDecision(value: unknown): BrowserPermissionDecision {
+  if (
+    typeof value !== 'string' ||
+    (value !== 'allow' && value !== 'allow-once' && value !== 'deny' && value !== 'dismiss')
+  ) {
+    throw new TypeError('Browser permission decision is invalid')
+  }
+  return value
+}
+
 function validateDownloadId(value: unknown): string {
   if (typeof value !== 'string' || !DOWNLOAD_ID_PATTERN.test(value)) {
     throw new TypeError('Browser download ID is invalid')
@@ -131,6 +142,20 @@ function permissionGrantKeys(request: BrowserPermissionRequest): string[] {
   return [permissionKey(request.origin, request.permission)]
 }
 
+/** How a permission reply affects what the browser remembers. */
+interface PermissionResolution {
+  granted: boolean
+  rememberGrant: boolean
+  rememberDeny: boolean
+}
+
+const permissionResolutions: Record<BrowserPermissionDecision, PermissionResolution> = {
+  allow: { granted: true, rememberGrant: true, rememberDeny: false },
+  'allow-once': { granted: true, rememberGrant: false, rememberDeny: false },
+  deny: { granted: false, rememberGrant: false, rememberDeny: true },
+  dismiss: { granted: false, rememberGrant: false, rememberDeny: false }
+}
+
 function validateBrowserUrl(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > MAX_BROWSER_URL_LENGTH) {
     throw new TypeError('Browser URL must be a string of at most 8192 characters')
@@ -175,6 +200,7 @@ export class BrowserService {
   private readonly agentTabIds = new Map<string, string>()
   private readonly configuredSessions = new Set<string>()
   private readonly permissionGrants = new Map<string, Set<string>>()
+  private readonly permissionDenies = new Map<string, Set<string>>()
   private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
   private readonly permissionSuspendedTabs = new Set<string>()
   private readonly downloads = new Map<string, BrowserDownloadRecord>()
@@ -260,12 +286,10 @@ export class BrowserService {
     ipcMain.handle('browser:clearData', async (_event, rawProjectId) => {
       await this.clearProjectData(validateProjectId(rawProjectId))
     })
-    ipcMain.handle('browser:resolvePermission', (_event, rawRequestId, rawGranted) => {
+    ipcMain.handle('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)
-      if (typeof rawGranted !== 'boolean') {
-        throw new TypeError('Browser permission response must be a boolean')
-      }
-      this.resolvePermission(requestId, rawGranted)
+      const decision = validatePermissionDecision(rawDecision)
+      this.resolvePermission(requestId, permissionResolutions[decision])
     })
     ipcMain.handle('browser:destroy', (_event, rawTabId) => {
       this.destroy(validateTabId(rawTabId))
@@ -323,7 +347,7 @@ export class BrowserService {
   dispose(): void {
     this.detachActiveView()
     for (const requestId of [...this.pendingPermissions.keys()]) {
-      this.resolvePermission(requestId, false, false)
+      this.resolvePermission(requestId, permissionResolutions.dismiss, false)
     }
     for (const tab of this.tabs.values()) {
       if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
@@ -332,6 +356,7 @@ export class BrowserService {
     this.agentTabIds.clear()
     this.configuredSessions.clear()
     this.permissionGrants.clear()
+    this.permissionDenies.clear()
     for (const record of this.downloads.values()) {
       if (record.download.state === 'progressing') record.item.cancel()
     }
@@ -544,14 +569,20 @@ export class BrowserService {
     const browserSession = session.fromPartition(partition)
     if (this.configuredSessions.has(partition)) return browserSession
     const grants = new Set<string>()
+    const denies = new Set<string>()
     this.permissionGrants.set(partition, grants)
+    this.permissionDenies.set(partition, denies)
     browserSession.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
       const origin = permissionOrigin(requestingOrigin)
       if (!origin) return false
       const mediaType = Reflect.get(details, 'mediaType')
-      return grants.has(
-        permissionKey(origin, permission, typeof mediaType === 'string' ? mediaType : '')
+      const scope = permissionKey(
+        origin,
+        permission,
+        typeof mediaType === 'string' ? mediaType : ''
       )
+      // A remembered "Don't allow" wins over any cached grant for the same key.
+      return !denies.has(scope) && grants.has(scope)
     })
     browserSession.setPermissionRequestHandler((contents, permission, callback, details) => {
       const tabEntry = [...this.tabs.entries()].find(
@@ -573,17 +604,28 @@ export class BrowserService {
       const [tabId] = tabEntry
       const id = crypto.randomUUID()
       const rawMediaTypes: unknown = Reflect.get(details, 'mediaTypes')
+      const mediaTypes = Array.isArray(rawMediaTypes)
+        ? rawMediaTypes.filter((value): value is string => typeof value === 'string')
+        : []
       const request: BrowserPermissionRequest = {
         id,
         tabId,
         projectId,
         origin,
         permission,
-        mediaTypes: Array.isArray(rawMediaTypes)
-          ? rawMediaTypes.filter((value): value is string => typeof value === 'string')
-          : []
+        mediaTypes
       }
-      const timer = setTimeout(() => this.resolvePermission(id, false), PERMISSION_TIMEOUT_MS)
+      // A remembered "Don't allow" for any of these keys: refuse silently so the
+      // site is not re-prompted, without suspending the view or showing a modal.
+      const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
+      if (permissionGrantKeys(request).some((key) => this.permissionDenies.get(partition)?.has(key))) {
+        callback(false)
+        return
+      }
+      const timer = setTimeout(
+        () => this.resolvePermission(id, permissionResolutions.dismiss),
+        PERMISSION_TIMEOUT_MS
+      )
       this.pendingPermissions.set(id, { request, callback, timer })
       this.suspendActiveViewForPermission()
       sendToRenderer(this.window.webContents, 'browser:permissionRequested', request)
@@ -688,7 +730,7 @@ export class BrowserService {
 
   private async clearProjectData(projectId: string): Promise<void> {
     for (const [requestId, pending] of this.pendingPermissions) {
-      if (pending.request.projectId === projectId) this.resolvePermission(requestId, false, false)
+      if (pending.request.projectId === projectId) this.resolvePermission(requestId, permissionResolutions.dismiss, false)
     }
     for (const record of this.downloads.values()) {
       if (record.download.projectId === projectId && record.download.state === 'progressing') {
@@ -697,6 +739,7 @@ export class BrowserService {
     }
     const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
     this.permissionGrants.get(partition)?.clear()
+    this.permissionDenies.get(partition)?.clear()
     const browserSession = this.sessionForProject(projectId)
     await Promise.all([browserSession.clearStorageData(), browserSession.clearCache()])
     await browserSession.closeAllConnections()
@@ -705,17 +748,30 @@ export class BrowserService {
     }
   }
 
-  private resolvePermission(requestId: string, granted: boolean, restoreView = true): void {
+  private resolvePermission(
+    requestId: string,
+    resolution: PermissionResolution,
+    restoreView = true
+  ): void {
     const pending = this.pendingPermissions.get(requestId)
     if (!pending) return
     clearTimeout(pending.timer)
     this.pendingPermissions.delete(requestId)
-    if (granted) {
+    if (resolution.rememberGrant || resolution.rememberDeny) {
       const partition = `${BROWSER_PARTITION_PREFIX}${pending.request.projectId}`
       const grants = this.permissionGrants.get(partition)
-      for (const key of permissionGrantKeys(pending.request)) grants?.add(key)
+      const denies = this.permissionDenies.get(partition)
+      for (const key of permissionGrantKeys(pending.request)) {
+        if (resolution.rememberDeny) {
+          grants?.delete(key)
+          denies?.add(key)
+        } else if (resolution.rememberGrant) {
+          denies?.delete(key)
+          grants?.add(key)
+        }
+      }
     }
-    pending.callback(granted)
+    pending.callback(resolution.granted)
     if (!this.window.webContents.isDestroyed()) {
       sendToRenderer(this.window.webContents, 'browser:permissionResolved', requestId)
     }
@@ -833,7 +889,7 @@ export class BrowserService {
     const tab = this.tabs.get(tabId)
     if (!tab) return
     for (const [requestId, pending] of this.pendingPermissions) {
-      if (pending.request.tabId === tabId) this.resolvePermission(requestId, false, false)
+      if (pending.request.tabId === tabId) this.resolvePermission(requestId, permissionResolutions.dismiss, false)
     }
     if (this.activeTabId === tabId) this.detachActiveView()
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()

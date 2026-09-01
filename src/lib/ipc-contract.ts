@@ -271,6 +271,15 @@ export interface BrowserPermissionRequest {
   mediaTypes: string[]
 }
 
+/**
+ * How the user answered a browser permission prompt.
+ * - `allow`: grant for this origin+permission for the app session (remembered).
+ * - `allow-once`: grant only the request at hand; the next request re-prompts.
+ * - `deny`: refuse and remember the denial so future requests auto-deny.
+ * - `dismiss`: refuse only this request (e.g. closing the modal) without remembering.
+ */
+export type BrowserPermissionDecision = 'allow' | 'allow-once' | 'deny' | 'dismiss'
+
 export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
 
 /** Where a renderer log line originated, for the durable log tag. */
@@ -2116,7 +2125,7 @@ export interface IpcInvokeContract {
   'browser:getConsole': Contract<[tabId: string], BrowserConsoleEntry[]>
   'browser:clearConsole': Contract<[tabId: string], void>
   'browser:clearData': Contract<[projectId: string], void>
-  'browser:resolvePermission': Contract<[requestId: string, granted: boolean], void>
+  'browser:resolvePermission': Contract<[requestId: string, decision: BrowserPermissionDecision], void>
   'browser:destroy': Contract<[tabId: string], void>
   'browser:destroyThread': Contract<[projectId: string, threadId: string], void>
   'browser:destroyProject': Contract<[projectId: string], void>
