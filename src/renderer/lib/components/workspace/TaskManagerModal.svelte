@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { ExternalLink, Loader2, Plug, SquareTerminal, Trash2, X } from '@lucide/svelte'
+  import { ExternalLink, Loader2, Plug, RefreshCw, SquareTerminal, Trash2, X } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
-  import { invoke, subscribe } from '$lib/ipc.svelte'
+  import Switch from '$lib/components/ui/Switch.svelte'
+  import { invoke } from '$lib/ipc.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { SvelteSet } from 'svelte/reactivity'
@@ -15,48 +16,67 @@
   let { open, onClose }: Props = $props()
 
   let processes = $state<TaskManagerProcess[]>([])
-  let loading = $state(false)
+  /** True only during a user-triggered refresh or the first load; drives the
+   *  refresh spinner and the "Checking running processes…" state. Quiet 5s
+   *  background polls do not set this. */
+  let checking = $state(false)
   let error = $state('')
-  let stopping = new SvelteSet<number>()
-  let resolving = new SvelteSet<number>()
-  let forceKillTarget = $state<TaskManagerProcess | null>(null)
-  let forceKilling = $state(false)
+  let selected = new SvelteSet<number>()
+  let ending = $state(false)
+  let forceEndTargets = $state<readonly TaskManagerProcess[]>([])
+  let forceEnding = $state(false)
 
   const activeProjectId = $derived(workspaceState.activeProject?.id ?? null)
+  const selectedProcesses = $derived(processes.filter((process) => selected.has(process.pid)))
 
   async function load(): Promise<void> {
-    if (loading) return
-    loading = true
+    if (checking) return
+    checking = true
     error = ''
     try {
       processes = await invoke('taskManager:list')
+      pruneSelection()
     } catch (loadError) {
       error = loadError instanceof Error ? loadError.message : 'Processes could not be loaded.'
     } finally {
-      loading = false
+      checking = false
     }
   }
 
+  /** Silent refresh used by the 5s cadence: updates the list without toggling
+   *  the spinner so a populated modal never flashes a loading state. */
+  async function refreshQuietly(): Promise<void> {
+    try {
+      processes = await invoke('taskManager:list')
+      pruneSelection()
+    } catch {
+      // Swallow background poll errors; the last good snapshot stays visible.
+    }
+  }
+
+  /** Drop any selected pid that no longer exists after a refresh. */
+  function pruneSelection(): void {
+    const alive = new Set(processes.map((process) => process.pid))
+    for (const pid of [...selected]) {
+      if (!alive.has(pid)) selected.delete(pid)
+    }
+  }
+
+  // Initial load on open.
   $effect(() => {
     if (open) void load()
   })
 
-  $effect(() => {
-    if (!open) return
-    return subscribe('taskManager:processesChanged', () => {
-      void load()
-    })
-  })
-
-  // Keep durations ticking while the modal is open; mutating `now` re-renders
-  // the list without touching the process registry.
+  // Keep the process list live: quiet reload every 5s and re-render durations
+  // on the same cadence so the modal stays current without being noisy.
   let now = $state(0)
   $effect(() => {
     if (!open) return
     now = Date.now()
     const timer = setInterval(() => {
       now = Date.now()
-    }, 1_000)
+      void refreshQuietly()
+    }, 5_000)
     return () => clearInterval(timer)
   })
 
@@ -129,8 +149,7 @@
   }
 
   async function openInBrowser(process: TaskManagerProcess): Promise<void> {
-    if (resolving.has(process.pid) || process.ports.length === 0) return
-    resolving.add(process.pid)
+    if (process.ports.length === 0) return
     error = ''
     try {
       const target = await resolveTarget(process)
@@ -148,14 +167,10 @@
       )
     } catch (openError) {
       error = openError instanceof Error ? openError.message : 'Could not open the process.'
-    } finally {
-      resolving.delete(process.pid)
     }
   }
 
   async function openInTerminal(process: TaskManagerProcess): Promise<void> {
-    if (resolving.has(process.pid)) return
-    resolving.add(process.pid)
     error = ''
     try {
       const target = await resolveTarget(process)
@@ -166,210 +181,243 @@
       contextSidebarState.openNewTerminal(target.projectId, target.threadId)
     } catch (openError) {
       error = openError instanceof Error ? openError.message : 'Could not open the terminal.'
-    } finally {
-      resolving.delete(process.pid)
     }
   }
 
-  async function killProcess(process: TaskManagerProcess, force: boolean): Promise<void> {
-    if (stopping.has(process.pid)) return
-    stopping.add(process.pid)
+  /** Gracefully end every currently selected process. */
+  async function endSelected(): Promise<void> {
+    const targets = selectedProcesses
+    if (targets.length === 0 || ending) return
+    ending = true
     error = ''
     try {
-      await invoke('taskManager:killProcess', process.pid, force)
+      await Promise.all(
+        targets.map((process) => invoke('taskManager:killProcess', process.pid, false))
+      )
+      selected.clear()
+      await load()
     } catch (killError) {
       error =
         killError instanceof Error
           ? killError.message
-          : `Process ${process.pid} could not be stopped.`
+          : 'One or more processes could not be stopped.'
     } finally {
-      stopping.delete(process.pid)
-      void load()
+      ending = false
     }
   }
 
-  async function confirmForceKill(): Promise<void> {
-    const process = forceKillTarget
-    if (!process || forceKilling) return
-    forceKilling = true
+  /** Force-end every currently selected process (confirmation first). */
+  function requestForceEnd(): void {
+    if (selectedProcesses.length === 0) return
+    forceEndTargets = selectedProcesses
+  }
+
+  async function confirmForceEnd(): Promise<void> {
+    if (forceEndTargets.length === 0 || forceEnding) return
+    forceEnding = true
+    error = ''
     try {
-      await killProcess(process, true)
-      forceKillTarget = null
+      await Promise.all(
+        forceEndTargets.map((process) => invoke('taskManager:killProcess', process.pid, true))
+      )
+      selected.clear()
+      forceEndTargets = []
+      await load()
+    } catch (killError) {
+      error =
+        killError instanceof Error
+          ? killError.message
+          : 'One or more processes could not be killed.'
     } finally {
-      forceKilling = false
+      forceEnding = false
     }
   }
 </script>
 
-<Modal {open} title="Task Manager" {onClose} size="xl" contentClass="overflow-y-auto p-0">
-  <div class="flex items-center gap-2 border-b px-5 py-3">
-    <button
-      type="button"
-      class="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
-      disabled={loading}
-      title="Refresh running processes"
-      onclick={() => void load()}
-    >
-      {#if loading}
-        <Loader2 size={13} class="animate-spin" />
-      {:else}
-        <Plug size={13} />
-      {/if}
-      Refresh
-    </button>
+<Modal {open} title="Task Manager" {onClose} size="xl" contentClass="flex h-[52vh] flex-col p-0">
+  <div class="flex flex-col overflow-hidden">
     {#if error}
-      <p class="min-w-0 flex-1 truncate text-xs text-danger" role="alert">{error}</p>
-    {:else if processes.length > 0}
-      <p class="ml-auto text-xs text-dimmed tabular-nums">
-        {processes.length} process{processes.length !== 1 ? 'es' : ''}
-      </p>
+      <div class="shrink-0 border-b border-border px-5 py-2" role="alert">
+        <p class="truncate text-xs text-danger">{error}</p>
+      </div>
     {/if}
+
+    <div class="min-h-0 flex-1 overflow-y-auto">
+      {#if checking && processes.length === 0}
+        <div class="flex h-full flex-col items-center justify-center gap-2">
+          <Loader2 size={20} class="animate-spin text-muted" />
+          <p class="text-xs text-dimmed">Checking running processes…</p>
+        </div>
+      {:else if processes.length === 0}
+        <div class="flex h-full items-center justify-center px-8 text-center">
+          <div class="max-w-64">
+            <Plug size={20} class="mx-auto text-muted" />
+            <p class="mt-3 text-sm font-semibold text-foreground">No running processes</p>
+            <p class="mt-1 text-xs leading-relaxed text-dimmed">
+              Processes started by the app will appear here while they are running.
+            </p>
+          </div>
+        </div>
+      {:else}
+        <ul class="divide-y divide-border">
+          {#each processes as process (process.pid)}
+            <li
+              class="flex items-start gap-3 px-5 py-3 transition-colors {selected.has(process.pid)
+                ? 'bg-elevated'
+                : 'hover:bg-elevated'}"
+            >
+              <Switch
+                checked={selected.has(process.pid)}
+                onchange={(value) => {
+                  if (value) selected.add(process.pid)
+                  else selected.delete(process.pid)
+                }}
+                aria-label={`Select ${processName(process.command)} (PID ${process.pid})`}
+                title={`Select ${processName(process.command)}`}
+                class="mt-1 shrink-0"
+              />
+              <span
+                class="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+              >
+                <SquareTerminal size={15} />
+              </span>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <p class="truncate text-sm font-semibold text-foreground">
+                    {processName(process.command)}
+                  </p>
+                  {#if process.ports.length > 0}
+                    <span
+                      class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary"
+                    >
+                      :{process.ports[0]}
+                      {#if process.ports.length > 1}
+                        <span class="text-dimmed">+{process.ports.length - 1}</span>
+                      {/if}
+                    </span>
+                  {/if}
+                  <span
+                    class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted {process.scope ===
+                    'app'
+                      ? 'uppercase tracking-wide'
+                      : ''}"
+                  >
+                    {process.scope === 'app' ? 'Shared' : 'Running'}
+                  </span>
+                </div>
+                <p class="mt-1 truncate font-mono text-[10px] text-dimmed" title={process.command}>
+                  {process.command}
+                </p>
+                <div
+                  class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-dimmed tabular-nums"
+                >
+                  <span>PID {process.pid}</span>
+                  <span>{formatDuration(process.startedAt)}</span>
+                  <span class="min-w-0 truncate" title={process.cwd ?? undefined}>
+                    {shortPath(process.cwd)}
+                  </span>
+                  <span class="shrink-0">{locationLabel(process)}</span>
+                </div>
+              </div>
+              <div class="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={process.ports.length === 0}
+                  title={process.ports.length > 0 ? 'Open in in-app browser' : 'No port detected'}
+                  aria-label={`Open ${processName(process.command)} in the in-app browser`}
+                  onclick={() => void openInBrowser(process)}
+                >
+                  <ExternalLink size={13} />
+                </button>
+                <button
+                  type="button"
+                  class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                  title="Open path in in-app terminal"
+                  aria-label={`Open ${processName(process.command)} path in the in-app terminal`}
+                  onclick={() => void openInTerminal(process)}
+                >
+                  <SquareTerminal size={13} />
+                </button>
+              </div>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
   </div>
 
-  {#if loading && processes.length === 0}
-    <div class="flex h-48 items-center justify-center">
-      <p class="text-xs text-dimmed">Checking running processes…</p>
-    </div>
-  {:else if processes.length === 0}
-    <div class="flex h-48 items-center justify-center px-8 text-center">
-      <div class="max-w-64">
-        <Plug size={20} class="mx-auto text-muted" />
-        <p class="mt-3 text-sm font-semibold text-foreground">No running processes</p>
-        <p class="mt-1 text-xs leading-relaxed text-dimmed">
-          Processes started by the app will appear here while they are running.
-        </p>
+  {#snippet footer()}
+    <div class="flex w-full items-center justify-between gap-4">
+      <p class="min-w-0 flex-1 truncate text-xs text-dimmed tabular-nums">
+        {selected.size} of {processes.length} selected
+      </p>
+      <div class="flex shrink-0 items-center gap-1.5">
+        <button
+          type="button"
+          class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
+          disabled={checking}
+          title="Refresh running processes"
+          onclick={() => void load()}
+        >
+          {#if checking}
+            <Loader2 size={14} class="animate-spin" />
+          {:else}
+            <RefreshCw size={14} />
+          {/if}
+          Refresh
+        </button>
+        <button
+          type="button"
+          class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          disabled={selected.size === 0 || ending || forceEnding}
+          title="Gracefully stop the selected processes"
+          onclick={() => void endSelected()}
+        >
+          {#if ending}
+            <Loader2 size={14} class="animate-spin" />
+          {:else}
+            <X size={14} />
+          {/if}
+          End
+        </button>
+        <button
+          type="button"
+          class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-danger px-2.5 text-xs font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-40"
+          disabled={selected.size === 0 || ending || forceEnding}
+          title="Force kill the selected processes"
+          onclick={requestForceEnd}
+        >
+          <Trash2 size={14} />
+          Force end
+        </button>
       </div>
     </div>
-  {:else}
-    <ul class="divide-y divide-border">
-      {#each processes as process (process.pid)}
-        <li class="px-5 py-3 transition-colors hover:bg-elevated">
-          <div class="flex items-start gap-3">
-            <span
-              class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
-            >
-              <SquareTerminal size={15} />
-            </span>
-            <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <p class="truncate text-sm font-semibold text-foreground">
-                  {processName(process.command)}
-                </p>
-                {#if process.ports.length > 0}
-                  <span
-                    class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary"
-                  >
-                    :{process.ports[0]}
-                    {#if process.ports.length > 1}
-                      <span class="text-dimmed">+{process.ports.length - 1}</span>
-                    {/if}
-                  </span>
-                {/if}
-                <span
-                  class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted {process.scope ===
-                  'app'
-                    ? 'uppercase tracking-wide'
-                    : ''}"
-                >
-                  {process.scope === 'app' ? 'Shared' : 'Running'}
-                </span>
-              </div>
-              <p class="mt-1 truncate font-mono text-[10px] text-dimmed" title={process.command}>
-                {process.command}
-              </p>
-              <div
-                class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-dimmed tabular-nums"
-              >
-                <span>PID {process.pid}</span>
-                <span>{formatDuration(process.startedAt)}</span>
-                <span class="min-w-0 truncate" title={process.cwd ?? undefined}>
-                  {shortPath(process.cwd)}
-                </span>
-                <span class="shrink-0">{locationLabel(process)}</span>
-              </div>
-            </div>
-            <div class="flex shrink-0 items-center gap-1">
-              <button
-                type="button"
-                class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                disabled={process.ports.length === 0 || resolving.has(process.pid)}
-                title={process.ports.length > 0 ? 'Open in in-app browser' : 'No port detected'}
-                aria-label={`Open ${processName(process.command)} in the in-app browser`}
-                onclick={() => void openInBrowser(process)}
-              >
-                {#if resolving.has(process.pid)}
-                  <Loader2 size={13} class="animate-spin" />
-                {:else}
-                  <ExternalLink size={13} />
-                {/if}
-              </button>
-              <button
-                type="button"
-                class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-40"
-                disabled={resolving.has(process.pid)}
-                title="Open path in in-app terminal"
-                aria-label={`Open ${processName(process.command)} path in the in-app terminal`}
-                onclick={() => void openInTerminal(process)}
-              >
-                <SquareTerminal size={13} />
-              </button>
-              <button
-                type="button"
-                class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-danger disabled:opacity-40"
-                disabled={stopping.has(process.pid)}
-                title="Stop gracefully"
-                aria-label={`Stop ${processName(process.command)} gracefully`}
-                onclick={() => void killProcess(process, false)}
-              >
-                {#if stopping.has(process.pid)}
-                  <Loader2 size={13} class="animate-spin" />
-                {:else}
-                  <X size={13} />
-                {/if}
-              </button>
-              <button
-                type="button"
-                class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-danger disabled:opacity-40"
-                disabled={stopping.has(process.pid)}
-                title="Force kill"
-                aria-label={`Force kill ${processName(process.command)}`}
-                onclick={() => (forceKillTarget = process)}
-              >
-                <Trash2 size={13} />
-              </button>
-            </div>
-          </div>
-        </li>
-      {/each}
-    </ul>
-  {/if}
+  {/snippet}
 </Modal>
 
 <Modal
-  open={forceKillTarget !== null}
-  title="Force kill process?"
+  open={forceEndTargets.length > 0}
+  title="Force end processes?"
   onClose={() => {
-    if (!forceKilling) forceKillTarget = null
+    if (!forceEnding) forceEndTargets = []
   }}
-  closeOnBackdrop={!forceKilling}
+  closeOnBackdrop={!forceEnding}
 >
   <div class="space-y-4">
     <p class="text-sm leading-relaxed text-muted">
-      Force-kill
-      <span class="font-medium text-foreground"
-        >{forceKillTarget ? processName(forceKillTarget.command) : ''}</span
-      >
-      (PID {forceKillTarget?.pid})? This immediately terminates the process without allowing it to
-      clean up, and may lose unsaved work or corrupt its output.
+      Force-end <span class="font-medium text-foreground">{forceEndTargets.length}</span> selected
+      process{forceEndTargets.length !== 1 ? 'es' : ''}? This immediately terminates them without
+      allowing them to clean up, and may lose unsaved work or corrupt their output.
     </p>
   </div>
   {#snippet footer()}
     <button
       type="button"
       class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-3 text-sm font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
-      disabled={forceKilling}
+      disabled={forceEnding}
       title="Cancel"
-      onclick={() => (forceKillTarget = null)}
+      onclick={() => (forceEndTargets = [])}
     >
       Cancel
     </button>
@@ -377,16 +425,16 @@
       type="button"
       data-modal-primary
       class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-sm font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:opacity-50"
-      disabled={forceKilling}
-      title="Force kill the process"
-      onclick={() => void confirmForceKill()}
+      disabled={forceEnding}
+      title="Force kill the selected processes"
+      onclick={() => void confirmForceEnd()}
     >
-      {#if forceKilling}
+      {#if forceEnding}
         <Loader2 size={14} class="animate-spin" />
       {:else}
         <Trash2 size={14} />
       {/if}
-      Force kill
+      Force end
     </button>
   {/snippet}
 </Modal>
