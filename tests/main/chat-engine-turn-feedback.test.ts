@@ -257,13 +257,13 @@ describe('ChatEngine turn-feedback pipeline', () => {
     // Nothing is due yet — the 30-minute general window is still running.
     expect(repo.listDuePendingWithProject(Date.now())).toHaveLength(0)
 
-    engine.handleThreadReadForGrading('p1', 't1')
+    await engine.handleThreadReadForGrading('p1', 't1')
     const afterRead = pendingRow(db, 'turn-4')
     expect(afterRead?.due_at_ms).toBeGreaterThan(Date.now() + 4 * 60_000)
     expect(afterRead?.due_at_ms).toBeLessThanOrEqual(Date.now() + 5 * 60_000 + 1_000)
 
     // Drafting anchors a fresh 10-minute window, replacing the read window.
-    engine.handleThreadDraftChangedForGrading('p1', 't1', true)
+    await engine.handleThreadDraftChangedForGrading('p1', 't1', true)
     const afterDraft = pendingRow(db, 'turn-4')
     expect(afterDraft?.due_at_ms).toBeGreaterThan(Date.now() + 9 * 60_000)
     expect(afterDraft?.due_at_ms).toBeLessThanOrEqual(Date.now() + 10 * 60_000 + 1_000)

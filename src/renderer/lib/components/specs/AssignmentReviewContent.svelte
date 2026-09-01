@@ -112,6 +112,128 @@
     return forceRework ? (reworkCycle ?? 1) : undefined
   }
 
+  // ── Batched phase/task model commits ──────────────────────────────────────
+  // The model picker emits a model pick and its thinking-level auto-resolve in
+  // the same synchronous tick, and in read-only mode both become fire-and-forget
+  // IPC writes. Without batching, the second write is built from pre-update
+  // props, so it can silently revert the just-picked model (or drop the level)
+  // depending on which write lands last. Batching per phase/task collapses one
+  // tick's writes into a single commit: the newest model with the newest
+  // explicit thinking level.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- local-only batching state; it must not notify Svelte while picker callbacks run in the same tick
+  const pendingPhaseSelections = new Map<string, AssignmentModelSelection>()
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- local-only batching state; it must not notify Svelte while picker callbacks run in the same tick
+  const pendingTaskSelections = new Map<
+    string,
+    { task: AssignmentTask; selection: AssignmentModelSelection }
+  >()
+  let modelCommitFlush: Promise<void> | null = null
+
+  function scheduleModelCommitFlush(): void {
+    if (modelCommitFlush !== null) return
+    modelCommitFlush = Promise.resolve().then(async () => {
+      try {
+        await flushModelCommits()
+      } finally {
+        modelCommitFlush = null
+        if (pendingPhaseSelections.size > 0 || pendingTaskSelections.size > 0) {
+          scheduleModelCommitFlush()
+        }
+      }
+    })
+  }
+
+  async function flushModelCommits(): Promise<void> {
+    while (pendingPhaseSelections.size > 0 || pendingTaskSelections.size > 0) {
+      const phaseEntries = [...pendingPhaseSelections.entries()]
+      const taskEntries = [...pendingTaskSelections.entries()]
+      pendingPhaseSelections.clear()
+      pendingTaskSelections.clear()
+
+      if (!readOnly) {
+        let next = content
+        // A phase-model change governs that phase and every phase after it
+        // (top to bottom). Phases above the changed phase keep their own model,
+        // so a mid-list pick never bleeds upward or into other unstamped phases.
+        for (const [phaseId, selection] of phaseEntries) {
+          const index = next.phases.findIndex((phase) => phase.id === phaseId)
+          if (index < 0) continue
+          next = {
+            ...next,
+            phases: next.phases.map((phase, phaseIndex) =>
+              phaseIndex < index ? phase : { ...phase, defaultModel: selection }
+            )
+          }
+        }
+        for (const [taskId, { selection }] of taskEntries) {
+          next = {
+            ...next,
+            tasks: next.tasks.map((task) =>
+              task.id === taskId ? { ...task, model: selection } : task
+            )
+          }
+        }
+        if (next !== content) update(next)
+      }
+
+      // Only the topmost phase doubles as the "default phase model" control:
+      // changing it reflects from the top to the bottom and seeds the last-used
+      // worker model. Deeper phase changes stay local to their own cascade.
+      if (!readOnly) {
+        for (const [phaseId, selection] of phaseEntries) {
+          const index = content.phases.findIndex((phase) => phase.id === phaseId)
+          if (index === 0) onWorkerModelChange?.(selection)
+        }
+      }
+
+      // Task models are local to the task; worker-task edits never mutate the
+      // shared worker default, which would drag every unstamped phase along.
+      // Senior tasks still own the assignment-wide Sr. Engineer model.
+      for (const [, { task, selection }] of taskEntries) {
+        if (readOnly) {
+          const liveTask = content.tasks.find((candidate) => candidate.id === task.id)
+          if (liveTask && canUpdateTaskModel(liveTask)) {
+            await onTaskModelChange?.(task.id, selection)
+          }
+        } else if (task.owner === 'senior') {
+          onSeniorModelChange?.(selection)
+        }
+      }
+    }
+  }
+
+  function queuePhaseSelection(
+    phaseId: string,
+    selection: AssignmentModelSelection,
+    explicitLevel?: ThinkingLevel
+  ): void {
+    const pending = pendingPhaseSelections.get(phaseId)
+    if (explicitLevel !== undefined && pending) {
+      pendingPhaseSelections.set(phaseId, { ...pending, thinkingLevel: explicitLevel })
+    } else {
+      pendingPhaseSelections.set(phaseId, selection)
+    }
+    scheduleModelCommitFlush()
+  }
+
+  function queueTaskSelection(
+    taskId: string,
+    task: AssignmentTask,
+    selection: AssignmentModelSelection,
+    explicitLevel?: ThinkingLevel
+  ): void {
+    const pending = pendingTaskSelections.get(taskId)
+    if (explicitLevel !== undefined && pending) {
+      pendingTaskSelections.set(taskId, {
+        task,
+        selection: { ...pending.selection, thinkingLevel: explicitLevel }
+      })
+    } else {
+      pendingTaskSelections.set(taskId, { task, selection })
+    }
+    scheduleModelCommitFlush()
+  }
+
   function updatePhaseModel(
     phaseId: string,
     providerId: string,
@@ -119,6 +241,8 @@
     nextHarnessId?: string,
     thinkingLevel?: ThinkingLevel
   ): void {
+    const phaseIndex = content.phases.findIndex((phase) => phase.id === phaseId)
+    if (phaseIndex < 0) return
     const current = phaseModel(phaseId)
     const selectedHarnessId = nextHarnessId ?? harnessId
     const selection: AssignmentModelSelection = {
@@ -128,17 +252,7 @@
       modelId,
       thinkingLevel: thinkingLevel ?? current.thinkingLevel
     }
-    update({
-      ...content,
-      phases: content.phases.map((phase) => {
-        if (phase.id !== phaseId) return phase
-        return {
-          ...phase,
-          defaultModel: selection
-        }
-      })
-    })
-    onWorkerModelChange?.(selection)
+    queuePhaseSelection(phaseId, selection, thinkingLevel)
   }
 
   function updateTaskModel(
@@ -159,22 +273,7 @@
       modelId,
       thinkingLevel: thinkingLevel ?? resolved.thinkingLevel
     }
-    if (readOnly) {
-      if (canUpdateTaskModel(current)) void onTaskModelChange?.(taskId, selection)
-      return
-    }
-    update({
-      ...content,
-      tasks: content.tasks.map((task) => {
-        if (task.id !== taskId) return task
-        return {
-          ...task,
-          model: selection
-        }
-      })
-    })
-    if (current.owner === 'senior') onSeniorModelChange?.(selection)
-    else onWorkerModelChange?.(selection)
+    queueTaskSelection(taskId, current, selection, thinkingLevel)
   }
 
   function updateTaskText(
@@ -347,7 +446,7 @@
             <ModelPicker
               {providers}
               {projectId}
-              {harnessId}
+              harnessId={selectedPhaseModel.harnessId}
               providerId={selectedPhaseModel.providerId}
               modelId={selectedPhaseModel.modelId}
               {favoriteModels}
@@ -456,7 +555,7 @@
                   <ModelPicker
                     {providers}
                     {projectId}
-                    {harnessId}
+                    harnessId={selectedTaskModel.harnessId}
                     providerId={selectedTaskModel.providerId}
                     modelId={selectedTaskModel.modelId}
                     {favoriteModels}

@@ -1,3 +1,4 @@
+import { Logger } from '../../system/logger'
 import type { Database } from '../database'
 import type {
   LocalProfileModelPerformance,
@@ -196,6 +197,26 @@ export class TurnFeedbackRepo {
        ORDER BY created_at ASC, id ASC`,
       threadId
     )
+  }
+
+  /**
+   * Whether the thread has any pending outcome. Runs on the maintenance worker
+   * connection so grading-anchor checks never scan `turn_feedback` on the
+   * Electron main thread (primary-connection fallback for in-memory test DBs).
+   */
+  async hasPendingForThread(threadId: string): Promise<boolean> {
+    const result = await this.db.queryViaWorker(
+      `SELECT 1 FROM turn_feedback
+       WHERE thread_id = ? AND status = 'pending'
+       LIMIT 1`,
+      [threadId],
+      1
+    )
+    if (!result.ok) {
+      Logger.error('hasPendingForThread failed', result.error)
+      return false
+    }
+    return result.rows.length > 0
   }
 
   /**

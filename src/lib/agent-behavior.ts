@@ -1,3 +1,5 @@
+import { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID } from "../main/utilities/utility-registry-service"
+
 /**
  * Default operational behavior for implementation turns.
  *
@@ -50,6 +52,10 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - Use the equivalent MCP or skill available for the technology being changed. Example: for Svelte or SvelteKit work, consult the current Svelte documentation and use the Svelte validation workflow before reporting completion.
    - Keep implementation changes type-safe and follow the project's established conventions. Never break the project rules unless explicitly asked to.
    - Never create cosmetic tests just to propose a false sense of "safety" to the user, ALL TESTS MUST BE USEFUL AND MUST BE THERE FOR A USEFUL PURPOSE!
+   - When necessary, you may use the in-app browser "${APP_BROWSER_UTILITY_ID}" tool to test web pages or computer use tool "${APP_CUA_DRIVER_UTILITY_ID}" to test directly on the computer. Use this only when necessary.
+   - When installing dependencies (deps) for a project, unless otherwise stated by the user, ALWAYS ENSURE YOU USE THE LATEST STABLE VERSION OF SAID DEPS WHILST ENSRUING COMPATIBILITY WITH PEER DEPS! DO NOT INSTALL DEPRECATED DEPS EVER!!
+   - NEVER EVER USE deprecated code!! NEVER! if you ever need to do that, ALWAYS ENSURE YOU ANNOUNCE IT TO THE USER AND STATE THE REASONS!!
+   - Always first check for existing components when implementing; if resuable then reuse directly, if extendable, then extend directly; if can be used to compose a new reusable component, then compose. NEVER REPEAT FEATURES UNNECESSARILY, ESPECIALLY WHEN THERE ARE SLIGHT VARIATIONS BETWEEN EACH COPY!! Component here can be anything: functions, class, ui components, widgets, etc.
 
 These are the default application rules for implementation work. A direct user instruction overrides them for that task.`
 

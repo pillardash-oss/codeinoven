@@ -23,6 +23,8 @@
   import { clampFileExplorerWidth } from '$lib/stores/file-explorer.svelte'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
+  import Switch from '../ui/Switch.svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
   import FolderTypeIcon from './FolderTypeIcon.svelte'
   import ProjectFileContextMenu from './ProjectFileContextMenu.svelte'
@@ -244,19 +246,22 @@
 
   $effect(() => {
     const query = filterQuery.trim()
+    const includeCio = cioSearchVisibility.includeCio
     const requestId = ++searchRequestId
 
     if (!query) return
 
     const timer = setTimeout(async () => {
       try {
-        const results = await invoke(
-          'projectFiles:search',
-          projectId,
-          query,
-          'all',
-          workspaceState.activeScopeBucketIdFor(projectId)
-        )
+        const results = (
+          await invoke(
+            'projectFiles:search',
+            projectId,
+            query,
+            'all',
+            workspaceState.activeScopeBucketIdFor(projectId)
+          )
+        ).filter((entry) => includeCio || !isCioScratchPath(entry.path))
         if (requestId !== searchRequestId) return
 
         const dirsToLoad = new SvelteSet<string>()
@@ -1112,6 +1117,11 @@
     query: string,
     queryMatches: Record<string, boolean>
   ): boolean {
+    // While a search session is open with `.cio` excluded, hide every entry
+    // inside the scratch directory regardless of the query.
+    if (!cioSearchVisibility.includeCio && filterOpen && isCioScratchPath(entry.path)) {
+      return false
+    }
     const matchesLastTurn =
       !lastTurnOnly ||
       (entry.kind === 'file'
@@ -1438,29 +1448,41 @@
 
   {#if filterOpen}
     <div
-      class="absolute left-2 right-2 top-10 z-20 flex items-center gap-1 rounded-xl border border-border bg-surface p-1.5 shadow-xl"
+      class="absolute left-2 right-2 top-10 z-20 rounded-xl border border-border bg-surface shadow-xl"
       role="search"
       aria-label="Search project files"
     >
-      <Search size={13} class="shrink-0 text-dimmed" />
-      <input
-        bind:this={filterInput}
-        type="search"
-        class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[11px] text-foreground outline-none placeholder:text-dimmed"
-        placeholder="Search files and folders…"
-        value={filterQuery}
-        oninput={handleFilterInput}
-        onkeydown={(event: KeyboardEvent) => event.key === 'Escape' && closeFilter()}
-      />
-      <button
-        type="button"
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed hover:bg-elevated hover:text-foreground"
-        aria-label="Close file search"
-        title="Close file search (Escape)"
-        onclick={() => closeFilter()}
-      >
-        <X size={12} />
-      </button>
+      <div class="flex items-center gap-1 p-1.5">
+        <Search size={13} class="shrink-0 text-dimmed" />
+        <input
+          bind:this={filterInput}
+          type="search"
+          class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[11px] text-foreground outline-none placeholder:text-dimmed"
+          placeholder="Search files and folders…"
+          value={filterQuery}
+          oninput={handleFilterInput}
+          onkeydown={(event: KeyboardEvent) => event.key === 'Escape' && closeFilter()}
+        />
+        <button
+          type="button"
+          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed hover:bg-elevated hover:text-foreground"
+          aria-label="Close file search"
+          title="Close file search (Escape)"
+          onclick={() => closeFilter()}
+        >
+          <X size={12} />
+        </button>
+      </div>
+      <div class="flex items-center border-t border-border px-2 py-1">
+        <Switch
+          checked={cioSearchVisibility.includeCio}
+          label="cio directory"
+          class="text-[10px] font-semibold text-dimmed"
+          title="Include the .cio directory in search results"
+          aria-label="Include the .cio directory in search results"
+          onchange={(checked: boolean) => cioSearchVisibility.setIncludeCio(checked)}
+        />
+      </div>
     </div>
   {/if}
 
