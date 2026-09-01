@@ -1,4 +1,4 @@
-import { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID } from "../main/utilities/utility-registry-service"
+import { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID } from './utility-ids'
 
 /**
  * Default operational behavior for implementation turns.

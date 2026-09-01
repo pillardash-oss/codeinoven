@@ -20,6 +20,12 @@ import { generateId } from '../../lib/utils'
 import { RETRIEVE_MCP_HOST_TOOL_NAME } from '../../lib/gateway-tools'
 import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
+// Sourced from the shared `lib/utility-ids` module (and re-exported here for
+// existing consumers) so browser-bound renderer code — which imports these ids
+// from `lib/agent-behavior` — never pulls this main-process service (and its
+// `fs`-importing `utils` dependency) into client bundles.
+import { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID } from '../../lib/utility-ids'
+export { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID }
 
 const REGISTRY_PATH = 'utilities/registry.json'
 const REGISTRY_VERSION = 1
@@ -40,10 +46,6 @@ const WEB_TOOL_PROVIDERS = new Set<WebToolProviderId>(['exa', 'firecrawl', 'brav
 export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'cio:image-descriptor'
 /** Stable id of the app-owned, always-active MCP host recovery utility. */
 export const APP_RETRIEVE_MCP_HOST_UTILITY_ID = 'cio:retrieve-mcp-host'
-/** Stable id of the browser control utility backed by the in-app browser. */
-export const APP_BROWSER_UTILITY_ID = 'cio:browser'
-/** Stable id of the Cua Driver computer-use MCP utility. */
-export const APP_CUA_DRIVER_UTILITY_ID = 'cio:cua-driver'
 
 /** App-owned ids seeded before the `cio:` rename, mapped to their current ids. */
 const LEGACY_APP_UTILITY_IDS: Readonly<Record<string, string>> = {
