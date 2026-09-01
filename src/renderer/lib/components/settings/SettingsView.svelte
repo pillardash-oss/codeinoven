@@ -377,6 +377,12 @@
 
   const isNightlyChannel = $derived(config.updateChannel === 'nightly')
 
+  /** Installed build's version, marked as nightly when the user is on the nightly channel. */
+  const displayVersion = $derived.by(() => {
+    const base = updaterState.status.currentVersion ?? '0.1.0'
+    return base.includes('nightly') ? base : isNightlyChannel ? `${base}-nightly` : base
+  })
+
   /** Toggle ON opens the confirmation modal; only a confirmed choice persists. */
   function onNightlyToggleRequested(enabled: boolean): void {
     if (enabled) {
@@ -865,24 +871,6 @@
           </p>
         </div>
 
-        <!-- Version info -->
-        <div class="rounded-xl border bg-surface p-4">
-          <div class="space-y-2 text-sm">
-            <div class="flex justify-between">
-              <span class="text-muted">Version</span>
-              <span class="font-medium">{updaterState.status.currentVersion ?? '0.1.0'}</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-muted">Architecture</span>
-              <span class="font-medium">Electron + Svelte 5</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-muted">Purpose</span>
-              <span class="font-medium">Coordinated agent development</span>
-            </div>
-          </div>
-        </div>
-
         <!-- Storage -->
         <div id="settings-block-about-storage" class="mt-4 rounded-xl border bg-surface p-4">
           <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Storage</h3>
@@ -1082,6 +1070,16 @@
               {/if}
             </div>
           </div>
+        </div>
+
+        <!-- Version & copyright -->
+        <div class="mt-6 flex flex-col items-center gap-1 text-center">
+          <p class="text-xs text-muted" title="Installed app version">
+            {APP_NAME} v{displayVersion}
+          </p>
+          <p class="text-[11px] text-dimmed">
+            © 2026 Pillardash Solutions Limited. All rights reserved.
+          </p>
         </div>
       </div>
     {/if}
