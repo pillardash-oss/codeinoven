@@ -726,9 +726,12 @@
   let providers = $derived(providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached())
 
   /** Chats are for questions and research: they never inject the Engineering
-   *  workflow and always run with auto permission review. */
+   *  workflow and stay pinned to auto permission review while File System is
+   *  off. Once File System is enabled the permission picker unlocks up to Full
+   *  Access, so the user's chosen level is carried through instead of being
+   *  clobbered back to auto review. */
   function normalizeChatSettings(next: ThreadSettings): ThreadSettings {
-    return { ...next, permissionLevel: 'auto_review' }
+    return next.fileSystemMode === true ? next : { ...next, permissionLevel: 'auto_review' }
   }
 
   /** Commit to the chat-scoped last-used store on the Chats tab, and to the
