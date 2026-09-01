@@ -700,9 +700,7 @@ export class ThreadManager {
 
     const updated: Thread = {
       ...existing,
-      lastActivity: movedScopes
-        ? Date.now()
-        : (input.lastActivity ?? existing.lastActivity),
+      lastActivity: movedScopes ? Date.now() : (input.lastActivity ?? existing.lastActivity),
       title: input.title ?? existing.title,
       titleSource: input.titleSource ?? existing.titleSource,
       providerId: input.providerId ?? existing.providerId,
@@ -799,6 +797,114 @@ export class ThreadManager {
     for (const root of roots) {
       await this.deleteThread(projectId, root.id)
     }
+  }
+
+  /** All non-archived threads whose scope bucket equals `bucketId`. */
+  private scopeOwnedThreads(projectId: string, bucketId: string): Thread[] {
+    return this.threadRepo
+      .listByProject(projectId, { includeArchived: false })
+      .filter((thread) => (thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID) === bucketId)
+  }
+
+  /** Number of user-visible (non-orchestration-child) threads owned by a scope. */
+  async countThreadsInScope(projectId: string, bucketId: string): Promise<number> {
+    return this.scopeOwnedThreads(projectId, bucketId).filter(
+      (thread) => !isOrchestrationChildThread(thread)
+    ).length
+  }
+
+  /**
+   * Delete every thread owned by a scope. Parent threads go through
+   * `deleteThread` so their orchestration descendants and disk artifacts are
+   * swept; leftover children (orphans whose coordinator lived outside the
+   * scope) are removed individually.
+   */
+  async deleteThreadsInScope(projectId: string, bucketId: string): Promise<number> {
+    const owned = this.scopeOwnedThreads(projectId, bucketId)
+    const roots = owned.filter((thread) => !isOrchestrationChildThread(thread))
+    let deleted = roots.length
+    for (const root of roots) {
+      await this.deleteThread(projectId, root.id)
+    }
+    const remaining = this.scopeOwnedThreads(projectId, bucketId)
+    for (const thread of remaining) {
+      try {
+        await this.deleteThread(projectId, thread.id)
+        deleted += 1
+      } catch {
+        // Already swept by a parent deletion; treat as removed.
+      }
+    }
+    return deleted
+  }
+
+  /**
+   * Move every thread owned by a scope into the Default scope's regular bucket
+   * and enforce the project thread limit there, evicting the oldest Default
+   * threads that exceed it (freshly moved and protected threads are never
+   * evicted). Returns how many were moved and evicted.
+   */
+  async moveThreadsOutOfScope(
+    projectId: string,
+    fromBucketId: string
+  ): Promise<{ moved: number; evicted: number }> {
+    const protectedIds = new Set<string>()
+    let moved = 0
+    const owned = this.scopeOwnedThreads(projectId, fromBucketId)
+    for (const root of owned.filter((thread) => !isOrchestrationChildThread(thread))) {
+      await this.updateThread(projectId, root.id, { scopeBucketId: DEFAULT_SCOPE_BUCKET_ID })
+      protectedIds.add(root.id)
+      moved += 1
+    }
+    // Sweep orphans the parent move did not cover (children whose coordinator
+    // lived outside the scope).
+    const leftovers = this.scopeOwnedThreads(projectId, fromBucketId)
+    for (const thread of leftovers) {
+      await this.updateThread(projectId, thread.id, { scopeBucketId: DEFAULT_SCOPE_BUCKET_ID })
+      protectedIds.add(thread.id)
+      moved += 1
+    }
+    const evicted = await this.enforceRegularBucketCapacity(projectId, protectedIds)
+    return { moved, evicted }
+  }
+
+  /**
+   * Evict the oldest unprotected threads in the shared regular bucket until the
+   * project thread limit is respected. `protectedIds` are never evicted.
+   * Returns how many threads were removed.
+   */
+  private async enforceRegularBucketCapacity(
+    projectId: string,
+    protectedIds: ReadonlySet<string> = new Set()
+  ): Promise<number> {
+    const project = await this.projectRepo.getViaWorker(projectId)
+    if (!project) throw new Error(`Project not found: ${projectId}`)
+    const scopedBuckets = scopedBucketIdsFromBoard(this.scopeManager.getBoard(projectId))
+    const candidates = await this.threadRepo.listCapacityCandidatesViaWorker(projectId)
+    const regular = candidates.filter(
+      (candidate) =>
+        bucketForThread(candidate, scopedBuckets) === REGULAR_BUCKET &&
+        !protectedIds.has(candidate.id)
+    )
+    let overage =
+      candidates.filter((candidate) => bucketForThread(candidate, scopedBuckets) === REGULAR_BUCKET)
+        .length - project.threadLimit
+    const evictionCandidates = regular.sort(
+      (left, right) => left.lastActivity - right.lastActivity || left.id.localeCompare(right.id)
+    )
+    let evicted = 0
+    for (const candidate of evictionCandidates) {
+      if (overage <= 0) break
+      if (isProtectedFromAutomaticCleanup(candidate)) continue
+      try {
+        await this.deleteThread(projectId, candidate.id)
+        evicted += 1
+      } catch {
+        // Race with another sweep; the limit is best-effort here.
+      }
+      overage -= 1
+    }
+    return evicted
   }
 
   /** Remove app-owned scratch directories a deleted thread wrote to. Best-effort. */
@@ -1254,7 +1360,8 @@ export class ThreadManager {
     // Threads in pinned-like scopes live in their own per-scope buckets and are
     // reported separately; the regular bucket holds every other thread.
     const regular = active.filter(
-      (thread) => bucketForThread({ scopeBucketId: thread.scopeBucketId }, scopedBuckets) === REGULAR_BUCKET
+      (thread) =>
+        bucketForThread({ scopeBucketId: thread.scopeBucketId }, scopedBuckets) === REGULAR_BUCKET
     )
     return {
       limit: project.threadLimit,

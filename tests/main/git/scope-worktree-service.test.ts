@@ -421,4 +421,177 @@ describe.skipIf(process.platform === 'win32')('ScopeWorktreeService', () => {
     expect(scopes.getBoard('p1').buckets.some((candidate) => candidate.id === bucketA)).toBe(false)
     expect(existsSync(worktreePath)).toBe(false)
   }, 60_000)
+
+  describe('merge back into the project', () => {
+    async function createFeatureWorktree(): Promise<{
+      service: ScopeWorktreeService
+      scopes: ScopeManager
+      bucketA: string
+      directory: string
+      branch: string
+    }> {
+      const fixture = await setup()
+      const descriptor = await fixture.service.createManagedWorktree(
+        { projectId: 'p1', scopeBucketId: fixture.bucketA },
+        { title: 'MergedFeature', runSetup: false, environmentMode: 'copy' }
+      )
+      const directory = getScopeRootPath('p1', descriptor.directoryName)
+      const worktreeGit = simpleGit(directory)
+      writeFileSync(join(directory, 'feature.txt'), 'feature\n')
+      await worktreeGit.add('.')
+      await worktreeGit.commit('feature work')
+      return { ...fixture, directory, branch: descriptor.branch }
+    }
+
+    it('merge-and-keep leaves the scope intact and integrates the branch', async () => {
+      const f = await createFeatureWorktree()
+      const preflight = await f.service.mergePreflight(
+        { projectId: 'p1', scopeBucketId: f.bucketA },
+        { projectId: 'p1', scopeBucketId: 'default' },
+        'merge-keep'
+      )
+      expect(preflight.sourceBranch).toBe(f.branch)
+      expect(preflight.mergeTargetScopeBucketId).toBe('default')
+
+      const outcome = await f.service.confirmMerge(
+        { projectId: 'p1', scopeBucketId: f.bucketA },
+        { projectId: 'p1', scopeBucketId: 'default' },
+        'merge-keep',
+        preflight.confirmationId
+      )
+      expect(outcome).toEqual({ merged: true, conflicted: [] })
+
+      // The default scope now contains the feature commit and the scope stays.
+      const mainGit = simpleGit(repoPath)
+      expect(await mainGit.revparse(['--abbrev-ref', 'HEAD'])).toBe('main')
+      expect((await mainGit.log(['-1'])).latest?.message).toBe('feature work')
+      expect(f.scopes.getBoard('p1').buckets.some((candidate) => candidate.id === f.bucketA)).toBe(
+        true
+      )
+      expect(existsSync(f.directory)).toBe(true)
+    }, 60_000)
+
+    it('merge-and-delete merges, removes the worktree, the scope and the branch', async () => {
+      const f = await createFeatureWorktree()
+      const calls: string[] = []
+      const scopeThreads = {
+        countThreadsInScope: async () => {
+          calls.push('count')
+          return 2
+        },
+        deleteThreadsInScope: async () => {
+          calls.push('delete')
+          return 2
+        },
+        moveThreadsOutOfScope: async () => {
+          calls.push('move')
+          return { moved: 0, evicted: 0 }
+        }
+      }
+      f.service.attachThreadLifecycle(scopeThreads)
+
+      const preflight = await f.service.mergePreflight(
+        { projectId: 'p1', scopeBucketId: f.bucketA },
+        { projectId: 'p1', scopeBucketId: 'default' },
+        'merge-delete'
+      )
+      expect(preflight.threadCount).toBe(2)
+      const outcome = await f.service.confirmMerge(
+        { projectId: 'p1', scopeBucketId: f.bucketA },
+        { projectId: 'p1', scopeBucketId: 'default' },
+        'merge-delete',
+        preflight.confirmationId
+      )
+      expect(outcome.merged).toBe(true)
+      expect(calls).toContain('delete')
+      expect(calls).not.toContain('move')
+
+      const mainGit = simpleGit(repoPath)
+      expect((await mainGit.log(['-1'])).latest?.message).toBe('feature work')
+      expect(f.scopes.getBoard('p1').buckets.some((candidate) => candidate.id === f.bucketA)).toBe(
+        false
+      )
+      expect(existsSync(f.directory)).toBe(false)
+      await expect(mainGit.branch(['--list', f.branch])).resolves.not.toContain(f.branch)
+    }, 60_000)
+
+    it('merge-move-to-default moves threads and evicts', async () => {
+      const f = await createFeatureWorktree()
+      const calls: string[] = []
+      const scopeThreads = {
+        countThreadsInScope: async () => 3,
+        deleteThreadsInScope: async () => 0,
+        moveThreadsOutOfScope: async () => {
+          calls.push('move')
+          return { moved: 3, evicted: 1 }
+        }
+      }
+      f.service.attachThreadLifecycle(scopeThreads)
+      const preflight = await f.service.mergePreflight(
+        { projectId: 'p1', scopeBucketId: f.bucketA },
+        { projectId: 'p1', scopeBucketId: 'default' },
+        'merge-move-to-default'
+      )
+      const outcome = await f.service.confirmMerge(
+        { projectId: 'p1', scopeBucketId: f.bucketA },
+        { projectId: 'p1', scopeBucketId: 'default' },
+        'merge-move-to-default',
+        preflight.confirmationId
+      )
+      expect(outcome.merged).toBe(true)
+      expect(calls).toEqual(['move'])
+      expect(f.scopes.getBoard('p1').buckets.some((candidate) => candidate.id === f.bucketA)).toBe(
+        false
+      )
+    }, 60_000)
+
+    it('reports conflicts and deletes nothing', async () => {
+      const f = await createFeatureWorktree()
+      // Add a divergent commit on the default branch so the merge conflicts.
+      const mainGit = simpleGit(repoPath)
+      await mainGit.checkout('main')
+      writeFileSync(join(repoPath, 'feature.txt'), 'main-side\n')
+      await mainGit.add('.')
+      await mainGit.commit('main diverges')
+
+      const preflight = await f.service.mergePreflight(
+        { projectId: 'p1', scopeBucketId: f.bucketA },
+        { projectId: 'p1', scopeBucketId: 'default' },
+        'merge-delete'
+      )
+      const outcome = await f.service.confirmMerge(
+        { projectId: 'p1', scopeBucketId: f.bucketA },
+        { projectId: 'p1', scopeBucketId: 'default' },
+        'merge-delete',
+        preflight.confirmationId
+      )
+      expect(outcome.merged).toBe(false)
+      expect(outcome.conflicted.length).toBeGreaterThan(0)
+
+      // Nothing was deleted.
+      expect(f.scopes.getBoard('p1').buckets.some((candidate) => candidate.id === f.bucketA)).toBe(
+        true
+      )
+      expect(existsSync(f.directory)).toBe(true)
+    }, 60_000)
+
+    it('rejects merging a scope into itself and stale tokens', async () => {
+      const f = await createFeatureWorktree()
+      await expect(
+        f.service.mergePreflight(
+          { projectId: 'p1', scopeBucketId: f.bucketA },
+          { projectId: 'p1', scopeBucketId: f.bucketA },
+          'merge-keep'
+        )
+      ).rejects.toThrow(/different scope/)
+      await expect(
+        f.service.confirmMerge(
+          { projectId: 'p1', scopeBucketId: f.bucketA },
+          { projectId: 'p1', scopeBucketId: 'default' },
+          'merge-keep',
+          'bogus'
+        )
+      ).rejects.toThrow(/token is stale/)
+    }, 60_000)
+  })
 })

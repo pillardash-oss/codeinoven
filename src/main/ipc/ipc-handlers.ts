@@ -117,6 +117,7 @@ import {
   validateScopeCollapsePatch,
   validateScopeCreateInput,
   validateScopeLifecycleAction,
+  validateScopeMergeMode,
   validateScopeAdoptInput,
   validateScopeOrderIds,
   validateScopeSlice,
@@ -2229,6 +2230,17 @@ export function registerIpcHandlers(
     },
     scopeRoots
   )
+  // The merge lifecycle deletes/moves threads in the source scope after the
+  // git merge lands; the thread manager is created after the worktree service,
+  // so the service receives it here.
+  scopeWorktreeService.attachThreadLifecycle({
+    countThreadsInScope: (projectId, bucketId) =>
+      threadManager.countThreadsInScope(projectId, bucketId),
+    deleteThreadsInScope: (projectId, bucketId) =>
+      threadManager.deleteThreadsInScope(projectId, bucketId),
+    moveThreadsOutOfScope: (projectId, fromBucketId) =>
+      threadManager.moveThreadsOutOfScope(projectId, fromBucketId)
+  })
   const historyEngine = new HistoryEngine(database)
   const engineeringLifecycleEngine = new EngineeringLifecycleEngine(database)
   const planEngine = new PlanEngine(storage, database)
@@ -4736,6 +4748,25 @@ export function registerIpcHandlers(
     const runSetup = input === undefined ? true : validateBoolean(input.runSetup, 'Run setup')
     return scopeWorktreeService.runSetupFromFailure(validatedTarget, { runSetup })
   })
+  ipcMain.handle(
+    'scope:worktree:mergePreflight',
+    (_, target: unknown, mergeTarget: unknown, mode: unknown) =>
+      scopeWorktreeService.mergePreflight(
+        validateScopeTarget(target),
+        validateScopeTarget(mergeTarget),
+        validateScopeMergeMode(mode)
+      )
+  )
+  ipcMain.handle(
+    'scope:worktree:confirmMerge',
+    (_, target: unknown, mergeTarget: unknown, mode: unknown, confirmationId: unknown) =>
+      scopeWorktreeService.confirmMerge(
+        validateScopeTarget(target),
+        validateScopeTarget(mergeTarget),
+        validateScopeMergeMode(mode),
+        validateConfirmationToken(confirmationId)
+      )
+  )
   ipcMain.handle(
     'project:update',
     async (_, projectId: string, input: Partial<CreateProjectInput>) => {

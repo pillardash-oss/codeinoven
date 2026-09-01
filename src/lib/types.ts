@@ -280,6 +280,45 @@ export interface ScopeLifecyclePreflight {
   createdAt: number
 }
 
+/** How a scope worktree is merged back into the main project. */
+export type ScopeMergeMode = 'merge-delete' | 'merge-keep' | 'merge-move-to-default'
+
+/**
+ * State-bound preflight for merging a managed worktree scope into another
+ * scope. Mints a single-use confirmation token describing exactly what the
+ * merge (and any cleanup) will do before it happens.
+ */
+export interface ScopeMergePreflight {
+  /** The managed-worktree scope being merged (the source). */
+  sourceProjectId: string
+  sourceScopeBucketId: string
+  /** The scope the source branch is merged into (Default by default). */
+  mergeTargetScopeBucketId: string
+  /** Branch being merged from the source worktree (e.g. `cio/<slug>`). */
+  sourceBranch: string
+  /** Branch currently checked out at the merge target root. */
+  targetBranch: string
+  /** Non-archived threads owned by the source scope. */
+  threadCount: number
+  /** Dirty files in the source worktree (lost when it is removed). */
+  dirtyFiles: string[]
+  /** Commits on the source branch not reachable from any remote via the source scope. */
+  unpushedCommits: number
+  hasActiveProcesses: boolean
+  mode: ScopeMergeMode
+  /** Single-use token bound to this exact snapshot. */
+  confirmationId: string
+  createdAt: number
+}
+
+/** Result of a confirmed scope merge. */
+export interface ScopeMergeOutcome {
+  /** False when the merge landed in conflict; nothing was deleted. */
+  merged: boolean
+  /** Conflicted file paths when the merge hit conflicts. */
+  conflicted: string[]
+}
+
 /** Bounded progress events for managed-worktree creation and setup. */
 export interface ScopeWorktreeProgress {
   stage:

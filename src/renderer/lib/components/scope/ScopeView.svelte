@@ -12,6 +12,7 @@
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
   import { workspaceState, findEmptyNewThread } from '$lib/stores/workspace.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
     DEFAULT_THREAD_TITLE,
@@ -20,6 +21,7 @@
   } from '$shared/types'
   import ScopeBucketView from './ScopeBucket.svelte'
   import ScopeLifecycleModal from './ScopeLifecycleModal.svelte'
+  import ScopeMergeModal from './ScopeMergeModal.svelte'
   import ScopeCreateModal from './ScopeCreateModal.svelte'
   import ScopeAdoptModal from './ScopeAdoptModal.svelte'
   import type { ScopeLifecycleAction } from '$shared/types'
@@ -38,6 +40,7 @@
   let deleteThreads = $state(false)
   let actionError = $state<string | null>(null)
   let lifecycleAction = $state<{ action: ScopeLifecycleAction; bucket: ScopeBucket } | null>(null)
+  let mergeTarget = $state<ScopeBucket | null>(null)
   let createWorktreeTarget = $state<ScopeBucket | null>(null)
   let adoptWorktreeTarget = $state<ScopeBucket | null>(null)
 
@@ -304,6 +307,37 @@
     lifecycleAction = { action, bucket }
   }
 
+  /**
+   * A merge that landed in conflict keeps everything intact. Hand the user off
+   * to the Git panel aimed at the merge-target scope so they can resolve the
+   * conflict manually or with an agent, like any other conflicted merge.
+   */
+  function openConflictsHandoff(projectId: string, targetScopeBucketId: string): void {
+    const project =
+      scopeState.projectRecords.find((candidate) => candidate.id === projectId) ?? null
+    const anchor =
+      scopeState.allScopeThreads.find(
+        (thread) =>
+          thread.projectId === projectId &&
+          !thread.archived &&
+          scopeState.bucketForThread(thread) === targetScopeBucketId
+      ) ??
+      scopeState.allScopeThreads.find(
+        (thread) => thread.projectId === projectId && !thread.archived
+      ) ??
+      (workspaceState.selectedThread?.projectId === projectId
+        ? workspaceState.selectedThread
+        : undefined)
+    if (!anchor) {
+      actionError = 'The merge hit conflicts. Open the Git panel from a thread to resolve them.'
+      return
+    }
+    scopeState.showSidebarForThread(anchor)
+    navigateToProjects?.()
+    workspaceState.openThread(anchor, project)
+    contextSidebarState.openGit(projectId, anchor.id)
+  }
+
   async function toggleArchive(bucket: ScopeBucket, archived: boolean): Promise<void> {
     if (!scopeState.activeProjectId) return
     try {
@@ -316,11 +350,7 @@
   async function togglePinned(bucket: ScopeBucket): Promise<void> {
     if (!scopeState.activeProjectId) return
     try {
-      await scopeState.setPinned(
-        scopeState.activeProjectId,
-        bucket.id,
-        bucket.pinned !== true
-      )
+      await scopeState.setPinned(scopeState.activeProjectId, bucket.id, bucket.pinned !== true)
     } catch (error) {
       actionError = errorMessage(error, 'The scope could not be pinned.')
     }
@@ -451,6 +481,7 @@
               onAdoptWorktree={() => (adoptWorktreeTarget = bucket)}
               onRetrySetup={() => void retrySetup(bucket)}
               onRepairWorktree={() => void repairWorktree(bucket)}
+              onMerge={() => (mergeTarget = bucket)}
               onDetach={() => openLifecycle(bucket, 'detach')}
               onRemoveWorktree={() => openLifecycle(bucket, 'remove-worktree')}
               onDeleteBranch={() => openLifecycle(bucket, 'delete-branch')}
@@ -566,6 +597,18 @@
     />
   </div>
 </Modal>
+
+{#if mergeTarget && scopeState.activeProjectId}
+  <ScopeMergeModal
+    open={mergeTarget !== null}
+    projectId={scopeState.activeProjectId}
+    sourceBucketId={mergeTarget.id}
+    onClose={() => (mergeTarget = null)}
+    onDone={() => (mergeTarget = null)}
+    onConflicts={(projectId, targetScopeBucketId) =>
+      openConflictsHandoff(projectId, targetScopeBucketId)}
+  />
+{/if}
 
 {#if lifecycleAction && scopeState.activeProjectId}
   <ScopeLifecycleModal

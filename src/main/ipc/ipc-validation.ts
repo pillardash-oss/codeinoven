@@ -279,6 +279,16 @@ export function validateScopeLifecycleAction(
   return assertEnum(value, SCOPE_LIFECYCLE_ACTIONS, 'scope lifecycle action')
 }
 
+const SCOPE_MERGE_MODES = new Set<import('../../lib/types').ScopeMergeMode>([
+  'merge-delete',
+  'merge-keep',
+  'merge-move-to-default'
+])
+
+export function validateScopeMergeMode(value: unknown): import('../../lib/types').ScopeMergeMode {
+  return assertEnum(value, SCOPE_MERGE_MODES, 'scope merge mode')
+}
+
 /** Validate the renderer input for managed-worktree creation. */
 export function validateScopeWorktreeCreateInput(
   value: unknown

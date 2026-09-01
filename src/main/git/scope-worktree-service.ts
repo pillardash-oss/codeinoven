@@ -2,11 +2,15 @@ import { copyFile, mkdir, readdir, realpath, rename, rm } from 'fs/promises'
 import { existsSync, realpathSync } from 'fs'
 import { isAbsolute, join } from 'path'
 import { randomBytes } from 'crypto'
+import { DEFAULT_SCOPE_BUCKET_ID } from '../../lib/types'
 import type {
   AdoptableWorktreeInfo,
   ManagedWorktreeDescriptor,
   ScopeEnvironmentMode,
   ScopeLifecyclePreflight,
+  ScopeMergeMode,
+  ScopeMergeOutcome,
+  ScopeMergePreflight,
   ScopeSetupCommandRecord,
   ScopeSetupCommandSpec,
   ScopeTarget,
@@ -33,8 +37,25 @@ export interface ActiveProcessProbe {
   hasActiveProcessesFor(projectId: string, scopeBucketId?: string): Promise<boolean> | boolean
 }
 
+/**
+ * Thread lifecycle operations the merge flow needs after the git merge lands.
+ * Injected by the IPC layer after the ThreadManager is constructed.
+ */
+export interface ScopeThreadLifecycle {
+  /** Count non-archived, user-visible threads owned by a scope bucket. */
+  countThreadsInScope(projectId: string, bucketId: string): Promise<number>
+  /** Delete every thread owned by a scope bucket. Returns how many were deleted. */
+  deleteThreadsInScope(projectId: string, bucketId: string): Promise<number>
+  /** Move every thread owned by a scope into the Default bucket, evicting older Default threads as needed. */
+  moveThreadsOutOfScope(
+    projectId: string,
+    fromBucketId: string
+  ): Promise<{ moved: number; evicted: number }>
+}
+
 export interface ScopeWorktreeServiceOptions {
   activeProcesses?: ActiveProcessProbe
+  scopeThreads?: ScopeThreadLifecycle
 }
 
 /** Negotiable progress events emitted to the initiating renderer. */
@@ -60,6 +81,21 @@ interface PreflightSnapshot {
   unpushedCommits: number
   hasActiveProcesses: boolean
   branchOwnedByWorktree: boolean
+  token: string
+  createdAt: number
+}
+
+interface MergePreflightSnapshot {
+  target: ScopeTarget
+  mergeTarget: ScopeTarget
+  mode: ScopeMergeMode
+  descriptor: ManagedWorktreeDescriptor
+  sourcePath: string
+  targetBranch: string
+  threadCount: number
+  dirtyFiles: string[]
+  unpushedCommits: number
+  hasActiveProcesses: boolean
   token: string
   createdAt: number
 }
@@ -146,7 +182,9 @@ export function parseWorktreePorcelain(output: string): ParsedWorktreeList {
 export class ScopeWorktreeService implements ManagedWorktreeInspector {
   private readonly queues = new Map<string, Promise<unknown>>()
   private readonly preflights = new Map<string, PreflightSnapshot>()
+  private readonly mergePreflights = new Map<string, MergePreflightSnapshot>()
   private readonly activeProcesses?: ActiveProcessProbe
+  private scopeThreads?: ScopeThreadLifecycle
 
   constructor(
     private scopes: ScopeManager,
@@ -154,6 +192,16 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     options: ScopeWorktreeServiceOptions = {}
   ) {
     this.activeProcesses = options.activeProcesses
+    this.scopeThreads = options.scopeThreads
+  }
+
+  /**
+   * Inject the thread lifecycle once the ThreadManager is available. The merge
+   * service is constructed before the thread manager, so callers wire it in
+   * after both exist.
+   */
+  attachThreadLifecycle(scopeThreads: ScopeThreadLifecycle): void {
+    this.scopeThreads = scopeThreads
   }
 
   private enqueue<T>(projectId: string, task: () => Promise<T>): Promise<T> {
@@ -1149,6 +1197,253 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
         })
       }
     })
+  }
+
+  // ─── Merge a managed scope back into another scope ───────────────────────
+
+  /**
+   * Compute a state-bound preflight for merging a managed scope into another
+   * scope (Default by default) and mint a single-use confirmation token.
+   * Describes the branch being merged, the target branch, the threads that
+   * will be deleted or moved, and the work that would be discarded in the
+   * delete modes.
+   */
+  async mergePreflight(
+    target: ScopeTarget,
+    mergeTarget: ScopeTarget,
+    mode: ScopeMergeMode
+  ): Promise<ScopeMergePreflight> {
+    return this.enqueue(target.projectId, async () => {
+      const descriptor = this.requireManaged(target)
+      this.assertDistinctMergeTarget(target, mergeTarget)
+      const sourcePath = getScopeRootPath(target.projectId, descriptor.directoryName)
+      const project = await this.projects.getProject(target.projectId)
+      const repoPath = project?.path
+      const targetRoot = await this.resolveMergeTargetRoot(mergeTarget, repoPath)
+      const dirtyFiles = await this.dirtyFiles(repoPath, sourcePath)
+      const unpushedCommits = await this.unpushedCount(repoPath, descriptor.branch, sourcePath)
+      const hasActiveProcesses =
+        (await this.activeProcesses?.hasActiveProcessesFor(
+          target.projectId,
+          target.scopeBucketId
+        )) ?? false
+      const threadCount =
+        (await this.scopeThreads?.countThreadsInScope(target.projectId, target.scopeBucketId)) ?? 0
+      const snapshot: MergePreflightSnapshot = {
+        target,
+        mergeTarget,
+        mode,
+        descriptor,
+        sourcePath,
+        targetBranch: targetRoot.branch,
+        threadCount,
+        dirtyFiles,
+        unpushedCommits,
+        hasActiveProcesses,
+        token: randomBytes(16).toString('hex'),
+        createdAt: Date.now()
+      }
+      this.mergePreflights.set(snapshot.token, snapshot)
+      return {
+        sourceProjectId: target.projectId,
+        sourceScopeBucketId: target.scopeBucketId,
+        mergeTargetScopeBucketId: mergeTarget.scopeBucketId,
+        sourceBranch: descriptor.branch,
+        targetBranch: snapshot.targetBranch,
+        threadCount: snapshot.threadCount,
+        dirtyFiles: [...snapshot.dirtyFiles],
+        unpushedCommits: snapshot.unpushedCommits,
+        hasActiveProcesses: snapshot.hasActiveProcesses,
+        mode,
+        confirmationId: snapshot.token,
+        createdAt: snapshot.createdAt
+      }
+    })
+  }
+
+  /**
+   * Consume the merge confirmation token and apply the merge plus the selected
+   * post-merge disposition. The git merge runs inside the merge target scope's
+   * root. A conflict aborts nothing and deletes nothing: the merge is left
+   * in-progress in the target (standard Git-panel conflict handling) and the
+   * renderer hands off to the conflict UI. A clean merge then applies the mode:
+   *
+   *  - `merge-keep`: leave the scope and its threads untouched.
+   *  - `merge-delete`: delete the scope's threads, remove the worktree, delete
+   *    the scope bucket and the `cio/` branch.
+   *  - `merge-move-to-default`: move the scope's threads into the Default bucket
+   *    (evicting older Default threads), then remove the worktree, bucket and
+   *    branch.
+   */
+  async confirmMerge(
+    target: ScopeTarget,
+    mergeTarget: ScopeTarget,
+    mode: ScopeMergeMode,
+    token: string
+  ): Promise<ScopeMergeOutcome> {
+    return this.enqueue(target.projectId, async () => {
+      const snapshot = this.requireFreshMergeSnapshot(token, target, mergeTarget, mode)
+      const descriptor = snapshot.descriptor
+      const project = await this.projects.getProject(target.projectId)
+      const repoPath = project?.path ?? snapshot.sourcePath
+      const targetRoot = await this.resolveMergeTargetRoot(mergeTarget, repoPath)
+
+      // Re-check the destination is not mid-mutation before running the merge so
+      // a stale token cannot collide with a worktree the user since touched.
+      if (mergeTarget.scopeBucketId !== DEFAULT_SCOPE_BUCKET_ID) {
+        const health = await this.health(mergeTarget)
+        if (health.category !== 'healthy') {
+          throw new Error(
+            `The merge target worktree is not healthy (${health.category}); fix it before merging`
+          )
+        }
+      }
+
+      const outcome = await this.runIntoMerge(targetRoot.root, descriptor.branch)
+      if (!outcome.merged) return outcome
+
+      if (mode === 'merge-keep') {
+        return { merged: true, conflicted: [] }
+      }
+
+      if (mode === 'merge-delete') {
+        await this.scopeThreads?.deleteThreadsInScope(target.projectId, target.scopeBucketId)
+      } else {
+        await this.scopeThreads?.moveThreadsOutOfScope(target.projectId, target.scopeBucketId)
+      }
+
+      await this.removeManagedWorktree(target, descriptor, repoPath)
+      await runGit(['branch', '-D', descriptor.branch], {
+        cwd: repoPath,
+        timeoutMs: 60_000
+      }).catch((cause) => {
+        const detail = cause instanceof Error ? cause.message : String(cause)
+        throw new Error(`${descriptor.branch} could not be deleted after the merge: ${detail}`, {
+          cause
+        })
+      })
+      this.scopes.deleteBucket(target.projectId, target.scopeBucketId)
+      return { merged: true, conflicted: [] }
+    })
+  }
+
+  /** Run `git merge <sourceBranch>` in `root`; reports conflicts without failing. */
+  private async runIntoMerge(root: string, sourceBranch: string): Promise<ScopeMergeOutcome> {
+    try {
+      await runGitChecked(['merge', sourceBranch], { cwd: root, timeoutMs: 120_000 })
+    } catch (cause) {
+      const conflicting = await this.unmergedFiles(root)
+      if (conflicting.length > 0) {
+        return { merged: false, conflicted: conflicting }
+      }
+      const detail = cause instanceof Error ? cause.message : String(cause)
+      throw new Error(`The merge into the target scope could not start: ${detail}`, { cause })
+    }
+    return { merged: true, conflicted: [] }
+  }
+
+  /** Conflicted (unmerged) file paths in a working tree. */
+  private async unmergedFiles(root: string): Promise<string[]> {
+    try {
+      const output = await runGit(['diff', '--name-only', '--diff-filter=U'], { cwd: root })
+      return output
+        .split('\n')
+        .map((path) => path.trim())
+        .filter((path) => path.length > 0)
+    } catch {
+      return []
+    }
+  }
+
+  /** Remove the managed worktree and prune stale registrations (best-effort). */
+  private async removeManagedWorktree(
+    target: ScopeTarget,
+    descriptor: ManagedWorktreeDescriptor,
+    repoPath: string
+  ): Promise<void> {
+    const worktreePath = getScopeRootPath(target.projectId, descriptor.directoryName)
+    await runGit(['worktree', 'remove', '--force', worktreePath], {
+      cwd: repoPath,
+      timeoutMs: 120_000
+    }).catch(async (cause) => {
+      const detail = cause instanceof Error ? cause.message : String(cause)
+      Logger.error(`Managed worktree removal after merge failed: ${detail}`)
+      await runGit(['worktree', 'prune'], { cwd: repoPath, timeoutMs: 60_000 }).catch(
+        () => undefined
+      )
+    })
+  }
+
+  /**
+   * Resolve the filesystem root and current branch of the merge target scope.
+   * The Default scope (and any project-rooted scope) resolves to the project
+   * directory; a managed scope resolves to its worktree checkout.
+   */
+  private async resolveMergeTargetRoot(
+    mergeTarget: ScopeTarget,
+    repoPath: string | undefined
+  ): Promise<{ root: string; branch: string }> {
+    const board = this.scopes.getBoard(mergeTarget.projectId)
+    const bucket = board.buckets.find((candidate) => candidate.id === mergeTarget.scopeBucketId)
+    if (!bucket) throw new Error(`Merge target scope not found: ${mergeTarget.scopeBucketId}`)
+    if (bucket.root.kind === 'worktree') {
+      const root = getScopeRootPath(mergeTarget.projectId, bucket.root.directoryName)
+      let branch = bucket.root.branch
+      try {
+        const resolved = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root })).trim()
+        if (resolved && resolved !== 'HEAD') branch = resolved
+      } catch {
+        // Fall back to the descriptor's branch.
+      }
+      return { root, branch }
+    }
+    if (!repoPath) throw new Error('The merge target requires a local project repository')
+    let branch = 'HEAD'
+    try {
+      const resolved = (
+        await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], {
+          cwd: repoPath
+        })
+      ).trim()
+      if (resolved && resolved !== 'HEAD') branch = resolved
+    } catch {
+      // Unborn/empty repository; the merge will surface a concrete error.
+    }
+    return { root: repoPath, branch }
+  }
+
+  /** A scope cannot be merged into itself. */
+  private assertDistinctMergeTarget(target: ScopeTarget, mergeTarget: ScopeTarget): void {
+    if (
+      target.projectId === mergeTarget.projectId &&
+      target.scopeBucketId === mergeTarget.scopeBucketId
+    ) {
+      throw new Error('The merge target must be a different scope than the source')
+    }
+  }
+
+  private requireFreshMergeSnapshot(
+    token: string,
+    target: ScopeTarget,
+    mergeTarget: ScopeTarget,
+    mode: ScopeMergeMode
+  ): MergePreflightSnapshot {
+    const snapshot = this.mergePreflights.get(token)
+    if (!snapshot || Date.now() - snapshot.createdAt > 10 * 60 * 1000) {
+      this.mergePreflights.delete(token)
+      throw new Error('Confirmation token is stale; run preflight again')
+    }
+    this.mergePreflights.delete(token)
+    if (
+      snapshot.target.projectId !== target.projectId ||
+      snapshot.target.scopeBucketId !== target.scopeBucketId ||
+      snapshot.mergeTarget.projectId !== mergeTarget.projectId ||
+      snapshot.mergeTarget.scopeBucketId !== mergeTarget.scopeBucketId ||
+      snapshot.mode !== mode
+    ) {
+      throw new Error('Confirmation token does not match the requested merge')
+    }
+    return snapshot
   }
 
   private requireFreshSnapshot(

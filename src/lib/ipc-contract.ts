@@ -132,6 +132,9 @@ import type {
   ScopeCreateInput,
   ScopeLifecycleAction,
   ScopeLifecyclePreflight,
+  ScopeMergeMode,
+  ScopeMergeOutcome,
+  ScopeMergePreflight,
   ScopeTarget,
   ScopeWorktreeCreateInput,
   ScopeWorktreeDefaults,
@@ -1806,6 +1809,16 @@ export interface IpcInvokeContract {
   'scope:worktree:retrySetup': Contract<
     [target: ScopeTarget, options: { runSetup: boolean }],
     ManagedWorktreeDescriptor
+  >
+  /** Preflight merging a managed scope into another scope and mint a token. */
+  'scope:worktree:mergePreflight': Contract<
+    [target: ScopeTarget, mergeTarget: ScopeTarget, mode: ScopeMergeMode],
+    ScopeMergePreflight
+  >
+  /** Consume a merge token to merge a scope and apply its post-merge mode. */
+  'scope:worktree:confirmMerge': Contract<
+    [target: ScopeTarget, mergeTarget: ScopeTarget, mode: ScopeMergeMode, confirmationId: string],
+    ScopeMergeOutcome
   >
   /** Update project-level managed-worktree defaults. */
   'scope:setWorktreeDefaults': Contract<

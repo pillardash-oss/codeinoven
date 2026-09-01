@@ -45,6 +45,7 @@
     onAdoptWorktree?: () => void
     onRetrySetup?: () => void
     onRepairWorktree?: () => void
+    onMerge?: () => void
     onDetach?: () => void
     onRemoveWorktree?: () => void
     onDeleteBranch?: () => void
@@ -74,6 +75,7 @@
     onAdoptWorktree,
     onRetrySetup,
     onRepairWorktree,
+    onMerge,
     onDetach,
     onRemoveWorktree,
     onDeleteBranch
@@ -249,6 +251,7 @@
       {onRetrySetup}
       {onRepairWorktree}
       hasRepairableIssue={repairable}
+      {onMerge}
       {onDetach}
       {onRemoveWorktree}
       {onDeleteBranch}

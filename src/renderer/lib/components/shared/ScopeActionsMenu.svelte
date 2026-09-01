@@ -5,6 +5,7 @@
     Ellipsis,
     FolderInput,
     GitBranch,
+    GitMerge,
     Pencil,
     Pin,
     PinOff,
@@ -24,6 +25,7 @@
     | 'adopt-worktree'
     | 'retry-setup'
     | 'repair-worktree'
+    | 'merge'
     | 'detach'
     | 'remove-worktree'
     | 'delete-branch'
@@ -43,6 +45,7 @@
     onRepairWorktree?: () => void
     /** Cached health reports a repairable managed-worktree problem. */
     hasRepairableIssue?: boolean
+    onMerge?: () => void
     onDetach?: () => void
     onRemoveWorktree?: () => void
     onDeleteBranch?: () => void
@@ -60,6 +63,7 @@
     onRetrySetup,
     onRepairWorktree,
     hasRepairableIssue = false,
+    onMerge,
     onDetach,
     onRemoveWorktree,
     onDeleteBranch
@@ -148,6 +152,13 @@
         })
       }
       if (isManaged) {
+        list.push({
+          label: 'Merge into project…',
+          run: () => {
+            onMerge?.()
+            closeMenu()
+          }
+        })
         if (setupFailed) {
           list.push({
             label: 'Retry setup',
@@ -238,6 +249,8 @@
             <Trash2 size={13} class="text-muted" />
           {:else if item.label === 'Edit'}
             <Pencil size={13} class="text-muted" />
+          {:else if item.label === 'Merge into project…'}
+            <GitMerge size={13} class="text-muted" />
           {:else if item.label === 'Pin scope' || item.label === 'Unpin scope'}
             {#if item.label === 'Pin scope'}
               <Pin size={13} class="text-muted" />
