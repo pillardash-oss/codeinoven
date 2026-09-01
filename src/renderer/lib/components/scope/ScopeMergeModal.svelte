@@ -24,10 +24,104 @@
   let mode = $state<ScopeMergeMode>('merge-delete')
   let mergeTargetBucketId = $state(DEFAULT_SCOPE_BUCKET_ID)
   let preflight = $state<ScopeMergePreflight | null>(null)
-  let busy = $state(false)
+  let working = $state(false)
+  let refreshing = $state(false)
   let error = $state<string | null>(null)
   let conflicted = $state(false)
 
+  /** True when `preflight` matches the currently selected mode and target. */
+  const preflightMatches = $derived(
+    preflight !== null &&
+      preflight.mode === mode &&
+      preflight.mergeTargetScopeBucketId === mergeTargetBucketId
+  )
+
+  function close(): void {
+    preflight = null
+    error = null
+    working = false
+    refreshing = false
+    conflicted = false
+    onClose()
+  }
+
+  let preflightSeq = 0
+  /**
+   * Quietly refresh the consequence summary. The previous summary stays visible,
+   * the footer never changes, and a stale in-flight request can never overwrite
+   * a newer one. Errors keep the last good summary so the dialog never blanks.
+   */
+  async function loadPreflight(): Promise<void> {
+    const seq = ++preflightSeq
+    refreshing = true
+    error = null
+    try {
+      const next = await scopeState.mergeToScopePreflight(
+        projectId,
+        sourceBucketId,
+        mergeTargetBucketId,
+        mode
+      )
+      if (seq !== preflightSeq) return
+      preflight = next
+      conflicted = false
+    } catch (cause) {
+      if (seq !== preflightSeq) return
+      error = cause instanceof Error ? cause.message : 'The merge preflight could not be run.'
+      // Keep the last resolved preflight so the dialog never disappears on a
+      // transient refresh failure.
+    } finally {
+      if (seq === preflightSeq) refreshing = false
+    }
+  }
+
+  async function confirm(): Promise<void> {
+    if (!preflightMatches || !preflight) return
+    working = true
+    error = null
+    try {
+      const outcome: ScopeMergeOutcome = await scopeState.confirmScopeMerge(
+        projectId,
+        sourceBucketId,
+        mergeTargetBucketId,
+        mode,
+        preflight.confirmationId
+      )
+      if (!outcome.merged && outcome.conflicted.length > 0) {
+        conflicted = true
+        onConflicts?.(projectId, mergeTargetBucketId)
+        onDone?.()
+        close()
+        return
+      }
+      await scopeState.loadBoard(projectId)
+      onDone?.()
+      close()
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'The merge could not be completed.'
+    } finally {
+      working = false
+    }
+  }
+
+  function selectMode(value: ScopeMergeMode): void {
+    if (mode === value) return
+    mode = value
+    void loadPreflight()
+  }
+
+  $effect(() => {
+    if (open) {
+      mode = 'merge-delete'
+      mergeTargetBucketId = DEFAULT_SCOPE_BUCKET_ID
+      preflight = null
+      error = null
+      working = false
+      refreshing = false
+      conflicted = false
+      void loadPreflight()
+    }
+  })
   const sourceBucket = $derived(
     scopeState.board.buckets.find((bucket) => bucket.id === sourceBucketId) ?? null
   )
@@ -74,80 +168,6 @@
     if (!bucket) return bucketId
     return bucket.root.kind === 'worktree' ? `${bucket.name} (worktree)` : bucket.name
   }
-
-  function close(): void {
-    preflight = null
-    error = null
-    busy = false
-    conflicted = false
-    onClose()
-  }
-
-  async function loadPreflight(): Promise<void> {
-    busy = true
-    error = null
-    try {
-      preflight = await scopeState.mergeToScopePreflight(
-        projectId,
-        sourceBucketId,
-        mergeTargetBucketId,
-        mode
-      )
-      conflicted = false
-    } catch (cause) {
-      preflight = null
-      error = cause instanceof Error ? cause.message : 'The merge preflight could not be run.'
-    } finally {
-      busy = false
-    }
-  }
-
-  async function confirm(): Promise<void> {
-    if (!preflight) return
-    busy = true
-    error = null
-    try {
-      const outcome: ScopeMergeOutcome = await scopeState.confirmScopeMerge(
-        projectId,
-        sourceBucketId,
-        mergeTargetBucketId,
-        mode,
-        preflight.confirmationId
-      )
-      if (!outcome.merged && outcome.conflicted.length > 0) {
-        conflicted = true
-        onConflicts?.(projectId, mergeTargetBucketId)
-        onDone?.()
-        close()
-        return
-      }
-      await scopeState.loadBoard(projectId)
-      onDone?.()
-      close()
-    } catch (cause) {
-      error = cause instanceof Error ? cause.message : 'The merge could not be completed.'
-    } finally {
-      busy = false
-    }
-  }
-
-  function selectMode(value: ScopeMergeMode): void {
-    if (mode === value) return
-    mode = value
-    void loadPreflight()
-  }
-
-  $effect(() => {
-    if (open) {
-      mode = 'merge-delete'
-      mergeTargetBucketId = DEFAULT_SCOPE_BUCKET_ID
-      preflight = null
-      error = null
-      busy = false
-      conflicted = false
-      void loadPreflight()
-    }
-  })
 </script>
 
 <Modal {open} title="Merge scope into project" onClose={close} footer={footerSnippet}>
@@ -202,6 +222,10 @@
 
     {#if !preflight && !error}
       <p class="text-sm text-muted">Checking this scope before anything is changed…</p>
+    {/if}
+
+    {#if refreshing && preflight}
+      <p class="text-xs text-dimmed">Updating summary…</p>
     {/if}
 
     {#if preflight}
@@ -288,9 +312,9 @@
         ? 'bg-primary text-on-primary hover:bg-primary-hover'
         : 'bg-danger text-on-danger hover:bg-danger-hover'
     ].join(' ')}
-    disabled={!preflight || busy}
+    disabled={!preflightMatches || working}
     onclick={() => void confirm()}
   >
-    {busy ? 'Working…' : mode === 'merge-keep' ? 'Merge' : 'Merge & close'}
+    {working ? 'Merging…' : mode === 'merge-keep' ? 'Merge' : 'Merge & close'}
   </button>
 {/snippet}
