@@ -6,6 +6,7 @@
     Download,
     Info,
     Loader2,
+    Plug,
     RefreshCw,
     Settings,
     Smartphone
@@ -15,6 +16,7 @@
   import { updaterState } from '$lib/stores/updater.svelte'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import type { AccountProfileState } from '$shared/types'
+  import TaskManagerModal from './TaskManagerModal.svelte'
 
   interface Props {
     active: boolean
@@ -32,6 +34,7 @@
   let accountState = $state<AccountProfileState>({ status: 'signed-out', profile: null })
   let remoteStatus = $state<RemoteStatus | null>(null)
   let wasActive: boolean | null = null
+  let taskManagerOpen = $state(false)
 
   const profile = $derived(accountState.profile)
   const initials = $derived.by(() => {
@@ -142,6 +145,15 @@
   {/if}
 
   <div class="ml-auto flex shrink-0 items-center gap-1">
+    <button
+      type="button"
+      class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      title="Task manager — running processes"
+      aria-label="Open the task manager"
+      onclick={() => (taskManagerOpen = true)}
+    >
+      <Plug size={14} />
+    </button>
     {#if profile}
       <button
         type="button"
@@ -244,3 +256,5 @@
     {/if}
   </div>
 </div>
+
+<TaskManagerModal open={taskManagerOpen} onClose={() => (taskManagerOpen = false)} />

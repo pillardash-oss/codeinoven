@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
-import type { AgentRunningProcess } from '../../lib/types'
+import type { AgentRunningProcess, TaskManagerProcess } from '../../lib/types'
 import type { AgentProcessObserver } from '../drivers/driver.interface'
 import { OWNED_PROCESS_MARKER } from '../drivers/cli-environment'
 import { Logger } from '../system/logger'
@@ -29,10 +29,12 @@ interface HarnessRoot {
   pid: number
   command: string
   cwd: string
+  startedAt: number
 }
 
 interface TrackedProcess extends AgentRunningProcess {
   sessionId: string
+  cwd: string | null
 }
 export interface ReapOrphansResult {
   killed: number[]
@@ -159,7 +161,7 @@ export class AgentProcessService implements AgentProcessObserver {
       sessionRoots = new Map()
       this.roots.set(scope, sessionRoots)
     }
-    sessionRoots.set(pid, { pid, command, cwd })
+    sessionRoots.set(pid, { pid, command, cwd, startedAt: Date.now() })
     this.journal?.register(pid, command, cwd)
     this.ensureScanner()
     void this.scan()
@@ -199,8 +201,158 @@ export class AgentProcessService implements AgentProcessObserver {
 
   async killProcess(projectId: string, threadId: string, pid: number): Promise<void> {
     if (!this.ownsProcess(pid)) throw new Error(`Process ${pid} is not owned by this app`)
-    await this.killTree(pid)
+    await this.killTree(pid, false)
     await this.scan()
+  }
+
+  /**
+   * Global kill used by the task manager: targets any app-owned pid regardless
+   * of project/thread. `force` skips the graceful SIGTERM stage and escalates
+   * straight to SIGKILL (or `taskkill /F` on Windows).
+   */
+  async killProcessGlobal(pid: number, force: boolean): Promise<void> {
+    if (!this.ownsProcess(pid)) throw new Error(`Process ${pid} is not owned by this app`)
+    await this.killTree(pid, force)
+    await this.scan()
+  }
+
+  /**
+   * App-wide process list for the task manager. Enumerates every owned harness
+   * root and descendant across all sessions (thread-scoped and app-scoped),
+   * attaching the project/thread that owns each, its working directory, and the
+   * TCP ports it is listening on (best-effort OS detection).
+   */
+  async listAll(): Promise<TaskManagerProcess[]> {
+    const pids = new Set<number>()
+    for (const processes of this.tracked.values()) {
+      for (const process of processes.values()) pids.add(process.pid)
+    }
+    for (const sessionRoots of this.roots.values()) {
+      for (const root of sessionRoots.values()) pids.add(root.pid)
+    }
+    const portsByPid = await this.detectPorts([...pids])
+
+    const unique = new Map<number, TaskManagerProcess>()
+    for (const [sessionId, owner] of this.owners) {
+      const sessionRoots = this.roots.get(sessionId)
+      for (const root of sessionRoots?.values() ?? []) {
+        unique.set(root.pid, {
+          pid: root.pid,
+          parentPid: 0,
+          command: root.command,
+          startedAt: root.startedAt,
+          scope: 'thread',
+          cwd: root.cwd,
+          projectId: owner.projectId,
+          threadId: owner.threadId,
+          ports: portsByPid.get(root.pid) ?? []
+        })
+      }
+      for (const process of this.tracked.get(sessionId)?.values() ?? []) {
+        unique.set(process.pid, {
+          pid: process.pid,
+          parentPid: process.parentPid,
+          command: process.command,
+          startedAt: process.startedAt,
+          scope: process.scope,
+          cwd: process.cwd,
+          projectId: owner.projectId,
+          threadId: owner.threadId,
+          ports: portsByPid.get(process.pid) ?? []
+        })
+      }
+    }
+    // App-scoped processes (descendants of a shared/pooled harness) carry no
+    // project/thread owner, so those fields are null in the task manager list.
+    for (const root of this.roots.get(APP_SCOPE)?.values() ?? []) {
+      unique.set(root.pid, {
+        pid: root.pid,
+        parentPid: 0,
+        command: root.command,
+        startedAt: root.startedAt,
+        scope: 'app',
+        cwd: root.cwd,
+        projectId: null,
+        threadId: null,
+        ports: portsByPid.get(root.pid) ?? []
+      })
+    }
+    for (const process of this.tracked.get(APP_SCOPE)?.values() ?? []) {
+      unique.set(process.pid, {
+        pid: process.pid,
+        parentPid: process.parentPid,
+        command: process.command,
+        startedAt: process.startedAt,
+        scope: 'app',
+        cwd: process.cwd,
+        projectId: null,
+        threadId: null,
+        ports: portsByPid.get(process.pid) ?? []
+      })
+    }
+    return [...unique.values()].sort((left, right) => left.startedAt - right.startedAt)
+  }
+
+  /**
+   * Best-effort detection of the TCP ports each owned pid is currently
+   * listening on. One batched `lsof` (unix) / `netstat` (windows) snapshot per
+   * call; failures degrade to an empty map so the task manager never blocks on
+   * a missing tool.
+   */
+  private async detectPorts(pids: readonly number[]): Promise<Map<number, number[]>> {
+    const wanted = new Set(pids)
+    if (wanted.size === 0) return new Map()
+    const map = new Map<number, number[]>()
+    try {
+      const entries =
+        process.platform === 'win32'
+          ? await this.snapshotWindowsListeningPorts()
+          : await this.snapshotUnixListeningPorts()
+      for (const [pid, port] of entries) {
+        if (!wanted.has(pid)) continue
+        const existing = map.get(pid)
+        if (existing) existing.push(port)
+        else map.set(pid, [port])
+      }
+    } catch {
+      // Port detection is strictly best-effort.
+    }
+    return map
+  }
+
+  private async snapshotUnixListeningPorts(): Promise<Array<[number, number]>> {
+    const { stdout } = await execFileAsync('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-F', 'pfn'])
+    const result: Array<[number, number]> = []
+    let currentPid = 0
+    for (const line of stdout.split(/\r?\n/u)) {
+      if (!line) continue
+      if (line.startsWith('p')) {
+        currentPid = Number(line.slice(1))
+      } else if (line.startsWith('n') && currentPid > 0) {
+        const name = line.slice(1)
+        const listenIndex = name.lastIndexOf('(LISTEN)')
+        const listenPart = listenIndex >= 0 ? name.slice(0, listenIndex).trimEnd() : name
+        const match = listenPart.match(/(\d+)\s*$/u)
+        if (match) result.push([currentPid, Number(match[1])])
+      }
+    }
+    return result
+  }
+
+  private async snapshotWindowsListeningPorts(): Promise<Array<[number, number]>> {
+    const { stdout } = await execFileAsync('netstat.exe', ['-ano', '-p', 'TCP'], {
+      windowsHide: true
+    })
+    const result: Array<[number, number]> = []
+    for (const line of stdout.split(/\r?\n/u)) {
+      const fields = line.trim().split(/\s+/u)
+      if (fields.length < 5 || fields[3] !== 'LISTENING') continue
+      const local = fields[1]
+      const portMatch = local.match(/:([^:]+)$/u)
+      const pid = Number(fields.at(-1))
+      if (portMatch && pid > 0) result.push([pid, Number(portMatch[1])])
+    }
+    return result
   }
 
   async killThread(projectId: string, threadId: string): Promise<void> {
@@ -436,7 +588,8 @@ export class AgentProcessService implements AgentProcessObserver {
               command: descendant.command,
               startedAt: Date.now(),
               scope: isAppScope ? 'app' : 'thread',
-              sessionId
+              sessionId,
+              cwd: root.cwd
             })
             changed = true
           }
@@ -483,10 +636,10 @@ export class AgentProcessService implements AgentProcessObserver {
     }
   }
 
-  private async killTree(pid: number): Promise<void> {
+  private async killTree(pid: number, force = false): Promise<void> {
     if (process.platform === 'win32') {
       try {
-        await execFileAsync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+        await execFileAsync('taskkill.exe', ['/PID', String(pid), '/T', ...(force ? ['/F'] : [])], {
           windowsHide: true
         })
       } catch (error) {
@@ -505,6 +658,17 @@ export class AgentProcessService implements AgentProcessObserver {
     }
     const tree = descendantsOf(pid, childrenByParent).reverse()
     const targets = [...tree, { pid }]
+    if (force) {
+      // No grace period: terminate every process in the tree immediately.
+      for (const process of targets) {
+        try {
+          globalThis.process.kill(process.pid, 'SIGKILL')
+        } catch (error) {
+          if (!isMissingProcessError(error)) throw error
+        }
+      }
+      return
+    }
     for (const process of targets) {
       try {
         globalThis.process.kill(process.pid, 'SIGTERM')

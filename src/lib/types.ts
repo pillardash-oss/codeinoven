@@ -1747,6 +1747,24 @@ export interface AgentRunningProcess {
   scope: 'thread' | 'app'
 }
 
+/**
+ * App-wide process row surfaced by the task manager. Extends the per-thread
+ * `AgentRunningProcess` with the working directory the process was launched in
+ * and the project/thread that owns it (both `null` for app-scoped pooled
+ * harness processes). `ports` lists any TCP ports the process is currently
+ * listening on (best-effort OS detection).
+ */
+export interface TaskManagerProcess extends AgentRunningProcess {
+  cwd: string | null
+  projectId: string | null
+  threadId: string | null
+  ports: number[]
+  /** Display name of the owning project, resolved at IPC time. */
+  projectName?: string | null
+  /** Display title of the owning thread, resolved at IPC time. */
+  threadTitle?: string | null
+}
+
 /** Provider-neutral lifecycle state for one delegated child-agent task. */
 export interface AgentSubagentActivity {
   status: AgentToolStatus

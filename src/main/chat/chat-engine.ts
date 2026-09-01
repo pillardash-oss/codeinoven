@@ -144,6 +144,7 @@ import type {
   AgentCapabilitySource,
   AgentRunningProcess,
   NativeMcpContent,
+  TaskManagerProcess,
   AssignmentPlan,
   AssignmentPlanContent,
   AssignmentFollowUpTaskInput,
@@ -2022,6 +2023,13 @@ export class ChatEngine {
         validateEntityId(threadId, 'Thread ID')
       )
     )
+    ipcMain.handle('taskManager:list', () => this.listTaskManagerProcesses())
+    ipcMain.handle('taskManager:killProcess', (_, pid: unknown, force: unknown) => {
+      if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) {
+        throw new TypeError('Process ID must be a positive integer')
+      }
+      return this.killTaskManagerProcess(pid, force === true)
+    })
     ipcMain.handle('capabilities:readSkill', (_, source: AgentCapabilitySource) =>
       this.capabilityDiscovery.readSkill(source)
     )
@@ -4628,6 +4636,39 @@ export class ChatEngine {
       validateEntityId(projectId, 'Project ID'),
       validateEntityId(threadId, 'Thread ID')
     )
+  }
+
+  /** App-wide process list for the task manager (all projects and app scope). */
+  async listTaskManagerProcesses(): Promise<TaskManagerProcess[]> {
+    const processes = await this.agentProcesses.listAll()
+    const projectNames = new Map<string, string>()
+    const threadTitles = new Map<string, string>()
+    for (const process of processes) {
+      const { projectId, threadId } = process
+      if (projectId && !projectNames.has(projectId)) {
+        const project = await this.projectManager.getProject(projectId)
+        projectNames.set(projectId, project?.name ?? projectId)
+      }
+      if (projectId && threadId && !threadTitles.has(threadId)) {
+        const thread = await this.threadManager.getThread(projectId, threadId)
+        threadTitles.set(threadId, thread?.title ?? threadId)
+      }
+    }
+    return processes.map((process) => ({
+      ...process,
+      ...(process.projectId ? { projectName: projectNames.get(process.projectId) ?? null } : {}),
+      ...(process.threadId
+        ? { threadTitle: threadTitles.get(process.threadId) ?? null }
+        : {})
+    }))
+  }
+
+  /** Kill an app-owned process by pid for the task manager (graceful or force). */
+  killTaskManagerProcess(pid: number, force: boolean): Promise<void> {
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
+      throw new TypeError('Process ID must be a positive integer')
+    }
+    return this.agentProcesses.killProcessGlobal(pid, force)
   }
 
   /** Delete a harness-native or app-managed skill. */

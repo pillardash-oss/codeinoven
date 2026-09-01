@@ -5,6 +5,7 @@ import type {
   AgentRole,
   AgentSessionStatus,
   AgentRunningProcess,
+  TaskManagerProcess,
   AssignmentModelSelection,
   AssignmentPlan,
   AssignmentPlanContent,
@@ -894,6 +895,8 @@ export interface IpcInvokeContract {
   'agent:listProcesses': Contract<[projectId: string, threadId: string], AgentRunningProcess[]>
   'agent:killProcess': Contract<[projectId: string, threadId: string, pid: number], void>
   'agent:killThreadProcesses': Contract<[projectId: string, threadId: string], void>
+  'taskManager:list': Contract<[], TaskManagerProcess[]>
+  'taskManager:killProcess': Contract<[pid: number, force: boolean], void>
   'capabilities:readSkill': Contract<[source: AgentCapabilitySource], NativeSkillContent | null>
   'capabilities:updateSkill': Contract<
     [source: AgentCapabilitySource, instructions: string],
@@ -2125,7 +2128,10 @@ export interface IpcInvokeContract {
   'browser:getConsole': Contract<[tabId: string], BrowserConsoleEntry[]>
   'browser:clearConsole': Contract<[tabId: string], void>
   'browser:clearData': Contract<[projectId: string], void>
-  'browser:resolvePermission': Contract<[requestId: string, decision: BrowserPermissionDecision], void>
+  'browser:resolvePermission': Contract<
+    [requestId: string, decision: BrowserPermissionDecision],
+    void
+  >
   'browser:destroy': Contract<[tabId: string], void>
   'browser:destroyThread': Contract<[projectId: string, threadId: string], void>
   'browser:destroyProject': Contract<[projectId: string], void>
@@ -2619,6 +2625,7 @@ export interface IpcEventContract {
   /** Emitted after browser sign-in changes the shared desktop account. */
   'account:profileChanged': [state: import('./types').AccountProfileState]
   'agent:processesChanged': [projectId: string, threadId: string]
+  'taskManager:processesChanged': []
   'agent:temporaryChatExpired': [temporaryChatId: string]
   'thread:deleted': [projectId: string, threadId: string]
   /** Note presence changed for a thread (saved or deleted). */
