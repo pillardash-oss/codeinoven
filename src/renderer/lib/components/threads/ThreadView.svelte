@@ -159,7 +159,11 @@
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import { DEFAULT_SCOPE_BUCKET_ID, DEFAULT_THREAD_TITLE } from '$shared/types'
+  import {
+    DEFAULT_SCOPE_BUCKET_ID,
+    DEFAULT_THREAD_TITLE,
+    isOrchestrationChildThread
+  } from '$shared/types'
   import type {
     Thread,
     ThreadMessageCursor,
@@ -1023,7 +1027,10 @@
       })
     }
 
-    if (!chatMode) {
+    // Orchestration child threads (workers, auditors) are driven by their
+    // coordinator — they can never enable engineering mode themselves, so the
+    // stage toggles and Auto Pilot are not offered to them.
+    if (!chatMode && !orchestrationChild) {
       // Engineering is a set of lifecycle stages, not one switch: expose every
       // stage as its own toggle so "turn engineering on/off" is never ambiguous.
       // Each action stages the selection exactly like the Engineering Toolbox —
@@ -2320,6 +2327,10 @@
       thread.assignmentRole === undefined) ||
       thread.achievementRole === 'auditor'
   )
+  /** Workers and auditors are orchestration internals driven by their
+   *  coordinator: identical view, but they never enable engineering mode
+   *  themselves, so the composer hides the toolbox and lifecycle actions. */
+  let orchestrationChild = $derived(isOrchestrationChildThread(thread))
   let achievementOnly = $derived(settings.loopMode === true && settings.assignmentMode !== true)
   let studioOnlyAuditWorkflow = $derived(
     settings.assignmentMode !== true &&
@@ -11047,7 +11058,7 @@
                     working={busy}
                     onStop={abortRun}
                     autofocus
-                    showEngineeringMode={!chatMode}
+                    showEngineeringMode={!chatMode && !orchestrationChild}
                     engineeringLifecycle={pendingLifecycleDisplay}
                     engineeringActive={engineeringOn}
                     onEngineeringLifecycleSelect={selectEngineeringLifecycle}
