@@ -35,6 +35,8 @@
   let sampledAt = $state(0)
   /** True only during the initial open-time snapshot or an explicit refresh. */
   let checking = $state(false)
+  /** True only while a background 5s poll is in flight. */
+  let polling = $state(false)
   let error = $state('')
   let selected = new SvelteSet<number>()
   let ending = $state(false)
@@ -65,6 +67,24 @@
     }
   }
 
+  /** Silent background refresh; avoids flashing the loading UI on each tick. */
+  async function poll(): Promise<void> {
+    if (polling || checking) return
+    polling = true
+    try {
+      const snapshot = await invoke('taskManager:list')
+      processes = snapshot.processes
+      power = snapshot.power
+      sampledAt = snapshot.sampledAt
+      pruneSelection()
+      void ensureProjectIcons(snapshot.processes)
+    } catch {
+      // Background poll failed — keep showing the last snapshot, don't spam errors.
+    } finally {
+      polling = false
+    }
+  }
+
   /** Drop any selected pid that no longer exists after a refresh. */
   function pruneSelection(): void {
     const alive = new Set(processes.map((process) => process.pid))
@@ -82,6 +102,13 @@
     queueMicrotask(() => {
       if (open) void load()
     })
+  })
+
+  // Auto-refresh every 5 seconds while the modal stays open.
+  $effect(() => {
+    if (!open) return
+    const timer = setInterval(() => void poll(), 5000)
+    return () => clearInterval(timer)
   })
 
   function processName(command: string): string {
