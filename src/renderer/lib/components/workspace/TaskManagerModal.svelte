@@ -1,12 +1,15 @@
 <script lang="ts">
   import { ExternalLink, Plug, SquareTerminal, Trash2, X } from '@lucide/svelte'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import { getAgentIcon } from '$lib/agent-icons/registry'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { SvelteSet } from 'svelte/reactivity'
-  import type { TaskManagerProcess } from '$shared/types'
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+  import type { Project, TaskManagerProcess } from '$shared/types'
 
   interface Props {
     open: boolean
@@ -25,6 +28,9 @@
   let ending = $state(false)
   let forceEndTargets = $state<readonly TaskManagerProcess[]>([])
   let forceEnding = $state(false)
+  let projectIconsRequest: Promise<void> | null = null
+  const projectsById = new SvelteMap<string, Project>()
+  const projectIconUrls = new SvelteMap<string, string>()
 
   const activeProjectId = $derived(workspaceState.activeProject?.id ?? null)
   const selectedProcesses = $derived(processes.filter((process) => selected.has(process.pid)))
@@ -34,8 +40,10 @@
     checking = true
     error = ''
     try {
-      processes = await invoke('taskManager:list')
+      const nextProcesses = await invoke('taskManager:list')
+      processes = nextProcesses
       pruneSelection()
+      void ensureProjectIcons(nextProcesses)
     } catch (loadError) {
       error = loadError instanceof Error ? loadError.message : 'Processes could not be loaded.'
     } finally {
@@ -47,8 +55,10 @@
    *  the spinner so a populated modal never flashes a loading state. */
   async function refreshQuietly(): Promise<void> {
     try {
-      processes = await invoke('taskManager:list')
+      const nextProcesses = await invoke('taskManager:list')
+      processes = nextProcesses
       pruneSelection()
+      void ensureProjectIcons(nextProcesses)
     } catch {
       // Swallow background poll errors; the last good snapshot stays visible.
     }
@@ -89,6 +99,61 @@
   function processName(command: string): string {
     const executable = command.trim().split(/\s+/u)[0] ?? command
     return executable.split(/[\\/]/u).at(-1) || 'Process'
+  }
+
+  function harnessIdFor(command: string): string | undefined {
+    const executable = command
+      .trim()
+      .split(/\s+/u)[0]
+      ?.replace(/^['"]|['"]$/gu, '')
+    const name = executable
+      ?.split(/[\\/]/u)
+      .at(-1)
+      ?.replace(/\.exe$/iu, '')
+    return getAgentIcon(name)?.id
+  }
+
+  function projectIconFor(process: TaskManagerProcess): string | undefined {
+    return process.projectId ? projectIconUrls.get(process.projectId) : undefined
+  }
+
+  function handleProjectIconError(event: Event, projectId: string | null): void {
+    const image = event.currentTarget
+    if (!(image instanceof HTMLImageElement) || image.dataset.iconFallbackApplied) return
+    image.dataset.iconFallbackApplied = 'true'
+    const project = projectId ? projectsById.get(projectId) : undefined
+    const fallback = project ? getProjectIcon(project, undefined) : null
+    if (fallback) image.src = fallback
+  }
+
+  async function ensureProjectIcons(nextProcesses: readonly TaskManagerProcess[]): Promise<void> {
+    if (projectIconsRequest) await projectIconsRequest
+    const missingIds = new Set(
+      nextProcesses.flatMap((process) =>
+        process.projectId && !projectIconUrls.has(process.projectId) ? [process.projectId] : []
+      )
+    )
+    if (missingIds.size === 0) return
+
+    const request = (async () => {
+      const projects = (await invoke('project:list')).filter((project) =>
+        missingIds.has(project.id)
+      )
+      const storedIcons = await loadProjectIcons(projects)
+      for (const project of projects) {
+        projectsById.set(project.id, project)
+        const iconUrl = getProjectIcon(project, storedIcons.get(project.id))
+        if (iconUrl) projectIconUrls.set(project.id, iconUrl)
+      }
+    })()
+    projectIconsRequest = request
+    try {
+      await request
+    } catch {
+      // Project icon loading is best-effort; the terminal fallback remains.
+    } finally {
+      if (projectIconsRequest === request) projectIconsRequest = null
+    }
   }
 
   function formatDuration(startedAt: number): string {
@@ -272,6 +337,8 @@
       {:else}
         <ul class="divide-y divide-border">
           {#each processes as process (process.pid)}
+            {@const harnessId = harnessIdFor(process.command)}
+            {@const projectIcon = projectIconFor(process)}
             <li
               class="flex items-start gap-3 px-5 py-3 transition-colors {selected.has(process.pid)
                 ? 'bg-elevated'
@@ -290,7 +357,18 @@
               <span
                 class="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
               >
-                <SquareTerminal size={15} />
+                {#if harnessId}
+                  <AgentIcon agentId={harnessId} size={16} />
+                {:else if projectIcon}
+                  <img
+                    src={projectIcon}
+                    alt=""
+                    class="h-4 w-4 rounded-sm object-contain grayscale"
+                    onerror={(event) => handleProjectIconError(event, process.projectId)}
+                  />
+                {:else}
+                  <SquareTerminal size={15} />
+                {/if}
               </span>
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
