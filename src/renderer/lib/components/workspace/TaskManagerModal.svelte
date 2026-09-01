@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ExternalLink, Plug, RefreshCw, SquareTerminal, Trash2, X } from '@lucide/svelte'
+  import { ExternalLink, Plug, SquareTerminal, Trash2, X } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -246,7 +246,8 @@
       {#if checking}
         <div class="flex h-full flex-col items-center justify-center gap-3" aria-live="polite">
           <span
-            class="size-5 animate-spin rounded-full border-2 border-primary border-t-transparent"
+            class="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-transparent"
+            style="border-top-color: var(--color-primary); border-right-color: var(--color-primary);"
             role="status"
             aria-label="Checking running processes"
           ></span>
@@ -363,48 +364,53 @@
       <div class="flex shrink-0 items-center gap-1.5">
         <button
           type="button"
-          class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
+          class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-[width] hover:bg-overlay hover:text-foreground disabled:opacity-50"
           disabled={checking}
           title="Refresh running processes"
+          aria-label="Refresh running processes"
           onclick={() => void load()}
         >
           {#if checking}
             <span
-              class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+              class="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-transparent"
+              style="border-top-color: currentColor; border-right-color: currentColor;"
               aria-hidden="true"
             ></span>
+            Refresh
           {:else}
-            <RefreshCw size={14} />
+            Refresh
           {/if}
-          Refresh
         </button>
-        <button
-          type="button"
-          class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={selected.size === 0 || ending || forceEnding}
-          title="Gracefully stop the selected processes"
-          onclick={() => void endSelected()}
-        >
-          {#if ending}
-            <span
-              class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
-              aria-hidden="true"
-            ></span>
-          {:else}
-            <X size={14} />
-          {/if}
-          End
-        </button>
-        <button
-          type="button"
-          class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-danger px-2.5 text-xs font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={selected.size === 0 || ending || forceEnding}
-          title="Force kill the selected processes"
-          onclick={requestForceEnd}
-        >
-          <Trash2 size={14} />
-          Force end
-        </button>
+        {#if selected.size > 0}
+          <button
+            type="button"
+            class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={ending || forceEnding}
+            title="Gracefully stop the selected processes"
+            onclick={() => void endSelected()}
+          >
+            {#if ending}
+              <span
+                class="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-transparent"
+                style="border-top-color: currentColor; border-right-color: currentColor;"
+                aria-hidden="true"
+              ></span>
+            {:else}
+              <X size={14} />
+            {/if}
+            End
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-danger px-2.5 text-xs font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={ending || forceEnding}
+            title="Force kill the selected processes"
+            onclick={requestForceEnd}
+          >
+            <Trash2 size={14} />
+            Force end
+          </button>
+        {/if}
       </div>
     </div>
   {/snippet}
@@ -445,7 +451,8 @@
     >
       {#if forceEnding}
         <span
-          class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+          class="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-transparent"
+          style="border-top-color: currentColor; border-right-color: currentColor;"
           aria-hidden="true"
         ></span>
       {:else}
