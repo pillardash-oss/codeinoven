@@ -3,6 +3,7 @@ import { readdir, readFile } from 'fs/promises'
 import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, relative, resolve } from 'path'
+import { fileURLToPath } from 'url'
 import { createHash, randomBytes, randomInt } from 'crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { Logger } from '../system/logger'
@@ -772,8 +773,9 @@ class TemporaryChatCancelledError extends Error {
 /** Chat-only instruction — plain chat threads behave like a browser web chatbot. */
 const CHAT_SYSTEM_PROMPT = [
   `You are a general-purpose web chat assistant inside ${APP_NAME}.`,
-  'This chat has no file-system access. Do not traverse, read, search, or modify local files.',
-  'When you do not know an answer directly, search the internet using the web search and web fetch tools instead of inspecting files.',
+  'Files the user attaches to this chat are explicitly shared and may be read and inspected — use them whenever relevant.',
+  'This chat has no broader file-system access. Do not traverse, read, search, or modify any local file other than the files the user attached. Never enumerate or guess at other file paths.',
+  'If something you need was not attached, ask the user to attach it or work only from what was provided; when you do not know an answer directly, search the internet using the web search and web fetch tools instead of inspecting files.',
   'Answer questions directly; use clarifying questions only when the request is genuinely ambiguous.',
   'When you reference external content, cite it as a Markdown link (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`) — never a bare URL or a plain-text mention.'
 ].join(' ')
@@ -782,8 +784,10 @@ const CHAT_SYSTEM_PROMPT = [
 const FILE_SYSTEM_CHAT_SYSTEM_PROMPT = [
   `You are a general-purpose assistant inside ${APP_NAME} with file-system access enabled.`,
   'The user explicitly granted this chat file operations. You may read and search files with the file tools available in this session.',
-  'When you do not know an answer directly, search the internet using the web search and web fetch tools.',
+  'Files the user attaches are always in scope, wherever they point.',
+  'Do not read or exfiltrate sensitive files — credentials, secrets, tokens, private keys, and protected paths such as `.env`, `.config`, `.ssh`, `.aws`, and the user home configuration — unless the user explicitly approves access to that specific file.',
   'Do not modify files unless the user asks you to.',
+  'When you do not know an answer directly, search the internet using the web search and web fetch tools.',
   CITATION_SYSTEM_INSTRUCTION
 ].join(' ')
 
@@ -18157,6 +18161,43 @@ export class ChatEngine {
 
   // ─── Permission policy ────────────────────────────────────────────────────
 
+  /**
+   * The file-access scope for a permission request in a chat session.
+   *
+   * Chats (inbox threads) get an attachment allowlist: every file the user
+   * attached across the conversation is always readable. When File System mode
+   * is off, the chat is also restricted to exactly those attached files — any
+   * other path must surface a permission prompt. File-System-on chats keep the
+   * normal project-root + protected-path rules but still auto-allow attached
+   * files regardless of where they live. Non-chat threads are untouched.
+   */
+  private async chatPermissionScope(info: SessionInfo): Promise<{
+    allowedPaths: string[]
+    restrictToAllowed: boolean
+  }> {
+    const isChat = info.projectId === INBOX_PROJECT_ID
+    if (!isChat) return { allowedPaths: [], restrictToAllowed: false }
+
+    const thread = await this.threadManager.getThread(info.projectId, info.threadId)
+    const fileSystemMode = thread?.settings?.fileSystemMode === true
+    const allowedPaths = await this.collectChatAttachmentPaths(info)
+    return { allowedPaths, restrictToAllowed: !fileSystemMode }
+  }
+
+  /** Absolute local paths of every file the user attached to a chat thread. */
+  private async collectChatAttachmentPaths(info: SessionInfo): Promise<string[]> {
+    const records = await this.threadManager.loadMessageRecords(info.projectId, info.threadId)
+    const paths = new Set<string>()
+    for (const message of records) {
+      for (const part of message.parts) {
+        if (part.type !== 'file' || !part.url) continue
+        const raw = part.url.startsWith('file:') ? fileURLToPath(part.url) : part.url
+        paths.add(isAbsolute(raw) ? raw : resolve(info.projectPath, raw))
+      }
+    }
+    return [...paths]
+  }
+
   /** Resolve a permission request per the thread's permission level. */
   private async handlePermissionAsked(
     driverId: string,
@@ -18171,9 +18212,12 @@ export class ChatEngine {
     }
 
     const commands = permissionCommands(request.metadata)
+    const { allowedPaths, restrictToAllowed } = await this.chatPermissionScope(info)
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
-      mode: level
+      mode: level,
+      ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
+      ...(restrictToAllowed ? { restrictToAllowed } : {})
     }).evaluate({
       permission: request.permission,
       paths: request.patterns.filter((pattern) => !commands.includes(pattern)),
