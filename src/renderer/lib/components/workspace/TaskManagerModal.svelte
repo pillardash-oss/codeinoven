@@ -327,9 +327,9 @@
       >
         <span class="inline-flex items-center gap-1.5" title="Current system power source">
           {#if power.source === 'battery'}
-            <Battery size={13} />
+            <Battery size={13} class="text-dimmed" />
           {:else}
-            <Plug size={13} />
+            <Plug size={13} class="text-dimmed" />
           {/if}
           {powerLabel()}
         </span>
