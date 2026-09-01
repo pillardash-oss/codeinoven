@@ -1,13 +1,12 @@
 <script lang="ts">
-  import { FolderOpen, X, Palette } from '@lucide/svelte'
+  import { FolderOpen, X } from '@lucide/svelte'
   import { PROJECT_COLORS } from '$lib/project-colors'
   import {
     PROJECT_SVG_ICONS,
     generateInitialsIconSvg,
     getIconSvgDataUrl
   } from '$lib/project-svg-icons'
-  import ColorPicker from './ColorPicker.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import ColorSwatches from './ColorSwatches.svelte'
 
   interface Props {
     name: string
@@ -31,32 +30,7 @@
 
   let previewColor = $derived(color ?? PROJECT_COLORS[0].value)
   let hasAppearance = $derived(Boolean(color || iconType || fallbackIconUrl))
-
-  let isCustomColor = $derived(Boolean(color && !PROJECT_COLORS.some((c) => c.value === color)))
-
-  let showColorPicker = $state(false)
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive('appearance-color-picker', showColorPicker)
-  })
-
-  function handleCustomColorClick() {
-    showColorPicker = true
-  }
-
-  function handleColorPickerChange(newColor: string) {
-    onColorChange(newColor)
-  }
-
-  function handleColorPickerClose() {
-    showColorPicker = false
-  }
 </script>
-
-<svelte:window
-  onkeydown={(e: KeyboardEvent) => {
-    if (e.key === 'Escape' && showColorPicker) showColorPicker = false
-  }}
-/>
 
 <div class="space-y-4">
   <div class="flex justify-center">
@@ -89,37 +63,12 @@
 
   <div>
     <span class="mb-1 block text-xs font-medium text-muted">Colour</span>
-    <div class="flex flex-wrap gap-1.5">
-      {#each PROJECT_COLORS as option (option.value)}
-        <button
-          type="button"
-          class="h-6 w-6 rounded-full border-2 transition-transform hover:scale-110 {color ===
-          option.value
-            ? 'border-foreground'
-            : 'border-transparent'}"
-          style="background-color: {option.value}; {color === option.value
-            ? `box-shadow: 0 0 0 1px ${option.value}`
-            : ''}"
-          title={option.name}
-          aria-label={option.name}
-          aria-pressed={color === option.value}
-          onclick={() => onColorChange(color === option.value ? undefined : option.value)}
-        ></button>
-      {/each}
-      <button
-        type="button"
-        class="relative flex h-6 w-6 items-center justify-center rounded-full border-2 transition-transform hover:scale-110 {isCustomColor
-          ? 'border-foreground'
-          : 'border-dashed border-muted'}"
-        style={isCustomColor ? `background-color: ${color}; box-shadow: 0 0 0 1px ${color}` : ''}
-        title="Custom colour"
-        aria-label="Custom colour"
-        aria-pressed={isCustomColor}
-        onclick={handleCustomColorClick}
-      >
-        <Palette size={10} class="text-muted {isCustomColor ? 'opacity-0' : ''}" />
-      </button>
-    </div>
+    <ColorSwatches
+      value={color ?? null}
+      allowNone={false}
+      oncolorchange={(next) => onColorChange(next ?? undefined)}
+      suppressKey="appearance-color-picker"
+    />
   </div>
 
   <div>
@@ -162,31 +111,3 @@
     </div>
   {/if}
 </div>
-
-{#if showColorPicker}
-  <div
-    class="fixed inset-0 z-[60] flex items-center justify-center"
-    role="dialog"
-    aria-modal="true"
-    aria-label="Custom colour picker"
-  >
-    <button
-      class="absolute inset-0 cursor-default"
-      aria-label="Close colour picker"
-      onclick={handleColorPickerClose}
-    ></button>
-
-    <div
-      class="relative w-[260px] rounded-xl border bg-surface p-4 shadow-xl"
-      onclick={(e: MouseEvent) => e.stopPropagation()}
-      onkeydown={() => {}}
-      role="presentation"
-    >
-      <ColorPicker
-        value={color ?? PROJECT_COLORS[0].value}
-        oncolorchange={handleColorPickerChange}
-        onclose={handleColorPickerClose}
-      />
-    </div>
-  </div>
-{/if}
