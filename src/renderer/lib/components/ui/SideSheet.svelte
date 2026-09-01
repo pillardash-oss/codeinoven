@@ -2,6 +2,7 @@
   import { X } from '@lucide/svelte'
   import type { Snippet } from 'svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 
   interface Props {
     open: boolean
@@ -19,6 +20,16 @@
   $effect(() => {
     if (!open) return
     return registerOverlayClose(onClose)
+  })
+
+  // A sheet is a full-window DOM surface; the browser's native view floats above
+  // every DOM surface, so it must be suppressed while the sheet is open or it
+  // would cover the sheet and swallow its clicks. Keyed per instance so stacked
+  // sheets don't clear each other's suppression.
+  const suppressionKey = `sheet-${Math.random().toString(36).slice(2)}`
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive(suppressionKey, open)
+    return () => contextSidebarState.setFullscreenSurfaceActive(suppressionKey, false)
   })
 </script>
 
