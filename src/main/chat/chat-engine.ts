@@ -7972,6 +7972,54 @@ export class ChatEngine {
   private async executeImageDescriptor(
     request: ImageDescriptorExecutorRequest
   ): Promise<ImageDescriptorResult[]> {
+    try {
+      return await this.runImageDescriptor(request)
+    } catch (error) {
+      // A failed descriptor must never stop the thread's work. The sendPrompt
+      // and steerPrompt flows call describePromptAttachments before dispatch
+      // inside a try/catch that marks the thread 'failed'; escaping here would
+      // kill the whole turn just because the vision model could not describe
+      // an image. Degrade to per-image error results so the (text-only) model
+      // receives an explicit note instead of the thread dying.
+      Logger.error('Image descriptor failed; continuing the thread without image descriptions', {
+        projectId: request.projectId,
+        threadId: request.threadId,
+        error: error instanceof Error ? (error.stack ?? error.message) : String(error)
+      })
+      // A decision prompt (or another early step) may have cleared the parent
+      // session's watchdog before failing; always re-arm it so the real turn
+      // stays guarded after the descriptor degrades and returns.
+      this.startSessionWatchdog(request.sessionId)
+      return this.imageDescriptorFailureResults(
+        request,
+        rawErrorMessage(error) || 'The vision model could not describe the attached image.'
+      )
+    }
+  }
+
+  /**
+   * One error result per requested image. This is the degraded shape the
+   * descriptor returns whenever it cannot produce a real description (including
+   * the no-vision-model case), so the text-only model always has explicit
+   * evidence about what is missing and can continue the thread.
+   */
+  private imageDescriptorFailureResults(
+    request: ImageDescriptorExecutorRequest,
+    error: string
+  ): ImageDescriptorResult[] {
+    const message = `${error} Continue without the image description.`
+    return request.images.map((entry) => ({
+      id: entry.id,
+      source: entry.source,
+      type: entry.type,
+      description: '',
+      error: message
+    }))
+  }
+
+  private async runImageDescriptor(
+    request: ImageDescriptorExecutorRequest
+  ): Promise<ImageDescriptorResult[]> {
     const thread = await this.threadManager.getThread(request.projectId, request.threadId)
     const config = await this.storage.getConfig()
     let selection =
@@ -7987,13 +8035,10 @@ export class ChatEngine {
         'unknown'
       )
       if (decision.action !== 'retry' || !decision.selection) {
-        return request.images.map((entry) => ({
-          id: entry.id,
-          source: entry.source,
-          type: entry.type,
-          description: '',
-          error: 'No vision model was selected. Continue without an image description.'
-        }))
+        return this.imageDescriptorFailureResults(
+          request,
+          'No vision model was selected to describe the image.'
+        )
       }
       selection = decision.selection
       await this.persistImageDescriptorSelection(request.projectId, request.threadId, selection)
