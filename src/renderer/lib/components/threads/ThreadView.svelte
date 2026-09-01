@@ -2392,6 +2392,7 @@
   // context dock renders it. Only the coordination kind is tracked here, so a
   // task update never re-registers (and never remounts) the panel.
   $effect(() => {
+    if (!active) return
     const kind = coordinatorKind
     if (!kind) return
     const label =
@@ -9401,7 +9402,7 @@
   // receives this instance's in-process window broadcasts and would otherwise
   // show a trace frozen at whatever was on disk at mount).
   $effect(() => {
-    if (!busy) return
+    if (!active || !busy) return
     const poll = setInterval(() => {
       const generation = ++streamPartsLoadGeneration
       void invoke('thread:loadStreamParts', thread.projectId, thread.id)
