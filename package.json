@@ -96,7 +96,7 @@
     "better-auth": "^1.6.26",
     "bits-ui": "^2.18.1",
     "builder-util": "26.15.3",
-    "dompurify": "^3.4.13",
+    "dompurify": "^3.4.14",
     "electron": "^43.3.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
