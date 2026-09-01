@@ -48,13 +48,6 @@
 
   const filename = $derived(attachment.filename ?? 'file')
   const kind = $derived(attachmentPreviewKind(attachment.mime, filename))
-  /** PPTX decks render with images and layout via pptx-preview instead of the
-   *  text-only main-process HTML (kept as fallback). */
-  const isPptx = $derived(
-    kind === 'document' &&
-      (attachment.mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
-        /\.pptx$/iu.test(filename))
-  )
   const editableText = $derived(
     (kind === 'markdown' || kind === 'text') && onSaveText !== undefined
   )
@@ -73,48 +66,6 @@
   const documentSrcdoc = $derived(
     kind === 'document' && documentHtml ? documentPreviewFrame(documentHtml) : undefined
   )
-
-  // ─── PPTX slide rendering (pptx-preview) ───
-  let pptxContainer = $state<HTMLDivElement>()
-  let pptxRendered = $state(false)
-  /** URL of the attachment whose JS render failed — empty enables a retry for
-   *  any other file since the modal instance is reused across selections. */
-  let pptxFailedUrl = $state<string | null>(null)
-  const pptxFailed = $derived(pptxFailedUrl === attachment.url)
-  const showPptxRenderer = $derived(isPptx && src !== undefined && !pptxFailed)
-
-  $effect(() => {
-    if (!showPptxRenderer || !pptxContainer || !src) return
-    const container = pptxContainer
-    const objectUrl = src
-    const failedUrl = attachment.url
-    let disposed = false
-    let previewer: { destroy(): void; preview(bytes: ArrayBuffer): Promise<unknown> } | undefined
-    void (async () => {
-      try {
-        const { init } = await import('pptx-preview')
-        const response = await fetch(objectUrl)
-        const bytes = await response.arrayBuffer()
-        if (disposed) return
-        container.innerHTML = ''
-        const width = Math.max(480, Math.min(container.clientWidth - 32 || 1024, 1600))
-        previewer = init(container, { width, mode: 'list' })
-        await previewer.preview(bytes)
-        if (disposed) {
-          previewer.destroy()
-          return
-        }
-        pptxRendered = true
-      } catch {
-        if (!disposed) pptxFailedUrl = failedUrl
-      }
-    })()
-    return () => {
-      disposed = true
-      previewer?.destroy()
-      pptxRendered = false
-    }
-  })
 
   const panZoom = new PanZoom()
   let imageViewport = $state<HTMLDivElement>()
@@ -414,18 +365,6 @@
           class="h-full w-full rounded-lg border-0 shadow-2xl"
           title={`Preview ${filename}`}
         ></iframe>
-      {:else if kind === 'document' && showPptxRenderer}
-        <div
-          bind:this={pptxContainer}
-          class="flex h-full w-full items-start justify-center overflow-auto rounded-lg bg-raised p-4 shadow-2xl"
-        >
-          {#if !pptxRendered}
-            <div class="flex h-full items-center justify-center text-muted" role="status">
-              <Loader2 size={24} class="animate-spin" />
-              <span class="sr-only">Loading presentation preview</span>
-            </div>
-          {/if}
-        </div>
       {:else if kind === 'document' && documentSrcdoc}
         <iframe
           srcdoc={documentSrcdoc}
