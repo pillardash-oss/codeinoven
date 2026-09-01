@@ -20,8 +20,6 @@
      *  because a native view stacks above all renderer DOM. */
     nativeAvailable?: boolean
     onSelect: (thread: Thread) => void | Promise<void>
-    onPreview?: (thread: Thread) => void
-    onPreviewEnd?: (thread: Thread) => void
   }
 
   let {
@@ -30,9 +28,7 @@
     projectIconUrls,
     selectedThreadId,
     nativeAvailable = false,
-    onSelect,
-    onPreview = () => {},
-    onPreviewEnd = () => {}
+    onSelect
   }: Props = $props()
 
   let open = $state(false)
@@ -40,8 +36,6 @@
    *  keyboard handling, so the DOM dialog and the renderer's window handlers
    *  must step aside while it is focused. */
   let nativeSessionActive = $state(false)
-  let nativePreviewThreadId: string | null = null
-  let domPreviewThreadId: string | null = null
   let highlightedIndex = $state(0)
   let contentElement = $state<HTMLElement | null>(null)
   let previousFocus: HTMLElement | null = null
@@ -83,26 +77,6 @@
     })
   }
 
-  /** Preview changes are driven by keyboard and pointer events. Running the
-   *  parent cache mutation inside an effect would make that effect subscribe
-   *  to the cache it updates and create a reactive update cycle. */
-  function previewDomThread(thread: Thread): void {
-    if (domPreviewThreadId === thread.id) return
-    const previous = threads.find((candidate) => candidate.id === domPreviewThreadId)
-    if (previous) onPreviewEnd(previous)
-    domPreviewThreadId = thread.id
-    onPreview(thread)
-    if (!threadMessages.loaded(thread.projectId, thread.id)) {
-      void threadMessages.preload(thread.projectId, thread.id)
-    }
-  }
-
-  function cancelDomPreview(): void {
-    const previewed = threads.find((thread) => thread.id === domPreviewThreadId)
-    if (previewed) onPreviewEnd(previewed)
-    domPreviewThreadId = null
-  }
-
   function cycle(direction: 1 | -1): void {
     if (threads.length === 0) return
 
@@ -118,21 +92,17 @@
       highlightedIndex = (highlightedIndex + direction + threads.length) % threads.length
     }
 
-    const highlighted = threads[highlightedIndex]
-    if (highlighted) previewDomThread(highlighted)
     focusHighlightedThread()
   }
 
   function cancel(): void {
     if (!open) return
     restoreFocusOnClose = true
-    cancelDomPreview()
     open = false
   }
 
   async function selectThread(thread: Thread): Promise<void> {
     restoreFocusOnClose = false
-    domPreviewThreadId = null
     open = false
     await onSelect(thread)
     // Focus the new thread's composer editor in place after the dialog is fully
@@ -172,10 +142,6 @@
     const highlightedThreadId = payload.highlightedThreadId
     if (highlightedThreadId) {
       const thread = threads.find((candidate) => candidate.id === highlightedThreadId)
-      if (thread) {
-        nativePreviewThreadId = thread.id
-        onPreview(thread)
-      }
       if (thread && !threadMessages.loaded(thread.projectId, thread.id)) {
         void threadMessages.preload(thread.projectId, thread.id)
       }
@@ -185,16 +151,12 @@
   function closeNative(): void {
     if (!nativeSessionActive) return
     nativeSessionActive = false
-    const highlighted = threads.find((thread) => thread.id === nativePreviewThreadId)
-    if (highlighted) onPreviewEnd(highlighted)
-    nativePreviewThreadId = null
     void invoke('switcher:close').catch(() => {})
   }
 
   async function handleNativeSelect(threadId: string): Promise<void> {
     if (!nativeSessionActive) return
     nativeSessionActive = false
-    nativePreviewThreadId = null
     void invoke('switcher:close').catch(() => {})
     const thread = threads.find((candidate) => candidate.id === threadId)
     if (!thread) return
@@ -204,12 +166,8 @@
 
   function handleNativeHighlight(threadId: string): void {
     const thread = threads.find((candidate) => candidate.id === threadId)
-    if (!thread) return
-    nativePreviewThreadId = thread.id
-    onPreview(thread)
-    if (!threadMessages.loaded(thread.projectId, thread.id)) {
-      void threadMessages.preload(thread.projectId, thread.id)
-    }
+    if (!thread || threadMessages.loaded(thread.projectId, thread.id)) return
+    void threadMessages.preload(thread.projectId, thread.id)
   }
 
   // While a native session is active the overlay owns the keyboard, so the
@@ -229,15 +187,22 @@
     })
     const unsubscribeClosed = subscribe('switcher:closed', () => {
       nativeSessionActive = false
-      const previewed = threads.find((thread) => thread.id === nativePreviewThreadId)
-      if (previewed) onPreviewEnd(previewed)
-      nativePreviewThreadId = null
     })
     return () => {
       unsubscribeSelect()
       unsubscribeHighlight()
       unsubscribeClosed()
     }
+  })
+
+  /** Warm the highlighted thread's message cache so releasing Ctrl (or
+   *  clicking) opens it without the loading spinner. */
+  $effect(() => {
+    if (!open) return
+    const thread = threads[highlightedIndex]
+    if (!thread) return
+    if (threadMessages.loaded(thread.projectId, thread.id)) return
+    void threadMessages.preload(thread.projectId, thread.id)
   })
 
   function handleWindowKeydown(event: KeyboardEvent): void {
@@ -331,9 +296,7 @@
             class="w-full overflow-hidden rounded-lg text-left outline-none transition-colors hover:bg-elevated focus-visible:ring-2 focus-visible:ring-primary"
             title="Open {thread.title}"
             onpointerenter={(event) => {
-              if (!pointerMovedSinceOpen(event)) return
-              highlightedIndex = index
-              previewDomThread(thread)
+              if (pointerMovedSinceOpen(event)) highlightedIndex = index
             }}
             onclick={() => void selectThread(thread)}
           >

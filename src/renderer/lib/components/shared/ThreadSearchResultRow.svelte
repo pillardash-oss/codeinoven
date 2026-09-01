@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, tick } from 'svelte'
+  import { tick } from 'svelte'
   import { Portal } from 'bits-ui'
   import type { Attachment } from 'svelte/attachments'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -14,17 +14,9 @@
     result: ThreadSearchResult
     selected?: boolean
     onOpen: (thread: Thread) => void
-    onPreview?: (thread: Thread) => void
-    onPreviewEnd?: (thread: Thread) => void
   }
 
-  let {
-    result,
-    selected = false,
-    onOpen,
-    onPreview = () => {},
-    onPreviewEnd = () => {}
-  }: Props = $props()
+  let { result, selected = false, onOpen }: Props = $props()
 
   let thread = $derived(result.thread)
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
@@ -115,7 +107,6 @@
   let popoverEl = $state<HTMLDivElement>()
   let popoverPos = $state({ x: 0, y: 0 })
   let popoverTimer: ReturnType<typeof setTimeout> | undefined
-  let previewTimer: ReturnType<typeof setTimeout> | undefined
 
   const POPOVER_WIDTH = 256
   const POPOVER_ESTIMATED_HEIGHT = 290
@@ -162,8 +153,6 @@
 
   function onRowEnter(): void {
     clearTimeout(popoverTimer)
-    clearTimeout(previewTimer)
-    if (!selected) previewTimer = setTimeout(() => onPreview(thread), 200)
     popoverTimer = setTimeout(() => {
       void revealPopover()
     }, 550)
@@ -171,16 +160,8 @@
 
   function onRowLeave(): void {
     clearTimeout(popoverTimer)
-    clearTimeout(previewTimer)
-    onPreviewEnd(thread)
     showPopover = false
   }
-
-  onDestroy(() => {
-    clearTimeout(previewTimer)
-    clearTimeout(popoverTimer)
-    onPreviewEnd(thread)
-  })
 
   const captureRowElement: Attachment<HTMLButtonElement> = (element) => {
     rowEl = element
