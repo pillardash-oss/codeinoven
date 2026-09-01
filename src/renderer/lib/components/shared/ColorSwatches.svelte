@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Palette, X } from '@lucide/svelte'
+  import { Check, Palette, X } from '@lucide/svelte'
   import { PROJECT_COLORS } from '$lib/project-colors'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import ColorPicker from './ColorPicker.svelte'
@@ -40,6 +40,10 @@
     }
   })
 
+  const checkSize = $derived(size === 'sm' ? 8 : 10)
+  const chipInner = $derived(size === 'sm' ? 'h-3 w-3' : 'h-3.5 w-3.5')
+  const chipIcon = $derived(size === 'sm' ? 8 : 9)
+
   function select(optionValue: string): void {
     oncolorchange(value === optionValue ? null : optionValue)
   }
@@ -52,6 +56,20 @@
 />
 
 <div class="flex flex-wrap items-center gap-1.5">
+  <!-- Live current-colour indicator so the selection is always obvious. -->
+  <span
+    class="flex {swatchClass} shrink-0 items-center justify-center rounded-full border-2 {value ===
+    null
+      ? 'border-border'
+      : 'border-foreground'}"
+    style="background-color: {value ?? 'transparent'}"
+    title={value ?? 'No colour selected'}
+    aria-hidden="true"
+  >
+    {#if value === null}
+      <X size={chipIcon} class="text-muted" />
+    {/if}
+  </span>
   {#if allowNone}
     <button
       type="button"
@@ -79,7 +97,15 @@
       aria-label={option.name}
       aria-pressed={value === option.value}
       onclick={() => select(option.value)}
-    ></button>
+    >
+      {#if value === option.value}
+        <span
+          class="absolute inset-0 m-auto flex {chipInner} items-center justify-center rounded-full bg-white/90 shadow-sm"
+        >
+          <Check size={checkSize} class="text-black/70" />
+        </span>
+      {/if}
+    </button>
   {/each}
   <button
     type="button"

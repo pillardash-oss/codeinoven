@@ -319,6 +319,18 @@
       <div class="mt-2">
         <ColorSwatches value={color} size="sm" oncolorchange={(next) => (color = next)} />
       </div>
+      <div
+        class="mt-3 flex items-center gap-2 rounded-lg border border-border bg-surface px-2 py-1.5"
+        style={color ? `border-left: 3px solid ${color}` : ''}
+      >
+        <span class="h-2 w-2 shrink-0 rounded-full bg-raised"></span>
+        <span class="truncate text-xs font-semibold text-foreground"
+          >{name || 'Action preview'}</span
+        >
+        <span class="ml-auto shrink-0 font-mono text-[10px] text-muted">
+          {color ?? 'no colour'}
+        </span>
+      </div>
       <p class="mt-1.5 text-[11px] text-muted">
         The colour shows as the entry's left border — group similar scripts together.
       </p>
