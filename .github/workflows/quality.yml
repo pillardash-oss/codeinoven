@@ -31,7 +31,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.3.14
 
       - name: Read promotion versions
         env:
@@ -58,7 +58,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.3.14
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
@@ -76,7 +76,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.3.14
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
@@ -97,7 +97,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.3.14
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
@@ -118,7 +118,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.3.14
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
@@ -139,7 +139,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.3.14
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
@@ -163,7 +163,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.3.14
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
@@ -191,7 +191,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.3.14
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
@@ -217,7 +217,6 @@ jobs:
         run: bunx electron-builder --win --x64 --dir -c.forceCodeSigning=false
 
       - name: Launch packaged application through workspace readiness
-        continue-on-error: true
         run: >-
           bun run smoke:packaged --target win --app-dir dist/win-unpacked
           --output agent-out/windows-startup-smoke.json
@@ -242,7 +241,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.3.14
 
       - name: Install native launcher headers
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
@@ -293,7 +292,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.3.14
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
