@@ -281,6 +281,7 @@ const INVOKE_CHANNELS = [
   'git:merge',
   'git:rebase',
   'git:preparePrResolve',
+  'git:finishPrResolve',
   'git:stash',
   'git:ignore',
   'git:discard',

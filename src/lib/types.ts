@@ -4105,6 +4105,10 @@ export interface PrResolveOptions {
   pullNumber: number
   /** Base branch to merge into the checked-out PR head (e.g. `main`). */
   baseBranch: string
+  /** The PR's head branch name (e.g. `feature-x`) the resolution is pushed back to. */
+  headBranch: string
+  /** The branch the user was on before the temporary `pr-<n>` branch was checked out. */
+  returnBranch: string
 }
 
 /** Merge method accepted by provider merge endpoints. */

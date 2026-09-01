@@ -830,13 +830,21 @@ export function validatePrResolveOptions(value: unknown): {
   remote: string
   pullNumber: number
   baseBranch: string
+  headBranch: string
+  returnBranch: string
 } {
   const input = assertRecord(value, 'PR resolve options')
-  rejectUnknownFields(input, new Set(['remote', 'pullNumber', 'baseBranch']), 'PR resolve options')
+  rejectUnknownFields(
+    input,
+    new Set(['remote', 'pullNumber', 'baseBranch', 'headBranch', 'returnBranch']),
+    'PR resolve options'
+  )
   return {
     remote: validateRemoteName(input.remote),
     pullNumber: validateBoundedInteger(input.pullNumber, 'Pull request number', 1, 1_000_000_000),
-    baseBranch: validateBranchName(input.baseBranch, 'PR base branch')
+    baseBranch: validateBranchName(input.baseBranch, 'PR base branch'),
+    headBranch: validateBranchName(input.headBranch, 'PR head branch'),
+    returnBranch: validateBranchName(input.returnBranch, 'Branch to return to')
   }
 }
 

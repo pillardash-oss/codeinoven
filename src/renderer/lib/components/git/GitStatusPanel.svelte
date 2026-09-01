@@ -615,10 +615,13 @@
    */
   async function resolveConflictsLocally(pr: PullRequestSummary): Promise<void> {
     const remote = primaryRemote?.name ?? 'origin'
+    const returnBranch = gitState.status?.branch ?? 'main'
     await gitState.preparePrResolve(projectId, {
       remote,
       pullNumber: pr.number,
-      baseBranch: pr.baseRef
+      baseBranch: pr.baseRef,
+      headBranch: pr.headRef,
+      returnBranch
     })
     if (gitState.error) return
     selectedPullRequest = null
@@ -636,10 +639,13 @@
     const project = await invoke('project:get', projectId).catch(() => null)
     if (!project) return
     const remote = primaryRemote?.name ?? 'origin'
+    const returnBranch = gitState.status?.branch ?? 'main'
     await gitState.preparePrResolve(projectId, {
       remote,
       pullNumber: pr.number,
-      baseBranch: pr.baseRef
+      baseBranch: pr.baseRef,
+      headBranch: pr.headRef,
+      returnBranch
     })
     if (gitState.error) return
     const conflictedPaths = [...gitState.conflicted]
@@ -683,7 +689,7 @@
       '1. `git add -A`',
       `2. \`git commit -m "Resolve merge conflicts with ${pr.baseRef}"\``,
       '',
-      'Do NOT push — finish in the Git panel with the app push, which uses your stored GitHub credentials.'
+      'Do NOT push — after committing, the user finishes in the Git panel with the Resolve merge button, which pushes the resolution to the pull request and cleans up the temporary branch.'
     ].join('\n')
   }
 
@@ -1422,7 +1428,7 @@
   let resolveMergeOpen = $state(false)
   let mergeTitle = $state('')
   let mergeDescription = $state('')
-  const resolveMergeBusy = $derived(gitState.isBusy('commit'))
+  const resolveMergeBusy = $derived(gitState.isBusy(['commit', 'push']))
 
   function openResolveMerge(): void {
     mergeTitle = ''
@@ -1442,12 +1448,16 @@
   async function confirmResolveMerge(): Promise<void> {
     if (resolveMergeBusy) return
     await gitState.commit(projectId, mergeCommitMessage())
-    if (!gitState.error) {
-      resolveMergeOpen = false
-      mergeTitle = ''
-      mergeDescription = ''
-      void refreshStatus()
-    }
+    if (gitState.error) return
+    // A recorded PR-conflict session finishes itself: push the resolution back
+    // to the PR head branch, check out the original branch, delete pr-<n>.
+    // A plain local merge is already complete once committed.
+    const finished = await gitState.finishPrResolve(projectId)
+    if (!finished && gitState.prResolveSession) return
+    resolveMergeOpen = false
+    mergeTitle = ''
+    mergeDescription = ''
+    void refreshStatus()
   }
 
   const integrateBusy = $derived(
@@ -3423,7 +3433,8 @@
       <div class="space-y-2">
         <p class="text-[11px] leading-relaxed text-muted">
           All conflicts are resolved. Give the merge commit a title and description, or leave them
-          empty to generate one automatically.
+          empty to generate one automatically. Resolving also pushes the result back to the pull
+          request, restores your previous branch, and removes the temporary conflict branch.
         </p>
         <input
           class="h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"

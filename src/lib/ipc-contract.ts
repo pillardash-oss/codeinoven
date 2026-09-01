@@ -1442,6 +1442,10 @@ export interface IpcInvokeContract {
     [projectId: string, options: PrResolveOptions, scopeBucketId?: string],
     GitStatus
   >
+  'git:finishPrResolve': Contract<
+    [projectId: string, options: PrResolveOptions, scopeBucketId?: string],
+    GitStatus
+  >
   'git:stash': Contract<
     [projectId: string, message?: string, paths?: string[], scopeBucketId?: string],
     GitStatus

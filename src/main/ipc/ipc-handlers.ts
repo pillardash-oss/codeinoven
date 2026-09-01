@@ -5754,6 +5754,19 @@ export function registerIpcHandlers(
       )
   )
   ipcMain.handle(
+    'git:finishPrResolve',
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
+      gitService.finishPrResolve(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validatePrResolveOptions(options)
+      )
+  )
+  ipcMain.handle(
     'git:stash',
     async (_, projectId: unknown, message?: unknown, paths?: unknown, scopeBucketId?: unknown) =>
       gitService.stash(
