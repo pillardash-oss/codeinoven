@@ -171,9 +171,10 @@ active processes in the scope, and branch ownership, and mints one
 confirmation ID bound to that snapshot. The ID is consumed at execution;
 stale or mismatched IDs are rejected.
 
-- **Detach:** returns the scope to the project directory — removes the
-  worktree checkout while keeping the scope, its threads and the branch.
-  Refused when the worktree is dirty or unpushed.
+- **Remove worktree (keep scope):** removes the worktree checkout and
+  re-points the scope to the project directory. The scope, its threads and the
+  branch are all kept — only the isolated checkout is gone. Refused when the
+  worktree is dirty or unpushed.
 - **Delete scope:** full cleanup for a managed scope — removes the worktree
   checkout, deletes the scope bucket and the `cio/` branch in one confirmed
   action. The dialog also offers to permanently delete the scope's threads
@@ -186,11 +187,11 @@ stale or mismatched IDs are rejected.
   silently orphaning a registered worktree.
 
 The scope actions menu intentionally exposes only the non-overlapping
-operations (merge, detach, archive, delete). `Remove worktree` and `Delete
-branch` are not separate menu entries: removing a worktree while keeping the
-scope is *Detach*, and permanently removing a scope is *Delete scope* (which
-also removes the worktree and branch). Branch-level maintenance that keeps the
-worktree lives in the Git panel.
+operations (merge, remove-worktree-keep-scope, archive, delete). A leftover
+`Delete branch`-style entry is not needed: removing a worktree while keeping
+its scope is *Remove worktree (keep scope)*, and permanently removing a scope
+is *Delete scope* (which also removes the worktree and branch). Branch-level
+maintenance that keeps the worktree lives in the Git panel.
 
 Archiving and restoring a scope never mutate Git, the worktree, environment
 files, setup status, or thread assignments.

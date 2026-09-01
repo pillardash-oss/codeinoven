@@ -163,7 +163,7 @@
           })
         }
         list.push({
-          label: 'Detach to project root',
+          label: 'Remove worktree (keep scope)',
           run: () => {
             onDetach?.()
             closeMenu()
