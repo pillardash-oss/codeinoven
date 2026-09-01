@@ -989,7 +989,7 @@
                         <RecordingIndicator label="Speaking" tone="speech" />
                     {:else}
                       <span class="shrink-0 text-[10px] text-dimmed"
-                        >{relativeTime(thread.createdAt)}</span
+                        >{relativeTime(thread.lastActivity)}</span
                       >
                     {/if}
                   </button>
@@ -1070,7 +1070,7 @@
                             <RecordingIndicator label="Speaking" tone="speech" />
                         {:else}
                           <span class="shrink-0 text-[10px] text-dimmed"
-                            >{relativeTime(thread.createdAt)}</span
+                            >{relativeTime(thread.lastActivity)}</span
                           >
                         {/if}
                       </button>
@@ -1157,7 +1157,7 @@
                       <RecordingIndicator label="Speaking" tone="speech" />
                   {:else}
                     <span class="shrink-0 text-[10px] text-dimmed"
-                      >{relativeTime(thread.createdAt)}</span
+                      >{relativeTime(thread.lastActivity)}</span
                     >
                   {/if}
                 </button>
@@ -1201,7 +1201,7 @@
                       <RecordingIndicator label="Speaking" tone="speech" />
                   {:else}
                     <span class="shrink-0 text-[10px] text-dimmed"
-                      >{relativeTime(thread.createdAt)}</span
+                      >{relativeTime(thread.lastActivity)}</span
                     >
                   {/if}
                 </button>

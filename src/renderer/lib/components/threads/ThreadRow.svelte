@@ -720,7 +720,7 @@
           </span>
         {:else}
           <span class="whitespace-nowrap text-[10px] text-dimmed">
-            {relativeTime(thread.createdAt)}
+            {relativeTime(thread.lastActivity)}
           </span>
         {/if}
       {:else if currentModelProviderName}
@@ -785,7 +785,7 @@
             <RecordingIndicator label="Speaking" tone="speech" />
           {:else}
             <span class="whitespace-nowrap text-[10px] text-dimmed">
-              {relativeTime(thread.createdAt)}
+              {relativeTime(thread.lastActivity)}
             </span>
           {/if}
         </span>
@@ -951,7 +951,7 @@
               : 'opacity-100'}"
             aria-hidden={hovered}
           >
-            {relativeTime(thread.createdAt)}
+            {relativeTime(thread.lastActivity)}
           </span>
         {/if}
       {:else}
@@ -1035,7 +1035,7 @@
                 : 'opacity-100'}"
               aria-hidden={hovered}
             >
-              {relativeTime(thread.createdAt)}
+              {relativeTime(thread.lastActivity)}
             </span>
           {/if}
         </span>
