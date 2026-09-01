@@ -19252,9 +19252,9 @@ export class ChatEngine {
    * still-general rows to one durable post-read deadline; no per-thread timer
    * is needed.
    */
-  handleThreadReadForGrading(projectId: string, threadId: string): void {
+  async handleThreadReadForGrading(projectId: string, threadId: string): Promise<void> {
     void projectId
-    if (this.turnFeedbackRepo.listPendingForThread(threadId).length === 0) return
+    if (!(await this.turnFeedbackRepo.hasPendingForThread(threadId))) return
     this.turnFeedbackRepo.scheduleReading(threadId, Date.now() + ChatEngine.GRADE_READING_WINDOW_MS)
     this.scheduleTurnFeedbackDrain()
   }
@@ -19264,10 +19264,14 @@ export class ChatEngine {
    * window exactly once — clearing the draft or re-entering never restarts it.
    * When it elapses, everything captured so far is graded.
    */
-  handleThreadDraftChangedForGrading(projectId: string, threadId: string, drafting: boolean): void {
+  async handleThreadDraftChangedForGrading(
+    projectId: string,
+    threadId: string,
+    drafting: boolean
+  ): Promise<void> {
     void projectId
     if (!drafting) return
-    if (this.turnFeedbackRepo.listPendingForThread(threadId).length === 0) return
+    if (!(await this.turnFeedbackRepo.hasPendingForThread(threadId))) return
     this.turnFeedbackRepo.scheduleDraft(threadId, Date.now() + ChatEngine.GRADE_DRAFT_WINDOW_MS)
     this.scheduleTurnFeedbackDrain()
   }
