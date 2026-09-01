@@ -182,6 +182,7 @@
 
   const INITIAL_THREAD_LIMIT = 100
   const HISTORY_PAGE_LIMIT = 50
+  const THREAD_VIEW_CACHE_LIMIT = 3
 
   let projects = $state<Project[]>([])
   let allThreads = $state<Thread[]>([])
@@ -214,9 +215,7 @@
     return null
   }
 
-  function handleConversationRenderError(error: unknown): void {
-    const thread = workspaceState.selectedThread
-    if (!thread) return
+  function handleConversationRenderError(error: unknown, thread: Thread): void {
     reportError(error, 'The conversation could not be rendered.', {
       projectId: thread.projectId,
       threadId: thread.id
@@ -373,6 +372,24 @@
   /** Selection + terminal state live in the shared store (drives the app header). */
   let selectedThread = $derived(workspaceState.selectedThread)
   let activeProject = $derived(workspaceState.activeProject)
+  // Intentional mount-time seed: an already selected thread must render in the
+  // first flush rather than waiting for the LRU synchronization effect.
+  // svelte-ignore state_referenced_locally
+  let cachedThreadViews = $state.raw<Thread[]>(selectedThread ? [selectedThread] : [])
+  // svelte-ignore state_referenced_locally
+  let lastCachedThreadId: string | null = selectedThread?.id ?? null
+
+  /** Retain the three most recently selected conversation trees. The selected
+   *  entry is most-recently used; a fourth distinct selection evicts the tail. */
+  $effect(() => {
+    const current = selectedThread
+    if (!current || current.id === lastCachedThreadId) return
+    lastCachedThreadId = current.id
+    cachedThreadViews = [
+      current,
+      ...cachedThreadViews.filter((cached) => cached.id !== current.id)
+    ].slice(0, THREAD_VIEW_CACHE_LIMIT)
+  })
 
   let selectedThreadHasDraft = $derived(
     selectedThread
@@ -3874,41 +3891,54 @@
       >
         {#if selectedThread}
           <div class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-            {#key selectedThread.id}
-              <svelte:boundary onerror={handleConversationRenderError}>
-                <ThreadView
-                  thread={selectedThread}
-                  chatMode={mode === 'chats'}
-                  onForked={handleForkedThread}
-                  projects={visibleProjects}
-                  {projectIcons}
-                  onContinueInProject={handleContinuedInProject}
-                  onProjectCreated={handleChatProjectCreated}
-                />
-                {#snippet failed(_error: unknown, reset: () => void)}
-                  <div class="flex h-full min-h-0 items-center justify-center px-6">
-                    <div
-                      class="w-full max-w-md rounded-xl border border-danger/30 bg-surface px-5 py-4"
-                      role="alert"
-                    >
-                      <p class="text-sm font-semibold text-foreground">
-                        Conversation view failed to render
-                      </p>
-                      <p class="mt-1 text-sm text-muted">
-                        The thread is still saved. Reload this view to continue.
-                      </p>
-                      <button
-                        type="button"
-                        class="mt-4 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90"
-                        onclick={reset}
+            {#each cachedThreadViews as cachedThread (cachedThread.id)}
+              {@const isActiveThread = cachedThread.id === selectedThread.id}
+              {@const currentCachedThread = isActiveThread
+                ? selectedThread
+                : (allThreads.find((thread) => thread.id === cachedThread.id) ?? cachedThread)}
+              <div
+                class="h-full min-h-0 min-w-0 flex-col {isActiveThread ? 'flex' : 'hidden'}"
+                aria-hidden={!isActiveThread}
+                inert={!isActiveThread}
+              >
+                <svelte:boundary
+                  onerror={(error) => handleConversationRenderError(error, currentCachedThread)}
+                >
+                  <ThreadView
+                    thread={currentCachedThread}
+                    active={isActiveThread}
+                    chatMode={mode === 'chats'}
+                    onForked={handleForkedThread}
+                    projects={visibleProjects}
+                    {projectIcons}
+                    onContinueInProject={handleContinuedInProject}
+                    onProjectCreated={handleChatProjectCreated}
+                  />
+                  {#snippet failed(_error: unknown, reset: () => void)}
+                    <div class="flex h-full min-h-0 items-center justify-center px-6">
+                      <div
+                        class="w-full max-w-md rounded-xl border border-danger/30 bg-surface px-5 py-4"
+                        role="alert"
                       >
-                        Reload conversation
-                      </button>
+                        <p class="text-sm font-semibold text-foreground">
+                          Conversation view failed to render
+                        </p>
+                        <p class="mt-1 text-sm text-muted">
+                          The thread is still saved. Reload this view to continue.
+                        </p>
+                        <button
+                          type="button"
+                          class="mt-4 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90"
+                          onclick={reset}
+                        >
+                          Reload conversation
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                {/snippet}
-              </svelte:boundary>
-            {/key}
+                  {/snippet}
+                </svelte:boundary>
+              </div>
+            {/each}
           </div>
         {:else if mode === 'chats'}
           <!-- Empty state — greeting centered, composer anchored at the bottom -->

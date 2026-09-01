@@ -251,6 +251,8 @@
 
   interface Props {
     thread: Thread
+    /** Whether this cached view currently owns the visible conversation surface. */
+    active?: boolean
     /** True on the Chats tab — hides engineering tooling. */
     chatMode?: boolean
     /** Called with the new thread after a fork from a message succeeds. */
@@ -280,6 +282,7 @@
 
   let {
     thread: threadProp,
+    active = true,
     chatMode = false,
     onForked,
     projects = [],
@@ -1917,6 +1920,7 @@
   // Keep comment bubbles anchored to their highlights as the conversation
   // re-renders (message streaming, history windowing, thread restore).
   $effect(() => {
+    if (!active) return
     void responseReferences.length
     void visibleMessages.length
     void tick().then(() => {
@@ -2827,6 +2831,7 @@
   // Convert file:// image/media URLs to blob: Object URLs for reliable display
   // in the Electron renderer (file:// URLs are blocked on http:// origins).
   $effect(() => {
+    if (!active) return
     for (const msg of messages) {
       for (const part of msg.parts) {
         if (
@@ -2844,12 +2849,13 @@
   // Controller-driven views (temporary chats) are embedded panels, never the
   // primary conversation surface — they must not publish global header state.
   $effect(() => {
-    if (hasController) return
+    if (hasController || !active) return
     workspaceState.sources = sources
   })
 
   // Jump the transcript to a section requested from the Sources panel.
   $effect(() => {
+    if (!active) return
     const target = sectionNavigationState.last
     const sequence = sectionNavigationState.sequence
     if (!target || sequence === 0) return
@@ -2880,7 +2886,7 @@
         content,
         ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
       }))
-    if (hasController) return
+    if (hasController || !active) return
     workspaceState.messageCount = userMessages.length
     workspaceState.userMessages = userMessages
   })
@@ -2888,7 +2894,7 @@
   // Expose fork/delete to the history side panel; identity-safe cleanup below.
   // Controller-driven views (temporary chats) never publish history actions.
   $effect(() => {
-    if (hasController) return
+    if (hasController || !active) return
     const actions: HistoryMessageActions = {
       fork: (id) => void forkFromHistoryMessage(id),
       requestDelete: requestHistoryMessageDelete,
@@ -2904,7 +2910,7 @@
   // Controller-driven views (temporary chats) never feed the spec-conversation
   // sidebar: their responses belong to the side chat, not the studio thread.
   $effect(() => {
-    if (hasController) return
+    if (hasController || !active) return
     workspaceState.specAgentResponses = messages
       .filter((message) => message.role === 'assistant')
       .map((message) => ({
@@ -2918,6 +2924,7 @@
   // Publish only the currently mounted thread's actions to the global palette.
   // Identity-safe cleanup prevents an older keyed view from clearing a newer one.
   $effect(() => {
+    if (!active) return
     const actions = activeActions
     return actionContext.register({
       actions,
@@ -2932,7 +2939,7 @@
   // their own showSpecStudio is always false, so publishing from them would
   // close the studio and pop the project sidebar open while the studio is up.
   $effect(() => {
-    if (hasController) return
+    if (hasController || !active) return
     const hasStudioDocument =
       brainstorm !== null ||
       prd !== null ||
@@ -2959,8 +2966,8 @@
   // Register the header's Spec toggle; cleared when the thread view unmounts.
   // Controller-driven views (temporary chats) never register workspace state.
   $effect(() => {
-    if (hasController) return
-    workspaceState.toggleSpecStudio = () => {
+    if (hasController || !active) return
+    const toggleSpecStudio = (): void => {
       if (showSpecStudio) {
         closeSpecStudio()
       } else if (auditReport) {
@@ -2977,7 +2984,9 @@
         void openSpecStudio()
       }
     }
+    workspaceState.toggleSpecStudio = toggleSpecStudio
     return () => {
+      if (workspaceState.toggleSpecStudio !== toggleSpecStudio) return
       workspaceState.toggleSpecStudio = null
       workspaceState.specStudioAvailable = false
       workspaceState.specStudioOpen = false
@@ -3094,9 +3103,9 @@
   // restore it. This runs once per thread (the view is remounted per thread
   // switch); later arrivals are followed by the resize observer below.
   $effect(() => {
-    if (!loaded || !scrollEl || scrollRestored) return
+    if (!active || !loaded || !scrollEl || scrollRestored) return
     void tick().then(() => {
-      if (!scrollEl || scrollRestored) return
+      if (!active || !scrollEl || scrollRestored) return
       scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
       userScrolledAway = false
       // Flag the restore *after* the scroll actually ran: setting it in the
@@ -3119,11 +3128,12 @@
   // event-driven: no timers, no animation-frame loops, so scrolling can never
   // be interrupted by a competing writer.
   $effect(() => {
+    if (!active) return
     const el = scrollEl
     const content = el?.firstElementChild
     if (!el || !(content instanceof Element)) return
     const observer = new ResizeObserver(() => {
-      if (!scrollEl || !mayReanchorToLatest(userScrolledAway)) return
+      if (!active || !scrollEl || !mayReanchorToLatest(userScrolledAway)) return
       // Re-anchor only when the viewport actually drifted from the bottom —
       // a no-op write here would fire a pointless scroll event per resize.
       if (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight > 1) {
@@ -3246,18 +3256,29 @@
   let locallySubmittedTurnId: string | null = null
   let locallySubmittedTurnAcknowledged = false
 
+  /** Only the visible cached view may provide conversation navigation to the
+   *  app header. Hidden LRU entries keep their local DOM and scroll state. */
+  $effect(() => {
+    if (controller || !active) return
+    workspaceState.jumpToMessage = jumpToMessage
+    workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+    return () => {
+      if (workspaceState.jumpToMessage === jumpToMessage) workspaceState.jumpToMessage = null
+      if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
+        workspaceState.loadUserMessageHistory = null
+      }
+    }
+  })
+
   onMount(() => {
     // The parent clears its selected thread before Svelte runs this cleanup.
     // Keep the mounted identity stable so teardown never crosses the chat /
     // project boundary through the now-null live prop.
     const mountedProjectId = thread.projectId
     const mountedThreadId = thread.id
-    if (!controller) {
-      workspaceState.jumpToMessage = jumpToMessage
-      workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+    const onResize = (): void => {
+      if (active) scheduleResponseBubbleUpdate()
     }
-
-    const onResize = (): void => scheduleResponseBubbleUpdate()
     window.addEventListener('resize', onResize)
 
     if (controller) {
@@ -3402,13 +3423,16 @@
       unsubscribeLifecycleInheritance?.()
       window.removeEventListener('resize', onResize)
       clearTimeout(copyResetTimer)
-      workspaceState.sources = []
-      workspaceState.jumpToMessage = null
+      const ownsVisibleWorkspace = workspaceState.selectedThread?.id === mountedThreadId
+      if (ownsVisibleWorkspace) workspaceState.sources = []
+      if (workspaceState.jumpToMessage === jumpToMessage) workspaceState.jumpToMessage = null
       if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
         workspaceState.loadUserMessageHistory = null
       }
-      workspaceState.messageCount = 0
-      workspaceState.userMessages = []
+      if (ownsVisibleWorkspace) {
+        workspaceState.messageCount = 0
+        workspaceState.userMessages = []
+      }
     }
   })
 
@@ -5024,7 +5048,9 @@
     if (!skill) return
     const request = args.trim()
     sendComposerMessage(
-      request ? `${request}\n\n(Use the "${skill.name}" skill for this.)` : `Use the "${skill.name}" skill.`,
+      request
+        ? `${request}\n\n(Use the "${skill.name}" skill for this.)`
+        : `Use the "${skill.name}" skill.`,
       []
     )
   }
