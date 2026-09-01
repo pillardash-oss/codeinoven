@@ -20,6 +20,23 @@
   let hasContent = $derived(tab.draftBody.trim().length > 0)
   let dirty = $derived(tab.draftBody !== (tab.savedBody ?? ''))
 
+  let notesEditor = $state<RichMarkdownEditor | null>(null)
+
+  /** Clicking/down anywhere on the notes panel body drops the caret into the
+   *  editor, so users don't have to aim for the placeholder or last character.
+   *  Listened on pointerdown so focus lands before click, and it reads as a
+   *  focus-routing pointer event rather than an interactive control. */
+  function focusNotesEditor(event: PointerEvent): void {
+    if (tab.mode !== 'edit') return
+    const target = event.target
+    // Clicks already inside the editor focus it natively and keep the exact
+    // caret — let them pass through untouched.
+    if (target instanceof Element && target.closest('.rich-markdown-editor')) return
+    // Buttons, links and other controls should keep their own behavior.
+    if (target instanceof Element && target.closest('button, a, [contenteditable]')) return
+    notesEditor?.focusAtBookmark(null)
+  }
+
   function startEdit(): void {
     tab.error = null
     tab.mode = 'edit'
@@ -134,12 +151,15 @@
     {/if}
   </div>
 
-  <div class="min-h-0 flex-1 overflow-y-auto">
+  <!-- Focus-routing container: taps anywhere drop the caret into the editor. -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="min-h-0 flex-1 overflow-y-auto" onpointerdown={focusNotesEditor}>
     {#if tab.loading}
       <p class="py-10 text-center text-sm text-dimmed">Loading note…</p>
     {:else if tab.mode === 'edit'}
       {#key tab.focusRequest}
         <RichMarkdownEditor
+          bind:this={notesEditor}
           id="thread-note-body"
           value={tab.draftBody}
           onValueChange={(value) => (tab.draftBody = value)}
