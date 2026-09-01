@@ -119,6 +119,8 @@
     nextHarnessId?: string,
     thinkingLevel?: ThinkingLevel
   ): void {
+    const phaseIndex = content.phases.findIndex((phase) => phase.id === phaseId)
+    if (phaseIndex < 0) return
     const current = phaseModel(phaseId)
     const selectedHarnessId = nextHarnessId ?? harnessId
     const selection: AssignmentModelSelection = {
@@ -130,15 +132,17 @@
     }
     update({
       ...content,
-      phases: content.phases.map((phase) => {
-        if (phase.id !== phaseId) return phase
-        return {
-          ...phase,
-          defaultModel: selection
-        }
-      })
+      // A phase-model change governs that phase and every phase after it
+      // (top to bottom). Phases above the changed phase keep their own model,
+      // so a mid-list pick never bleeds upward or into other unstamped phases.
+      phases: content.phases.map((phase, index) =>
+        index < phaseIndex ? phase : { ...phase, defaultModel: selection }
+      )
     })
-    onWorkerModelChange?.(selection)
+    // Only the topmost phase doubles as the "default phase model" control:
+    // changing it reflects from the top to the bottom and seeds the last-used
+    // worker model. Deeper phase changes stay local to their own cascade.
+    if (phaseIndex === 0) onWorkerModelChange?.(selection)
   }
 
   function updateTaskModel(
@@ -173,8 +177,11 @@
         }
       })
     })
+    // The task's own model is local to the task; worker-task edits never
+    // mutate the shared worker default, which would drag every unstamped
+    // phase along. Senior tasks still own the assignment-wide Sr. Engineer
+    // model by design.
     if (current.owner === 'senior') onSeniorModelChange?.(selection)
-    else onWorkerModelChange?.(selection)
   }
 
   function updateTaskText(
