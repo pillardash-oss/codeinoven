@@ -2,6 +2,8 @@
   import { ChevronRight, ListTodo, Wrench } from '@lucide/svelte'
   import type { AssignmentTask, ProjectFileEntry } from '$shared/types'
   import { composerMentionKey, type ComposerMentionEntry } from './composer-mentions'
+  import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
+  import Switch from '../ui/Switch.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
 
@@ -10,9 +12,12 @@
     activeIndex: number
     query: string
     onSelect: (entry: ComposerMentionEntry) => void
+    /** Re-run the mention search after the .cio visibility switch toggles, so
+     *  the open result list reflects the new state immediately. */
+    onCioFilterChange: () => void
   }
 
-  let { entries, activeIndex, query, onSelect }: Props = $props()
+  let { entries, activeIndex, query, onSelect, onCioFilterChange }: Props = $props()
   let listboxElement: HTMLDivElement
 
   $effect(() => {
@@ -43,9 +48,23 @@
   role="listbox"
   aria-label="Composer references"
 >
-  <p class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-    {query ? `References matching “${query}”` : 'Built-in actions, files, and Assignment tasks'}
-  </p>
+  <div class="flex items-center justify-between gap-2 px-2 py-1">
+    <p class="min-w-0 truncate text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+      {query ? `References matching “${query}”` : 'Built-in actions, files, and Assignment tasks'}
+    </p>
+    <Switch
+      checked={cioSearchVisibility.includeCio}
+      label="cio files"
+      class="text-[10px] font-semibold text-dimmed"
+      title="Include .cio files in tag search"
+      aria-label="Include .cio files in tag search"
+      onmousedown={(event: MouseEvent) => event.preventDefault()}
+      onchange={(checked: boolean) => {
+        cioSearchVisibility.setIncludeCio(checked)
+        onCioFilterChange()
+      }}
+    />
+  </div>
   {#if entries.length === 0}
     <p class="px-2 py-2 text-xs text-dimmed">No matching references</p>
   {:else}

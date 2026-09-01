@@ -56,6 +56,7 @@
   import Switch from '../ui/Switch.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
+  import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
   import {
     composerMentionQuery,
     normalizeComposerMessage,
@@ -1042,13 +1043,15 @@
         })
         .map((entry) => ({ type: 'task', entry }))
       const files = fileTagProjectId
-        ? await invoke(
-            'projectFiles:search',
-            fileTagProjectId,
-            query,
-            'all',
-            workspaceState.activeScopeBucketIdFor(fileTagProjectId)
-          )
+        ? (
+            await invoke(
+              'projectFiles:search',
+              fileTagProjectId,
+              query,
+              'all',
+              workspaceState.activeScopeBucketIdFor(fileTagProjectId)
+            )
+          ).filter((entry) => cioSearchVisibility.includeCio || !isCioScratchPath(entry.path))
         : []
       const entries: ComposerMentionEntry[] = [
         ...utilityEntries,
@@ -2199,6 +2202,9 @@
         activeIndex={mentionIndex}
         query={mentionQuery}
         onSelect={selectMention}
+        onCioFilterChange={() => {
+          if (lastCaretText !== null) void updateFileMention(lastCaretText)
+        }}
       />
     {/if}
     <RichMarkdownEditor
