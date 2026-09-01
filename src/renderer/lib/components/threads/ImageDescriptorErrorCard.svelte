@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { AlertTriangle, Check, Eye, Loader2, RotateCw, Send } from '@lucide/svelte'
+  import {
+    AlertTriangle,
+    Check,
+    Eye,
+    ImagePlus,
+    Loader2,
+    RefreshCw,
+    RotateCw
+  } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import Switch from '../ui/Switch.svelte'
   import type {
@@ -17,6 +25,8 @@
     recentModels?: string[]
     onRetry: (requestId: string, selection: AgentModelSelection, remember: boolean) => Promise<void>
     onIgnore: (requestId: string) => Promise<void>
+    /** Opens a file picker for a replacement image and retries with it. */
+    onPickImage: (requestId: string) => Promise<void>
     /** Records the model executing the turn as vision-capable, then continues. */
     onFalsePositive: (requestId: string) => Promise<void>
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
@@ -37,6 +47,7 @@
     recentModels = [],
     onRetry,
     onIgnore,
+    onPickImage,
     onFalsePositive,
     onToggleFavorite,
     onRemoveRecent,
@@ -108,6 +119,19 @@
     }
   }
 
+  async function pickNewImage(): Promise<void> {
+    if (working) return
+    actionError = ''
+    working = true
+    try {
+      await onPickImage(request.id)
+    } catch (error) {
+      actionError = error instanceof Error ? error.message : 'The new image could not be attached.'
+    } finally {
+      working = false
+    }
+  }
+
   async function reportFalsePositive(): Promise<void> {
     if (working) return
     actionError = ''
@@ -166,10 +190,10 @@
         {needsSelection
           ? 'Choose a vision-capable model to describe the image. The blocked worker resumes after you continue.'
           : networkRelated
-            ? 'This is usually caused by a slow or unstable connection. Retry allows more upload time; you can also choose another vision model or continue without the description.'
+            ? 'This is usually caused by a slow or unstable connection. Retry allows more upload time; you can also choose another vision model, pick a different image, or continue without the description.'
             : changed
-              ? 'Retry with the selected vision model, ignore, or type a new message below to steer the agent another way.'
-              : 'Pick a different vision model and retry, ignore, or type a new message below to steer the agent another way.'}
+              ? 'Retry with the selected vision model, pick a different image, ignore, or type a new message below to steer the agent another way.'
+              : 'Pick a different vision model and retry, pick a different image, ignore, or type a new message below to steer the agent another way.'}
       </p>
     </div>
 
@@ -219,9 +243,21 @@
         disabled={working}
         onclick={() => void ignore()}
       >
-        <Send size={13} />
-        Ignore and send
+        <RefreshCw size={13} />
+        Ignore
       </button>
+      {#if request.imageId}
+        <button
+          class="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+          disabled={working}
+          onclick={() => void pickNewImage()}
+          title="Choose a different image and retry the description with it"
+          aria-label="Choose a different image and retry the description with it"
+        >
+          <ImagePlus size={13} />
+          Pick new image
+        </button>
+      {/if}
       {#if request.requestingModel}
         <button
           class="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"

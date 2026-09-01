@@ -1237,7 +1237,7 @@ export interface PermissionRequest {
 }
 
 /** How the user resolved a failed image-descriptor vision-model call. */
-export type ImageDescriptorReplyAction = 'retry' | 'ignore' | 'false_positive'
+export type ImageDescriptorReplyAction = 'retry' | 'ignore' | 'false_positive' | 'pick_image'
 
 /** A model identity without thinking preferences, e.g. the model executing a turn. */
 export type ModelIdentity = Pick<AgentModelSelection, 'harnessId' | 'providerId' | 'modelId'>
@@ -1279,6 +1279,9 @@ export interface ImageDescriptorErrorRequest {
   partialOutput: string
   /** Number of images that failed in this descriptor call. */
   imageCount: number
+  /** Id of the specific image that failed, when the failure is per image.
+   *  Used to attach a replacement image picked by the user on the card. */
+  imageId?: string
   /** When the failure was surfaced. */
   createdAt: number
 }

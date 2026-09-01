@@ -222,6 +222,7 @@
     PendingAgentQuestionRequest,
     ImageDescriptorErrorRequest,
     ImageDescriptorReplyAction,
+    AttachmentStorageScope,
     UserMessagePresentation,
     UserMessageSummary,
     UsageEfficiencyKpis,
@@ -4339,17 +4340,43 @@
   async function replyImageDescriptor(
     requestId: string,
     action: ImageDescriptorReplyAction,
-    selection?: AgentModelSelection
+    selection?: AgentModelSelection,
+    imagePath?: string
   ): Promise<void> {
     const { projectId, id } = thread
     try {
-      await invoke('agent:replyImageDescriptor', projectId, id, requestId, action, selection)
+      await invoke(
+        'agent:replyImageDescriptor',
+        projectId,
+        id,
+        requestId,
+        action,
+        selection,
+        imagePath
+      )
       pendingImageDescriptorError = null
     } catch (error) {
       errorMessage =
         error instanceof Error ? error.message : 'The image descriptor could not be retried.'
       throw error
     }
+  }
+
+  /** Open the file picker for a replacement image on the vision error card and
+   *  hand the chosen path to the descriptor, which retries the failed image
+   *  with it. The picked file is retained in the thread's attachment scratch
+   *  (project tmp for project threads), the same stable spot pasted images
+   *  come from. */
+  async function pickImageDescriptorReplacement(requestId: string): Promise<void> {
+    const { projectId, id } = thread
+    const scope: AttachmentStorageScope = {
+      kind: chatMode ? 'chat' : 'project',
+      projectId,
+      threadId: id
+    }
+    const picked = await invoke('dialog:pickFile', scope)
+    if (!picked) return
+    await replyImageDescriptor(requestId, 'pick_image', undefined, picked)
   }
 
   /** Record the model executing the turn as vision-capable (the descriptor ran
@@ -10718,6 +10745,7 @@
                     await replyImageDescriptor(requestId, 'retry', selection)
                   }}
                   onIgnore={(requestId) => replyImageDescriptor(requestId, 'ignore')}
+                  onPickImage={(requestId) => pickImageDescriptorReplacement(requestId)}
                   onFalsePositive={(requestId) => reportImageDescriptorFalsePositive(requestId)}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}

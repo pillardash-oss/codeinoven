@@ -108,8 +108,10 @@ import {
 } from '../utilities/utility-orchestration-service'
 import {
   IMAGE_DESCRIPTOR_PROMPT,
+  assertReadablePartSource,
   imageDescriptorInactivityTimeoutMs,
-  resolveSelfContainedAttachment,
+  resolveImageEntries,
+  resolveVisionAttachment,
   type ImageDescriptorExecutorRequest,
   type ImageDescriptorResult,
   type ResolvedImageEntry
@@ -1321,7 +1323,9 @@ interface PendingQuestionInfo {
 
 /** How the user resolved a failed image-descriptor call. */
 type ImageDescriptorUserDecision =
-  { action: 'retry'; selection?: AgentModelSelection } | { action: 'ignore' }
+  | { action: 'retry'; selection?: AgentModelSelection }
+  | { action: 'pick_image'; entry: ResolvedImageEntry }
+  | { action: 'ignore' }
 
 /** A blocked image-descriptor tool call awaiting a user decision. */
 interface PendingImageDescriptorDecision {
@@ -2351,8 +2355,9 @@ export class ChatEngine {
         threadId: string,
         requestId: string,
         action: ImageDescriptorReplyAction,
-        selection?: AgentModelSelection
-      ) => this.replyImageDescriptor(projectId, threadId, requestId, action, selection)
+        selection?: AgentModelSelection,
+        imagePath?: string
+      ) => this.replyImageDescriptor(projectId, threadId, requestId, action, selection, imagePath)
     )
     ipcMain.handle(
       'agent:answerQuestion',
@@ -8199,7 +8204,7 @@ export class ChatEngine {
     try {
       const attachments: PromptAttachment[] = []
       for (const image of images) {
-        attachments.push(await resolveSelfContainedAttachment(image))
+        attachments.push(await resolveVisionAttachment(image))
       }
       const firstAttachment = attachments[0] ?? { mime: 'image/*' as const, url: '' }
       const timeoutMs = imageDescriptorInactivityTimeoutMs(firstAttachment, 0)
@@ -8297,9 +8302,14 @@ export class ChatEngine {
   ): Promise<ImageDescriptorResult> {
     let next: AgentModelSelection = selection.current
     let usedFallback = false
+    // The image being described can be replaced from the error card when its
+    // source is missing/unreadable; the replacement keeps the original id so
+    // its description still maps back to the same slot in the result set.
+    let currentImage: ResolvedImageEntry = image
     // One try for the primary, one automatic try for the fallback, and one
-    // try for a model picked from the user decision card — enough rounds to
-    // cover the configured pair without ever hanging the turn in a loop.
+    // try for a model (or replacement image) picked from the user decision
+    // card — enough rounds to cover the configured pair without ever hanging
+    // the turn in a loop.
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const active = next
       // A reply to the error card briefly re-arms the parent watchdog. The
@@ -8311,11 +8321,16 @@ export class ChatEngine {
           request.threadId,
           request.projectPath,
           active,
-          image,
+          currentImage,
           attempt,
           parentTurnId
         )
-        return { id: image.id, source: image.source, type: image.type, description }
+        return {
+          id: currentImage.id,
+          source: currentImage.source,
+          type: currentImage.type,
+          description
+        }
       } catch (error) {
         const message = this.imageDescriptorFailureMessage(error)
         const kind: AgentProviderIssueKind =
@@ -8347,7 +8362,8 @@ export class ChatEngine {
           request,
           active,
           attributedMessage,
-          kind
+          kind,
+          currentImage.id
         )
         if (decision.action === 'retry') {
           if (decision.selection) {
@@ -8363,19 +8379,25 @@ export class ChatEngine {
           }
           continue
         }
+        if (decision.action === 'pick_image') {
+          // The user picked a replacement image from the error card: describe
+          // it instead of the source that is missing/unreadable.
+          currentImage = decision.entry
+          continue
+        }
         return {
-          id: image.id,
-          source: image.source,
-          type: image.type,
+          id: currentImage.id,
+          source: currentImage.source,
+          type: currentImage.type,
           description: '',
           error: `${attributedMessage} You chose to continue. Work with the partial description above if it is usable; otherwise tell the user what is missing and suggest how to fix it.`
         }
       }
     }
     return {
-      id: image.id,
-      source: image.source,
-      type: image.type,
+      id: currentImage.id,
+      source: currentImage.source,
+      type: currentImage.type,
       description: '',
       error: 'Image description failed after retry'
     }
@@ -8391,7 +8413,8 @@ export class ChatEngine {
     request: ImageDescriptorExecutorRequest,
     selection: AgentModelSelection | undefined,
     error: string,
-    kind: AgentProviderIssueKind
+    kind: AgentProviderIssueKind,
+    imageId?: string
   ): Promise<ImageDescriptorUserDecision> {
     const id = generateId()
     this.clearSessionWatchdog(request.sessionId)
@@ -8421,6 +8444,7 @@ export class ChatEngine {
         error,
         kind,
         selection,
+        ...(imageId ? { imageId } : {}),
         ...(owningThread?.settings
           ? {
               requestingModel: {
@@ -8516,10 +8540,12 @@ export class ChatEngine {
     let response: AgentMessage | undefined
     let failure: string | null = null
     try {
-      // Inline local file sources as data URLs so the vision session never
-      // depends on the original path still existing (transient temp screenshots
-      // and pasted images can be deleted before the harness reads them).
-      const attachment = await resolveSelfContainedAttachment(image)
+      // Pasted/dropped images live in the project's temporary attachment
+      // directory, so pass the resolved file path to the vision session and
+      // let the harness read it itself — no base64 inflation in the prompt.
+      // A missing file throws here and surfaces via the recovery card, where
+      // the user can pick a replacement image.
+      const attachment = await resolveVisionAttachment(image)
       const timeoutMs = imageDescriptorInactivityTimeoutMs(attachment, attempt)
       const nextTimeoutMs =
         attempt === 0 ? imageDescriptorInactivityTimeoutMs(attachment, attempt + 1) : undefined
@@ -9480,18 +9506,24 @@ export class ChatEngine {
     threadId: string,
     requestId: string,
     action: ImageDescriptorReplyAction,
-    selection?: AgentModelSelection
+    selection?: AgentModelSelection,
+    imagePath?: string
   ): Promise<void> {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     requestId = validateEntityId(requestId, 'Image descriptor request ID', 256)
-    if (action !== 'retry' && action !== 'ignore' && action !== 'false_positive') {
+    if (
+      action !== 'retry' &&
+      action !== 'ignore' &&
+      action !== 'false_positive' &&
+      action !== 'pick_image'
+    ) {
       throw new TypeError('Invalid image descriptor reply')
     }
+    const pending = this.pendingImageDescriptorDecisions.get(requestId)
     if (action === 'false_positive') {
-      const requestingModel =
-        this.pendingImageDescriptorDecisions.get(requestId)?.request.requestingModel
+      const requestingModel = pending?.request.requestingModel
       if (!requestingModel) {
         throw new Error('This report needs the model that was executing the turn')
       }
@@ -9501,6 +9533,17 @@ export class ChatEngine {
         providerId: requestingModel.providerId,
         harnessId: requestingModel.harnessId
       })
+    }
+    // A replacement image picked from the error card is validated here (it
+    // must be a readable file) and keeps the failed image's id so its
+    // description still maps to the same slot in the per-image result set.
+    let replacement: ResolvedImageEntry | undefined
+    if (action === 'pick_image') {
+      const failedImageId = pending?.request.imageId
+      if (!failedImageId) {
+        throw new Error('This image descriptor request has no failed image to replace')
+      }
+      replacement = await this.buildImageDescriptorReplacement(failedImageId, imagePath)
     }
     if (action === 'retry' && selection !== undefined) {
       selection = {
@@ -9519,7 +9562,6 @@ export class ChatEngine {
         modelId: validateBoundedString(selection.modelId, 'Image descriptor model ID', 1, 256)
       }
     }
-    const pending = this.pendingImageDescriptorDecisions.get(requestId)
     if (
       !pending ||
       pending.projectId !== projectId ||
@@ -9540,11 +9582,33 @@ export class ChatEngine {
       requestId,
       action
     })
-    pending.resolve(
-      action === 'retry'
-        ? { action: 'retry', selection: selection ?? undefined }
-        : { action: 'ignore' }
-    )
+    if (action === 'retry') {
+      pending.resolve({ action: 'retry', selection: selection ?? undefined })
+    } else if (action === 'pick_image' && replacement) {
+      pending.resolve({ action: 'pick_image', entry: replacement })
+    } else {
+      pending.resolve({ action: 'ignore' })
+    }
+  }
+
+  /**
+   * Validate the replacement image picked on the error card and prepare it for
+   * the vision call. The entry keeps the failed image's id so the description
+   * maps back to the same result slot.
+   */
+  private async buildImageDescriptorReplacement(
+    imageId: string,
+    imagePath: string | undefined
+  ): Promise<ResolvedImageEntry> {
+    if (!imagePath || !imagePath.trim()) {
+      throw new TypeError('A replacement image path is required')
+    }
+    const source = imagePath.startsWith('file://') ? fileURLToPath(imagePath) : imagePath.trim()
+    const [entry] = resolveImageEntries({
+      images: [{ id: imageId, source, type: 'path' }]
+    })
+    await assertReadablePartSource(entry)
+    return entry
   }
 
   /** List slash commands exposed by the thread's active harness. */

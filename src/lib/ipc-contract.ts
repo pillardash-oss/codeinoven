@@ -933,7 +933,8 @@ export interface IpcInvokeContract {
       threadId: string,
       requestId: string,
       action: ImageDescriptorReplyAction,
-      selection?: AgentModelSelection
+      selection?: AgentModelSelection,
+      imagePath?: string
     ],
     void
   >
