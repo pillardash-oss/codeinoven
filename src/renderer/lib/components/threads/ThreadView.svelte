@@ -13,11 +13,6 @@
 
   /** Persists each thread's scroll position across component remounts. */
   const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
-  /** Messages mounted on the very first frame after a thread switch — only the
-   *  newest tail; the rest of the loaded page reveals across the next frames. */
-  const TAIL_RENDER_INITIAL_LIMIT = 12
-  /** Delay between tail-window growth steps — one frame lets each batch paint. */
-  const TAIL_RENDER_GROW_DELAY_MS = 16
   const HISTORY_WINDOW_SIZE = 40
   const HISTORY_PRELOAD_THRESHOLD = 240
 
@@ -313,37 +308,10 @@
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
   let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
-  // The store already keeps the loaded history bounded to one page and grows
-  // it only when the user reaches the top. Render that page as one continuous
-  // scroll surface so the user can always scroll back down to the latest turn.
-
-  /** Frame one mounts only the newest tail — enough markdown to block the
-   *  composer for seconds if flushed all at once — then the window completes
-   *  across the next frames. Once complete it never shrinks or re-mounts:
-   *  scrolling is a pure snapshot scroll with zero runtime work. */
-  let renderLimit = $state(TAIL_RENDER_INITIAL_LIMIT)
-
-  let visibleMessages = $derived(
-    renderLimit >= messages.length ? messages : messages.slice(-renderLimit)
-  )
-
-  /** Complete the mount on the frame after first paint, in one step, so the
-   *  list is static for the lifetime of the view. */
-  $effect(() => {
-    if (renderLimit >= messages.length) return
-    let raf = 0
-    const timer = setTimeout(() => {
-      raf = requestAnimationFrame(() => {
-        raf = requestAnimationFrame(() => {
-          renderLimit = messages.length
-        })
-      })
-    }, TAIL_RENDER_GROW_DELAY_MS)
-    return () => {
-      clearTimeout(timer)
-      cancelAnimationFrame(raf)
-    }
-  })
+  // The store owns cold-load batching. Once messages reach this mounted view,
+  // keep its DOM continuous: a live append must never slice an older message
+  // out, shrink the scroll surface, then restore it a frame later.
+  let visibleMessages = $derived(messages)
   /** The latest turn that already has an assistant message. A newly submitted
    *  user follow-up is handled separately until its first assistant message is
    *  mirrored, so it can never lend live state to the preceding trace. */
