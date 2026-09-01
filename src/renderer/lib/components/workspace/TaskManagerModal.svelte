@@ -345,22 +345,6 @@
       </div>
     {/if}
 
-    {#if !checking}
-      <div
-        class="flex min-h-9 shrink-0 items-center gap-3 border-b border-border bg-raised px-5 text-[10px] text-muted tabular-nums"
-      >
-        {#if power.thermalState !== 'unknown' && power.thermalState !== 'nominal'}
-          <span
-            class="inline-flex items-center gap-1.5 text-danger"
-            title="Current macOS thermal pressure"
-          >
-            <Thermometer size={13} />
-            {thermalLabel()}
-          </span>
-        {/if}
-      </div>
-    {/if}
-
     <div class="min-h-0 flex-1 overflow-y-auto">
       {#if checking}
         <div class="flex h-full flex-col items-center justify-center gap-3" aria-live="polite">
@@ -519,6 +503,15 @@
             title="Plugged in"
             aria-label="Plugged in"
           />
+        {/if}
+        {#if power.thermalState !== 'unknown' && power.thermalState !== 'nominal'}
+          <span
+            class="inline-flex shrink-0 items-center gap-1 text-danger"
+            title="Current macOS thermal pressure — {thermalLabel()}"
+            aria-label="Current macOS thermal pressure — {thermalLabel()}"
+          >
+            <Thermometer size={14} />
+          </span>
         {/if}
         <p class="min-w-0 truncate text-xs text-dimmed tabular-nums">
           {#if selected.size > 0}
