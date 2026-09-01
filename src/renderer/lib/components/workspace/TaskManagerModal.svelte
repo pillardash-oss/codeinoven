@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ExternalLink, Loader2, Plug, RefreshCw, SquareTerminal, Trash2, X } from '@lucide/svelte'
+  import { ExternalLink, Plug, RefreshCw, SquareTerminal, Trash2, X } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -245,7 +245,11 @@
     <div class="min-h-0 flex-1 overflow-y-auto">
       {#if checking}
         <div class="flex h-full flex-col items-center justify-center gap-3" aria-live="polite">
-          <Loader2 size={22} class="animate-spin text-primary" />
+          <span
+            class="size-5 animate-spin rounded-full border-2 border-primary border-t-transparent"
+            role="status"
+            aria-label="Checking running processes"
+          ></span>
           <p class="text-xs text-dimmed">Checking running processes…</p>
         </div>
       {:else if processes.length === 0}
@@ -365,7 +369,10 @@
           onclick={() => void load()}
         >
           {#if checking}
-            <Loader2 size={14} class="animate-spin" />
+            <span
+              class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+              aria-hidden="true"
+            ></span>
           {:else}
             <RefreshCw size={14} />
           {/if}
@@ -379,7 +386,10 @@
           onclick={() => void endSelected()}
         >
           {#if ending}
-            <Loader2 size={14} class="animate-spin" />
+            <span
+              class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+              aria-hidden="true"
+            ></span>
           {:else}
             <X size={14} />
           {/if}
@@ -434,7 +444,10 @@
       onclick={() => void confirmForceEnd()}
     >
       {#if forceEnding}
-        <Loader2 size={14} class="animate-spin" />
+        <span
+          class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+          aria-hidden="true"
+        ></span>
       {:else}
         <Trash2 size={14} />
       {/if}
