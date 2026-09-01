@@ -2841,7 +2841,10 @@
   })
 
   // Feed the header count and Sources sidebar from the persisted conversation.
+  // Controller-driven views (temporary chats) are embedded panels, never the
+  // primary conversation surface — they must not publish global header state.
   $effect(() => {
+    if (hasController) return
     workspaceState.sources = sources
   })
 
@@ -2877,12 +2880,15 @@
         content,
         ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
       }))
+    if (hasController) return
     workspaceState.messageCount = userMessages.length
     workspaceState.userMessages = userMessages
   })
 
   // Expose fork/delete to the history side panel; identity-safe cleanup below.
+  // Controller-driven views (temporary chats) never publish history actions.
   $effect(() => {
+    if (hasController) return
     const actions: HistoryMessageActions = {
       fork: (id) => void forkFromHistoryMessage(id),
       requestDelete: requestHistoryMessageDelete,
@@ -2895,7 +2901,10 @@
     }
   })
 
+  // Controller-driven views (temporary chats) never feed the spec-conversation
+  // sidebar: their responses belong to the side chat, not the studio thread.
   $effect(() => {
+    if (hasController) return
     workspaceState.specAgentResponses = messages
       .filter((message) => message.role === 'assistant')
       .map((message) => ({
@@ -2919,7 +2928,11 @@
   // A persisted studio document remains available from the header. A missing
   // specification is only retryable after the current agent turn has produced
   // a final response and the generation path has reported an error.
+  // Controller-driven views (temporary chats) must not touch spec-studio state:
+  // their own showSpecStudio is always false, so publishing from them would
+  // close the studio and pop the project sidebar open while the studio is up.
   $effect(() => {
+    if (hasController) return
     const hasStudioDocument =
       brainstorm !== null ||
       prd !== null ||
@@ -2944,7 +2957,9 @@
   })
 
   // Register the header's Spec toggle; cleared when the thread view unmounts.
+  // Controller-driven views (temporary chats) never register workspace state.
   $effect(() => {
+    if (hasController) return
     workspaceState.toggleSpecStudio = () => {
       if (showSpecStudio) {
         closeSpecStudio()
@@ -3237,8 +3252,10 @@
     // project boundary through the now-null live prop.
     const mountedProjectId = thread.projectId
     const mountedThreadId = thread.id
-    workspaceState.jumpToMessage = jumpToMessage
-    workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+    if (!controller) {
+      workspaceState.jumpToMessage = jumpToMessage
+      workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+    }
 
     const onResize = (): void => scheduleResponseBubbleUpdate()
     window.addEventListener('resize', onResize)
@@ -3262,13 +3279,18 @@
         }
         window.removeEventListener('resize', onResize)
         clearTimeout(copyResetTimer)
-        workspaceState.sources = []
-        workspaceState.jumpToMessage = null
-        if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
-          workspaceState.loadUserMessageHistory = null
+        // Controller-driven views never published the global state below, so
+        // their teardown must not clear it either — clearing would clobber the
+        // values published by the primary conversation view behind the panel.
+        if (!controller) {
+          workspaceState.sources = []
+          workspaceState.jumpToMessage = null
+          if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
+            workspaceState.loadUserMessageHistory = null
+          }
+          workspaceState.messageCount = 0
+          workspaceState.userMessages = []
         }
-        workspaceState.messageCount = 0
-        workspaceState.userMessages = []
         controller.unmount()
       }
     }
