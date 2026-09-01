@@ -234,7 +234,7 @@
   }
 </script>
 
-<Modal {open} title="Task Manager" {onClose} size="xl" contentClass="h-[min(72vh,44rem)] p-0">
+<Modal {open} title="Task Manager" {onClose} size="xl" fill contentClass="p-0">
   <div class="flex h-full flex-col overflow-hidden">
     {#if error}
       <div class="shrink-0 border-b border-border px-5 py-2" role="alert">
