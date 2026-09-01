@@ -88,7 +88,7 @@
   {#each PROJECT_COLORS as option (option.value)}
     <button
       type="button"
-      class="{swatchClass} rounded-full border-2 transition-transform hover:scale-110 {value ===
+      class="relative {swatchClass} rounded-full border-2 transition-transform hover:scale-110 {value ===
       option.value
         ? 'border-foreground'
         : 'border-transparent'}"
