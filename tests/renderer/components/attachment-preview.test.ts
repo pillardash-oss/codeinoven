@@ -1,52 +1,39 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import {
-  PPTX_JS_PREVIEW_ENABLED,
-  pptxPreviewMode,
-  type PptxPreviewPolicyInput
-} from '$lib/chats/pptx-preview-policy'
 
-function policy(overrides: Partial<PptxPreviewPolicyInput> = {}): PptxPreviewPolicyInput {
-  return {
-    echartsVersion: '6.1.0',
-    uuidVersion: '11.1.1',
-    rendererIsolated: false,
-    ...overrides
-  }
+const repoRoot = new URL('../../../', import.meta.url)
+
+function readRepoFile(relativePath: string): string {
+  return readFileSync(new URL(relativePath, repoRoot), 'utf8')
 }
 
-describe('pptxPreviewMode (SEC-01 presentation containment)', () => {
-  it('never enables the interactive renderer without a sanitization boundary', () => {
-    expect(pptxPreviewMode(policy())).toBe('disabled')
+const componentSource = readRepoFile('src/renderer/lib/components/chats/AttachmentPreview.svelte')
+const lockfile = readRepoFile('bun.lock')
+const packageJson = JSON.parse(readRepoFile('package.json')) as {
+  dependencies?: Record<string, string>
+  overrides?: Record<string, string>
+}
+
+describe('AttachmentPreview SEC-01 presentation containment', () => {
+  it('removes the interactive pptx-preview renderer from the production component', () => {
+    expect(componentSource).not.toMatch(/pptx-preview/)
   })
 
-  it('requires ECharts 6.1.0 or newer for the safe path', () => {
-    expect(pptxPreviewMode(policy({ echartsVersion: '6.1.0', rendererIsolated: true }))).toBe(
-      'safe'
-    )
-    expect(pptxPreviewMode(policy({ echartsVersion: '6.2.0', rendererIsolated: true }))).toBe(
-      'safe'
-    )
-    expect(pptxPreviewMode(policy({ echartsVersion: '5.5.0', rendererIsolated: true }))).toBe(
-      'disabled'
-    )
+  it('never injects untrusted presentation bytes into a trusted DOM container', () => {
+    expect(componentSource).not.toMatch(/innerHTML\s*=/)
   })
 
-  it('requires UUID 11.1.1 or newer for the safe path', () => {
-    expect(pptxPreviewMode(policy({ uuidVersion: '11.1.1', rendererIsolated: true }))).toBe('safe')
-    expect(pptxPreviewMode(policy({ uuidVersion: '11.2.0', rendererIsolated: true }))).toBe('safe')
-    expect(pptxPreviewMode(policy({ uuidVersion: '10.0.0', rendererIsolated: true }))).toBe(
-      'disabled'
-    )
+  it('keeps the sanitized, sandboxed document preview that PPTX documents fall back to', () => {
+    expect(componentSource).toMatch(/DOMPurify\.sanitize/)
+    expect(componentSource).toMatch(/sandbox=""/)
+    expect(componentSource).toMatch(/srcdoc=\{documentSrcdoc\}/)
   })
 
-  it('stays disabled when safe versions resolve but the renderer is not isolated', () => {
-    expect(pptxPreviewMode(policy({ rendererIsolated: false }))).toBe('disabled')
-  })
-
-  it('disables the interactive renderer in the trusted renderer regardless of versions', () => {
-    expect(PPTX_JS_PREVIEW_ENABLED).toBe(false)
-    expect(pptxPreviewMode(policy({ echartsVersion: '6.1.0', uuidVersion: '11.1.1' }))).toBe(
-      'disabled'
-    )
+  it('drops pptx-preview and echarts from the production graph while pinning UUID 11.1.1', () => {
+    expect(packageJson.dependencies?.['pptx-preview']).toBeUndefined()
+    expect(packageJson.overrides?.echarts).toBeUndefined()
+    expect(packageJson.overrides?.uuid).toBe('11.1.1')
+    expect(lockfile).not.toMatch(/"pptx-preview"/)
+    expect(lockfile).not.toMatch(/"echarts": \["echarts@/)
   })
 })

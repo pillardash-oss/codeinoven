@@ -69,13 +69,21 @@
 
   const panZoom = new PanZoom()
   let imageViewport = $state<HTMLDivElement>()
+  const imageViewportAttachment = (node: HTMLDivElement): (() => void) => {
+    imageViewport = node
+    return () => {
+      if (imageViewport === node) imageViewport = undefined
+    }
+  }
 
   // The component instance is reused if the caller swaps `attachment`
   // without unmounting (same `{#if previewFile}` block) — reset zoom/pan so
   // it doesn't carry over onto the next image.
   $effect(() => {
     void attachment.url
-    panZoom.reset()
+    panZoom.zoom = 1
+    panZoom.panX = 0
+    panZoom.panY = 0
   })
   const wrapTitle = $derived(wrapToggleLabel(wrapTextState.wrapped))
 
@@ -288,7 +296,7 @@
     >
       {#if kind === 'image' && src}
         <div
-          bind:this={imageViewport}
+          {@attach imageViewportAttachment}
           role="group"
           class={[
             'flex touch-none items-center justify-center overflow-hidden',
