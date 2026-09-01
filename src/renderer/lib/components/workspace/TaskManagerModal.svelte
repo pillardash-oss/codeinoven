@@ -16,9 +16,9 @@
   let { open, onClose }: Props = $props()
 
   let processes = $state<TaskManagerProcess[]>([])
-  /** True only during a user-triggered refresh or the first load; drives the
-   *  refresh spinner and the "Checking running processes…" state. Quiet 5s
-   *  background polls do not set this. */
+  /** True during a user-triggered refresh or the first load; drives the refresh
+   *  spinner and the "Checking running processes…" state. Quiet 5s background
+   *  polls do not set this so a populated modal never flashes a loading state. */
   let checking = $state(false)
   let error = $state('')
   let selected = new SvelteSet<number>()
@@ -234,8 +234,8 @@
   }
 </script>
 
-<Modal {open} title="Task Manager" {onClose} size="xl" contentClass="flex h-[52vh] flex-col p-0">
-  <div class="flex flex-col overflow-hidden">
+<Modal {open} title="Task Manager" {onClose} size="xl" contentClass="h-[min(72vh,44rem)] p-0">
+  <div class="flex h-full flex-col overflow-hidden">
     {#if error}
       <div class="shrink-0 border-b border-border px-5 py-2" role="alert">
         <p class="truncate text-xs text-danger">{error}</p>
@@ -243,9 +243,9 @@
     {/if}
 
     <div class="min-h-0 flex-1 overflow-y-auto">
-      {#if checking && processes.length === 0}
-        <div class="flex h-full flex-col items-center justify-center gap-2">
-          <Loader2 size={20} class="animate-spin text-muted" />
+      {#if checking}
+        <div class="flex h-full flex-col items-center justify-center gap-3" aria-live="polite">
+          <Loader2 size={22} class="animate-spin text-primary" />
           <p class="text-xs text-dimmed">Checking running processes…</p>
         </div>
       {:else if processes.length === 0}
@@ -350,7 +350,11 @@
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-4">
       <p class="min-w-0 flex-1 truncate text-xs text-dimmed tabular-nums">
-        {selected.size} of {processes.length} selected
+        {#if selected.size > 0}
+          {selected.size} of {processes.length} selected
+        {:else}
+          {processes.length} running
+        {/if}
       </p>
       <div class="flex shrink-0 items-center gap-1.5">
         <button
