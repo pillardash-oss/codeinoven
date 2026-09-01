@@ -354,7 +354,7 @@
             <ModelPicker
               {providers}
               {projectId}
-              {harnessId}
+              harnessId={selectedPhaseModel.harnessId}
               providerId={selectedPhaseModel.providerId}
               modelId={selectedPhaseModel.modelId}
               {favoriteModels}
@@ -463,7 +463,7 @@
                   <ModelPicker
                     {providers}
                     {projectId}
-                    {harnessId}
+                    harnessId={selectedTaskModel.harnessId}
                     providerId={selectedTaskModel.providerId}
                     modelId={selectedTaskModel.modelId}
                     {favoriteModels}
