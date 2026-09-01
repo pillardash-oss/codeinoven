@@ -84,6 +84,13 @@
     ).length
   )
 
+  /** Archived scopes are visually washed out (still interactive, still on the board). */
+  let isArchived = $derived(bucket.archivedAt !== undefined)
+  /** Accent colour used for the border and icons; muted for archived scopes. */
+  let displayColor = $derived(
+    isArchived ? 'var(--color-border-strong)' : (bucket.color ?? pickColorForSeed(bucket.id))
+  )
+
   const REPAIRABLE_HEALTH_CATEGORIES = new Set([
     'missing',
     'unregistered',
@@ -138,18 +145,23 @@
 </script>
 
 <section
-  class="relative flex w-full min-w-0 flex-col rounded-xl border bg-surface {bucket.collapsed
-    ? 'h-10'
-    : fill
-      ? 'h-full'
-      : 'h-120'} {scopeDropPosition ? 'ring-2 ring-primary/30' : ''}"
-  style:border-color={bucket.color}
+  class="relative flex w-full min-w-0 flex-col rounded-xl border {isArchived
+    ? 'border-border bg-elevated/40'
+    : 'bg-surface'} {bucket.collapsed ? 'h-10' : fill ? 'h-full' : 'h-120'} {scopeDropPosition
+    ? 'ring-2 ring-primary/30'
+    : ''}"
+  style:border-color={isArchived ? undefined : bucket.color}
+  style:opacity={isArchived ? 0.65 : undefined}
   aria-labelledby="scope-bucket-{bucket.id}"
   ondragover={handleScopeDragOver}
   ondragleave={() => (scopeDropPosition = null)}
   ondrop={handleScopeDrop}
 >
-  <div class="sticky top-0 z-40 flex h-10 shrink-0 items-center rounded-t-xl bg-surface px-3">
+  <div
+    class="sticky top-0 z-40 flex h-10 shrink-0 items-center rounded-t-xl {isArchived
+      ? 'bg-elevated/40'
+      : 'bg-surface'} px-3"
+  >
     <button
       class="mr-1 flex h-7 w-5 shrink-0 cursor-grab items-center justify-center rounded-md text-dimmed hover:bg-elevated hover:text-foreground active:cursor-grabbing"
       aria-label="Move {bucket.name}"
@@ -173,20 +185,23 @@
       {/if}
       {#if bucket.iconType}
         <img
-          src={getIconSvgDataUrl(bucket.iconType, bucket.color ?? pickColorForSeed(bucket.id))}
+          src={getIconSvgDataUrl(bucket.iconType, displayColor)}
           alt=""
           class="h-4 w-4 shrink-0 object-contain"
           draggable="false"
         />
       {:else if bucket.color}
         <img
-          src={generateInitialsIconSvg(bucket.name, bucket.color)}
+          src={generateInitialsIconSvg(bucket.name, displayColor)}
           alt=""
           class="h-4 w-4 shrink-0 object-contain"
           draggable="false"
         />
       {/if}
-      <h2 id="scope-bucket-{bucket.id}" class="truncate text-xs font-semibold text-foreground">
+      <h2
+        id="scope-bucket-{bucket.id}"
+        class="truncate text-xs font-semibold {isArchived ? 'text-muted' : 'text-foreground'}"
+      >
         {bucket.name}
       </h2>
       {#if bucket.pinned}
