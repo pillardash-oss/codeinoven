@@ -308,9 +308,48 @@
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
   let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
+  /** Minimum first paint: only the newest few messages mount on the first
+   *  frame, so a long thread paints instantly on switch. The rest of the
+   *  preloaded window reveals in a single step after the browser has
+   *  displayed the tail once. The reveal window is an absolute start index,
+   *  so streaming or optimistic appends can never shift, shrink, or restart
+   *  it — the previous slice-from-the-end window broke exactly that way. */
+  const INITIAL_PAINT_MESSAGES = 4
+  let initialPaintComplete = $state(false)
+  let initialPaintStartIndex = $state(0)
+  let initialPaintRevealFrame = 0
   // Keep the mounted list stable. The message store bounds the initial page;
   // older history is added only when the reader reaches the history edge.
-  let visibleMessages = $derived(messages)
+  let visibleMessages = $derived(
+    initialPaintComplete ? messages : messages.slice(initialPaintStartIndex)
+  )
+
+  /** Schedule the single-step reveal of the remaining preloaded messages.
+   *  Runs once messages first become available for this mount — straight
+   *  away on a warm cache, after the bounded preload resolves otherwise. */
+  function beginInitialPaintReveal(): void {
+    if (!alive || initialPaintComplete) return
+    const count = messages.length
+    if (count === 0) return
+    initialPaintStartIndex = Math.max(0, count - INITIAL_PAINT_MESSAGES)
+    if (initialPaintStartIndex === 0) {
+      initialPaintComplete = true
+      return
+    }
+    // One reveal step — never batched growth. After the browser has painted
+    // the newest tail, mount the whole preloaded window in a single frame.
+    // The tail-follow ResizeObserver re-anchors the bottom before paint, so
+    // the reveal is invisible to a reader sitting at the bottom.
+    initialPaintRevealFrame = requestAnimationFrame(() => {
+      initialPaintRevealFrame = requestAnimationFrame(() => {
+        if (!alive) return
+        initialPaintComplete = true
+        if (!userScrolledAway && scrollEl) {
+          scrollEl.scrollTop = scrollEl.scrollHeight
+        }
+      })
+    })
+  }
   /** The latest turn that already has an assistant message. A newly submitted
    *  user follow-up is handled separately until its first assistant message is
    *  mirrored, so it can never lend live state to the preceding trace. */
@@ -3228,7 +3267,7 @@
 
     if (controller) {
       controller.mount()
-      void controller.load()
+      void Promise.resolve(controller.load()).then(() => beginInitialPaintReveal())
       localReady = Promise.resolve()
       sessionReady = Promise.resolve('')
       void refreshCommands()
@@ -3245,6 +3284,7 @@
         }
         window.removeEventListener('resize', onResize)
         clearTimeout(copyResetTimer)
+        cancelAnimationFrame(initialPaintRevealFrame)
         // Controller-driven views never published the global state below, so
         // their teardown must not clear it either — clearing would clobber the
         // values published by the primary conversation view behind the panel.
@@ -3340,6 +3380,14 @@
     })
     // Task mount restores app-owned state only. Native harness transport stays
     // cold until user sends a message.
+    // Warm cache: the bounded window is already in memory (hover preloads or a
+    // recent visit), so the staged first paint can start with zero IPC waits.
+    if (
+      threadMessages.loaded(mountedProjectId, mountedThreadId) &&
+      threadMessages.messages(mountedProjectId, mountedThreadId).length > 0
+    ) {
+      beginInitialPaintReveal()
+    }
     void connectSession()
     localReady = loadLocal().then(() => {
       if (!alive) return
@@ -3367,6 +3415,7 @@
       unsubscribeLifecycleInheritance?.()
       window.removeEventListener('resize', onResize)
       clearTimeout(copyResetTimer)
+      cancelAnimationFrame(initialPaintRevealFrame)
       workspaceState.sources = []
       workspaceState.jumpToMessage = null
       if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
@@ -3556,6 +3605,9 @@
       ])
       if (!alive) return
       olderMessagesAvailable = threadMessages.hasOlder(projectId, id)
+      // Cold cache: the bounded preload just landed — stage the first paint
+      // around the newest tail now. No-op when the warm path already revealed.
+      beginInitialPaintReveal()
       if (threadData?.settings) {
         settings = chatMode
           ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
