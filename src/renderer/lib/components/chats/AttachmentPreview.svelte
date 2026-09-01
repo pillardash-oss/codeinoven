@@ -51,9 +51,15 @@
   const editableText = $derived(
     (kind === 'markdown' || kind === 'text') && onSaveText !== undefined
   )
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive('attachment-editor', editableText)
-  })
+  /** Register the attachment-editor full-window surface while the fullscreen
+   *  editor is mounted, clearing it on teardown so native surfaces are never
+   *  suppressed after the editor closes. */
+  function editorSurfaceAttachment(_node: HTMLElement): () => void {
+    contextSidebarState.setFullscreenSurfaceActive('attachment-editor', true)
+    return () => {
+      contextSidebarState.setFullscreenSurfaceActive('attachment-editor', false)
+    }
+  }
   const csvRows = $derived(kind === 'csv' && text !== undefined ? parseCsv(text) : [])
   // The preview is created anew for each selected attachment, so this is the
   // editor's intentional local draft rather than a live mirror of the prop.
@@ -212,7 +218,10 @@
 />
 
 {#if editableText}
-  <div class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl">
+  <div
+    {@attach editorSurfaceAttachment}
+    class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl"
+  >
     <div
       class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
       style={trafficLightInsetStyle()}
