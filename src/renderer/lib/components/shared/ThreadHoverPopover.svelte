@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { StickyNote } from '@lucide/svelte'
+  import { Clock, StickyNote } from '@lucide/svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -28,6 +28,7 @@
       | 'spec'
       | 'approval'
       | 'error'
+      | 'scheduled'
   }
 
   let {
@@ -124,6 +125,21 @@
       <dd class="flex items-center gap-1 text-muted">
         <StatusBadge stage="working" animated size="sm" title={stageLabel} />
         {stageLabel}
+      </dd>
+    </div>
+  {/if}
+  {#if threadState === 'scheduled'}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
+      <dd class="flex items-center gap-1" style="color: var(--color-thread-working)">
+        <StatusBadge
+          stage="working"
+          variant="icon"
+          icon={Clock}
+          size="sm"
+          title="Waiting for dependencies"
+        />
+        Waiting for dependencies
       </dd>
     </div>
   {/if}

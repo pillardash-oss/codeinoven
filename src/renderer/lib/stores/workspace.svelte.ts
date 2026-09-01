@@ -456,12 +456,11 @@ export function findEmptyNewThread(
     const thisBucket = t.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
     const targetBucket = scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
     if (thisBucket !== targetBucket) return false
-    const draft = rendererRecovery.draftFor(projectId, t.id)
-    if (draft.length > 0) return false
-    const attachments = rendererRecovery.attachmentsFor(projectId, t.id)
-    if (attachments.length > 0) return false
-    const refs = rendererRecovery.projectReferencesFor(projectId, t.id)
-    if (refs.length > 0) return false
+    // A thread is only "empty" when it holds no draft, staged, or queued
+    // content. A brand-new thread with a message scheduled behind other
+    // threads (start-after) must not be reused as a blank New Thread — it
+    // needs to stay put so the user can start a fresh one.
+    if (rendererRecovery.hasDraftContent(projectId, t.id)) return false
     return true
   })
 }

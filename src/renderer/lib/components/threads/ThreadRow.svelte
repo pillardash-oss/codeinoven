@@ -1,8 +1,10 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import type { Component } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import {
     Check,
+    Clock,
     Copy,
     Pin,
     PinOff,
@@ -346,6 +348,7 @@
     | 'spec'
     | 'approval'
     | 'error'
+    | 'scheduled'
 
   /** Threads with any unsent composer content read as "todo" (filled gray dot).
    *  Live dictation counts too: from the first mic press through transcription
@@ -354,6 +357,13 @@
   let isDraft = $derived(
     rendererRecovery.hasDraftContent(thread.projectId, thread.id) ||
       speechController.isCapturingThread(thread.id)
+  )
+
+  /** A thread with an unsent message scheduled behind other thread(s) — its
+   *  agent has not started yet. Reads as pending/draft state, but gets a timer
+   *  badge in the working colour instead of the plain draft dot. */
+  let hasStartAfterPending = $derived(
+    rendererRecovery.hasStartAfterPending(thread.projectId, thread.id)
   )
 
   /** Orchestration worker/auditor threads stay silent: never presented as unread. */
@@ -414,6 +424,10 @@
     if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
     if (thread.status === 'spec') return 'spec'
+    // A scheduled message (queued behind other threads) reads as pending work
+    // and shows the timer badge — it is a draft in the sorting/pinning sense but
+    // not something still being typed.
+    if (hasStartAfterPending) return 'scheduled'
     // Drafting (or the brief post-send grace) shows the todo dot.
     if (holdingDraft) return 'todo'
     if (isDraft) return 'todo'
@@ -474,7 +488,8 @@
       stage?: 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done' | 'pinned'
       tone?: 'todo' | 'working' | 'working-paused' | 'attention' | 'spec' | 'done' | 'error'
       kind?: 'completed' | 'attention' | 'error'
-      variant?: 'dot' | 'spinner'
+      variant?: 'dot' | 'spinner' | 'icon'
+      icon?: Component | null
       animated?: boolean
     } | null => {
       switch (threadState) {
@@ -484,6 +499,8 @@
           return { stage: 'todo' }
         case 'working':
           return { variant: 'spinner', stage: 'working' }
+        case 'scheduled':
+          return { variant: 'icon', stage: 'working', icon: Clock }
         case 'working-paused':
           return { variant: 'spinner', tone: 'working-paused' }
         case 'spec':
@@ -658,6 +675,7 @@
             tone={badgeProps.tone}
             kind={badgeProps.kind}
             variant={badgeProps.variant ?? 'dot'}
+            icon={badgeProps.icon}
             animated={badgeProps.animated}
             size="md"
             title={isRetryPaused
@@ -666,7 +684,9 @@
                 ? stageLabel
                 : thread.status === 'spec'
                   ? 'Spec ready'
-                  : threadState}
+                  : threadState === 'scheduled'
+                    ? 'Scheduled'
+                    : threadState}
           />
         {:else}
           <span
@@ -847,6 +867,7 @@
               tone={badgeProps.tone}
               kind={badgeProps.kind}
               variant={badgeProps.variant ?? 'dot'}
+              icon={badgeProps.icon}
               animated={badgeProps.animated}
               size="md"
               title={isRetryPaused
@@ -855,7 +876,9 @@
                   ? stageLabel
                   : thread.status === 'spec'
                     ? 'Spec ready'
-                    : threadState}
+                    : threadState === 'scheduled'
+                      ? 'Scheduled'
+                      : threadState}
             />
           {:else}
             <span
