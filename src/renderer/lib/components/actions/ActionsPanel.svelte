@@ -1,15 +1,5 @@
 <script lang="ts">
-  import {
-    Copy,
-    FileTerminal,
-    Pencil,
-    Play,
-    Plus,
-    Square,
-    Trash2,
-    Variable,
-    X
-  } from '@lucide/svelte'
+  import { Copy, MonitorCog, Pencil, Play, Plus, Square, Trash2, Variable, X } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import ColorSwatches from '$lib/components/shared/ColorSwatches.svelte'
@@ -157,7 +147,7 @@
 <section class="flex h-full min-h-0 flex-col bg-app" aria-label="Actions">
   <header class="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
     <div class="flex items-center gap-2">
-      <FileTerminal size={15} />
+      <MonitorCog size={15} />
       <h2 class="text-xs font-semibold">Actions</h2>
     </div>
     <button
@@ -171,7 +161,7 @@
   <div class="min-h-0 flex-1 overflow-y-auto p-2">
     {#if actions.length === 0}
       <div class="flex h-full min-h-48 flex-col items-center justify-center px-6 text-center">
-        <FileTerminal size={24} class="text-dimmed" />
+        <MonitorCog size={24} class="text-dimmed" />
         <p class="mt-3 text-sm font-semibold">No actions yet</p>
         <p class="mt-1 text-xs text-muted">
           Save a command you run often, then launch it without opening a terminal.

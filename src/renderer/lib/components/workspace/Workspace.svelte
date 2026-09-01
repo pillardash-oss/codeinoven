@@ -30,7 +30,7 @@
     Download,
     FileDown,
     FileDiff,
-    FileTerminal,
+    MonitorCog,
     FolderTree,
     Globe2,
     History,
@@ -1081,7 +1081,7 @@
       workspaceTools.push({
         id: 'actions',
         label: runningActions > 0 ? `Actions (${runningActions} running)` : 'Actions',
-        icon: FileTerminal,
+        icon: MonitorCog,
         active: dockKindActive('actions'),
         countBadge: runningActions > 0 ? String(runningActions) : undefined,
         countBadgeTone: runningActions > 0 ? 'working' : undefined,
