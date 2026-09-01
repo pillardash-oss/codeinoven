@@ -8,11 +8,13 @@
     Square,
     Trash2,
     Variable,
-    X
+    X,
+    Palette
   } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { PROJECT_COLORS } from '$lib/project-colors'
+  import ColorPicker from '$lib/components/shared/ColorPicker.svelte'
   import ActionTerminal from './ActionTerminal.svelte'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import type {
@@ -33,6 +35,10 @@
   const SCRIPT_PLACEHOLDER = `bun install\ncd apps/mobile\nbun run deploy --message "$m"`
   let variables = $state<ProjectActionVariable[]>([])
   let color = $state<string | null>(null)
+  let showColorPicker = $state(false)
+  let isCustomColor = $derived(
+    Boolean(color && !PROJECT_COLORS.some((option) => option.value === color))
+  )
   let runTarget = $state<ProjectAction | null>(null)
   let runValues = $state<Record<string, string>>({})
   let deleteTarget = $state<ProjectAction | null>(null)
@@ -301,6 +307,39 @@
   </div>
 </section>
 
+<svelte:window
+  onkeydown={(event: KeyboardEvent) => {
+    if (event.key === 'Escape' && showColorPicker) showColorPicker = false
+  }}
+/>
+
+{#if showColorPicker}
+  <div
+    class="fixed inset-0 z-[60] flex items-center justify-center"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Custom colour picker"
+  >
+    <button
+      class="absolute inset-0 cursor-default"
+      aria-label="Close colour picker"
+      onclick={() => (showColorPicker = false)}
+    ></button>
+
+    <div
+      class="relative w-[260px] rounded-xl border bg-surface p-4 shadow-xl"
+      role="presentation"
+      onclick={(event: MouseEvent) => event.stopPropagation()}
+    >
+      <ColorPicker
+        value={color ?? PROJECT_COLORS[0].value}
+        oncolorchange={(next) => (color = next)}
+        onclose={() => (showColorPicker = false)}
+      />
+    </div>
+  </div>
+{/if}
+
 <Modal
   open={editorOpen}
   title={editing ? 'Edit action' : 'Add action'}
@@ -347,6 +386,18 @@
             onclick={() => (color = option.value)}
           ></button>
         {/each}
+        <button
+          type="button"
+          class="flex h-5 w-5 items-center justify-center rounded-full border-2 transition-transform hover:scale-110 {isCustomColor
+            ? 'border-foreground'
+            : 'border-dashed border-muted'}"
+          style={isCustomColor ? `background-color: ${color}; box-shadow: 0 0 0 1px ${color}` : ''}
+          title="Custom colour"
+          aria-label="Custom colour"
+          aria-pressed={isCustomColor}
+          onclick={() => (showColorPicker = true)}
+          ><Palette size={10} class="text-muted {isCustomColor ? 'opacity-0' : ''}" /></button
+        >
       </div>
       <p class="mt-1.5 text-[11px] text-muted">
         The colour shows as the entry's left border — group similar scripts together.
