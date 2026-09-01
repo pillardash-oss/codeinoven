@@ -73,7 +73,10 @@ import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import type { PreparedUtilityRuntime } from '../drivers/driver.interface'
 import type { Database } from '../database/database'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
-import { TurnFeedbackRepo } from '../database/repositories/turn-feedback-repo'
+import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
+import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
+import { RANKING_RUBRIC_VERSION } from './turn-grader-prompt'
+import { isGreetingOnly } from './greeting-filter'
 import type { StorageEngine } from '../storage/storage-engine'
 import type {
   SpeechRemoteCleanupInput,
@@ -196,8 +199,7 @@ import type {
   TurnCheckpointChangeSummary,
   TurnCheckpointSummary,
   ThinkingLevel,
-  TurnOutcomeBasis,
-  TurnOutcomeTaskType,
+  ModelRankingSnapshotRow,
   UsageEventDetails,
   UsageEventFeature,
   UsagePricingProvenance
@@ -1545,16 +1547,16 @@ export interface VirtualTaskOptions {
 }
 
 export class ChatEngine {
-  /** Post-read window: how long the user may just read before grading fires. */
-  private static readonly GRADE_READING_WINDOW_MS = 5 * 60_000
-  /** Draft window: anchored at the first draft entry, never restarted. */
-  private static readonly GRADE_DRAFT_WINDOW_MS = 10 * 60_000
-  /** Hard fallback: unread and untouched completed turns are still evaluated. */
-  private static readonly GRADE_GENERAL_WINDOW_MS = 30 * 60_000
-  /** Failed judges retry out of band without blocking newer completed turns. */
-  private static readonly GRADE_RETRY_BASE_MS = 5 * 60_000
-  /** Bound each drain so model feedback never monopolizes the main process. */
-  private static readonly GRADE_DRAIN_BATCH_SIZE = 3
+  /** Close deadline: an untouched conversation is graded after this much inactivity. */
+  private static readonly RANKING_INACTIVITY_CLOSE_MS = 24 * 60 * 60_000
+  /** Failed judges retry out of band without blocking newer closed conversations. */
+  private static readonly RANKING_RETRY_BASE_MS = 5 * 60_000
+  /** Bounded retries before a snapshot parks as failed for recovery. */
+  private static readonly RANKING_ATTEMPT_CAP = 5
+  /** Failed snapshots re-enter the queue this long after their last attempt. */
+  private static readonly RANKING_RECOVERY_COOLDOWN_MS = 24 * 60 * 60_000
+  /** Bound each drain so model ranking never monopolizes the main process. */
+  private static readonly RANKING_DRAIN_BATCH_SIZE = 3
 
   private static readonly STREAM_BROADCAST_INTERVAL_MS = 50
   private static readonly TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
@@ -1834,7 +1836,8 @@ export class ChatEngine {
   private baseUrlProviders: BaseUrlProviderService
   private utilityOrchestration: UtilityOrchestrationService
   private usageRepo: HarnessUsageRepo
-  private turnFeedbackRepo: TurnFeedbackRepo
+  private rankingRepo: ModelRankingRepo
+  private rankingSnapshotRepo: ModelRankingSnapshotRepo
   private gradeDrainTimer: ReturnType<typeof setTimeout> | null = null
   private gradeDrainRunning = false
   private utilityTurns = new Map<
@@ -1862,7 +1865,8 @@ export class ChatEngine {
     this.agentProcesses.attachJournal(processJournalPath)
     this.threadCreation = threadCreation ?? new ThreadCreationCoordinator()
     this.usageRepo = new HarnessUsageRepo(database)
-    this.turnFeedbackRepo = new TurnFeedbackRepo(database)
+    this.rankingRepo = new ModelRankingRepo(database)
+    this.rankingSnapshotRepo = new ModelRankingSnapshotRepo(database)
     this.projectManager = new ProjectManager(database)
     this.projectFilesService = new ProjectFilesService(this.projectManager)
     this.checkpointManager = new CheckpointManager(database)
@@ -1883,10 +1887,10 @@ export class ChatEngine {
       },
       this.scopeRoots
     )
-    this.threadManager.onTurnFeedbackDeleted = (_projectId, threadIds) => {
+    this.threadManager.onThreadsDeletedForRanking = (_projectId, threadIds) => {
       void _projectId
-      this.turnFeedbackRepo.scheduleDeleted(threadIds, Date.now())
-      this.scheduleTurnFeedbackDrain()
+      this.rankingSnapshotRepo.closeForThreads(threadIds, Date.now())
+      this.scheduleRankingDrain()
     }
     this.memoryService = new MemoryService(storage)
     this.generatedArtifactService = new GeneratedArtifactService(storage)
@@ -8765,11 +8769,6 @@ export class ChatEngine {
       completedAt: createdAt
     }
     await this.threadManager.upsertMessages(projectId, threadId, [userMessage])
-    if (dispatchOrigin === 'user') {
-      // The user reacted to the previous turn: capture the follow-up text as
-      // extra judge context for that turn's pending outcome.
-      this.noteFollowUpForGrading(threadId, displayText)
-    }
     return userMessage
   }
 
@@ -18903,8 +18902,7 @@ export class ChatEngine {
         !contractContinuationRequired &&
         !contractBlocked
       ) {
-        await this.openTurnOutcome(
-          sessionId,
+        await this.openRankingSnapshot(
           thread,
           info.threadId,
           merged,
@@ -19518,75 +19516,36 @@ export class ChatEngine {
     return { costUsd, costStatus: estimated ? 'estimated' : 'known' }
   }
 
-  // ─── LLM turn grading ─────────────────────────────────────────────────────
+  // ─── LLM conversation grading (model ranking) ──────────────────────────
 
-  /** A captured turn payload staged for the judge, independent of repo row shape. */
-  private toTurnGradeCandidate(row: {
-    id: string
-    harness_id: string | null
-    provider_id: string | null
-    model_id: string | null
-    thinking_level: string | null
-    user_message_text: string
-    assistant_output_text: string
-    follow_up_text: string | null
-  }): TurnGradeCandidate | null {
-    if (!row.harness_id) return null
+  /** Minimal judge payload reconstructed from one durable queue row. */
+  private toRankingCandidate(row: ModelRankingSnapshotRow): RankingGradeCandidate {
     return {
       id: row.id,
       harnessId: row.harness_id,
-      providerId: row.provider_id ?? '',
-      modelId: row.model_id ?? '',
-      thinkingLevel: (row.thinking_level ?? 'minimal') as ThinkingLevel,
+      providerId: row.provider_id,
+      modelId: row.model_id,
+      thinkingLevel: (row.thinking_level || 'minimal') as ThinkingLevel,
       userMessage: row.user_message_text,
       assistantOutput: row.assistant_output_text,
       followUp: row.follow_up_text
     }
   }
 
-  /** Follow-up sent while an outcome was pending: captured as extra judge context. */
-  noteFollowUpForGrading(threadId: string, text: string): void {
-    this.turnFeedbackRepo.noteFollowUp(threadId, text.slice(0, 6_000))
-  }
-
   /**
-   * The user opened the thread to read the final output. The repository moves
-   * still-general rows to one durable post-read deadline; no per-thread timer
-   * is needed.
+   * Restart recovery: rows orphaned mid-claim by a crash return to the queue,
+   * then every overdue closed conversation is drained. The stale-claim sweep
+   * shares the drain guard so overlapping recoveries can never flip a row a
+   * concurrent drain is actively judging.
    */
-  async handleThreadReadForGrading(projectId: string, threadId: string): Promise<void> {
-    void projectId
-    if (!(await this.turnFeedbackRepo.hasPendingForThread(threadId))) return
-    this.turnFeedbackRepo.scheduleReading(threadId, Date.now() + ChatEngine.GRADE_READING_WINDOW_MS)
-    this.scheduleTurnFeedbackDrain()
-  }
-
-  /**
-   * Composer activity on the thread. Entering drafting anchors a fresh 10-minute
-   * window exactly once — clearing the draft or re-entering never restarts it.
-   * When it elapses, everything captured so far is graded.
-   */
-  async handleThreadDraftChangedForGrading(
-    projectId: string,
-    threadId: string,
-    drafting: boolean
-  ): Promise<void> {
-    void projectId
-    if (!drafting) return
-    if (!(await this.turnFeedbackRepo.hasPendingForThread(threadId))) return
-    this.turnFeedbackRepo.scheduleDraft(threadId, Date.now() + ChatEngine.GRADE_DRAFT_WINDOW_MS)
-    this.scheduleTurnFeedbackDrain()
-  }
-
-  /** Restart recovery drains overdue rows and re-arms the earliest future row. */
-  async recoverPendingTurnGrades(): Promise<void> {
-    await this.drainTurnFeedbackQueue()
+  async recoverPendingRankingGrades(): Promise<void> {
+    await this.drainRankingQueue(true)
   }
 
   /** Arm one process-wide wake-up for the earliest durable queue row. */
-  private scheduleTurnFeedbackDrain(delayOverrideMs?: number): void {
+  private scheduleRankingDrain(delayOverrideMs?: number): void {
     if (this.gradeDrainTimer) clearTimeout(this.gradeDrainTimer)
-    const nextDeadline = this.turnFeedbackRepo.nextPendingDeadline()
+    const nextDeadline = this.rankingSnapshotRepo.nextDueDeadline()
     if (nextDeadline === null) {
       this.gradeDrainTimer = null
       return
@@ -19594,75 +19553,79 @@ export class ChatEngine {
     const delay = delayOverrideMs ?? Math.max(0, Math.min(2_147_483_647, nextDeadline - Date.now()))
     this.gradeDrainTimer = setTimeout(() => {
       this.gradeDrainTimer = null
-      void this.drainTurnFeedbackQueue()
+      void this.drainRankingQueue()
     }, delay)
   }
 
   /**
-   * Independent post-conversation runner. Each persisted parent-turn row is a
-   * checkpoint, so later drains continue at the oldest still-pending turn and
-   * the same thread can be evaluated any number of times across its lifetime.
+   * Independent grading runner. Claims at most three closed snapshots per
+   * pass (bounded batching; never blocks the main process), scores each one,
+   * and on success applies exactly one aggregate increment plus the snapshot
+   * hard-delete in one transaction. Failed judges retry with bounded backoff
+   * up to the attempt cap, then park as failed for the recovery pass.
    */
-  private async drainTurnFeedbackQueue(): Promise<void> {
+  private async drainRankingQueue(requeueStale = false): Promise<void> {
     if (this.gradeDrainRunning) return
     this.gradeDrainRunning = true
     let processed = 0
     try {
-      const rows = this.turnFeedbackRepo.listDuePendingWithProject(Date.now())
+      if (requeueStale) this.rankingSnapshotRepo.requeueStaleProcessing()
+      this.rankingSnapshotRepo.requeueFailedForRecovery(
+        ChatEngine.RANKING_RECOVERY_COOLDOWN_MS,
+        Date.now()
+      )
+      const rows = this.rankingSnapshotRepo.claimDueBatch(
+        Date.now(),
+        ChatEngine.RANKING_DRAIN_BATCH_SIZE
+      )
       for (const row of rows) {
-        const basis = row.basis ?? 'general_timeout'
-        const graded = await this.gradeOutcomeCandidate(row.project_id, row, basis, null)
-        if (!graded) {
-          const exponent = Math.min(row.attempt_count, 4)
-          const retryDelay = ChatEngine.GRADE_RETRY_BASE_MS * 2 ** exponent
-          this.turnFeedbackRepo.defer(row.id, Date.now() + retryDelay)
+        const candidate = this.toRankingCandidate(row)
+        const score = await this.gradeCandidateCore(row.project_id, candidate)
+        if (score !== null) {
+          const durationMs = Math.max(0, row.ended_at - row.started_at)
+          const applied = this.rankingSnapshotRepo.deleteScoredInTransaction(row.id, () => {
+            this.rankingRepo.increment({
+              harnessId: row.harness_id,
+              providerId: row.provider_id,
+              modelId: row.model_id,
+              thinkingLevel: row.thinking_level,
+              shotCategory: row.shot_category,
+              score,
+              durationMs,
+              costUsd: row.cost_usd,
+              rubricVersion: RANKING_RUBRIC_VERSION
+            })
+          })
+          // The snapshot vanished mid-drain (restart recovery already
+          // re-queued it); never defer or double-count it.
+          if (applied) processed += 1
+          continue
         }
+        this.rankingSnapshotRepo.deferOrPark(
+          row.id,
+          ChatEngine.RANKING_ATTEMPT_CAP,
+          ChatEngine.RANKING_RETRY_BASE_MS,
+          Date.now()
+        )
         processed += 1
       }
     } finally {
       this.gradeDrainRunning = false
-      this.scheduleTurnFeedbackDrain(
-        processed >= ChatEngine.GRADE_DRAIN_BATCH_SIZE ? 100 : undefined
+      this.scheduleRankingDrain(
+        processed >= ChatEngine.RANKING_DRAIN_BATCH_SIZE ? 100 : undefined
       )
     }
   }
 
-  /** Repo-shaped wrapper keeping the once-only guard before judging. */
-  private async gradeOutcomeCandidate(
+  /** Judge one candidate and persist nothing; returns the 0–10 score, or null on judge failure. */
+  private async gradeCandidateCore(
     projectId: string,
-    row: {
-      id: string
-      harness_id: string | null
-      provider_id: string | null
-      model_id: string | null
-      thinking_level: string | null
-      user_message_text: string
-      assistant_output_text: string
-      follow_up_text: string | null
-    },
-    basis: TurnOutcomeBasis,
-    parentSessionId: string | null
-  ): Promise<boolean> {
-    const candidate = this.toTurnGradeCandidate(row)
-    if (!candidate) return false
-    const graded = await this.gradeOutcomeCore(projectId, candidate, basis, parentSessionId)
-    return graded !== null && this.turnFeedbackRepo.grade(candidate.id, basis, graded)
-  }
-
-  /** Judge one candidate and persist nothing; returns the grade, or null on judge failure. */
-  private async gradeOutcomeCore(
-    projectId: string,
-    candidate: TurnGradeCandidate,
-    _basis: TurnOutcomeBasis,
-    parentSessionId: string | null
+    candidate: RankingGradeCandidate
   ): Promise<number | null> {
-    void _basis
-    let projectPath: string
     try {
       const resolved = await this.resolve(projectId, candidate.harnessId)
-      projectPath = resolved.projectPath
       const { driver } = resolved
-      const grade = await driver.gradeTurn(projectPath, {
+      const score = await driver.gradeTurn(resolved.projectPath, {
         settings: {
           harnessId: candidate.harnessId,
           providerId: candidate.providerId,
@@ -19672,31 +19635,32 @@ export class ChatEngine {
         },
         userMessage: candidate.userMessage,
         assistantOutput: candidate.assistantOutput,
-        followUp: candidate.followUp,
-        ...(parentSessionId ? { parentSessionId } : {})
+        followUp: candidate.followUp
       })
-      Logger.dev('Turn grading completed', {
+      Logger.dev('Ranking grading completed', {
         harnessId: candidate.harnessId,
         modelId: candidate.modelId,
-        grade
+        score
       })
-      return grade
+      // A driver that violates its number-or-null contract is a judge failure.
+      return typeof score === 'number' ? score : null
     } catch (error) {
-      Logger.dev('Turn grading failed:', rawErrorMessage(error))
+      Logger.dev('Ranking grading failed:', rawErrorMessage(error))
       return null
     }
   }
 
   /**
-   * Open a pending session-outcome record for a completed, error-free turn that
-   * answered a visible user message. Document-generating workflows (brainstorm,
-   * PRD) and audit-report threads are never graded. The outcome is judged later
-   * by the cheap-model grader from the captured exchange plus any follow-up.
-   * Internal orchestration turns (spec generation, repairs, hidden recaps)
-   * never open a record.
+   * Capture one ranking snapshot for a completed, error-free turn that
+   * answered a visible user message. The first substantive exchange opens a
+   * `first_shot` window; a substantive follow-up upgrades it to `multi_shot`
+   * and closes it for immediate grading — never a failure marker. A third
+   * substantive prompt (or a greeting-excluded thread) starts a new window.
+   * Greeting-only first prompts never enter the queue, so they never consume
+   * judge tokens. Document-generating workflows (brainstorm, PRD) and
+   * audit-report threads are excluded, as are internal orchestration turns.
    */
-  private async openTurnOutcome(
-    sessionId: string,
+  private async openRankingSnapshot(
     thread: Thread | null,
     threadId: string,
     mirror: AgentMessage[],
@@ -19710,38 +19674,42 @@ export class ChatEngine {
     const parentMessage = mirror.find((message) => message.id === parentTurnId)
     if (parentMessage?.origin !== 'user') return
     if (!turnAssistant.modelId && !thread.settings.modelId) return
-    // Audit-report generation and document-drafting workflows are excluded from grading.
+    // Audit-report generation and document-drafting workflows are excluded from ranking.
     if (thread.achievementRole === 'auditor') return
     const brainstormStage = this.brainstormEngine.getWorkflowState(projectId, threadId)?.stage
     if (brainstormStage === 'drafting') return
     const prdStage = this.prdEngine.getWorkflowState(projectId, threadId)?.stage
     if (prdStage === 'drafting' || prdStage === 'brainstorming') return
-    const taskType: TurnOutcomeTaskType =
-      thread.assignmentRole === 'worker' || thread.assignmentRole === 'coordinator'
-        ? 'assignment'
-        : 'main'
+    const endedAt = turnAssistant.completedAt ?? turnAssistant.createdAt ?? Date.now()
+    const parentText = textForMessage(parentMessage)
+    const open = this.rankingSnapshotRepo.openForThread(threadId)
+    if (open) {
+      // Substantive follow-up on the open window: upgrade and close for
+      // immediate grading. Classification and processing status stay
+      // independent — this is a plain update, not a failure marker.
+      this.rankingSnapshotRepo.upgradeToMultiShot(open.id, parentText.slice(0, 6_000), endedAt)
+      this.scheduleRankingDrain()
+      return
+    }
+    if (isGreetingOnly(parentText)) return
     const { costUsd, costStatus } = this.assistantTurnCostAccounting(turnAssistant)
-    await this.turnFeedbackRepo.openPendingViaWorker({
-      id: `outcome:${parentTurnId}`,
-      projectId,
+    this.rankingSnapshotRepo.insertViaWorker({
       threadId,
-      parentTurnId,
-      sessionId,
-      createdAt: turnAssistant.completedAt ?? turnAssistant.createdAt ?? Date.now(),
-      feature: taskType,
-      taskSlug: thread.featureSlug ?? null,
+      projectId,
+      shotCategory: 'first_shot',
       harnessId: turnAssistant.harnessId ?? thread.settings.harnessId,
-      providerId: turnAssistant.providerId ?? thread.settings.providerId ?? null,
-      modelId: turnAssistant.modelId ?? thread.settings.modelId ?? null,
-      thinkingLevel: turnAssistant.thinkingLevel ?? thread.settings.thinkingLevel ?? null,
-      costUsd,
-      costStatus,
-      tokensTotal: turnAssistant.tokens?.total ?? null,
-      userMessageText: textForMessage(parentMessage).slice(0, 6_000),
+      providerId: turnAssistant.providerId ?? thread.settings.providerId ?? '',
+      modelId: turnAssistant.modelId ?? thread.settings.modelId ?? '',
+      thinkingLevel: turnAssistant.thinkingLevel ?? thread.settings.thinkingLevel ?? '',
+      startedAt: parentMessage.createdAt ?? endedAt,
+      endedAt,
+      dueAtMs: endedAt + ChatEngine.RANKING_INACTIVITY_CLOSE_MS,
+      userMessageText: parentText.slice(0, 6_000),
       assistantOutputText: textForMessage(turnAssistant).slice(0, 6_000),
-      generalDeadlineMs: Date.now() + ChatEngine.GRADE_GENERAL_WINDOW_MS
+      costUsd,
+      costStatus
     })
-    this.scheduleTurnFeedbackDrain()
+    this.scheduleRankingDrain()
   }
 
   private recordAuxiliaryUsageEvent(input: {
@@ -21740,7 +21708,7 @@ function titleAttemptsFromDriver(driver: HarnessDriver): readonly TitleAttemptAc
 }
 
 /** Minimal judge payload reconstructed from one durable queue row. */
-interface TurnGradeCandidate {
+interface RankingGradeCandidate {
   id: string
   harnessId: string
   providerId: string

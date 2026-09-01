@@ -299,10 +299,11 @@ export class ThreadManager {
   private readonly scopeManager: ScopeManager
 
   /**
-   * Set by the ChatEngine so deleting a thread makes its durable feedback rows
-   * immediately eligible before the thread foreign key is detached.
+   * Set by the ChatEngine so deleting a thread closes its open ranking
+   * snapshot conversation for immediate grading before the thread foreign
+   * key is detached — deletion is the conversation close signal.
    */
-  onTurnFeedbackDeleted?: (projectId: string, threadIds: string[]) => void
+  onThreadsDeletedForRanking?: (projectId: string, threadIds: string[]) => void
 
   /** Distinct harness ids used across a thread's session, newest first. */
   /** Distinct harness ids used across a thread's session, newest first. */
@@ -767,7 +768,7 @@ export class ThreadManager {
     for (const candidate of deletionOrder) {
       await this.onDelete?.(candidate)
     }
-    this.onTurnFeedbackDeleted?.(
+    this.onThreadsDeletedForRanking?.(
       projectId,
       deletionOrder.map((candidate) => candidate.id)
     )

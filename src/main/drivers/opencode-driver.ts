@@ -62,7 +62,7 @@ import {
   readDocumentText
 } from './document-attachment'
 import { buildTitlePrompt, HEARTBEAT_PROMPT, sanitizeGeneratedTitle } from '../chat/title-generator'
-import { buildTurnGradePrompt, parseTurnGrade } from '../chat/turn-grader-prompt'
+import { buildRankingGradePrompt, parseRankingGrade } from '../chat/turn-grader-prompt'
 import { leanAgentConfigMap } from '../opencode/opencode-agent-definitions'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
 
@@ -1538,13 +1538,13 @@ export class OpenCodeDriver implements HarnessDriver {
       options.settings,
       'Turn grade',
       candidates,
-      buildTurnGradePrompt({
+      buildRankingGradePrompt({
         userMessage: options.userMessage,
         assistantOutput: options.assistantOutput,
         followUp: options.followUp ?? null
       })
     )
-    return result === null ? null : parseTurnGrade(result)
+    return result === null ? null : parseRankingGrade(result)
   }
 
   /**

@@ -243,14 +243,14 @@ export interface GenerateTitleOptions {
   parentSessionId?: string
 }
 
-/** Captured grading payload judged 1–5 by a disposable cheap-model completion. */
+/** Captured conversation payload judged 0–10 by a disposable cheap-model completion. */
 export interface GradeTurnOptions {
   settings: ThreadSettings
-  /** The initiating visible user message of the scored turn. */
+  /** The initiating visible user message of the closed conversation window. */
   userMessage: string
-  /** The agent's final output text for the scored turn. */
+  /** The agent's final output text for the conversation window. */
   assistantOutput: string
-  /** Follow-up the user sent while the grade was pending, when one exists. */
+  /** The conversation's follow-up exchange, when one exists. */
   followUp?: string | null
   /** Parent turn whose authenticated transport permits a safe auxiliary grading process. */
   parentSessionId?: string

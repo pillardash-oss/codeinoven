@@ -44,7 +44,7 @@ import {
   sanitizeGeneratedTitle,
   sanitizeHeartbeatReply
 } from '../chat/title-generator'
-import { buildTurnGradePrompt, parseTurnGrade } from '../chat/turn-grader-prompt'
+import { buildRankingGradePrompt, parseRankingGrade } from '../chat/turn-grader-prompt'
 import {
   isPermissionToolName,
   isQuestionToolName,
@@ -389,12 +389,12 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         ...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {})
       },
       candidates,
-      buildTurnGradePrompt({
+      buildRankingGradePrompt({
         userMessage: options.userMessage,
         assistantOutput: options.assistantOutput,
         followUp: options.followUp ?? null
       }),
-      parseTurnGradeForAttempt
+      parseRankingGradeForAttempt
     )
     this.lastGradeTurnAttempts = outcome.attempts
     return outcome.value === null ? null : Number.parseInt(outcome.value, 10)
@@ -1530,10 +1530,10 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   }
 }
 
-/** Validate a one-shot grading response; returns the grade digits for accounting. */
-function parseTurnGradeForAttempt(raw: string): string | null {
-  const grade = parseTurnGrade(raw)
-  return grade === null ? null : String(grade)
+/** Validate a one-shot grading response; returns the score digits for accounting. */
+function parseRankingGradeForAttempt(raw: string): string | null {
+  const score = parseRankingGrade(raw)
+  return score === null ? null : String(score)
 }
 
 /** Accept any non-empty auxiliary response, trimmed and length-bounded. */
