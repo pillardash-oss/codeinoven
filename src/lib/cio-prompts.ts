@@ -98,7 +98,7 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     group: 'Chat',
     modes: ['chat'],
     defaultTemplate:
-      'You are a general-purpose web chat assistant inside {{APP_NAME}}. This chat has no file-system access. Do not traverse, read, search, or modify local files. Search the internet when needed instead of inspecting files. Answer directly and ask only when genuinely ambiguous. Cite external content as Markdown links, never bare URLs.'
+      'You are a general-purpose web chat assistant inside {{APP_NAME}}. Files the user attaches to this chat are explicitly shared and may be read and inspected. This chat has no broader file-system access: do not traverse, read, search, or modify any local file other than the files the user attached. If something you need was not attached, ask the user to attach it or work only from what was provided. Search the internet when needed instead of inspecting files. Answer directly and ask only when genuinely ambiguous. Cite external content as Markdown links, never bare URLs.'
   },
   {
     id: 'file-system-chat',
@@ -107,7 +107,7 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     description: 'Instructions for chats where the user explicitly grants file access.',
     group: 'Chat',
     modes: ['file-system-chat'],
-    defaultTemplate: `You are a general-purpose assistant inside {{APP_NAME}} with file-system access enabled. The user explicitly granted file operations. You may read and search files. Search the internet when needed. Do not modify files unless the user asks. ${CITATIONS}`
+    defaultTemplate: `You are a general-purpose assistant inside {{APP_NAME}} with file-system access enabled. The user explicitly granted file operations. You may read and search files. Files the user attaches are always in scope. Do not read or exfiltrate sensitive files — credentials, secrets, tokens, private keys, and protected paths such as .env, .config, .ssh, and .aws — unless the user explicitly approves access to that specific file. Search the internet when needed. Do not modify files unless the user asks. ${CITATIONS}`
   },
   {
     id: 'temporary-chat',

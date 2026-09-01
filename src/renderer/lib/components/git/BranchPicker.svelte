@@ -14,10 +14,23 @@
     onSelect: (branch: GitBranchInfo) => void
     onCreate?: (name: string) => void
     onDelete?: (name: string) => void
+    /** Open the add-origin flow (shown when no remote is configured). */
+    onAddOrigin?: () => void
+    /** Open the replace-origin flow (shown when a remote is configured). */
+    onReplaceOrigin?: () => void
   }
 
-  let { branches, currentBranch, isBusy, primaryRemote, onSelect, onCreate, onDelete }: Props =
-    $props()
+  let {
+    branches,
+    currentBranch,
+    isBusy,
+    primaryRemote,
+    onSelect,
+    onCreate,
+    onDelete,
+    onAddOrigin,
+    onReplaceOrigin
+  }: Props = $props()
 
   let open = $state(false)
   let search = $state('')
@@ -127,7 +140,28 @@
           <span class="min-w-0 flex-1 truncate font-mono text-[9px] text-dimmed">
             {remoteIdentity?.path ?? primaryRemote.url}
           </span>
+          {#if onReplaceOrigin}
+            <button
+              type="button"
+              class="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              title="Replace origin ({primaryRemote.name})"
+              onclick={onReplaceOrigin}
+            >
+              Replace
+            </button>
+          {/if}
         </div>
+      {:else if onAddOrigin}
+        <button
+          type="button"
+          class="flex w-full cursor-pointer items-center gap-1.5 border-b border-border px-3 py-1.5 text-[10px] font-medium text-muted outline-none transition-colors hover:bg-elevated hover:text-foreground"
+          title="Add a git remote so you can fetch and push"
+          aria-label="Add Git Origin"
+          onclick={onAddOrigin}
+        >
+          <Plus size={11} class="shrink-0" />
+          Add Git Origin
+        </button>
       {/if}
 
       <div class="border-b border-border px-3 py-2">

@@ -214,8 +214,13 @@ jobs:
             if [ -n "$n" ] && [ "$n" -gt "$max_n" ] 2>/dev/null; then max_n=$n; fi
           done
           next=$((max_n + 1))
-          echo "tag=v${base}-nightly-${next}" >> "$GITHUB_OUTPUT"
-          echo "Resolved nightly tag v${base}-nightly-${next} (base $base, max existing $max_n)" 
+          # Use a DOT between the channel and the counter (nightly.N): electron-updater's
+          # GitHub provider derives the nightly channel from the first dot-separated
+          # prerelease identifier. With a hyphen (nightly-N) the identifier is "nightly-N",
+          # which never matches the configured "nightly" channel and the update check
+          # fails with ERR_UPDATER_NO_PUBLISHED_VERSIONS ("No published versions on GitHub").
+          echo "tag=v${base}-nightly.${next}" >> "$GITHUB_OUTPUT"
+          echo "Resolved nightly tag v${base}-nightly.${next} (base $base, max existing $max_n)" 
 
       - name: Download build artifacts
         uses: actions/download-artifact@v7

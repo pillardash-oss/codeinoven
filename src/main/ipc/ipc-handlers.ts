@@ -5554,6 +5554,20 @@ export function registerIpcHandlers(
       )
   )
   ipcMain.handle(
+    'git:setRemoteUrl',
+    async (_, projectId: unknown, name: unknown, url: unknown, scopeBucketId?: unknown) =>
+      gitService.setRemoteUrl(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateRemoteName(name),
+        validateRemoteUrl(url)
+      )
+  )
+  ipcMain.handle(
     'git:removeRemote',
     async (_, projectId: unknown, name: unknown, scopeBucketId?: unknown) =>
       gitService.removeRemote(

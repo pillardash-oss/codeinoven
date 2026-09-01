@@ -978,6 +978,15 @@ export class GitState {
     }
   }
 
+  async setRemoteUrl(projectId: string, name: string, url: string): Promise<void> {
+    this.error = null
+    try {
+      this.remotes = await invoke('git:setRemoteUrl', ...this.scopedGitArgs(projectId, name, url))
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Remote URL could not be updated')
+    }
+  }
+
   async removeRemote(projectId: string, name: string): Promise<void> {
     this.error = null
     try {
@@ -1857,10 +1866,7 @@ export class GitState {
   ): Promise<void> {
     this.markBusy('restore-files', true)
     try {
-      await invoke(
-        'git:restoreFiles',
-        ...this.scopedGitArgs(projectId, source, paths, target)
-      )
+      await invoke('git:restoreFiles', ...this.scopedGitArgs(projectId, source, paths, target))
       await this.refresh(projectId)
     } finally {
       this.markBusy('restore-files', false)
