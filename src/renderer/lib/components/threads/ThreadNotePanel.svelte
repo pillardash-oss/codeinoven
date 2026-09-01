@@ -134,7 +134,7 @@
     {/if}
   </div>
 
-  <div class="min-h-0 flex-1 overflow-y-auto">
+  <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
     {#if tab.loading}
       <p class="py-10 text-center text-sm text-dimmed">Loading note…</p>
     {:else if tab.mode === 'edit'}
@@ -146,7 +146,7 @@
           placeholder="Remind yourself what you intended to do here — Markdown supported…"
           ariaLabel="Thread note"
           autofocus
-          containerClass="h-full"
+          containerClass="min-h-0 flex-1"
           class="min-h-full w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
           onHistoryControllerChange={(controller) => (historyController = controller)}
           onHistoryStateChange={(state) => {
