@@ -319,8 +319,8 @@ export default function codeInOvenCoreToolsExtension(pi) {
         Type.Object({
           question: Type.String({ description: 'The question text.' }),
           header: Type.String({
-            description: 'Short header label (12 or fewer characters).',
-            maxLength: 12
+            description: 'Short header label (24 or fewer characters).',
+            maxLength: 24
           }),
           options: Type.Array(
             Type.Object({
