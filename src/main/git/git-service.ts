@@ -904,6 +904,17 @@ export class GitService {
     })
   }
 
+  /** `git remote set-url <name> <url>` — update an existing remote's URL. */
+  async setRemoteUrl(projectPath: string, name: string, url: string): Promise<GitRemoteInfo[]> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await this.client(directory).remote(['set-url', name, url])
+      })
+      return this.readRemotes(directory)
+    })
+  }
+
   async removeRemote(projectPath: string, name: string): Promise<GitRemoteInfo[]> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)

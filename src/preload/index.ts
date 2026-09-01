@@ -266,6 +266,7 @@ const INVOKE_CHANNELS = [
   'git:setIdentity',
   'git:remotes',
   'git:addRemote',
+  'git:setRemoteUrl',
   'git:removeRemote',
   'git:fetch',
   'git:fetchBranch',

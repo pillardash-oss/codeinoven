@@ -132,6 +132,14 @@
   let forceDeleteBranchConfirm = $state<string | null>(null)
   let creatingBranch = $state(false)
   let newBranchName = $state('')
+  /** Add/Replace Git Origin modal on the branch picker. */
+  let originModalOpen = $state(false)
+  let originMode = $state<'add' | 'replace'>('add')
+  let originName = $state('origin')
+  let originUrl = $state('')
+  let originBusy = $state(false)
+  /** Destructive confirmation that a replace-origin is intended. */
+  let originReplaceConfirm = $state(false)
   let acknowledgeActiveTurn = $state(false)
   let agentTurnActive = $state(false)
   let activeTab = $state<TabId>(savedView.activeTab)
@@ -1341,6 +1349,65 @@
     }
   }
 
+  /** Open the Add-origin modal (no remote configured yet). */
+  function openAddOrigin(): void {
+    originMode = 'add'
+    originName = 'origin'
+    originUrl = ''
+    originReplaceConfirm = false
+    originModalOpen = true
+  }
+
+  /** Open the Replace-origin modal, prefilled with the current primary remote URL. */
+  function openReplaceOrigin(): void {
+    originMode = 'replace'
+    originName = primaryRemote?.name ?? 'origin'
+    originUrl = primaryRemote?.url ?? ''
+    originReplaceConfirm = false
+    originModalOpen = true
+  }
+
+  function closeOriginModal(): void {
+    if (originBusy) return
+    originModalOpen = false
+    originReplaceConfirm = false
+  }
+
+  /** First step of the save button: replace routes through a destructive
+   *  confirmation first; add commits immediately. */
+  function requestSetOrigin(): void {
+    if (!originUrl.trim() || originBusy) return
+    if (originMode === 'replace') {
+      originReplaceConfirm = true
+      return
+    }
+    void runSetOrigin()
+  }
+
+  /** `git remote add <name> <url>` or `git remote set-url <name> <url>`. */
+  async function runSetOrigin(): Promise<void> {
+    const name = originName.trim()
+    const url = originUrl.trim()
+    if (!url || !name || originBusy) return
+    originBusy = true
+    const mode = originMode
+    try {
+      if (mode === 'replace') {
+        await gitState.setRemoteUrl(projectId, name, url)
+      } else {
+        await gitState.addRemote(projectId, name, url)
+      }
+      if (!gitState.error) {
+        originModalOpen = false
+        originReplaceConfirm = false
+        originUrl = ''
+        void refreshStatus()
+      }
+    } finally {
+      originBusy = false
+    }
+  }
+
   const conflictState = $derived(gitState.conflictState)
   const integrateBusy = $derived(
     gitState.isBusy(['merge', 'rebase', 'stash', 'abortMerge', 'abortRebase'])
@@ -1742,6 +1809,8 @@
           onSelect={requestCheckout}
           onCreate={(name) => void createBranchAction(name)}
           onDelete={(name) => void deleteBranchAction(name)}
+          onAddOrigin={openAddOrigin}
+          onReplaceOrigin={openReplaceOrigin}
         />
       {:else}
         <div class="flex items-center gap-1.5 px-2">
@@ -3835,6 +3904,105 @@
                 <Loader2 size={12} class="animate-spin" />
               {/if}
               Delete branch
+            </AlertDialog.Action>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
+  {/if}
+
+  <!-- Add / Replace Git Origin -->
+  {#if originModalOpen}
+    <Modal
+      open
+      title={originMode === 'replace' ? 'Replace Git Origin' : 'Add Git Origin'}
+      onClose={closeOriginModal}
+    >
+      <div class="space-y-3">
+        <p class="text-[11px] leading-relaxed text-muted">
+          {#if originMode === 'replace'}
+            Update the URL of the <span class="font-mono text-foreground">{originName}</span> remote.
+            This is the address the repository fetches from and pushes to.
+          {:else}
+            Add the <span class="font-mono text-foreground">{originName}</span> remote so you can pull
+            from and push to a hosted repository.
+          {/if}
+        </p>
+        <div>
+          <p class="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+            Remote URL
+          </p>
+          <input
+            class="w-full rounded-lg border border-border bg-elevated px-3 py-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+            placeholder="https://github.com/your-name/repo.git"
+            bind:value={originUrl}
+            onkeydown={(e: KeyboardEvent) => {
+              if (e.key === 'Enter' && !originBusy) requestSetOrigin()
+            }}
+          />
+        </div>
+        {#if gitState.error}
+          <p class="text-[10px] leading-relaxed text-danger">{gitState.error}</p>
+        {/if}
+      </div>
+      {#snippet footer()}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            disabled={originBusy}
+            onclick={closeOriginModal}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-modal-primary
+            class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            disabled={originBusy || !originUrl.trim()}
+            onclick={requestSetOrigin}
+          >
+            {#if originBusy}
+              <Loader2 size={12} class="animate-spin" />
+            {/if}
+            {originMode === 'replace' ? 'Replace Origin' : 'Add Origin'}
+          </button>
+        </div>
+      {/snippet}
+    </Modal>
+  {/if}
+
+  {#if originReplaceConfirm}
+    <AlertDialog.Root open onOpenChange={() => (originReplaceConfirm = false)}>
+      <AlertDialog.Portal>
+        <AlertDialog.Content
+          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-danger/30 bg-surface p-5 shadow-xl"
+        >
+          <AlertDialog.Title class="text-sm font-semibold text-foreground">
+            Replace {originName}?
+          </AlertDialog.Title>
+          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+            Changing the <span class="font-mono text-foreground">{originName}</span> remote URL
+            permanently redirects future <strong class="font-medium text-foreground">pull</strong>
+            and <strong class="font-medium text-foreground">push</strong> operations to the new address.
+            Your local history is preserved, but the current remote target is replaced. This cannot be
+            undone automatically — make sure this is the repository you want to use.
+          </AlertDialog.Description>
+          <div class="mt-5 flex justify-end gap-2">
+            <AlertDialog.Cancel
+              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+            >
+              Cancel
+            </AlertDialog.Cancel>
+            <AlertDialog.Action
+              class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+              disabled={originBusy}
+              onclick={() => void runSetOrigin()}
+            >
+              {#if originBusy}
+                <Loader2 size={12} class="animate-spin" />
+              {/if}
+              Replace {originName}
             </AlertDialog.Action>
           </div>
         </AlertDialog.Content>

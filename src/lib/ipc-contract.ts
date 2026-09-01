@@ -1383,6 +1383,10 @@ export interface IpcInvokeContract {
     [projectId: string, name: string, url: string, scopeBucketId?: string],
     GitRemoteInfo[]
   >
+  'git:setRemoteUrl': Contract<
+    [projectId: string, name: string, url: string, scopeBucketId?: string],
+    GitRemoteInfo[]
+  >
   'git:removeRemote': Contract<
     [projectId: string, name: string, scopeBucketId?: string],
     GitRemoteInfo[]
