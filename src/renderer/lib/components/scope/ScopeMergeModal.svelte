@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { RefreshCw } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import {
@@ -110,17 +111,23 @@
     void loadPreflight()
   }
 
+  // Reset and fetch only on the false→true open transition. This effect must
+  // never re-run when `mode` or `mergeTargetBucketId` change: `loadPreflight`
+  // reads them synchronously, which would otherwise make the effect re-fire on
+  // every mode/target click and snap the selection back to the default.
+  let wasOpen = false
   $effect(() => {
-    if (open) {
-      mode = 'merge-delete'
-      mergeTargetBucketId = DEFAULT_SCOPE_BUCKET_ID
-      preflight = null
-      error = null
-      working = false
-      refreshing = false
-      conflicted = false
-      void loadPreflight()
-    }
+    if (open === wasOpen) return
+    wasOpen = open
+    if (!open) return
+    mode = 'merge-delete'
+    mergeTargetBucketId = DEFAULT_SCOPE_BUCKET_ID
+    preflight = null
+    error = null
+    working = false
+    refreshing = false
+    conflicted = false
+    void loadPreflight()
   })
   const sourceBucket = $derived(
     scopeState.board.buckets.find((bucket) => bucket.id === sourceBucketId) ?? null
@@ -168,6 +175,24 @@
     if (!bucket) return bucketId
     return bucket.root.kind === 'worktree' ? `${bucket.name} (worktree)` : bucket.name
   }
+
+  /** Fixed summary rows — the row always exists; only its label text changes. */
+  const threadRowLabel = $derived(
+    mode === 'merge-delete'
+      ? 'Threads to delete'
+      : mode === 'merge-move-to-default'
+        ? 'Threads to move to Default'
+        : 'Threads kept in scope'
+  )
+
+  /** Always-rendered bottom note; text adapts to the selected mode. */
+  const modeNote = $derived(
+    mode === 'merge-keep'
+      ? 'The worktree, this scope and its threads are kept — nothing is removed.'
+      : mode === 'merge-move-to-default'
+        ? 'The worktree is removed, this scope is deleted, and its threads move to Default (evicting the oldest Default threads to respect the thread limit).'
+        : 'The worktree and the branch are removed, and this scope is deleted, after the merge completes.'
+  )
 </script>
 
 <Modal {open} title="Merge scope into project" onClose={close} footer={footerSnippet}>
@@ -220,67 +245,60 @@
       </div>
     </div>
 
-    {#if !preflight && !error}
-      <p class="text-sm text-muted">Checking this scope before anything is changed…</p>
-    {/if}
+    <div class="relative space-y-2 rounded-lg border bg-elevated/50 p-3 text-xs text-muted">
+      {#if refreshing}
+        <RefreshCw
+          size={12}
+          class="absolute right-2 top-2 animate-spin text-dimmed"
+          aria-hidden="true"
+        />
+      {/if}
+      <p class="flex items-center justify-between pr-4">
+        <span>Merge branch</span>
+        <span class="font-medium text-foreground tabular-nums">
+          {preflight?.sourceBranch ?? '\u2014'}
+        </span>
+      </p>
+      <p class="flex items-center justify-between">
+        <span>Into (target branch)</span>
+        <span class="font-medium text-foreground tabular-nums">
+          {preflight?.targetBranch ?? '\u2014'}
+        </span>
+      </p>
+      <p class="flex items-center justify-between">
+        <span>{threadRowLabel}</span>
+        <span class="font-medium text-foreground tabular-nums">
+          {preflight?.threadCount ?? '\u2014'}
+        </span>
+      </p>
+      <p class="flex items-center justify-between">
+        <span>Unpushed commits</span>
+        <span class="font-medium text-foreground tabular-nums">
+          {preflight?.unpushedCommits ?? '\u2014'}
+        </span>
+      </p>
+    </div>
 
-    {#if refreshing && preflight}
-      <p class="text-xs text-dimmed">Updating summary…</p>
-    {/if}
+    <p class="text-xs text-muted">{modeNote}</p>
 
-    {#if preflight}
-      <div class="space-y-2 rounded-lg border bg-elevated/50 p-3 text-xs text-muted">
-        <p class="flex items-center justify-between">
-          <span>Merge branch</span>
-          <span class="font-medium text-foreground tabular-nums">{preflight.sourceBranch}</span>
-        </p>
-        <p class="flex items-center justify-between">
-          <span>Into (target branch)</span>
-          <span class="font-medium text-foreground tabular-nums">{preflight.targetBranch}</span>
-        </p>
-        {#if mode === 'merge-delete'}
-          <p class="flex items-center justify-between">
-            <span>Threads to delete</span>
-            <span class="font-medium text-foreground tabular-nums">{preflight.threadCount}</span>
-          </p>
-        {:else if mode === 'merge-move-to-default'}
-          <p class="flex items-center justify-between">
-            <span>Threads to move to Default</span>
-            <span class="font-medium text-foreground tabular-nums">{preflight.threadCount}</span>
-          </p>
-        {/if}
-        {#if mode === 'merge-delete' || mode === 'merge-move-to-default'}
-          <p class="flex items-center justify-between">
-            <span>Unpushed commits</span>
-            <span class="font-medium text-foreground tabular-nums">
-              {preflight.unpushedCommits}
-            </span>
-          </p>
-        {/if}
+    {#if preflight?.hasActiveProcesses}
+      <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+        Active agent processes are still running in this scope.
       </div>
-
-      {#if preflight.hasActiveProcesses}
-        <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
-          Active agent processes are still running in this scope.
-        </div>
-      {/if}
-      {#if (preflight.dirtyFiles.length ?? 0) > 0 && (mode === 'merge-delete' || mode === 'merge-move-to-default')}
-        <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
-          <p class="font-medium">
-            Uncommitted changes will be lost ({preflight.dirtyFiles.length})
-          </p>
-          <ul class="mt-1 max-h-24 list-inside list-disc overflow-y-auto">
-            {#each preflight.dirtyFiles.slice(0, 20) as file (file)}
-              <li class="truncate">{file}</li>
-            {/each}
-          </ul>
-        </div>
-      {/if}
-      {#if mode === 'merge-delete' || mode === 'merge-move-to-default'}
-        <p class="text-xs text-muted">
-          Default scope worktree and {preflight.sourceBranch} branch are removed when the merge completes.
+    {/if}
+    {#if (preflight?.dirtyFiles.length ?? 0) > 0}
+      <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+        <p class="font-medium">
+          {mode === 'merge-keep'
+            ? `Uncommitted changes stay in the worktree (${preflight?.dirtyFiles.length ?? 0} files)`
+            : `Uncommitted changes will be lost (${preflight?.dirtyFiles.length ?? 0} files)`}
         </p>
-      {/if}
+        <ul class="mt-1 max-h-24 list-inside list-disc overflow-y-auto">
+          {#each (preflight?.dirtyFiles ?? []).slice(0, 20) as file (file)}
+            <li class="truncate">{file}</li>
+          {/each}
+        </ul>
+      </div>
     {/if}
 
     {#if conflicted}
