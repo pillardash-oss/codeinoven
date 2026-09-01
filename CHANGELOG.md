@@ -3,6 +3,21 @@
 All notable changes to CodeInOven are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- Replaced the 1–5 per-turn feedback ledger with a 0–10 conversation-grading
+  model-ranking system. Rankings are keyed by harness + provider + model +
+  thinking level and split into separate **one-shot** and **multi-shot**
+  scores, sample counts, and agent runtime per configuration. Greeting-only
+  first prompts are never graded. Existing graded history folds into the new
+  aggregate under the `legacy-1to5-map-v1` rubric tag (linearly mapped, only
+  approximately comparable to the new rubric; the Profile settings surface
+  shows the rubric version per row). The Profile analytics section
+  "Best model by feedback" becomes "Model rankings" with one-shot/multi-shot
+  columns, and the old blended grade-of-five display is gone.
+
 ## [0.5.1] - 2026-08-06
 
 ### Changed
