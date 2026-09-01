@@ -46,7 +46,7 @@ async function exactEntry(projectId: string, path: string): Promise<ProjectFileE
   if (!path) return { name: '', path: '', kind: 'directory' }
   if (path.startsWith('/') || path.split('/').includes('..')) return null
   try {
-    const info = await invoke('projectFiles:info', projectId, path)
+    const info = await projectFilesWorkspace.fileInfo(projectId, path)
     return { name: info.name, path: info.path, kind: info.kind }
   } catch {
     return null

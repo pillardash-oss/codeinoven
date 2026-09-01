@@ -1,4 +1,4 @@
-const PREFERRED_DESKTOP_KEY = 'codeinoven:preferred-remote-desktop'
+const PREFERRED_DESKTOP_KEY = 'cio:preferred-remote-desktop'
 
 /** Remember the desktop the user deliberately connected to for PWA restoration. */
 export function savePreferredDesktop(desktopId: string, storage: Storage = localStorage): void {

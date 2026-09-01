@@ -35,6 +35,7 @@ import type {
   HarnessDriver,
   HarnessToolDefinition,
   PreparedUtilityRuntime,
+  SendHeartbeatPingOptions,
   SendPromptOptions,
   SteerPromptOptions,
   UtilityRuntimeOverlay,
@@ -42,18 +43,25 @@ import type {
 } from './driver.interface'
 import { buildProcessEnvironment } from './cli-environment'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
-import { hasNativeProviderCatalog } from '../agents/native-provider-config-service'
+import {
+  hasNativeProviderCatalog,
+  opencodeNativeProviderIds
+} from '../agents/native-provider-config-service'
 import { SecretVault } from '../storage/secret-vault'
 import { resolveFastModelId } from '../../lib/fast-inference'
-import { classifyProviderIssue } from '../../lib/provider-issue'
+import {
+  classifyProviderIssue,
+  extractProviderErrorEnvelope,
+  parseUsageResetAt
+} from '../../lib/provider-issue'
 import { isSvgAttachment, readSvgAttachmentText, formatSvgAsText } from './svg-attachment'
 import { isTextAttachment, readTextAttachment, formatTextAsText } from './text-attachment'
 import {
-  formatWordDocumentAsText,
-  isWordDocumentAttachment,
-  readWordDocumentText
+  formatDocumentAsText,
+  isDocumentAttachment,
+  readDocumentText
 } from './document-attachment'
-import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
+import { buildTitlePrompt, HEARTBEAT_PROMPT, sanitizeGeneratedTitle } from '../chat/title-generator'
 import { buildTurnGradePrompt, parseTurnGrade } from '../chat/turn-grader-prompt'
 import { leanAgentConfigMap } from '../opencode/opencode-agent-definitions'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
@@ -272,21 +280,36 @@ function openCodeIssue(
 ): AgentProviderIssue {
   const error = recordValue(raw)
   const data = recordValue(error?.['data'])
-  const message =
+  const rawMessage =
     stringValue(data?.['message']) ??
     stringValue(error?.['message']) ??
     stringValue(raw) ??
     fallback
+  // OpenCode (and upstream providers it proxies) sometimes hands back a raw
+  // JSON error body as the message string itself (e.g.
+  // `429: {"message":"...weekly usage limit...","type":"rate_limit_error",
+  // "code":"RATE_LIMITED"}`) instead of a plain sentence. Unwrap it so the UI
+  // never has to render the JSON blob as the "friendly" message.
+  const envelope = extractProviderErrorEnvelope(rawMessage)
   const statusCode = numberValue(data?.['statusCode']) ?? numberValue(error?.['statusCode'])
+  const kind = classifyProviderIssue(rawMessage, statusCode)
+  // A genuine usage/quota reset date embedded in the message is authoritative
+  // over any short-interval retry hint the caller passed in `overrides` (e.g.
+  // OpenCode's own internal retry backoff, which fires every few seconds and
+  // is meaningless against a multi-day weekly cap).
+  const usageResetAt =
+    kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(envelope.message) : undefined
   return {
-    kind: classifyProviderIssue(message, statusCode),
-    message,
+    kind,
+    message: envelope.message,
+    ...(envelope.message === rawMessage ? {} : { rawError: rawMessage }),
     harnessId: 'opencode',
     retryable:
       overrides.retryable ??
       (typeof data?.['isRetryable'] === 'boolean' ? data['isRetryable'] : false),
     ...(statusCode === undefined ? {} : { statusCode }),
-    ...overrides
+    ...overrides,
+    ...(usageResetAt === undefined ? {} : { retryAt: usageResetAt })
   }
 }
 
@@ -1290,21 +1313,34 @@ export class OpenCodeDriver implements HarnessDriver {
         if (custom.headers) options.headers = custom.headers
         const models: Record<string, Record<string, unknown>> = {}
         for (const model of custom.models) {
-          const limit =
-            model.contextWindow && model.maxOutputTokens
-              ? { context: model.contextWindow, output: model.maxOutputTokens }
-              : undefined
+          // Either bound is meaningful on its own (e.g. discovery often
+          // reports only context_length) — requiring both dropped a known
+          // context window whenever the output limit was missing.
+          const limit = {
+            ...(model.contextWindow ? { context: model.contextWindow } : {}),
+            ...(model.maxOutputTokens ? { output: model.maxOutputTokens } : {})
+          }
+          // opencode dispatches by passing the thread's thinking level
+          // straight through as the variant key, so the key must equal the
+          // level it selects — `thinkingLevel` in the value is what opencode
+          // itself reads to know which effort to actually request.
           const variants =
             model.thinkingPresets && model.thinkingPresets.length > 0
-              ? model.thinkingPresets.map((p) => [p.id, { name: p.label }])
+              ? model.thinkingPresets.map((p) => [p.id, { thinkingLevel: p.id }])
               : model.reasoning || model.defaultThinkingLevel
-                ? STANDARD_THINKING_VARIANTS.map((p) => [p.id, { name: p.label }])
+                ? STANDARD_THINKING_VARIANTS.map((p) => [p.id, { thinkingLevel: p.id }])
                 : []
           models[model.id] = {
             name: model.name,
             ...(model.reasoning ? { reasoning: true } : {}),
-            ...(limit ? { limit } : {}),
-            ...(variants.length > 0 ? { variants: Object.fromEntries(variants) } : {})
+            ...(Object.keys(limit).length > 0 ? { limit } : {}),
+            ...(variants.length > 0 ? { variants: Object.fromEntries(variants) } : {}),
+            // Unset `vision` is treated as capable everywhere else in this
+            // codebase; mirror that here rather than opencode's own default.
+            modalities: {
+              input: model.vision === false ? ['text'] : ['text', 'image'],
+              output: ['text']
+            }
           }
         }
         provider[custom.id] = {
@@ -1360,29 +1396,15 @@ export class OpenCodeDriver implements HarnessDriver {
     return this.createSessionOnHandle(handle, title)
   }
 
-  /** Free/cheap opencode candidates, shared by title and grading runs. */
-  private async cheapCandidates(projectPath: string): Promise<Array<{ providerId: string; modelId: string }>> {
-    const catalogs = await this.listProviders(projectPath).catch(() => [])
-    const openCodeModels = catalogs.find((catalog) => catalog.id === 'opencode')?.models ?? []
-    const freeModels = openCodeModels.filter((model) => /(?:^|[-:])free$/iu.test(model.id))
-    const fallbackFreeModels = freeModels.filter(
-      (model) => model.id !== 'big-pickle' && model.id !== 'big-pickle-free'
-    )
-    const goFlash = catalogs
-      .find((catalog) => catalog.id === 'opencode-go')
-      ?.models.find((model) => model.id === 'deepseek-v4-flash')
-
-    // Always pin big-pickle first; only fall back to other free/stealth models
-    // if it fails or is unavailable. The thread model is appended by the caller.
-    const attempts = new Map<string, { providerId: string; modelId: string }>()
-    const addCandidate = (providerId?: string, modelId?: string) => {
-      if (!providerId || !modelId) return
-      attempts.set(`${providerId}/${modelId}`, { providerId, modelId })
-    }
-    addCandidate('opencode', 'big-pickle')
-    for (const model of fallbackFreeModels) addCandidate(model.providerId, model.id)
-    addCandidate(goFlash?.providerId, goFlash?.id)
-    return [...attempts.values()]
+  /** Big Pickle is OpenCode's single cheap auxiliary candidate. */
+  private async cheapCandidates(
+    _projectPath: string
+  ): Promise<Array<{ providerId: string; modelId: string }>> {
+    void _projectPath
+    // Pin the known alias so catalog discovery cannot block the fallback. The
+    // one-shot runner appends the conversation model and tries it when Big
+    // Pickle times out, fails, or produces an invalid response.
+    return [{ providerId: 'opencode', modelId: 'big-pickle' }]
   }
 
   /** Run one auxiliary one-shot completion per candidate on isolated servers. */
@@ -1421,8 +1443,7 @@ export class OpenCodeDriver implements HarnessDriver {
               modelId: candidate.modelId,
               thinkingLevel: 'minimal',
               inferenceMode: 'normal',
-              permissionLevel: 'auto_review',
-              engineeringMode: false
+              permissionLevel: 'auto_review'
             },
             text: promptText,
             attachments: [],
@@ -1432,7 +1453,12 @@ export class OpenCodeDriver implements HarnessDriver {
           isolated
         )
         const result = await this.waitForTitleResult(isolated, timeoutMs)
-        attempts?.push({ providerId: candidate.providerId, modelId: candidate.modelId, ok: result !== null, failure: result === null ? 'No usable response produced' : null })
+        attempts?.push({
+          providerId: candidate.providerId,
+          modelId: candidate.modelId,
+          ok: result !== null,
+          failure: result === null ? 'No usable response produced' : null
+        })
         if (result) return result
       } catch (error) {
         attempts?.push({
@@ -1465,6 +1491,21 @@ export class OpenCodeDriver implements HarnessDriver {
       candidates,
       buildTitlePrompt(options.message.slice(0, 2_000))
     )
+  }
+
+  /** Ping the exact configured model — no cheap-candidate substitution. */
+  async sendHeartbeatPing(
+    projectPath: string,
+    options: SendHeartbeatPingOptions
+  ): Promise<boolean> {
+    const reply = await this.isolatedOneShot(
+      projectPath,
+      options.settings,
+      'Heartbeat',
+      [],
+      HEARTBEAT_PROMPT
+    )
+    return reply !== null
   }
 
   /**
@@ -1581,10 +1622,10 @@ export class OpenCodeDriver implements HarnessDriver {
           continue
         }
       }
-      if (isWordDocumentAttachment(attachment)) {
-        const content = await readWordDocumentText(attachment)
+      if (isDocumentAttachment(attachment)) {
+        const content = await readDocumentText(attachment)
         if (content !== null) {
-          parts.push({ type: 'text', text: formatWordDocumentAsText(attachment, content) })
+          parts.push({ type: 'text', text: formatDocumentAsText(attachment, content) })
           continue
         }
       }
@@ -1671,10 +1712,10 @@ export class OpenCodeDriver implements HarnessDriver {
           continue
         }
       }
-      if (isWordDocumentAttachment(attachment)) {
-        const content = await readWordDocumentText(attachment)
+      if (isDocumentAttachment(attachment)) {
+        const content = await readDocumentText(attachment)
         if (content !== null) {
-          parts.push({ type: 'text', text: formatWordDocumentAsText(attachment, content) })
+          parts.push({ type: 'text', text: formatDocumentAsText(attachment, content) })
           continue
         }
       }
@@ -1691,6 +1732,37 @@ export class OpenCodeDriver implements HarnessDriver {
       body: JSON.stringify({ messageID: opts.userMessageId, parts })
     })
     if (!res.ok) throw await errorFromResponse(res, 'Failed to steer active OpenCode session')
+  }
+
+  /**
+   * Live probe of the shared server's session-status map (`GET /session/status`,
+   * a Record of sessionID → `{ type: 'busy' | 'idle' | 'retry' | 'completed' }`).
+   * Used by restart recovery before resuming an "interrupted" thread: the
+   * surviving `opencode serve` process may still be running the pre-restart
+   * turn, and sending a prompt then would start a second concurrent loop on
+   * the same session. Best-effort: any transport/parse failure reports
+   * "not busy" so recovery keeps its legacy behavior rather than blocking.
+   */
+  async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
+    let handle: ServerHandle
+    try {
+      handle = await this.ensureServer(projectPath)
+    } catch {
+      return false
+    }
+    try {
+      const res = await fetch(`${handle.baseUrl}/session/status`, {
+        method: 'GET',
+        headers: this.headersFor(handle)
+      })
+      if (!res.ok) return false
+      const statuses = recordValue(await res.json())
+      if (!statuses) return false
+      const status = recordValue(statuses[sessionId])
+      return status?.['type'] === 'busy' || status?.['type'] === 'retry'
+    } catch {
+      return false
+    }
   }
 
   async loadMessages(
@@ -1807,6 +1879,8 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
+    const connected = await this.connectedProviderIds()
+    if (connected !== null && connected.size === 0) return []
     const { stdout } = await runHarnessCommand('opencode', ['models', '--verbose'], {
       cwd: projectPath,
       env: this.buildEnv(),
@@ -1831,7 +1905,7 @@ export class OpenCodeDriver implements HarnessDriver {
     const catalogs = [...rawProviders.values()]
       .map((provider) => this.mapProvider(provider))
       .filter((provider): provider is ProviderCatalog => provider !== null)
-    if (!this.baseUrlProviders) return catalogs
+    if (!this.baseUrlProviders) return this.filterConnectedCatalogs(catalogs, connected)
     const customProviders = await this.baseUrlProviders.listEnabled(this.id)
     const customIds = new Set(customProviders.map((provider) => provider.id))
     const merged = catalogs.filter((catalog) => !customIds.has(catalog.id))
@@ -1856,7 +1930,77 @@ export class OpenCodeDriver implements HarnessDriver {
         }))
       })
     }
-    return merged
+    return this.filterConnectedCatalogs(merged, connected)
+  }
+
+  /**
+   * The providers the user is actually connected to, keyed by the same provider
+   * ids `opencode models` reports: credentials in opencode's auth store
+   * (`auth.json` — OAuth logins and stored API keys), providers configured in
+   * `~/.config/opencode/opencode.json` (custom base URLs and keyless local
+   * servers alike), and CodeInOven-managed base-URL providers injected through
+   * the discovery overlay. Returns `null` when the connected set cannot be
+   * determined reliably — callers then keep the catalog unfiltered rather than
+   * wrongly hiding every provider behind a transient read failure.
+   */
+  private async connectedProviderIds(): Promise<Set<string> | null> {
+    const overlay = this.baseUrlProviders
+      ? await this.baseUrlProviders.listEnabled(this.id).catch(() => null)
+      : []
+    const nativeIds = await opencodeNativeProviderIds()
+    const authIds = await this.authCredentialIds()
+    if (overlay === null || nativeIds === null || authIds === null) return null
+    const connected = new Set<string>([...authIds, ...nativeIds])
+    for (const provider of overlay) connected.add(provider.id)
+    return connected
+  }
+
+  /**
+   * Credential ids held in opencode's auth store. `auth.json` is a record keyed
+   * by provider id. A missing store simply means no credentials; one that is
+   * present but unreadable or corrupt returns `null` so callers keep their
+   * catalog unfiltered rather than hiding every provider.
+   */
+  private async authCredentialIds(): Promise<Set<string> | null> {
+    const environment = this.buildEnv()
+    for (const path of openCodeAuthPaths(environment)) {
+      let raw: string
+      try {
+        raw = await readFile(path, 'utf8')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+        return null
+      }
+      try {
+        const auth = recordValue(JSON.parse(raw))
+        return new Set(auth ? Object.keys(auth) : [])
+      } catch {
+        return null
+      }
+    }
+    return new Set()
+  }
+
+  private filterConnectedCatalogs(
+    catalogs: ProviderCatalog[],
+    connected: Set<string> | null
+  ): ProviderCatalog[] {
+    if (connected === null) return catalogs
+    return catalogs.filter((catalog) => connected.has(catalog.id))
+  }
+
+  /** Cheap staleness signature of the connected-provider set; see the interface contract. */
+  async providerCatalogFingerprint(): Promise<string | null> {
+    const connected = await this.connectedProviderIds()
+    if (connected === null) return null
+    const overlay = this.baseUrlProviders
+      ? await this.baseUrlProviders.listEnabled(this.id).catch(() => [])
+      : []
+    const overlayModels = overlay
+      .map((provider) => `${provider.id}=${provider.models.map((model) => model.id).join(',')}`)
+      .sort()
+      .join('|')
+    return JSON.stringify([[...connected].sort(), overlayModels])
   }
 
   async listCommands(projectPath: string): Promise<HarnessCommand[]> {
@@ -2053,12 +2197,21 @@ export class OpenCodeDriver implements HarnessDriver {
     }
   }
 
+  /**
+   * Reuse-only poll: pending questions live in a running server's memory, so
+   * spawning a fresh `opencode serve` could never surface them — it would only
+   * boot the full harness. The thread mount calls this on every startup for
+   * reconnect recovery, so collect the handles that already exist (pooled +
+   * per-turn) and never start one here; a server spawned for real work gets
+   * picked up by the next poll or the SSE stream.
+   */
   async listPendingQuestions(projectPath: string): Promise<AgentQuestionRequest[]> {
-    const pooled = await this.ensureServer(projectPath)
+    const pooled = this.server ? this.scopedHandle(this.server, projectPath) : null
     const handles = [
-      pooled,
+      ...(pooled ? [pooled] : []),
       ...[...this.turnServers.values()].filter((handle) => handle.projectPath === projectPath)
     ]
+    if (handles.length === 0) return []
     const pending = await Promise.all(
       handles.map(async (handle) => {
         const response = await fetch(`${handle.baseUrl}/question`, {

@@ -2,6 +2,7 @@ import { readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
+import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import type {
   AgentCapabilityCatalog,
   AgentCapabilityEntry,
@@ -99,12 +100,12 @@ const HARNESS_SPECS: Record<string, HarnessSpec> = {
 }
 
 const DEFAULT_SPEC: HarnessSpec = {
-  id: 'opencode',
-  globalConfigPaths: ['.config/opencode/opencode.json'],
-  projectConfigPaths: ['.opencode/opencode.json', 'opencode.json'],
-  globalSkillDirs: ['.config/opencode/skills'],
-  projectSkillDirs: ['.opencode/skills'],
-  mcpFormat: 'opencode'
+  id: DEFAULT_HARNESS,
+  globalConfigPaths: [],
+  projectConfigPaths: [],
+  globalSkillDirs: [],
+  projectSkillDirs: ['.pi/skills'],
+  mcpFormat: 'mcpServers'
 }
 
 interface DiscoveryResult {

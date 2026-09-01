@@ -61,12 +61,12 @@ export const CIO_PROMPT_TEMPLATE_TAGS = [
   {
     tag: '{{BRAINSTORM_DOCUMENT_TOOL_NAME}}',
     description: 'The stable Brainstorm document tool name.',
-    value: 'brainstorm_document'
+    value: 'cio_brainstorm_doc'
   },
   {
     tag: '{{PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME}}',
     description: 'The stable product requirements document tool name.',
-    value: 'product_requirements_document'
+    value: 'cio_prd'
   }
 ] as const
 

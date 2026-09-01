@@ -155,6 +155,14 @@ export default defineConfig(({ mode }) => {
       resolve: {
         alias: rendererAlias
       },
+      // Pin the dev origin. The renderer's persisted state (recovery snapshot,
+      // thread visits, UI preferences) lives in localStorage keyed by origin,
+      // so a port that drifts when 5173 is busy silently loses every restart
+      // restore — the app would boot with empty persisted state.
+      server: {
+        port: 5173,
+        strictPort: true
+      },
       build: {
         outDir: resolve(__dirname, 'out/renderer'),
         rollupOptions: {

@@ -2,6 +2,7 @@ import { fileURLToPath } from 'url'
 import { realpath } from 'fs/promises'
 import { isAbsolute, posix, relative, resolve, sep, win32 } from 'path'
 import type { WebFrameMain } from 'electron'
+import type { GitRestoreTarget } from '../../lib/types'
 import type {
   ChecklistItemStatus,
   CreateProjectInput,
@@ -126,7 +127,6 @@ const THREAD_SETTINGS_FIELDS = new Set([
   'thinkingLevel',
   'inferenceMode',
   'permissionLevel',
-  'engineeringMode',
   'assignmentMode',
   'loopMode',
   'fileSystemMode',
@@ -633,6 +633,22 @@ export function validateGitResetMode(value: unknown): 'soft' | 'mixed' | 'hard' 
   return value as 'soft' | 'mixed' | 'hard'
 }
 
+/** Validate a restore target: the index only, or the index and working tree. */
+export function validateGitRestoreTarget(value: unknown): GitRestoreTarget {
+  if (value !== 'staged' && value !== 'worktree') {
+    throw new TypeError('Restore target must be one of: staged, worktree')
+  }
+  return value
+}
+
+/** Validate a revision-like restore source (commit hash, `stash@{n}`, branch). */
+export function validateGitRevision(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim() || value.trim().startsWith('-')) {
+    throw new TypeError('A valid git revision is required')
+  }
+  return value.trim()
+}
+
 /** Validate a git identity name/email pair. */
 export function validateGitIdentity(value: unknown): { name: string; email: string } {
   const input = assertRecord(value, 'Git identity')
@@ -989,7 +1005,10 @@ export function validateChecklistItemStatus(value: unknown): ChecklistItemStatus
 
 export function validateThreadSettings(value: unknown): ThreadSettings {
   const input = assertRecord(value, 'Thread settings')
-  rejectUnknownFields(input, THREAD_SETTINGS_FIELDS, 'thread settings')
+  // Settings persisted before the legacy `engineeringMode` flag was scrubbed
+  // still carry it — tolerate and drop it instead of rejecting the payload.
+  const { engineeringMode: _legacyEngineeringMode, ...rest } = input
+  rejectUnknownFields(rest, THREAD_SETTINGS_FIELDS, 'thread settings')
 
   const settings: ThreadSettings = {
     harnessId: validateEntityId(input.harnessId, 'Harness ID'),
@@ -997,7 +1016,6 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
     modelId: validateBoundedString(input.modelId, 'Model ID', 0, 256),
     thinkingLevel: assertEnum(input.thinkingLevel, THINKING_LEVELS, 'thinking level'),
     permissionLevel: assertEnum(input.permissionLevel, PERMISSION_LEVELS, 'permission level'),
-    engineeringMode: validateBoolean(input.engineeringMode, 'Engineering'),
     assignmentMode:
       input.assignmentMode === undefined
         ? false

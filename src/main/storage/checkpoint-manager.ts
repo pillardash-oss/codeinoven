@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises'
 import { dirname, join, resolve, sep } from 'path'
 import { APP_NAME } from '../../lib/brand'
 import { generateId, getConfigRoot } from '../../lib/utils'
+import { Logger } from '../system/logger'
 import type {
   TurnCheckpointChangeSummary,
   TurnCheckpointFileDiff,
@@ -69,10 +70,31 @@ export interface TurnCompletionOptions {
 /** Cap on foreign-thread checkpoints scanned while reconciling concurrent edits. */
 const FOREIGN_CHECKPOINT_SCAN_LIMIT = 500
 
+/** Upper bounds for one line-stats repair pass so startup is never blocked. */
+const REPAIR_MAX_CHECKPOINTS = 200
+const REPAIR_MAX_FILES = 500
+
 const MAX_LINE_DIFF_BYTES = 1024 * 1024
 const MAX_LINE_DIFF_LINES = 20_000
 const MAX_LINE_DIFF_DISTANCE = 4_000
 const MAX_LINE_DIFF_WORK = 4_000_000
+/**
+ * Maximum user-facing failure text persisted on (and rendered from) a turn
+ * checkpoint. A checkpoint failure is a short explanation (interruption notice,
+ * capture warning, contract rejection) — never a transcript. The bound also
+ * heals legacy checkpoints: before the textual usage-limit detection was
+ * structurally guarded, an agent's entire final message could be recorded as
+ * the failure and then splash into the run-changes card verbatim.
+ */
+export const MAX_CHECKPOINT_FAILURE_LENGTH = 600
+
+/** Bound a checkpoint's user-facing failure text to a short explanation. */
+function boundCheckpointFailure(failure: string): string {
+  const trimmed = failure.trim()
+  if (trimmed.length <= MAX_CHECKPOINT_FAILURE_LENGTH) return trimmed
+  return `${trimmed.slice(0, MAX_CHECKPOINT_FAILURE_LENGTH).trimEnd()}…`
+}
+
 /** Byte window returned for a per-file diff. Kept small to bound IPC payloads. */
 const MAX_DIFF_WINDOW_BYTES = 64 * 1024
 /** Context bytes kept around the changed region so the diff reads naturally. */
@@ -223,19 +245,12 @@ export class CheckpointManager {
         allChanges.length > 0 ? await this.foreignClaimedPaths(checkpoint, options) : undefined
       const precisePaths = options.precisePaths ?? new Set<string>()
       const keepChange = (path: string): boolean =>
-        foreign === undefined ||
-        !foreign.has(path) ||
-        precisePaths.has(path) ||
-        (changedPaths?.has(path) ?? false)
-      // An empty path filter is no evidence at all: it must not hide real
-      // before/after changes (e.g. edits made through tools that reported no
-      // paths). Only a non-empty set restricts the recorded diff; otherwise the
-      // authoritative snapshot diff stays visible.
-      const filterChangedPaths = changedPaths && changedPaths.size > 0 ? changedPaths : undefined
-      const changes = filterChangedPaths
-        ? allChanges.filter(
-            (change) => filterChangedPaths.has(change.path) && keepChange(change.path)
-          )
+        foreign === undefined || !foreign.has(path) || precisePaths.has(path)
+      // `undefined` preserves the project-wide snapshot behavior used by
+      // recovery and direct checkpoint callers. A supplied empty set means the
+      // owning turn reported no mutations and must record no workspace diff.
+      const changes = changedPaths
+        ? allChanges.filter((change) => changedPaths.has(change.path) && keepChange(change.path))
         : allChanges.filter((change) => keepChange(change.path))
       const lineStats = await this.calculateLineStats(tracker, changes)
       const contentUnavailable = new Set([
@@ -246,14 +261,14 @@ export class CheckpointManager {
       const captureWarning = this.captureWarning(
         changes.filter((change) => contentUnavailable.has(change.path)).map((change) => change.path)
       )
-      const completionFailure = [failure, captureWarning].filter(Boolean).join(' ')
+      const joinedFailure = [failure, captureWarning].filter(Boolean).join(' ')
+      const completionFailure = joinedFailure ? boundCheckpointFailure(joinedFailure) : ''
       const updated: TurnCheckpoint = {
         ...checkpoint,
         status,
         after,
         changes,
-        changeFilterApplied:
-          filterChangedPaths !== undefined || changes.length !== allChanges.length,
+        changeFilterApplied: changedPaths !== undefined || changes.length !== allChanges.length,
         lineStats: lineStats.stats,
         completedAt: Date.now(),
         ...(completionFailure ? { failure: completionFailure } : {})
@@ -371,7 +386,7 @@ export class CheckpointManager {
       const updated: TurnCheckpoint = {
         ...checkpoint,
         status: 'interrupted',
-        failure: `${interruption} Change capture failed: ${detail}`
+        failure: boundCheckpointFailure(`${interruption} Change capture failed: ${detail}`)
       }
       await this.save(updated)
       await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
@@ -410,7 +425,9 @@ export class CheckpointManager {
       const updated: TurnCheckpoint = {
         ...checkpoint,
         status: 'completed',
-        failure: `Change capture failed while finalizing a completed turn: ${detail}`
+        failure: boundCheckpointFailure(
+          `Change capture failed while finalizing a completed turn: ${detail}`
+        )
       }
       await this.save(updated)
       await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
@@ -433,7 +450,7 @@ export class CheckpointManager {
     const updated: TurnCheckpoint = {
       ...checkpoint,
       status: 'failed',
-      failure,
+      failure: boundCheckpointFailure(failure),
       completedAt: checkpoint.completedAt ?? Date.now()
     }
     await this.save(updated)
@@ -455,6 +472,83 @@ export class CheckpointManager {
     return rows.map((row) =>
       this.recoverUnfilteredChanges(projectId, JSON.parse(String(row['data'])) as TurnCheckpoint)
     )
+  }
+
+  /**
+   * One-time repair pass for checkpoints whose line stats were recorded as
+   * `{ truncated: true }` by the previous gating, which measured whole-file
+   * line counts instead of the trimmed changed region and therefore rejected
+   * large files with small edits. The blob-backed history is intact, so the
+   * exact counts can be recomputed and persisted. Idempotent: repaired
+   * checkpoints no longer match the candidate query, and checkpoints whose
+   * blobs are genuinely gone keep their honest truncated marker. Only terminal
+   * checkpoints are touched — `active` and `interrupted` rows can still be
+   * finalized by `completeTurn` and must never be rewritten from a read path.
+   */
+  async repairTruncatedLineStats(): Promise<number> {
+    let rows: Record<string, unknown>[]
+    try {
+      rows = await this.queryRows(
+        `SELECT DISTINCT tc.turn_id AS turn_id, tc.project_id AS project_id, tc.thread_id AS thread_id
+         FROM turn_checkpoints tc, json_each(tc.data, '$.lineStats') ls
+         WHERE json_extract(ls.value, '$.truncated') = 1
+         LIMIT ?`,
+        [REPAIR_MAX_CHECKPOINTS],
+        REPAIR_MAX_CHECKPOINTS
+      )
+    } catch (error) {
+      Logger.error('Line-stats repair could not list candidates (non-fatal):', error)
+      return 0
+    }
+    let repaired = 0
+    let repairedFiles = 0
+    for (const row of rows) {
+      if (repairedFiles >= REPAIR_MAX_FILES) break
+      const turnId = row['turn_id']
+      const projectId = row['project_id']
+      const threadId = row['thread_id']
+      if (
+        typeof turnId !== 'string' ||
+        typeof projectId !== 'string' ||
+        typeof threadId !== 'string'
+      ) {
+        continue
+      }
+      try {
+        const checkpoint = await this.get(projectId, threadId, turnId)
+        if (!checkpoint) continue
+        if (checkpoint.status === 'active' || checkpoint.status === 'interrupted') continue
+        const pending = checkpoint.changes.filter((change) => {
+          const stats = checkpoint.lineStats?.[change.path]
+          return stats !== undefined && stats.truncated === true && stats.additions === undefined
+        })
+        if (pending.length === 0) continue
+        const recomputed = await this.calculateLineStats(this.tracker(projectId), pending)
+        const lineStats: Record<string, CheckpointLineStats> = { ...(checkpoint.lineStats ?? {}) }
+        let recovered = 0
+        for (const change of pending) {
+          const stats = recomputed.stats[change.path]
+          if (stats && stats.additions !== undefined) {
+            lineStats[change.path] = stats
+            recovered += 1
+            repairedFiles += 1
+          }
+        }
+        if (recovered === 0) {
+          // Nothing recovered for this checkpoint (blobs genuinely unavailable);
+          // keep the honest truncated marker instead of rewriting the row.
+          continue
+        }
+        await this.save({ ...checkpoint, lineStats })
+        repaired += 1
+        // Yield between checkpoints so a large first-run repair never
+        // monopolizes the main process.
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      } catch (error) {
+        Logger.error('Line-stats repair skipped a checkpoint (non-fatal):', error)
+      }
+    }
+    return repaired
   }
 
   /** Remove project checkpoint blobs that no remaining thread references. */
@@ -558,7 +652,12 @@ export class CheckpointManager {
     const checkpoint = await this.get(projectId, threadId, turnId)
     if (!checkpoint) throw new Error(`Turn checkpoint not found: ${turnId}`)
     const change = checkpoint.changes.find((candidate) => candidate.path === path)
-    if (!change) throw new Error(`Path is not part of this checkpoint: ${path}`)
+    if (!change) {
+      // Stale renderer state (or a change filtered out at completion) can
+      // request a path this checkpoint never recorded. Serve the live diff
+      // for it instead of throwing so a hover popover degrades gracefully.
+      return this.getLiveFileDiff(projectId, threadId, turnId, path)
+    }
     const binary = change.before?.binary ?? change.after?.binary ?? false
     if (binary) {
       return { path, kind: change.kind, binary: true, truncated: false }
@@ -663,15 +762,19 @@ export class CheckpointManager {
    * and rollback-capable after the checkpoint format evolved.
    */
   private recoverUnfilteredChanges(projectId: string, checkpoint: TurnCheckpoint): TurnCheckpoint {
-    if (
-      checkpoint.changes.length > 0 ||
-      !checkpoint.after ||
-      checkpoint.changeFilterApplied === true
-    ) {
-      return checkpoint
+    // Read-time heal for legacy poison: checkpoints written before the failure
+    // bound could carry an entire agent transcript as `failure`. Overlong
+    // failure text is never a legitimate explanation — strip it so it can
+    // never splash into the run-changes card, regardless of when it was saved.
+    const healed =
+      checkpoint.failure !== undefined && checkpoint.failure.length > MAX_CHECKPOINT_FAILURE_LENGTH
+        ? { ...checkpoint, failure: undefined }
+        : checkpoint
+    if (healed.changes.length > 0 || !healed.after || healed.changeFilterApplied === true) {
+      return healed
     }
-    const changes = this.tracker(projectId).calculateChanges(checkpoint.before, checkpoint.after)
-    return changes.length > 0 ? { ...checkpoint, changes } : checkpoint
+    const changes = this.tracker(projectId).calculateChanges(healed.before, healed.after)
+    return changes.length > 0 ? { ...healed, changes } : healed
   }
 
   async rollback(projectId: string, threadId: string, turnId: string): Promise<TurnCheckpoint> {
@@ -790,10 +893,14 @@ export class CheckpointManager {
    * paths. The full maps duplicate the per-change snapshots and dominate the
    * row size (each entry is a tracked repo file), so a finished checkpoint only
    * retains what rollback, summaries, diffs, and blob pruning actually need.
-   * Checkpoints with an empty change list keep their full maps for inspection.
+   * Unfiltered empty checkpoints keep their maps for legacy recovery. A
+   * filtered empty checkpoint has proved that it owns no paths, so retaining
+   * two full project maps would waste storage on every read-only turn.
    */
   private compactCheckpoint(checkpoint: TurnCheckpoint): TurnCheckpoint {
-    if (checkpoint.changes.length === 0) return checkpoint
+    if (checkpoint.changes.length === 0 && checkpoint.changeFilterApplied !== true) {
+      return checkpoint
+    }
     const paths = new Set(checkpoint.changes.map((change) => change.path))
     const trimFiles = (snapshot: ProjectCheckpoint): ProjectCheckpoint => {
       const files: Record<string, CheckpointFile> = {}
@@ -921,9 +1028,6 @@ function calculateBoundedLineStats(
   } catch {
     return { truncated: true }
   }
-  if (before.length + after.length > MAX_LINE_DIFF_LINES) {
-    return { truncated: true }
-  }
 
   let prefix = 0
   while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) {
@@ -938,6 +1042,13 @@ function calculateBoundedLineStats(
 
   const oldLines = before.slice(prefix, beforeEnd)
   const newLines = after.slice(prefix, afterEnd)
+  // The line budget guards the expensive alignment below, which only ever sees
+  // the trimmed changed region — never the full files. Gating on whole-file
+  // line counts here would reject large files with small edits (the common
+  // case) even though computing their exact stats is cheap.
+  if (oldLines.length + newLines.length > MAX_LINE_DIFF_LINES) {
+    return { truncated: true }
+  }
   if (oldLines.length === 0) return { additions: newLines.length, deletions: 0 }
   if (newLines.length === 0) return { additions: 0, deletions: oldLines.length }
 

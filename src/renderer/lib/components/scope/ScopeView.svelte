@@ -244,7 +244,7 @@
     try {
       const created = await invoke('thread:create', {
         projectId: activeProject.id,
-        providerId: 'opencode',
+        providerId: 'pi',
         title: DEFAULT_THREAD_TITLE,
         workingDirectory: activeProject.path,
         settings: inheritedSettings,
@@ -310,6 +310,19 @@
       await scopeState.setArchive(scopeState.activeProjectId, bucket.id, archived)
     } catch (error) {
       actionError = errorMessage(error, 'The scope could not be archived.')
+    }
+  }
+
+  async function togglePinned(bucket: ScopeBucket): Promise<void> {
+    if (!scopeState.activeProjectId) return
+    try {
+      await scopeState.setPinned(
+        scopeState.activeProjectId,
+        bucket.id,
+        bucket.pinned !== true
+      )
+    } catch (error) {
+      actionError = errorMessage(error, 'The scope could not be pinned.')
     }
   }
 
@@ -431,6 +444,7 @@
               onToggleSlice={(stage) => toggleSlice(bucket.id, stage)}
               onEditBucket={() => askEditBucket(bucket)}
               onDeleteBucket={() => (deleteBucketTarget = bucket)}
+              onTogglePinned={() => void togglePinned(bucket)}
               onArchive={() => void toggleArchive(bucket, true)}
               onRestore={() => void toggleArchive(bucket, false)}
               onCreateWorktree={() => (createWorktreeTarget = bucket)}

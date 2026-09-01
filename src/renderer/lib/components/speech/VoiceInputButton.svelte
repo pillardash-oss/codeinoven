@@ -124,6 +124,7 @@
   })
 
   const belongsHere = $derived(speechController.isActiveTarget(targetId))
+  const transcribingHere = $derived(speechController.isTranscribingTarget(targetId))
   const activeRecordingScope = $derived(speechController.recordingScope)
   const recordingHere = $derived(
     activeRecordingScope !== null &&
@@ -163,6 +164,8 @@
           ? 'Stopping voice recording'
           : 'Transcribing voice recording'
     }
+    if (transcribingHere)
+      return 'Transcribing your last recording — click to start a new one'
     return 'Start voice recording'
   })
 
@@ -289,12 +292,18 @@
         <span class="wave-bar wave-bar-delay-1"></span>
         <span class="wave-bar wave-bar-delay-2"></span>
       </span>
+    {:else if transcribingHere}
+      <span class="flex h-3 items-center gap-[2px]" aria-hidden="true">
+        <span class="wave-bar wave-bar-transcribing"></span>
+        <span class="wave-bar wave-bar-transcribing wave-bar-delay-1"></span>
+        <span class="wave-bar wave-bar-transcribing wave-bar-delay-2"></span>
+      </span>
     {:else}
       <Mic size={14} aria-hidden="true" />
     {/if}
   </button>
 
-  <span class="sr-only" aria-live="polite">{action !== 'start' ? label : ''}</span>
+  <span class="sr-only" aria-live="polite">{action !== 'start' || transcribingHere ? label : ''}</span>
 {/if}
 
 <style>
@@ -320,5 +329,8 @@
   }
   .wave-bar-delay-2 {
     animation-delay: 0.3s;
+  }
+  .wave-bar-transcribing {
+    background: var(--color-info);
   }
 </style>

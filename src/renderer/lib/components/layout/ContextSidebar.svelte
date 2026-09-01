@@ -9,6 +9,7 @@
     ChevronDown,
     Cloud,
     FileDiff,
+    FileTerminal,
     Files,
     GitBranch,
     Globe2,
@@ -24,6 +25,7 @@
     X
   } from '@lucide/svelte'
   import type { ContextSidebarTab, TerminalPlacement } from '$lib/stores/context-sidebar.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
 
@@ -99,6 +101,7 @@
     'debugger',
     'notifications',
     'git',
+    'actions',
     'thread-note',
     'coordinator'
   ])
@@ -134,6 +137,19 @@
   let dragTabId = $state<string | null>(null)
   let dropTargetId = $state<string | null>(null)
   let dropPosition = $state<'before' | 'after' | null>(null)
+  let stripScroller = $state<HTMLDivElement>()
+
+  // Keep the active tab visible in the strip: whenever the strip mounts or the
+  // active tab changes (a link opened a new browser tab, a tab was selected,
+  // the workspace came back from fullscreen), scroll it into view horizontally
+  // so it is never hidden past the strip's scroll edge. Mirrors the fullscreen
+  // dialog strip's behavior.
+  $effect(() => {
+    const scroller = stripScroller
+    if (!scroller || !activeTabId) return
+    const activeButton = scroller.querySelector<HTMLElement>('[data-active-tab="true"]')
+    activeButton?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+  })
 
   function setDragImage(e: DragEvent, label: string): void {
     const ghost = document.createElement('div')
@@ -234,6 +250,8 @@
       <FileDiff size={12} class="shrink-0" />
     {:else if tab.kind === 'terminal'}
       <SquareTerminal size={12} class="shrink-0" />
+    {:else if tab.kind === 'actions'}
+      <FileTerminal size={12} class="shrink-0" />
     {:else if tab.kind === 'browser'}
       <Globe2 size={12} class="shrink-0" />
     {:else if tab.kind === 'debugger'}
@@ -262,7 +280,7 @@
   {#if !headerless}
     <div class="flex h-10 shrink-0 items-center border-b border-border">
       {#if tabbedMode}
-        <div class="min-w-0 flex-1 overflow-x-auto">
+        <div class="min-w-0 flex-1 overflow-x-auto" bind:this={stripScroller}>
           <div class="flex h-10 min-w-max items-stretch">
             {#each stripTabs as tab (tab.id)}
               <div
@@ -301,6 +319,7 @@
                   type="button"
                   class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
                   aria-current={activeTabId === tab.id ? 'page' : undefined}
+                  data-active-tab={activeTabId === tab.id ? 'true' : undefined}
                   title={tab.title}
                   onclick={() => onSelect(tab.id)}
                 >
@@ -310,21 +329,10 @@
                       ? 'italic'
                       : ''}">{tab.title}</span
                   >
-                  {#if tab.kind === 'temporary-chat' && tab.busy}
+                  {#if tab.kind === 'temporary-chat' && agentRuns.isBusy(tab.projectId, tab.temporaryChatId)}
                     <StatusBadge stage="working" animated title="Working" />
                   {/if}
                 </button>
-                {#if (tab.kind === 'terminal' || tab.kind === 'browser') && onFullscreenTab}
-                  <button
-                    type="button"
-                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                    aria-label={`Fullscreen ${tab.title}`}
-                    title="Fullscreen"
-                    onclick={() => onFullscreenTab(tab.id)}
-                  >
-                    <Maximize2 size={11} />
-                  </button>
-                {/if}
                 <button
                   type="button"
                   class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
@@ -404,6 +412,15 @@
                 <Plus size={13} />
               </button>
             {/if}
+            <button
+              type="button"
+              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="Fullscreen"
+              title="Fullscreen"
+              onclick={() => activeTabId && onFullscreenTab?.(activeTabId)}
+            >
+              <Maximize2 size={13} />
+            </button>
           {:else if terminalMode}
             {#if onNewTerminal}
               <button
@@ -427,6 +444,15 @@
                 <ChevronDown size={13} />
               </button>
             {/if}
+            <button
+              type="button"
+              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="Fullscreen"
+              title="Fullscreen"
+              onclick={() => activeTabId && onFullscreenTab?.(activeTabId)}
+            >
+              <Maximize2 size={13} />
+            </button>
             <button
               type="button"
               class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"

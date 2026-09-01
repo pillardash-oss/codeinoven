@@ -1,18 +1,18 @@
-import type { Thread, ThreadSettings } from '$shared/types'
+import { sanitizeThreadSettings, type Thread, type ThreadSettings } from '$shared/types'
 import { APP_SLUG } from '$shared/brand'
+import { DEFAULT_HARNESS } from '$shared/harness-default'
 
 const THREAD_SETTINGS_KEY = `${APP_SLUG}.threadSettings.lastUsed`
 const CHAT_SETTINGS_KEY = `${APP_SLUG}.chatSettings.lastUsed`
 
 /** Fallback settings used before anything has been persisted. */
 export const DEFAULT_SETTINGS: ThreadSettings = {
-  harnessId: 'pi',
+  harnessId: DEFAULT_HARNESS,
   providerId: '',
   modelId: '',
   thinkingLevel: 'medium',
   inferenceMode: 'normal',
   permissionLevel: 'auto_review',
-  engineeringMode: false,
   loopMode: false,
   fileSystemMode: false
 }
@@ -25,7 +25,6 @@ export const DEFAULT_SETTINGS: ThreadSettings = {
  */
 export const CHAT_DEFAULT_SETTINGS: ThreadSettings = {
   ...DEFAULT_SETTINGS,
-  engineeringMode: false,
   permissionLevel: 'auto_review'
 }
 
@@ -34,7 +33,7 @@ function load(storageKey: string, defaults: ThreadSettings): ThreadSettings {
   try {
     const raw = window.localStorage.getItem(storageKey)
     if (!raw) return { ...defaults }
-    const parsed = JSON.parse(raw) as Partial<ThreadSettings>
+    const parsed = sanitizeThreadSettings(JSON.parse(raw))
     return { ...defaults, ...parsed }
   } catch {
     return { ...defaults }
@@ -110,7 +109,6 @@ export function chatEffectiveSettings(): ThreadSettings {
     providerId: project.providerId,
     modelId: project.modelId,
     thinkingLevel: project.thinkingLevel,
-    engineeringMode: false,
     permissionLevel: 'auto_review'
   }
 }

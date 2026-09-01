@@ -365,7 +365,7 @@
 
     const thread = await invoke('thread:create', {
       projectId,
-      providerId: 'opencode',
+      providerId: 'pi',
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: project.path,
       settings: { ...threadSettings.lastUsed }

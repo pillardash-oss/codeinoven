@@ -1,3 +1,4 @@
+import { Logger } from '../../system/logger'
 import type { Database } from '../database'
 import type {
   AccountActivityDay,
@@ -216,46 +217,60 @@ export interface UsageCostCoverage {
 export class HarnessUsageRepo {
   constructor(private db: Database) {}
 
-  /** Persist one usage attempt. Replaying its stable identity is a no-op. */
+  /**
+   * Persist one usage attempt. Replaying its stable identity is a no-op.
+   * Usage telemetry is best-effort: a stale `parentTurnId` (e.g. the owning
+   * `agent_messages` row was deleted, edited, or not yet committed) can trip
+   * the FK constraint. Swallow that instead of letting it mask the real
+   * error in whatever `finally` block called us.
+   */
   recordEvent(event: UsageEvent): void {
-    this.db.run(
-      `INSERT OR IGNORE INTO usage_events(
-        id, thread_id, parent_turn_id, feature_call_id, attempt, feature,
-        harness_id, provider_id, model_id, thinking_level, utility_id, raw_provider_usage_json,
-        tokens_uncached_input, tokens_cached_input, tokens_cache_write,
-        tokens_output, tokens_reasoning, tokens_total, raw_total, total_semantics,
-        cost_usd, cost_status, pricing_provenance_json, tool_fee_usd,
-        success, retry_cause, duration_ms, created_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      event.id,
-      event.threadId,
-      event.parentTurnId,
-      event.featureCallId,
-      event.attempt,
-      event.feature,
-      event.harnessId,
-      event.providerId,
-      event.modelId,
-      event.thinkingLevel,
-      event.utilityId,
-      JSON.stringify(event.rawProviderUsage),
-      event.tokens.uncachedInput,
-      event.tokens.cachedInput,
-      event.tokens.cacheWrite,
-      event.tokens.output,
-      event.tokens.reasoning,
-      accountedTokenTotal(event),
-      event.rawTotal,
-      event.totalSemantics,
-      event.costUsd,
-      event.costStatus,
-      event.pricingProvenance === null ? null : JSON.stringify(event.pricingProvenance),
-      event.toolFeeUsd,
-      event.success ? 1 : 0,
-      event.retryCause,
-      Math.max(0, Math.floor(event.durationMs ?? 0)),
-      event.createdAt
-    )
+    try {
+      this.db.run(
+        `INSERT OR IGNORE INTO usage_events(
+          id, thread_id, parent_turn_id, feature_call_id, attempt, feature,
+          harness_id, provider_id, model_id, thinking_level, utility_id, raw_provider_usage_json,
+          tokens_uncached_input, tokens_cached_input, tokens_cache_write,
+          tokens_output, tokens_reasoning, tokens_total, raw_total, total_semantics,
+          cost_usd, cost_status, pricing_provenance_json, tool_fee_usd,
+          success, retry_cause, duration_ms, created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        event.id,
+        event.threadId,
+        event.parentTurnId,
+        event.featureCallId,
+        event.attempt,
+        event.feature,
+        event.harnessId,
+        event.providerId,
+        event.modelId,
+        event.thinkingLevel,
+        event.utilityId,
+        JSON.stringify(event.rawProviderUsage),
+        event.tokens.uncachedInput,
+        event.tokens.cachedInput,
+        event.tokens.cacheWrite,
+        event.tokens.output,
+        event.tokens.reasoning,
+        accountedTokenTotal(event),
+        event.rawTotal,
+        event.totalSemantics,
+        event.costUsd,
+        event.costStatus,
+        event.pricingProvenance === null ? null : JSON.stringify(event.pricingProvenance),
+        event.toolFeeUsd,
+        event.success ? 1 : 0,
+        event.retryCause,
+        Math.max(0, Math.floor(event.durationMs ?? 0)),
+        event.createdAt
+      )
+    } catch (error) {
+      Logger.dev('Failed to record usage event; dropping telemetry', {
+        feature: event.feature,
+        parentTurnId: event.parentTurnId,
+        error
+      })
+    }
   }
 
   /** Cost totals with explicit coverage; unavailable events never enter USD sums. */
@@ -285,20 +300,25 @@ export class HarnessUsageRepo {
   }
 
   /** Economically comparable metrics for completed successful user turns. */
-  efficiencyKpis(range?: LocalProfileAnalyticsRange): UsageEfficiencyKpis {
+  efficiencyKpis(range?: LocalProfileAnalyticsRange): Promise<UsageEfficiencyKpis> {
     return this.computeEfficiencyKpis(range)
   }
 
   /** Economically comparable metrics scoped to a single thread's completed turns. */
-  efficiencyKpisForThread(threadId: string): UsageEfficiencyKpis {
+  efficiencyKpisForThread(threadId: string): Promise<UsageEfficiencyKpis> {
     return this.computeEfficiencyKpis(undefined, threadId)
   }
 
-  private computeEfficiencyKpis(
+  /**
+   * Both KPI queries run on the maintenance worker connection so their full
+   * `usage_events` scans never block the Electron main thread (primary-
+   * connection fallback for in-memory test databases).
+   */
+  private async computeEfficiencyKpis(
     range?: LocalProfileAnalyticsRange,
     threadId?: string
-  ): UsageEfficiencyKpis {
-    const row = this.db.get<{
+  ): Promise<UsageEfficiencyKpis> {
+    const [row] = await this.aggregate<{
       successful_turns: number
       uncached_input: number
       cached_input: number
@@ -369,13 +389,14 @@ export class HarnessUsageRepo {
                            THEN COALESCE(tokens_uncached_input, 0) + COALESCE(tokens_output, 0)
                            ELSE 0 END), 0) AS tool_result_tokens
        FROM scoped`,
-      range?.startAt ?? null,
-      range?.startAt ?? null,
-      range?.endAt ?? null,
-      range?.endAt ?? null,
-      threadId ?? null,
-      threadId ?? null
-    )
+      [
+        range?.startAt ?? null,
+        range?.startAt ?? null,
+        range?.endAt ?? null,
+        range?.endAt ?? null,
+        threadId ?? null,
+        threadId ?? null
+      ])
     const successfulTurns = row?.successful_turns ?? 0
     const uncachedInputTokens = row?.uncached_input ?? 0
     const cachedInputTokens = row?.cached_input ?? 0
@@ -393,7 +414,7 @@ export class HarnessUsageRepo {
     const pricedCostEvents = row?.priced_cost_events ?? 0
     const totalCostEvents = row?.total_cost_events ?? 0
     const toolResultTokens = row?.tool_result_tokens ?? 0
-    const cacheBreakdownRows = this.db.all<{
+    const cacheBreakdownRows = await this.aggregate<{
       harness_id: string | null
       provider_id: string | null
       model_id: string | null
@@ -429,13 +450,14 @@ export class HarnessUsageRepo {
        WHERE feature IN ('main', 'audit', 'assignment')
        GROUP BY harness_id, provider_id, model_id
        ORDER BY main_attempts DESC, harness_id ASC, provider_id ASC, model_id ASC`,
-      range?.startAt ?? null,
-      range?.startAt ?? null,
-      range?.endAt ?? null,
-      range?.endAt ?? null,
-      threadId ?? null,
-      threadId ?? null
-    )
+      [
+        range?.startAt ?? null,
+        range?.startAt ?? null,
+        range?.endAt ?? null,
+        range?.endAt ?? null,
+        threadId ?? null,
+        threadId ?? null
+      ])
     const cacheBreakdown: UsageCacheHitBreakdown[] = cacheBreakdownRows.map((entry) => ({
       harnessId: entry.harness_id,
       providerId: entry.provider_id,
@@ -679,6 +701,7 @@ export class HarnessUsageRepo {
       utilityRows,
       activityRows,
       dailyRows,
+      responseRows,
       hourlyRows
     ] = await Promise.all([
       this.aggregate<LocalUsageAggregateRow>(
@@ -792,6 +815,18 @@ export class HarnessUsageRepo {
            ORDER BY date ASC`,
         [...PROFILE_UTILITY_FEATURES, ...params]
       ),
+      // Real agent responses: count durable assistant messages (not usage
+      // events) within the range, and sum their wall-clock turn runtime.
+      this.aggregate<{ message_count: number; duration_ms: number }>(
+        `SELECT COUNT(*) AS message_count,
+                COALESCE(SUM(COALESCE(completed_at, created_at) - created_at), 0) AS duration_ms
+         FROM agent_messages
+         WHERE role = 'assistant'
+           AND harness_id IS NOT NULL
+           AND created_at >= ?
+           AND created_at < ?`,
+        [range.startAt, range.endAt]
+      ),
       this.aggregate<LocalUsageHourRow>(
         `SELECT CAST(hour_key AS INTEGER) AS id,
                   CAST(hour_key AS INTEGER) AS hour,
@@ -870,7 +905,10 @@ export class HarnessUsageRepo {
     return {
       range,
       activityRange,
-      messageCount: harnessRows.reduce((sum, row) => sum + row.message_count, 0),
+      // Real agent responses come from the durable assistant-message ledger,
+      // not from usage events, so retries never inflate the count.
+      messageCount: responseRows[0]?.message_count ?? 0,
+      responseDurationMs: responseRows[0]?.duration_ms ?? 0,
       costUsd: harnessCost + utilityCost,
       tokens: harnessTokens + utilityTokens,
       durationMs:

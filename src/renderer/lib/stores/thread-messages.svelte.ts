@@ -9,7 +9,7 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageId as createMessageId } from '$shared/id'
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type {
   AgentEvent,
   AgentMessage,
@@ -34,6 +34,9 @@ interface ThreadMessagesEntry {
   hasOlder: boolean
   error: string
   runIssue: AgentProviderIssue | null
+  /** User messages held by the chat engine before delivery to the harness —
+   *  the steer-undo window. Keyed by user message id. */
+  heldSteerIds: Set<string>
 }
 
 /** Bounded window warmed on hover, matching the ThreadView history window so a
@@ -131,7 +134,8 @@ class ThreadMessagesStore {
         loading: false,
         hasOlder: false,
         error: '',
-        runIssue: null
+        runIssue: null,
+        heldSteerIds: new SvelteSet<string>()
       }
       this.#threads.set(key, entry)
       this.threads.set(key, { ...entry })
@@ -202,6 +206,17 @@ class ThreadMessagesStore {
     this.#notify(projectId, threadId)
   }
 
+  /** Whether this user message is held by the engine before harness delivery
+   *  (the steer-undo window). */
+  isSteerHeld(projectId: string, threadId: string, messageId: string): boolean {
+    return this.threads.get(threadKey(projectId, threadId))?.heldSteerIds.has(messageId) ?? false
+  }
+
+  /** Ask the engine to drop a held steer before it reaches the harness. */
+  async discardSteer(projectId: string, threadId: string, messageId: string): Promise<void> {
+    await invoke('agent:discardSteer', projectId, threadId, messageId)
+  }
+
   clearLoadError(projectId: string, threadId: string): void {
     const entry = this.entry(projectId, threadId)
     if (!entry.error) return
@@ -236,6 +251,61 @@ class ThreadMessagesStore {
     } finally {
       if (this.#loadPromises.get(key) === loadPromise) this.#loadPromises.delete(key)
     }
+  }
+
+  /**
+   * Load a temporary side chat from its harness mirror.
+   *
+   * Temporary conversations share every primitive with threads — cache entry,
+   * reconcile merge, event application, busy tracking — and differ only in
+   * where their mirror lives (`agent:loadTemporaryChatMessages`) and that the
+   * mirror is unpaged.
+   */
+  async loadTemporary(projectId: string, conversationId: string): Promise<void> {
+    const key = threadKey(projectId, conversationId)
+    const existing = this.#loadPromises.get(key)
+    if (existing) return existing
+    const loadPromise = (async (): Promise<void> => {
+      const entry = this.entry(projectId, conversationId)
+      entry.loading = true
+      entry.error = ''
+      this.#notify(projectId, conversationId)
+      try {
+        const serverMessages = await invoke('agent:loadTemporaryChatMessages', conversationId)
+        this.reconcile(projectId, conversationId, serverMessages)
+        entry.hasOlder = false
+        entry.loaded = true
+      } catch (err) {
+        entry.error = err instanceof Error ? err.message : 'Could not load messages.'
+      } finally {
+        entry.loading = false
+        this.#notify(projectId, conversationId)
+      }
+    })()
+    this.#loadPromises.set(key, loadPromise)
+    try {
+      await loadPromise
+    } finally {
+      if (this.#loadPromises.get(key) === loadPromise) this.#loadPromises.delete(key)
+    }
+  }
+
+  /**
+   * Commit a pre-built message into a temporary conversation immediately —
+   * used by side chats that must show their seeded selection prompt the instant
+   * the tab opens, before any turn is submitted. The message joins the same
+   * cache a thread uses, so later mirror reconciles merge against it.
+   */
+  seedMessage(projectId: string, conversationId: string, message: AgentMessage): void {
+    this.#cancelReveal(threadKey(projectId, conversationId))
+    const entry = this.entry(projectId, conversationId)
+    if (entry.messages.some((candidate) => candidate.id === message.id)) return
+    entry.messages = [...entry.messages, message]
+    entry.loaded = true
+    entry.loading = false
+    entry.hasOlder = false
+    entry.error = ''
+    this.#notify(projectId, conversationId)
   }
 
   async #load(projectId: string, threadId: string, recentLimit?: number): Promise<void> {
@@ -444,6 +514,11 @@ class ThreadMessagesStore {
     this.#flushReveal(threadKey(projectId, threadId))
     const entry = this.entry(projectId, threadId)
     const messageId = userMessageId ?? createMessageId()
+    // A pre-seeded message (the side chat's explain prompt committed at open
+    // time) already occupies this ID — reuse it instead of appending a duplicate.
+    if (entry.messages.some((candidate) => candidate.id === messageId)) {
+      return { entry, messageId }
+    }
     const optimistic: AgentMessage = {
       id: messageId,
       role: 'user',
@@ -627,6 +702,105 @@ class ThreadMessagesStore {
     return messageId
   }
 
+  /**
+   * Send a turn into a temporary side chat.
+   *
+   * Temporary conversations are ordinary entries in this store — same
+   * optimistic append, same mirror reconciliation, same event-driven busy
+   * tracking. Only the backend transport differs (`agent:sendTemporaryPrompt`,
+   * read-only, returns the final assistant message instead of the confirmed
+   * user message), and the visible text may differ from the transport text
+   * (the explain tab shows a short action label while sending the full
+   * instruction).
+   */
+  async sendTemporary(
+    projectId: string,
+    threadId: string,
+    conversationId: string,
+    settings: ThreadSettings,
+    options: {
+      text: string
+      transportText?: string
+      attachments?: PromptAttachment[]
+      references?: PromptReference[]
+      initialContext?: string
+      userMessageId?: string
+    }
+  ): Promise<void> {
+    const { text, transportText, attachments = [], references, initialContext, userMessageId } =
+      options
+    this.setRunIssue(projectId, conversationId, null)
+    const { entry, messageId } = this.appendOptimistic(
+      projectId,
+      conversationId,
+      text,
+      attachments,
+      userMessageId,
+      references
+    )
+    agentRuns.setBusy(projectId, conversationId, true, messageId)
+    try {
+      const response = await invoke(
+        'agent:sendTemporaryPrompt',
+        projectId,
+        threadId,
+        conversationId,
+        settings,
+        transportText ?? text,
+        attachments,
+        references ?? [],
+        initialContext,
+        messageId,
+        text
+      )
+      // The backend returns the authoritative final assistant message; merge it
+      // through the same never-downgrade snapshot path a thread's mirror uses.
+      if (response) this.mergePage(projectId, conversationId, [response])
+    } catch (error) {
+      this.rejectOptimistic(projectId, conversationId, entry, messageId, error)
+      throw error
+    }
+  }
+
+  /** Steer — append a user intervention into a temporary chat's active turn. */
+  async steerTemporary(
+    projectId: string,
+    threadId: string,
+    conversationId: string,
+    settings: ThreadSettings,
+    text: string,
+    attachments: PromptAttachment[] = [],
+    references: PromptReference[] = []
+  ): Promise<void> {
+    this.setRunIssue(projectId, conversationId, null)
+    const { entry, messageId } = this.appendOptimistic(
+      projectId,
+      conversationId,
+      text,
+      attachments,
+      undefined,
+      references
+    )
+    agentRuns.setBusy(projectId, conversationId, true, messageId)
+    try {
+      await invoke(
+        'agent:steerTemporaryPrompt',
+        projectId,
+        threadId,
+        conversationId,
+        settings,
+        text,
+        attachments,
+        references,
+        messageId,
+        text
+      )
+    } catch (error) {
+      this.rejectOptimistic(projectId, conversationId, entry, messageId, error)
+      throw error
+    }
+  }
+
   /** Apply a streaming part update to the cached messages. */
   upsertPart(projectId: string, threadId: string, sessionId: string, part: AgentPart): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
@@ -786,6 +960,27 @@ class ThreadMessagesStore {
   /** Drop a message and everything after it from the cache. */
   async truncate(projectId: string, threadId: string, messageId: string): Promise<AgentMessage[]> {
     const kept = await invoke('agent:truncateMessages', projectId, threadId, messageId)
+    this.#applyRemoval(projectId, threadId, kept)
+    return kept
+  }
+
+  /**
+   * Delete history around a message: `down` keeps the prefix before it,
+   * `single` removes the message and its turn's work trace and splices the
+   * neighbours together, `up` keeps only later messages.
+   */
+  async remove(
+    projectId: string,
+    threadId: string,
+    messageId: string,
+    mode: 'down' | 'single' | 'up'
+  ): Promise<AgentMessage[]> {
+    const kept = await invoke('agent:deleteMessages', projectId, threadId, messageId, mode)
+    this.#applyRemoval(projectId, threadId, kept)
+    return kept
+  }
+
+  #applyRemoval(projectId: string, threadId: string, kept: AgentMessage[]): void {
     const key = threadKey(projectId, threadId)
     this.#cancelReveal(key)
     const entry = this.entry(projectId, threadId)
@@ -794,7 +989,6 @@ class ThreadMessagesStore {
     entry.error = ''
     this.#sessionIds.delete(key)
     this.#notify(projectId, threadId)
-    return kept
   }
 
   /** Clear the cache for a thread (e.g. on deletion). */
@@ -821,6 +1015,19 @@ class ThreadMessagesStore {
     }
     if (update.type === 'refresh.completed') {
       agentRuns.completeBackground(projectId, threadId, 'brainstorm_report')
+      return
+    }
+    if (update.type === 'refresh.failed') {
+      // A failed post-turn refresh must clear the background busy state (no
+      // 'refresh.completed' will arrive) and surface the failure like any
+      // other terminal run issue instead of silently dropping the version.
+      agentRuns.completeBackground(projectId, threadId, 'brainstorm_report')
+      this.setRunIssue(projectId, threadId, {
+        kind: 'unknown',
+        message: update.error,
+        harnessId: update.harnessId,
+        retryable: true
+      })
       return
     }
     if (update.type === 'started' || update.type === 'completed') {
@@ -860,6 +1067,12 @@ class ThreadMessagesStore {
       return
     }
     if (!('sessionId' in event)) return
+    // A temporary chat's isolated session coming up — bind it so the shared
+    // pipeline routes streaming events to the side chat like any thread.
+    if (event.type === 'temporary-chat.started') {
+      this.setSessionId(event.projectId, event.temporaryChatId, event.sessionId)
+      return
+    }
     const target = this.#threadsBySession.get(event.sessionId)
     if (!target) return
     const { projectId, threadId } = target
@@ -874,6 +1087,25 @@ class ThreadMessagesStore {
     }
 
     switch (event.type) {
+      case 'steer.held':
+      case 'steer.delivered':
+      case 'steer.discarded': {
+        const entry = this.entry(projectId, threadId)
+        if (event.type === 'steer.held') {
+          entry.heldSteerIds.add(event.userMessageId)
+        } else {
+          entry.heldSteerIds.delete(event.userMessageId)
+          if (event.type === 'steer.discarded') {
+            // The steer never reached the harness — remove the optimistic
+            // message so the conversation looks untouched.
+            entry.messages = entry.messages.filter(
+              (message) => message.id !== event.userMessageId
+            )
+          }
+        }
+        this.#notify(projectId, threadId)
+        break
+      }
       case 'message.part.updated':
         this.upsertPart(projectId, threadId, event.sessionId, event.part)
         break

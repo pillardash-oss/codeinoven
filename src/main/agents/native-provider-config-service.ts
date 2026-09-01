@@ -5,16 +5,69 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
-import type { BaseUrlProvider, BaseUrlProviderModel } from '../../lib/types'
+import type { BaseUrlProvider, BaseUrlProviderModel, ThinkingLevel } from '../../lib/types'
+import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
 const PI_MODELS_PATH = join(homedir(), '.pi', 'agent', 'models.json')
 const NATIVE_HARNESSES = new Set(['opencode', 'pi'])
 const FORMAT_OPTIONS = { tabSize: 2, insertSpaces: true, eol: '\n' }
+const THINKING_LEVELS = new Set<ThinkingLevel>([
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra'
+])
+
+/**
+ * A model's default thinking level is a CodeInOven-only picker convenience
+ * (pre-selects the thread's thinking level the first time the model is
+ * chosen) — neither opencode's nor pi's own schema has a concept for it. This
+ * writes/reads it under a clearly CodeInOven-owned key rather than dropping
+ * it, so it survives a save/reload round trip like every other model field.
+ */
+function readDefaultThinkingLevel(value: unknown): ThinkingLevel | undefined {
+  return typeof value === 'string' && THINKING_LEVELS.has(value as ThinkingLevel)
+    ? (value as ThinkingLevel)
+    : undefined
+}
 
 /** Native harness files that can round-trip both providers and their model catalogs. */
 export function hasNativeProviderCatalog(harnessId: string): boolean {
   return NATIVE_HARNESSES.has(harnessId)
+}
+
+/**
+ * Provider ids the user configured natively in Pi's `~/.pi/agent/models.json` —
+ * explicit connect targets regardless of whether their entry carries an API
+ * key (keyless local servers are legitimate).
+ */
+export async function piNativeProviderIds(): Promise<Set<string>> {
+  const config = await readJsoncObject(PI_MODELS_PATH)
+  const providers = record(config['providers']) ?? {}
+  return new Set(Object.keys(providers))
+}
+
+/**
+ * Provider ids the user configured natively in opencode's
+ * `~/.config/opencode/opencode.json` (`provider` entries — explicit connect
+ * targets regardless of whether their entry carries an API key), minus ids the
+ * user disabled via `disabled_providers`. Returns `null` when the config exists
+ * but cannot be parsed — callers then keep their catalog unfiltered rather
+ * than wrongly hiding every provider behind a read failure.
+ */
+export async function opencodeNativeProviderIds(): Promise<Set<string> | null> {
+  try {
+    const config = await readJsoncObject(OPENCODE_CONFIG_PATH)
+    const providers = record(config['provider']) ?? {}
+    const disabled = new Set(stringArray(config['disabled_providers']))
+    return new Set(Object.keys(providers).filter((id) => !disabled.has(id)))
+  } catch {
+    return null
+  }
 }
 
 /** Reads and surgically edits harness-owned custom provider catalogs. */
@@ -95,6 +148,7 @@ export class NativeProviderConfigService {
       ...existingOptions,
       baseURL: provider.baseURL,
       ...(provider.headers ? { headers: provider.headers } : {}),
+      ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
       ...(apiKey ? { apiKey } : {})
     }
     if (removeApiKey) delete options['apiKey']
@@ -172,6 +226,7 @@ export class NativeProviderConfigService {
             : 'openai-completions',
       apiKey: removeApiKey ? 'none' : (apiKey ?? existing['apiKey'] ?? 'none'),
       ...(provider.headers ? { headers: provider.headers } : {}),
+      ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
       models: provider.models.map(serializePiModel)
     }
     await updateJsonc(PI_MODELS_PATH, ['providers', provider.id], entry)
@@ -191,6 +246,7 @@ function nativeProvider(
   const headers = stringRecord(record(source['headers']))
   const apiKey = stringValue(source['apiKey'])
   const apiKeyConfigured = apiKey !== undefined && apiKey.trim() !== '' && apiKey !== 'none'
+  const usagePath = stringValue(source['usagePath'])
   return {
     id,
     harnessId,
@@ -199,6 +255,7 @@ function nativeProvider(
     baseURL,
     apiKeyConfigured,
     ...(headers ? { headers } : {}),
+    ...(usagePath ? { usagePath } : {}),
     models,
     enabled,
     createdAt: 0,
@@ -210,6 +267,8 @@ function openCodeModel(providerId: string, id: string, value: unknown): BaseUrlP
   const model = record(value) ?? {}
   const limit = record(model['limit'])
   const variants = record(model['variants'])
+  const modalities = record(model['modalities'])
+  const inputModalities = Array.isArray(modalities?.['input']) ? modalities['input'] : undefined
   return {
     id,
     providerId,
@@ -221,14 +280,26 @@ function openCodeModel(providerId: string, id: string, value: unknown): BaseUrlP
       ? { maxOutputTokens: positiveInteger(limit?.['output']) }
       : {}),
     reasoning: model['reasoning'] === true || variants !== undefined,
+    // opencode's variant *key* is a free-form label — the level it actually
+    // dispatches with is `thinkingLevel` inside the value (falls back to the
+    // key for older/hand-written configs that don't set it).
     ...(variants
       ? {
-          thinkingPresets: Object.keys(variants).map((variant) => ({
-            id: variant,
-            label: variant.charAt(0).toUpperCase() + variant.slice(1),
-            description: `${variant} reasoning effort`
-          }))
+          thinkingPresets: Object.entries(variants).map(([variant, value]) => {
+            const level = stringValue(record(value)?.['thinkingLevel']) ?? variant
+            return {
+              id: level,
+              label: level.charAt(0).toUpperCase() + level.slice(1),
+              description: `${level} reasoning effort`
+            }
+          })
         }
+      : {}),
+    // `vision` is left unset (treated as capable) unless opencode explicitly
+    // declares an input modality list that omits "image".
+    ...(inputModalities && !inputModalities.includes('image') ? { vision: false } : {}),
+    ...(readDefaultThinkingLevel(model['cioDefaultThinkingLevel'])
+      ? { defaultThinkingLevel: readDefaultThinkingLevel(model['cioDefaultThinkingLevel']) }
       : {})
   }
 }
@@ -237,6 +308,7 @@ function piModel(providerId: string, value: unknown): BaseUrlProviderModel | nul
   const model = record(value)
   const id = stringValue(model?.['id'])
   if (!model || !id) return null
+  const reasoning = model['reasoning'] === true
   return {
     id,
     providerId,
@@ -247,26 +319,46 @@ function piModel(providerId: string, value: unknown): BaseUrlProviderModel | nul
     ...(positiveInteger(model['maxTokens'])
       ? { maxOutputTokens: positiveInteger(model['maxTokens']) }
       : {}),
-    reasoning: model['reasoning'] === true
+    reasoning,
+    // Pi's model config has no per-model variant list (unlike opencode's
+    // `variants`), so a reasoning model always gets Pi's fixed thinking levels.
+    ...(reasoning ? { thinkingPresets: PI_THINKING_PRESETS } : {}),
+    ...(readDefaultThinkingLevel(model['cioDefaultThinkingLevel'])
+      ? { defaultThinkingLevel: readDefaultThinkingLevel(model['cioDefaultThinkingLevel']) }
+      : {})
   }
 }
 
 function serializeOpenCodeModel(model: BaseUrlProviderModel): Record<string, unknown> {
-  const limit =
-    model.contextWindow && model.maxOutputTokens
-      ? { context: model.contextWindow, output: model.maxOutputTokens }
-      : undefined
+  // Either bound is meaningful on its own (e.g. discovery often reports only
+  // context_length) — requiring both dropped a known context window whenever
+  // the output limit was missing.
+  const limit = {
+    ...(model.contextWindow ? { context: model.contextWindow } : {}),
+    ...(model.maxOutputTokens ? { output: model.maxOutputTokens } : {})
+  }
   return {
     name: model.name,
     ...(model.reasoning ? { reasoning: true } : {}),
-    ...(limit ? { limit } : {}),
+    ...(Object.keys(limit).length > 0 ? { limit } : {}),
+    // opencode dispatches by passing the thread's thinking level straight
+    // through as the variant key (see opencode-driver's `variant:` field), so
+    // the key must equal the level it selects — the value's `thinkingLevel`
+    // is what opencode itself reads to know which effort to actually request.
     ...(model.thinkingPresets?.length
       ? {
           variants: Object.fromEntries(
-            model.thinkingPresets.map((preset) => [preset.id, { name: preset.label }])
+            model.thinkingPresets.map((preset) => [preset.id, { thinkingLevel: preset.id }])
           )
         }
-      : {})
+      : {}),
+    // Unset `vision` is treated as capable everywhere else in this codebase;
+    // mirror that here rather than letting opencode's own default apply.
+    modalities: {
+      input: model.vision === false ? ['text'] : ['text', 'image'],
+      output: ['text']
+    },
+    ...(model.defaultThinkingLevel ? { cioDefaultThinkingLevel: model.defaultThinkingLevel } : {})
   }
 }
 
@@ -276,7 +368,8 @@ function serializePiModel(model: BaseUrlProviderModel): Record<string, unknown> 
     name: model.name,
     reasoning: model.reasoning,
     ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-    ...(model.maxOutputTokens ? { maxTokens: model.maxOutputTokens } : {})
+    ...(model.maxOutputTokens ? { maxTokens: model.maxOutputTokens } : {}),
+    ...(model.defaultThinkingLevel ? { cioDefaultThinkingLevel: model.defaultThinkingLevel } : {})
   }
 }
 

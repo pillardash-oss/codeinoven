@@ -6,7 +6,7 @@ Website: [codeinoven.com](https://codeinoven.com) · [Support](SECURITY.md) · [
 
 [![CI](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml)
 [![Security](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-orange.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fpillardash-oss%2Fcodeinoven%2Fmain%2Fpackage.json&query=version&label=version)](package.json)
 
 ---
@@ -148,4 +148,6 @@ Release builds are available for:
 
 ## License
 
-CodeInOven is released under the [MIT License](LICENSE).
+CodeInOven is licensed under the [PolyForm Noncommercial 1.0.0](LICENSE) license.
+
+You are free to use, modify, and redistribute CodeInOven for **personal, educational, and non-commercial** purposes. Commercial use — including use by companies or organizations in the course of business — requires a separate commercial license from [Pillardash Solutions Limited](mailto:sales@pillardash.com).

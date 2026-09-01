@@ -614,7 +614,6 @@ describe('opencodePermissionTools', () => {
       modelId: 'claude-sonnet-4-5',
       thinkingLevel: 'medium',
       permissionLevel,
-      engineeringMode: false
     }) as const
 
   it('maps full_access to an allow-all bypass so nothing is asked or denied', () => {
@@ -664,7 +663,6 @@ describe('OpenCodeDriver prompt body agent field', () => {
     modelId: 'claude-sonnet-4-5',
     thinkingLevel: 'medium',
     permissionLevel: 'auto_review',
-    engineeringMode: false
   } as const
 
   function isolatedHandle(baseUrl: string): IsolatedHandle {

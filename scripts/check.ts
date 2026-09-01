@@ -111,7 +111,7 @@ try {
           extends: join(projectRoot, 'tsconfig.json'),
           exclude: [],
           files: scope.files.map((file) => relative(temporaryDirectory, file)),
-          include: []
+          include: [join(projectRoot, 'src/main/types/**/*.ts')]
         },
         null,
         2

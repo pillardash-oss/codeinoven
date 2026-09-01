@@ -1,11 +1,18 @@
 import { createRequire } from 'node:module'
-import { readdir } from 'node:fs/promises'
+import { open, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
-import { rm } from 'node:fs/promises'
 import { parentPort } from 'node:worker_threads'
 import type { SpeechWorkerRequest, SpeechWorkerResponse } from './speech-worker-protocol'
 import { resolveFfmpegPath } from './ffmpeg-path'
+import {
+  ASR_BYTES_PER_SAMPLE,
+  ASR_CHUNK_SECONDS,
+  ASR_SAMPLE_RATE,
+  parseWavDataRegion,
+  pcmChunkToSamples,
+  splitTtsText
+} from './asr-audio'
 
 interface SherpaWave {
   samples: Float32Array
@@ -54,14 +61,16 @@ interface SherpaModule {
   OfflineRecognizer: SherpaRecognizerConstructor
   OfflinePunctuation: SherpaPunctuationConstructor
   OfflineTts: SherpaTtsConstructor
-  readWave: (path: string) => SherpaWave
   writeWave: (path: string, wave: SherpaWave) => void
 }
 
 type SherpaAsrFamily = 'whisper' | 'parakeet'
 
+/** Per-directory model caches; the worker thread is disposed wholesale on evict, so these never outlive the models they hold. */
+const MAX_CACHED_MODELS = 3
+
 const port = parentPort
-const require = createRequire(import.meta.url)
+const nodeRequire = createRequire(import.meta.url)
 let loadedModule: SherpaModule | null = null
 
 let cachedRecognizer: {
@@ -70,9 +79,12 @@ let cachedRecognizer: {
   recognizer: SherpaRecognizer
 } | null = null
 
+const cachedTts = new Map<string, SherpaTts>()
+const cachedPunctuation = new Map<string, SherpaPunctuation>()
+
 function sherpa(): SherpaModule {
   if (loadedModule) return loadedModule
-  const candidate: unknown = require('sherpa-onnx-node')
+  const candidate: unknown = nodeRequire('sherpa-onnx-node')
   if (typeof candidate !== 'object' || candidate === null) {
     throw new Error('The packaged sherpa-onnx module is unavailable.')
   }
@@ -80,17 +92,20 @@ function sherpa(): SherpaModule {
   return loadedModule
 }
 
+function rememberModel<T>(cache: Map<string, T>, directory: string, model: T): void {
+  if (!cache.has(directory) && cache.size >= MAX_CACHED_MODELS) {
+    const oldest = cache.keys().next()
+    if (!oldest.done) cache.delete(oldest.value)
+  }
+  cache.set(directory, model)
+}
+
 function emit(response: SpeechWorkerResponse): void {
   port?.postMessage(response)
 }
 
-async function transcribe(
-  request: Extract<SpeechWorkerRequest, { kind: 'transcribe' }>
-): Promise<string> {
-  const runtime = sherpa()
-  const decoderPath = await resolveFfmpegPath()
-  const wavePath = `${request.audioPath}.decoded.wav`
-  await new Promise<void>((resolve, reject) => {
+function runFfmpeg(decoderPath: string, inputPath: string, wavePath: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const child = spawn(
       decoderPath,
       [
@@ -100,11 +115,13 @@ async function transcribe(
         'error',
         '-y',
         '-i',
-        request.audioPath,
+        inputPath,
         '-ac',
         '1',
         '-ar',
-        '16000',
+        String(ASR_SAMPLE_RATE),
+        '-c:a',
+        'pcm_s16le',
         wavePath
       ],
       { stdio: ['ignore', 'ignore', 'pipe'] }
@@ -121,12 +138,42 @@ async function transcribe(
         reject(new Error(failure.trim() || `Audio decoding exited with code ${code ?? 'unknown'}.`))
     })
   })
-  const recognizer = await recognizerFor(request.modelDirectory, request.modelFamily)
+}
+
+async function transcribe(
+  request: Extract<SpeechWorkerRequest, { kind: 'transcribe' }>
+): Promise<string> {
+  const decoderPath = await resolveFfmpegPath()
+  const wavePath = `${request.audioPath}.decoded.wav`
   try {
-    const stream = recognizer.createStream()
-    stream.acceptWaveform(runtime.readWave(wavePath))
-    const result = await recognizer.decodeAsync(stream)
-    return result.text?.trim() ?? ''
+    await runFfmpeg(decoderPath, request.audioPath, wavePath)
+    const recognizer = await recognizerFor(request.modelDirectory, request.modelFamily)
+    const file = await open(wavePath, 'r')
+    try {
+      const { size } = await file.stat()
+      const header = Buffer.alloc(Math.min(size, 64 * 1024))
+      await file.read(header, 0, header.length, 0)
+      const { dataOffset, dataLength } = parseWavDataRegion(header, size)
+      const bytesPerChunk = ASR_CHUNK_SECONDS * ASR_SAMPLE_RATE * ASR_BYTES_PER_SAMPLE
+      const chunk = Buffer.allocUnsafe(bytesPerChunk)
+      const pieces: string[] = []
+      for (let offset = 0; offset < dataLength; offset += bytesPerChunk) {
+        const byteLength = Math.min(bytesPerChunk, dataLength - offset)
+        const { bytesRead } = await file.read(chunk, 0, byteLength, dataOffset + offset)
+        if (bytesRead === 0) break
+        const stream = recognizer.createStream()
+        stream.acceptWaveform({
+          samples: pcmChunkToSamples(chunk, bytesRead),
+          sampleRate: ASR_SAMPLE_RATE
+        })
+        const result = await recognizer.decodeAsync(stream)
+        const text = result.text?.trim() ?? ''
+        if (text) pieces.push(text)
+      }
+      return pieces.join(' ')
+    } finally {
+      await file.close()
+    }
   } finally {
     await rm(wavePath, { force: true })
   }
@@ -184,10 +231,13 @@ async function recognizerFor(
           )
         }
   const recognizer = await runtime.OfflineRecognizer.createAsync({
-    featConfig: { sampleRate: 16000, featureDim: 80 },
+    featConfig: { sampleRate: ASR_SAMPLE_RATE, featureDim: 80 },
     modelConfig: {
       ...modelConfig,
-      numThreads: 2,
+      // Stage-level parallelism comes from one worker thread per stage
+      // (ASR / TTS); raising this intra-op count historically spawned
+      // unbounded native threads and crashed the app. Keep it at 1.
+      numThreads: 1,
       debug: false,
       provider: 'cpu'
     }
@@ -221,44 +271,87 @@ function modelPath(
   return join(directory, fileName)
 }
 
-function cleanup(request: Extract<SpeechWorkerRequest, { kind: 'cleanup' }>): string {
+async function punctuationFor(modelDirectory: string): Promise<SherpaPunctuation> {
+  const cached = cachedPunctuation.get(modelDirectory)
+  if (cached) return cached
   const punctuation = new (sherpa().OfflinePunctuation)({
     model: {
-      ctTransformer: join(request.modelDirectory, 'model.onnx'),
-      numThreads: 2,
+      ctTransformer: join(modelDirectory, 'model.onnx'),
+      numThreads: 1,
       debug: false,
       provider: 'cpu'
     }
   })
+  rememberModel(cachedPunctuation, modelDirectory, punctuation)
+  return punctuation
+}
+
+async function cleanup(request: Extract<SpeechWorkerRequest, { kind: 'cleanup' }>): Promise<string> {
+  const punctuation = await punctuationFor(request.modelDirectory)
   return punctuation.addPunctuation(request.transcript).trim()
+}
+
+async function ttsFor(modelDirectory: string): Promise<SherpaTts> {
+  const cached = cachedTts.get(modelDirectory)
+  if (cached) return cached
+  const tts = await sherpa().OfflineTts.createAsync({
+    model: {
+      kokoro: {
+        model: join(modelDirectory, 'model.onnx'),
+        voices: join(modelDirectory, 'voices.bin'),
+        tokens: join(modelDirectory, 'tokens.txt'),
+        dataDir: modelDirectory,
+        lengthScale: 1,
+        lang: 'en-us'
+      }
+    },
+    maxNumSentences: 1,
+    numThreads: 1,
+    provider: 'cpu'
+  })
+  rememberModel(cachedTts, modelDirectory, tts)
+  return tts
 }
 
 async function synthesize(
   request: Extract<SpeechWorkerRequest, { kind: 'synthesize' }>
 ): Promise<void> {
   const runtime = sherpa()
-  const tts = await runtime.OfflineTts.createAsync({
-    model: {
-      kokoro: {
-        model: join(request.modelDirectory, 'model.onnx'),
-        voices: join(request.modelDirectory, 'voices.bin'),
-        tokens: join(request.modelDirectory, 'tokens.txt'),
-        dataDir: request.modelDirectory,
-        lengthScale: 1,
-        lang: 'en-us'
-      }
-    },
-    maxNumSentences: 1,
-    numThreads: 2,
-    provider: 'cpu'
-  })
-  const audio = await tts.generateAsync({
-    text: request.text,
-    sid: request.speakerId,
-    speed: 1,
-    enableExternalBuffer: true
-  })
+  const tts = await ttsFor(request.modelDirectory)
+  const pieces = splitTtsText(request.text)
+  if (pieces.length === 0) throw new Error('The synthesis request has no readable text.')
+  const parts: Float32Array[] = []
+  let sampleRate = 0
+  for (const piece of pieces) {
+    const audio = await tts.generateAsync({
+      text: piece,
+      sid: request.speakerId,
+      speed: 1,
+      enableExternalBuffer: false
+    })
+    parts.push(audio.samples)
+    sampleRate = audio.sampleRate
+  }
+  const audio =
+    parts.length === 1
+      ? { samples: parts[0], sampleRate }
+      : {
+          samples: mergeSamples(parts),
+          sampleRate
+        }
   runtime.writeWave(request.outputPath, audio)
+}
+
+function mergeSamples(parts: readonly Float32Array[]): Float32Array {
+  let total = 0
+  for (const part of parts) total += part.length
+  const merged = new Float32Array(total)
+  let offset = 0
+  for (const part of parts) {
+    merged.set(part, offset)
+    offset += part.length
+  }
+  return merged
 }
 
 if (port) {
@@ -280,7 +373,7 @@ if (port) {
           return
         }
         if (request.kind === 'cleanup') {
-          emit({ id: request.id, ok: true, kind: 'cleanup', text: cleanup(request) })
+          emit({ id: request.id, ok: true, kind: 'cleanup', text: await cleanup(request) })
           return
         }
         await synthesize(request)

@@ -21,7 +21,6 @@ const SETTINGS = {
   modelId: 'gpt-5.6',
   thinkingLevel: 'medium',
   permissionLevel: 'full_access',
-  engineeringMode: true,
   assignmentMode: true
 } as const
 
@@ -348,7 +347,6 @@ describe('AssignmentEngine', () => {
 
     expect(await storage.getWorkerNames()).toHaveLength(10)
     expect(first.thread?.title).toBe('wrk-zipporah: Set up design guide')
-    expect(first.thread?.settings?.engineeringMode).toBe(false)
     expect(first.thread?.settings?.assignmentMode).toBe(false)
     expect(first.thread?.settings).toMatchObject({
       harnessId: 'opencode',
@@ -517,7 +515,6 @@ describe('AssignmentEngine', () => {
     expect(first.workingDirectory).toBe(projectPath)
     expect(first.settings).toMatchObject({
       permissionLevel: 'auto_review',
-      engineeringMode: false,
       assignmentMode: false,
       loopMode: false
     })

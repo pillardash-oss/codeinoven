@@ -475,6 +475,14 @@
                       )}">{runtimeBadge(artifact.runtime)}</span
                     >
                     <span class="text-[10px] text-dimmed">· external</span>
+                    {#if !artifact.available}
+                      <span
+                        class="inline-flex items-center gap-1 rounded-full bg-danger px-2 py-0.5 text-[10px] font-semibold text-white"
+                        title={artifact.unavailableReason ??
+                          'The imported model path no longer exists.'}
+                        ><X size={10} aria-hidden="true" /> Not found</span
+                      >
+                    {/if}
                     {#if isActiveImported(artifact.artifactId, activeModelSubTab)}
                       <span
                         class="inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[10px] font-semibold text-white"
@@ -513,11 +521,19 @@
                       )}">{runtimeBadge(artifact.runtime)}</span
                     >
                     <span>· external</span>
+                    {#if !artifact.available}
+                      <span
+                        class="inline-flex items-center gap-1 rounded-full bg-danger px-2 py-0.5 text-[10px] font-semibold text-white"
+                        title={artifact.unavailableReason ??
+                          'The imported model path no longer exists.'}
+                        ><X size={10} aria-hidden="true" /> Not found</span
+                      >
+                    {/if}
                   </p>
                 {/if}
               </div>
               <div class="flex shrink-0 items-center gap-1">
-                {#if !isActiveImported(artifact.artifactId, activeModelSubTab)}
+                {#if !isActiveImported(artifact.artifactId, activeModelSubTab) && artifact.available}
                   <button
                     type="button"
                     class="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-on-primary hover:bg-primary/90"
@@ -527,7 +543,7 @@
                     ><Star size={11} aria-hidden="true" /> Set Active</button
                   >
                 {/if}
-                {#if !isActiveImported(artifact.artifactId, activeModelSubTab)}<button
+                {#if !isActiveImported(artifact.artifactId, activeModelSubTab) || !artifact.available}<button
                     type="button"
                     class="flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-dimmed hover:border-border hover:bg-surface hover:text-muted"
                     title={`Unregister ${artifact.importPath}`}
@@ -566,8 +582,11 @@
       <div class="space-y-3">
         {#each sortedForSubTab(activeModelSubTab) as artifact (artifact.id)}
           {@const installed = speech.capabilities?.installedArtifacts.find(
-            (item) => item.artifactId === artifact.id && item.available
+            (item) => item.artifactId === artifact.id
           )}
+          {@const active = isActiveCatalog(artifact.id, activeModelSubTab) && installed?.available}
+          {@const selectedUnavailable =
+            isActiveCatalog(artifact.id, activeModelSubTab) && installed && !installed.available}
           {@const download = speech.downloads[artifact.id]}
           {@const badge = bestForBadge(artifact)}
           {@const isRetired = artifact.qualification.status === 'retired'}
@@ -576,7 +595,7 @@
             : `Download ${artifact.label}`}
           <div
             id="model-card-{artifact.id}"
-            class="rounded-xl border p-3 {isActiveCatalog(artifact.id, activeModelSubTab)
+            class="rounded-xl border p-3 {active
               ? 'bg-success/5 border-success/30 ring-1 ring-success/20'
               : 'bg-elevated'}"
           >
@@ -595,10 +614,15 @@
                       >{badge.label}</span
                     >
                   {/if}
-                  {#if isActiveCatalog(artifact.id, activeModelSubTab)}
+                  {#if active}
                     <span
                       class="inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[10px] font-semibold text-white border-success"
                       ><Check size={10} aria-hidden="true" /> Active</span
+                    >
+                  {:else if selectedUnavailable}
+                    <span
+                      class="inline-flex items-center rounded-full border border-amber-600/30 bg-amber-600/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600"
+                      >Selected · unavailable</span
                     >
                   {/if}
                 </div>
@@ -618,6 +642,11 @@
                     <span>{artifact.languages.join(', ')}</span>
                   {/if}
                 </p>
+                {#if installed && !installed.available}
+                  <p class="mt-1 text-[11px] text-amber-600">
+                    {installed.unavailableReason ?? 'The model runtime is unavailable.'}
+                  </p>
+                {/if}
                 <a
                   href={artifact.sourcePageUrl}
                   target="_blank"
@@ -966,8 +995,7 @@
             </div>
             <div class="flex items-center justify-between gap-4">
               <p class="text-xs text-dimmed">
-                Preserve technical — keep code identifiers exact; “index dot tsx” →
-                “index.tsx”
+                Preserve technical — keep code identifiers exact; “index dot tsx” → “index.tsx”
               </p>
               <Switch
                 checked={settings.refinementFlags.preserveTechnical}

@@ -42,19 +42,12 @@ jobs:
           previous="$(git show "${BEFORE_SHA}:package.json" | jq -r .version)"
           version="$(node -p "require('./package.json').version")"
           upstream="$(git show origin/nightly:package.json | jq -r .version)"
-          # Cohesive tagging: upstream is base (e.g. 0.5.50), version is 0.5.51.
-          # Validate version is exactly one increment ahead of upstream.
-          expected="$(node -e "const m=require('./scripts/bump-version.ts'); console.log(m.incrementVersion? '': '')" 2>/dev/null || true)"
-          # Compute expected as upstream patch+1 using Node
-          expected="$(node -p "(() => { const [a,b,c]=require('./package.json').version.split('.').map(Number); let p=c+1,m=b,M=a; if(p===100){p=0;m++} if(m===100){m=0;M++} return M+'.'+m+'.'+p })()" 2>/dev/null || true)"
-          # Simpler: use upstream to compute
-          expected="$(node -p "(() => { const v='"$upstream"'.split('.').map(Number); let [M,m,p]=v; p+=1; if(p===100){p=0;m+=1} if(m===100){m=0;M+=1} return M+'.'+m+'.'+p })()")"
-          if [ "$version" != "$expected" ] && [ "$version" != "$upstream" ]; then
-            echo "::error::main version $version must be nightly base $upstream or its increment $expected (got $version)"
+          # Semver-correct nightly: stable 0.5.51 -> nightly 0.5.52-nightly-1
+          # So nightly branch already carries the NEXT stable version, and
+          # main must equal nightly exactly.
+          if [ "$version" != "$upstream" ]; then
+            echo "::error::main version $version must equal nightly version $upstream (nightly is next stable; e.g. stable 0.5.51 -> nightly 0.5.52-nightly-1 -> stable 0.5.52)"
             exit 1
-          fi
-          if [ "$version" = "$upstream" ]; then
-            echo "::warning::main version equals nightly base $upstream; stable release will reuse same version (no bump)"
           fi
           # Require at least one nightly prerelease for the base (supports both - and . separators for legacy)
           if ! gh release list --limit 1000 --json tagName,isPrerelease | \
@@ -79,7 +72,7 @@ jobs:
       matrix:
         include:
           - name: macOS (Apple Silicon)
-            os: macos-14
+            os: macos-26
             target: mac
             arch: --arm64
             artifact: mac-arm64
@@ -116,9 +109,12 @@ jobs:
       - name: Build Pi harness
         run: bun run harness:build-pi
 
-      - name: Build Apple Silicon speech worker
-        continue-on-error: true
-        run: bun run speech:build-mlx
+      - name: Build Apple Silicon speech workers
+        if: matrix.target == 'mac'
+        run: |
+          bun run speech:build-mlx
+          bun run speech:build-coreml
+          bun run speech:build-native-capture
 
       - name: Build production bundle
         run: bun run build:production

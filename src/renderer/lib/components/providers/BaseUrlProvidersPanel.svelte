@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { SvelteSet } from 'svelte/reactivity'
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import {
     AlertTriangle,
     ListFilter,
@@ -16,6 +16,7 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import Modal from '../ui/Modal.svelte'
   import type { BaseUrlProvider, ProviderConnectionInfo } from '$shared/types'
+  import { DEFAULT_HARNESS } from '$shared/harness-default'
   import BaseUrlProviderEditor from './BaseUrlProviderEditor.svelte'
 
   interface Props {
@@ -28,7 +29,8 @@
   let editorOpen = $state(false)
   let editingProvider = $state<BaseUrlProvider | null>(null)
   let editorError = $state('')
-  let deleteTarget = $state<BaseUrlProvider | null>(null)
+  /** The full linked group (one record per harness) queued for deletion. */
+  let deleteTarget = $state<BaseUrlProvider[] | null>(null)
 
   let baseUrlHarnesses = $derived(
     providers.filter(
@@ -53,11 +55,30 @@
   /** Multi-select harness filter; empty selection means "all harnesses". */
   let selectedHarnesses = new SvelteSet<string>()
 
-  let filteredProviders = $derived(
+  /** Providers sharing an id are the same logical provider linked across
+   *  harnesses — collapse them into one row backed by every member record. */
+  let groupedProviders = $derived.by(() => {
+    const groups = new SvelteMap<string, BaseUrlProvider[]>()
+    for (const candidate of baseUrlProviderStore.providers) {
+      const group = groups.get(candidate.id)
+      if (group) group.push(candidate)
+      else groups.set(candidate.id, [candidate])
+    }
+    // Most recently updated first — adding or editing one at the bottom of a
+    // long list is easy to miss, and a saved edit should resurface it too.
+    return [...groups.values()].sort(
+      (left, right) =>
+        Math.max(...right.map((provider) => provider.updatedAt)) -
+        Math.max(...left.map((provider) => provider.updatedAt))
+    )
+  })
+
+  /** A group is shown when any of its linked harnesses match the active filter. */
+  let filteredGroups = $derived(
     selectedHarnesses.size === 0
-      ? baseUrlProviderStore.providers
-      : baseUrlProviderStore.providers.filter((provider) =>
-          selectedHarnesses.has(provider.harnessId)
+      ? groupedProviders
+      : groupedProviders.filter((group) =>
+          group.some((provider) => selectedHarnesses.has(provider.harnessId))
         )
   )
 
@@ -67,7 +88,7 @@
    *  user narrowed the list, otherwise the first base-URL harness. */
   let defaultCreateHarnessId = $derived.by(() => {
     if (selectedHarnesses.size > 0) return [...selectedHarnesses][0]
-    return baseUrlHarnesses[0]?.id ?? 'opencode'
+    return baseUrlHarnesses[0]?.id ?? DEFAULT_HARNESS
   })
 
   function toggleHarnessFilter(id: string): void {
@@ -89,8 +110,8 @@
     editorOpen = true
   }
 
-  function openEdit(provider: BaseUrlProvider): void {
-    editingProvider = provider
+  function openEdit(group: BaseUrlProvider[]): void {
+    editingProvider = group[0] ?? null
     editorError = ''
     editorOpen = true
   }
@@ -104,11 +125,15 @@
     closeEditor()
   }
 
+  /** Removes every harness-linked record in the group. Stops at the first
+   *  failure so the error is visible instead of silently partial. */
   async function removeProvider(): Promise<void> {
     if (!deleteTarget) return
     editorError = ''
     try {
-      await baseUrlProviderStore.remove(deleteTarget.harnessId, deleteTarget.id)
+      for (const provider of deleteTarget) {
+        await baseUrlProviderStore.remove(provider.harnessId, provider.id)
+      }
       deleteTarget = null
     } catch (removeError) {
       editorError =
@@ -125,8 +150,8 @@
   <div class="flex items-start justify-between">
     <div>
       <p class="text-xs text-muted">
-        Add custom OpenAI-compatible providers by base URL. Models appear in the picker after the
-        next agent turn.
+        Add custom OpenAI-compatible providers by base URL. Models are ready in the picker as soon
+        as you save.
       </p>
     </div>
     <button
@@ -219,7 +244,7 @@
           Add the first provider
         </button>
       </div>
-    {:else if filteredProviders.length === 0}
+    {:else if filteredGroups.length === 0}
       <div class="rounded-xl border border-dashed p-5 text-center">
         <ListFilter size={17} class="mx-auto mb-1.5 text-dimmed" />
         <p class="text-xs text-muted">No providers match the selected harnesses.</p>
@@ -232,7 +257,8 @@
       </div>
     {:else}
       <div class="overflow-hidden rounded-xl border bg-surface">
-        {#each filteredProviders as provider (`${provider.harnessId}:${provider.id}`)}
+        {#each filteredGroups as group (group[0].id)}
+          {@const provider = group[0]}
           <div
             class="grid grid-cols-[minmax(0,1fr)_minmax(8rem,0.6fr)_auto] items-center gap-3 border-b px-3 py-2.5 last:border-b-0"
           >
@@ -247,10 +273,25 @@
                   {provider.enabled ? 'Enabled' : 'Disabled'}
                 </span>
               </div>
-              <p class="mt-0.5 truncate text-[10px] text-dimmed">
-                {providerName(provider.harnessId)} · {provider.models.length}
-                {provider.models.length === 1 ? 'model' : 'models'}
-              </p>
+              <div class="mt-0.5 flex flex-wrap items-center gap-x-1 gap-y-0.5">
+                {#each group as member (member.harnessId)}
+                  <span
+                    class="flex items-center gap-1 rounded-full bg-raised px-1.5 py-0.5 text-[10px] text-dimmed"
+                    title={providerName(member.harnessId)}
+                  >
+                    <AgentIcon
+                      agentId={member.harnessId}
+                      label={providerName(member.harnessId)}
+                      size={14}
+                    />
+                    {providerName(member.harnessId)}
+                  </span>
+                {/each}
+                <span class="text-[10px] text-dimmed">
+                  · {provider.models.length}
+                  {provider.models.length === 1 ? 'model' : 'models'}
+                </span>
+              </div>
             </div>
             <p class="truncate font-mono text-[10px] text-dimmed" title={provider.baseURL}>
               {provider.baseURL}
@@ -260,7 +301,7 @@
                 class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-overlay hover:text-foreground"
                 aria-label="Edit {provider.name}"
                 title="Edit {provider.name}"
-                onclick={() => openEdit(provider)}
+                onclick={() => openEdit(group)}
               >
                 <Pencil size={13} />
               </button>
@@ -268,7 +309,7 @@
                 class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
                 aria-label="Delete {provider.name}"
                 title="Delete {provider.name}"
-                onclick={() => (deleteTarget = provider)}
+                onclick={() => (deleteTarget = group)}
               >
                 <Trash2 size={13} />
               </button>
@@ -322,8 +363,15 @@
   <div class="flex gap-2 text-sm text-muted">
     <AlertTriangle size={16} class="mt-0.5 shrink-0 text-warning" />
     <p>
-      Delete <strong class="text-foreground">{deleteTarget?.name}</strong>? Its API key will be
-      removed from secure storage and the provider will disappear from the model picker.
+      Delete <strong class="text-foreground">{deleteTarget?.[0]?.name}</strong>?
+      {#if deleteTarget && deleteTarget.length > 1}
+        It's linked to {deleteTarget.length} harnesses ({deleteTarget
+          .map((p) => providerName(p.harnessId))
+          .join(', ')}) — all of them will be removed. Its
+      {:else}
+        Its
+      {/if}
+      API key will be removed from secure storage and the provider will disappear from the model picker.
     </p>
   </div>
 </Modal>

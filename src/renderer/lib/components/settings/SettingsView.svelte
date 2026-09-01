@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { isOverlayOpen } from '$lib/overlay-close.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
@@ -46,6 +47,7 @@
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
+  import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
   import RemoteSettingsTab from './RemoteSettingsTab.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
@@ -136,8 +138,13 @@
 
   const escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
-      // The settings spotlight owns Escape while it is open.
-      if (settingsSearchOpen) return
+      // The settings spotlight owns Escape while it is open, and so does any
+      // open overlay (modal, palette): Escape closes only the topmost surface,
+      // never the settings page underneath. bits-ui palettes preventDefault the
+      // keydown they consume on `document`, before this window listener runs;
+      // Modal-style overlays unregister only in the microtask flush after the
+      // event, so isOverlayOpen() still sees them during that same event.
+      if (settingsSearchOpen || e.defaultPrevented || isOverlayOpen()) return
       e.preventDefault()
       goBack()
     }
@@ -807,6 +814,8 @@
       <AuditSettingsTab {config} {settingsReady} {updateConfig} />
     {:else if section === 'cio-prompts'}
       <CioPromptsSettings />
+    {:else if section === 'heartbeat'}
+      <HeartbeatSettingsView />
     {:else if section === 'memory'}
       <SettingsMemoryTab
         variant="settings"

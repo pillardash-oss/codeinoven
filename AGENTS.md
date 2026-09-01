@@ -24,6 +24,7 @@ After completing the code, ask the user if they want a playground link. Only cal
 
 ## Rules You Must Follow
 
+- CodeInOven stores all threads, sessions, and app data in `~/.config/pillardash/codeinoven/`. When asked to inspect a thread, session, logs, or any stored app data, look there. NEVER use `~/Library/Application Support/CodeInOven` for app data — it contains only Electron/Chromium runtime junk (caches, cookies, an empty db) and inspecting it is always wrong.
 - Always read the `docs/APP-BIBLE.md` file if it exists. It will guide you on the principles and philosophies of this app, and how to contribute to it.
 - Always use `bun`.
 - Do not use type `any` anywhere in this codebase!

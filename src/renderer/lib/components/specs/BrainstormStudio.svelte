@@ -101,6 +101,7 @@
     onOpenInEditor?: (brainstorm: BrainstormDocument) => CallbackResult
     onRevealInAppFile?: (brainstorm: BrainstormDocument) => CallbackResult
     onOpenPrototype?: (previewPath: string) => CallbackResult
+    onGenerateHifi?: (prototypeId: string) => CallbackResult
   }
 
   let {
@@ -131,18 +132,9 @@
     onNextStep,
     onOpenInEditor,
     onRevealInAppFile,
+    onGenerateHifi,
     onOpenPrototype
   }: Props = $props()
-
-  const canonicalSections: Array<{ id: BrainstormSectionId; title: string }> = [
-    { id: 'context', title: 'What We Learned' },
-    { id: 'goals', title: 'What We Are Building' },
-    { id: 'decisions', title: 'Aligned Decisions' },
-    { id: 'open_questions', title: 'Still to Decide' },
-    { id: 'constraints', title: 'Boundaries' },
-    { id: 'proposed_direction', title: 'Agreed Direction' },
-    { id: 'additional_info', title: 'Additional Notes' }
-  ]
 
   // This component is keyed by document identity in ThreadView. The effect below only reconciles
   // a newly selected or persisted version while retaining intentional local edit buffers.
@@ -156,7 +148,9 @@
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   // svelte-ignore state_referenced_locally
   let loadedKey = $state(`${brainstorm.id}:${brainstorm.version}:${brainstorm.updatedAt}`)
-  let selectedSection = $state<BrainstormSectionId>('context')
+  type BrainstormNavigationSectionId = BrainstormSectionId | 'prototypes'
+
+  let selectedSection = $state<BrainstormNavigationSectionId>('context')
   /** Phone only: the section rail is a bottom drawer instead of a column. */
   let sectionsOpen = $state(false)
   // svelte-ignore state_referenced_locally
@@ -211,11 +205,23 @@
   )
   const latestVersion = $derived(sortedVersions[0]?.version ?? draft.version)
   const canEdit = $derived(draft.status === 'draft' && draft.version === latestVersion)
-  const visibleSections = $derived(
-    canonicalSections.filter(
-      ({ id }) => id !== 'additional_info' || Boolean(sectionFor(id)?.markdown.trim())
-    )
-  )
+  interface NavigationSection {
+    id: BrainstormNavigationSectionId
+    title: string
+  }
+
+  // Sidebar headings are a projection of the document itself: every section present in the
+  // content gets an entry, in document order, followed by Prototypes when artifacts exist.
+  const navigationSections = $derived.by<NavigationSection[]>(() => {
+    const items: NavigationSection[] = draft.content.sections.map((section) => ({
+      id: section.id,
+      title: section.title
+    }))
+    if (draft.content.prototypes?.length) {
+      items.push({ id: 'prototypes', title: 'Prototypes' })
+    }
+    return items
+  })
 
   const openAnnotationCount = $derived(
     draft.annotations.filter((annotation) => annotation.status === 'open').length
@@ -232,7 +238,7 @@
     pendingAction = null
     closePendingAnnotation()
     closeAnnotation()
-    if (!visibleSections.some((section) => section.id === selectedSection)) {
+    if (!navigationSections.some((section) => section.id === selectedSection)) {
       selectedSection = 'context'
     }
   })
@@ -244,11 +250,12 @@
     void refreshAnnotationMarkers()
   })
 
-  function sectionFor(sectionId: BrainstormSectionId): BrainstormSection | undefined {
+  function sectionFor(sectionId: BrainstormNavigationSectionId): BrainstormSection | undefined {
+    if (sectionId === 'prototypes') return undefined
     return draft.content.sections.find((section) => section.id === sectionId)
   }
 
-  function annotationsFor(sectionId: BrainstormSectionId): BrainstormAnnotation[] {
+  function annotationsFor(sectionId: BrainstormNavigationSectionId): BrainstormAnnotation[] {
     return draft.annotations.filter(
       (annotation) => annotation.section === sectionId && annotation.status === 'open'
     )
@@ -341,7 +348,7 @@
     return { startLine, endLine: startLine + quote.split('\n').length - 1 }
   }
 
-  async function selectAndScroll(sectionId: BrainstormSectionId): Promise<void> {
+  async function selectAndScroll(sectionId: BrainstormNavigationSectionId): Promise<void> {
     sectionsOpen = false
     selectedSection = sectionId
     await tick()
@@ -639,7 +646,10 @@
     return edits
   }
 
+  let submittingAction = $state(false)
+
   async function submitAction(action: BrainstormDecisionAction): Promise<void> {
+    if (submittingAction) return
     const reviewEdits = collectReviewEdits()
     let submitted = $state.snapshot(draft)
     if (dirty) {
@@ -648,13 +658,21 @@
       submitted = saved
     }
     const notes = additionalNotes
-    pendingAction = null
-    additionalNotes = ''
-    await onSubmit(action, submitted, notes, {
-      baselineAvailable: brainstorm.generatedContent !== undefined,
-      edits: reviewEdits
-    })
-    speechController.observeSent(decisionSpeechTargetId, notes)
+    submittingAction = true
+    try {
+      // Only clear the panel and the user's typed notes once the send has
+      // actually gone through — a painstakingly-typed draft must survive a
+      // failed or merely-deferred submit so the user never has to retype it.
+      await onSubmit(action, submitted, notes, {
+        baselineAvailable: brainstorm.generatedContent !== undefined,
+        edits: reviewEdits
+      })
+      pendingAction = null
+      additionalNotes = ''
+      speechController.observeSent(decisionSpeechTargetId, notes)
+    } finally {
+      submittingAction = false
+    }
   }
 
   let nextStepBusy = $state(false)
@@ -756,7 +774,7 @@
             >
               {#each sortedVersions as version (version.version)}
                 <DropdownMenu.Item
-                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
                   textValue={`Version ${version.version}`}
                   title={`Open brainstorm version ${version.version}`}
                   onSelect={() => void onSelectVersion(version.version)}
@@ -825,7 +843,7 @@
                 class="z-50 w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
               >
                 <DropdownMenu.Item
-                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
                   title="Prototype a low-fidelity Lo-Fi wireframe direction"
                   disabled={nextStepBusy}
                   onSelect={() => void runNextStep('lofi')}
@@ -833,7 +851,7 @@
                   <span>Prototype Lo-Fi</span>
                 </DropdownMenu.Item>
                 <DropdownMenu.Item
-                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
                   title="Prototype a single high-fidelity Hi-Fi direction"
                   disabled={nextStepBusy}
                   onSelect={() => void runNextStep('hifi')}
@@ -841,7 +859,7 @@
                   <span>Prototype Hi-Fi</span>
                 </DropdownMenu.Item>
                 <DropdownMenu.Item
-                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
                   title="Generate the product requirements document from this Brainstorm"
                   disabled={nextStepBusy}
                   onSelect={() => void runNextStep('prd')}
@@ -849,7 +867,7 @@
                   <span>Generate PRD</span>
                 </DropdownMenu.Item>
                 <DropdownMenu.Item
-                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
                   title="Finalize this Brainstorm and generate an implementation-ready Spec"
                   disabled={nextStepBusy}
                   onSelect={() => void runNextStep('spec')}
@@ -891,7 +909,7 @@
         />
         <button
           class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
-          disabled={busy}
+          disabled={busy || submittingAction}
           title={pendingAction === 'review' ? 'Discuss report changes' : 'Prepare specification'}
           onclick={() => void submitAction(pendingAction!)}
           >{pendingAction === 'review' ? 'Discuss' : 'Prepare spec'}</button
@@ -934,7 +952,7 @@
       </div>
       <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div class="space-y-0.5 p-2" role="tablist" aria-orientation="vertical">
-          {#each visibleSections as section (section.id)}
+          {#each navigationSections as section (section.id)}
             {@const annotationCount = annotationsFor(section.id).length}
             <button
               class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors max-md:py-3 {selectedSection ===
@@ -986,38 +1004,38 @@
             {/each}
           </div>
         </div>
-
-        {#if onRevealInAppFile || onOpenInEditor}
-          <div class="flex shrink-0 items-center gap-1 border-t p-2">
-            {#if onRevealInAppFile}
-              <button
-                class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
-                disabled={busy}
-                title="Reveal this brainstorm as Markdown in the file tree"
-                onclick={() => void onRevealInAppFile?.(draft)}
-              >
-                <FileText size={13} />
-                View
-              </button>
-            {/if}
-            {#if onOpenInEditor}
-              <button
-                class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
-                disabled={busy}
-                title={`Open this brainstorm as Markdown in ${preferredName}`}
-                onclick={() => void onOpenInEditor?.(draft)}
-              >
-                {#if preferredIcon}
-                  <img src={preferredIcon} alt="" class="h-3.5 w-3.5 shrink-0" />
-                {:else}
-                  <AppWindow size={14} class="shrink-0" />
-                {/if}
-                Open
-              </button>
-            {/if}
-          </div>
-        {/if}
       </div>
+
+      {#if onRevealInAppFile || onOpenInEditor}
+        <div class="flex shrink-0 items-center gap-1 border-t p-2">
+          {#if onRevealInAppFile}
+            <button
+              class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              disabled={busy}
+              title="Reveal this brainstorm as Markdown in the file tree"
+              onclick={() => void onRevealInAppFile?.(draft)}
+            >
+              <FileText size={13} />
+              View
+            </button>
+          {/if}
+          {#if onOpenInEditor}
+            <button
+              class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              disabled={busy}
+              title={`Open this brainstorm as Markdown in ${preferredName}`}
+              onclick={() => void onOpenInEditor?.(draft)}
+            >
+              {#if preferredIcon}
+                <img src={preferredIcon} alt="" class="h-3.5 w-3.5 shrink-0" />
+              {:else}
+                <AppWindow size={14} class="shrink-0" />
+              {/if}
+              Open
+            </button>
+          {/if}
+        </div>
+      {/if}
     </aside>
 
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -1054,7 +1072,7 @@
           </section>
         </header>
 
-        {#each visibleSections as sectionDefinition (sectionDefinition.id)}
+        {#each draft.content.sections as sectionDefinition (sectionDefinition.id)}
           {@const section = sectionFor(sectionDefinition.id)}
           {#if section}
             <section
@@ -1132,13 +1150,22 @@
                     {prototype.previewPath}
                   </p>
                   <div class="mt-3 flex gap-2">
-                    {#if onOpenPrototype}
+                    {#if prototype.fidelity === 'lofi' && draft.status === 'draft' && onGenerateHifi}
                       <button
                         type="button"
                         class="rounded-lg bg-thread-spec px-2.5 py-1.5 text-xs font-medium text-foreground"
+                        onclick={() => void onGenerateHifi?.(prototype.id)}
+                      >
+                        HiFi from this
+                      </button>
+                    {/if}
+                    {#if onOpenPrototype}
+                      <button
+                        type="button"
+                        class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
                         onclick={() => void onOpenPrototype?.(prototype.previewPath)}
                       >
-                        Open preview
+                        View prototype
                       </button>
                     {/if}
                     <button

@@ -7,6 +7,9 @@
   import type { ActionDefinition, ActionSelection } from '../../actions'
   import { displayShortcutKey, displayShortcutLabel } from '../../shortcut-display'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import { getAgentIcon } from '$lib/agent-icons/registry'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
 
   interface Props {
     open: boolean
@@ -109,6 +112,11 @@
 
   function categoryLabel(action: ActionDefinition): string {
     return action.category === 'mcp' ? 'MCP' : action.category
+  }
+
+  /** Human-readable harness name for an agent icon tooltip. */
+  function harnessLabel(id: string): string {
+    return getAgentIcon(id)?.name ?? id
   }
 </script>
 
@@ -277,9 +285,44 @@
               <span class="mt-0.5 block truncate text-[11px] text-danger">
                 {action.disabledReason}
               </span>
-            {:else if action.description}
-              <span class="mt-0.5 block truncate text-[11px] text-dimmed">
-                {action.description}
+            {:else if action.description || action.threadMeta}
+              <span class="mt-0.5 flex min-w-0 items-center gap-2">
+                {#if action.description}
+                  <span class="min-w-0 truncate text-[11px] text-dimmed">
+                    {action.description}
+                  </span>
+                {/if}
+                {#if action.threadMeta}
+                  {@const meta = action.threadMeta}
+                  <span
+                    class="ml-auto flex shrink-0 items-center gap-1.5"
+                    title={meta.working && meta.modelId
+                      ? meta.modelId
+                      : meta.providerName ?? undefined}
+                  >
+                    {#if meta.working && meta.modelId}
+                      {#if meta.providerName}
+                        <VendorIcon
+                          name={meta.providerName}
+                          id={meta.providerId ?? undefined}
+                          size={12}
+                        />
+                      {/if}
+                      <span class="truncate text-[11px] text-dimmed">{meta.modelId}</span>
+                    {:else if meta.harnessIds.length > 0 || meta.providerName}
+                      {#each meta.harnessIds as harnessId (harnessId)}
+                        <AgentIcon agentId={harnessId} label={harnessLabel(harnessId)} size={14} />
+                      {/each}
+                      {#if meta.providerName}
+                        <VendorIcon
+                          name={meta.providerName}
+                          id={meta.providerId ?? undefined}
+                          size={12}
+                        />
+                      {/if}
+                    {/if}
+                  </span>
+                {/if}
               </span>
             {/if}
           </span>

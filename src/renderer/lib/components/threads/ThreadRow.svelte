@@ -199,6 +199,10 @@
     return providers.find((provider) => provider.id === providerId)?.name ?? null
   })
 
+  /** Provider id of the thread's current model — ids drive icon resolution so
+   *  custom CodeInOven providers (`cio-…`) always render the CodeInOven mark. */
+  const currentModelProviderId = $derived(thread.settings?.providerId ?? null)
+
   $effect(() => {
     const row = harnessRowEl
     if (!row) return
@@ -686,6 +690,14 @@
           <RecordingIndicator label="Listening" />
         {:else if isSpeaking}
           <RecordingIndicator label="Speaking" tone="speech" />
+        {:else if isBusyIndicator && currentModelProviderName}
+          <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
+            <VendorIcon
+              name={currentModelProviderName}
+              id={currentModelProviderId ?? undefined}
+              size={13}
+            />
+          </span>
         {:else}
           <span class="whitespace-nowrap text-[10px] text-dimmed">
             {relativeTime(thread.createdAt)}
@@ -693,7 +705,11 @@
         {/if}
       {:else if currentModelProviderName}
         <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
-          <VendorIcon name={currentModelProviderName} size={13} />
+          <VendorIcon
+            name={currentModelProviderName}
+            id={currentModelProviderId ?? undefined}
+            size={13}
+          />
         </span>
       {/if}
       {#if selected}
@@ -729,6 +745,9 @@
                 class="h-2 w-2 shrink-0 object-contain opacity-50 grayscale"
                 draggable="false"
               />
+            {/if}
+            {#if scopeBucket.pinned}
+              <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
             {/if}
             <span class="truncate">{scopeBucket.name}</span>
           </span>
@@ -881,12 +900,27 @@
         {displayTitle}
       </span>
 
-      <!-- Single-line default: time rides on the top line -->
+      <!-- Single-line default: time rides on the top line, swapped for the
+           working model's provider icon while the thread is working -->
       {#if !showBottomRow}
         {#if isRecording}
           <RecordingIndicator label="Listening" />
         {:else if isSpeaking}
           <RecordingIndicator label="Speaking" tone="speech" />
+        {:else if isBusyIndicator && currentModelProviderName}
+          <span
+            class="flex shrink-0 items-center transition-opacity duration-150 {hovered
+              ? 'opacity-0'
+              : 'opacity-100'}"
+            aria-hidden={hovered}
+            title={thread.settings?.modelId ?? 'Model'}
+          >
+            <VendorIcon
+              name={currentModelProviderName}
+              id={currentModelProviderId ?? undefined}
+              size={13}
+            />
+          </span>
         {:else}
           <span
             class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
@@ -907,7 +941,11 @@
             aria-hidden={hovered}
             title={thread.settings?.modelId ?? 'Model'}
           >
-            <VendorIcon name={currentModelProviderName} size={13} />
+            <VendorIcon
+              name={currentModelProviderName}
+              id={currentModelProviderId ?? undefined}
+              size={13}
+            />
           </span>
         {/if}
       {/if}
@@ -949,6 +987,9 @@
                 class="h-2 w-2 shrink-0 object-contain opacity-45 grayscale"
                 draggable="false"
               />
+            {/if}
+            {#if scopeBucket.pinned}
+              <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
             {/if}
             <span class="truncate">{scopeBucket.name}</span>
           </span>

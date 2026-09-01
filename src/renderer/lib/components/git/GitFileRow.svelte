@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { GitDiff, GitFileChange, TurnCheckpointFileDiff } from '$shared/types'
+  import type { GitDiff, GitFileChange, GitRestoreTarget, TurnCheckpointFileDiff } from '$shared/types'
   import { Check } from '@lucide/svelte'
   import { ContextMenu } from 'bits-ui'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
@@ -22,6 +22,8 @@
     onOpenInEditor?: (path: string) => void
     onIgnore?: (path: string) => void
     onDiscard?: (path: string) => void
+    /** Restore this file's content from the commit or stash being viewed. */
+    onRestore?: (path: string, target: GitRestoreTarget) => void
     /** Opens the dedicated conflict-resolution panel for a conflicted file. */
     onResolveConflict?: (path: string) => void
     readonly?: boolean
@@ -44,18 +46,19 @@
     onOpenInEditor,
     onIgnore,
     onDiscard,
+    onRestore,
     onResolveConflict,
     readonly = false,
     displayPath
   }: Props = $props()
 
   const hasActions = $derived(
-    !readonly &&
-      (onStash !== undefined ||
-        onOpenInEditor !== undefined ||
-        onIgnore !== undefined ||
-        onDiscard !== undefined ||
-        onResolveConflict !== undefined)
+    onStash !== undefined ||
+      onOpenInEditor !== undefined ||
+      onIgnore !== undefined ||
+      onDiscard !== undefined ||
+      onResolveConflict !== undefined ||
+      onRestore !== undefined
   )
 
   const letter = $derived(
@@ -242,18 +245,20 @@
               </ContextMenu.Item>
             {/if}
           {:else}
-            <ContextMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-              onSelect={() => onToggleStage()}
-            >
-              {#if change.staged}
-                <span class="inline-block w-3 text-center text-[10px] text-danger">−</span>
-                Unstage file
-              {:else}
-                <Check size={12} class="text-success" />
-                Stage file
-              {/if}
-            </ContextMenu.Item>
+            {#if !readonly}
+              <ContextMenu.Item
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => onToggleStage()}
+              >
+                {#if change.staged}
+                  <span class="inline-block w-3 text-center text-[10px] text-danger">−</span>
+                  Unstage file
+                {:else}
+                  <Check size={12} class="text-success" />
+                  Stage file
+                {/if}
+              </ContextMenu.Item>
+            {/if}
             {#if onStash}
               <ContextMenu.Separator class="my-1 h-px bg-border" />
               <ContextMenu.Item
@@ -271,6 +276,23 @@
               >
                 <span class="inline-block w-3 text-center text-[10px]">✎</span>
                 Open
+              </ContextMenu.Item>
+            {/if}
+            {#if onRestore}
+              <ContextMenu.Separator class="my-1 h-px bg-border" />
+              <ContextMenu.Item
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => onRestore?.(change.path, 'staged')}
+              >
+                <span class="inline-block w-3 text-center text-[10px]">↩</span>
+                Restore to index
+              </ContextMenu.Item>
+              <ContextMenu.Item
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => onRestore?.(change.path, 'worktree')}
+              >
+                <span class="inline-block w-3 text-center text-[10px]">↩</span>
+                Restore to index + working tree
               </ContextMenu.Item>
             {/if}
             {#if onIgnore || onDiscard}

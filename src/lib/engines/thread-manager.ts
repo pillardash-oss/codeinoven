@@ -8,6 +8,7 @@ import { messageId as createMessageId } from '../id'
 import { featureSlugFromTitle } from '../project-artifacts'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage-repo'
+import { EngineeringLifecycleEngine } from './engineering-lifecycle-engine'
 import {
   AgentMessageRepo,
   type ProviderDeltaSyncResult,
@@ -24,8 +25,10 @@ import {
 import {
   buildThreadSearchSql,
   mergeThreadSearchResults,
-  ThreadRepo
+  ThreadRepo,
+  type ThreadCapacityCandidate
 } from '../../main/database/repositories/thread-repo'
+import { ScopeManager } from './scope-manager'
 import type { Database } from '../../main/database/database'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
@@ -71,6 +74,26 @@ function isProtectedFromAutomaticCleanup(thread: Pick<Thread, 'pinned' | 'status
   return thread.pinned || thread.status === 'spec'
 }
 
+/**
+ * Scope-bucket ids whose threads live outside the regular bucket. Reads the
+ * board lazily per use; the scope board is a single JSON row, so this is cheap.
+ */
+function pinnedScopeIdsFromBoard(board: import('../types').ScopeBoard): Set<string> {
+  const ids = new Set<string>()
+  for (const bucket of board.buckets) {
+    if (bucket.pinned === true) ids.add(bucket.id)
+  }
+  return ids
+}
+
+/** Threads in pinned scopes never count toward the project thread limit. */
+function isInPinnedScope(
+  candidate: Pick<ThreadCapacityCandidate, 'scopeBucketId'>,
+  pinnedScopes: Set<string>
+): boolean {
+  return pinnedScopes.has(candidate.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+}
+
 /** Deterministic view of a project's thread capacity for the UI. */
 export interface ThreadCapacity {
   limit: number
@@ -78,6 +101,8 @@ export interface ThreadCapacity {
   pinnedCount: number
   protectedCount: number
   deletableCount: number
+  /** Threads in pinned scopes, kept outside the regular bucket. */
+  pinnedScopeCount: number
 }
 
 /** Paging/visibility controls for thread listings. */
@@ -93,41 +118,6 @@ type SqlStatement = { sql: string; params: unknown[] }
 
 function placeholdersFor(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ')
-}
-
-/** Pending turn-feedback payload captured before its thread is deleted. */
-export interface DetachedTurnFeedbackPayload {
-  id: string
-  harnessId: string
-  providerId: string | null
-  modelId: string | null
-  thinkingLevel: string | null
-  userMessageText: string
-  assistantOutputText: string
-  followUpText: string | null
-}
-
-/** Map a pending feedback row to the judge payload that outlives its thread. */
-function toDetachedPayload(row: {
-  id: string
-  harness_id: string | null
-  provider_id: string | null
-  model_id: string | null
-  thinking_level: string | null
-  user_message_text: string
-  assistant_output_text: string
-  follow_up_text: string | null
-}): DetachedTurnFeedbackPayload {
-  return {
-    id: row.id,
-    harnessId: row.harness_id ?? '',
-    providerId: row.provider_id,
-    modelId: row.model_id,
-    thinkingLevel: row.thinking_level,
-    userMessageText: row.user_message_text,
-    assistantOutputText: row.assistant_output_text,
-    followUpText: row.follow_up_text
-  }
 }
 
 /** Build one set-based cleanup transaction for a thread tree. */
@@ -259,6 +249,15 @@ export class ThreadManager {
   private projectRepo: ProjectRepo
   private agentMessageRepo: AgentMessageRepo
   private harnessUsageRepo: HarnessUsageRepo
+  private engineeringLifecycleEngine: EngineeringLifecycleEngine
+
+  /**
+   * Per-thread cache of the full user-message jump list (keyed by
+   * `${projectId}:${threadId}`), populated on first async worker-backed load
+   * and busted only when a new user message is applied to that thread or the
+   * thread is deleted — repeated menu-opens never re-scan the database.
+   */
+  private readonly userMessageHistoryCache = new Map<string, UserMessageSummary[]>()
 
   /**
    * @param onChange Invoked after a thread's status/read state is persisted so
@@ -277,19 +276,20 @@ export class ThreadManager {
     this.projectRepo = new ProjectRepo(db)
     this.agentMessageRepo = new AgentMessageRepo(db)
     this.harnessUsageRepo = new HarnessUsageRepo(db)
+    this.engineeringLifecycleEngine = new EngineeringLifecycleEngine(db)
+    this.scopeManager = new ScopeManager(db)
   }
 
-  /**
-   * Set by the ChatEngine: receives the deleted thread ids plus the pending
-   * turn-feedback rows captured before their threads were deleted so countdown
-   * timers are cancelled and the LLM grader can judge them immediately.
-   */
-  onTurnFeedbackDetached?: (
-    projectId: string,
-    threadIds: string[],
-    rows: DetachedTurnFeedbackPayload[]
-  ) => void
+  /** Reads scope boards to keep pinned scopes outside the thread bucket. */
+  private readonly scopeManager: ScopeManager
 
+  /**
+   * Set by the ChatEngine so deleting a thread makes its durable feedback rows
+   * immediately eligible before the thread foreign key is detached.
+   */
+  onTurnFeedbackDeleted?: (projectId: string, threadIds: string[]) => void
+
+  /** Distinct harness ids used across a thread's session, newest first. */
   /** Distinct harness ids used across a thread's session, newest first. */
   usedHarnessIds(threadId: string): string[] {
     return this.harnessUsageRepo.harnessIdsFor(threadId)
@@ -301,7 +301,10 @@ export class ThreadManager {
   }
 
   /** Efficiency and cost-coverage KPIs for a thread's completed successful user turns. */
-  efficiencyKpisFor(_projectId: string, threadId: string): import('../types').UsageEfficiencyKpis {
+  efficiencyKpisFor(
+    _projectId: string,
+    threadId: string
+  ): Promise<import('../types').UsageEfficiencyKpis> {
     return this.harnessUsageRepo.efficiencyKpisForThread(threadId)
   }
 
@@ -390,13 +393,26 @@ export class ThreadManager {
       if (!project) {
         throw new Error(`Project not found: ${input.projectId}`)
       }
+      const pinnedScopes = pinnedScopeIdsFromBoard(this.scopeManager.getBoard(input.projectId))
+      const newThreadInPinnedScope = pinnedScopes.has(input.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
       const active = await this.threadRepo.listCapacityCandidatesViaWorker(input.projectId)
+      // Threads in pinned scopes sit outside the regular bucket: they neither
+      // fill it nor are they eligible for automatic eviction.
+      const regularCount = active.filter((candidate) => !isInPinnedScope(candidate, pinnedScopes))
+        .length
       let toEvictId: string | undefined
-      if (!creatingOrchestrationChild && active.length >= project.threadLimit) {
-        const toEvict = active.find((candidate) => !isProtectedFromAutomaticCleanup(candidate))
+      if (
+        !creatingOrchestrationChild &&
+        !newThreadInPinnedScope &&
+        regularCount >= project.threadLimit
+      ) {
+        const toEvict = active.find(
+          (candidate) =>
+            !isInPinnedScope(candidate, pinnedScopes) && !isProtectedFromAutomaticCleanup(candidate)
+        )
         toEvictId = toEvict?.id
         if (!toEvictId) {
-          throw new AllThreadsProtectedError(input.projectId, project.threadLimit, active.length)
+          throw new AllThreadsProtectedError(input.projectId, project.threadLimit, regularCount)
         }
       }
 
@@ -660,14 +676,24 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
+    // Moving a thread to a different scope counts as activity on it: the
+    // thread jumps to the top of the destination scope instead of arriving
+    // with a stale timestamp (which would also make it the immediate
+    // candidate for automatic eviction).
+    const movedScopes =
+      input.scopeBucketId !== undefined &&
+      input.scopeBucketId !== (existing.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+
     const updated: Thread = {
       ...existing,
+      lastActivity: movedScopes
+        ? Date.now()
+        : (input.lastActivity ?? existing.lastActivity),
       title: input.title ?? existing.title,
       titleSource: input.titleSource ?? existing.titleSource,
       providerId: input.providerId ?? existing.providerId,
       workingDirectory: input.workingDirectory ?? existing.workingDirectory,
       scopeBucketId: input.scopeBucketId ?? existing.scopeBucketId,
-      lastActivity: input.lastActivity ?? existing.lastActivity,
       read: input.read ?? existing.read,
       assignmentId: input.assignmentId ?? existing.assignmentId,
       assignmentRole: input.assignmentRole ?? existing.assignmentRole,
@@ -729,38 +755,18 @@ export class ThreadManager {
     for (const candidate of deletionOrder) {
       await this.onDelete?.(candidate)
     }
-    // Capture pending turn-feedback rows before the delete transaction: their
-    // grading payload must outlive the threads (thread reference becomes NULL
-    // via ON DELETE SET NULL) so the LLM grader can judge them immediately.
-    const detachedFeedback =
-      deletionOrder.length > 0
-        ? this.db.all<{
-            id: string
-            harness_id: string | null
-            provider_id: string | null
-            model_id: string | null
-            thinking_level: string | null
-            user_message_text: string
-            assistant_output_text: string
-            follow_up_text: string | null
-          }>(
-            `SELECT id, harness_id, provider_id, model_id, thinking_level,
-                    user_message_text, assistant_output_text, follow_up_text
-             FROM turn_feedback WHERE thread_id IN (${placeholdersFor(deletionOrder.length)})
-               AND status = 'pending'`,
-            ...deletionOrder.map((candidate) => candidate.id)
-          )
-        : []
-    this.onTurnFeedbackDetached?.(
+    this.onTurnFeedbackDeleted?.(
       projectId,
-      deletionOrder.map((candidate) => candidate.id),
-      detachedFeedback.map(toDetachedPayload)
+      deletionOrder.map((candidate) => candidate.id)
     )
     const outcome = await this.db.transactionViaWorker(
       buildThreadDeletionStatements(deletionOrder, assignmentIds)
     )
     if (!outcome.ok) {
       throw new Error(outcome.error ?? 'thread deletion failed')
+    }
+    for (const candidate of deletionOrder) {
+      this.userMessageHistoryCache.delete(this.userMessageHistoryCacheKey(projectId, candidate.id))
     }
     await this.removeThreadDiskArtifacts(deletionOrder)
     await this.onDeleted?.(deletionOrder)
@@ -1099,7 +1105,15 @@ export class ThreadManager {
       }
     }
     const resolvedSessionId = sessionId ?? thread.sessionId ?? ''
-    return this.db.syncProviderDeltasViaWorker(threadId, resolvedSessionId, messages)
+    const result = await this.db.syncProviderDeltasViaWorker(threadId, resolvedSessionId, messages)
+    if (result.applied > 0 && messages.some((message) => message.role === 'user')) {
+      this.userMessageHistoryCache.delete(this.userMessageHistoryCacheKey(projectId, threadId))
+    }
+    return result
+  }
+
+  private userMessageHistoryCacheKey(projectId: string, threadId: string): string {
+    return `${projectId}:${threadId}`
   }
 
   /** Load the mirrored agent conversation, or an empty list when absent. */
@@ -1144,11 +1158,16 @@ export class ThreadManager {
   /** Load every mirrored user-authored conversation message, oldest to newest. */
   async loadUserMessages(projectId: string, threadId: string): Promise<UserMessageSummary[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
+    const cacheKey = this.userMessageHistoryCacheKey(projectId, threadId)
+    const cached = this.userMessageHistoryCache.get(cacheKey)
+    if (cached) return cached
     const page = await this.pagedMessageRows((after) =>
       buildLoadUserMessagesPageSql(threadId, after)
     )
     if (!page.ok) return this.agentMessageRepo.loadUserMessagesByThread(threadId)
-    return mapUserMessageRows(page.rows)
+    const history = mapUserMessageRows(page.rows)
+    this.userMessageHistoryCache.set(cacheKey, history)
+    return history
   }
 
   /** Load every parent-session record, including hidden transport-only prompts. */
@@ -1217,12 +1236,19 @@ export class ThreadManager {
     const threads = this.threadRepo.listByProject(projectId)
     const logicalThreads = threads.filter((thread) => !isOrchestrationChildThread(thread))
     const active = logicalThreads.filter((thread) => !thread.archived)
+    const pinnedScopes = pinnedScopeIdsFromBoard(this.scopeManager.getBoard(projectId))
+    // Pinned-scope threads live outside the regular bucket and are reported
+    // separately so the UI can explain the capacity numbers.
+    const regular = active.filter(
+      (thread) => !isInPinnedScope({ scopeBucketId: thread.scopeBucketId }, pinnedScopes)
+    )
     return {
       limit: project.threadLimit,
-      activeCount: active.length,
-      pinnedCount: active.filter((t) => t.pinned).length,
-      protectedCount: active.filter((t) => isProtectedFromAutomaticCleanup(t)).length,
-      deletableCount: active.filter((t) => !isProtectedFromAutomaticCleanup(t)).length
+      activeCount: regular.length,
+      pinnedCount: regular.filter((t) => t.pinned).length,
+      protectedCount: regular.filter((t) => isProtectedFromAutomaticCleanup(t)).length,
+      deletableCount: regular.filter((t) => !isProtectedFromAutomaticCleanup(t)).length,
+      pinnedScopeCount: active.length - regular.length
     }
   }
 
@@ -1307,6 +1333,22 @@ export class ThreadManager {
     // Same-scope forks re-resolve their compatibility directory from the
     // destination scope inside `createThread`, so a stale parent directory
     // can never override the authoritative root.
+    // A fork of an Engineering thread must open with the same switches lit:
+    // carry the parent's stage selection (and Auto Pilot) into the fork so
+    // the toolbox reflects exactly what the user had turned on.
+    {
+      const sourceLifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
+      if (sourceLifecycle && sourceLifecycle.selection !== 'none') {
+        try {
+          this.engineeringLifecycleEngine.select(destinationProjectId, forked.id, {
+            stages: sourceLifecycle.selectedStages ?? [],
+            autopilot: sourceLifecycle.autopilot === true
+          })
+        } catch {
+          // Lifecycle inheritance is cosmetic — never fail the fork on it.
+        }
+      }
+    }
     if (copied.length > 0) {
       const withNewIds = remapCopiedMessages(copied)
       await this.saveMessages(destinationProjectId, forked.id, withNewIds)

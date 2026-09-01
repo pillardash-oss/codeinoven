@@ -30,6 +30,8 @@
   let localBranches = $state.raw<GitBranchInfo[]>([])
   let branchesLoading = $state(true)
   let branchesError = $state<string | null>(null)
+  /** Local branches whose options carry the [WrkT] worktree marker in the source dropdown. */
+  let worktreeSourceCount = $state(0)
   let sourceInfo = $state.raw<ScopeWorktreeSourceInfo | null>(null)
   let error = $state<string | null>(null)
   let busy = $state(false)
@@ -39,6 +41,9 @@
       const branches = (await invoke('git:branches', getProjectId())).filter(
         (branch) => branch.kind === 'local'
       )
+      // Forking a fresh cio/ branch from a worktree branch is git-legal, so every local
+      // branch is offered; worktree branches are marked with [WrkT] instead of hidden.
+      worktreeSourceCount = branches.filter((branch) => branch.worktreePath !== null).length
       localBranches = branches
       baseBranch = branches.find((branch) => branch.current)?.name ?? branches[0]?.name ?? ''
       branchesError = branches.length > 0 ? null : 'This repository has no local branches.'
@@ -194,7 +199,9 @@
                 {:else}
                   {#each localBranches as branch (branch.ref)}
                     <option value={branch.name}>
-                      {branch.name}{branch.current ? ' (current)' : ''}
+                      {branch.name}{branch.current ? ' (current)' : ''}{branch.worktreePath
+                        ? ' [WrkT]'
+                        : ''}
                     </option>
                   {/each}
                 {/if}
@@ -207,12 +214,19 @@
               {/if}
             </div>
           </div>
-          <p
-            id={`${componentId}-base-branch-status`}
-            class={branchesError ? 'mt-1 text-xs text-danger' : 'sr-only'}
-          >
-            {branchesError ?? 'Only local branches are available as worktree sources.'}
-          </p>
+          {#if branchesError}
+            <p id={`${componentId}-base-branch-status`} class="mt-1 text-xs text-danger">
+              {branchesError}
+            </p>
+          {:else if worktreeSourceCount > 0}
+            <p id={`${componentId}-base-branch-status`} class="mt-1 text-xs text-muted">
+              [WrkT] marks branches already checked out in a worktree.
+            </p>
+          {:else}
+            <p id={`${componentId}-base-branch-status`} class="sr-only">
+              Only local branches are available as worktree sources.
+            </p>
+          {/if}
           {#if sourceInfo}
             <p class="text-xs text-dimmed">
               Forks from <span class="text-muted">{baseBranch || sourceInfo.currentBranch}</span>

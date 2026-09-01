@@ -8,17 +8,14 @@
 
   interface Props {
     lifecycleState: EngineeringLifecycleState | null
-    /** Whether the thread is in engineering mode. A thread can be in
-     *  engineering mode (inherited or via a lifecycle stage selection) before
-     *  any specific stage has been chosen, e.g. when a new thread inherits the
-     *  previous thread's engineering settings. */
+    /** Whether any Engineering lifecycle stage is active for the thread —
+     *  either staged (intent-only) or persisted via an inherited selection. */
     active?: boolean
     disabled?: boolean
     onselect: (input: EngineeringLifecycleSelectionInput) => void | Promise<void>
-    onretry?: () => void | Promise<void>
   }
 
-  let { lifecycleState, active = false, disabled = false, onselect, onretry }: Props = $props()
+  let { lifecycleState, active = false, disabled = false, onselect }: Props = $props()
   let open = $state(false)
   let panel: HTMLDivElement | undefined = $state(undefined)
 
@@ -167,31 +164,6 @@
           </span>
         </span>
       </Switch>
-      {#if lifecycleState?.humanGate === 'terminal_failure'}
-        <div class="mx-2 mt-2 rounded-lg border border-danger/30 bg-danger/5 p-2.5">
-          <p class="text-[11px] font-medium text-danger">Engineering needs attention</p>
-          <p class="mt-1 line-clamp-3 text-[11px] leading-4 text-muted">
-            {lifecycleState.failure ?? 'The active stage could not complete.'}
-          </p>
-          <div class="mt-2 flex justify-end gap-2">
-            <button
-              type="button"
-              class="rounded-lg px-2.5 py-1.5 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              onclick={() => void onselect({ stages: [], autopilot: false })}
-            >
-              Stop
-            </button>
-            <button
-              type="button"
-              class="rounded-lg bg-thread-spec px-2.5 py-1.5 text-[11px] font-medium text-foreground disabled:opacity-50"
-              disabled={!onretry}
-              onclick={() => void onretry?.()}
-            >
-              Retry stage
-            </button>
-          </div>
-        </div>
-      {/if}
     </div>
   {/if}
 </div>

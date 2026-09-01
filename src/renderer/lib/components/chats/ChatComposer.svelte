@@ -32,8 +32,11 @@
     fastSelectionModelId,
     supportsFastInference
   } from '$shared/fast-inference'
+  import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { STANDARD_THINKING_PRESETS, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { invoke } from '$lib/ipc.svelte'
+  import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { modelKey } from '$lib/model-keys'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
@@ -44,6 +47,7 @@
     getInlineFolderTypeIconDataUri
   } from '../files/file-type-icons'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { visionModels } from '$lib/stores/vision-models.svelte'
   import { attachmentPreviewKind, fileUrlToPath, mimeFromPath, pathToFileUrl } from '$lib/mime'
   import { placeCaretAtEnd } from '../shared/rich-markdown'
   import AttachmentPreview from './AttachmentPreview.svelte'
@@ -176,10 +180,12 @@
     /** False on the Chats tab — plain chats never surface the engineer toggle. */
     showEngineeringMode?: boolean
     engineeringLifecycle?: EngineeringLifecycleState | null
+    /** Overrides the settings-derived Engineering activity for the toolbox
+     *  icon so staged (send-deferred) selections light or dim it live. */
+    engineeringActive?: boolean
     onEngineeringLifecycleSelect?: (
       input: EngineeringLifecycleSelectionInput
     ) => void | Promise<void>
-    onEngineeringLifecycleRetry?: () => void | Promise<void>
     /** True on the Chats tab — surfaces the chat-only Engineering and File System toggles. */
     showChatModes?: boolean
     /** Hides the permission level selector and forces auto review — chats are
@@ -194,6 +200,8 @@
     favoriteModels?: string[]
     /** Called when the user toggles a model as favorite. */
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Removes one model from the recently-used history; shows the "x" on recent rows. */
+    onRemoveRecent?: (modelKey: string) => void
     /** Called when the user reorders a favorite relative to another favorite. */
     onReorderFavorite?: (
       draggedKey: string,
@@ -250,7 +258,7 @@
     onActionSelect,
     onSlashCommand,
     providers = [],
-    harnessId = 'opencode',
+    harnessId = DEFAULT_HARNESS,
     projectContext,
     projectId = null,
     threadId = '',
@@ -276,14 +284,15 @@
     onEditReference,
     showEngineeringMode = true,
     engineeringLifecycle = null,
+    engineeringActive,
     onEngineeringLifecycleSelect,
-    onEngineeringLifecycleRetry,
     showChatModes = false,
     hidePermissionSelector = false,
     readOnlyMode = false,
     allowAttachments = false,
     favoriteModels = [],
     onToggleFavorite,
+    onRemoveRecent,
     onReorderFavorite,
     recentModels = [],
     onModelUsed,
@@ -305,13 +314,15 @@
     hideUsageIndicator = false
   }: Props = $props()
 
-  /** Resolved settings — uses the prop if provided, else the global last-used.
-   *  Chats always run with auto permission review, so when the permission
-   *  selector is hidden the level is pinned to `auto_review`. */
+  /** Base composer settings — the prop when provided, else the global last-used. */
+  const baseSettings = $derived(settings ?? threadSettingsStore.lastUsed)
+  /** Resolved settings — chats run with auto permission review until File System
+   *  is enabled, so the level stays pinned to `auto_review` while File System is
+   *  off and unlocks (selector visible, up to Full Access) once it is turned on. */
   let resolved = $derived<ThreadSettings>(
-    hidePermissionSelector
-      ? { ...(settings ?? threadSettingsStore.lastUsed), permissionLevel: 'auto_review' as const }
-      : (settings ?? threadSettingsStore.lastUsed)
+    hidePermissionSelector && baseSettings.fileSystemMode !== true
+      ? { ...baseSettings, permissionLevel: 'auto_review' as const }
+      : baseSettings
   )
 
   function projectReferenceToken(reference: Pick<PromptProjectReference, 'path'>): string {
@@ -633,14 +644,13 @@
     thinkingMenuOpen = false
   }
 
-  // Prior-open tracking for the focus-on-close edge detection below. This is a
-  // non-reactive scratch value read/written only inside the effect — the effect
-  // re-runs because it also reads the reactive menu state, so keeping the
-  // previous value in a plain variable (rather than $state) is correct.
+  // Focus restoration on close for every menu/overlay that steals focus from
+  // the editor: each returns the caret to its last published position rather
+  // than the end, so mid-sentence editing stays seamless.
   let modelWasOpen = false
   $effect(() => {
     if (modelWasOpen && !modelMenuOpen) {
-      focusComposerAtEnd()
+      focusComposerAtSavedCaret()
     }
     modelWasOpen = modelMenuOpen
   })
@@ -648,9 +658,25 @@
   let thinkingWasOpen = false
   $effect(() => {
     if (thinkingWasOpen && !thinkingMenuOpen) {
-      focusComposerAtEnd()
+      focusComposerAtSavedCaret()
     }
     thinkingWasOpen = thinkingMenuOpen
+  })
+
+  let permissionWasOpen = false
+  $effect(() => {
+    if (permissionWasOpen && !permissionMenuOpen) {
+      focusComposerAtSavedCaret()
+    }
+    permissionWasOpen = permissionMenuOpen
+  })
+
+  let inferenceWasOpen = false
+  $effect(() => {
+    if (inferenceWasOpen && !inferenceMenuOpen) {
+      focusComposerAtSavedCaret()
+    }
+    inferenceWasOpen = inferenceMenuOpen
   })
 
   function toggleInferenceMenu(): void {
@@ -684,8 +710,11 @@
 
   /** True when the selected harness cannot accept any prompt attachments. */
   let selectedHarnessLacksAttachments = $derived(selectedProvider?.supportsAttachments === false)
-  /** True when the catalog reports this model cannot see images. */
-  let selectedModelLacksVision = $derived(selectedModel?.attachment === false)
+  /** True when the catalog reports this model cannot see images and the app's
+   *  own vision record does not say otherwise. */
+  let selectedModelLacksVision = $derived(
+    selectedModel?.attachment === false && !visionModels.has(selectedModel.id)
+  )
   let hasImageAttachments = $derived(attachments.some(isImageAttachment))
   let attachmentBlockedNotice = $state(false)
   let textAttachmentError = $state('')
@@ -719,6 +748,7 @@
 
   function cancelImageDescriptorGate(): void {
     imageDescriptorGateOpen = false
+    focusComposerAtSavedCaret()
   }
 
   /** Persist the chosen vision model (thread + optional global default) and send. */
@@ -815,6 +845,9 @@
     cancelStop()
   })
 
+  /** Arms the stop confirmation on the first press; the second press calls
+   *  `onStop`. Shared by the stop button and the Escape-key flow so both paths
+   *  show the same visual armed state. */
   function confirmStop(): void {
     if (!onStop) return
     if (pendingStop) {
@@ -834,7 +867,12 @@
     pendingStop = false
   }
 
-  function isHarnessSlashAction(action: ActionDefinition): boolean {
+  /** Actions whose selection inserts `/title ` into the composer and whose
+   *  typed `/title args` submit is routed through `onSlashCommand`. Harness
+   *  command/skill/mcp actions qualify natively; app-owned actions opt in via
+   *  the `slashCommand` flag. */
+  function isSlashRoutedAction(action: ActionDefinition): boolean {
+    if (action.slashCommand === true) return true
     return (
       action.source.kind === 'harness' &&
       (action.category === 'command' || action.category === 'skill' || action.category === 'mcp') &&
@@ -852,12 +890,24 @@
     })
   }
 
+  /** Focus the composer editor and restore the caret to the position the user
+   *  last had inside it — published continuously by the rich editor via its
+   *  selection tracking. Falls back to the end when no position is known.
+   *  This is the right default whenever an overlay that stole focus (menu,
+   *  attachment preview, picker) closes: typing resumes exactly where it left
+   *  off instead of the caret jumping to the end. */
+  export function focusComposerAtSavedCaret(): void {
+    void tick().then(() => {
+      richEditor?.focusAtBookmark(richEditor.caretBookmark())
+    })
+  }
+
   function selectSlashAction(action: ActionDefinition, method: ActionSelection['method']): void {
     if (action.disabledReason) return
     const selectedQuery = slashQuery
     slashOpen = false
 
-    const replacement = isHarnessSlashAction(action) ? `${action.title} ` : ''
+    const replacement = isSlashRoutedAction(action) ? `${action.title} ` : ''
     const replaced = richEditor.replaceTextBeforeCaret(
       /(^|\s)\/[^\s/]*$/u,
       (_match, prefix) => `${prefix}${replacement}`
@@ -875,7 +925,7 @@
       return
     }
 
-    if (isHarnessSlashAction(action)) {
+    if (isSlashRoutedAction(action)) {
       return
     }
 
@@ -906,7 +956,7 @@
     if (slashCommand && onSlashCommand) {
       const name = slashCommand[1]
       const action = actions.find(
-        (candidate) => isHarnessSlashAction(candidate) && candidate.title === `/${name}`
+        (candidate) => isSlashRoutedAction(candidate) && candidate.title === `/${name}`
       )
       if (action) {
         if (action.disabledReason) return
@@ -977,7 +1027,8 @@
                 entry: {
                   id: 'cio-utility',
                   name: '@cio-utility',
-                  description: 'Set up a skill, MCP server, or plugin with a CodeInOven agent.'
+                  description:
+                    'Set up a skill, MCP server, or plugin, or debug an app issue with a CodeInOven agent.'
                 }
               }
             ]
@@ -991,7 +1042,13 @@
         })
         .map((entry) => ({ type: 'task', entry }))
       const files = fileTagProjectId
-        ? await invoke('projectFiles:search', fileTagProjectId, query, 'all')
+        ? await invoke(
+            'projectFiles:search',
+            fileTagProjectId,
+            query,
+            'all',
+            workspaceState.activeScopeBucketIdFor(fileTagProjectId)
+          )
         : []
       const entries: ComposerMentionEntry[] = [
         ...utilityEntries,
@@ -1204,9 +1261,9 @@
   }
 
   /** Loads the preview payload for one attachment: blob URLs for binary media,
-   *  converted Word HTML, or decoded text. Missing/undecodable files silently
-   *  yield no preview so the chip falls back to the file:// URL or the modal
-   *  shows its unavailable state. */
+   *  converted document HTML (DOCX, DOC, ODT, PPTX), or decoded text. Missing/
+   *  undecodable files silently yield no preview so the chip falls back to the
+   *  file:// URL or the modal shows its unavailable state. */
   async function loadAttachmentPreview(file: PromptAttachment): Promise<void> {
     const kind = attachmentPreviewKind(file.mime, file.filename ?? '')
     if (!kind) return
@@ -1217,7 +1274,7 @@
         if (previewDocuments[file.url] !== undefined && previewUrls[file.url]) return
         if (previewDocumentLoading[file.url]) return
         previewDocumentLoading = { ...previewDocumentLoading, [file.url]: true }
-        const html = await invoke('file:readWordPreview', filePath)
+        const html = await invoke('file:readDocumentPreview', filePath)
         if (!html) return
         previewDocuments = { ...previewDocuments, [file.url]: html }
         if (!previewUrls[file.url]) {
@@ -1258,6 +1315,14 @@
 
   onMount(() => {
     void loadAttachmentPreviews(attachments)
+    // A voice recording started in this thread keeps running while the user
+    // navigates away and back, which destroys and remounts this composer. The
+    // speech controller still holds the destroyed editor target, so the
+    // transcript would silently land in the draft store without appearing in
+    // the visible editor. Hand the live editor target back to the controller
+    // when one is mid-capture for this composer.
+    const liveTarget = composerSpeechTarget()
+    if (liveTarget) speechController.reattachTarget(liveTarget)
   })
 
   async function addFileAttachments(
@@ -1366,6 +1431,7 @@
     }
     const paths = await invoke('dialog:pickFiles', attachmentStorage)
     await addFileAttachments(paths.map((path) => ({ path })))
+    focusComposerAtSavedCaret()
   }
 
   async function handleRemoteFileSelection(event: Event): Promise<void> {
@@ -1381,6 +1447,7 @@
       }
     }
     input.value = ''
+    focusComposerAtSavedCaret()
   }
 
   // ─── Global file drop (full viewport) ─────────────────────────────────────
@@ -1571,6 +1638,12 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent): void {
+    // While a surface above this composer owns Escape — a Settings/Scope page
+    // covering the shell, an open modal or palette (spotlight) — or the event
+    // was already consumed by such an overlay, stay inert. Reacting here would
+    // arm the "Stop?" confirmation invisibly, making the user's next Escape on
+    // the thread abort the run without them ever seeing the armed state.
+    if (isEscapeClaimed(e)) return
     if (mentionOpen) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault()
@@ -1679,18 +1752,17 @@
       void engineeringToolbox?.openAndFocus()
       return
     }
+    // While the agent runs, the first Escape arms the stop button with a
+    // visible "Stop?" state and the second confirms the abort. A running agent
+    // is a global session concern, so this remains active even when the
+    // composer editor itself does not have focus.
     if (e.key !== 'Escape') return
-    // Escape cancels the stop-button confirmation, but stops an active turn
-    // immediately when there is no pending confirmation. A running agent is a
-    // global session concern, so this remains active even when the composer
-    // editor itself does not have focus.
-    if (pendingStop) {
-      cancelStop()
+    if (working && onStop) {
+      confirmStop()
       return
     }
-    if (!working || !onStop) return
-    e.preventDefault()
-    onStop()
+    // Idle — Escape only dismisses a stale armed confirmation.
+    if (pendingStop) cancelStop()
   }
 </script>
 
@@ -1714,7 +1786,10 @@
     documentHtml={previewDocuments[previewFile.url]}
     documentLoading={previewDocumentLoading[previewFile.url] ?? false}
     onSaveText={isEditablePastedTextAttachment(previewFile) ? savePreviewText : undefined}
-    onClose={() => (previewFile = null)}
+    onClose={() => {
+      previewFile = null
+      focusComposerAtSavedCaret()
+    }}
   />
 {/if}
 
@@ -1794,6 +1869,7 @@
             modelId={gateVisionSelection?.modelId ?? ''}
             {favoriteModels}
             {recentModels}
+            {onRemoveRecent}
             visionOnly
             side="top"
             variant="field"
@@ -2283,10 +2359,9 @@
       <EngineeringToolbox
         bind:this={engineeringToolbox}
         lifecycleState={engineeringLifecycle}
-        active={resolved.engineeringMode === true}
+        active={engineeringActive === true}
         disabled={readOnlyMode}
         onselect={onEngineeringLifecycleSelect}
-        onretry={onEngineeringLifecycleRetry}
       />
     {/if}
 
@@ -2299,7 +2374,7 @@
         <Shield size={12} />
         <span class="composer-control-label">Read only</span>
       </span>
-    {:else if !hidePermissionSelector}
+    {:else if !hidePermissionSelector || resolved.fileSystemMode === true}
       <div class="relative">
         <button
           type="button"
@@ -2373,6 +2448,7 @@
       modelId={resolved.modelId}
       {favoriteModels}
       {recentModels}
+      {onRemoveRecent}
       bind:open={modelMenuOpen}
       bind:thinkingMenuOpen
       onSelect={selectModel}
@@ -2489,7 +2565,7 @@
               ? 'Queue message'
               : 'Send message'}
         title={pendingStop
-          ? 'Click again to stop — Esc to cancel'
+          ? 'Click again to stop'
           : canStop
             ? 'Stop the running agent'
             : working
@@ -2524,6 +2600,7 @@
   onClose={() => {
     startAfterPickerOpen = false
     if (startAfterThreads.length === 0) startAfterEnabled = false
+    focusComposerAtSavedCaret()
   }}
 />
 

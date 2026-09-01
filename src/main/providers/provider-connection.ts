@@ -1,7 +1,12 @@
 import { BrowserWindow } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import type { ProviderConnectionInfo } from '../../lib/types'
-import { findHarness, listHarnesses, type HarnessDescriptor } from '../agents/harness-registry'
+import {
+  findHarness,
+  harnessSupportsManualCompaction,
+  listHarnesses,
+  type HarnessDescriptor
+} from '../agents/harness-registry'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import {
@@ -44,8 +49,13 @@ export class ProviderConnectionService {
   private checkAllInFlight: Promise<ProviderConnectionInfo[]> | null = null
   private checkOneInFlight = new Map<string, Promise<ProviderConnectionInfo>>()
   private probeQueueTail: Promise<void> = Promise.resolve()
+  /** Last settled (non-probing) result per harness, for change detection. */
+  private lastSettled = new Map<string, ProviderConnectionInfo>()
+  /** Fired when a probe changes a harness's install state (status/version). */
+  private readonly onStatusesChanged?: () => void
 
-  constructor() {
+  constructor(onStatusesChanged?: () => void) {
+    this.onStatusesChanged = onStatusesChanged
     for (const harness of listHarnesses()) {
       this.statuses.set(harness.id, {
         id: harness.id,
@@ -53,6 +63,7 @@ export class ProviderConnectionService {
         command: harness.command,
         integration: harness.integration,
         supportsCustomProviders: harness.supportsCustomProviders,
+        supportsManualCompaction: harnessSupportsManualCompaction(harness.id),
         status: 'idle'
       })
     }
@@ -92,6 +103,7 @@ export class ProviderConnectionService {
           command: id,
           integration: 'planned',
           supportsCustomProviders: false,
+          supportsManualCompaction: false,
           status: 'error',
           detail: 'Unknown provider'
         }
@@ -141,6 +153,7 @@ export class ProviderConnectionService {
         this.probe(definition, runtimes.get(definition.command) ?? null)
       )
       this.statuses.set(result.id, result)
+      this.noteSettled(result)
       if ((index + 1) % PROBE_BROADCAST_BATCH_SIZE === 0 || index === harnesses.length - 1) {
         this.broadcast()
       }
@@ -156,6 +169,24 @@ export class ProviderConnectionService {
   private update(info: ProviderConnectionInfo): void {
     this.statuses.set(info.id, info)
     this.broadcast()
+    this.noteSettled(info)
+  }
+
+  /**
+   * Record a settled (non-probing) result and fire `onStatusesChanged` when the
+   * harness's install state or version differs from the last settled probe —
+   * e.g. pi was just installed or upgraded while the app is running.
+   */
+  private noteSettled(info: ProviderConnectionInfo): void {
+    if (info.status === 'checking' || info.status === 'idle') return
+    const settled = this.lastSettled.get(info.id)
+    this.lastSettled.set(info.id, info)
+    if (
+      settled &&
+      (settled.status !== info.status || (settled.version ?? '') !== (info.version ?? ''))
+    ) {
+      this.onStatusesChanged?.()
+    }
   }
 
   private broadcast(): void {
@@ -177,6 +208,7 @@ export class ProviderConnectionService {
       command: def.command,
       integration: def.integration,
       supportsCustomProviders: def.supportsCustomProviders,
+      supportsManualCompaction: harnessSupportsManualCompaction(def.id),
       status: 'idle'
     }
 

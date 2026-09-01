@@ -30,12 +30,12 @@
     Download,
     FileDown,
     FileDiff,
+    FileTerminal,
     FolderTree,
     Globe2,
     History,
     Info,
     Loader2,
-    Minimize2,
     MessageCircleDashed,
     Pause,
     Play,
@@ -58,11 +58,13 @@
   import ThreadView from '../threads/ThreadView.svelte'
   import SpecConversationSidebar from '../specs/SpecConversationSidebar.svelte'
   import TerminalPanel from '../terminal/TerminalPanel.svelte'
+  import ActionsPanel from '../actions/ActionsPanel.svelte'
   import BrowserPanel from '../browser/BrowserPanel.svelte'
   import ProjectFilesPanel from '../files/ProjectFilesPanel.svelte'
   import DiffSidebarPanel from '../files/DiffSidebarPanel.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
+  import FullscreenPanelDialog from '../workspace/FullscreenPanelDialog.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import SubagentSessionView from '../threads/SubagentSessionView.svelte'
   import SourcesPanel from '../threads/SourcesPanel.svelte'
@@ -75,13 +77,14 @@
   import AppearancePicker from '../shared/AppearancePicker.svelte'
   import ScopeBadge from '../shared/ScopeBadge.svelte'
   import StatusBadge from '../shared/StatusBadge.svelte'
-  import MessageHistoryPanel from '../shared/MessageHistoryPanel.svelte'
+  import HistorySidePanel from '../shared/HistorySidePanel.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
   import SidebarAccountControls from './SidebarAccountControls.svelte'
   import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { copyText } from '$lib/copy-text'
   import { loadProjectIcons, getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
@@ -109,7 +112,6 @@
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
@@ -156,13 +158,23 @@
     mode: 'projects' | 'chats' | 'threads'
     /** Whether the shell is the on-screen view (hidden while in Settings/Scope). */
     active?: boolean
+    /** True while the Scope page is on screen — thread switches must keep the
+     *  scope store's active project in sync with the selected thread. */
+    scopeViewActive?: boolean
     navigate: (view: MainView) => void
     /** Global app config — drives the image-descriptor default + ask-again flag. */
     config?: AppConfig
     updateConfig?: (patch: AppConfigPatch) => Promise<void>
   }
 
-  let { mode, active = true, navigate, config, updateConfig }: Props = $props()
+  let {
+    mode,
+    active = true,
+    scopeViewActive = false,
+    navigate,
+    config,
+    updateConfig
+  }: Props = $props()
 
   const INITIAL_THREAD_LIMIT = 100
   const HISTORY_PAGE_LIMIT = 50
@@ -645,6 +657,18 @@
     }, 120)
   }
 
+  /** Clicking into the chat composer means the user found what they were
+   *  looking for: any open sidebar thread search is dismissed immediately
+   *  ("click and go") instead of lingering and blocking the composer. Runs in
+   *  the capture phase so it fires before focus settles into the editor. */
+  function handleComposerPointerDown(event: Event): void {
+    const target = event.target
+    if (!(target instanceof Element)) return
+    if (!target.closest('[data-onboarding="composer"]')) return
+    if (threadsSearchOpen) closeThreadsSearch()
+    for (const projectId of [...projectSearchOpen]) closeProjectSearch(projectId)
+  }
+
   /** Project icon data URLs keyed by project id. */
   const projectIcons = new SvelteMap<string, string>()
 
@@ -685,14 +709,14 @@
     contextSidebarState.openDiff(selectedThread.projectId, selectedThread.id)
   }
 
-  function openNewTerminal(): void {
-    if (!selectedThread) return
-    contextSidebarState.openNewTerminal(selectedThread.projectId, selectedThread.id)
+  function openNewTerminal(): string | null {
+    if (!selectedThread) return null
+    return contextSidebarState.openNewTerminal(selectedThread.projectId, selectedThread.id)
   }
 
-  function openNewBrowser(): void {
+  function openNewBrowser(): string | null {
     const activeTab = contextSidebarState.sidebarActiveTab
-    contextSidebarState.openBrowser(
+    return contextSidebarState.openBrowser(
       activeTab?.kind === 'browser' ? activeTab.url : 'http://localhost:3000/'
     )
   }
@@ -712,6 +736,11 @@
       return
     }
     contextSidebarState.openSources(selectedThread.projectId, selectedThread.id)
+  }
+
+  function openActionsTab(): void {
+    if (!selectedThread) return
+    contextSidebarState.openActions(selectedThread.projectId, selectedThread.id)
   }
 
   function openCloudDeploymentsTab(): void {
@@ -759,8 +788,10 @@
   )
 
   function focusBrowser(): void {
-    const tab = browserTabs.at(-1)
-    if (tab) contextSidebarState.focus(tab.id)
+    // Prefer the remembered active tab over the last one so a restart (or any
+    // path that lost track of the active tab) reopens what the user last saw.
+    const id = contextSidebarState.rememberedBrowserTabId
+    if (id) contextSidebarState.focus(id)
   }
 
   function focusSubagent(): void {
@@ -1046,6 +1077,16 @@
         active: terminalOpen,
         onSelect: toggleTerminal
       })
+      const runningActions = projectActionsState.runningCount(selectedThread.projectId)
+      workspaceTools.push({
+        id: 'actions',
+        label: runningActions > 0 ? `Actions (${runningActions} running)` : 'Actions',
+        icon: FileTerminal,
+        active: dockKindActive('actions'),
+        countBadge: runningActions > 0 ? String(runningActions) : undefined,
+        countBadgeTone: runningActions > 0 ? 'working' : undefined,
+        onSelect: () => toggleDockPanel('actions', openActionsTab)
+      })
     }
 
     const sessionTools: ContextDockItem[] = [
@@ -1208,6 +1249,25 @@
 
   let terminalFullscreenTabId = $state<string | null>(null)
   let browserFullscreenTabId = $state<string | null>(null)
+  /** All open browser tabs, for the fullscreen dialog's tab strip. */
+  let fullscreenBrowserTabs = $derived(
+    contextSidebarState.tabs.filter((tab) => tab.kind === 'browser')
+  )
+  let fullscreenTerminalTabs = $derived(
+    contextSidebarState.tabs.filter((tab) => tab.kind === 'terminal')
+  )
+
+  /** Close a tab from a fullscreen strip without tearing the fullscreen down
+   *  unless it was the last tab of that kind. */
+  function closeFullscreenTab(kind: 'terminal' | 'browser', tabId: string): void {
+    const openTabs = contextSidebarState.tabs.filter((tab) => tab.kind === kind)
+    const remaining = openTabs.filter((tab) => tab.id !== tabId)
+    closeContextTab(tabId)
+    if (remaining.length === 0) return
+    const fallback = remaining.at(-1)?.id ?? null
+    if (kind === 'terminal') terminalFullscreenTabId = fallback
+    else browserFullscreenTabId = fallback
+  }
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
 
@@ -1606,10 +1666,13 @@
 
   // Full user-message history is only needed after the history menu opens.
   // Keeping it out of the thread mount path prevents a hidden database scan on
-  // every switch while preserving the complete jump list when requested.
+  // every switch. Also re-fires when the active thread changes (the callback
+  // pointer swaps on ThreadView mount) so the list refreshes for the new
+  // thread if the menu is already open — without scanning on every mount.
   $effect(() => {
-    if (!showHistoryMenu) return
-    void workspaceState.loadUserMessageHistory?.()
+    const load = workspaceState.loadUserMessageHistory
+    if (!showHistoryMenu || !load) return
+    void load()
   })
 
   // Live thread updates pushed from the main process (status/read changes
@@ -1962,18 +2025,30 @@
         })
       })
 
-      // Preserve the initial empty-state behavior previously triggered by App.
-      // A restored thread remains selected and does not create a new one.
+      // Never auto-create a chat, thread, or project on startup — the user
+      // (or the onboarding tour) initiates that. When no thread was restored
+      // from the recovery snapshot, reopen the last thread the user actually
+      // visited (recentThreadVisits is persisted visit order); fall back to
+      // the most recently active thread of the mode. allThreads order is not
+      // visit recency (listRecent hoists the selected project first), so it
+      // must never be used to guess the last-open thread.
       if (active && !workspaceState.selectedThread) {
-        if (mode === 'chats') {
-          workspaceState.requestNewChat()
-        } else if (
-          workspaceState.activeProject &&
-          workspaceState.activeProject.id !== INBOX_PROJECT_ID
-        ) {
-          workspaceState.requestCreateThread(scopeState.sidebarContext?.bucketId)
-        } else {
-          workspaceState.requestAddProject()
+        const wantChat = mode === 'chats'
+        const candidates = allThreads.filter(
+          (t) => !t.archived && (t.projectId === INBOX_PROJECT_ID) === wantChat
+        )
+        const byVisit = new Map(candidates.map((t) => [threadVisitKey(t), t]))
+        const last =
+          workspaceState.recentThreadVisits
+            .map((key) => byVisit.get(key))
+            .find((t) => t !== undefined) ??
+          candidates.sort((a, b) => b.lastActivity - a.lastActivity)[0]
+        if (last) {
+          workspaceState.openThread(
+            last,
+            projectList.find((candidate) => candidate.id === last.projectId) ?? null
+          )
+          void scopeState.ensureBoardLoaded(last.projectId)
         }
       }
     } catch {
@@ -2513,7 +2588,7 @@
     const optimisticThread = {
       id: optimisticId,
       projectId: project.id,
-      providerId: 'opencode' as const,
+      providerId: 'pi' as const,
       title: DEFAULT_THREAD_TITLE,
       titleSource: 'default' as const,
       status: 'created' as const,
@@ -2543,15 +2618,12 @@
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     workspaceState.openThread(thread as any, project)
-    if (activeThread) {
-      void inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
-    }
     // Persist in background with the same stable id — no ID swap, branch
     // detection runs after the first thread:update broadcast, never blocking typing.
     void invoke('thread:create', {
       id: optimisticId,
       projectId: project.id,
-      providerId: 'opencode',
+      providerId: 'pi',
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: project.path,
       settings: inheritedSettings,
@@ -2566,6 +2638,20 @@
         if (workspaceState.selectedThread?.id === optimisticId) {
           workspaceState.openThread(confirmed, project)
         }
+        // Lifecycle inheritance must run only after the destination row is
+        // durable: fired concurrently with creation, its internal `thread:get`
+        // can race ahead of the insert and the "Thread not found" failure is
+        // swallowed — leaving the toolbox icon lit while every switch reads off.
+        if (activeThread) {
+          void inheritEngineeringLifecycle(project.id, activeThread.id, optimisticId)
+        }
+        if (activeThread?.settings) {
+          // Settings already applied optimistically and persisted by thread:create;
+          // this update keeps the pre-fix main-process path honest now that the
+          // row is guaranteed durable.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          void persistInheritedThreadSettings(thread as any, inheritedSettings).catch(() => {})
+        }
       })
       .catch((error) => {
         // Creation failed — remove the optimistic thread so the UI does not strand on a phantom
@@ -2576,11 +2662,6 @@
         }
         reportError(error, 'The new thread could not be created.')
       })
-    if (activeThread?.settings) {
-      // Settings already applied optimistically; background persistence will confirm via thread:update
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      void persistInheritedThreadSettings(thread as any, inheritedSettings).catch(() => {})
-    }
   }
 
   /** Start a fresh standalone chat — shows the composer immediately. */
@@ -2600,7 +2681,7 @@
       const inbox = await invoke('project:ensureInbox')
       const thread = await invoke('thread:create', {
         projectId: inbox.id,
-        providerId: 'opencode',
+        providerId: 'pi',
         title: DEFAULT_THREAD_TITLE,
         workingDirectory: '',
         settings: chatEffectiveSettings()
@@ -2652,6 +2733,19 @@
   async function openThreadFromSwitcher(thread: Thread): Promise<void> {
     if (thread.projectId === INBOX_PROJECT_ID) navigate('chats')
     else if (mode === 'chats') navigate('projects')
+    // The scope store reads its own activeProjectId / sidebarContext, not the
+    // workspace selection, so a cross-project Ctrl+Tab jump must sync it —
+    // otherwise the scope view tabs and the scope-state sidebar stay stuck on
+    // the previous project. On the Scope page the view itself follows the
+    // thread's project; an active scope-state sidebar follows the thread and
+    // its own scope bucket.
+    if (thread.projectId !== INBOX_PROJECT_ID) {
+      if (scopeViewActive) {
+        void scopeState.activateProject(thread.projectId)
+      } else if (scopeState.sidebarContext) {
+        scopeState.showSidebarForThread(thread)
+      }
+    }
     await openThread(thread)
     // A Ctrl+Tab selection is a deliberate jump to a specific thread. When it
     // crosses modes (e.g. Chats → Projects) the mode switch opens a suppression
@@ -2843,6 +2937,8 @@
 
   loadData()
 </script>
+
+<svelte:document onpointerdowncapture={handleComposerPointerDown} />
 
 <div class="flex h-full">
   <!-- Shared sidebar — shows Projects or Chats depending on the shell mode -->
@@ -3128,6 +3224,9 @@
                           draggable="false"
                         />
                       {/if}
+                      {#if bucket.pinned}
+                        <Pin size={10} class="shrink-0 text-accent" aria-hidden="true" />
+                      {/if}
                       <span class="truncate">{bucket.name}</span>
                     </button>
                     <div class="opacity-0 transition-opacity group-hover:opacity-100">
@@ -3338,8 +3437,11 @@
           <!-- Pinned threads above everything -->
           <PinnedSection
             threads={pinnedThreads}
-            projects={visibleProjects}
             selectedThreadId={selectedThread?.id ?? null}
+            getProjectIconUrl={(projectId) => {
+              const project = projects.find((p) => p.id === projectId)
+              return project ? getProjectIcon(project, projectIcons.get(project.id)) : null
+            }}
             onOpen={openThread}
             onRename={handleRename}
             onTogglePin={togglePin}
@@ -3839,6 +3941,7 @@
                     onReorderFavorite={(draggedKey, targetKey, position) =>
                       rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
                     recentModels={rendererRecovery.chatRecentModels}
+                    onRemoveRecent={(key) => rendererRecovery.removeChatRecentModel(key)}
                     onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
                     imageDescriptorDefault={config?.agentDefaults.imageDescriptor}
                     imageDescriptorAskAgain={config?.imageDescriptorAskAgain === true}
@@ -3929,8 +4032,16 @@
                   <TerminalPanel
                     terminalId={activeContextTab.terminalId}
                     projectId={activeContextTab.projectId}
+                    scopeBucketId={workspaceState.activeScopeBucketIdFor(
+                      activeContextTab.projectId
+                    )}
                   />
                 {/if}
+              {:else if activeContextTab.kind === 'actions'}
+                <ActionsPanel
+                  projectId={activeContextTab.projectId}
+                  scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
+                />
               {:else if activeContextTab.kind === 'browser'}
                 {#if browserFullscreenTabId === activeContextTab.id}
                   <div class="flex h-full items-center justify-center text-xs text-muted">
@@ -3939,7 +4050,10 @@
                 {:else if showClearBrowserDataConfirm && browserDataClearProjectId === activeContextTab.projectId}
                   <div class="h-full bg-app" aria-hidden="true"></div>
                 {:else}
-                  <BrowserPanel tab={activeContextTab} />
+                  <BrowserPanel
+                    tab={activeContextTab}
+                    suppressed={browserFullscreenTabId !== null}
+                  />
                 {/if}
               {:else if activeContextTab.kind === 'debugger'}
                 <AgentDebugPanel />
@@ -4029,6 +4143,7 @@
                 <TerminalPanel
                   terminalId={activeDockTab.terminalId}
                   projectId={activeDockTab.projectId}
+                  scopeBucketId={workspaceState.activeScopeBucketIdFor(activeDockTab.projectId)}
                 />
               {/key}
             {/if}
@@ -4084,21 +4199,20 @@
     title="Close history"
     onclick={() => (showHistoryMenu = false)}
   ></button>
-  <div
-    class="absolute right-full top-0 z-40 mr-2 w-72 overflow-hidden border bg-surface shadow-lg"
-    role="menu"
-    aria-label="Jump to message"
-  >
-    <p class="border-b px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed">
-      Your messages
-    </p>
-    <div class="max-h-72 overflow-y-auto">
-      <MessageHistoryPanel
-        messages={workspaceState.userMessages}
-        onSelect={(id) => jumpToHistoryMessage(id)}
-      />
-    </div>
-  </div>
+  <HistorySidePanel
+    messages={workspaceState.userMessages}
+    busy={workspaceState.historyActions?.busy ?? false}
+    forkingId={workspaceState.historyActions?.forkingId ?? null}
+    onSelect={(id) => jumpToHistoryMessage(id)}
+    onFork={(id) => workspaceState.historyActions?.fork(id)}
+    onDelete={(id, mode) =>
+      workspaceState.historyActions?.requestDelete(
+        id,
+        workspaceState.userMessages.find((message) => message.id === id)?.content ?? '',
+        mode
+      )}
+    onClose={() => (showHistoryMenu = false)}
+  />
 {/snippet}
 
 {#snippet browserMenu()}
@@ -4629,81 +4743,59 @@
   onSelect={openThreadFromSwitcher}
 />
 
-<!-- Terminal fullscreen dialog -->
-{#if terminalFullscreenTabId}
+{#if terminalFullscreenTabId && fullscreenTerminalTabs.length > 0}
   {@const terminalTab = contextSidebarState.tabs.find((t) => t.id === terminalFullscreenTabId)}
-  {#if terminalTab?.kind === 'terminal'}
-    <Dialog.Root
-      open={true}
-      onOpenChange={(open) => {
-        if (!open) terminalFullscreenTabId = null
-      }}
-    >
-      <Dialog.Portal>
-        <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/80 backdrop-blur-sm" />
-        <Dialog.Content
-          class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl"
-          onEscapeKeydown={(e) => e.preventDefault()}
-        >
-          <div
-            class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
-            style={trafficLightInsetStyle()}
-          >
-            <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
-              {terminalTab.title}
-            </Dialog.Title>
-            <Dialog.Description class="sr-only">Fullscreen terminal</Dialog.Description>
-            <Dialog.Close
-              class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Close fullscreen terminal"
-              title="Close fullscreen terminal"
-            >
-              <X size={14} />
-            </Dialog.Close>
-          </div>
-          <TerminalPanel terminalId={terminalTab.terminalId} projectId={terminalTab.projectId} />
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  {/if}
+  <FullscreenPanelDialog
+    tabs={fullscreenTerminalTabs}
+    activeTabId={terminalFullscreenTabId}
+    newLabel="New terminal"
+    minimizeLabel="Minimize terminal"
+    onSelect={(id) => (terminalFullscreenTabId = id)}
+    onCloseTab={(id) => closeFullscreenTab('terminal', id)}
+    onNew={() => {
+      const id = openNewTerminal()
+      if (id) terminalFullscreenTabId = id
+    }}
+    onMinimize={() => (terminalFullscreenTabId = null)}
+  >
+    {#snippet icon()}
+      <SquareTerminal size={11} class="shrink-0" />
+    {/snippet}
+    {#if terminalTab?.kind === 'terminal'}
+      {#key terminalFullscreenTabId}
+        <TerminalPanel
+          terminalId={terminalTab.terminalId}
+          projectId={terminalTab.projectId}
+          scopeBucketId={workspaceState.activeScopeBucketIdFor(terminalTab.projectId)}
+        />
+      {/key}
+    {/if}
+  </FullscreenPanelDialog>
 {/if}
 
-<!-- Browser fullscreen dialog -->
 {#if browserFullscreenTabId}
   {@const browserTab = contextSidebarState.tabs.find((tab) => tab.id === browserFullscreenTabId)}
   {#if browserTab?.kind === 'browser'}
-    <Dialog.Root
-      open={true}
-      onOpenChange={(open) => {
-        if (!open) browserFullscreenTabId = null
+    <FullscreenPanelDialog
+      tabs={fullscreenBrowserTabs}
+      activeTabId={browserFullscreenTabId}
+      newLabel="New browser tab"
+      minimizeLabel="Minimize browser"
+      onSelect={(id) => (browserFullscreenTabId = id)}
+      onCloseTab={(id) => closeFullscreenTab('browser', id)}
+      onNew={() => {
+        const id = openNewBrowser()
+        if (id) browserFullscreenTabId = id
       }}
+      onMinimize={() => (browserFullscreenTabId = null)}
     >
-      <Dialog.Portal>
-        <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/80 backdrop-blur-sm" />
-        <Dialog.Content
-          class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl"
-          onEscapeKeydown={(event) => event.preventDefault()}
-        >
-          <div
-            class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
-            style={trafficLightInsetStyle()}
-          >
-            <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
-              {browserTab.title}
-            </Dialog.Title>
-            <Dialog.Description class="sr-only">Fullscreen browser</Dialog.Description>
-            <Dialog.Close
-              class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Minimize browser"
-              title="Minimize browser"
-            >
-              <Minimize2 size={14} />
-            </Dialog.Close>
-          </div>
-          <BrowserPanel tab={browserTab} fullscreen />
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+      {#snippet icon()}
+        <Globe2 size={11} class="shrink-0" />
+      {/snippet}
+      {#key browserFullscreenTabId}
+        <BrowserPanel tab={browserTab} fullscreen />
+      {/key}
+    </FullscreenPanelDialog>
   {/if}
 {/if}
 

@@ -95,18 +95,26 @@
     })
   })
   const finalOutput = $derived(tab.activity.output?.trim() ?? '')
-  const transcriptCoversOutput = $derived.by(() => {
-    if (!finalOutput) return true
-    const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
-    if (!lastAssistant) return false
-    const text = textParts(lastAssistant)
-      .map((part) => part.text.trim())
-      .join('\n')
-      .trim()
-    if (!text) return false
-    return text === finalOutput || text.includes(finalOutput) || finalOutput.includes(text)
-  })
-  const showCapturedOutput = $derived(finalOutput.length > 0 && !transcriptCoversOutput)
+  // The captured output is a fallback for when the transcript itself is not
+  // renderable — never a companion to it. While the sub-agent works,
+  // activity.output is an accumulating preview that concatenates every
+  // assistant message (capped, possibly cut mid-line), so substring checks
+  // against the last assistant message fail and the raw wall of text would
+  // duplicate the live working trace at the bottom of the view. Only surface
+  // it when the loaded transcript carries no assistant text to cover it and
+  // the session is no longer streaming.
+  const transcriptHasAssistantText = $derived(
+    [...messages].reverse().some(
+      (message) =>
+        message.role === 'assistant' && textParts(message).some((part) => part.text.trim())
+    )
+  )
+  const showCapturedOutput = $derived(
+    finalOutput.length > 0 &&
+      !busy &&
+      !loading &&
+      (loadError !== '' || messages.length === 0 || !transcriptHasAssistantText)
+  )
 
   onMount(() => {
     void initializeSession()

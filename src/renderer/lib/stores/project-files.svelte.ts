@@ -6,11 +6,13 @@ import type {
   ProjectTextFile,
   TurnCheckpointFileDiff
 } from '$shared/types'
+import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
 import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState, type FilesContextTab } from '$lib/stores/context-sidebar.svelte'
 import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import { gitState } from '$lib/stores/git.svelte'
+import { workspaceState } from '$lib/stores/workspace.svelte'
 import { isImageMime, isPdfMime, mimeFromPath } from '$lib/mime'
 
 /** How many levels of subfolders "Expand all" reveals below the project root,
@@ -61,12 +63,16 @@ export interface ProjectFilesState {
   selectionAnchor: string | null
   loadingPaths: Record<string, boolean>
   sessions: Record<string, ProjectFileSession>
+  /** Scope bucket the cached listings were read from. */
+  activeScope: string
 }
 
 export interface ProjectFileClipboard {
   projectId: string
   paths: string[]
   mode: ProjectFileTransferMode
+  /** Scope bucket the copied paths are relative to. */
+  scopeBucketId: string
 }
 
 export function createProjectFilesState(projectId: string): ProjectFilesState {
@@ -91,7 +97,8 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     selectedPaths: [...explorer.selectedPaths],
     selectionAnchor: null,
     loadingPaths: {},
-    sessions: {}
+    sessions: {},
+    activeScope: DEFAULT_SCOPE_BUCKET_ID
   }
 }
 
@@ -110,6 +117,11 @@ class ProjectFilesWorkspace {
   private pendingRestores = new Set<string>()
   clipboard: ProjectFileClipboard | null = $state(null)
 
+  /** The scope bucket the project's file operations must target right now. */
+  private scopeFor(projectId: string): string {
+    return workspaceState.activeScopeBucketIdFor(projectId)
+  }
+
   ensureState(projectId: string): ProjectFilesState {
     const existing = this.projects[projectId]
     if (existing) return existing
@@ -127,6 +139,18 @@ class ProjectFilesWorkspace {
 
   async loadDirectory(projectId: string, directory: string, force = false): Promise<void> {
     const state = this.ensureState(projectId)
+    // A scope switch (thread opened in another bucket, sidebar bucket change)
+    // invalidates every cached listing so the tree re-reads the new root.
+    const scope = this.scopeFor(projectId)
+    if (state.activeScope !== scope) {
+      state.activeScope = scope
+      state.entriesByDirectory = {}
+      state.loadingDirectories = {}
+      state.directoryErrors = {}
+      for (const key of [...this.directoryLoads.keys()]) {
+        if (key.startsWith(`${projectId}:`)) this.directoryLoads.delete(key)
+      }
+    }
     const loadKey = `${projectId}:${directory}`
     const pending = this.directoryLoads.get(loadKey)
     if (pending) return pending
@@ -139,7 +163,8 @@ class ProjectFilesWorkspace {
         state.entriesByDirectory[directory] = await invoke(
           'projectFiles:list',
           projectId,
-          directory
+          directory,
+          scope
         )
         // The first time the root is listed for a freshly hydrated project,
         // cheaply restore the last-viewed position: only the ancestor chain of
@@ -277,7 +302,7 @@ class ProjectFilesWorkspace {
   }
 
   setClipboard(projectId: string, paths: string[], mode: ProjectFileTransferMode): void {
-    this.clipboard = { projectId, paths, mode }
+    this.clipboard = { projectId, paths, mode, scopeBucketId: this.scopeFor(projectId) }
   }
 
   setSelection(projectId: string, paths: string[]): void {
@@ -306,7 +331,7 @@ class ProjectFilesWorkspace {
 
   async createFile(projectId: string, directory: string, name: string): Promise<void> {
     const entry = await this.runFileOperation(() =>
-      invoke('projectFiles:create', projectId, directory, name)
+      invoke('projectFiles:create', projectId, directory, name, this.scopeFor(projectId))
     )
     await this.loadDirectory(projectId, directory, true)
     await this.openFile(projectId, entry.path)
@@ -314,7 +339,7 @@ class ProjectFilesWorkspace {
 
   async createDirectory(projectId: string, directory: string, name: string): Promise<void> {
     await this.runFileOperation(() =>
-      invoke('projectFiles:createDirectory', projectId, directory, name)
+      invoke('projectFiles:createDirectory', projectId, directory, name, this.scopeFor(projectId))
     )
     await this.loadDirectory(projectId, directory, true)
   }
@@ -322,7 +347,7 @@ class ProjectFilesWorkspace {
   async renameFile(projectId: string, path: string, name: string): Promise<void> {
     const state = this.ensureState(projectId)
     const next = await this.runFileOperation(() =>
-      invoke('projectFiles:rename', projectId, path, name)
+      invoke('projectFiles:rename', projectId, path, name, this.scopeFor(projectId))
     )
     this.remapPath(state, projectId, path, next.path)
     await this.loadDirectory(projectId, this.parentDirectory(path), true)
@@ -370,7 +395,9 @@ class ProjectFilesWorkspace {
               sourcePath,
               projectId,
               destinationDirectory,
-              clipboard.mode
+              clipboard.mode,
+              clipboard.scopeBucketId,
+              this.scopeFor(projectId)
             )
           )
         )
@@ -405,7 +432,13 @@ class ProjectFilesWorkspace {
   ): Promise<ProjectFileEntry[]> {
     if (sourcePaths.length === 0) return []
     const entries = await this.runFileOperation(() =>
-      invoke('projectFiles:importPaths', projectId, sourcePaths, destinationDirectory)
+      invoke(
+        'projectFiles:importPaths',
+        projectId,
+        sourcePaths,
+        destinationDirectory,
+        this.scopeFor(projectId)
+      )
     )
     await this.loadDirectory(projectId, destinationDirectory, true)
     return entries
@@ -418,7 +451,13 @@ class ProjectFilesWorkspace {
   ): Promise<ProjectFileDropResult[]> {
     if (sourcePaths.length === 0) return []
     const results = await this.runFileOperation(() =>
-      invoke('projectFiles:dropPaths', projectId, sourcePaths, destinationDirectory)
+      invoke(
+        'projectFiles:dropPaths',
+        projectId,
+        sourcePaths,
+        destinationDirectory,
+        this.scopeFor(projectId)
+      )
     )
     for (const result of results) {
       if (result.movedFrom) this.remapMovedFile(projectId, result.movedFrom, result.entry.path)
@@ -428,7 +467,9 @@ class ProjectFilesWorkspace {
   }
 
   async fileInfo(projectId: string, path: string): Promise<ProjectFileInfo> {
-    return this.runFileOperation(() => invoke('projectFiles:info', projectId, path))
+    return this.runFileOperation(() =>
+      invoke('projectFiles:info', projectId, path, this.scopeFor(projectId))
+    )
   }
 
   async openFile(
@@ -803,7 +844,7 @@ class ProjectFilesWorkspace {
     if (session) session.error = null
     state.loadingPaths[path] = true
     try {
-      const source = await invoke('projectFiles:read', projectId, path)
+      const source = await invoke('projectFiles:read', projectId, path, this.scopeFor(projectId))
       state.sessions[path] = {
         source,
         draft: source.content,
@@ -938,7 +979,7 @@ class ProjectFilesWorkspace {
     if (state.loadingPaths[path]) return
     state.loadingPaths[path] = true
     try {
-      const source = await invoke('projectFiles:read', projectId, path)
+      const source = await invoke('projectFiles:read', projectId, path, this.scopeFor(projectId))
       state.sessions[path] = {
         source,
         draft: source.content,

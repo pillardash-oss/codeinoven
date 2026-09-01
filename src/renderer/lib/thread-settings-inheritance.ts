@@ -70,7 +70,31 @@ export async function inheritEngineeringLifecycle(
       stages: source.selectedStages ?? [],
       autopilot: source.autopilot
     })
+    // The destination view may already be mounted and have hydrated its
+    // lifecycle state before this copy landed — signal it to re-read so the
+    // inherited switches show as on instead of staying neutral.
+    notifyEngineeringLifecycleInherited(destinationThreadId)
   } catch {
     // Lifecycle inheritance is cosmetic — never block thread creation on it.
   }
+}
+
+/**
+ * Reactive signal raised after an Engineering lifecycle selection is copied
+ * into a destination thread. Thread views subscribe so a lifecycle that was
+ * inherited after their initial hydration still lights the inherited switches.
+ */
+type EngineeringLifecycleInheritanceListener = (threadId: string) => void
+const lifecycleInheritanceListeners = new Set<EngineeringLifecycleInheritanceListener>()
+
+/** Subscribe to lifecycle-inheritance notifications; returns an unsubscribe fn. */
+export function onEngineeringLifecycleInherited(
+  listener: EngineeringLifecycleInheritanceListener
+): () => void {
+  lifecycleInheritanceListeners.add(listener)
+  return () => lifecycleInheritanceListeners.delete(listener)
+}
+
+function notifyEngineeringLifecycleInherited(threadId: string): void {
+  for (const listener of lifecycleInheritanceListeners) listener(threadId)
 }

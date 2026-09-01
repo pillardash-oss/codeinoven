@@ -12,7 +12,7 @@ import {
   atomicWrite,
   resolveWithinRoot
 } from '../../lib/utils'
-import type { AppConfig } from '../../lib/types'
+import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import {
   CIO_PROMPT_DEFINITIONS,
@@ -68,6 +68,9 @@ const DEFAULT_CONFIG: AppConfig = {
  * StorageEngine — manages all filesystem persistence under ~/.config/pillardash/codeinoven/
  * All writes are atomic (write .tmp then rename).
  */
+const HEARTBEATS_FILE = 'heartbeat/heartbeats.json'
+const VISION_MODELS_FILE = 'vision-models.json'
+
 export class StorageEngine {
   private root: string
   private readonly allowOrphanProjectArtifacts: boolean
@@ -308,6 +311,42 @@ export class StorageEngine {
       defaults: defaults.length > 0 ? defaults : [...FALLBACK_WORKER_NAMES],
       custom: await this.readWorkerNameFile(CUSTOM_WORKER_NAMES_FILE)
     }
+  }
+
+  /** Read the configured heartbeat pings (empty when none configured yet). */
+  async getHeartbeats(): Promise<HeartbeatConfig[]> {
+    return (await this.read<HeartbeatConfig[]>(HEARTBEATS_FILE)) ?? []
+  }
+
+  /** Persist the full list of configured heartbeat pings. */
+  async saveHeartbeats(heartbeats: HeartbeatConfig[]): Promise<void> {
+    await this.write(HEARTBEATS_FILE, heartbeats)
+  }
+
+  /** Every model the app recorded as vision-capable, reported by the user. */
+  async getVisionModels(): Promise<VisionModelRecord[]> {
+    const stored = await this.read<VisionModelRecord[]>(VISION_MODELS_FILE)
+    return Array.isArray(stored) ? stored : []
+  }
+
+  /** Record a model as vision-capable. Ids are normalized (trimmed,
+   *  lowercased) so the record matches the same model across every harness
+   *  and provider. Duplicate reports are ignored. */
+  async addVisionModel(modelId: string): Promise<void> {
+    const id = modelId.trim().toLowerCase()
+    if (!id) throw new TypeError('Vision model id cannot be empty')
+    const models = await this.getVisionModels()
+    if (models.some((model) => model.id === id)) return
+    models.push({ id, addedAt: Date.now() })
+    await this.write(VISION_MODELS_FILE, models)
+  }
+
+  /** True when the app's own record says this model can see images. */
+  async hasVisionModel(modelId: string): Promise<boolean> {
+    const id = modelId.trim().toLowerCase()
+    if (!id) return false
+    const models = await this.getVisionModels()
+    return models.some((model) => model.id === id)
   }
 
   /** Read a JSON file relative to config root */

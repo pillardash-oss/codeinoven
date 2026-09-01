@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight, GripVertical, Plus, TriangleAlert } from '@lucide/svelte'
+  import {
+    ChevronDown,
+    ChevronRight,
+    FolderTree,
+    GripVertical,
+    Pin,
+    Plus,
+    TriangleAlert
+  } from '@lucide/svelte'
   import StageContainer from './StageContainer.svelte'
   import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -30,6 +38,7 @@
       position: 'before' | 'after'
     ) => void
     /** Lifecycle callbacks surfaced through the scope actions menu. */
+    onTogglePinned?: () => void
     onArchive?: () => void
     onRestore?: () => void
     onCreateWorktree?: () => void
@@ -58,6 +67,7 @@
     onFork,
     onMoveThread,
     onReorderThread,
+    onTogglePinned,
     onArchive,
     onRestore,
     onCreateWorktree,
@@ -181,11 +191,22 @@
       <h2 id="scope-bucket-{bucket.id}" class="truncate text-xs font-semibold text-foreground">
         {bucket.name}
       </h2>
+      {#if bucket.pinned}
+        <span
+          class="flex shrink-0 text-accent"
+          role="img"
+          aria-label="Pinned scope: threads never auto-clean and do not count toward the thread limit"
+          title="Pinned scope: threads never auto-clean and do not count toward the thread limit"
+        >
+          <Pin size={11} />
+        </span>
+      {/if}
       {#if bucket.root.kind === 'worktree'}
         <span
-          class="shrink-0 rounded border border-overlay bg-overlay px-1 py-0.5 text-[9px] leading-none text-muted"
+          class="flex shrink-0 items-center gap-1 rounded border border-overlay bg-overlay px-1 py-0.5 font-mono text-[9px] leading-none text-muted"
           title="Managed Git worktree scope on {bucket.root.branch}"
         >
+          <FolderTree size={9} class="text-warning" />
           {bucket.root.branch}
         </span>
       {/if}
@@ -220,6 +241,7 @@
       {bucket}
       onEdit={onEditBucket}
       onDelete={onDeleteBucket}
+      {onTogglePinned}
       {onArchive}
       {onRestore}
       {onCreateWorktree}

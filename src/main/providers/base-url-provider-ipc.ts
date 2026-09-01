@@ -2,6 +2,7 @@ import { clipboard } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import type {
   BaseUrlProviderCreateRequest,
+  BaseUrlProviderFetchModelsRequest,
   BaseUrlProviderModel,
   BaseUrlProviderUpdateRequest,
   ThinkingLevel,
@@ -13,6 +14,9 @@ import { hasNativeProviderCatalog } from '../agents/native-provider-config-servi
 import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { serializeProviderClipboard } from '../../lib/provider-clipboard'
+import { discoverBaseUrlModels } from './base-url-model-discovery'
+import { normalizeUsagePath } from './base-url-provider-service'
+import { CustomProviderUsageClient } from './custom-provider-usage-client'
 
 const CREATE_FIELDS = new Set([
   'harnessId',
@@ -22,7 +26,9 @@ const CREATE_FIELDS = new Set([
   'apiKey',
   'headers',
   'models',
-  'enabled'
+  'usagePath',
+  'enabled',
+  'id'
 ])
 const UPDATE_FIELDS = new Set([
   'npm',
@@ -32,9 +38,11 @@ const UPDATE_FIELDS = new Set([
   'removeApiKey',
   'headers',
   'models',
+  'usagePath',
   'enabled'
 ])
-const SAFE_MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$/u
+/** Model IDs routinely include slashes/at-signs (LM Studio: `org/model`, HF: `org/model@precision`, Cloudflare: `@cf/org/model`). */
+const SAFE_MODEL_ID = /^[a-zA-Z0-9@][a-zA-Z0-9._:/@+-]*$/u
 /** Thinking presets map to OpenCode variant IDs — keep them conservative. */
 const SAFE_PRESET_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/u
 const THINKING_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
@@ -48,6 +56,7 @@ export function registerBaseUrlProviderIpc(
   providers = new BaseUrlProviderService(storage),
   vault = new SecretVault(storage)
 ): void {
+  const usageClient = new CustomProviderUsageClient()
   ipcMain.handle('baseUrlProviders:list', () => providers.listProviders())
 
   ipcMain.handle('baseUrlProviders:create', async (_, rawInput: unknown) => {
@@ -64,7 +73,9 @@ export function registerBaseUrlProviderIpc(
         ...(apiKeyRef === undefined ? {} : { apiKeyRef }),
         headers: input.headers,
         models: input.models,
-        ...(input.enabled === undefined ? {} : { enabled: input.enabled })
+        ...(input.usagePath === undefined ? {} : { usagePath: input.usagePath }),
+        ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
+        ...(input.id === undefined ? {} : { id: input.id })
       } satisfies BaseUrlProviderCreateRequest)
     } catch (error) {
       if (apiKeyRef) await vault.remove(apiKeyRef)
@@ -105,6 +116,7 @@ export function registerBaseUrlProviderIpc(
           ...(native && patch.apiKey !== undefined ? { apiKey: patch.apiKey } : {}),
           ...(patch.headers === undefined ? {} : { headers: patch.headers }),
           ...(patch.models === undefined ? {} : { models: patch.models }),
+          ...(patch.usagePath === undefined ? {} : { usagePath: patch.usagePath }),
           ...(patch.enabled === undefined ? {} : { enabled: patch.enabled }),
           ...(patch.removeApiKey === true ? { removeApiKey: true } : {}),
           ...(nextApiKeyRef !== undefined ? { apiKeyRef: nextApiKeyRef } : {})
@@ -147,11 +159,45 @@ export function registerBaseUrlProviderIpc(
         baseURL: input.baseURL,
         apiKey,
         headers: input.headers ?? '',
+        ...(input.usagePath ? { usagePath: input.usagePath } : {}),
         models: input.models,
         enabled: input.enabled
       })
     )
   })
+
+  ipcMain.handle('baseUrlProviders:fetchModels', async (_, rawInput: unknown) => {
+    const input = parseFetchModelsRequest(rawInput)
+    let apiKey = input.apiKey
+    if (!apiKey && input.harnessId && input.id) {
+      const provider = await providers.getProvider(input.harnessId, input.id)
+      if (provider?.apiKeyRef) apiKey = await vault.resolve(provider.apiKeyRef)
+    }
+    return discoverBaseUrlModels(input.baseURL, {
+      ...(apiKey ? { apiKey } : {}),
+      ...(input.headers ? { headers: input.headers } : {}),
+      force: input.force
+    })
+  })
+
+  ipcMain.handle(
+    'baseUrlProviders:fetchUsage',
+    async (_, rawHarnessId: unknown, rawId: unknown) => {
+      const harnessId = validateEntityId(rawHarnessId, 'Base URL provider harness ID', 256)
+      const id = validateEntityId(rawId, 'Base URL provider ID', 256)
+      const provider = await providers.getProvider(harnessId, id)
+      if (!provider?.usagePath) return null
+      const apiKey = provider.apiKeyRef ? await vault.resolve(provider.apiKeyRef) : undefined
+      return usageClient.read(
+        provider.id,
+        provider.harnessId,
+        provider.baseURL,
+        provider.usagePath,
+        apiKey,
+        provider.headers
+      )
+    }
+  )
 }
 
 // ─── Request parsing & validation ────────────────────────────────────────────
@@ -164,7 +210,10 @@ interface ParsedCreateRequest {
   apiKey?: string
   headers?: Record<string, string>
   models: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
+  usagePath?: string
   enabled?: boolean
+  /** Reuses an existing provider id to link this record to sibling harnesses. */
+  id?: string
 }
 
 interface ParsedUpdateRequest {
@@ -175,6 +224,7 @@ interface ParsedUpdateRequest {
   removeApiKey?: boolean
   headers?: Record<string, string>
   models?: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
+  usagePath?: string
   enabled?: boolean
 }
 
@@ -190,8 +240,12 @@ function parseCreateRequest(value: unknown): ParsedCreateRequest {
       ? {}
       : { apiKey: boundedStr(raw['apiKey'], 'API key', 1, 8_192) }),
     headers: parseHeaders(raw['headers']),
-    models: parseModels(raw['models']),
-    ...(raw['enabled'] === undefined ? {} : { enabled: asBoolean(raw['enabled'], 'enabled') })
+    models: raw['models'] === undefined ? [] : parseModels(raw['models']),
+    ...(raw['usagePath'] === undefined ? {} : { usagePath: parseUsagePath(raw['usagePath']) }),
+    ...(raw['enabled'] === undefined ? {} : { enabled: asBoolean(raw['enabled'], 'enabled') }),
+    ...(raw['id'] === undefined
+      ? {}
+      : { id: validateEntityId(raw['id'], 'Base URL provider ID', 256) })
   }
 }
 
@@ -203,6 +257,7 @@ function parseCopyClipboardRequest(value: unknown): {
   baseURL: string
   apiKey?: string
   headers?: string
+  usagePath?: string
   models: Array<{
     id: string
     name: string
@@ -229,6 +284,9 @@ function parseCopyClipboardRequest(value: unknown): {
     ...(raw['headers'] === undefined
       ? {}
       : { headers: preserveStr(raw['headers'], 'Headers', 0, 16_384) }),
+    ...(raw['usagePath'] === undefined
+      ? {}
+      : { usagePath: preserveStr(raw['usagePath'], 'Usage route', 0, 2_048) }),
     models: parseClipboardModels(raw['models']),
     enabled: raw['enabled'] === undefined ? true : asBoolean(raw['enabled'], 'enabled')
   }
@@ -243,8 +301,8 @@ function parseClipboardModels(value: unknown): Array<{
   defaultThinkingLevel: ThinkingLevel | ''
   vision: boolean
 }> {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError('Base URL provider must expose at least one model')
+  if (!Array.isArray(value)) {
+    throw new TypeError('Base URL provider models must be an array')
   }
   if (value.length > MAX_MODELS) {
     throw new TypeError(`Base URL provider supports at most ${MAX_MODELS} models`)
@@ -277,6 +335,24 @@ function parseClipboardModels(value: unknown): Array<{
   })
 }
 
+function parseFetchModelsRequest(value: unknown): BaseUrlProviderFetchModelsRequest {
+  const raw = record(value, 'Base URL provider fetch-models request')
+  return {
+    ...(raw['harnessId'] === undefined
+      ? {}
+      : { harnessId: validateEntityId(raw['harnessId'], 'Base URL provider harness ID', 256) }),
+    ...(raw['id'] === undefined
+      ? {}
+      : { id: validateEntityId(raw['id'], 'Base URL provider ID', 256) }),
+    baseURL: boundedStr(raw['baseURL'], 'Base URL provider base URL', 1, 2_048),
+    ...(raw['apiKey'] === undefined
+      ? {}
+      : { apiKey: boundedStr(raw['apiKey'], 'API key', 1, 8_192) }),
+    ...(raw['headers'] === undefined ? {} : { headers: parseHeaders(raw['headers']) }),
+    ...(raw['force'] === undefined ? {} : { force: asBoolean(raw['force'], 'force') })
+  }
+}
+
 function parseUpdateRequest(value: unknown): ParsedUpdateRequest {
   const raw = record(value, 'Base URL provider update request')
   rejectUnknownFields(raw, UPDATE_FIELDS, 'Base URL provider update request')
@@ -298,8 +374,15 @@ function parseUpdateRequest(value: unknown): ParsedUpdateRequest {
       : { removeApiKey: asBoolean(raw['removeApiKey'], 'removeApiKey') }),
     headers: raw['headers'] === undefined ? undefined : parseHeaders(raw['headers']),
     models: raw['models'] === undefined ? undefined : parseModels(raw['models']),
+    ...(raw['usagePath'] === undefined ? {} : { usagePath: parseUsagePath(raw['usagePath']) }),
     ...(raw['enabled'] === undefined ? {} : { enabled: asBoolean(raw['enabled'], 'enabled') })
   }
+}
+
+/** Validate an optional status/usage route (absolute URL or root-relative path). */
+function parseUsagePath(value: unknown): string {
+  const raw = preserveStr(value, 'Usage route', 0, 2_048)
+  return normalizeUsagePath(raw) ?? ''
 }
 
 function parseHeaders(value: unknown): Record<string, string> | undefined {
@@ -320,8 +403,8 @@ function parseHeaders(value: unknown): Record<string, string> | undefined {
 function parseModels(
   value: unknown
 ): Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }> {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError('Base URL provider must expose at least one model')
+  if (!Array.isArray(value)) {
+    throw new TypeError('Base URL provider models must be an array')
   }
   if (value.length > MAX_MODELS) {
     throw new TypeError(`Base URL provider supports at most ${MAX_MODELS} models`)
@@ -398,7 +481,7 @@ function parseThinkingPresets(value: unknown): ThinkingPreset[] | undefined {
 }
 
 function parseThinkingLevel(value: unknown): ThinkingLevel | undefined {
-  if (value === undefined) return undefined
+  if (value === undefined || value === '') return undefined
   if (typeof value !== 'string' || !THINKING_LEVELS.has(value as ThinkingLevel)) {
     throw new TypeError(`Default thinking level must be one of: ${[...THINKING_LEVELS].join(', ')}`)
   }

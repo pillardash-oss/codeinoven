@@ -13,6 +13,7 @@ setRemoteLogger(createRingBufferLogger())
 // the main-process durable log so client crashes are diagnosable on disk.
 installRendererErrorCapture()
 
+
 const notificationSound = new Audio(new URL('./alert.wav', document.baseURI).href)
 notificationSound.preload = 'auto'
 // Kick the fetch off at startup so the first alert starts instantly instead of

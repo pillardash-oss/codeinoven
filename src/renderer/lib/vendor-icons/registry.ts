@@ -36,7 +36,7 @@ const vendorAliases: Record<string, string> = {
   cloudflareai: 'cloudflare',
   cloudflareworkersai: 'cloudflare',
   chatgpt: 'openai',
-  codeinoven: 'cio',
+
   openai: 'codex',
   githubcopilot: 'githubcopilot',
   githubmodels: 'github',
@@ -55,7 +55,8 @@ const vendorAliases: Record<string, string> = {
   '01ai': 'zeroone',
   opencodego: 'opencode',
   opencodezen: 'opencode',
-  vertexai: 'gemini'
+  vertexai: 'gemini',
+  vercelaigateway: 'vercel'
 }
 
 export function normalizeVendorName(value: string): string {
@@ -72,6 +73,10 @@ export function normalizeVendorName(value: string): string {
  */
 export function getVendorSlug(name: string | undefined): string | undefined {
   if (!name) return undefined
+  // Custom base-URL providers created by CodeInOven carry a `cio-` id prefix
+  // (see deriveProviderId). They are CodeInOven-vendored providers and always
+  // render the CodeInOven mark, whatever their display name normalizes to.
+  if (name.trim().toLowerCase().startsWith('cio-')) return 'cio'
   const key = normalizeVendorName(name)
   if (!key) return undefined
   const alias = vendorAliases[key]

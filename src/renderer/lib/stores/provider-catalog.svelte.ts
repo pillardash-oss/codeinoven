@@ -28,6 +28,13 @@ import { APP_SLUG } from '$shared/brand'
  */
 /** Fresh catalog is reused within this window instead of re-fetching drivers. */
 const CATALOG_FRESH_TTL_MS = 24 * 60 * 60 * 1000
+/**
+ * Picker-interaction freshness window. Model pickers revalidate on every open;
+ * within this short window the cached copy is reused so opening the picker
+ * never pings harnesses, but after 5 minutes the open triggers a background
+ * revalidation — keeping the visible list from going stale for long sessions.
+ */
+const CATALOG_PICKER_TTL_MS = 5 * 60 * 1000
 /** Base backoff for background retries of a failed hydration (doubles per try). */
 const RETRY_BASE_DELAY_MS = 20 * 1000
 /** Cap for the exponential retry backoff. */
@@ -80,6 +87,14 @@ export function mergeProviderCatalogEntries(catalogs: ProviderCatalog[]): Provid
 
 class ProviderCatalogStore {
   private cache = new SvelteMap<string, ProviderCatalog[]>()
+  /**
+   * Projects whose cache entry was validated this session — snapshot-seeded via
+   * `init`, probed, or received through a `providerCatalog.updated` broadcast.
+   * Mirror-seeded entries for projects outside this set are unvalidated relics
+   * (they can predate harness-side catalog changes, e.g. the connected-provider
+   * filter) and must never reach `allCached`'s cross-project union.
+   */
+  private knownProjects = new SvelteSet<string>()
   private customOverrides = new SvelteMap<string, BaseUrlProvider | null>()
   private refreshedAt = new Map<string, number>()
   /** When the last hydration attempt for a project failed. */
@@ -106,6 +121,7 @@ class ProviderCatalogStore {
       const event = args[0] as AgentEvent | undefined
       if (event?.type === 'providerCatalog.updated') {
         this.cache.set(event.projectId, event.catalogs)
+        this.knownProjects.add(event.projectId)
         this.refreshedAt.set(event.projectId, Date.now())
         this.failedAt.delete(event.projectId)
         this.retryAttempts.delete(event.projectId)
@@ -121,6 +137,16 @@ class ProviderCatalogStore {
   async init(projectIds: string[], options: { refresh?: boolean } = {}): Promise<void> {
     const refresh = options.refresh ?? true
     const targets = [...new Set(projectIds)]
+    // Mirror-seeded entries for projects this session has not validated are
+    // unvalidated relics: `init` only runs for the active project (plus inbox),
+    // so a stale entry for any other project would otherwise sit in the cache
+    // forever — never revalidated (mirror entries carry no refreshedAt), never
+    // pruned, and unioned into every picker via `allCached`. Drop them here and
+    // rewrite the mirror so relics cannot resurrect across restarts.
+    for (const projectId of targets) this.knownProjects.add(projectId)
+    for (const projectId of [...this.cache.keys()]) {
+      if (!this.knownProjects.has(projectId)) this.cache.delete(projectId)
+    }
     await Promise.all(
       targets.map(async (projectId) => {
         try {
@@ -197,10 +223,14 @@ class ProviderCatalogStore {
    * Deduped union of every currently cached project catalog. Used to resolve
    * global favorites / recently-used models that may not exist in the current
    * thread's project catalog (cold projects, driver availability differences).
+   * Only validated projects contribute — a mirror-seeded entry for a project
+   * this session never initialized is unvalidated relic data that must not
+   * leak into pickers through this union.
    */
   allCached(): ProviderCatalog[] {
     const catalogs: ProviderCatalog[] = []
-    for (const projectCatalogs of this.cache.values()) {
+    for (const [projectId, projectCatalogs] of this.cache) {
+      if (!this.knownProjects.has(projectId)) continue
       catalogs.push(...projectCatalogs)
     }
     return this.applyCustomOverrides(mergeProviderCatalogEntries(catalogs))
@@ -217,10 +247,20 @@ class ProviderCatalogStore {
     const existing = this.cache.get(projectId)
     const lastFetched = this.refreshedAt.get(projectId)
     const lastFailed = this.failedAt.get(projectId)
-    if (!force && existing && lastFetched && Date.now() - lastFetched < CATALOG_FRESH_TTL_MS) {
+    if (!force && existing && lastFetched) {
       // A snapshot that failed to hydrate is revalidated on the next picker
       // open once the backoff elapses — never silently served forever.
-      if (lastFailed === undefined || Date.now() - lastFailed < RETRY_MIN_INTERVAL_MS) {
+      const failureFresh =
+        lastFailed !== undefined && Date.now() - lastFailed < RETRY_MIN_INTERVAL_MS
+      if (failureFresh) return Promise.resolve(this.applyCustomOverrides(existing))
+      if (Date.now() - lastFetched < CATALOG_PICKER_TTL_MS) {
+        return Promise.resolve(this.applyCustomOverrides(existing))
+      }
+      // Older than the picker window but inside the long TTL: revalidate in
+      // the background and serve the cached copy immediately so the picker
+      // opens without waiting on harness probes.
+      if (Date.now() - lastFetched < CATALOG_FRESH_TTL_MS) {
+        this.revalidateInBackground(projectId)
         return Promise.resolve(this.applyCustomOverrides(existing))
       }
     }
@@ -238,6 +278,17 @@ class ProviderCatalogStore {
   }
 
   /**
+   * Background revalidation for a cached-but-aging catalog: probe the
+   * harnesses without blocking the caller. Deduped by the inflight map, so
+   * rapid picker opens share one probe.
+   */
+  private revalidateInBackground(projectId: string): void {
+    void this.refresh(projectId, true).catch(() => {
+      // probe() already records the failure and schedules retries.
+    })
+  }
+
+  /**
    * One driver-probing round-trip. Success replaces the cache and clears the
    * failure state; failure records the timestamp and schedules a background
    * retry so a transient start-up hiccup recovers without user action.
@@ -246,6 +297,7 @@ class ProviderCatalogStore {
     try {
       const catalogs = await invoke('agent:refreshProviderCatalog', projectId)
       this.cache.set(projectId, catalogs)
+      this.knownProjects.add(projectId)
       this.refreshedAt.set(projectId, Date.now())
       this.failedAt.delete(projectId)
       this.retryAttempts.delete(projectId)

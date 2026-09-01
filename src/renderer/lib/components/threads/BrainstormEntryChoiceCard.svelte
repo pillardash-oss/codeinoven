@@ -18,6 +18,8 @@
     /** Dismiss the card and revert an accidental engineering-mode send. */
     onClose?: () => void | Promise<void>
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Removes one model from the recently-used history; shows the "x" on recent rows. */
+    onRemoveRecent?: (modelKey: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
@@ -39,6 +41,7 @@
     onCancel,
     onClose,
     onToggleFavorite,
+    onRemoveRecent,
     onReorderFavorite
   }: Props = $props()
 
@@ -109,6 +112,7 @@
             modelId={settings.modelId}
             {favoriteModels}
             {recentModels}
+            {onRemoveRecent}
             side="top"
             label="Change"
             variant="action"

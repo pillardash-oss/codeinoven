@@ -40,6 +40,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
+import { QuestionRequestGoneError } from './driver.interface'
 import {
   PersistentCliDriver,
   type CliLineParseContext,
@@ -338,7 +339,7 @@ export class CodexDriver extends PersistentCliDriver {
           name: model.name || model.id,
           reasoning: model.reasoning,
           thinkingPresets: model.reasoning ? THINKING_PRESETS : undefined,
-          attachment: true,
+          attachment: model.vision !== false,
           toolcall: true,
           ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
         }))
@@ -426,13 +427,10 @@ export class CodexDriver extends PersistentCliDriver {
     throw new Error(`Command is not available in ${this.name}: ${command.name}`)
   }
 
-  /** Cheapest available catalog model, shared by title and grading runs. */
-  private async cheapestCandidate(projectPath: string): Promise<TitleModelCandidate[]> {
-    const catalogs = await this.listProviders(projectPath)
-    const luna = catalogs
-      .find((catalog) => catalog.id === 'openai')
-      ?.models.find((model) => model.id === 'gpt-5.6-luna')
-    return luna ? [{ providerId: luna.providerId, modelId: luna.id }] : []
+  /** Luna is Codex's single cheap auxiliary candidate. */
+  private async cheapestCandidate(_projectPath: string): Promise<TitleModelCandidate[]> {
+    void _projectPath
+    return [{ providerId: 'openai', modelId: 'gpt-5.6-luna' }]
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
@@ -597,13 +595,13 @@ export class CodexDriver extends PersistentCliDriver {
 
   override async replyToQuestion(
     _projectPath: string,
-    _sessionId: string,
+    sessionId: string,
     requestId: string,
     answers: string[][]
   ): Promise<void> {
     const request = this.serverRequests.get(requestId)
     if (!request || !isCodexQuestionRequest(request.method)) {
-      throw new Error(`Codex question request is no longer pending: ${requestId}`)
+      throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
     const questionIds = codexQuestionIds(request.params)
     const mappedAnswers: Record<string, { answers: string[] }> = {}
@@ -616,12 +614,12 @@ export class CodexDriver extends PersistentCliDriver {
 
   override async rejectQuestion(
     _projectPath: string,
-    _sessionId: string,
+    sessionId: string,
     requestId: string
   ): Promise<void> {
     const request = this.serverRequests.get(requestId)
     if (!request || !isCodexQuestionRequest(request.method)) {
-      throw new Error(`Codex question request is no longer pending: ${requestId}`)
+      throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
     const answers: Record<string, { answers: string[] }> = {}
     for (const id of codexQuestionIds(request.params)) answers[id] = { answers: [] }
@@ -1075,10 +1073,16 @@ export class CodexDriver extends PersistentCliDriver {
     const turn = recordValue(params['turn'])
     const status = stringValue(turn?.['status'])
     const error = recordValue(turn?.['error'])
+    // A prior `error` notification (e.g. a usage-limit hit with
+    // `willRetry: false`) already captured `active.failure`/`active.failureIssue`
+    // before the turn tore down. The app-server can report that teardown as a
+    // non-`'failed'` terminal status (e.g. `'interrupted'`) — falling through to
+    // `undefined` here would silently drop the captured failure and let the
+    // turn look like a clean success.
     const message =
       status === 'failed'
         ? (stringValue(error?.['message']) ?? active.failure ?? 'Codex turn failed')
-        : undefined
+        : active.failure
     const unsupportedSummary = [message, active.failure].some(
       (candidate) => candidate !== undefined && isUnsupportedReasoningSummary(candidate)
     )
@@ -1089,7 +1093,7 @@ export class CodexDriver extends PersistentCliDriver {
     const issue =
       status === 'failed'
         ? (codexUsageLimitIssue(error, message ?? '') ?? active.failureIssue)
-        : undefined
+        : active.failureIssue
     void this.completeAppServerTurn(active, message, issue)
   }
 
@@ -1969,10 +1973,14 @@ function codexRetryIssue(
 }
 
 /** Parse the concrete reset time Codex embeds in its usage-limit message,
- *  e.g. "…or try again at Aug 20th, 2026 7:30 AM." */
+ *  e.g. "…or try again at Aug 20th, 2026 7:30 AM." Tolerates an optional
+ *  leading weekday ("…try again at Monday, Sep 7th, 2026 12:40 PM.") and
+ *  "a.m./p.m." with periods, since a stricter match here silently falls
+ *  through to a farther, unrelated reset window (see `scheduleAutomaticRetry`)
+ *  instead of trusting the date the provider itself reported. */
 function codexUsageLimitResetAt(message: string, now = Date.now()): number | undefined {
   const match = message.match(
-    /\btry again at\s+([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+(\d{1,2}):(\d{2})\s*(am|pm)\b/iu
+    /\btry again at\s+(?:[a-z]+,\s+)?([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+(\d{1,2})[:.](\d{2})\s*(a\.?m\.?|p\.?m\.?)\b/iu
   )
   if (!match) return undefined
   let month: number | undefined
@@ -1989,7 +1997,7 @@ function codexUsageLimitResetAt(message: string, now = Date.now()): number | und
   const hour12 = Number(match[4])
   const minute = Number(match[5])
   if (hour12 < 1 || hour12 > 12 || minute < 0 || minute > 59) return undefined
-  const hour = (hour12 % 12) + (match[6].toLowerCase() === 'pm' ? 12 : 0)
+  const hour = (hour12 % 12) + (match[6].toLowerCase().startsWith('p') ? 12 : 0)
   const reset = new Date(year, month, day, hour, minute, 0, 0)
   if (!Number.isFinite(reset.getTime()) || reset.getTime() <= now) return undefined
   return reset.getTime()

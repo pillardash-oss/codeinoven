@@ -33,7 +33,11 @@ function sanitize(raw: unknown): RendererLogEntry | null {
       ? record.stack.slice(0, MAX_STACK_CHARS)
       : undefined
   let source: RendererLogSource = 'error'
-  if (record.source === 'unhandledrejection' || record.source === 'console') {
+  if (
+    record.source === 'unhandledrejection' ||
+    record.source === 'console' ||
+    record.source === 'watchdog'
+  ) {
     source = record.source
   }
   return { level, message, source, stack, at: Date.now() }

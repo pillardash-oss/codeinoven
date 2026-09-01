@@ -25,6 +25,8 @@
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
     onSeniorModelChange?: (selection: AssignmentModelSelection) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Removes one model from the recently-used history; shows the "x" on recent rows. */
+    onRemoveRecent?: (modelKey: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
@@ -49,6 +51,7 @@
     onWorkerModelChange,
     onSeniorModelChange,
     onToggleFavorite,
+    onRemoveRecent,
     onReorderFavorite
   }: Props = $props()
 
@@ -106,6 +109,7 @@
       {seniorModel}
       {favoriteModels}
       {recentModels}
+      {onRemoveRecent}
       compact
       onChange={(content) => (draft = content)}
       {onWorkerModelChange}

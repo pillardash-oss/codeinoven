@@ -55,6 +55,7 @@
   import { updaterState } from '$lib/stores/updater.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
+  import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { clearDraftLabelCookie } from '$lib/stores/draft-label'
@@ -94,6 +95,7 @@
   import type {
     AgentNotificationPayload,
     CloseConfirmationPayload,
+    CloseConfirmationProject,
     ThreadClickedPayload
   } from '$shared/ipc-contract'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -315,7 +317,7 @@
         category: 'navigation',
         source: applicationSource,
         icon: GraduationCap,
-        keywords: ['onboarding', 'tour', 'help', 'setup', 'opencode']
+        keywords: ['onboarding', 'tour', 'help', 'setup', 'pi']
       }
     ]
 
@@ -835,7 +837,13 @@
     const projectResults = await Promise.all(
       projects.map(async (project) => {
         try {
-          const entries = await invoke('projectFiles:search', project.id, query, 'all')
+          const entries = await invoke(
+            'projectFiles:search',
+            project.id,
+            query,
+            'all',
+            workspaceState.activeScopeBucketIdFor(project.id)
+          )
           return { project, entries: entries.slice(0, 12) }
         } catch {
           return { project, entries: [] }
@@ -979,6 +987,20 @@
         ? agentRuns.isBusy(thread.projectId, thread.id)
         : Boolean(thread.sessionId) && isThreadWorking(thread)
       const status = statusBadgeForThread(thread, isLiveWorking)
+      // Model/harness metadata for the result row: while the thread is working
+      // the current provider + model is shown, otherwise the thread's harnesses
+      // and provider appear as icons — mirroring the sidebar thread row.
+      const harnessIds = Array.from(
+        new Set([
+          ...(thread.usedHarnessIds ?? []),
+          ...(thread.settings?.harnessId ? [thread.settings.harnessId] : [])
+        ])
+      )
+      const providerId = thread.settings?.providerId ?? thread.providerId
+      const providers = providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached()
+      const providerName = providerId
+        ? (providers.find((provider) => provider.id === providerId)?.name ?? null)
+        : null
       const projectLabel = project?.name ?? thread.projectId
       const createdLabel = relativeThreadTime(thread.createdAt)
       actions.push({
@@ -997,6 +1019,13 @@
         showSourceBadge: false,
         ...(projectIconUri ? { iconUri: projectIconUri } : { icon: MessagesSquare }),
         ...(status ? { status } : {}),
+        threadMeta: {
+          working: isLiveWorking,
+          harnessIds,
+          providerName,
+          providerId,
+          modelId: thread.settings?.modelId ?? null
+        },
         keywords: [project?.name ?? thread.projectId, thread.title, ...(snippet ? [snippet] : [])]
       })
     }
@@ -1288,6 +1317,34 @@
     await invoke('app:confirmClose')
   }
 
+  /**
+   * While the close-confirmation modal is open, watch the threads it listed as
+   * still working. As each one leaves that state (completed, failed, or
+   * otherwise no longer executing/planning) it drops off the list. Once none
+   * remain — and no unsaved files are pending — the close the user already
+   * asked for proceeds automatically instead of waiting on a second click.
+   */
+  function settleCloseConfirmationThread(thread: Thread): void {
+    const current = closeConfirmation
+    if (!current || isThreadWorking(thread)) return
+
+    const projects: CloseConfirmationProject[] = []
+    for (const project of current.projects) {
+      const threads = project.threads.filter((entry) => entry.threadId !== thread.id)
+      if (threads.length > 0) {
+        projects.push({ ...project, threads, threadCount: threads.length })
+      }
+    }
+    if (projects.length === current.projects.length) return
+
+    if (projects.length === 0 && current.files.length === 0) {
+      closeConfirmation = null
+      void confirmForceClose()
+      return
+    }
+    closeConfirmation = { ...current, projects }
+  }
+
   /** Save every unsaved file, then close the app. Stays open if a save fails. */
   async function confirmForceCloseSaving(): Promise<void> {
     if (await projectFilesWorkspace.saveAllUnsaved()) {
@@ -1327,6 +1384,7 @@
       if (thread.read) {
         notificationPanelState.dismissForThread(thread.projectId, thread.id)
       }
+      settleCloseConfirmationThread(thread)
     })
     const unsubscribeThreadDeleted = subscribe('thread:deleted', (projectId, threadId) => {
       scopeState.removeThread(threadId)
@@ -1581,6 +1639,11 @@
     }
     observeNavigationLocation()
     void loadConfig()
+    // Fire-and-forget: the app's own record of models reported as
+    // vision-capable, consulted before any vision-capability gate.
+    void visionModels.load().catch(() => {})
+    // Fire-and-forget: probes opted-in harnesses and docks quiet auto-updates.
+    void harnessLifecycleStore.autoUpdateOnStartup()
     // Workspace owns the initial project/thread hydration. Keeping this signal
     // there prevents App and Workspace from issuing the same startup queries.
 
@@ -1619,6 +1682,7 @@
       <Workspace
         mode={lastContentView}
         active={activeView === 'projects' || activeView === 'chats' || activeView === 'threads'}
+        scopeViewActive={activeView === 'scope'}
         {navigate}
         {config}
         {updateConfig}

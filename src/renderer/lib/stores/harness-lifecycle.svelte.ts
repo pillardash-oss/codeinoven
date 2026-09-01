@@ -96,11 +96,15 @@ class HarnessLifecycleStore {
   }
 
   /** Launch a harness's own self-update command in an embedded terminal. */
-  async startUpdate(harnessId: string, harnessName: string): Promise<void> {
+  async startUpdate(
+    harnessId: string,
+    harnessName: string,
+    options?: { docked?: boolean }
+  ): Promise<void> {
     if (this.isRunning(harnessId)) return
     try {
       const handoff = await invoke('harnessUpdates:handoff', harnessId)
-      this.pushRun({ kind: 'update', harnessId, harnessName, handoff })
+      this.pushRun({ kind: 'update', harnessId, harnessName, handoff }, options?.docked ?? false)
     } catch (updateError) {
       const message = updateError instanceof Error ? updateError.message : 'Update failed to start.'
       toast.error(message)
@@ -141,15 +145,22 @@ class HarnessLifecycleStore {
       await providerStore.checkAll()
       await this.checkAll()
 
+      this.autoManagedBatch = true
+
       for (const provider of providerStore.providers) {
         if (enabledIds.includes(provider.id) && this.updateAvailableFor(provider.id)) {
-          await this.startUpdate(provider.id, provider.name)
+          // Docked: the panel stays collapsed to the bottom-right chip so a
+          // quiet background update never opens a modal over the workspace.
+          await this.startUpdate(provider.id, provider.name, { docked: true })
         }
       }
     } catch {
       // Auto-update is best-effort on startup.
     }
   }
+
+  /** Whether the current run set came from the startup auto-update batch. */
+  private autoManagedBatch = false
 
   /** Poll the persisted auto-update prefs until the service is ready. */
   private async waitForReady(): Promise<Record<string, boolean> | undefined> {
@@ -174,6 +185,13 @@ class HarnessLifecycleStore {
       // Version re-probe is best-effort after a lifecycle run.
     }
     await this.checkOne(harnessId)
+
+    // Auto-managed batches close themselves once every run has finished so the
+    // user is never left with a stale panel after a quiet startup update.
+    if (this.autoManagedBatch && this.hasFinished) {
+      this.autoManagedBatch = false
+      this.close()
+    }
   }
 
   minimize = (): void => {
@@ -194,9 +212,10 @@ class HarnessLifecycleStore {
     this.runs = []
     this.minimized = false
     this.focusedHarnessId = null
+    this.autoManagedBatch = false
   }
 
-  private pushRun(run: Omit<HarnessRun, 'terminalId'>): void {
+  private pushRun(run: Omit<HarnessRun, 'terminalId'>, docked = false): void {
     this.runs = [
       ...this.runs,
       {
@@ -204,7 +223,9 @@ class HarnessLifecycleStore {
         terminalId: `harness-${run.kind}-${crypto.randomUUID()}`
       }
     ]
-    this.minimized = false
+    // Auto-managed batches stay docked (chip only, no opened modal) unless the
+    // user explicitly expands the panel; user-initiated runs open the panel.
+    this.minimized = docked
     this.focusedHarnessId = null
   }
 }

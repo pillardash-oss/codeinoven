@@ -18,6 +18,36 @@ const MIME_TYPES: Readonly<Record<string, string>> = {
 }
 const PREVIEW_CHUNK_BYTES = 192 * 1024
 
+/** 16x16 amber placeholder served when a browser asks the origin root for a favicon. */
+const DEFAULT_FAVICON_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAG0lEQVR4nGN41WXznxLMMGrAaBiMpoP/wyQMANVNrx/VZr2aAAAAAElFTkSuQmCC',
+  'base64'
+)
+
+/**
+ * Dev-preview posture for agent-generated prototypes: prototypes are self-contained
+ * static HTML that rely on inline scripts, inline event handlers, and demo forms that
+ * post back to their own URL, so same-origin interactivity is allowed. Everything that
+ * would let prototype content reach outside this loopback origin stays locked down:
+ * no external script/CDN origins, no framing from other documents, no base-url
+ * hijacking, no plugin content.
+ */
+const PREVIEW_CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "media-src 'self' data: blob:",
+  "connect-src 'self'",
+  "worker-src 'self' blob:",
+  "frame-src 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "base-uri 'none'",
+  "form-action 'self'"
+].join('; ')
+
 export interface PrototypePreviewChunk {
   base64: string
   nextOffset: number
@@ -162,12 +192,17 @@ export class PrototypePreviewService {
     response.setHeader('X-Content-Type-Options', 'nosniff')
     response.setHeader('Referrer-Policy', 'no-referrer')
     response.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
-    response.setHeader(
-      'Content-Security-Policy',
-      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
-    )
+    response.setHeader('Content-Security-Policy', PREVIEW_CSP)
     try {
       const parsed = new URL(url, 'http://127.0.0.1')
+      if (parsed.pathname === '/favicon.ico') {
+        response.statusCode = 200
+        response.setHeader('Content-Type', 'image/png')
+        response.setHeader('Content-Length', String(DEFAULT_FAVICON_PNG.length))
+        response.setHeader('Cache-Control', 'public, max-age=86400')
+        response.end(DEFAULT_FAVICON_PNG)
+        return
+      }
       const segments = parsed.pathname.split('/').filter(Boolean)
       if (segments[0] !== 'cio' || !segments[1]) throw new Error('not_found')
       const root = this.roots.get(segments[1])

@@ -27,8 +27,10 @@ interface CitationPathsCache {
 
 class CitationPathsState {
   private readonly projects = new Map<string, CitationPathsCache>()
-  private readonly inflight = new Map<string, Promise<void>>()
-  /** Absolute paths outside the project root confirmed to exist on disk. */
+  private readonly inflight = new Map<
+    string,
+    Promise<void>
+  >() /** Absolute paths outside the project root confirmed to exist on disk. */
   private readonly externalKnown = new Set<string>()
   private readonly externalChecked = new Set<string>()
   private readonly externalPending = new Set<string>()
@@ -50,7 +52,8 @@ class CitationPathsState {
     const projectId = workspaceState.activeProject?.id
     if (!projectId) return false
     void this.refreshKey
-    return this.cacheFor(projectId).known.has(path)
+    const cacheKey = `${projectId}:${workspaceState.activeScopeBucketIdFor(projectId)}`
+    return this.cacheFor(cacheKey).known.has(path)
   }
 
   /** Whether an absolute path (outside the project root) exists on disk. */
@@ -61,7 +64,8 @@ class CitationPathsState {
 
   /** Queue existence checks for candidate paths in the active project. Absolute
    *  candidates are probed externally; everything else resolves inside the
-   *  project root. */
+   *  project root — or the active scope's worktree root when the open thread
+   *  belongs to a managed scope. */
   ensureActiveProjectChecked(candidates: string[]): void {
     const project = workspaceState.activeProject
     if (
@@ -79,7 +83,13 @@ class CitationPathsState {
       if (isAbsoluteCitationPath(candidate)) external.push(candidate)
       else projectCandidates.push(candidate)
     }
-    if (projectCandidates.length > 0) this.ensureChecked(project.id, projectCandidates)
+    if (projectCandidates.length > 0) {
+      this.ensureChecked(
+        project.id,
+        projectCandidates,
+        workspaceState.activeScopeBucketIdFor(project.id)
+      )
+    }
     if (external.length > 0) this.ensureExternalChecked(external)
   }
 
@@ -88,29 +98,39 @@ class CitationPathsState {
    * coalescing bursts (e.g. every MarkdownView mounting at once) into one
    * inflight drain per project.
    */
-  ensureChecked(projectId: string, candidates: string[]): void {
+  ensureChecked(projectId: string, candidates: string[], scopeBucketId?: string): void {
     if (projectId === INBOX_PROJECT_ID) return
-    const cache = this.cacheFor(projectId)
+    const cacheKey = `${projectId}:${scopeBucketId ?? ''}`
+    const cache = this.cacheFor(cacheKey)
     for (const candidate of candidates) {
       if (candidate.length === 0 || cache.checked.has(candidate)) continue
       cache.checked.add(candidate)
       cache.pending.add(candidate)
     }
-    if (cache.pending.size === 0 || this.inflight.has(projectId)) return
+    if (cache.pending.size === 0 || this.inflight.has(cacheKey)) return
 
-    const drain = this.drain(projectId, cache)
-    this.inflight.set(projectId, drain)
+    const drain = this.drain(projectId, scopeBucketId, cache)
+    this.inflight.set(cacheKey, drain)
     void drain.finally(() => {
-      if (this.inflight.get(projectId) === drain) this.inflight.delete(projectId)
+      if (this.inflight.get(cacheKey) === drain) this.inflight.delete(cacheKey)
     })
   }
 
-  private async drain(projectId: string, cache: CitationPathsCache): Promise<void> {
+  private async drain(
+    projectId: string,
+    scopeBucketId: string | undefined,
+    cache: CitationPathsCache
+  ): Promise<void> {
     while (cache.pending.size > 0) {
       const batch = [...cache.pending]
       cache.pending.clear()
       try {
-        const resolved = await invoke('projectFiles:resolveCitationPaths', projectId, batch)
+        const resolved = await invoke(
+          'projectFiles:resolveCitationPaths',
+          projectId,
+          batch,
+          scopeBucketId
+        )
         const known = cache.known
         let changed = false
         for (const [candidate, resolvedPath] of Object.entries(resolved)) {

@@ -2,6 +2,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { toast } from 'svelte-sonner'
   import { projectIconOnError, getProjectIcon } from '$lib/project-icons'
+  import { pickColorForSeed } from '$lib/project-colors'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
@@ -818,27 +819,32 @@
       >
         <div class="ml-auto flex h-full w-max items-center gap-0.5">
           {#each scopeState.projects as project (project.id)}
+            {@const projectColor = project.color ?? pickColorForSeed(project.id)}
+            {@const isActiveProject = scopeState.activeProjectId === project.id}
             <button
-              class="flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors {scopeState.activeProjectId ===
-              project.id
-                ? 'bg-elevated font-medium text-foreground'
+              class="flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors {isActiveProject
+                ? 'bg-foreground font-medium text-app'
                 : 'text-muted hover:bg-elevated hover:text-foreground'}"
               role="tab"
-              aria-selected={scopeState.activeProjectId === project.id}
+              aria-selected={isActiveProject}
               title={projectIdentityTitle(project)}
               onclick={() => void switchProject(project.id)}
             >
-              {#if project.color}
-                <span class="h-2 w-2 rounded-full" style="background: {project.color}"></span>
-              {/if}
-              {#if project.iconUrl}
-                <img
-                  src={project.iconUrl}
-                  alt=""
-                  class="h-4 w-4 shrink-0 rounded object-contain"
-                  onerror={projectIconOnError(project)}
-                />
-              {/if}
+              <span
+                class="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-raised"
+                style:border-color={`color-mix(in srgb, ${projectColor} 45%, transparent)`}
+                style:background-color={`color-mix(in srgb, ${projectColor} 6%, var(--color-raised))`}
+                aria-hidden="true"
+              >
+                {#if project.iconUrl}
+                  <img
+                    src={project.iconUrl}
+                    alt=""
+                    class="h-3.5 w-3.5 object-contain"
+                    onerror={projectIconOnError(project)}
+                  />
+                {/if}
+              </span>
               <ProjectIdentity
                 {project}
                 class="max-w-36 text-left"

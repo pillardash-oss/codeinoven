@@ -35,6 +35,8 @@
     recentModels?: string[]
     onModelChange?: (settings: ThreadSettings) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Removes one model from the recently-used history; shows the "x" on recent rows. */
+    onRemoveRecent?: (modelKey: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
@@ -63,6 +65,7 @@
     recentModels = [],
     onModelChange,
     onToggleFavorite,
+    onRemoveRecent,
     onReorderFavorite,
     onStop,
     onRetry,
@@ -88,6 +91,18 @@
     if (issue.retryAt) subscribeToClock()
     return Date.now()
   })
+  /**
+   * A reset far in the future (e.g. a multi-day weekly usage cap) is not
+   * something the app should present as an imminent, live-ticking
+   * auto-resume — that reads as broken when the countdown says "in 6 days".
+   * It also isn't something the harness's own short-interval retry hint
+   * (meant for transient errors) should drive. Once the reset falls inside
+   * this window, switch to the live auto-resume countdown.
+   */
+  const AUTO_SCHEDULE_WINDOW_MS = 30 * 60 * 1000
+  const withinAutoScheduleWindow = $derived(
+    issue.retryAt !== undefined && issue.retryAt - now <= AUTO_SCHEDULE_WINDOW_MS
+  )
   const rawError = $derived(issue.rawError?.trim() || issue.message.trim())
   const waiting = $derived(status.state === 'waiting')
   /**
@@ -103,6 +118,25 @@
         issue.kind === 'rate_limit' ||
         issue.kind === 'provider_unavailable')
   )
+
+  const URL_PATTERN = /https?:\/\/[^\s<>"']+/g
+
+  function messageParts(message: string): Array<{ text: string; isLink: boolean }> {
+    const parts: Array<{ text: string; isLink: boolean }> = []
+    let lastIndex = 0
+    for (const match of message.matchAll(URL_PATTERN)) {
+      const start = match.index ?? 0
+      if (start > lastIndex) {
+        parts.push({ text: message.slice(lastIndex, start), isLink: false })
+      }
+      parts.push({ text: match[0], isLink: true })
+      lastIndex = start + match[0].length
+    }
+    if (lastIndex < message.length) {
+      parts.push({ text: message.slice(lastIndex), isLink: false })
+    }
+    return parts
+  }
 
   function issueTitle(kind: AgentProviderIssueKind): string {
     switch (kind) {
@@ -234,9 +268,23 @@
         <p class="mt-1 text-xs font-medium text-foreground">Task · {sourceDetail}</p>
       {/if}
 
-      <p class="mt-1 text-sm leading-relaxed text-muted">{issue.message}</p>
+      <p class="mt-1 text-sm leading-relaxed text-muted select-text">
+        {#each messageParts(issue.message) as part, index (index)}
+          {#if part.isLink}
+            <a
+              href={part.text}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="break-all text-accent underline underline-offset-2 hover:text-accent/80"
+              >{part.text}</a
+            >
+          {:else}
+            {part.text}
+          {/if}
+        {/each}
+      </p>
 
-      {#if waiting && issue.retryAt && autoRetryEnabled}
+      {#if waiting && issue.retryAt && autoRetryEnabled && withinAutoScheduleWindow}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
           <span aria-live="polite">
             Auto-resume {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
@@ -247,9 +295,9 @@
         </p>
       {:else if waiting && issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          Available again {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
+          Will retry {absoluteRetryTime(issue.retryAt)}
         </p>
-      {:else if autoResume && issue.retryAt}
+      {:else if autoResume && issue.retryAt && withinAutoScheduleWindow}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
           {#if autoRetryEnabled}
             Auto-resume {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
@@ -261,7 +309,7 @@
         </p>
       {:else if issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          Available again {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
+          Will retry {absoluteRetryTime(issue.retryAt)}
         </p>
       {:else if waiting}
         <p class="mt-2 text-xs font-medium text-foreground">
@@ -317,7 +365,7 @@
             {retrying ? 'Retrying…' : retryLabel}
           </button>
         {/if}
-        {#if !waiting && settings && providers.length > 0 && onModelChange}
+        {#if settings && providers.length > 0 && onModelChange}
           <ModelPicker
             {providers}
             {projectId}
@@ -326,6 +374,7 @@
             modelId={settings.modelId}
             {favoriteModels}
             {recentModels}
+            {onRemoveRecent}
             side="top"
             label="Change"
             variant="action"

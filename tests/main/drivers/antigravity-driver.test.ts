@@ -80,7 +80,6 @@ describe.skipIf(process.platform === 'win32')('AntigravityDriver', () => {
         modelId: 'gemini-3.6-flash',
         thinkingLevel: 'high',
         permissionLevel: 'auto_review',
-        engineeringMode: false
       }
     })
 
@@ -118,7 +117,6 @@ describe.skipIf(process.platform === 'win32')('AntigravityDriver', () => {
         modelId: 'gemini-3.1-pro',
         thinkingLevel: 'medium',
         permissionLevel: 'auto_review',
-        engineeringMode: false
       }
     })
 
@@ -157,7 +155,6 @@ describe.skipIf(process.platform === 'win32')('AntigravityDriver', () => {
         modelId: 'claude-sonnet-4-6',
         thinkingLevel: 'high',
         permissionLevel: 'auto_review',
-        engineeringMode: false
       }
     })
 
@@ -188,7 +185,6 @@ describe.skipIf(process.platform === 'win32')('AntigravityDriver', () => {
       modelId: 'gemini-3.6-flash',
       thinkingLevel: 'medium',
       permissionLevel: 'auto_review',
-      engineeringMode: false
     }
     const first = await driver.createSession('/project', 'First')
     await driver.sendPrompt('/project', {

@@ -20,6 +20,8 @@
     onRetry: (settings: ThreadSettings) => void
     onModelChange: (settings: ThreadSettings) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Removes one model from the recently-used history; shows the "x" on recent rows. */
+    onRemoveRecent?: (modelKey: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
@@ -46,6 +48,7 @@
     onRetry,
     onModelChange,
     onToggleFavorite,
+    onRemoveRecent,
     onReorderFavorite,
     onViewTrace,
     onViewReport
@@ -158,6 +161,7 @@
         modelId={settings.modelId}
         {favoriteModels}
         {recentModels}
+        {onRemoveRecent}
         side="top"
         variant="action"
         disabled={busy || state === 'running'}

@@ -85,6 +85,12 @@ export interface ScopeBucket {
   root: ScopeRootDescriptor
   /** Present when the scope is archived; archival never mutates Git state. */
   archivedAt?: number
+  /**
+   * Pinned scopes sit outside the regular thread bucket: their threads are
+   * never evicted by automatic cleanup and never count toward the project's
+   * thread limit. Display-only flag; the Default scope can never be pinned.
+   */
+  pinned?: boolean
 }
 
 /** Identifies the project + scope pair every scope-aware operation targets. */
@@ -618,6 +624,8 @@ export interface ProviderConnectionInfo {
   integration: 'ready' | 'planned'
   /** Whether this harness can consume custom base-URL providers at runtime. */
   supportsCustomProviders: boolean
+  /** Whether this harness supports manual context compaction (harness manifest). */
+  supportsManualCompaction?: boolean
   status: ProviderConnectionStatus
   /** Absolute path to the resolved binary, when found. */
   resolvedPath?: string
@@ -802,6 +810,8 @@ export interface OfferedProvider {
   modelCount: number
   /** Whether credentials are already stored for this provider. */
   authenticated: boolean
+  /** Whether the harness supports a fully in-app OAuth sign-in for this provider. */
+  oauth?: boolean
   /** Human-readable hint when the provider cannot be connected from the UI. */
   detail?: string
 }
@@ -850,6 +860,13 @@ export interface BaseUrlProvider {
   headers?: Record<string, string>
   /** Models this provider exposes. */
   models: BaseUrlProviderModel[]
+  /**
+   * Optional account status/usage route, relative to `baseURL` (e.g. `/status`,
+   * `/usage`) or an absolute URL. Providers backed by a subscription often
+   * expose one; when set, CodeInOven polls it for quota windows shown in the
+   * usage UI. Empty means the provider reports no usage.
+   */
+  usagePath?: string
   enabled: boolean
   createdAt: number
   updatedAt: number
@@ -865,7 +882,15 @@ export interface BaseUrlProviderCreateRequest {
   apiKey?: string
   headers?: Record<string, string>
   models: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
+  /** Optional account status/usage route relative to `baseURL`, or an absolute URL. */
+  usagePath?: string
   enabled?: boolean
+  /**
+   * Reuse this id instead of generating one. Lets the renderer link the same
+   * logical provider across multiple harnesses: every record sharing an id
+   * (regardless of harnessId) is treated as one linked provider.
+   */
+  id?: string
 }
 
 /** Renderer-safe update request. Omitted API key retains the current value. */
@@ -879,6 +904,8 @@ export interface BaseUrlProviderUpdateRequest {
   removeApiKey?: boolean
   headers?: Record<string, string>
   models?: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
+  /** Optional account status/usage route; empty string clears it. */
+  usagePath?: string
   enabled?: boolean
 }
 
@@ -893,6 +920,8 @@ export interface BaseUrlProviderCopyClipboardRequest {
   baseURL: string
   apiKey?: string
   headers?: string
+  /** Account status/usage route carried through copy/paste. */
+  usagePath?: string
   models: Array<{
     id: string
     name: string
@@ -902,6 +931,26 @@ export interface BaseUrlProviderCopyClipboardRequest {
     defaultThinkingLevel: ThinkingLevel | ''
   }>
   enabled: boolean
+}
+
+/** Request to discover models from `${baseURL}/models`. Pass `harnessId`+`id`
+ *  for a saved provider so main can resolve its vaulted API key when `apiKey`
+ *  is omitted; set `force` to bypass the 24h cache. */
+export interface BaseUrlProviderFetchModelsRequest {
+  harnessId?: string
+  id?: string
+  baseURL: string
+  apiKey?: string
+  headers?: Record<string, string>
+  force?: boolean
+}
+
+/** A model entry discovered from an OpenAI-compatible `/models` endpoint. */
+export interface DiscoveredBaseUrlModel {
+  id: string
+  name: string
+  /** Context window in tokens, when the endpoint reports one (e.g. `context_length`). */
+  contextWindow?: number
 }
 
 export type CuaPermissionStatus = 'granted' | 'missing' | 'unknown' | 'not_required'
@@ -1046,8 +1095,6 @@ export interface ThreadSettings {
   /** Fast inference for this thread's turns; `fast` requests the harness fast tier. */
   inferenceMode?: InferenceMode
   permissionLevel: PermissionLevel
-  /** When true, the engineering spec/plan workflow is injected into prompts. */
-  engineeringMode: boolean
   /** Optional multi-agent planning workflow layered on Engineering mode. */
   assignmentMode?: boolean
   /** Enable Achievement's automatic implementation-audit correction cycle. */
@@ -1058,6 +1105,41 @@ export interface ThreadSettings {
   loopAuditor?: AgentModelSelection
   /** Vision model used to describe images for this thread's text-only model. */
   imageDescriptor?: AgentModelSelection
+}
+
+/**
+ * Strip settings fields from removed eras so stale persisted rows and
+ * last-used snapshots never re-enter the app. Currently drops the legacy
+ * `engineeringMode` flag, which was superseded by the Engineering lifecycle
+ * selection. Returns a shallow copy; never mutates the input.
+ */
+export function sanitizeThreadSettings(settings: unknown): Partial<ThreadSettings> {
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) return {}
+  const { engineeringMode: _legacyEngineeringMode, ...rest } = settings as Record<string, unknown>
+  return rest as Partial<ThreadSettings>
+}
+
+/** Result of the most recent heartbeat ping attempt. */
+export interface HeartbeatLastRun {
+  /** Epoch ms when the ping was sent. */
+  at: number
+  success: boolean
+  error?: string
+}
+
+/**
+ * A scheduled "keep the usage window warm" ping. At each configured time of
+ * day, an ephemeral thread sends `Simply respond pong` to the selected model
+ * and discards the reply — the same disposable-session mechanism title
+ * generation uses, just to touch the provider's usage window early.
+ */
+export interface HeartbeatConfig extends AgentModelSelection {
+  id: string
+  name: string
+  /** Times of day in 24h `HH:mm` local-time form, e.g. `["04:00", "13:30", "22:00"]`. */
+  times: string[]
+  enabled: boolean
+  lastRun?: HeartbeatLastRun
 }
 
 /** A model exposed by a harness provider. */
@@ -1112,7 +1194,18 @@ export interface PermissionRequest {
 }
 
 /** How the user resolved a failed image-descriptor vision-model call. */
-export type ImageDescriptorReplyAction = 'retry' | 'ignore'
+export type ImageDescriptorReplyAction = 'retry' | 'ignore' | 'false_positive'
+
+/** A model identity without thinking preferences, e.g. the model executing a turn. */
+export type ModelIdentity = Pick<AgentModelSelection, 'harnessId' | 'providerId' | 'modelId'>
+
+/** A model the app recorded as vision-capable, reported by the user. */
+export interface VisionModelRecord {
+  /** Normalized model id (trimmed, lowercased); matches across harnesses and providers. */
+  id: string
+  /** When the model was reported as vision-capable. */
+  addedAt: number
+}
 
 /**
  * A failed image-descriptor vision-model call that needs a user decision.
@@ -1137,6 +1230,8 @@ export interface ImageDescriptorErrorRequest {
   kind: AgentProviderIssueKind
   /** Vision model that produced the failure. */
   selection?: AgentModelSelection
+  /** Model that was executing the turn and was assumed to lack vision, when known. */
+  requestingModel?: ModelIdentity
   /** Partial description generated before the failure, if any. */
   partialOutput: string
   /** Number of images that failed in this descriptor call. */
@@ -1870,6 +1965,22 @@ export interface AgentAccountUsage {
   contextUsed?: number
 }
 
+/**
+ * Quota telemetry read from one custom provider's user-defined usage route.
+ * The route is the provider author's contract — CodeInOven accepts the common
+ * OpenAI/`new-api`-style `{ data: [...] }` envelope plus flat quota objects
+ * and maps whatever it can recognize into rate-limit windows.
+ */
+export interface CustomProviderUsage {
+  providerId: string
+  /** Harness the usage route belongs to. */
+  harnessId: string
+  rateLimits: AgentRateLimitWindow[]
+  credits?: AgentUsageCredits
+  /** Raw endpoint the snapshot came from, for diagnostics. */
+  source: string
+}
+
 /** Last-known usage snapshot stored with a thread so the meter restores
  *  instantly on mount and is evacuated automatically when the thread row is
  *  deleted. The harness/provider pair guard against showing usage from a
@@ -2001,6 +2112,8 @@ export interface LocalProfileAnalytics {
   costUsd: number
   tokens: number
   durationMs: number
+  /** Wall-clock runtime of assistant responses, from agent_messages. */
+  responseDurationMs: number
   topHarnessId: string | null
   topProviderId: string | null
   topModelId: string | null
@@ -2028,7 +2141,7 @@ export interface LocalProfileAnalytics {
 export type TurnOutcomeStatus = 'pending' | 'graded'
 
 /** What triggered the judge for a pending turn outcome. */
-export type TurnOutcomeBasis = 'deleted' | 'read_timeout' | 'draft_timeout'
+export type TurnOutcomeBasis = 'deleted' | 'general_timeout' | 'read_timeout' | 'draft_timeout'
 
 /** Task kind recorded with a turn outcome, mirroring usage_events.feature. */
 export type TurnOutcomeTaskType = 'main' | 'audit' | 'assignment'
@@ -2424,12 +2537,16 @@ export type BrainstormTraceUpdate =
   | { type: 'completed'; messages: AgentMessage[] }
   | { type: 'refresh.started'; startedAt: number }
   | { type: 'refresh.completed' }
+  | { type: 'refresh.failed'; error: string; harnessId: string }
 
 export type SpecGenerationTraceUpdate =
   | { type: 'started'; startedAt: number }
   | { type: 'part.updated'; part: AgentPart }
   | { type: 'part.delta'; partId: string; field: string; delta: string }
   | { type: 'completed' }
+
+/** Live trace of an isolated offshoot run (shares the spec trace shape). */
+export type AssignmentGenerationTraceUpdate = SpecGenerationTraceUpdate
 
 export type AgentEvent =
   | { type: 'message.part.updated'; sessionId: string; part: AgentPart }
@@ -2478,6 +2595,8 @@ export type AgentEvent =
       credits?: AgentUsageCredits
       /** The completed assistant message summarizes a compaction and is trace-only. */
       compaction?: boolean
+      /** Driver-internal silent-continue marker; stripped before broadcast. */
+      silentContinue?: AgentSilentContinueMarker
     }
   | {
       type: 'usage.updated'
@@ -2554,6 +2673,13 @@ export type AgentEvent =
       update: SpecGenerationTraceUpdate
     }
   | {
+      type: 'assignment.trace'
+      sessionId: string
+      projectId: string
+      threadId: string
+      update: AssignmentGenerationTraceUpdate
+    }
+  | {
       type: 'spec.ready'
       sessionId: string
       projectId: string
@@ -2565,6 +2691,7 @@ export type AgentEvent =
       type: 'temporary-chat.started'
       sessionId: string
       temporaryChatId: string
+      projectId: string
     }
   | {
       type: 'catalog.updated'
@@ -2590,6 +2717,25 @@ export type AgentEvent =
       requestId: string
       action: ImageDescriptorReplyAction
     }
+  | {
+      /** A steered message is held by the chat engine until the harness's
+       *  in-flight tool call ends; it has not reached the harness yet. */
+      type: 'steer.held'
+      sessionId: string
+      userMessageId: string
+    }
+  | {
+      /** A held steer was delivered to the harness (undo window closed). */
+      type: 'steer.delivered'
+      sessionId: string
+      userMessageId: string
+    }
+  | {
+      /** A held steer was discarded by the user; the harness never saw it. */
+      type: 'steer.discarded'
+      sessionId: string
+      userMessageId: string
+    }
 
 /**
  * Agent events that are tied to a running session. Catalog events are app-level
@@ -2600,6 +2746,17 @@ export type SessionAgentEvent = Exclude<
   AgentEvent,
   { type: 'catalog.updated' } | { type: 'providerCatalog.updated' }
 >
+
+/**
+ * Driver-internal marker on a `message.completed` event: the turn hit a
+ * recoverable finish-reason flake and the driver intends to silently continue
+ * instead of surfacing the error. Never broadcast to renderers — drivers strip
+ * it before emitting events to the engine.
+ */
+export interface AgentSilentContinueMarker {
+  /** The original provider error text, kept for diagnostics when retries cap out. */
+  error: string
+}
 
 // ─── Change Tracking ────────────────────────────────────────────────────────
 
@@ -3751,6 +3908,10 @@ export interface GitBranchInfo {
   upstream: string | null
   ahead: number
   behind: number
+  /** Absolute path of a linked worktree where this branch is checked out, when one exists.
+   *  Null for regular branches and for the checkout the git panel is operating in. Such
+   *  branches cannot be checked out elsewhere: git refuses the same branch in two worktrees. */
+  worktreePath: string | null
 }
 
 /** A configured remote. */
@@ -3783,6 +3944,9 @@ export interface GitCommitInfo {
 
 /** Reset severity: soft keeps index+worktree, mixed resets index, hard discards all local changes. */
 export type GitResetMode = 'soft' | 'mixed' | 'hard'
+
+/** Where a restored file lands: the index only, or the index and working tree. */
+export type GitRestoreTarget = 'staged' | 'worktree'
 
 /** Renderer-safe git reset request. */
 export interface GitResetInput {

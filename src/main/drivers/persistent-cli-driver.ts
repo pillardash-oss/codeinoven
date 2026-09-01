@@ -34,10 +34,16 @@ import type {
   HarnessCapabilities,
   HarnessDriver,
   PreparedUtilityRuntime,
+  SendHeartbeatPingOptions,
   SendPromptOptions,
   SteerPromptOptions
 } from './driver.interface'
-import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
+import {
+  buildTitlePrompt,
+  HEARTBEAT_PROMPT,
+  sanitizeGeneratedTitle,
+  sanitizeHeartbeatReply
+} from '../chat/title-generator'
 import { buildTurnGradePrompt, parseTurnGrade } from '../chat/turn-grader-prompt'
 import {
   isPermissionToolName,
@@ -107,6 +113,8 @@ export interface PersistentCliSession {
   title: string
   projectPathHash: string
   nativeSessionId?: string
+  /** Owning thread, stamped by the engine so sessions survive harness switches. */
+  threadId?: string
   messages: AgentMessage[]
   createdAt: number
   updatedAt: number
@@ -181,7 +189,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     Pick<SendPromptOptions, 'text' | 'attachments'>
   >()
   private utilityRuntimes = new Map<string, PreparedUtilityRuntime>()
-  private sessionCache = new Map<string, PersistentCliSession>()
+  protected sessionCache = new Map<string, PersistentCliSession>()
   private deletedSessions = new Set<string>()
   /** Sessions whose provider stream already supplied a structured terminal issue. */
   private structuredProcessIssues = new Set<string>()
@@ -288,8 +296,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
             modelId: candidate.modelId,
             thinkingLevel: 'minimal',
             inferenceMode: 'normal',
-            permissionLevel: 'auto_review',
-            engineeringMode: false
+            permissionLevel: 'auto_review'
           },
           text: promptText,
           attachments: [],
@@ -297,7 +304,11 @@ export abstract class PersistentCliDriver implements HarnessDriver {
           allowedTools: []
         })
         await completion.promise
-        const messages = await this.loadMessages(projectPath, sessionId)
+        // Read the live session record directly: a driver override may answer
+        // from a native transcript or report [] for unresumable sessions, while
+        // title generation always wants this disposable session's own mirror.
+        const titleSession = await this.requireSession(projectPath, sessionId)
+        const messages = titleSession.messages
         const response = [...messages].reverse().find((message) => message.role === 'assistant')
         if (response?.error) {
           accounted.push(
@@ -315,13 +326,22 @@ export abstract class PersistentCliDriver implements HarnessDriver {
           return { value, authFailed: false, attempts: accounted }
         }
         accounted.push(
-          this.buildTitleAttempt(index + 1, candidate, false, 'No usable response produced', response)
+          this.buildTitleAttempt(
+            index + 1,
+            candidate,
+            false,
+            'No usable response produced',
+            response
+          )
         )
       } catch (error) {
         const fallbackReason = this.describeTitleFailure(error)
         if (error instanceof TitleTurnProviderIssueError && error.issue.kind === 'authentication') {
           accounted.push(this.buildTitleAttempt(index + 1, candidate, false, fallbackReason))
-          return { value: null, authFailed: true, attempts: accounted }
+          if (index === attempts.length - 1) {
+            return { value: null, authFailed: true, attempts: accounted }
+          }
+          continue
         }
         Logger.dev(
           `${this.name} one-shot model ${candidate.providerId}/${candidate.modelId} unavailable:`,
@@ -420,12 +440,35 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return []
   }
 
-  generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
-    return this.generateTitleWithCandidates(projectPath, options, [])
+  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+    return this.generateTitleWithCandidates(
+      projectPath,
+      options,
+      await this.cheapCandidateModels(projectPath)
+    )
   }
 
-  gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
-    return this.gradeTurnWithCandidates(projectPath, options, [])
+  /** Ping the exact configured model — no cheap-candidate substitution. */
+  async sendHeartbeatPing(
+    projectPath: string,
+    options: SendHeartbeatPingOptions
+  ): Promise<boolean> {
+    const outcome = await this.oneShotWithCandidates(
+      projectPath,
+      { settings: options.settings, message: '' },
+      [],
+      HEARTBEAT_PROMPT,
+      sanitizeHeartbeatReply
+    )
+    return outcome.value !== null
+  }
+
+  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
+    return this.gradeTurnWithCandidates(
+      projectPath,
+      options,
+      await this.cheapCandidateModels(projectPath)
+    )
   }
 
   /**
@@ -462,8 +505,23 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   async sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, opts.sessionId)
-    if (this.activeProcesses.has(session.id)) {
-      throw new Error(`A turn is already active for session ${session.id}`)
+    // A previous turn can leave a lingering process behind (e.g. a CLI hung on
+    // a dead socket after a network failure) while the chat engine already
+    // considers the session idle and dispatches a retry here. Replace the
+    // orphaned turn — stop its process and drain its settlement — instead of
+    // rejecting the retry with "A turn is already active".
+    const orphan = this.activeProcesses.get(session.id)
+    if (orphan) {
+      this.steeringSessions.add(session.id)
+      try {
+        if (orphan.exitCode === null && orphan.signalCode === null && !orphan.killed) {
+          orphan.kill()
+        }
+        const settlement = this.activeProcessSettlements.get(session.id)
+        if (settlement) await settlement
+      } finally {
+        this.steeringSessions.delete(session.id)
+      }
     }
 
     const invocation = await this.buildTurnCommand(projectPath, session, opts)
@@ -1092,15 +1150,32 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     })
     if (!result) return
     if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
+    this.applyParseResult(result, session, { trackProcessIssues: true })
+  }
+
+  /**
+   * Apply a parse result produced outside the live stdout loop (e.g. a
+   * harness-side log replay or a driver-side finalize pass) to the durable
+   * session and the live event stream. Mirrors the stdout application path
+   * exactly, minus process-issue bookkeeping.
+   */
+  protected applyParseResult(
+    result: CliLineParseResult,
+    session: PersistentCliSession,
+    options?: { trackProcessIssues?: boolean }
+  ): void {
+    if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
     if (result.messages) this.mergeMessages(session, result.messages)
     for (const event of this.normalizeInteractionEvents(session.id, result.events ?? [])) {
-      if (event.type === 'session.error' || (event.type === 'message.completed' && event.issue)) {
-        this.structuredProcessIssues.add(session.id)
-      } else if (event.type === 'session.status') {
-        if (event.status.state === 'waiting' || event.status.state === 'error') {
+      if (options?.trackProcessIssues) {
+        if (event.type === 'session.error' || (event.type === 'message.completed' && event.issue)) {
           this.structuredProcessIssues.add(session.id)
-        } else {
-          this.structuredProcessIssues.delete(session.id)
+        } else if (event.type === 'session.status') {
+          if (event.status.state === 'waiting' || event.status.state === 'error') {
+            this.structuredProcessIssues.add(session.id)
+          } else {
+            this.structuredProcessIssues.delete(session.id)
+          }
         }
       }
       this.applyEventToSession(session, event)
@@ -1310,6 +1385,54 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   private sessionPath(sessionId: string): string {
     return `drivers/${this.id}/sessions/${sessionId}.json`
+  }
+
+  /**
+   * Stamp the owning thread onto a session record. The engine calls this when
+   * binding a session so the driver can relocate the thread's sessions later —
+   * e.g. after a harness switch moved the thread's session slot elsewhere.
+   */
+  async tagSessionThread(projectPath: string, sessionId: string, threadId: string): Promise<void> {
+    try {
+      const session = await this.requireSession(projectPath, sessionId)
+      if (session.threadId === threadId) return
+      session.threadId = threadId
+      await this.persistSession(session)
+    } catch {
+      // Best-effort: an untagged session only costs native resume after a
+      // harness switch, never the current turn.
+    }
+  }
+
+  /**
+   * The most recent session record for a thread in this project, or null.
+   * Scans this driver's session records by project hash + stamped thread id.
+   */
+  protected async findLatestThreadSession(
+    projectPath: string,
+    threadId: string
+  ): Promise<PersistentCliSession | null> {
+    const hash = this.projectPathHash(projectPath)
+    let names: string[]
+    try {
+      names = await this.storage.list(`drivers/${this.id}/sessions`)
+    } catch {
+      return null
+    }
+    let latest: PersistentCliSession | null = null
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue
+      try {
+        const session = await this.storage.read<PersistentCliSession>(
+          `drivers/${this.id}/sessions/${name}`
+        )
+        if (!session || session.threadId !== threadId || session.projectPathHash !== hash) continue
+        if (!latest || session.updatedAt > latest.updatedAt) latest = session
+      } catch {
+        continue
+      }
+    }
+    return latest
   }
 
   private projectPathHash(projectPath: string): string {

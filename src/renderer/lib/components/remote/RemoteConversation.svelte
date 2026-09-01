@@ -14,6 +14,11 @@
     X
   } from '@lucide/svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import {
+    loadLifecycleIntent,
+    saveLifecycleIntent,
+    clearLifecycleIntent
+  } from '$lib/stores/lifecycle-intent'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
     threadSettings,
@@ -28,6 +33,7 @@
   import { copyText } from '$lib/copy-text'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
+  import { spokenWordOffset } from '../../speech/read-along'
   import { attachmentPreviewKind, fileUrlToPath } from '$lib/mime'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { fastVariantForModelId } from '$shared/fast-inference'
@@ -158,11 +164,17 @@
     settings = updated
   }
 
+  /** Switch the thread's text model from an engineering card's picker.
+   *  Persist immediately so the next run (e.g. a scheduled retry) uses it. */
+  async function changeThreadModel(updated: ThreadSettings): Promise<void> {
+    settings = updated
+    await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
+  }
+
   function settingsForEngineeringState(state: EngineeringLifecycleState | null): ThreadSettings {
     if (!state || (state.selectedStages.length === 0 && !state.autopilot)) {
       return {
         ...settings,
-        engineeringMode: false,
         assignmentMode: false,
         loopMode: false
       }
@@ -170,11 +182,6 @@
     const { selectedStages, autopilot } = state
     return {
       ...settings,
-      engineeringMode:
-        autopilot ||
-        selectedStages.includes('brainstorm') ||
-        selectedStages.includes('prd') ||
-        selectedStages.includes('spec'),
       assignmentMode: autopilot || selectedStages.includes('assignment'),
       loopMode: autopilot || selectedStages.includes('achievement')
     }
@@ -224,7 +231,13 @@
       }
     }
     void hydrate()
-    if (!chatMode) void refreshEngineeringLifecycle()
+    if (!chatMode) {
+      void refreshEngineeringLifecycle()
+      // Restore a staged (not-yet-sent) Toolbox selection so the switches keep
+      // the user's last choice across thread switches and app restarts.
+      const stagedIntent = loadLifecycleIntent(projectId, id)
+      if (stagedIntent) pendingLifecycleSelection = stagedIntent
+    }
     const bind = (sessionId: string | undefined): void => {
       if (sessionId) threadMessages.setSessionId(projectId, id, sessionId)
     }
@@ -270,6 +283,10 @@
    *  playing around in the composer must not apply settings or open the guard. */
   function selectEngineeringLifecycle(input: EngineeringLifecycleSelectionInput): void {
     pendingLifecycleSelection = input
+    // Persist the staged intent so the switches stay exactly where the user
+    // left them across thread switches and app restarts — a send must never
+    // steer a different prompt than the one the switches currently show.
+    saveLifecycleIntent(thread.projectId, thread.id, input)
   }
 
   async function confirmLifecycleReplacement(): Promise<void> {
@@ -282,6 +299,9 @@
     )
     pendingLifecycleSelection = null
     lifecycleGuardOpen = false
+    // The staged intent was either applied or discarded by this confirmation —
+    // it must not resurface on the next mount.
+    clearLifecycleIntent(thread.projectId, thread.id)
     if (replacement.stages.length > 0 || replacement.autopilot) {
       await applyLifecycleSelection(replacement)
     }
@@ -312,26 +332,6 @@
     }
   }
 
-  async function retryEngineeringLifecycle(): Promise<void> {
-    const current = engineeringLifecycle
-    if (current?.humanGate !== 'terminal_failure' || !current.resumeToken) return
-    try {
-      engineeringLifecycle = await invoke(
-        'engineeringLifecycle:retry',
-        thread.projectId,
-        thread.id,
-        current.resumeToken
-      )
-      settings = settingsForEngineeringState(engineeringLifecycle)
-      await deliver(
-        `Retry the persisted ${engineeringLifecycle.activeStage ?? 'Engineering'} stage from its durable state.`,
-        []
-      )
-    } catch (error) {
-      sendError = error instanceof Error ? error.message : 'The Engineering stage could not retry.'
-    }
-  }
-
   async function selectRemoteLofi(prototypeId: string): Promise<void> {
     const draft = gateBrainstorm
     if (!draft) return
@@ -343,7 +343,8 @@
         draft.threadId,
         draft.id,
         draft.version,
-        `Generate one direct HiFi prototype H1 based on selected LoFi prototype ${prototypeId}. Preserve all existing prototypes and aligned Brainstorm content.`
+        `Generate one direct HiFi prototype H1 based on selected LoFi prototype ${prototypeId}. Preserve all existing prototypes and aligned Brainstorm content.`,
+        { fidelity: 'hifi', count: 1 }
       )
       await refreshEngineeringLifecycle()
     } catch (error) {
@@ -904,6 +905,9 @@
     if (!pending) return base
     const autopilot = pending.autopilot === true
     const selectedStages = autopilot ? [] : normalizeLifecycleStages(pending.stages)
+    // A staged "everything off" must read as off — never carry a stale
+    // `startedAt` marker that would keep the toolbox icon lit.
+    const cleared = !autopilot && selectedStages.length === 0
     return {
       projectId: base?.projectId ?? thread.projectId,
       threadId: base?.threadId ?? thread.id,
@@ -914,9 +918,24 @@
       ...(base?.activeStage ? { activeStage: base.activeStage } : {}),
       ...(base?.humanGate ? { humanGate: base.humanGate } : {}),
       ...(base?.failure ? { failure: base.failure } : {}),
-      ...(base?.startedAt ? { startedAt: base.startedAt } : {}),
+      ...(!cleared && base?.startedAt ? { startedAt: base.startedAt } : {}),
       updatedAt: base?.updatedAt ?? Date.now()
     }
+  })
+
+  /** Toolbox icon activity mirrors the staged selection, not the persisted
+   *  settings: toggles are intent-only until send, so the icon must dim or
+   *  light the moment a switch flips — not after the next message. */
+  const toolboxActive = $derived.by(() => {
+    const pending = pendingLifecycleSelection
+    if (pending) {
+      return pending.autopilot === true || normalizeLifecycleStages(pending.stages).length > 0
+    }
+    return (
+      engineeringLifecycle !== null &&
+      ((engineeringLifecycle.selection ?? 'none') !== 'none' ||
+        engineeringLifecycle.startedAt !== undefined)
+    )
   })
 
   function handleSend(
@@ -958,6 +977,7 @@
           return
         }
         pendingLifecycleSelection = null
+        clearLifecycleIntent(thread.projectId, thread.id)
         await applyLifecycleSelection(staged)
       }
       if (dependencies.length > 0 || (busy && !direct)) {
@@ -1238,15 +1258,26 @@
                   {#if isReadingRemote && speechController.activeSegments && speechController.activeSegments.length > 0 && speechController.readingOverlayActive}
                     {@const segs = speechController.activeSegments}
                     {@const activeIdx = speechController.visibleSegmentIndex}
+                    {@const spokenProgress = speechController.activeSegmentProgress}
                     <div class="flex flex-col gap-1.5 text-sm text-foreground">
                       {#each segs as seg, i (seg.id)}
+                        {@const spokenOffset =
+                          i === activeIdx ? spokenWordOffset(seg.text, spokenProgress) : -1}
                         <div
                           class={i === activeIdx
                             ? 'rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors'
                             : 'px-2.5 py-1 opacity-80'}
                           data-speech-line={i === activeIdx ? 'active' : undefined}
                         >
-                          <span class="leading-relaxed">{seg.text}</span>
+                          <span class="leading-relaxed">
+                            {#if spokenOffset > 0}
+                              <span class="rounded-sm bg-info/20 px-0.5 box-decoration-clone"
+                                >{seg.text.slice(0, spokenOffset)}</span
+                              >{seg.text.slice(spokenOffset)}
+                            {:else}
+                              {seg.text}
+                            {/if}
+                          </span>
                         </div>
                       {/each}
                     </div>
@@ -1425,6 +1456,10 @@
           busy={lifecycleChoiceBusy}
           onBrainstormFirst={() => choosePrdEntry('brainstorm_first')}
           onJumpIn={() => choosePrdEntry('start_prd')}
+          {settings}
+          {providers}
+          projectId={thread.projectId}
+          onModelChange={(updated) => void changeThreadModel(updated)}
         />
       </div>
     {/if}
@@ -1514,8 +1549,8 @@
         hidePermissionSelector={chatMode}
         showEngineeringMode={!chatMode}
         engineeringLifecycle={pendingLifecycleDisplay}
+        engineeringActive={toolboxActive}
         onEngineeringLifecycleSelect={selectEngineeringLifecycle}
-        onEngineeringLifecycleRetry={retryEngineeringLifecycle}
         showChatModes={false}
         initialStartAfterThreads={queuedMessage?.startAfterThreads}
         initialValue={composerRestore?.text ?? ''}

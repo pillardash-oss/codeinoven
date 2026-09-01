@@ -1,5 +1,5 @@
 import type { AssignmentTask, ProjectFileEntry, PromptProjectReference } from '$shared/types'
-import { isQuotedMentionPosition } from '$shared/mention-context'
+import { isInsideUnclosedInlineCode, isQuotedMentionPosition } from '$shared/mention-context'
 
 export type ComposerMentionEntry =
   | { type: 'project'; entry: ProjectFileEntry }
@@ -16,7 +16,16 @@ export function composerMentionQuery(textBeforeCaret: string): string | null {
   if (!match || match.index === undefined) return null
 
   const mentionStart = match.index + (match[1]?.length ?? 0)
-  if (isQuotedMentionPosition(textBeforeCaret, mentionStart)) return null
+  // No mention menu inside a block quote, an open double-quoted passage, or an
+  // unclosed inline code span — the @ stays literal there. (Fenced code blocks
+  // and closed inline code never reach this check: the caret-tracking layer
+  // already reports them as command-unsupported.)
+  if (
+    isQuotedMentionPosition(textBeforeCaret, mentionStart) ||
+    isInsideUnclosedInlineCode(textBeforeCaret.slice(0, mentionStart))
+  ) {
+    return null
+  }
 
   return match[2] ?? ''
 }

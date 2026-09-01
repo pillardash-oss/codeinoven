@@ -399,7 +399,7 @@ class MobileState {
         : threadSettings.lastUsed
     const created = await invoke('thread:create', {
       projectId: project.id,
-      providerId: 'opencode',
+      providerId: 'pi',
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: project.path,
       settings: inherited
@@ -416,7 +416,7 @@ class MobileState {
     }
     const created = await invoke('thread:create', {
       projectId: inbox.id,
-      providerId: 'opencode',
+      providerId: 'pi',
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: '',
       settings: chatEffectiveSettings()

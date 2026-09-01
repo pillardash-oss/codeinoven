@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { CheckpointManager, type TurnCheckpoint } from '../../src/main/storage/checkpoint-manager'
+import {
+  CheckpointManager,
+  MAX_CHECKPOINT_FAILURE_LENGTH,
+  type TurnCheckpoint
+} from '../../src/main/storage/checkpoint-manager'
 import type { Database } from '../../src/main/database/database'
 import { createTestDb, destroyTestDb } from './database/test-helper'
 
@@ -336,7 +340,13 @@ describe('CheckpointManager', () => {
       // A worker sub-agent thread of this coordinator completes a turn inside
       // the window. The sub-turn file diff can be empty when snapshots are
       // cached, so seed its recorded changes the way a real editing turn does.
-      const workerTurn = await manager.beginTurn('project1', 'worker-a', projectRoot, 'Worker turn', false)
+      const workerTurn = await manager.beginTurn(
+        'project1',
+        'worker-a',
+        projectRoot,
+        'Worker turn',
+        false
+      )
       await writeFile(join(projectRoot, 'worker.txt'), 'worker-edit', 'utf-8')
       const workerDone = await manager.completeTurn(
         'project1',
@@ -394,8 +404,11 @@ describe('CheckpointManager', () => {
       family.projectRoot,
       'completed',
       undefined,
-      undefined,
-      { ownThreadIds: new Set(['coordinator', 'worker-a']) }
+      new Set(['mine.txt', 'worker.txt', 'unrelated.txt']),
+      {
+        precisePaths: new Set(['mine.txt']),
+        ownThreadIds: new Set(['coordinator', 'worker-a'])
+      }
     )
     expect(familyDone.changes.map((change) => change.path)).toEqual(['mine.txt', 'worker.txt'])
 
@@ -410,5 +423,40 @@ describe('CheckpointManager', () => {
       'completed'
     )
     expect(plainDone.changes.map((change) => change.path)).toEqual(['mine.txt'])
+  })
+
+  it('bounds the failure text written to a checkpoint', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    const before = await manager.beginTurn('project1', 'thread1', projectRoot, 'Failed turn', false)
+    const transcript = 'Fixed, validated, and committed. '.repeat(200)
+    const failed = await manager.markFailed('project1', 'thread1', before.id, transcript)
+    const failure = failed.failure
+    if (failure === undefined) throw new Error('markFailed did not record failure text')
+    expect(failure.length).toBeLessThanOrEqual(MAX_CHECKPOINT_FAILURE_LENGTH + 1)
+    expect(failure.endsWith('…')).toBe(true)
+  })
+
+  it('strips overlong legacy failure text when reading a checkpoint', async () => {
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const before = await manager.beginTurn('projectX', 'threadX', projectRoot, 'Poisoned turn', false)
+    await manager.completeTurn('projectX', 'threadX', before.id, projectRoot, 'completed')
+    // Simulate a legacy poisoned row saved before the failure bound existed.
+    const poisoned: TurnCheckpoint = {
+      ...(await manager.get('projectX', 'threadX', before.id))!,
+      failure: 'Fixed, validated, and committed. ## What went wrong '.repeat(80)
+    }
+    database.run(
+      'INSERT OR REPLACE INTO turn_checkpoints(turn_id, project_id, thread_id, data, created_at) VALUES(?, ?, ?, ?, ?)',
+      [poisoned.id, poisoned.projectId, poisoned.threadId, JSON.stringify(poisoned), poisoned.createdAt]
+    )
+    const listed = (await manager.list('projectX', 'threadX')).find(
+      (checkpoint) => checkpoint.id === before.id
+    )
+    expect(listed?.failure).toBeUndefined()
+    expect((await manager.get('projectX', 'threadX', before.id))?.failure).toBeUndefined()
   })
 })

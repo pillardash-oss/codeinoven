@@ -251,18 +251,20 @@ export const HARNESS_USAGE_MODELS_COLUMNS_SQL = `
  * attribution when the owning thread is deleted.
  *
  * Rows are captured pending when a turn answers a visible user message and are
- * graded exactly once by the cheap-model LLM judge. The captured texts and the
- * deadline anchors let grading survive restarts without reloading sessions.
+ * graded exactly once by the cheap-model LLM judge. The captured texts,
+ * project identity, and one due_at queue checkpoint survive restarts and
+ * thread deletion without reloading harness sessions.
  */
 export const TURN_FEEDBACK_COLUMNS_SQL = `
   id             TEXT PRIMARY KEY NOT NULL,
   thread_id      TEXT REFERENCES threads(id) ON DELETE SET NULL,
+  project_id     TEXT,
   parent_turn_id TEXT NOT NULL UNIQUE,
   session_id     TEXT,
   created_at     INTEGER NOT NULL,
   resolved_at    INTEGER,
   status         TEXT NOT NULL CHECK(status IN ('pending','graded')),
-  basis          TEXT CHECK(basis IN ('deleted','read_timeout','draft_timeout')),
+  basis          TEXT CHECK(basis IN ('deleted','general_timeout','read_timeout','draft_timeout')),
   grade          INTEGER CHECK(grade IS NULL OR (grade BETWEEN 1 AND 5)),
   feature        TEXT CHECK(feature IN ('main','audit','assignment')),
   task_slug      TEXT,
@@ -277,7 +279,11 @@ export const TURN_FEEDBACK_COLUMNS_SQL = `
   assistant_output_text TEXT NOT NULL DEFAULT '',
   follow_up_text        TEXT,
   reading_deadline_ms   INTEGER,
-  draft_deadline_ms     INTEGER`
+  draft_deadline_ms     INTEGER,
+  general_deadline_ms   INTEGER,
+  due_at_ms             INTEGER,
+  attempt_count         INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+  last_attempt_at_ms    INTEGER`
 
 export const ATTACHMENT_GRANTS_SQL = `
 -- ─── Durable attachment grants ──────────────────────────────────────────
@@ -796,7 +802,8 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_analytics_range
 -- One row per completed user turn, opened "pending" with the captured grading
 -- payload when an agent answer finishes, and graded exactly once (1–5) by the
 -- cheap-model judge when a deadline fires: thread deletion, the post-read
--- window, or the draft window. Grades feed the "best model by feedback"
+-- window, draft window, or general fallback deadline. One durable due_at
+-- checkpoint drives every trigger and survives restarts. Grades feed the "best model by feedback"
 -- profile section, keyed by harness/provider/model/thinking level and task
 -- kind. A follow-up message sent while pending is stored as extra context.
 CREATE TABLE IF NOT EXISTS turn_feedback (${TURN_FEEDBACK_COLUMNS_SQL});
@@ -808,7 +815,7 @@ CREATE INDEX IF NOT EXISTS idx_turn_feedback_pending
   ON turn_feedback(status, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_turn_feedback_deadline
-  ON turn_feedback(status, reading_deadline_ms, draft_deadline_ms);
+  ON turn_feedback(status, due_at_ms);
 
 CREATE INDEX IF NOT EXISTS idx_turn_feedback_attribution
   ON turn_feedback(harness_id, provider_id, model_id, thinking_level, feature);`

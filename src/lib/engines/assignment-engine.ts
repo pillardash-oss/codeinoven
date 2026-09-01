@@ -643,7 +643,6 @@ export class AssignmentEngine {
     const auditorSettings: ThreadSettings = {
       ...settings,
       permissionLevel: 'auto_review',
-      engineeringMode: false,
       assignmentMode: false,
       loopMode: false,
       loopAuditor: undefined
@@ -1589,7 +1588,6 @@ export class AssignmentEngine {
     return {
       ...coordinator,
       ...(selected ?? {}),
-      engineeringMode: false,
       assignmentMode: false,
       loopMode: false,
       loopAuditor: undefined

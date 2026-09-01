@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
+import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../lib/native-skill-paths'
 import { modelKey } from '../../lib/model-keys'
 import {
@@ -15,6 +16,11 @@ import {
   normalizeVoiceRecordingShortcut
 } from '../../lib/speech/types'
 import type { Database } from '../database/database'
+import type {
+  ProjectAction,
+  ProjectActionInput,
+  ProjectActionVariable
+} from '../../lib/project-actions'
 import { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 import { EditorService } from '../editor/editor-service'
@@ -35,6 +41,7 @@ import { settleThreadBranch, type ThreadBranchDeps } from '../chat/thread-branch
 import { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { DiagnosticsService } from '../system/diagnostics-service'
 import { resolveFavicons } from '../editor/favicon-service'
+import { isNetworkError } from '../util/network-error'
 import {
   MemoryService,
   parseMemoryExport,
@@ -52,6 +59,7 @@ import { AGENT_BEHAVIOR_PROMPT_MAX_LENGTH } from '../../lib/agent-behavior'
 import { CIO_PROMPT_MAX_LENGTH, isCioPromptId } from '../../lib/cio-prompts'
 import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
+import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import {
   broadcastNoteChanged,
   broadcastThreadBranchUpdated,
@@ -65,7 +73,7 @@ import { AttachmentGrantRepo } from '../database/repositories/attachment-grant-r
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { TurnFeedbackRepo } from '../database/repositories/turn-feedback-repo'
 import { NoteRepo } from '../database/repositories/note-repo'
-import { readWordDocumentHtml } from '../drivers/document-attachment'
+import { readDocumentPreviewHtml } from '../drivers/document-attachment'
 import {
   validateBoundedInteger,
   validateBoundedString,
@@ -85,6 +93,8 @@ import {
   validateGitPathArray,
   validateGitRelativePath,
   validateGitResetMode,
+  validateGitRevision,
+  validateGitRestoreTarget,
   validateHistoryRole,
   validateMergeMethod,
   validateMergeTarget,
@@ -199,7 +209,9 @@ import type {
   GitHubPermissionRequired,
   GitHubDeploymentOverview,
   AuditSectionId,
+  HeartbeatConfig,
   HistoryEntry,
+  ThinkingLevel,
   EditorId,
   LocalProfileAnalyticsRange,
   MemoryEntry,
@@ -220,6 +232,7 @@ import type {
   UtilityDefinitionInput
 } from '../../lib/types'
 import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES, INBOX_PROJECT_ID } from '../../lib/types'
+import { THINKING_LEVEL_ORDER } from '../../lib/thinking-presets'
 
 type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentVersion'>
 
@@ -229,6 +242,9 @@ const MAX_PATHLESS_ATTACHMENT_BYTES = 32 * 1024 * 1024
 const PR_PAGE_SIZE = 20
 const GITHUB_REPOSITORY_ACCESS_MESSAGE =
   'GitHub cannot access this repository. Install the CodeInOven GitHub App on it and grant the requested repository permissions.'
+/** Returned instead of a raw fetch failure when GitHub is unreachable (offline). */
+const GITHUB_OFFLINE_MESSAGE =
+  'GitHub is unreachable right now. Pull requests will refresh automatically once you are back online.'
 const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
 const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
 const GIT_PULL_PREFERENCES = new Set(['ask', 'merge', 'rebase', 'ff-only'])
@@ -2071,6 +2087,8 @@ export interface RegisterIpcHandlersOptions {
   powerWakeService?: PowerWakeService
   /** Auto-resume scheduler gated by the General settings toggle. */
   retryScheduler?: RetrySchedulerService
+  /** Timed usage-window "keep warm" ping scheduler backing the Heartbeat settings page. */
+  heartbeatScheduler?: HeartbeatSchedulerService
   /** Confirmed-override layer on the declarative harness behavior manifests. */
   harnessManifestService?: HarnessManifestService
   /** Hydration channels already registered before BrowserWindow navigation. */
@@ -2085,6 +2103,70 @@ export interface RegisterIpcHandlersOptions {
   worktreeService?: ScopeWorktreeService
   /** Speech service for auto-evict of idle sound models. */
   speechService?: { updateUnloadOptions: (opts: Record<string, unknown>) => void }
+}
+
+const HEARTBEAT_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
+
+function validateHeartbeatTimes(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError('Heartbeat must have at least one scheduled time')
+  }
+  const times = value.map((entry) => {
+    if (typeof entry !== 'string' || !HEARTBEAT_TIME_PATTERN.test(entry)) {
+      throw new TypeError('Heartbeat times must be 24h HH:mm strings')
+    }
+    return entry
+  })
+  return [...new Set(times)]
+}
+
+function validateHeartbeatThinkingLevel(value: unknown): ThinkingLevel | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !THINKING_LEVEL_ORDER.includes(value as ThinkingLevel)) {
+    throw new TypeError('Heartbeat thinking level is invalid')
+  }
+  return value as ThinkingLevel
+}
+
+function validateHeartbeatCreateInput(value: unknown): Omit<HeartbeatConfig, 'id' | 'lastRun'> {
+  if (typeof value !== 'object' || value === null) throw new TypeError('Invalid heartbeat input')
+  const input = value as Record<string, unknown>
+  return {
+    name: validateBoundedString(input.name, 'Heartbeat name', 1, 100),
+    harnessId: validateBoundedString(input.harnessId, 'Heartbeat harness ID', 1, 100),
+    providerId: validateBoundedString(input.providerId, 'Heartbeat provider ID', 1, 100),
+    modelId: validateBoundedString(input.modelId, 'Heartbeat model ID', 1, 200),
+    thinkingLevel: validateHeartbeatThinkingLevel(input.thinkingLevel),
+    times: validateHeartbeatTimes(input.times),
+    enabled: typeof input.enabled === 'boolean' ? input.enabled : true
+  }
+}
+
+function validateHeartbeatPatchInput(value: unknown): Partial<Omit<HeartbeatConfig, 'id'>> {
+  if (typeof value !== 'object' || value === null) throw new TypeError('Invalid heartbeat patch')
+  const input = value as Record<string, unknown>
+  const patch: Partial<Omit<HeartbeatConfig, 'id'>> = {}
+  if (input.name !== undefined)
+    patch.name = validateBoundedString(input.name, 'Heartbeat name', 1, 100)
+  if (input.harnessId !== undefined) {
+    patch.harnessId = validateBoundedString(input.harnessId, 'Heartbeat harness ID', 1, 100)
+  }
+  if (input.providerId !== undefined) {
+    patch.providerId = validateBoundedString(input.providerId, 'Heartbeat provider ID', 1, 100)
+  }
+  if (input.modelId !== undefined) {
+    patch.modelId = validateBoundedString(input.modelId, 'Heartbeat model ID', 1, 200)
+  }
+  if (input.thinkingLevel !== undefined) {
+    patch.thinkingLevel = validateHeartbeatThinkingLevel(input.thinkingLevel)
+  }
+  if (input.times !== undefined) patch.times = validateHeartbeatTimes(input.times)
+  if (input.enabled !== undefined) {
+    if (typeof input.enabled !== 'boolean')
+      throw new TypeError('Heartbeat enabled flag must be a boolean')
+    patch.enabled = input.enabled
+  }
+  return patch
 }
 
 export function registerIpcHandlers(
@@ -2105,7 +2187,6 @@ export function registerIpcHandlers(
   options: RegisterIpcHandlersOptions = {}
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
-  const projectFilesService = options.projectFilesService ?? new ProjectFilesService(projectManager)
   const threadCreation = options.threadCreation ?? new ThreadCreationCoordinator()
   const threadDeletion = options.threadDeletion ?? new ThreadDeletionCoordinator()
   const checkpointManager = new CheckpointManager(database)
@@ -2126,6 +2207,10 @@ export function registerIpcHandlers(
     options.worktreeInspector ?? scopeWorktreeService
   )
   const scopeRoots = scopeRootProvider(scopeRootResolver)
+  // Constructed after the scope resolver so interactive file surfaces can
+  // resolve managed worktree roots instead of always reading the project root.
+  const projectFilesService =
+    options.projectFilesService ?? new ProjectFilesService(projectManager, scopeRoots)
   const threadManager = new ThreadManager(
     database,
     broadcastThreadUpdate,
@@ -2205,11 +2290,29 @@ export function registerIpcHandlers(
     'engineeringLifecycle:select',
     async (_, projectId: unknown, threadId: unknown, input: unknown) => {
       const ids = await waitForThreadReady(projectId, threadId)
-      return engineeringLifecycleEngine.select(
+      const previous = engineeringLifecycleEngine.get(ids.projectId, ids.threadId)
+      const next = engineeringLifecycleEngine.select(
         ids.projectId,
         ids.threadId,
         validateEngineeringLifecycleSelectionInput(input)
       )
+      // Engineering is now expressed purely through the lifecycle selection, so
+      // the senior-engineer/auditor defaults attach the moment a thread first
+      // gains an active selection (previously tied to the creation-time flag).
+      if ((previous?.selection ?? 'none') === 'none' && next.selection !== 'none') {
+        const thread = await threadManager.getThread(ids.projectId, ids.threadId)
+        if (thread?.settings) {
+          const defaults = (await storage.getConfig()).agentDefaults
+          const baseSettings = { ...thread.settings }
+          delete baseSettings.loopAuditor
+          await threadManager.updateSettings(ids.projectId, ids.threadId, {
+            ...baseSettings,
+            ...(defaults.seniorEngineer ?? {}),
+            ...(defaults.auditor ? { loopAuditor: defaults.auditor } : {})
+          })
+        }
+      }
+      return next
     }
   )
   ipcMain.handle(
@@ -2401,7 +2504,86 @@ export function registerIpcHandlers(
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('config:get', () => storage.getConfig())
+    ipcMain.handle('visionModels:list', () => storage.getVisionModels())
   }
+  const projectActionsPath = (projectId: string): string =>
+    `projects/${validateEntityId(projectId, 'Project ID')}/actions.json`
+  const readProjectActions = async (projectId: string): Promise<ProjectAction[]> => {
+    const stored = await storage.read<{ actions?: unknown }>(projectActionsPath(projectId))
+    return Array.isArray(stored?.actions) ? (stored.actions as ProjectAction[]) : []
+  }
+  const validateProjectActionInput = (value: unknown): ProjectActionInput => {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new TypeError('Action is invalid')
+    const record = value as Record<string, unknown>
+    const name = validateBoundedString(record['name'], 'Action name', 0, 120).trim()
+    const script = validateBoundedString(record['script'], 'Action script', 1, 100_000).trim()
+    if (!script) throw new TypeError('Action script is required')
+    const rawVariables = record['variables']
+    if (!Array.isArray(rawVariables) || rawVariables.length > 30)
+      throw new TypeError('Action variables are invalid')
+    const variables: ProjectActionVariable[] = rawVariables.map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry))
+        throw new TypeError('Action variable is invalid')
+      const variable = entry as Record<string, unknown>
+      const variableName = validateBoundedString(variable['name'], 'Variable name', 1, 64).trim()
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(variableName))
+        throw new TypeError('Variable names must be valid shell environment names')
+      return {
+        name: variableName,
+        label:
+          validateBoundedString(variable['label'], 'Variable label', 0, 120).trim() || variableName,
+        required: validateBoolean(variable['required'], 'Variable required')
+      }
+    })
+    if (new Set(variables.map((variable) => variable.name)).size !== variables.length)
+      throw new TypeError('Variable names must be unique')
+    return { name, script, variables }
+  }
+  ipcMain.handle('projectActions:list', (_, projectId: string) => readProjectActions(projectId))
+  ipcMain.handle(
+    'projectActions:save',
+    async (_, projectId: string, actionId: string | null, value: unknown) => {
+      const input = validateProjectActionInput(value)
+      const actions = await readProjectActions(projectId)
+      const now = Date.now()
+      const existing = actionId ? actions.find((action) => action.id === actionId) : undefined
+      const action: ProjectAction = {
+        id: existing?.id ?? randomUUID(),
+        ...input,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now
+      }
+      const next = existing
+        ? actions.map((item) => (item.id === action.id ? action : item))
+        : [...actions, action]
+      await storage.write(projectActionsPath(projectId), { actions: next })
+      return action
+    }
+  )
+  ipcMain.handle('projectActions:delete', async (_, projectId: string, actionId: string) => {
+    const actions = await readProjectActions(projectId)
+    const next = actions.filter((action) => action.id !== validateEntityId(actionId, 'Action ID'))
+    if (next.length === actions.length) return false
+    await storage.write(projectActionsPath(projectId), { actions: next })
+    return true
+  })
+  ipcMain.handle('projectActions:reorder', async (_, projectId: string, orderedIds: unknown) => {
+    if (!Array.isArray(orderedIds)) throw new TypeError('Action order is invalid')
+    const ids = orderedIds.map((id) => validateEntityId(id, 'Action ID'))
+    const actions = await readProjectActions(projectId)
+    if (ids.length !== actions.length || new Set(ids).size !== ids.length)
+      throw new TypeError('Action order is invalid')
+    const byId = new Map(actions.map((action) => [action.id, action]))
+    const next: ProjectAction[] = []
+    for (const id of ids) {
+      const action = byId.get(id)
+      if (!action) throw new TypeError('Action order is invalid')
+      next.push(action)
+    }
+    await storage.write(projectActionsPath(projectId), { actions: next })
+    return next
+  })
   ipcMain.handle('config:update', async (_, input: unknown) => {
     const patch = validateAppConfigPatch(input)
     if (patch.agentBehaviorPrompt) {
@@ -2451,6 +2633,35 @@ export function registerIpcHandlers(
     await storage.resetCioPrompt(id)
     return storage.getCioPromptSettings()
   })
+  ipcMain.handle(
+    'heartbeat:list',
+    () => options.heartbeatScheduler?.list() ?? storage.getHeartbeats()
+  )
+  ipcMain.handle('heartbeat:create', async (_, input: unknown) => {
+    const scheduler = options.heartbeatScheduler
+    if (!scheduler) throw new Error('Heartbeat scheduler is not available')
+    return scheduler.create(validateHeartbeatCreateInput(input))
+  })
+  ipcMain.handle('heartbeat:update', async (_, id: unknown, patch: unknown) => {
+    const scheduler = options.heartbeatScheduler
+    if (!scheduler) throw new Error('Heartbeat scheduler is not available')
+    const safeId = validateBoundedString(id, 'Heartbeat ID', 1, 200)
+    return scheduler.update(safeId, validateHeartbeatPatchInput(patch))
+  })
+  ipcMain.handle('heartbeat:delete', async (_, id: unknown) => {
+    const scheduler = options.heartbeatScheduler
+    if (!scheduler) throw new Error('Heartbeat scheduler is not available')
+    const safeId = validateBoundedString(id, 'Heartbeat ID', 1, 200)
+    return scheduler.remove(safeId)
+  })
+  ipcMain.handle('heartbeat:toggle', async (_, id: unknown, enabled: unknown) => {
+    const scheduler = options.heartbeatScheduler
+    if (!scheduler) throw new Error('Heartbeat scheduler is not available')
+    const safeId = validateBoundedString(id, 'Heartbeat ID', 1, 200)
+    if (typeof enabled !== 'boolean')
+      throw new TypeError('Heartbeat enabled flag must be a boolean')
+    return scheduler.update(safeId, { enabled })
+  })
   ipcMain.handle('workerNames:getSettings', () => storage.getWorkerNameSettings())
   ipcMain.handle('workerNames:saveCustom', async (_, input: unknown) => {
     if (!Array.isArray(input) || input.some((name) => typeof name !== 'string')) {
@@ -2492,15 +2703,18 @@ export function registerIpcHandlers(
                 : thread?.settings?.harnessId === 'muse'
                   ? 'Muse Code'
                   : 'OpenCode'
-    const harnessId = thread?.settings?.harnessId ?? 'opencode'
+    const harnessId = thread?.settings?.harnessId ?? DEFAULT_HARNESS
     const driverInfo = {
       id: harnessId,
       name: driverName
     }
     const workflow = await specEngine.getWorkflowState(safeProjectId, safeThreadId)
     const hasActiveSpec = Boolean(workflow?.activeSpecId && workflow.activeSpecVersion)
-    const engineeringMode = thread?.settings?.engineeringMode !== false
-    const mode = !engineeringMode ? 'chat' : hasActiveSpec ? 'brainstorm' : 'implement'
+    const lifecycle = engineeringLifecycleEngine.get(safeProjectId, safeThreadId)
+    const engineeringActive =
+      lifecycle !== null &&
+      ((lifecycle.selection ?? 'none') !== 'none' || lifecycle.startedAt !== undefined)
+    const mode = !engineeringActive ? 'chat' : hasActiveSpec ? 'brainstorm' : 'implement'
     return assembler.getLayers(
       safeProjectId,
       safeThreadId,
@@ -3955,6 +4169,7 @@ export function registerIpcHandlers(
               'pdf',
               'doc',
               'docx',
+              'odt',
               'xls',
               'xlsx',
               'ppt',
@@ -4014,6 +4229,7 @@ export function registerIpcHandlers(
               'pdf',
               'doc',
               'docx',
+              'odt',
               'xls',
               'xlsx',
               'ppt',
@@ -4182,20 +4398,29 @@ export function registerIpcHandlers(
     }
   })
 
-  // Convert a scoped Word document to bounded semantic HTML on demand. The
-  // renderer sanitizes and isolates the result before displaying it.
-  privileged('file:readWordPreview', async (_event, filePath: unknown) => {
+  // Convert a scoped document attachment (DOCX, legacy DOC, ODT, PPTX) to
+  // bounded semantic HTML on demand. The renderer sanitizes and isolates the
+  // result before displaying it.
+  privileged('file:readDocumentPreview', async (_event, filePath: unknown) => {
     try {
       const safePath = await privilegedIpc.resolveScopedPath(filePath)
-      if (extname(safePath).toLowerCase() !== '.docx') return null
-      return readWordDocumentHtml({
-        mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      const extension = extname(safePath).toLowerCase().replace(/^\./u, '')
+      const mimeByExtension: Record<string, string> = {
+        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        doc: 'application/msword',
+        odt: 'application/vnd.oasis.opendocument.text',
+        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+      }
+      const mime = mimeByExtension[extension]
+      if (!mime) return null
+      return readDocumentPreviewHtml({
+        mime,
         url: safePath,
         filename: basename(safePath)
       })
     } catch (error) {
       if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
-      Logger.error('file:readWordPreview rejected out-of-scope path:', error)
+      Logger.error('file:readDocumentPreview rejected out-of-scope path:', error)
       return null
     }
   })
@@ -4416,6 +4641,15 @@ export function registerIpcHandlers(
       validateEntityId(bucketId, 'Scope bucket ID')
     )
   )
+  ipcMain.handle(
+    'scope:setPinned',
+    (_, projectId: unknown, bucketId: unknown, pinned: unknown) =>
+      scopeManager.setPinned(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(bucketId, 'Scope bucket ID'),
+        validateBoolean(pinned, 'Pinned')
+      )
+  )
   ipcMain.handle('scope:setWorktreeDefaults', (_, projectId: unknown, defaults: unknown) =>
     scopeManager.setWorktreeDefaults(
       validateEntityId(projectId, 'Project ID'),
@@ -4554,33 +4788,42 @@ export function registerIpcHandlers(
   ipcMain.handle('project:reorder', (_, orderedIds: unknown) =>
     projectManager.reorderProjects(validateStringArray(orderedIds, 'Ordered IDs'))
   )
-  ipcMain.handle('projectFiles:list', (_, projectId: unknown, relativeDirectory: unknown) => {
-    const validatedProjectId = validateEntityId(projectId, 'Project ID')
-    const directory = requireString(relativeDirectory, 'Project directory', true)
-    if (directory === '') {
-      void projectFilesService.prewarmProject(validatedProjectId)
+  ipcMain.handle(
+    'projectFiles:list',
+    (_, projectId: unknown, relativeDirectory: unknown, scopeBucketId?: unknown) => {
+      const validatedProjectId = validateEntityId(projectId, 'Project ID')
+      const directory = requireString(relativeDirectory, 'Project directory', true)
+      if (directory === '') {
+        void projectFilesService.prewarmProject(validatedProjectId)
+      }
+      return projectFilesService.listDirectory(
+        validatedProjectId,
+        directory,
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
     }
-    return projectFilesService.listDirectory(validatedProjectId, directory)
-  })
+  )
   ipcMain.handle(
     'projectFiles:search',
-    (_, projectId: unknown, query: unknown, category: unknown) => {
+    (_, projectId: unknown, query: unknown, category: unknown, scopeBucketId?: unknown) => {
       if (category !== 'all' && category !== 'rules') {
         throw new TypeError('Project file search category must be all or rules')
       }
       return projectFilesService.searchFiles(
         validateEntityId(projectId, 'Project ID'),
         requireString(query, 'Project file search query', true),
-        category
+        category,
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
     }
   )
   ipcMain.handle(
     'projectFiles:resolveCitationPaths',
-    (_, projectId: unknown, candidates: unknown) =>
+    (_, projectId: unknown, candidates: unknown, scopeBucketId?: unknown) =>
       projectFilesService.resolveCitationPaths(
         validateEntityId(projectId, 'Project ID'),
-        validateStringArray(candidates, 'Citation paths')
+        validateStringArray(candidates, 'Citation paths'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
   )
   ipcMain.handle('projectFiles:resolveExternalCitationPaths', (_, absolutePaths: unknown) =>
@@ -4590,74 +4833,97 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'projectFiles:create',
-    (_, projectId: unknown, relativeDirectory: unknown, name: unknown) =>
+    (_, projectId: unknown, relativeDirectory: unknown, name: unknown, scopeBucketId?: unknown) =>
       projectFilesService.createFile(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativeDirectory, 'Project directory', true),
-        requireString(name, 'File name')
+        requireString(name, 'File name'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
   )
   ipcMain.handle(
     'projectFiles:createDirectory',
-    (_, projectId: unknown, relativeDirectory: unknown, name: unknown) =>
+    (_, projectId: unknown, relativeDirectory: unknown, name: unknown, scopeBucketId?: unknown) =>
       projectFilesService.createDirectory(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativeDirectory, 'Project directory', true),
-        requireString(name, 'Folder name')
+        requireString(name, 'Folder name'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
   )
-  ipcMain.handle('projectFiles:delete', async (_, projectId: unknown, relativePath: unknown) => {
-    const validatedProjectId = validateEntityId(projectId, 'Project ID')
-    const target = await projectFilesService.resolveForTrash(
-      validatedProjectId,
-      requireString(relativePath, 'Project file path')
-    )
-    await shell.trashItem(target)
-    projectFilesService.invalidateProject(validatedProjectId)
-  })
-  ipcMain.handle('projectFiles:info', (_, projectId: unknown, relativePath: unknown) =>
-    projectFilesService.getInfo(
-      validateEntityId(projectId, 'Project ID'),
-      requireString(relativePath, 'Project file path')
-    )
+  ipcMain.handle(
+    'projectFiles:delete',
+    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) => {
+      const validatedProjectId = validateEntityId(projectId, 'Project ID')
+      const validatedScopeBucketId =
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      const target = await projectFilesService.resolveForTrash(
+        validatedProjectId,
+        requireString(relativePath, 'Project file path'),
+        validatedScopeBucketId
+      )
+      await shell.trashItem(target)
+      projectFilesService.invalidateProject(validatedProjectId, validatedScopeBucketId)
+    }
+  )
+  ipcMain.handle(
+    'projectFiles:info',
+    (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
+      projectFilesService.getInfo(
+        validateEntityId(projectId, 'Project ID'),
+        requireString(relativePath, 'Project file path'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
   )
   privileged(
     'projectFiles:openInEditor',
-    async (_event, projectId: unknown, relativePath: unknown) => {
+    async (_event, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) => {
       const config = await storage.getConfig()
       const target = await projectFilesService.resolveForExternalEditor(
         validateEntityId(projectId, 'Project ID'),
-        requireString(relativePath, 'Project file path')
+        requireString(relativePath, 'Project file path'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
       await editorService.openInEditor(config.preferredEditor, target, 'file')
     }
   )
   privileged(
     'projectFiles:openInEditorWith',
-    async (_event, projectId: unknown, relativePath: unknown, editorId: unknown) => {
+    async (
+      _event,
+      projectId: unknown,
+      relativePath: unknown,
+      editorId: unknown,
+      scopeBucketId?: unknown
+    ) => {
       if (typeof editorId !== 'string' || !EDITOR_IDS.has(editorId as EditorId)) {
         throw new TypeError('Unknown editor')
       }
       const target = await projectFilesService.resolveForExternalEditor(
         validateEntityId(projectId, 'Project ID'),
-        requireString(relativePath, 'Project file path')
+        requireString(relativePath, 'Project file path'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
       await editorService.openInEditor(editorId as EditorId, target, 'file')
     }
   )
-  ipcMain.handle('projectFiles:read', (_, projectId: unknown, relativePath: unknown) =>
-    projectFilesService.readText(
-      validateEntityId(projectId, 'Project ID'),
-      requireString(relativePath, 'Project file path')
-    )
+  ipcMain.handle(
+    'projectFiles:read',
+    (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
+      projectFilesService.readText(
+        validateEntityId(projectId, 'Project ID'),
+        requireString(relativePath, 'Project file path'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
   )
   ipcMain.handle(
     'projectFiles:rename',
-    (_, projectId: unknown, relativePath: unknown, name: unknown) =>
+    (_, projectId: unknown, relativePath: unknown, name: unknown, scopeBucketId?: unknown) =>
       projectFilesService.renameEntry(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativePath, 'Project file path'),
-        requireString(name, 'File name')
+        requireString(name, 'File name'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
   )
   ipcMain.handle(
@@ -4668,7 +4934,9 @@ export function registerIpcHandlers(
       sourcePath: unknown,
       destinationProjectId: unknown,
       destinationDirectory: unknown,
-      mode: unknown
+      mode: unknown,
+      sourceScopeBucketId?: unknown,
+      destinationScopeBucketId?: unknown
     ) => {
       if (mode !== 'copy' && mode !== 'move') {
         throw new TypeError('Project file transfer mode must be copy or move')
@@ -4678,47 +4946,80 @@ export function registerIpcHandlers(
         requireString(sourcePath, 'Source file path'),
         validateEntityId(destinationProjectId, 'Project ID'),
         requireString(destinationDirectory, 'Destination directory', true),
-        mode
+        mode,
+        sourceScopeBucketId === undefined
+          ? undefined
+          : validateEntityId(sourceScopeBucketId, 'Scope bucket ID'),
+        destinationScopeBucketId === undefined
+          ? undefined
+          : validateEntityId(destinationScopeBucketId, 'Scope bucket ID')
       )
     }
   )
   ipcMain.handle(
     'projectFiles:importPaths',
-    (_, projectId: unknown, sourcePaths: unknown, destinationDirectory: unknown) =>
+    (
+      _,
+      projectId: unknown,
+      sourcePaths: unknown,
+      destinationDirectory: unknown,
+      scopeBucketId?: unknown
+    ) =>
       projectFilesService.importPaths(
         validateEntityId(projectId, 'Project ID'),
         validateStringArray(sourcePaths, 'Import source paths'),
-        requireString(destinationDirectory, 'Destination directory', true)
+        requireString(destinationDirectory, 'Destination directory', true),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
   )
   ipcMain.handle(
     'projectFiles:dropPaths',
-    (_, projectId: unknown, sourcePaths: unknown, destinationDirectory: unknown) =>
+    (
+      _,
+      projectId: unknown,
+      sourcePaths: unknown,
+      destinationDirectory: unknown,
+      scopeBucketId?: unknown
+    ) =>
       projectFilesService.dropPaths(
         validateEntityId(projectId, 'Project ID'),
         validateStringArray(sourcePaths, 'Dropped paths'),
-        requireString(destinationDirectory, 'Destination directory', true)
+        requireString(destinationDirectory, 'Destination directory', true),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
   )
-  ipcMain.on('projectFiles:startDrag', (event, projectId: unknown, relativePaths: unknown) => {
-    void (async () => {
-      try {
-        const paths = projectFilesService.resolveForDragSync(
-          validateEntityId(projectId, 'Project ID'),
-          validateStringArray(relativePaths, 'Dragged paths')
-        )
-        if (paths.length === 0) throw new Error('No files are available to drag')
-        const icon = await resolveDragIcon(paths[0])
-        event.sender.startDrag({ file: paths[0], files: paths, icon })
-        Logger.dev('Native file drag started', { files: paths.length })
-      } catch (error) {
-        Logger.error('Could not start native file drag', error)
-      }
-    })()
-  })
+  ipcMain.on(
+    'projectFiles:startDrag',
+    (event, projectId: unknown, relativePaths: unknown, scopeBucketId?: unknown) => {
+      void (async () => {
+        try {
+          const paths = projectFilesService.resolveForDragSync(
+            validateEntityId(projectId, 'Project ID'),
+            validateStringArray(relativePaths, 'Dragged paths'),
+            scopeBucketId === undefined
+              ? undefined
+              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          )
+          if (paths.length === 0) throw new Error('No files are available to drag')
+          const icon = await resolveDragIcon(paths[0])
+          event.sender.startDrag({ file: paths[0], files: paths, icon })
+          Logger.dev('Native file drag started', { files: paths.length })
+        } catch (error) {
+          Logger.error('Could not start native file drag', error)
+        }
+      })()
+    }
+  )
   ipcMain.handle(
     'projectFiles:save',
-    (_, projectId: unknown, relativePath: unknown, content: unknown, expectedRevision: unknown) => {
+    (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      content: unknown,
+      expectedRevision: unknown,
+      scopeBucketId?: unknown
+    ) => {
       const revision = requireString(expectedRevision, 'Project file revision')
       if (!/^[a-f0-9]{64}$/u.test(revision)) {
         throw new TypeError('Project file revision must be a SHA-256 digest')
@@ -4727,29 +5028,34 @@ export function registerIpcHandlers(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativePath, 'Project file path'),
         requireString(content, 'Project file content', true),
-        revision
+        revision,
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
     }
   )
-  ipcMain.handle('projectFiles:saveAs', async (_, projectId: unknown, relativePath: unknown) => {
-    const safeRelativePath = requireString(relativePath, 'Project file path')
-    const textFile = await projectFilesService.readText(
-      validateEntityId(projectId, 'Project ID'),
-      safeRelativePath
-    )
-    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
-    const options: Electron.SaveDialogOptions = {
-      title: 'Save file as',
-      defaultPath: basename(safeRelativePath),
-      filters: [{ name: 'All Files', extensions: ['*'] }]
+  ipcMain.handle(
+    'projectFiles:saveAs',
+    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) => {
+      const safeRelativePath = requireString(relativePath, 'Project file path')
+      const textFile = await projectFilesService.readText(
+        validateEntityId(projectId, 'Project ID'),
+        safeRelativePath,
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+      const options: Electron.SaveDialogOptions = {
+        title: 'Save file as',
+        defaultPath: basename(safeRelativePath),
+        filters: [{ name: 'All Files', extensions: ['*'] }]
+      }
+      const result = win
+        ? await dialog.showSaveDialog(win, options)
+        : await dialog.showSaveDialog(options)
+      if (result.canceled || !result.filePath) return null
+      await atomicWrite(result.filePath, textFile.content)
+      return result.filePath
     }
-    const result = win
-      ? await dialog.showSaveDialog(win, options)
-      : await dialog.showSaveDialog(options)
-    if (result.canceled || !result.filePath) return null
-    await atomicWrite(result.filePath, textFile.content)
-    return result.filePath
-  })
+  )
   ipcMain.handle('repository:preflight', (_, projectPath: string) =>
     repositoryService.preflight(projectPath)
   )
@@ -4908,6 +5214,28 @@ export function registerIpcHandlers(
             : validateEntityId(scopeBucketId, 'Scope bucket ID')
         ),
         validateGitPathArray(paths)
+      )
+  )
+  ipcMain.handle(
+    'git:restoreFiles',
+    async (
+      _,
+      projectId: unknown,
+      source: unknown,
+      paths: unknown,
+      target: unknown,
+      scopeBucketId?: unknown
+    ) =>
+      gitService.restoreFiles(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRevision(source),
+        validateGitPathArray(paths),
+        validateGitRestoreTarget(target)
       )
   )
   ipcMain.handle(
@@ -5737,6 +6065,11 @@ export function registerIpcHandlers(
             accessError: GITHUB_REPOSITORY_ACCESS_MESSAGE
           }
         }
+        // An unreachable GitHub is a transient state, not a broken feature —
+        // degrade to an offline page so the renderer keeps its last known data.
+        if (isNetworkError(error)) {
+          return { items: [], page: safePage, hasMore: false, accessError: GITHUB_OFFLINE_MESSAGE }
+        }
         throw error
       }
     }
@@ -6428,7 +6761,6 @@ export function registerIpcHandlers(
       thinkingLevel: requestedSettings.thinkingLevel,
       inferenceMode: 'normal',
       permissionLevel: 'auto_review',
-      engineeringMode: false,
       assignmentMode: false,
       loopMode: false,
       fileSystemMode: false
@@ -6470,7 +6802,6 @@ export function registerIpcHandlers(
     const settings = validateThreadSettings({
       ...validateThreadSettings(args[2]),
       permissionLevel: 'auto_review',
-      engineeringMode: false,
       assignmentMode: false,
       loopMode: false
     })
@@ -6766,16 +7097,6 @@ export function registerIpcHandlers(
     threadCreation.begin(
       thread.id,
       async () => {
-        if (validated.settings?.engineeringMode) {
-          const baseSettings = { ...validated.settings }
-          delete baseSettings.loopAuditor
-          const defaults = (await storage.getConfig()).agentDefaults
-          thread.settings = {
-            ...baseSettings,
-            ...(defaults.seniorEngineer ?? {}),
-            ...(defaults.auditor ? { loopAuditor: defaults.auditor } : {})
-          }
-        }
         await finalize()
         // Broadcast immediately so the new thread opens instantly — the git
         // branch settles through a detached task below and arrives via a later
@@ -7264,7 +7585,9 @@ export function registerIpcHandlers(
 
   // ─── Updater ────────────────────────────────────────────────────────────
   if (updaterService) {
-    ipcMain.handle('updater:check', () => updaterService.checkForUpdates())
+    ipcMain.handle('updater:check', (_, explicit?: unknown) =>
+      updaterService.checkForUpdates(explicit === true)
+    )
 
     ipcMain.handle('updater:getStatus', () => updaterService.status)
 

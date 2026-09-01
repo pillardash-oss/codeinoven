@@ -1,13 +1,14 @@
 import type { Database } from '../database'
-import type {
-  AgentRateLimitWindow,
-  AgentTokenUsage,
-  Thread,
-  ThreadContextUsage,
-  ThreadSearchResult,
-  ThreadStatus,
-  ThreadSettings,
-  ThreadTitleSource
+import {
+  sanitizeThreadSettings,
+  type AgentRateLimitWindow,
+  type AgentTokenUsage,
+  type Thread,
+  type ThreadContextUsage,
+  type ThreadSearchResult,
+  type ThreadStatus,
+  type ThreadSettings,
+  type ThreadTitleSource
 } from '../../../lib/types'
 
 interface ThreadRow {
@@ -134,7 +135,9 @@ function rowToThread(row: ThreadRow): Thread {
     branch: row.branch ?? undefined,
     featureSlug: row.feature_slug ?? undefined,
     scopeBucketId: row.scope_bucket_id ?? undefined,
-    settings: row.settings ? (JSON.parse(row.settings) as ThreadSettings) : undefined,
+    settings: row.settings
+      ? (sanitizeThreadSettings(JSON.parse(row.settings)) as ThreadSettings)
+      : undefined,
     contextUsage: row.context_usage
       ? (parseThreadContextUsage(parseStoredJson(row.context_usage)) ?? undefined)
       : undefined,
@@ -230,6 +233,8 @@ export interface ThreadCapacityCandidate {
   pinned: boolean
   status: ThreadStatus
   lastActivity: number
+  /** Owning scope bucket; `undefined` resolves to the Default scope. */
+  scopeBucketId?: string
 }
 
 function buildOrderBy(options: ThreadListOptions): string {
@@ -513,7 +518,7 @@ export class ThreadRepo {
    */
   async listCapacityCandidatesViaWorker(projectId: string): Promise<ThreadCapacityCandidate[]> {
     const result = await this.db.queryViaWorker(
-      `SELECT id, pinned, status, last_activity
+      `SELECT id, pinned, status, last_activity, scope_bucket_id
        FROM threads
        WHERE project_id = ?
          AND archived = 0
@@ -529,7 +534,8 @@ export class ThreadRepo {
       id: String(row['id']),
       pinned: row['pinned'] === 1,
       status: String(row['status']) as ThreadStatus,
-      lastActivity: Number(row['last_activity'])
+      lastActivity: Number(row['last_activity']),
+      scopeBucketId: row['scope_bucket_id'] == null ? undefined : String(row['scope_bucket_id'])
     }))
   }
 
@@ -784,9 +790,9 @@ export function buildThreadSearchSql(
   const title = {
     sql: `SELECT t.* FROM threads t
       WHERE (? IS NULL OR t.project_id = ?)
-        AND t.title LIKE ? ESCAPE '\\'
+        AND (t.title LIKE ? ESCAPE '\\' OR t.id = ?)
       ORDER BY t.last_activity DESC`,
-    params: [projectId, projectId, `%${escapeLike(trimmed)}%`]
+    params: [projectId, projectId, `%${escapeLike(trimmed)}%`, trimmed]
   }
   const ftsQuery = toFtsQuery(trimmed)
   const fts = ftsQuery

@@ -1,10 +1,23 @@
-import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { constants, access, chmod, mkdir, open, readdir, realpath, rm, stat } from 'node:fs/promises'
+import {
+  constants,
+  access,
+  chmod,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  rm,
+  stat
+} from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn, execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { getConfigRoot } from '../../lib/utils'
+import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
+import { Logger } from '../system/logger'
+import { OwnedProcessJournal } from '../system/owned-process-journal'
 import type {
   SpeechLlamaRuntimeInstallation,
   SpeechLlamaRuntimeSource,
@@ -85,10 +98,77 @@ function serverBinaryName(): string {
 export class LlamaRuntimeService {
   private statusCache: LlamaRuntimeStatus | null = null
 
+  private readonly journal = new OwnedProcessJournal(
+    join(getConfigRoot(), 'speech', 'owned-processes.json')
+  )
+
   constructor(private readonly root = join(getConfigRoot(), 'speech', 'runtime')) {}
 
   managedDirectory(): string {
     return join(this.root, `llama-${LLAMA_RELEASE_TAG}`)
+  }
+
+  /**
+   * Record a llama-server the app spawned so a later launch can reap it if an
+   * unclean exit leaves it orphaned. Only app-spawned servers are ever journaled,
+   * so a user's own llama-server is never in scope for reaping.
+   */
+  registerServerProcess(pid: number, command: string, cwd: string): void {
+    this.journal.register(pid, command, cwd)
+  }
+
+  /** Drop a server that exited or was cleanly killed. */
+  unregisterServerProcess(pid: number): void {
+    this.journal.unregister(pid)
+  }
+
+  /** Clear the journal after a clean shutdown so nothing is reaped next launch. */
+  async clearOrphanJournal(): Promise<void> {
+    this.journal.clear()
+    await this.journal.flush()
+  }
+
+  /**
+   * Kill a llama-server this app spawned and left orphaned by a crash or
+   * force-quit, then clear the journal. A journaled PID is only killed when
+   * every check passes: the live process is orphaned (dead parent) AND its
+   * command line still contains the exact executable path the app spawned it
+   * from. Any uncertainty — recycled PID running an unrelated copy, no journal
+   * entry at all — skips the kill. A user's own llama-server is never journaled,
+   * so it is never touched. Must run before any server spawn on this launch.
+   */
+  async recoverOrphans(): Promise<{ killed: number[]; skipped: number[] }> {
+    const roots = await this.journal.load()
+    if (roots.length === 0) return { killed: [], skipped: [] }
+    const snapshot = await processSnapshot()
+    if (snapshot === null) {
+      return { killed: [], skipped: roots.map((root) => root.pid) }
+    }
+    const alive = new Set(snapshot.map((entry) => entry.pid))
+    const killed: number[] = []
+    const skipped: number[] = []
+    for (const root of roots) {
+      const entry = snapshot.find((candidate) => candidate.pid === root.pid)
+      if (!entry) {
+        skipped.push(root.pid)
+        continue
+      }
+      const orphaned = entry.parentPid <= 1 || !alive.has(entry.parentPid)
+      const commandMatches =
+        root.command.length > 0 && entry.command.includes(root.command)
+      if (!orphaned || !commandMatches) {
+        skipped.push(root.pid)
+        continue
+      }
+      await killProcessTree(root.pid)
+      killed.push(root.pid)
+    }
+    this.journal.clear()
+    await this.journal.flush()
+    if (killed.length > 0) {
+      Logger.info('Reaped orphaned llama-server processes', { killed })
+    }
+    return { killed, skipped }
   }
 
   async status(force = false): Promise<LlamaRuntimeStatus> {
@@ -105,9 +185,7 @@ export class LlamaRuntimeService {
       managedDir: this.managedDirectory(),
       releaseTag: LLAMA_RELEASE_TAG,
       downloadRequired: !selected && Boolean(asset),
-      ...(asset
-        ? { downloadName: asset.archiveName, downloadByteSize: asset.byteSize }
-        : {})
+      ...(asset ? { downloadName: asset.archiveName, downloadByteSize: asset.byteSize } : {})
     }
     return this.statusCache
   }
@@ -187,11 +265,9 @@ export class LlamaRuntimeService {
   /** System bsdtar handles tar.gz everywhere and zip archives on Windows 10+. */
   private extract(archivePath: string, targetDir: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const child = spawn(
-        'tar',
-        ['-xf', archivePath, '-C', targetDir],
-        { stdio: ['ignore', 'ignore', 'pipe'] }
-      )
+      const child = spawn('tar', ['-xf', archivePath, '-C', targetDir], {
+        stdio: ['ignore', 'ignore', 'pipe']
+      })
       let failure = ''
       child.stderr.setEncoding('utf8')
       child.stderr.on('data', (chunk: string) => {
@@ -200,7 +276,8 @@ export class LlamaRuntimeService {
       child.once('error', reject)
       child.once('exit', (code) => {
         if (code === 0) resolve()
-        else reject(new Error(failure.trim() || `Extraction exited with code ${code ?? 'unknown'}.`))
+        else
+          reject(new Error(failure.trim() || `Extraction exited with code ${code ?? 'unknown'}.`))
       })
     })
   }
@@ -290,46 +367,35 @@ export class LlamaRuntimeService {
       homebrew: 3,
       path: 4
     }
-    const interim = await Promise.all(
-      [...grouped.entries()].map(async ([realPath, group]): Promise<{
+    const interim = [...grouped.entries()].map(
+      ([realPath, group]): {
         realPath: string
         source: LlamaRuntimeSource
         path: string
         version: string | null
-      }> => ({
+      } => ({
         realPath,
         source: group
           .map((item) => item.source)
           .sort((left, right) => sourceRank[left] - sourceRank[right])[0],
         path: group[0]?.path ?? realPath,
-        version: await this.binaryVersion(realPath)
-      }))
+        version: group.some((item) => item.source === 'managed') ? LLAMA_RELEASE_TAG : null
+      })
     )
     return interim
-      .filter((installation): installation is LlamaRuntimeInstallation & { version: string } =>
-        installation.version !== null)
       .sort((left, right) => {
         // Pinned-release builds first so behavior matches what we test against.
-        const leftPinned = left.version.startsWith(LLAMA_RELEASE_TAG.slice(1)) ? 0 : 1
-        const rightPinned = right.version.startsWith(LLAMA_RELEASE_TAG.slice(1)) ? 0 : 1
+        const leftPinned = left.version?.startsWith(LLAMA_RELEASE_TAG.slice(1)) ? 0 : 1
+        const rightPinned = right.version?.startsWith(LLAMA_RELEASE_TAG.slice(1)) ? 0 : 1
         if (leftPinned !== rightPinned) return leftPinned - rightPinned
         return left.path.length - right.path.length
       })
-      .map(({ path, source, realPath, version }) => ({ path, source, realPath, version }))
-  }
-
-  private async binaryVersion(path: string): Promise<string | null> {
-    return new Promise((resolve) => {
-      execFile(path, ['--version'], { timeout: 5000 }, (error, stdout) => {
-        if (error) {
-          resolve(null)
-          return
-        }
-        // Output looks like: version: 6243abc12 (1234) built with ...
-        const match = /version:\s*(\S+)/u.exec(stdout.trim())
-        resolve(match?.[1] ?? null)
-      })
-    })
+      .map(({ path, source, realPath, version }) => ({
+        path,
+        source,
+        realPath,
+        ...(version ? { version } : {})
+      }))
   }
 
   private async isExecutable(path: string): Promise<boolean> {
@@ -339,5 +405,56 @@ export class LlamaRuntimeService {
     } catch {
       return false
     }
+  }
+}
+
+interface LlamaProcessEntry {
+  pid: number
+  parentPid: number
+  command: string
+}
+
+const execFileAsync = promisify(execFile)
+
+/**
+ * Live Unix process snapshot used to decide orphan status. Returns null on
+ * platforms or failures where a reliable parentage view is unavailable,
+ * disabling recovery rather than risking a recycled-PID kill.
+ */
+async function processSnapshot(): Promise<LlamaProcessEntry[] | null> {
+  if (process.platform === 'win32') return null
+  const resolved = resolveExecutablePath('ps')
+  if (!resolved) return null
+  try {
+    const { stdout } = await execFileAsync(resolved, ['-axo', 'pid=,ppid=,command='], {
+      env: buildProcessEnvironment()
+    })
+    const entries: LlamaProcessEntry[] = []
+    for (const line of stdout.split(/\r?\n/u)) {
+      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/u)
+      if (!match) continue
+      entries.push({
+        pid: Number(match[1]),
+        parentPid: Number(match[2]),
+        command: match[3]?.trim() || ''
+      })
+    }
+    return entries
+  } catch {
+    return null
+  }
+}
+
+async function killProcessTree(pid: number): Promise<void> {
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch {
+    return
+  }
+  await new Promise((resolve) => setTimeout(resolve, 2_000))
+  try {
+    process.kill(pid, 'SIGKILL')
+  } catch {
+    // Already gone.
   }
 }

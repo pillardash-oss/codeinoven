@@ -128,7 +128,6 @@ const prompt: SendPromptOptions = {
     modelId: '',
     thinkingLevel: 'low',
     permissionLevel: 'auto_review',
-    engineeringMode: false
   },
   text: 'hello',
   attachments: []

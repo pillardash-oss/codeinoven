@@ -1,4 +1,5 @@
 import type { ScopeSlice, ThreadStatus } from './types'
+import { harnessSupportsManualCompaction } from '../main/agents/harness-registry'
 
 export type ThreadStatusTone =
   'todo' | 'working' | 'working-paused' | 'attention' | 'spec' | 'done' | 'error'
@@ -126,6 +127,23 @@ export function threadStatusPolicy(status: ThreadStatus): ThreadStatusPolicy {
 
 export function isThreadExecutionActiveStatus(status: ThreadStatus): boolean {
   return threadStatusPolicy(status).executionActive
+}
+
+/**
+ * Whether a harness supports manual context compaction, straight from its
+ * declared harness manifest (`manualCompaction` behavior in the harness
+ * registry) — mirrored onto every `ProviderConnectionInfo` by the main
+ * process. Unknown harnesses (no manifest entry, no connection info) get the
+ * behavior-safe default of `false`.
+ */
+export function supportsManualCompaction(
+  harnessId: string | undefined,
+  providers: readonly { id: string; supportsManualCompaction?: boolean }[] = []
+): boolean {
+  if (harnessId === undefined) return false
+  const fromConnection = providers.find((provider) => provider.id === harnessId)
+  if (fromConnection) return fromConnection.supportsManualCompaction === true
+  return harnessSupportsManualCompaction(harnessId)
 }
 
 export function isThreadBusyStatus(status: ThreadStatus): boolean {

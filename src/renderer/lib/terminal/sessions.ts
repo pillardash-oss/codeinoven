@@ -19,6 +19,7 @@ export interface TerminalSession {
   projectId: string | null
   /** Consecutive immediate shell exits since the last healthy (2s) uptime. */
   respawnCount: number
+  kind: 'shell' | 'action'
 }
 
 const MAX_RESPAWNS = 5
@@ -93,7 +94,7 @@ class TerminalSessionManager {
   /** Return the live session for `id`, creating its Ghostty terminal if needed. */
   async getOrCreate(id: string): Promise<TerminalSession> {
     const existing = this.sessions.get(id)
-    if (existing && !existing.exited) return existing
+    if (existing && (!existing.exited || existing.kind === 'action')) return existing
     if (existing?.exited) this.teardown(id)
 
     const pending = this.pendingSessions.get(id)
@@ -110,6 +111,12 @@ class TerminalSessionManager {
     }
   }
 
+  async getOrCreateAction(id: string): Promise<TerminalSession> {
+    const session = await this.getOrCreate(id)
+    session.kind = 'action'
+    return session
+  }
+
   getSession(id: string): TerminalSession | undefined {
     return this.sessions.get(id)
   }
@@ -118,13 +125,46 @@ class TerminalSessionManager {
   async attach(
     session: TerminalSession,
     container: HTMLDivElement,
-    projectId: string
+    projectId: string,
+    scopeBucketId?: string
   ): Promise<void> {
     if (session.host.parentElement !== container) {
       container.replaceChildren(session.host)
     }
     session.fitAddon.fit()
-    await this.ensurePty(session, projectId)
+    await this.ensurePty(session, projectId, scopeBucketId)
+    session.term.focus()
+  }
+
+  async attachAction(
+    session: TerminalSession,
+    container: HTMLDivElement,
+    projectId: string,
+    script: string,
+    variables: Record<string, string>,
+    scopeBucketId?: string
+  ): Promise<void> {
+    if (session.host.parentElement !== container) container.replaceChildren(session.host)
+    session.fitAddon.fit()
+    if (!session.ptySpawned) {
+      session.projectId = projectId
+      session.ptySpawned = true
+      try {
+        await invoke(
+          'pty:createAction',
+          session.id,
+          projectId,
+          script,
+          variables,
+          session.term.cols,
+          session.term.rows,
+          scopeBucketId
+        )
+      } catch (error) {
+        session.ptySpawned = false
+        throw error
+      }
+    }
     session.term.focus()
   }
 
@@ -138,13 +178,26 @@ class TerminalSessionManager {
     return this.runtime
   }
 
-  /** Spawn the shell PTY after the terminal has been attached and sized. */
-  private async ensurePty(session: TerminalSession, projectId: string): Promise<void> {
+  /** Spawn the shell PTY after the terminal has been attached and sized. The
+   *  scope bucket resolves the shell's working directory: a managed worktree
+   *  scope starts the shell inside its checkout instead of the project root. */
+  private async ensurePty(
+    session: TerminalSession,
+    projectId: string,
+    scopeBucketId?: string
+  ): Promise<void> {
     if (session.ptySpawned) return
     session.projectId = projectId
     session.ptySpawned = true
     try {
-      await invoke('pty:create', session.id, projectId, session.term.cols, session.term.rows)
+      await invoke(
+        'pty:create',
+        session.id,
+        projectId,
+        session.term.cols,
+        session.term.rows,
+        scopeBucketId
+      )
     } catch (error) {
       session.ptySpawned = false
       throw error
@@ -201,7 +254,8 @@ class TerminalSessionManager {
       exited: false,
       ptySpawned: false,
       projectId: null,
-      respawnCount: 0
+      respawnCount: 0,
+      kind: 'shell'
     }
     this.sessions.set(id, session)
 
@@ -266,7 +320,8 @@ class TerminalSessionManager {
     subs.push(
       subscribe(`pty:exit:${id}`, () => {
         term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
-        void respawn()
+        session.exited = true
+        if (session.kind === 'shell') void respawn()
       })
     )
     subs.push(() => {

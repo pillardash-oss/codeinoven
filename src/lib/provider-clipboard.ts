@@ -2,8 +2,8 @@ import type { ThinkingLevel } from './types'
 
 /** Versioned clipboard envelopes for copying custom base-URL models/providers. */
 
-export const PROVIDER_CLIPBOARD_KIND = 'codeinoven.customBaseUrlProvider'
-export const MODEL_CLIPBOARD_KIND = 'codeinoven.customBaseUrlModel'
+export const PROVIDER_CLIPBOARD_KIND = 'cio.customBaseUrlProvider'
+export const MODEL_CLIPBOARD_KIND = 'cio.customBaseUrlModel'
 export const CLIPBOARD_VERSION = 1
 
 /** Draft-style model fields, matching the BaseUrlProviderEditor form. */
@@ -26,25 +26,27 @@ export interface BaseUrlProviderClipboardData {
   baseURL: string
   apiKey: string
   headers: string
+  /** Account status/usage route carried through copy/paste. Empty when none. */
+  usagePath?: string
   models: BaseUrlProviderModelClipboardData[]
   enabled: boolean
 }
 
 interface ModelEnvelope {
-  codeinoven: typeof MODEL_CLIPBOARD_KIND
+  cio: typeof MODEL_CLIPBOARD_KIND
   version: typeof CLIPBOARD_VERSION
   model: BaseUrlProviderModelClipboardData
 }
 
 interface ProviderEnvelope {
-  codeinoven: typeof PROVIDER_CLIPBOARD_KIND
+  cio: typeof PROVIDER_CLIPBOARD_KIND
   version: typeof CLIPBOARD_VERSION
   provider: BaseUrlProviderClipboardData
 }
 
 export function serializeModelClipboard(model: BaseUrlProviderModelClipboardData): string {
   const envelope: ModelEnvelope = {
-    codeinoven: MODEL_CLIPBOARD_KIND,
+    cio: MODEL_CLIPBOARD_KIND,
     version: CLIPBOARD_VERSION,
     model
   }
@@ -53,7 +55,7 @@ export function serializeModelClipboard(model: BaseUrlProviderModelClipboardData
 
 export function serializeProviderClipboard(provider: BaseUrlProviderClipboardData): string {
   const envelope: ProviderEnvelope = {
-    codeinoven: PROVIDER_CLIPBOARD_KIND,
+    cio: PROVIDER_CLIPBOARD_KIND,
     version: CLIPBOARD_VERSION,
     provider
   }
@@ -124,6 +126,7 @@ function parseProvider(raw: unknown): BaseUrlProviderClipboardData {
     baseURL: requiredString(provider['baseURL'], 'provider base URL'),
     apiKey: optionalString(provider['apiKey']),
     headers: optionalString(provider['headers']),
+    usagePath: optionalString(provider['usagePath']),
     models: provider['models'].map(parseModel),
     enabled: provider['enabled'] !== false
   }

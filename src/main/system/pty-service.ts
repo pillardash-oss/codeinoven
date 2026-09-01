@@ -100,6 +100,19 @@ export class PtyService {
       (_, id: string, command: string, args: string[], cols: number, rows: number) =>
         this.createCommand(id, command, args, cols, rows)
     )
+    ipcMain.handle(
+      'pty:createAction',
+      (
+        _,
+        id: string,
+        projectId: string,
+        script: string,
+        variables: Record<string, string>,
+        cols: number,
+        rows: number,
+        scopeBucketId?: string
+      ) => this.createAction(id, projectId, script, variables, cols, rows, scopeBucketId)
+    )
     ipcMain.on('pty:write', (_, id: string, data: string) => this.write(id, data))
     ipcMain.on('pty:resize', (_, id: string, cols: number, rows: number) =>
       this.resize(id, cols, rows)
@@ -270,6 +283,76 @@ export class PtyService {
       shell: command,
       pid: proc.pid,
       source: 'provider_login',
+      timestamp: createdAt
+    })
+    return { id, pid: proc.pid }
+  }
+
+  private async createAction(
+    id: string,
+    projectId: string,
+    script: string,
+    variables: Record<string, string>,
+    cols: number,
+    rows: number,
+    scopeBucketId?: string
+  ): Promise<{ id: string; pid: number }> {
+    const project = await this.projectManager.getProject(projectId)
+    if (!project || project.hidden || project.source !== 'local' || !project.path) {
+      throw new Error(`Actions require a local ${APP_NAME} project`)
+    }
+    if (!script.trim() || script.length > 100_000) throw new Error('Action script is invalid')
+    const safeVariables = Object.fromEntries(
+      Object.entries(variables).filter(
+        ([name, value]) => /^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) && typeof value === 'string'
+      )
+    )
+
+    // Resolve the action root through the active thread's scope when one is
+    // supplied, so scripts run inside the checked-out worktree instead of the
+    // main project directory — matching interactive terminal behavior.
+    const cwd =
+      scopeBucketId && this.scopeRoots
+        ? await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
+        : project.path
+    if (!cwd || !existsSync(cwd)) {
+      throw new Error(`Project directory is unavailable`)
+    }
+
+    this.destroy(id)
+    const shell = resolveShell()
+    const createdAt = Date.now()
+    const proc = pty.spawn(shell, ['-lc', script], {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd,
+      env: { ...buildShellEnv(), ...safeVariables }
+    })
+    proc.onData((data) => sendToRenderer(this.sender, `pty:data:${id}`, data))
+    proc.onExit(({ exitCode }) => {
+      this.sessions.delete(id)
+      sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
+      void this.recordEvent({
+        type: 'exit',
+        terminalId: id,
+        projectId,
+        cwd,
+        shell,
+        pid: proc.pid,
+        exitCode,
+        timestamp: Date.now()
+      })
+    })
+    this.sessions.set(id, { id, process: proc, projectId, cwd, shell, createdAt })
+    await this.recordEvent({
+      type: 'create',
+      terminalId: id,
+      projectId,
+      cwd,
+      shell,
+      pid: proc.pid,
+      source: 'project_action',
       timestamp: createdAt
     })
     return { id, pid: proc.pid }

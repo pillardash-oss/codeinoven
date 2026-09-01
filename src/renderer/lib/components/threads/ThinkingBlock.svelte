@@ -69,6 +69,8 @@
     <div class="max-h-80 overflow-y-auto">
       {#if part.text.trim()}
         <MarkdownView text={part.text} class="text-xs text-muted" {onCiteFile} />
+      {:else if !part.summary?.trim()}
+        <p class="text-xs text-muted/70 italic">No thinking text was recorded for this step.</p>
       {/if}
       {#if part.summary?.trim()}
         <div class={part.text.trim() ? 'mt-3 border-t border-border/40 pt-3' : ''}>

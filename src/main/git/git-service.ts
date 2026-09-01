@@ -11,6 +11,7 @@ import {
   unlink
 } from 'fs/promises'
 import { resolve, relative, isAbsolute, sep, dirname } from 'path'
+import { realpathSync } from 'fs'
 import { createHash } from 'node:crypto'
 import { simpleGit } from 'simple-git'
 import type { DefaultLogFields, LogOptions, SimpleGit, StatusResult } from 'simple-git'
@@ -27,6 +28,7 @@ import type {
   GitIdentity,
   GitPullStrategy,
   GitRemoteInfo,
+  GitRestoreTarget,
   GitResetMode,
   GitStashEntry,
   GitStatus,
@@ -36,6 +38,7 @@ import type {
   PrComposeInput
 } from '../../lib/types'
 import { Logger } from '../system/logger'
+import { parseWorktreePorcelain } from './scope-worktree-service'
 
 /** Upper bound on a single diff payload so the IPC contract never floods. */
 const MAX_DIFF_BYTES = 500 * 1024
@@ -513,6 +516,39 @@ export class GitService {
     })
   }
 
+  /**
+   * Restore files from a commit-like source (commit hash, `stash@{n}`, branch)
+   * into the index and working tree so the user can pull historical content
+   * back without reverting the whole commit or popping the whole stash.
+   */
+  async restoreFiles(
+    projectPath: string,
+    source: string,
+    paths: string[],
+    target: GitRestoreTarget
+  ): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
+      if (safePaths.length === 0) return this.readStatus(directory)
+      const safeSource = this.assertTreeIsh(source)
+      const args =
+        target === 'staged'
+          ? ['restore', '--staged', '--source', safeSource, '--', ...safePaths]
+          : ['restore', '--staged', '--worktree', '--source', safeSource, '--', ...safePaths]
+      await this.wrapError(directory, 'mutation', async () => {
+        await this.client(directory).raw(args)
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /** Reject anything that could be interpreted as an option by `git restore`. */
+  private assertTreeIsh(value: string): string {
+    if (!value || value.startsWith('-')) throw new TypeError('A valid revision is required')
+    return value
+  }
+
   async commit(projectPath: string, message: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
@@ -539,18 +575,23 @@ export class GitService {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () => {
         const git = this.client(directory)
-        const [output, remotes] = await Promise.all([
+        const [output, remotes, worktreeRaw] = await Promise.all([
           git.raw([
             'for-each-ref',
             '--format=%(refname)%09%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:remotename)%09%(upstream:track)%09%(symref)',
             'refs/heads',
             'refs/remotes'
           ]),
-          git.getRemotes()
+          git.getRemotes(),
+          git.raw(['worktree', 'list', '--porcelain', '-z']).catch(() => '')
         ])
         return this.parseBranchRefs(
           Array.isArray(output) ? output.join('\n') : output,
-          remotes.map(({ name }) => name)
+          remotes.map(({ name }) => name),
+          this.worktreeBranchPaths(
+            Array.isArray(worktreeRaw) ? worktreeRaw.join('\0') : worktreeRaw,
+            directory
+          )
         )
       })
     })
@@ -601,10 +642,45 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
-        await this.client(directory).deleteLocalBranch(name, force)
+        const git = this.client(directory)
+        await this.removeWorktreesForBranch(git, name)
+        await git.deleteLocalBranch(name, force)
       })
       return this.readStatus(directory)
     })
+  }
+
+  /**
+   * Git refuses `branch -d` while the branch is checked out in any worktree.
+   * Remove clean owning worktrees and prune stale registrations so the delete
+   * succeeds; a dirty live worktree keeps blocking and surfaces git's error.
+   */
+  private async removeWorktreesForBranch(git: SimpleGit, name: string): Promise<void> {
+    let listing: string
+    try {
+      listing = await git.raw(['worktree', 'list', '--porcelain'])
+    } catch {
+      return
+    }
+    const target = `refs/heads/${name}`
+    const lines = listing.split('\n')
+    const paths: string[] = []
+    for (let index = 0; index < lines.length; index += 1) {
+      if (!lines[index].startsWith('worktree ')) continue
+      const path = lines[index].slice('worktree '.length)
+      const branch = lines
+        .slice(index + 1, index + 5)
+        .find((line) => line.startsWith('branch '))
+        ?.slice('branch '.length)
+      if (branch === target) paths.push(path)
+    }
+    for (const path of paths) {
+      await git.raw(['worktree', 'remove', path]).catch(async () => {
+        // Path already gone or dirty — prune clears stale registrations; a
+        // live dirty worktree stays registered and the branch delete reports it.
+        await git.raw(['worktree', 'prune']).catch(() => undefined)
+      })
+    }
   }
 
   /** `offset` skips the N newest commits — pages in older history for infinite scroll. */
@@ -1623,7 +1699,40 @@ export class GitService {
     }
   }
 
-  private parseBranchRefs(raw: string, remoteNames: string[]): GitBranchInfo[] {
+  /** Map branch short names to the worktree paths that hold them. The entry for the checkout
+   *  being operated on (`directory`) is skipped: its branch is the panel's current branch and
+   *  already carries `current`, so it must not be double-flagged as a foreign worktree. Every
+   *  other checkout — including the primary repository when viewed from a linked worktree —
+   *  flags its branch, because git refuses checking that branch out anywhere else. */
+  private worktreeBranchPaths(raw: string, directory: string): Map<string, string> {
+    const entries = parseWorktreePorcelain(raw).entries
+    const paths = new Map<string, string>()
+    const directoryKey = this.worktreePathKey(directory)
+    for (const entry of entries) {
+      if (!entry.head?.startsWith('refs/heads/')) continue
+      // Git reports realpaths; the operating directory may still contain symlinks, so both
+      // sides are normalized before comparing (lexical fallback for vanished worktrees).
+      if (this.worktreePathKey(entry.path) === directoryKey) continue
+      paths.set(entry.head.slice('refs/heads/'.length), entry.path)
+    }
+    return paths
+  }
+
+  /** Stable comparison key for a worktree path: real location, or lexical resolution when the
+   *  path no longer exists on disk. */
+  private worktreePathKey(path: string): string {
+    try {
+      return realpathSync(path)
+    } catch {
+      return resolve(path)
+    }
+  }
+
+  private parseBranchRefs(
+    raw: string,
+    remoteNames: string[],
+    worktreePaths: ReadonlyMap<string, string>
+  ): GitBranchInfo[] {
     const namesBySpecificity = [...remoteNames].sort((left, right) => right.length - left.length)
     const branches: GitBranchInfo[] = []
     for (const line of raw.split('\n')) {
@@ -1641,7 +1750,8 @@ export class GitService {
           remote: remoteName || null,
           upstream: upstream || null,
           ahead: Number.parseInt(ahead, 10) || 0,
-          behind: Number.parseInt(behind, 10) || 0
+          behind: Number.parseInt(behind, 10) || 0,
+          worktreePath: worktreePaths.get(ref) ?? null
         })
         continue
       }
@@ -1658,7 +1768,8 @@ export class GitService {
         remote,
         upstream: null,
         ahead: 0,
-        behind: 0
+        behind: 0,
+        worktreePath: null
       })
     }
     return branches

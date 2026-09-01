@@ -88,8 +88,7 @@ describe('ThreadManager', () => {
       providerId: 'anthropic',
       modelId: 'claude-sonnet',
       thinkingLevel: 'medium',
-      permissionLevel: 'auto_review',
-      engineeringMode: true
+      permissionLevel: 'auto_review'
     }
     const thread = await manager.createThread({
       projectId: 'project1',
@@ -120,8 +119,7 @@ describe('ThreadManager', () => {
       providerId: 'openai',
       modelId: 'gpt-5',
       thinkingLevel: 'high',
-      permissionLevel: 'auto_review',
-      engineeringMode: false
+      permissionLevel: 'auto_review'
     }
     await manager.updateSettings('project1', thread.id, updatedSettings)
     await manager.setSessionId('project1', thread.id, 'session-123')

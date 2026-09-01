@@ -38,11 +38,33 @@ export interface ActionDefinition {
   disabledReason?: string
   /** Optional lucide icon rendered in place of the category letter badge. */
   icon?: Component
+  /** Selecting the action inserts `/title ` into the composer and submitting
+   *  routes the typed `/title args` text through `onSlashCommand`. Harness
+   *  command/skill/mcp actions are routed implicitly; app-owned actions opt in
+   *  with this flag. */
+  slashCommand?: boolean
   /** Optional colored data-URI (e.g. a file/folder icon) rendered in the badge. */
   iconUri?: string
   /** Optional live status rendered as a colored badge + human label (e.g. thread
    *  working / retrying / error) so results can be distinguished at a glance. */
   status?: ActionStatusBadge
+  /** Optional thread model/harness metadata rendered at the end of the
+   *  description row: the currently working provider + model while the thread
+   *  is working, otherwise the thread's harnesses and provider as icons. */
+  threadMeta?: ActionThreadMeta
+}
+
+export interface ActionThreadMeta {
+  /** Whether the thread is currently working — picks the current model over the history icons. */
+  working: boolean
+  /** Distinct harnesses associated with the thread, newest first. */
+  harnessIds: readonly string[]
+  /** Resolved provider display name for the thread's current model. */
+  providerName: string | null
+  /** Provider id of the thread's current model — drives icon resolution. */
+  providerId: string | null
+  /** Model identifier of the thread's current model. */
+  modelId: string | null
 }
 
 export interface ActionStatusBadge {

@@ -95,6 +95,7 @@ import type {
   AuditGenerationRequest,
   BrainstormContent,
   BrainstormEntryChoice,
+  BrainstormPrototypeFidelity,
   CreateThreadInput,
   EngineeringSpecContent,
   GitResetMode,
@@ -147,6 +148,7 @@ export interface RemoteRpcServices {
     | 'ensureSession'
     | 'sendPrompt'
     | 'steerPrompt'
+    | 'discardSteer'
     | 'abort'
     | 'listPermissions'
     | 'replyPermission'
@@ -158,6 +160,7 @@ export interface RemoteRpcServices {
     | 'runCommand'
     | 'compactSession'
     | 'truncateMessages'
+    | 'deleteMessages'
     | 'dismissQuestion'
     | 'updateQuestion'
     | 'listContextCapabilities'
@@ -169,7 +172,7 @@ export interface RemoteRpcServices {
     | 'deleteMcp'
     | 'sendTemporaryPrompt'
     | 'steerTemporaryPrompt'
-    | 'loadTemporaryChatMessages'
+    | 'loadTemporaryConversation'
     | 'getTemporaryChatStatus'
     | 'abortTemporaryChat'
     | 'touchTemporaryChat'
@@ -855,6 +858,12 @@ export class RemoteRpcDispatcher {
           this.string(args[1]),
           this.boolean(args[2])
         )
+      case 'scope:setPinned':
+        return this.scopeManager.setPinned(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.boolean(args[2])
+        )
       case 'scope:delete':
         return this.scopeManager.deleteBucket(this.string(args[0]), this.string(args[1]))
       case 'scope:setWorktreeDefaults':
@@ -878,7 +887,7 @@ export class RemoteRpcDispatcher {
       case 'agent:listProviderSnapshot':
         return chatEngine.listProviderSnapshot(this.string(args[0]))
       case 'agent:refreshProviderCatalog':
-        return chatEngine.listProviders(this.string(args[0]), true)
+        return chatEngine.listProviders(this.string(args[0]), args[1] !== false)
       case 'agent:refreshAccountUsage':
         return chatEngine.refreshAccountUsage(this.string(args[0]), this.string(args[1]))
       case 'agent:getHarnessAuthStatus':
@@ -920,6 +929,12 @@ export class RemoteRpcDispatcher {
           args[8] as UserMessagePresentation | undefined,
           args[9] as PromptAssignmentTaskReference[] | undefined
         )
+      case 'agent:discardSteer':
+        return chatEngine.discardSteer(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2])
+        )
       case 'agent:abort':
         return chatEngine.abort(this.string(args[0]), this.string(args[1]))
       case 'agent:listPermissions':
@@ -938,7 +953,7 @@ export class RemoteRpcDispatcher {
           this.string(args[0]),
           this.string(args[1]),
           this.string(args[2]),
-          args[3] as 'retry' | 'ignore',
+          args[3] as 'retry' | 'ignore' | 'false_positive',
           args[4] as import('../../lib/types').AgentModelSelection | undefined
         )
       case 'agent:listQuestions':
@@ -982,6 +997,13 @@ export class RemoteRpcDispatcher {
           this.string(args[1]),
           this.string(args[2])
         )
+      case 'agent:deleteMessages':
+        return chatEngine.deleteMessages(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          this.string(args[3]) as 'down' | 'single' | 'up'
+        )
       case 'agent:listContextCapabilities':
         return chatEngine.listContextCapabilities(this.string(args[0]), this.string(args[1]))
       case 'agent:listProcesses':
@@ -1004,8 +1026,10 @@ export class RemoteRpcDispatcher {
           args[3] as ThreadSettings,
           this.string(args[4]),
           (args[5] ?? []) as PromptAttachment[],
-          args[6] as string[] | undefined,
-          this.optionalString(args[7])
+          (args[6] ?? []) as PromptReference[],
+          this.optionalString(args[7]),
+          this.optionalString(args[8]),
+          this.optionalString(args[9])
         )
       case 'agent:steerTemporaryPrompt':
         return chatEngine.steerTemporaryPrompt(
@@ -1015,10 +1039,12 @@ export class RemoteRpcDispatcher {
           args[3] as ThreadSettings,
           this.string(args[4]),
           (args[5] ?? []) as PromptAttachment[],
-          args[6] as string[] | undefined
+          (args[6] ?? []) as PromptReference[],
+          this.optionalString(args[7]),
+          this.optionalString(args[8])
         )
       case 'agent:loadTemporaryChatMessages':
-        return chatEngine.loadTemporaryChatMessages(this.string(args[0]))
+        return chatEngine.loadTemporaryConversation(this.string(args[0]))
       case 'agent:getTemporaryChatStatus':
         return chatEngine.getTemporaryChatStatus(this.string(args[0]))
       case 'agent:abortTemporaryChat':
@@ -1075,7 +1101,8 @@ export class RemoteRpcDispatcher {
           this.string(args[1]),
           this.string(args[2]),
           args[3] as number,
-          typeof args[4] === 'string' ? args[4] : ''
+          typeof args[4] === 'string' ? args[4] : '',
+          args[5] === undefined ? undefined : { prototypeRequest: args[5] as { fidelity: BrainstormPrototypeFidelity; count?: number } }
         )
       case 'agent:finalizeBrainstorm':
         return chatEngine.finalizeBrainstorm(

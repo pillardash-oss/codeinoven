@@ -26,7 +26,7 @@ describe('changedPathsFromTool', () => {
     expect(changedPathsFromTool('/project', part)).toEqual(['src/changed.ts'])
   })
 
-  it('signals incomplete attribution when a mutating tool omits its path', () => {
+  it('does not claim workspace changes when a mutating tool omits its path', () => {
     const part: Extract<AgentPart, { type: 'tool' }> = {
       type: 'tool',
       id: 'part-2',
@@ -39,7 +39,7 @@ describe('changedPathsFromTool', () => {
       }
     }
 
-    expect(changedPathsFromTool('/project', part)).toBeNull()
+    expect(changedPathsFromTool('/project', part)).toEqual([])
   })
 
   it('extracts paths from Codex file-change items', () => {

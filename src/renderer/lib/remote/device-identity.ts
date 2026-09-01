@@ -417,7 +417,7 @@ export function handshakeTranscript(input: {
   bootstrap?: string | null
   context?: 'lan' | 'relay'
 }): string {
-  const prefix = input.context === 'relay' ? 'codeinoven:relay' : 'codeinoven'
+  const prefix = input.context === 'relay' ? 'cio:relay' : 'cio'
   if (input.deviceId) {
     return `${prefix}:auth:${input.nonce}:${input.deviceId}:${input.authVersion ?? 1}`
   }

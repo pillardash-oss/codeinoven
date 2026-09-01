@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, Check, Loader2, RotateCw, Send } from '@lucide/svelte'
+  import { AlertTriangle, Check, Eye, Loader2, RotateCw, Send } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import Switch from '../ui/Switch.svelte'
   import type {
@@ -17,7 +17,11 @@
     recentModels?: string[]
     onRetry: (requestId: string, selection: AgentModelSelection, remember: boolean) => Promise<void>
     onIgnore: (requestId: string) => Promise<void>
+    /** Records the model executing the turn as vision-capable, then continues. */
+    onFalsePositive: (requestId: string) => Promise<void>
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Removes one model from the recently-used history; shows the "x" on recent rows. */
+    onRemoveRecent?: (modelKey: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
@@ -33,7 +37,9 @@
     recentModels = [],
     onRetry,
     onIgnore,
+    onFalsePositive,
     onToggleFavorite,
+    onRemoveRecent,
     onReorderFavorite
   }: Props = $props()
 
@@ -48,6 +54,23 @@
         override.harnessId !== request.selection?.harnessId)
   )
   let networkRelated = $derived(request.kind === 'network')
+  /** Display name of the model that was executing the turn, when known. */
+  let requestingModelLabel = $derived.by(() => {
+    const model = request.requestingModel
+    if (!model) return ''
+    const provider =
+      providers.find(
+        (candidate) => candidate.harnessId === model.harnessId && candidate.id === model.providerId
+      ) ?? providers.find((candidate) => candidate.id === model.providerId)
+    return (
+      provider?.models.find((candidate) => candidate.id === model.modelId)?.name ?? model.modelId
+    )
+  })
+  let falsePositiveTitle = $derived(
+    requestingModelLabel
+      ? `Report that ${requestingModelLabel} has vision`
+      : 'Report that this model has vision'
+  )
   let needsSelection = $derived(request.selection === undefined)
   let working = $state(false)
   let actionError = $state('')
@@ -80,6 +103,19 @@
       await onIgnore(request.id)
     } catch (error) {
       actionError = error instanceof Error ? error.message : 'The instruction could not be sent.'
+    } finally {
+      working = false
+    }
+  }
+
+  async function reportFalsePositive(): Promise<void> {
+    if (working) return
+    actionError = ''
+    working = true
+    try {
+      await onFalsePositive(request.id)
+    } catch (error) {
+      actionError = error instanceof Error ? error.message : 'The report could not be saved.'
     } finally {
       working = false
     }
@@ -122,7 +158,7 @@
             : 'The vision model could not describe this image'}
       </p>
       <p
-        class="mt-1.5 break-words whitespace-pre-wrap rounded-lg bg-danger/5 px-3 py-2 font-mono text-[11px] leading-relaxed text-danger"
+        class="mt-1.5 max-h-40 overflow-y-auto break-words whitespace-pre-wrap rounded-lg bg-danger/5 px-3 py-2 font-mono text-[11px] leading-relaxed text-danger"
       >
         {request.error}
       </p>
@@ -149,6 +185,7 @@
         modelId={visionSelection?.modelId ?? ''}
         {favoriteModels}
         {recentModels}
+        {onRemoveRecent}
         visionOnly
         side="top"
         variant="field"
@@ -176,14 +213,28 @@
   </div>
 
   <div class="flex items-center justify-between gap-2 border-t px-4 py-2.5">
-    <button
-      class="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
-      disabled={working}
-      onclick={() => void ignore()}
-    >
-      <Send size={13} />
-      Ignore and send
-    </button>
+    <div class="flex items-center gap-2">
+      <button
+        class="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+        disabled={working}
+        onclick={() => void ignore()}
+      >
+        <Send size={13} />
+        Ignore and send
+      </button>
+      {#if request.requestingModel}
+        <button
+          class="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+          disabled={working}
+          onclick={() => void reportFalsePositive()}
+          aria-label="{falsePositiveTitle} so the image descriptor is skipped for it"
+          title="{falsePositiveTitle} so the image descriptor is skipped for it"
+        >
+          <Eye size={13} />
+          False positive
+        </button>
+      {/if}
+    </div>
     <button
       class="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
       disabled={working || !visionSelection}

@@ -1,6 +1,17 @@
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { lstat, mkdir, opendir, realpath, rename, stat, symlink, writeFile } from 'node:fs/promises'
+import {
+  lstat,
+  mkdir,
+  opendir,
+  readlink,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile
+} from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { platform } from 'node:os'
 import type { BrainstormPrototype, BrainstormPrototypeFidelity } from '../types'
@@ -39,7 +50,7 @@ export function planPrototypeGeneration(
 }
 
 const SAFE_FEATURE = /^[a-z0-9][a-z0-9-]{0,127}$/u
-const SAFE_PROTOTYPE_ID = /^[LH][1-9][0-9]*$/u
+export const SAFE_PROTOTYPE_ID = /^[LH][1-9][0-9]*$/u
 
 export interface PrototypeArtifactInput {
   projectRoot: string
@@ -149,8 +160,23 @@ async function inspectTree(root: string): Promise<{ bytes: number; hashes: strin
 async function ensurePreviewLink(paths: PrototypeArtifactPaths): Promise<void> {
   await mkdir(dirname(paths.previewRoot), { recursive: true })
   try {
-    await lstat(paths.previewRoot)
-    throw new Error(`Prototype preview path already exists: ${paths.previewPath}`)
+    const existing = await lstat(paths.previewRoot)
+    // Regenerating the same prototype id (e.g. rebuilding H1) re-finalizes an
+    // artifact whose preview link this same function already created. Only a
+    // symlink pointing at this prototype's own canonical root is safe to
+    // replace; anything else (a real directory, or a link to a different
+    // prototype/slug that happens to share this preview path) must still be
+    // treated as a genuine collision.
+    if (existing.isSymbolicLink()) {
+      const target = await readlink(paths.previewRoot)
+      if (resolve(dirname(paths.previewRoot), target) === resolve(paths.canonicalRoot)) {
+        await rm(paths.previewRoot, { force: true })
+      } else {
+        throw new Error(`Prototype preview path already exists: ${paths.previewPath}`)
+      }
+    } else {
+      throw new Error(`Prototype preview path already exists: ${paths.previewPath}`)
+    }
   } catch (error) {
     if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error
   }

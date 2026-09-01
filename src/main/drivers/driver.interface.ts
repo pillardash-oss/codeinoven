@@ -32,6 +32,25 @@ export class InactiveQuestionTurnError extends Error {
   }
 }
 
+/**
+ * The chat engine still tracks a question as pending, but the driver's own
+ * bookkeeping already dropped it (the harness answered/cancelled it through
+ * another path, or the driver instance was reset). Retrying the same reject
+ * or reply against the driver can never succeed, so the chat engine should
+ * treat this as an already-resolved question instead of leaving the user
+ * stuck retrying a dismissal that will always fail the same way.
+ */
+export class QuestionRequestGoneError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly requestId: string,
+    harnessName: string
+  ) {
+    super(`The ${harnessName} question ${requestId} is no longer pending on the driver`)
+    this.name = 'QuestionRequestGoneError'
+  }
+}
+
 /** Features a harness can reliably provide to CodeInOven. */
 export interface HarnessCapabilities {
   /** Truthful process topology used for app-wide host and RAM policy. */
@@ -268,6 +287,11 @@ export interface CheapModelResult {
   attempts: CheapModelAttempt[]
 }
 
+/** Input for one disposable heartbeat "ping" completion, pinned to the exact selected model. */
+export interface SendHeartbeatPingOptions {
+  settings: ThreadSettings
+}
+
 /** Provider-neutral input appended to an already active harness turn. */
 export interface SteerPromptOptions {
   sessionId: string
@@ -325,6 +349,14 @@ export interface HarnessDriver {
   provideCheapModel(projectPath: string, request: CheapModelRequest): Promise<CheapModelResult>
 
   /**
+   * Send a single disposable "ping" completion pinned to the exact model in
+   * `options.settings` (no cheap-candidate substitution) so a configured
+   * Heartbeat keeps that specific provider's usage window warm. Resolves
+   * true when any reply was received.
+   */
+  sendHeartbeatPing(projectPath: string, options: SendHeartbeatPingOptions): Promise<boolean>
+
+  /**
    * Best-effort release of a project's in-memory harness resources without
    * deleting any sessions. Called by the idle reaper after a project has been
    * fully idle for a grace period. The harness session(s) persist on disk and
@@ -338,8 +370,59 @@ export interface HarnessDriver {
   /** Append user input to the active turn using the harness's native steering protocol. */
   steerPrompt?(projectPath: string, opts: SteerPromptOptions): Promise<void>
 
+  /**
+   * Ask the harness whether a session currently has a live agent loop. Used by
+   * restart recovery: the engine's in-memory session-status map is empty after
+   * a restart, but the harness process may have survived and still be running
+   * the pre-restart turn — resuming such a session spawns a second concurrent
+   * run that interleaves outputs and derails both turns. Drivers without a
+   * status probe simply omit this; callers treat `false`/throwaway errors as
+   * "not busy" to keep the legacy behavior.
+   */
+  isSessionBusy?(projectPath: string, sessionId: string): Promise<boolean>
+
   /** Load the full message history for a session. */
   loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]>
+
+  /**
+   * Carry a replaced session's native conversation binding over to its
+   * replacement, so a harness that persists its own transcript (native resume)
+   * keeps resuming the real history instead of silently degrading every later
+   * turn to the engine's history recap. Best-effort; implementations must not
+   * throw when the old session is unknown or its transcript is gone.
+   */
+  inheritNativeSession?(
+    projectPath: string,
+    fromSessionId: string,
+    toSessionId: string
+  ): Promise<boolean>
+
+  /** Stamp the owning thread onto a session record so the driver can later
+   * relocate the thread's sessions across harness switches. Best-effort. */
+  tagSessionThread?(projectPath: string, sessionId: string, threadId: string): Promise<void>
+
+  /**
+   * Restore this session's native conversation binding from the driver's most
+   * recent resumable session record for the given thread. Used when a thread
+   * returns to a harness after a switch: the thread's session slot moved to
+   * the other harness, but this harness still holds the real transcript.
+   * Returns true when a binding was restored. Best-effort; implementations
+   * must not throw.
+   */
+  restoreNativeBinding?(projectPath: string, sessionId: string, threadId: string): Promise<boolean>
+
+  /**
+   * Seed a freshly created session with the thread's edited history as a
+   * native transcript, so the next turn resumes the real conversation instead
+   * of replaying the mirror as a history recap. Returns true when the session
+   * now natively holds history. No-ops on drivers without native transcripts.
+   * Best-effort; must not throw.
+   */
+  prefillNativeSession?(
+    projectPath: string,
+    sessionId: string,
+    messages: readonly AgentMessage[]
+  ): Promise<boolean>
 
   /**
    * Load only the active turn beginning at a stable user-message id. Drivers
@@ -375,6 +458,15 @@ export interface HarnessDriver {
   /** List available providers and their models. */
   listProviders(projectPath: string): Promise<ProviderCatalog[]>
 
+  /**
+   * Cheap, spawn-free staleness fingerprint of the driver's provider-catalog
+   * inputs (connected providers, auth state, configured model lists). The chat
+   * engine compares it against the fingerprint recorded with the last cached
+   * catalog and forces re-discovery when it drifts. Return `null` when the
+   * driver cannot determine one reliably (the cache then keeps its normal TTL).
+   */
+  providerCatalogFingerprint?(): Promise<string | null>
+
   /** List slash commands the harness exposes. */
   listCommands(projectPath: string): Promise<HarnessCommand[]>
 
@@ -396,6 +488,18 @@ export interface HarnessDriver {
   ): Promise<void>
 
   /**
+   * Publish a turn-scoped endpoint for harness bridges that cannot receive a
+   * per-turn launch overlay (shared or extension-backed harnesses). The payload
+   * is written session-keyed by the driver; `null` clears any active endpoint
+   * so turn-scoped tokens cannot be replayed after cleanup.
+   */
+  publishUtilityGatewayEndpoint?(
+    projectPath: string,
+    sessionId: string,
+    endpoint: { url: string; token: string } | null
+  ): Promise<void>
+
+  /**
    * Start any session-specific transport needed by the prepared runtime before
    * prompt composition finishes. Implementations must keep this idempotent.
    */
@@ -414,7 +518,7 @@ export interface HarnessDriver {
    * predate quota capture — can still show live quota. Returns null when the
    * harness cannot report quota without a turn.
    */
-  readAccountUsage?(projectPath: string): Promise<{
+  readAccountUsage?(projectPath: string, providerId?: string): Promise<{
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits
     contextWindow?: number

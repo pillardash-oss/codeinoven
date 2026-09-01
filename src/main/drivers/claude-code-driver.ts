@@ -49,7 +49,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
-import { InactiveQuestionTurnError } from './driver.interface'
+import { InactiveQuestionTurnError, QuestionRequestGoneError } from './driver.interface'
 import { buildProcessEnvironment } from './cli-environment'
 import { attachmentReference } from './attachment-reference'
 import {
@@ -110,6 +110,7 @@ const ONE_SHOT_SPAWN_LIMIT = 4
 
 /** Commands Claude Code documents as usable without its interactive TUI. */
 const CLAUDE_NON_INTERACTIVE_COMMANDS: readonly HarnessCommand[] = [
+  { name: 'compact', description: 'Summarize older history to free context' },
   { name: 'config', description: 'Set Claude Code preferences with key=value arguments' },
   { name: 'settings', description: 'Set Claude Code preferences with key=value arguments' }
 ]
@@ -803,6 +804,11 @@ function partFromBlock(
     const callId = string(block['id']) ?? `claude-call-${messageId}-${index}`
     const name = string(block['name']) ?? 'unknown'
     const input = record(block['input']) ?? {}
+    // AskUserQuestion is handled exclusively through the native can_use_tool
+    // control request. Promoting it here too would race that control event
+    // and register a second, differently-keyed question.asked, showing the
+    // same question set twice.
+    if (name === 'AskUserQuestion') return null
     if (isClaudeSubagentTool(name)) {
       return claudeSubagentPart(messageId, callId, name, input, 'pending')
     }
@@ -1389,7 +1395,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     providerCatalog: true,
     sessionStatus: true,
     contextUsage: true,
-    compaction: false,
+    compaction: true,
     subagents: true,
     structuredOutput: true,
     nativeUtilities: ['web_search', 'web_fetch']
@@ -1468,7 +1474,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
           thinkingPresets: model.reasoning
             ? (model.thinkingPresets ?? THINKING_PRESETS)
             : undefined,
-          attachment: true,
+          attachment: model.vision !== false,
           toolcall: true,
           ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
         }))
@@ -1502,30 +1508,61 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     })
   }
 
-  /** Cheapest first-party candidates, shared by title and grading runs. */
-  private async cheapAnthropicCandidates(
-    projectPath: string
-  ): Promise<{ candidates: TitleModelCandidate[]; anthropicFound: boolean }> {
-    const catalogs = await this.listProviders(projectPath)
-    const anthropic = catalogs.find((catalog) => catalog.id === 'anthropic')
-    const candidates = ['haiku', 'sonnet'].flatMap((modelId) =>
-      anthropic?.models.some((model) => model.id === modelId)
-        ? [{ providerId: 'anthropic' as const, modelId }]
-        : []
-    )
-    return { candidates, anthropicFound: anthropic !== undefined }
+  /**
+   * Compact the thread by resuming Claude's native session with the `/compact`
+   * slash command in a one-shot print process. Claude writes its own
+   * `compact_boundary` record into the resumed session and emits it on the
+   * stream, which the record parser mirrors as a compaction checkpoint; the
+   * normal turn machinery then reports idle. Throws when the session has no
+   * native id yet (nothing to resume) or Claude reports "no messages".
+   */
+  async compactSession(
+    projectPath: string,
+    sessionId: string,
+    settings: ThreadSettings
+  ): Promise<void> {
+    const session = await this.requireSession(projectPath, sessionId)
+    if (!session.nativeSessionId) {
+      throw new Error('No Claude Code session is available to compact yet')
+    }
+    this.emit({ type: 'session.status', sessionId, status: { state: 'working' } })
+    try {
+      await this.sendPrompt(projectPath, {
+        sessionId,
+        settings,
+        text: '/compact',
+        attachments: []
+      })
+    } catch (error) {
+      this.emit({ type: 'session.idle', sessionId })
+      throw error
+    }
+  }
+
+  /** Haiku is Claude Code's single cheap auxiliary candidate. */
+  private async cheapAnthropicCandidates(_projectPath: string): Promise<TitleModelCandidate[]> {
+    void _projectPath
+    // The stable alias is attempted directly. The shared one-shot runner adds
+    // the conversation model as the only fallback on timeout or failure.
+    return [{ providerId: 'anthropic', modelId: 'haiku' }]
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
     if (!(await this.auxiliaryTransportReady(options))) return null
-    const { candidates } = await this.cheapAnthropicCandidates(projectPath)
-    return this.generateTitleWithCandidates(projectPath, options, candidates)
+    return this.generateTitleWithCandidates(
+      projectPath,
+      options,
+      await this.cheapAnthropicCandidates(projectPath)
+    )
   }
 
   async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
     if (!(await this.auxiliaryTransportReady(options))) return null
-    const { candidates } = await this.cheapAnthropicCandidates(projectPath)
-    return this.gradeTurnWithCandidates(projectPath, options, candidates)
+    return this.gradeTurnWithCandidates(
+      projectPath,
+      options,
+      await this.cheapAnthropicCandidates(projectPath)
+    )
   }
 
   async provideCheapModel(
@@ -1542,8 +1579,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   protected override async cheapCandidateModels(
     projectPath: string
   ): Promise<TitleModelCandidate[]> {
-    const { candidates } = await this.cheapAnthropicCandidates(projectPath)
-    return candidates
+    return this.cheapAnthropicCandidates(projectPath)
   }
 
   /**
@@ -1611,7 +1647,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   ): Promise<void> {
     const request = this.pendingClaudeQuestions.get(requestId)
     if (!request || request.sessionId !== sessionId) {
-      throw new Error(`Claude question request is no longer pending: ${requestId}`)
+      throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
     const answersByPrompt = Object.fromEntries(
       request.questions.map((question, index) => [
@@ -1653,7 +1689,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   ): Promise<void> {
     const request = this.pendingClaudeQuestions.get(requestId)
     if (!request || request.sessionId !== sessionId) {
-      throw new Error(`Claude question request is no longer pending: ${requestId}`)
+      throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
     this.writeQuestionResponse(sessionId, requestId, () => {
       if (request.transport === 'control') {

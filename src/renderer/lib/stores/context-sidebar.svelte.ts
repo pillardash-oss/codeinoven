@@ -1,14 +1,11 @@
 import { invoke } from '$lib/ipc.svelte'
 import { messageId } from '$shared/id'
 import { SvelteSet } from 'svelte/reactivity'
+import { agentRuns } from './agent-runs.svelte'
+import { threadMessages } from './thread-messages.svelte'
 import { gitState } from './git.svelte'
 import { APP_SLUG } from '$shared/brand'
-import type {
-  AgentMessage,
-  AgentSessionStatus,
-  AgentSubagentActivity,
-  ThreadSettings
-} from '$shared/types'
+import type { AgentSubagentActivity, ThreadSettings } from '$shared/types'
 
 const TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
 const CONTEXT_SIDEBAR_MIN_WIDTH = 340
@@ -94,6 +91,14 @@ export interface SourcesContextTab {
 export interface GitContextTab {
   id: string
   kind: 'git'
+  title: string
+  projectId: string
+  threadId: string
+}
+
+export interface ActionsContextTab {
+  id: string
+  kind: 'actions'
   title: string
   projectId: string
   threadId: string
@@ -185,24 +190,17 @@ export interface TemporaryChatContextTab {
   projectId: string
   threadId: string
   temporaryChatId: string
+  /** Isolated harness session for the side chat, once the first turn starts. */
   sessionId: string | null
   mode: TemporaryChatMode
   selections: string[]
   initialContext: string
   settings: ThreadSettings
-  messages: AgentMessage[]
-  busy: boolean
-  error: string
-  /** Structured provider lifecycle state mirroring the main chat, so the
-   *  temporary chat renders the same provider status card above its composer. */
-  status: Extract<AgentSessionStatus, { state: 'waiting' | 'error' }> | null
-  draft: string
   selectionAttached: boolean
-  selectionMessageId: string | null
   autoPromptSent: boolean
   /** Id of the user message seeded at open time for the auto-sent explain
    *  prompt, so the prompt shows as a sent message the instant the tab opens
-   *  (the controller reuses it instead of appending a duplicate). */
+   *  (the send reuses it instead of appending a duplicate). */
   autoPromptMessageId: string | null
   /** Override for the auto-sent explain prompt, when the tab was opened to
    *  explain a specific selection (e.g. an agent question) rather than the
@@ -221,6 +219,7 @@ export type ContextSidebarTab =
   | DebuggerContextTab
   | SourcesContextTab
   | GitContextTab
+  | ActionsContextTab
   | ThreadNoteContextTab
   | CloudDeploymentContextTab
   | TemporaryChatContextTab
@@ -262,6 +261,7 @@ const NOTIFICATIONS_TAB: NotificationContextTab = {
 const PROJECT_TAB_KINDS = new Set<ContextSidebarTab['kind']>([
   'files',
   'terminal',
+  'actions',
   'git',
   'cloud-deployment',
   'memory'
@@ -271,68 +271,83 @@ function isProjectTab(tab: ContextSidebarTab): boolean {
   return PROJECT_TAB_KINDS.has(tab.kind)
 }
 
-function loadBrowserTabs(): BrowserContextTab[] {
-  if (typeof window === 'undefined') return []
+/** Restored browser tab list plus which tab was last active. The active id is
+ *  validated against the restored tabs so a stale id can never win. */
+function loadPersistedBrowserTabs(): { tabs: BrowserContextTab[]; activeTabId: string | null } {
+  const empty: { tabs: BrowserContextTab[]; activeTabId: string | null } = {
+    tabs: [],
+    activeTabId: null
+  }
+  if (typeof window === 'undefined') return empty
   try {
     const raw = window.localStorage.getItem(BROWSER_TABS_STORAGE_KEY)
-    if (!raw) return []
+    if (!raw) return empty
     const snapshot: unknown = JSON.parse(raw)
-    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return []
-    const tabs = (snapshot as Record<string, unknown>)['tabs']
-    if (!Array.isArray(tabs)) return []
-    const restored: BrowserContextTab[] = []
-    for (const value of tabs.slice(-MAX_PERSISTED_BROWSER_TABS)) {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) continue
-      const tab = value as Record<string, unknown>
-      const id = tab['id']
-      const projectId = tab['projectId']
-      const threadId = tab['threadId']
-      const title = tab['title']
-      const url = tab['url']
-      if (
-        typeof id !== 'string' ||
-        !BROWSER_TAB_ID_PATTERN.test(id) ||
-        restored.some((candidate) => candidate.id === id) ||
-        typeof projectId !== 'string' ||
-        projectId.length === 0 ||
-        projectId.length > 512 ||
-        typeof threadId !== 'string' ||
-        threadId.length > 512 ||
-        typeof title !== 'string' ||
-        title.length > 240 ||
-        typeof url !== 'string'
-      ) {
-        continue
-      }
-      let parsed: URL
-      try {
-        parsed = new URL(url)
-      } catch {
-        continue
-      }
-      if (
-        (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
-        parsed.username !== '' ||
-        parsed.password !== ''
-      ) {
-        continue
-      }
-      restored.push({
-        id,
-        kind: 'browser',
-        title,
-        projectId,
-        threadId,
-        url: parsed.href,
-        // Restored tabs stay inert until the user opens the project's browser.
-        // Start on the page so that explicit action is the only load trigger.
-        surface: 'page'
-      })
-    }
-    return restored
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return empty
+    const record = snapshot as Record<string, unknown>
+    const tabs = loadBrowserTabs(record)
+    const activeId = record['activeTabId']
+    const activeTabId =
+      typeof activeId === 'string' && BROWSER_TAB_ID_PATTERN.test(activeId) ? activeId : null
+    return { tabs, activeTabId: tabs.some((tab) => tab.id === activeTabId) ? activeTabId : null }
   } catch {
-    return []
+    return empty
   }
+}
+
+function loadBrowserTabs(snapshot: Record<string, unknown>): BrowserContextTab[] {
+  const tabs = snapshot['tabs']
+  if (!Array.isArray(tabs)) return []
+  const restored: BrowserContextTab[] = []
+  for (const value of tabs.slice(-MAX_PERSISTED_BROWSER_TABS)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+    const tab = value as Record<string, unknown>
+    const id = tab['id']
+    const projectId = tab['projectId']
+    const threadId = tab['threadId']
+    const title = tab['title']
+    const url = tab['url']
+    if (
+      typeof id !== 'string' ||
+      !BROWSER_TAB_ID_PATTERN.test(id) ||
+      restored.some((candidate) => candidate.id === id) ||
+      typeof projectId !== 'string' ||
+      projectId.length === 0 ||
+      projectId.length > 512 ||
+      typeof threadId !== 'string' ||
+      threadId.length > 512 ||
+      typeof title !== 'string' ||
+      title.length > 240 ||
+      typeof url !== 'string'
+    ) {
+      continue
+    }
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      continue
+    }
+    if (
+      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+      parsed.username !== '' ||
+      parsed.password !== ''
+    ) {
+      continue
+    }
+    restored.push({
+      id,
+      kind: 'browser',
+      title,
+      projectId,
+      threadId,
+      url: parsed.href,
+      // Restored tabs stay inert until the user opens the project's browser.
+      // Start on the page so that explicit action is the only load trigger.
+      surface: 'page'
+    })
+  }
+  return restored
 }
 
 function contextKey(projectId: string, threadId: string): string {
@@ -360,11 +375,14 @@ function sameSubagentActivity(
   )
 }
 
+/** Parsed once at module load: the persisted tab list plus the last active tab. */
+const persistedBrowserTabs = loadPersistedBrowserTabs()
+
 class ContextSidebarState {
   private contexts: Record<string, ThreadSidebarContext> = $state({})
   private projectContexts: Record<string, ProjectSidebarContext> = $state({})
-  private browserTabs: BrowserContextTab[] = $state(loadBrowserTabs())
-  private browserActiveTabId: string | null = $state(null)
+  private browserTabs: BrowserContextTab[] = $state(persistedBrowserTabs.tabs)
+  private browserActiveTabId: string | null = $state(persistedBrowserTabs.activeTabId)
   private browserVisible = $state(false)
   /** Keys of full-window DOM surfaces currently covering the workspace (e.g.
    *  fullscreen terminal/media/file editors). The browser's native view must
@@ -435,6 +453,19 @@ class ContextSidebarState {
       this.activeBrowserTabs.find((tab) => tab.id === this.browserActiveTabId) ??
       this.activeBrowserTabs.at(-1)
     return active?.surface === 'page'
+  }
+
+  /** The browser tab to focus when the browser workspace is revealed: the
+   *  remembered active tab when it still belongs to the active project,
+   *  otherwise the project's last open tab. Restarts, project switches and
+   *  tab closures all funnel through this so the sidebar never falls back to
+   *  an arbitrary tab. */
+  get rememberedBrowserTabId(): string | null {
+    const tabs = this.activeBrowserTabs
+    if (tabs.length === 0) return null
+    return this.browserActiveTabId && tabs.some((tab) => tab.id === this.browserActiveTabId)
+      ? this.browserActiveTabId
+      : (tabs.at(-1)?.id ?? null)
   }
 
   /**
@@ -923,6 +954,18 @@ class ContextSidebarState {
     gitState.notifyGitPanelOpened(projectId)
   }
 
+  openActions(projectId: string, threadId: string): void {
+    const context = this.ensureProjectContext(projectId)
+    const id = `actions:${projectId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      if (existing.kind === 'actions') existing.threadId = threadId
+      this.focusInProjectContext(context, id)
+      return
+    }
+    this.openProject(context, { id, kind: 'actions', title: 'Actions', projectId, threadId })
+  }
+
   openBrowser(url: string, requestedTabId?: string): string | null {
     if (!this.activeProjectId || !this.activeThreadId) return null
     return this.openBrowserForContext(
@@ -1179,8 +1222,8 @@ class ContextSidebarState {
           tab.kind === 'temporary-chat' &&
           tab.mode === 'quick' &&
           !tab.expired &&
-          !tab.busy &&
-          tab.messages.length === 0
+          !agentRuns.isBusy(projectId, tab.temporaryChatId) &&
+          threadMessages.messages(projectId, tab.temporaryChatId).length === 0
       )
       if (existing) {
         existing.selections = [...existing.selections, selection]
@@ -1194,35 +1237,33 @@ class ContextSidebarState {
     // The explain auto-prompt commits as a user-sent message immediately, so
     // the moment the tab opens the conversation already shows the selection
     // chip with the action label — never a blank panel while the harness
-    // session is still being assembled.
+    // session is still being assembled. The message lives in the shared
+    // thread-messages pipeline like every other conversation.
     const seededAutoPrompt = mode === 'elaborate' && selectionAttached ? (autoPrompt ?? '') : ''
     const autoPromptMessageId = seededAutoPrompt ? messageId() : null
-    const messages: AgentMessage[] =
-      autoPromptMessageId !== null
-        ? [
-            {
-              id: autoPromptMessageId,
-              role: 'user',
-              parts: [
-                {
-                  type: 'text',
-                  id: `${autoPromptMessageId}:text`,
-                  messageID: autoPromptMessageId,
-                  text: mode === 'elaborate' ? 'Explain' : seededAutoPrompt
-                }
-              ],
-              references: [
-                {
-                  id: `${temporaryChatId}:selection:0`,
-                  label: 'Selection 1',
-                  text: selection
-                }
-              ],
-              createdAt: Date.now(),
-              completedAt: Date.now()
-            }
-          ]
-        : []
+    if (autoPromptMessageId !== null) {
+      threadMessages.seedMessage(projectId, temporaryChatId, {
+        id: autoPromptMessageId,
+        role: 'user',
+        parts: [
+          {
+            type: 'text',
+            id: `${autoPromptMessageId}:text`,
+            messageID: autoPromptMessageId,
+            text: mode === 'elaborate' ? 'Explain' : seededAutoPrompt
+          }
+        ],
+        references: [
+          {
+            id: `${temporaryChatId}.selection.0`,
+            label: 'Selection 1',
+            text: selection
+          }
+        ],
+        createdAt: Date.now(),
+        completedAt: Date.now()
+      })
+    }
     const tab: TemporaryChatContextTab = {
       id: `temporary-chat:${temporaryChatId}`,
       kind: 'temporary-chat',
@@ -1234,14 +1275,8 @@ class ContextSidebarState {
       mode,
       selections: selectionAttached ? [selection] : [],
       initialContext,
-      settings: { ...settings, engineeringMode: false, permissionLevel: 'auto_review' },
-      messages,
-      busy: false,
-      error: '',
-      status: null,
-      draft: '',
+      settings: { ...settings, permissionLevel: 'auto_review' },
       selectionAttached,
-      selectionMessageId: null,
       autoPromptSent: false,
       autoPromptMessageId,
       autoPrompt,
@@ -1267,32 +1302,27 @@ class ContextSidebarState {
     if (tab.expired) return
     const temporaryChatId = tab.temporaryChatId
     tab.expired = true
-    tab.messages = []
-    tab.draft = ''
     tab.initialContext = ''
-    tab.busy = false
-    tab.error = ''
-    tab.status = null
     tab.selectionAttached = false
-    tab.selectionMessageId = null
     tab.autoPromptMessageId = null
+    // Conversation state lives in the shared pipeline now — drop its cache so
+    // an expired side chat leaves nothing behind.
+    threadMessages.clear(tab.projectId, temporaryChatId)
+    agentRuns.clear(tab.projectId, temporaryChatId)
     this.clearTemporaryChatExpiry(temporaryChatId)
     if (closeRemote) void invoke('agent:closeTemporaryChat', temporaryChatId)
   }
 
   restartTemporaryChat(tab: TemporaryChatContextTab): void {
+    // A fresh conversation identity: drop the old cache, then regenerate the id.
+    threadMessages.clear(tab.projectId, tab.temporaryChatId)
+    agentRuns.clear(tab.projectId, tab.temporaryChatId)
     this.clearTemporaryChatExpiry(tab.temporaryChatId)
     tab.temporaryChatId = crypto.randomUUID()
     tab.sessionId = null
-    tab.messages = []
-    tab.busy = false
-    tab.error = ''
-    tab.status = null
-    tab.draft = ''
     // Re-attach the selections on restart only when there are any — a quick chat
     // opened from the last agent turn has no selection attached.
     tab.selectionAttached = tab.selections.length > 0
-    tab.selectionMessageId = null
     tab.autoPromptSent = false
     tab.autoPromptMessageId = null
     tab.sessionStarted = false
@@ -1314,7 +1344,7 @@ class ContextSidebarState {
     this.openNewTerminal(projectId, threadId)
   }
 
-  openNewTerminal(projectId: string, threadId: string): void {
+  openNewTerminal(projectId: string, threadId: string): string {
     const context = this.ensureProjectContext(projectId)
     context.terminalSequence += 1
     const sequence = context.terminalSequence
@@ -1327,6 +1357,7 @@ class ContextSidebarState {
       projectId,
       threadId
     })
+    return id
   }
 
   openDebugger(projectId: string, threadId: string): void {
@@ -1624,6 +1655,7 @@ class ContextSidebarState {
     this.browserActiveTabId = id
     this.browserVisible = true
     this.notificationsVisible = false
+    this.persistBrowserTabs()
   }
 
   /** Detach the native browser view at the store layer. The panel's own
@@ -1642,7 +1674,11 @@ class ContextSidebarState {
     try {
       window.localStorage.setItem(
         BROWSER_TABS_STORAGE_KEY,
-        JSON.stringify({ version: 1, tabs: this.browserTabs.slice(-MAX_PERSISTED_BROWSER_TABS) })
+        JSON.stringify({
+          version: 1,
+          tabs: this.browserTabs.slice(-MAX_PERSISTED_BROWSER_TABS),
+          activeTabId: this.browserActiveTabId
+        })
       )
     } catch {
       // Browser restoration is best-effort; blocked storage must not break the sidebar.

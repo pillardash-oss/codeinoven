@@ -3,8 +3,11 @@
 import type {
   BaseUrlProvider,
   BaseUrlProviderCreateRequest,
+  BaseUrlProviderFetchModelsRequest,
   BaseUrlProviderModel,
   BaseUrlProviderUpdateRequest,
+  CustomProviderUsage,
+  DiscoveredBaseUrlModel,
   ThinkingLevel
 } from '$shared/types'
 import { invoke } from '$lib/ipc.svelte'
@@ -93,6 +96,18 @@ class BaseUrlProviderStore {
     } finally {
       this.saving = false
     }
+  }
+
+  /** Discover models from `${baseURL}/models`, cached in main for 24 hours.
+   *  Pass `force: true` (the picker's refresh button) to bypass the cache. */
+  async fetchModels(request: BaseUrlProviderFetchModelsRequest): Promise<DiscoveredBaseUrlModel[]> {
+    return invoke('baseUrlProviders:fetchModels', request)
+  }
+
+  /** Read a saved provider's account status/usage route. Null when the
+   *  provider declares no route or the route yields nothing usable. */
+  async fetchUsage(harnessId: string, id: string): Promise<CustomProviderUsage | null> {
+    return invoke('baseUrlProviders:fetchUsage', harnessId, id)
   }
 
   /** The stored custom model backing a harness catalog entry, if any. */

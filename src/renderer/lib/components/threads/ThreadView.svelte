@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
+  import { shouldMountWorkingTrace } from '$lib/working-trace-parts'
+  import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
@@ -11,6 +13,11 @@
 
   /** Persists each thread's scroll position across component remounts. */
   const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
+  /** Messages mounted on the very first frame after a thread switch — only the
+   *  newest tail; the rest of the loaded page reveals across the next frames. */
+  const TAIL_RENDER_INITIAL_LIMIT = 12
+  /** Delay between tail-window growth steps — one frame lets each batch paint. */
+  const TAIL_RENDER_GROW_DELAY_MS = 16
   const HISTORY_WINDOW_SIZE = 40
   const HISTORY_PRELOAD_THRESHOLD = 240
 
@@ -36,6 +43,7 @@
     ShieldCheck,
     Target,
     Trash2,
+    Undo2,
     Video,
     X,
     Zap
@@ -53,6 +61,7 @@
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
+  import { spokenWordOffset } from '../../speech/read-along'
   import WorkingTrace from './WorkingTrace.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
@@ -69,6 +78,7 @@
   import SpecReadyCard from './SpecReadyCard.svelte'
   import BrainstormEntryChoiceCard from './BrainstormEntryChoiceCard.svelte'
   import BrainstormReadyCard from './BrainstormReadyCard.svelte'
+  import EngineeringRetryCard from './EngineeringRetryCard.svelte'
   import EngineeringEntryCard from '../chats/EngineeringEntryCard.svelte'
   import PrdReadyCard from './PrdReadyCard.svelte'
   import EngineeringFlowCancelModal from './EngineeringFlowCancelModal.svelte'
@@ -89,6 +99,7 @@
     supportsFastInference
   } from '$shared/fast-inference'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
+  import { isAtLatest, mayReanchorToLatest } from '$lib/scroll-anchor'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import SpecStudio from '../specs/SpecStudio.svelte'
@@ -101,24 +112,33 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { isUsageResetWaitIssue } from '$shared/provider-issue'
   import { copyText } from '$lib/copy-text'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { chatDraft } from '$lib/stores/chat-draft'
   import {
+    loadLifecycleIntent,
+    saveLifecycleIntent,
+    clearLifecycleIntent
+  } from '$lib/stores/lifecycle-intent'
+  import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
+  import {
     threadSettings,
     chatSettings,
     chatEffectiveSettings
   } from '$lib/stores/thread-settings.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
+  import { providerStore } from '$lib/stores/providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import {
     rendererRecovery,
+    publishDraftActivity,
     type StartAfterThreadReference
   } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey, parseModelKey } from '$lib/model-keys'
@@ -126,6 +146,7 @@
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { visionModels } from '$lib/stores/vision-models.svelte'
   import {
     responseReferencesState,
     type ResponseReferenceAnchor
@@ -138,7 +159,7 @@
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
+  import { DEFAULT_SCOPE_BUCKET_ID, DEFAULT_THREAD_TITLE } from '$shared/types'
   import type {
     Thread,
     ThreadMessageCursor,
@@ -148,6 +169,7 @@
     ThinkingLevel,
     PermissionLevel,
     ScopedHarnessCommand,
+    AgentCapabilityEntry,
     AgentMessage,
     AgentPart,
     AgentEvent,
@@ -174,6 +196,7 @@
     BrainstormReviewChanges,
     BrainstormSectionId,
     SpecGenerationTraceUpdate,
+    AssignmentGenerationTraceUpdate,
     BrainstormWorkflowState,
     PrdContent,
     PrdDocument,
@@ -199,7 +222,8 @@
     UserMessageSummary,
     UsageEfficiencyKpis,
     EngineeringLifecycleSelectionInput,
-    EngineeringLifecycleState
+    EngineeringLifecycleState,
+    EngineeringLifecycleStage
   } from '$shared/types'
   import {
     hasSelectedStage,
@@ -207,9 +231,11 @@
     representativeLifecycleSelection
   } from '$shared/engines/engineering-lifecycle-engine'
   import { APP_NAME } from '$shared/brand'
+  import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
+  import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
   import * as CheckpointMatching from '../../threads/checkpoint-matching'
 
@@ -275,6 +301,9 @@
   let messages = $derived(
     controller?.messages ?? threadMessages.messages(thread.projectId, thread.id)
   )
+  /** The conversation identity for held-steer tracking: temporary chats use
+   *  their own id, threads use the thread id. */
+  let conversationId = $derived(controller?.conversationId ?? thread.id)
   // Intentional initial-value captures — Workspace keys this view by thread ID.
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
@@ -282,20 +311,49 @@
   // The store already keeps the loaded history bounded to one page and grows
   // it only when the user reaches the top. Render that page as one continuous
   // scroll surface so the user can always scroll back down to the latest turn.
-  let visibleMessages = $derived(messages)
-  /** The last turn in the list and whether it is still the "active" turn. A
-   *  trailing steer — a user message the agent has not responded to yet — does
-   *  not end the turn it intervenes in, so the streaming trace for the current
-   *  request stays open until that turn actually completes (or the agent starts
-   *  a newer turn). While the thread is busy, the latest turn is by definition
-   *  the active one: a steer the agent is demonstrably working on must keep its
-   *  trace open even when the preceding assistant message is stamped complete. */
+
+  /** Frame one mounts only the newest tail — enough markdown to block the
+   *  composer for seconds if flushed all at once — then the window completes
+   *  across the next frames. Once complete it never shrinks or re-mounts:
+   *  scrolling is a pure snapshot scroll with zero runtime work. */
+  let renderLimit = $state(TAIL_RENDER_INITIAL_LIMIT)
+
+  let visibleMessages = $derived(
+    renderLimit >= messages.length ? messages : messages.slice(-renderLimit)
+  )
+
+  /** Complete the mount on the frame after first paint, in one step, so the
+   *  list is static for the lifetime of the view. */
+  $effect(() => {
+    if (renderLimit >= messages.length) return
+    let raf = 0
+    const timer = setTimeout(() => {
+      raf = requestAnimationFrame(() => {
+        raf = requestAnimationFrame(() => {
+          renderLimit = messages.length
+        })
+      })
+    }, TAIL_RENDER_GROW_DELAY_MS)
+    return () => {
+      clearTimeout(timer)
+      cancelAnimationFrame(raf)
+    }
+  })
+  /** The latest turn that already has an assistant message. A newly submitted
+   *  user follow-up is handled separately until its first assistant message is
+   *  mirrored, so it can never lend live state to the preceding trace. */
   const latestTurnInfo = $derived.by(() => {
     const startIndex = lastTurnStartIndex(messages)
     if (startIndex === -1) return { startIndex: -1, active: false }
     let endIndex = startIndex
-    while (endIndex + 1 < messages.length && messages[endIndex + 1]?.role === 'assistant') {
-      endIndex += 1
+    while (endIndex + 1 < messages.length) {
+      const next = messages[endIndex + 1]
+      if (!next) break
+      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
+        endIndex += 1
+        continue
+      }
+      break
     }
     const trailingUserOnly =
       endIndex < messages.length - 1 &&
@@ -329,6 +387,30 @@
   /** Whether the current run is confirmed by live session activity. Persisted
    *  `planning`/`executing` is not enough to make the composer or trace busy. */
   let liveBusy = $derived(controller?.busy ?? agentRuns.isLiveBusy(thread.projectId, thread.id))
+  /** A live turn whose user message is visible but whose assistant message has
+   *  not been mirrored yet. Pi can keep streaming durable parts in this state
+   *  for an entire follow-up turn. Render those parts under the user message
+   *  instead of treating the preceding assistant trace as the active one. */
+  let pendingLiveTurn = $derived.by(() => {
+    if (!conversationBusy || brainstormReportRefreshing) return null
+    const userMessageId = agentRuns.currentTurnUserMessageId(thread.projectId, conversationId)
+    if (!userMessageId) return null
+    const userMessageIndex = messages.findIndex((message) => message.id === userMessageId)
+    const userMessage = messages[userMessageIndex]
+    if (
+      userMessageIndex === -1 ||
+      !userMessage ||
+      userMessage.role !== 'user' ||
+      isActivityOnlyUserMessage(userMessage)
+    ) {
+      return null
+    }
+    const assistantMirrored = messages
+      .slice(userMessageIndex + 1)
+      .some((message) => message.role === 'assistant')
+    return assistantMirrored ? null : { userMessageId, userMessageIndex }
+  })
+  let pendingLiveTurnParts = $derived(pendingLiveTurn ? streamWorkingPartsForPendingTurn() : [])
   /** Whether the latest turn currently has any renderable working-trace parts.
    *  When the thread is busy but nothing has materialized to write to the
    *  screen yet (the agent is still connecting/assembling, or the hydrated
@@ -343,7 +425,9 @@
    *  must not be mistaken for the current work. Count nothing in that window
    *  so the bottom working placeholder keeps showing instead of a blank tail. */
   let latestTurnRenderableParts = $derived.by(() => {
-    if (conversationBusy && messages[messages.length - 1]?.role === 'user') return []
+    const lastMessage = messages[messages.length - 1]
+    if (conversationBusy && lastMessage?.role === 'user' && !isActivityOnlyUserMessage(lastMessage))
+      return []
     if (latestTurnInfo.startIndex === -1) return []
     return getTurnWorkingParts(latestTurnInfo.startIndex, conversationBusy && latestTurnInfo.active)
   })
@@ -371,6 +455,15 @@
   // Intentional initial-value capture — view is remounted (keyed) per thread.
   // svelte-ignore state_referenced_locally
   let sessionId = $state(thread.sessionId ?? '')
+  // Ephemeral sessions this thread spawned (spec/brainstorm drafting) carry
+  // their own sessionId, distinct from the thread's main `sessionId` above.
+  // Track them so permission events raised on those sessions aren't silently
+  // dropped by the exact-match gate below — that used to require leaving and
+  // returning to the thread (forcing a remount) before the permission card
+  // would appear.
+  // Non-reactive bookkeeping: only read inside event handlers, never in the template.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  const knownEphemeralSessionIds = new Set<string>()
   // Intentional initial-value capture — the view is remounted (keyed) per thread.
   // For controller-driven conversations, the controller owns the settings proxy.
   // svelte-ignore state_referenced_locally
@@ -383,18 +476,17 @@
   )
 
   function shouldHydrateEngineeringState(): boolean {
-    return (
-      !chatMode &&
-      (settings.engineeringMode === true ||
-        thread.assignmentId !== undefined ||
-        thread.achievementRole !== undefined ||
-        thread.auditState !== undefined)
-    )
+    return !chatMode
   }
 
   let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
   let pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
   let lifecycleCancelModalOpen = $state(false)
+  /** True while the Engineering lifecycle retry from the failure card is running. */
+  let engineeringLifecycleRetrying = $state(false)
+  /** While a stage failed terminally, the retry card is the only card present:
+   *  every other stage card is suppressed until the user retries or cancels. */
+  const failureRetryVisible = $derived(engineeringLifecycle?.humanGate === 'terminal_failure')
   /** A user send that was parked behind the replacement guard, resubmitted after
    *  the user confirms stopping the active Engineering work. */
   let pendingGuardedSend = $state<GuardedSendPayload | null>(null)
@@ -410,6 +502,10 @@
     if (!pending) return base
     const autopilot = pending.autopilot === true
     const selectedStages = autopilot ? [] : normalizeLifecycleStages(pending.stages)
+    // When the staged selection turns everything off, the toolbox must read as
+    // off too — a stale `startedAt` marker from a previous run would keep the
+    // icon lit after the user toggled the modes off.
+    const cleared = !autopilot && selectedStages.length === 0
     return {
       projectId: base?.projectId ?? thread.projectId,
       threadId: base?.threadId ?? thread.id,
@@ -420,23 +516,36 @@
       ...(base?.activeStage ? { activeStage: base.activeStage } : {}),
       ...(base?.humanGate ? { humanGate: base.humanGate } : {}),
       ...(base?.failure ? { failure: base.failure } : {}),
-      ...(base?.startedAt ? { startedAt: base.startedAt } : {}),
+      ...(!cleared && base?.startedAt ? { startedAt: base.startedAt } : {}),
       updatedAt: base?.updatedAt ?? Date.now()
     }
   })
 
+  /** Toolbox icon activity mirrors the staged selection, not the persisted
+   *  settings: toggles are intent-only until send, so the icon must dim or
+   *  light the moment a switch flips — not after the next message.
+   *  Without a staged selection the persisted lifecycle stays authoritative. */
+  /** Whether the thread currently runs any Engineering lifecycle stage — a
+   *  staged (intent-only) selection wins over the persisted lifecycle state. */
+  const engineeringOn = $derived.by(() => {
+    const pending = pendingLifecycleSelection
+    if (pending) {
+      return pending.autopilot === true || normalizeLifecycleStages(pending.stages).length > 0
+    }
+    const lifecycle = engineeringLifecycle
+    return (
+      lifecycle !== null &&
+      ((lifecycle.selection ?? 'none') !== 'none' || lifecycle.startedAt !== undefined)
+    )
+  })
+
   function settingsForEngineeringState(state: EngineeringLifecycleState | null): ThreadSettings {
     if (!state || (state.selectedStages.length === 0 && !state.autopilot)) {
-      return { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
+      return { ...settings, assignmentMode: false, loopMode: false }
     }
     const { selectedStages, autopilot } = state
     return {
       ...settings,
-      engineeringMode:
-        autopilot ||
-        selectedStages.includes('brainstorm') ||
-        selectedStages.includes('prd') ||
-        selectedStages.includes('spec'),
       assignmentMode: autopilot || selectedStages.includes('assignment'),
       loopMode: autopilot || selectedStages.includes('achievement')
     }
@@ -458,6 +567,10 @@
    *  assignment offer cards, or pop the replacement guard. */
   function selectEngineeringLifecycle(input: EngineeringLifecycleSelectionInput): void {
     pendingLifecycleSelection = input
+    // Persist the staged intent so the switches stay exactly where the user
+    // left them across thread switches and app restarts — a send must never
+    // steer a different prompt than the one the switches currently show.
+    saveLifecycleIntent(thread.projectId, thread.id, input)
   }
 
   async function confirmLifecycleReplacement(): Promise<void> {
@@ -470,6 +583,9 @@
     )
     lifecycleCancelModalOpen = false
     pendingLifecycleSelection = null
+    // The staged intent was either applied or discarded by this confirmation —
+    // it must not resurface on the next mount.
+    clearLifecycleIntent(thread.projectId, thread.id)
     if (replacement.stages.length > 0 || replacement.autopilot) {
       await applyLifecycleSelection(replacement)
     } else {
@@ -494,6 +610,7 @@
       )
       // The parked draft was re-seeded into the composer; the send now owns it.
       rendererRecovery.clearDraft(thread.projectId, thread.id)
+      publishDraftActivity(thread.projectId, thread.id, false)
       composerRestoreKey += 1
     }
   }
@@ -501,6 +618,7 @@
   async function retryEngineeringLifecycle(): Promise<void> {
     const current = engineeringLifecycle
     if (current?.humanGate !== 'terminal_failure' || !current.resumeToken) return
+    engineeringLifecycleRetrying = true
     try {
       engineeringLifecycle = await invoke(
         'engineeringLifecycle:retry',
@@ -510,30 +628,28 @@
       )
       updateSettings(settingsForEngineeringState(engineeringLifecycle))
       const stage = engineeringLifecycle.activeStage
+      const failureNote = current.failure?.trim()
+        ? ` The previous attempt failed with: ${current.failure.trim()}`
+        : ''
       if (stage === 'brainstorm') {
-        const active = await invoke('brainstorm:getActive', thread.projectId, thread.id)
-        if (active) applyBrainstormDocument(active)
-        else
-          await sendMessage(
-            'Retry the persisted Brainstorm stage using the existing conversation and project context.',
-            [],
-            undefined,
-            true
-          )
+        // Retry always continues the same stage in the same conversation — the
+        // agent has the full history, so never shortcut to the stale document.
+        await sendMessage(
+          `Retry the persisted Brainstorm stage using the existing conversation and project context.${failureNote}`,
+          [],
+          undefined,
+          true
+        )
       } else if (stage === 'prd') {
-        const active = await invoke('prd:getActive', thread.projectId, thread.id)
-        if (active) prd = active
-        else {
-          prd = await invoke(
-            'agent:generatePrd',
-            thread.projectId,
-            thread.id,
-            settings,
-            'Retry the persisted PRD stage using the existing conversation, finalized Brainstorm, and project context.',
-            [],
-            messageId()
-          )
-        }
+        prd = await invoke(
+          'agent:generatePrd',
+          thread.projectId,
+          thread.id,
+          settings,
+          `Retry the persisted PRD stage using the existing conversation, finalized Brainstorm, and project context.${failureNote}`,
+          [],
+          messageId()
+        )
       } else if (stage === 'spec') {
         await setActiveSpec(await invoke('agent:ensureInitialSpec', thread.projectId, thread.id))
       } else if (stage === 'assignment') {
@@ -551,6 +667,26 @@
       errorMessage =
         error instanceof Error ? error.message : 'The Engineering stage could not retry.'
       engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+    } finally {
+      engineeringLifecycleRetrying = false
+    }
+  }
+
+  /** Stop the Engineering lifecycle from the prominent failure card. The failed
+   *  stage already ended, so no in-flight turn needs the replacement guard —
+   *  cancelling reveals the normal card for the stage underneath. */
+  async function cancelEngineeringFailure(): Promise<void> {
+    try {
+      engineeringLifecycle = await invoke(
+        'engineeringLifecycle:cancel',
+        thread.projectId,
+        thread.id,
+        true
+      )
+      updateSettings(settingsForEngineeringState(engineeringLifecycle))
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The Engineering stage could not be cancelled.'
     }
   }
   /** Sticky snapshot of the selection that started the live turn. Every working
@@ -588,7 +724,7 @@
   /** Chats are for questions and research: they never inject the Engineering
    *  workflow and always run with auto permission review. */
   function normalizeChatSettings(next: ThreadSettings): ThreadSettings {
-    return { ...next, engineeringMode: false, permissionLevel: 'auto_review' }
+    return { ...next, permissionLevel: 'auto_review' }
   }
 
   /** Commit to the chat-scoped last-used store on the Chats tab, and to the
@@ -623,6 +759,10 @@
   }
 
   let commands = $state<ScopedHarnessCommand[]>([])
+  /** Skills visible to the thread's active harness: harness-native, global-layer,
+   *  and CodeInOven-registered (Utilities) skills. Rendered as slash actions. */
+  let capabilitySkills = $state<AgentCapabilityEntry[]>([])
+  let capabilityHarnessName = $state('')
   let pendingPermissions = $state<PermissionRequest[]>([])
   let pendingImageDescriptorError = $state<ImageDescriptorErrorRequest | null>(null)
   /**
@@ -725,7 +865,7 @@
     if (visibleProviderStatus !== seenProviderStatusKey) {
       seenProviderStatusKey = visibleProviderStatus
       statusCardSettings = chatMode
-        ? { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
+        ? { ...settings, assignmentMode: false, loopMode: false }
         : { ...settings }
     } else if (visibleProviderStatus === null && statusCardSettings !== null) {
       statusCardSettings = null
@@ -742,6 +882,12 @@
     label: providerName,
     kind: 'harness'
   })
+  /** Global-layer skills shared by every project and harness. */
+  const globalSkillActionSource = {
+    id: 'global-skills',
+    label: 'Global',
+    kind: 'app'
+  } satisfies ActionSource
   /** Thinking levels derived from all provider model presets, deduplicated. */
   let actionThinkingLevels = $derived.by(() => {
     const seen = new SvelteSet<string>()
@@ -768,6 +914,64 @@
     { id: 'auto_review', label: 'Auto Review' },
     { id: 'full_access', label: 'Full Access' }
   ]
+
+  /** Engineering lifecycle stages exposed as individual action-menu toggles.
+   *  Mirrors the Engineering Toolbox rows so both surfaces stay in sync. */
+  const engineeringStageActions: ReadonlyArray<{
+    stage: EngineeringLifecycleStage
+    label: string
+    description: string
+    keywords: string[]
+  }> = [
+    {
+      stage: 'brainstorm',
+      label: 'Brainstorm',
+      description: 'Research, prototype and align your vision.',
+      keywords: ['brainstorm', 'research', 'vision']
+    },
+    {
+      stage: 'prd',
+      label: 'PRD',
+      description: 'Define product requirements, usecases and outcomes.',
+      keywords: ['prd', 'product', 'requirements']
+    },
+    {
+      stage: 'spec',
+      label: 'Spec',
+      description: 'Create an implementation-ready contract.',
+      keywords: ['spec', 'specification', 'contract']
+    },
+    {
+      stage: 'assignment',
+      label: 'Assignment',
+      description: 'Break up your tasks & assign to worker agents.',
+      keywords: ['assignment', 'coordinator', 'workers', 'parallel']
+    },
+    {
+      stage: 'achievement',
+      label: 'Achievement',
+      description: 'Spec, Implement, Audit and rework until complete.',
+      keywords: ['achievement', 'loop', 'goal', 'audit', 'implementation']
+    }
+  ]
+
+  /** The lifecycle selection currently in force: a staged (intent-only)
+   *  selection from the toolbox or action menu wins over the persisted one. */
+  const effectiveLifecycleSelection = $derived.by(
+    (): { stages: EngineeringLifecycleStage[]; autopilot: boolean } => {
+      const pending = pendingLifecycleSelection
+      if (pending) {
+        return {
+          stages: normalizeLifecycleStages(pending.stages),
+          autopilot: pending.autopilot === true
+        }
+      }
+      return {
+        stages: normalizeLifecycleStages(engineeringLifecycle?.selectedStages ?? []),
+        autopilot: engineeringLifecycle?.autopilot === true
+      }
+    }
+  )
 
   function actionId(value: string): ActionDefinition['id'] {
     return value as ActionDefinition['id']
@@ -820,53 +1024,48 @@
     }
 
     if (!chatMode) {
-      actions.push(
-        {
-          id: 'mode:engineering',
-          title: settings.engineeringMode ? 'Turn off Engineering' : 'Turn on Engineering',
-          description: settings.engineeringMode
-            ? 'Use a direct conversation without the specification workflow'
-            : 'Use the specification review and implementation workflow',
+      // Engineering is a set of lifecycle stages, not one switch: expose every
+      // stage as its own toggle so "turn engineering on/off" is never ambiguous.
+      // Each action stages the selection exactly like the Engineering Toolbox —
+      // intent only, applied when the next message is sent.
+      const lifecycle = effectiveLifecycleSelection
+      for (const stage of engineeringStageActions) {
+        const enabled = lifecycle.autopilot || lifecycle.stages.includes(stage.stage)
+        actions.push({
+          id: actionId(`mode:stage:${stage.stage}`),
+          title: enabled ? `Turn off ${stage.label}` : `Turn on ${stage.label}`,
+          description: stage.description,
           category: 'mode',
           source: applicationActionSource,
-          shortcut: ['⇧', 'Tab'],
-          keywords: ['engineer', 'specification', 'workflow']
-        },
-        {
-          id: 'mode:assignment',
-          title: settings.assignmentMode ? 'Turn off Assignment' : 'Turn on Assignment',
-          description: settings.assignmentMode
-            ? 'Return to a single-agent engineering workflow'
-            : 'Coordinate a plan across specialized worker threads',
-          category: 'mode',
-          source: applicationActionSource,
-          keywords: ['assignment', 'coordinator', 'workers', 'parallel']
-        },
-        {
-          id: 'mode:loop',
-          title: settings.loopMode ? 'Turn off Achievement' : 'Turn on Achievement',
-          description: settings.loopMode
-            ? 'Stop automatic audit and corrective implementation cycles'
-            : 'Automatically audit and correct the approved implementation until it passes',
-          category: 'mode',
-          source: applicationActionSource,
-          keywords: ['loop', 'achievement', 'goal', 'audit', 'implementation']
-        }
-      )
-    }
-
-    for (const permission of actionPermissionLevels) {
+          keywords: stage.keywords
+        })
+      }
       actions.push({
-        id: actionId(`mode:permission:${permission.id}`),
-        title: `Permissions: ${permission.label}`,
-        description:
-          permission.id === 'full_access'
-            ? 'Run in yolo mode — every operation auto-approved'
-            : 'Auto-run every permission unless it is explicitly denied',
+        id: 'mode:autopilot',
+        title: lifecycle.autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot',
+        description: 'Run every Engineering stage on full autonomy, reworking until complete.',
         category: 'mode',
         source: applicationActionSource,
-        keywords: ['access', 'approval', 'security', permission.label]
+        keywords: ['autopilot', 'auto', 'pilot', 'autonomy', 'engineering']
       })
+    }
+
+    // Chat mode only surfaces permission levels once File System is enabled —
+    // chats run with auto permission review until the user opts into files.
+    if (!chatMode || settings.fileSystemMode === true) {
+      for (const permission of actionPermissionLevels) {
+        actions.push({
+          id: actionId(`mode:permission:${permission.id}`),
+          title: `Permissions: ${permission.label}`,
+          description:
+            permission.id === 'full_access'
+              ? 'Run in yolo mode — every operation auto-approved'
+              : 'Auto-run every permission unless it is explicitly denied',
+          category: 'mode',
+          source: applicationActionSource,
+          keywords: ['access', 'approval', 'security', permission.label]
+        })
+      }
     }
 
     actions.push({
@@ -876,7 +1075,7 @@
       category: 'command',
       source: applicationActionSource,
       keywords: ['summarize', 'context', 'tokens'],
-      ...(!['opencode', 'codex'].includes(settings.harnessId)
+      ...(!supportsManualCompaction(settings.harnessId, providerStore.providers)
         ? { disabledReason: `${providerName} does not support manual compaction` }
         : busy
           ? { disabledReason: 'Wait for the active run to finish' }
@@ -886,7 +1085,9 @@
     // Quick chat is anchored at the last agent turn, so it only makes sense once
     // the agent has responded. It deliberately stays usable while the agent is
     // working — no busy/commandExecuting disabledReason.
-    if (messages.some((message) => message.role === 'assistant')) {
+    // Controller-driven views (quick chats) never offer it — a quick chat
+    // cannot open another quick chat from its own last turn.
+    if (!hasController && messages.some((message) => message.role === 'assistant')) {
       actions.push({
         id: 'command:quick-chat',
         title: '/quick chat',
@@ -907,6 +1108,52 @@
         source: harnessActionSource,
         keywords: [command.name, command.source, settings.harnessId],
         ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+      })
+    }
+
+    // CodeInOven utility turn — the slash spelling of the @cio-utility composer
+    // tag. Selecting sends the tag (plus any typed arguments) through the normal
+    // send path, so the main-process utility orchestration owns the contract.
+    actions.push({
+      id: 'command:cio-utility',
+      title: '/cio-utility',
+      description: 'Start a CodeInOven utility turn — install utilities or debug the app',
+      category: 'command',
+      source: applicationActionSource,
+      keywords: ['cio', 'utility', 'utilities', 'setup', 'install', 'skill', 'mcp', 'debug'],
+      slashCommand: true,
+      ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+    })
+
+    // Skills the thread's harness can see but does not expose as native slash
+    // commands: global-layer skills and CodeInOven-registered skills. Harness-
+    // reported skills are skipped — they are already listed above.
+    const harnessCommandNames = new Set(commands.map((command) => command.name.toLocaleLowerCase()))
+    for (const skill of capabilitySkills) {
+      if (harnessCommandNames.has(skill.name.toLocaleLowerCase())) continue
+      actions.push({
+        id: actionId(`cio-skill:${skill.id}`),
+        title: `/${skill.name}`,
+        description:
+          skill.origin === 'global'
+            ? `Global skill · ${skill.description ?? 'Available in every project'}`
+            : skill.origin === 'application'
+              ? `CodeInOven skill · ${skill.description ?? 'Installed via Utilities'}`
+              : `${capabilityHarnessName || 'Harness'} skill · ${skill.description ?? ''}`.trim(),
+        category: 'skill',
+        source:
+          skill.origin === 'harness'
+            ? harnessActionSource
+            : skill.origin === 'global'
+              ? globalSkillActionSource
+              : applicationActionSource,
+        keywords: [skill.name, skill.origin, 'skill'],
+        slashCommand: true,
+        ...(!skill.enabled
+          ? { disabledReason: 'Disabled in Utilities' }
+          : busy || commandExecuting
+            ? { disabledReason: 'Wait for the active run to finish' }
+            : {})
       })
     }
 
@@ -1255,6 +1502,15 @@
    *  don't hammer the harness CLIs. */
   let accountUsageFetchedAt = 0
   const ACCOUNT_USAGE_CACHE_MS = 5000
+  /** Fast drivers (pi answers over an in-memory RPC session in a few ms)
+   *  would make the loading bar flash imperceptibly, reading as "nothing
+   *  happened". Hold the fetching state briefly so the hover always gives
+   *  the same visible feedback the slower harness CLIs produce naturally. */
+  const ACCOUNT_USAGE_MIN_LOADING_MS = 800
+
+  function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+  }
 
   function revealContextUsage(): void {
     if (contextUsage) commitContextUsage(contextUsage)
@@ -1318,6 +1574,9 @@
     } catch {
       // Best-effort quota refresh — never surface a transient harness failure.
     } finally {
+      const elapsed = Date.now() - accountUsageFetchedAt
+      const wait = Math.max(0, ACCOUNT_USAGE_MIN_LOADING_MS - elapsed)
+      if (wait > 0) await delay(wait)
       refreshingAccountUsage = false
     }
   }
@@ -1663,7 +1922,7 @@
   function responseReferenceContext(): string | undefined {
     if (responseReferences.length === 0) return undefined
     return [
-      'The user attached these excerpts from your earlier response as references:',
+      'The user quoted excerpts from your earlier response as references. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address — if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
       ...responseReferences.map((reference) => {
         const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
         return `[${reference.label}]\n${comment}<selection>\n${reference.text}\n</selection>`
@@ -1748,6 +2007,7 @@
           return
         }
         pendingLifecycleSelection = null
+        clearLifecycleIntent(thread.projectId, thread.id)
         await applyLifecycleSelection(staged)
       }
       await sendMessage(
@@ -1808,6 +2068,35 @@
     )
   }
 
+  /** Spin the selection off into a brand-new thread in the same project: the
+   *  text is seeded as the fresh composer's draft, wrapped in a txt code block
+   *  with breathing room above and below so the user can add context around
+   *  it, and immediately kick off a task from it. The fence widens when the
+   *  selection itself contains triple backticks so the block stays intact. */
+  function openSelectionInNewThread(): void {
+    const selection = responseSelection
+    if (!selection) return
+    closeResponseSelection()
+    const fence = selection.text.includes('```') ? '````' : '```'
+    const draft = `\n${fence}txt\n${selection.text}\n${fence}\n`
+    const project = scopeState.projectRecords.find((p) => p.id === thread.projectId) ?? null
+    invoke('thread:create', {
+      projectId: thread.projectId,
+      providerId: thread.providerId,
+      title: DEFAULT_THREAD_TITLE,
+      workingDirectory: thread.workingDirectory,
+      settings: thread.settings,
+      scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
+    })
+      .then((newThread) => {
+        rendererRecovery.setDraft(newThread.projectId, newThread.id, draft)
+        workspaceState.openThread(newThread, project)
+      })
+      .catch((error) => {
+        reportError(error, 'The new thread could not be created.')
+      })
+  }
+
   let spec = $state<EngineeringSpec | null>(null)
   let brainstormWorkflow = $state<BrainstormWorkflowState | null>(null)
   let brainstorm = $state<BrainstormDocument | null>(null)
@@ -1834,6 +2123,9 @@
   let specGenerationTraceParts = $state<AgentPart[]>([])
   let specGenerationTraceActive = $state(false)
   let specGenerationTraceStartedAt = $state<number | undefined>()
+  let assignmentGenerationTraceParts = $state<AgentPart[]>([])
+  let assignmentGenerationTraceActive = $state(false)
+  let assignmentGenerationTraceStartedAt = $state<number | undefined>()
 
   function specTracePartStart(part: AgentPart): number | undefined {
     if (part.type === 'reasoning') return part.time?.start
@@ -1846,6 +2138,12 @@
     specGenerationTraceParts = []
     specGenerationTraceStartedAt = undefined
     specGenerationTraceActive = false
+  }
+
+  function clearAssignmentGenerationTrace(): void {
+    assignmentGenerationTraceParts = []
+    assignmentGenerationTraceStartedAt = undefined
+    assignmentGenerationTraceActive = false
   }
 
   function applySpecGenerationTrace(update: SpecGenerationTraceUpdate): void {
@@ -1883,6 +2181,44 @@
     })
   }
 
+  /** Live trace of the isolated Assignment draft offshoot — mirrors the spec
+   *  generation trace so the coordinator thread always bubbles up offshoot
+   *  sessions while they work. */
+  function applyAssignmentGenerationTrace(update: AssignmentGenerationTraceUpdate): void {
+    if (update.type === 'started') {
+      assignmentGenerationTraceParts = []
+      assignmentGenerationTraceStartedAt = update.startedAt
+      assignmentGenerationTraceActive = true
+      return
+    }
+    if (update.type === 'completed') {
+      clearAssignmentGenerationTrace()
+      return
+    }
+    if (update.type === 'part.updated') {
+      if (!assignmentGenerationTraceActive) {
+        assignmentGenerationTraceParts = []
+        assignmentGenerationTraceStartedAt = specTracePartStart(update.part) ?? Date.now()
+        assignmentGenerationTraceActive = true
+      }
+      const partIndex = assignmentGenerationTraceParts.findIndex(
+        (candidate) => candidate.id === update.part.id
+      )
+      assignmentGenerationTraceParts =
+        partIndex === -1
+          ? [...assignmentGenerationTraceParts, update.part]
+          : assignmentGenerationTraceParts.map((candidate, index) =>
+              index === partIndex ? update.part : candidate
+            )
+      return
+    }
+    if (!assignmentGenerationTraceActive || update.field !== 'text') return
+    assignmentGenerationTraceParts = assignmentGenerationTraceParts.map((part) => {
+      if (part.id !== update.partId || part.type !== 'reasoning') return part
+      return { ...part, text: `${part.text}${update.delta}` }
+    })
+  }
+
   let brainstormError = $state('')
   let planningResumeRequested = false
   let specVersions = $state<EngineeringSpec[]>([])
@@ -1900,6 +2236,8 @@
   let durableAuditThread = $state<Thread | undefined>()
   let assignmentCoordinatorThread = $state<Thread | undefined>()
   let assignmentBusy = $state(false)
+  /** True while the Sr. Engineer composes an Assignment draft from the approved Spec. */
+  let assignmentFormulating = $state(false)
   let assignmentError = $state('')
   let assignmentSeniorSettingsPersistence: Promise<void> = Promise.resolve()
   let assignmentFocusTaskId = $state<string | undefined>()
@@ -2000,7 +2338,7 @@
   )
   let plainEngineeringAuditAvailable = $derived(
     studioOnlyAuditWorkflow &&
-      (settings.engineeringMode === true || plainAuditTriggered) &&
+      (engineeringOn || plainAuditTriggered) &&
       spec?.status === 'approved' &&
       (auditState === 'offered' ||
         auditState === 'running' ||
@@ -2009,13 +2347,11 @@
         (auditState === undefined && auditReport !== null))
   )
   let plainEngineeringAuditRunning = $derived(
-    studioOnlyAuditWorkflow &&
-      (settings.engineeringMode === true || plainAuditTriggered) &&
-      auditState === 'running'
+    studioOnlyAuditWorkflow && (engineeringOn || plainAuditTriggered) && auditState === 'running'
   )
   let plainEngineeringAuditReady = $derived(
     studioOnlyAuditWorkflow &&
-      (settings.engineeringMode === true || plainAuditTriggered) &&
+      (engineeringOn || plainAuditTriggered) &&
       auditState === 'report_ready' &&
       auditReport !== null
   )
@@ -2141,7 +2477,7 @@
   let achievementAutonomous = $derived(
     settings.loopMode === true &&
       spec?.status === 'approved' &&
-      settings.engineeringMode === false &&
+      !engineeringOn &&
       (settings.assignmentMode !== true ||
         (assignment !== null && !['draft', 'stopped'].includes(assignment.status)))
   )
@@ -2210,7 +2546,6 @@
   $effect(() => {
     const persisted = thread.settings
     if (persisted) {
-      settings.engineeringMode = persisted.engineeringMode
       settings.assignmentMode = persisted.assignmentMode
       settings.loopMode = persisted.loopMode
       settings.loopAuditor = persisted.loopAuditor
@@ -2232,7 +2567,6 @@
       return {
         ...settings,
         ...settings.loopAuditor,
-        engineeringMode: false,
         loopMode: false
       }
     }
@@ -2243,7 +2577,6 @@
       return {
         ...settings,
         ...inheritedAuditor,
-        engineeringMode: false,
         loopMode: false
       }
     }
@@ -2288,7 +2621,8 @@
         : 'Formulating specification'
     }
     if (specFormulating) return 'Formulating'
-    if (!settings.engineeringMode) return 'Working'
+    if (assignmentFormulating) return 'Formulating Assignment'
+    if (!engineeringOn) return 'Working'
     switch (thread.status) {
       case 'planning':
         return 'Planning'
@@ -2505,9 +2839,10 @@
     void scrollToMessageSection(target.messageId, target.section)
   })
 
-  // Feed the header's history dropdown with every user-authored message: the
+  // Feed the header's history panel with every user-authored message: the
   // full persisted history plus any live/optimistic cache messages still pending
-  // in the mirror, deduped and kept in chronological order.
+  // in the mirror, deduped and kept in chronological order. Each message carries
+  // a short work-trace preview from the turn that follows it.
   $effect(() => {
     const byId: Record<string, UserMessageSummary> = {}
     for (const entry of fullUserMessageHistory) byId[entry.id] = entry
@@ -2519,11 +2854,30 @@
         createdAt: message.createdAt
       }
     }
+    const tracePreviews = tracePreviewByUserMessage(messages)
     const userMessages = Object.values(byId)
       .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-      .map(({ id, content }) => ({ id, content }))
+      .map(({ id, content }) => ({
+        id,
+        content,
+        ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
+      }))
     workspaceState.messageCount = userMessages.length
     workspaceState.userMessages = userMessages
+  })
+
+  // Expose fork/delete to the history side panel; identity-safe cleanup below.
+  $effect(() => {
+    const actions: HistoryMessageActions = {
+      fork: (id) => void forkFromHistoryMessage(id),
+      requestDelete: requestHistoryMessageDelete,
+      busy,
+      forkingId: forkingMessageId
+    }
+    workspaceState.historyActions = actions
+    return () => {
+      if (workspaceState.historyActions === actions) workspaceState.historyActions = null
+    }
   })
 
   $effect(() => {
@@ -2615,29 +2969,10 @@
   let scrollEl = $state<HTMLDivElement | undefined>()
   /** True once the saved position (or initial bottom) has been applied. */
   let scrollRestored = $state(false)
-  /** Whether the thread was working when the view mounted. A busy thread always
-   *  re-opens at the live bottom so the last message and the streaming trace are
-   *  immediately visible on return — a saved mid-conversation offset from before
-   *  the turn grew is stale and hides the action. Captured non-reactively so the
-   *  restore decision is made once at mount; the persisted in-flight status is
-   *  included so a thread that is working but was never marked busy in the store
-   *  still re-opens at the live bottom. */
-  // svelte-ignore state_referenced_locally
-  const mountBusy = threadWorking
-  /** Changes whenever the message cache publishes, including text deltas that
-   *  keep the message and part counts unchanged. */
-  const streamVersion = $derived(threadMessages.streamRevision(thread.projectId, thread.id))
-
-  /** Small tolerance for rounding and trackpad inertia at the live bottom.
-   *  A deliberate upward scroll beyond this distance releases tail-following. */
-  const SCROLL_AT_BOTTOM_THRESHOLD = 48
 
   function isAtBottom(el: HTMLDivElement): boolean {
-    return el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_AT_BOTTOM_THRESHOLD
+    return isAtLatest(el)
   }
-
-  /** Prevent a history-page merge from being mistaken for new live content. */
-  let preservingHistoryViewport = false
 
   function onScroll(): void {
     if (!scrollEl) return
@@ -2674,10 +3009,7 @@
       return
     }
     loadingOlderMessages = true
-    preservingHistoryViewport = true
-    // Loading history is an explicit request to inspect the past. Keep live
-    // stream updates from pulling the user back to the newest message while
-    // pages are being fetched and inserted.
+    // Loading history is an explicit request to inspect the past.
     userScrolledAway = true
     try {
       // Backfill ahead of the reader: keep fetching bounded batches until
@@ -2722,60 +3054,54 @@
       // A transient page failure leaves the current window intact; the next
       // scroll or button press can retry from the same cursor.
     } finally {
-      preservingHistoryViewport = false
       loadingOlderMessages = false
     }
   }
 
-  // Restore the saved scroll position (or snap to bottom) once data is loaded.
-  // A thread the agent is working on re-opens at the live bottom instead of a
-  // saved offset: the conversation grew while the user was away, so the old
-  // pixel offset now lands mid-trace and hides the latest message + stream.
-  // This runs once: without a `scrollRestored` guard the synchronous
-  // `messages.length` read above makes the effect re-run on every message that
-  // streams in while the thread is busy, snapping the user back to the live
-  // tail and re-locking `userScrolledAway` — the exact "tail steals scroll"
-  // behaviour. Later arrivals are followed by the auto-scroll effect instead.
+  // A thread always opens at the live bottom: the latest output, the working
+  // trace, the file-changes cards. A saved pixel offset is stale the moment
+  // the conversation grows, so restoring it lands the user mid-list — never
+  // restore it. This runs once per thread (the view is remounted per thread
+  // switch); later arrivals are followed by the resize observer below.
   $effect(() => {
     if (!loaded || !scrollEl || scrollRestored) return
-    if (mountBusy) {
-      // Always anchor a busy thread to its live tail: the conversation grew
-      // while the user was away, so a stale saved offset would drop them into
-      // a blank body with the current turn's message and trace out of view.
+    void tick().then(() => {
+      if (!scrollEl || scrollRestored) return
       scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
       userScrolledAway = false
-    } else if (savedScrollState) {
-      scrollEl.scrollTop = savedScrollState.top
-      userScrolledAway = savedScrollState.awayFromBottom
-    } else {
-      scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
-      userScrolledAway = false
-    }
-    scrollRestored = true
+      // Flag the restore *after* the scroll actually ran: setting it in the
+      // effect body would poison this callback's own `scrollRestored` guard
+      // (the body runs synchronously, before `tick()` resolves) and the
+      // snap-to-bottom would never fire.
+      scrollRestored = true
+    })
   })
 
-  // After the initial restore, auto-scroll only when new content arrives and
-  // the user hasn't scrolled away from the bottom. Messages and the file-changes
-  // cards both arrive asynchronously after mount — cards mount only once the
-  // checkpoint list resolves, which can be after the initial scroll, so without
-  // this the latest changes card would sit just above the fold until the user
-  // scrolled. Reading `streamVersion` (the cache revision) makes the view follow
-  // a streaming turn even when parts accumulate inside a single message, and
-  // reading `busy` snaps back to the live bottom as soon as a run becomes
-  // active on an otherwise idle thread. A finished thread deliberately skips
-  // this effect so ordinary history scrolling is never competing with tailing.
+  // Follow the live tail without ever fighting the reader. Whenever the
+  // conversation content changes size — messages stream in, markdown and
+  // images finish rendering, cards resolve, a sent message lands — re-anchor
+  // to the latest message, but only while the reader is still at the bottom.
+  // Their first upward scroll or wheel tick sets `userScrolledAway` and the
+  // viewport is never touched again until they jump back. Native browser
+  // anchoring is disabled on the scroller because a changing trace descendant
+  // is an unstable anchor; the fixed scrollTop preserves the reader's viewport.
+  // This is purely
+  // event-driven: no timers, no animation-frame loops, so scrolling can never
+  // be interrupted by a competing writer.
   $effect(() => {
-    if (!scrollRestored) return
-    if (preservingHistoryViewport) return
-    if (!threadWorking && !restoredBusy) return
-    void messages.length
-    void checkpoints.length
-    void threadWorking
-    void streamVersion
-    void tick().then(() => {
-      if (!scrollEl || userScrolledAway) return
-      scrollEl.scrollTop = scrollEl.scrollHeight
+    const el = scrollEl
+    const content = el?.firstElementChild
+    if (!el || !(content instanceof Element)) return
+    const observer = new ResizeObserver(() => {
+      if (!scrollEl || !mayReanchorToLatest(userScrolledAway)) return
+      // Re-anchor only when the viewport actually drifted from the bottom —
+      // a no-op write here would fire a pointless scroll event per resize.
+      if (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight > 1) {
+        scrollEl.scrollTop = scrollEl.scrollHeight
+      }
     })
+    observer.observe(content)
+    return () => observer.disconnect()
   })
 
   function scrollToLatest(): void {
@@ -2837,24 +3163,43 @@
     const assistantMsg = messages[msgIndex]
     if (assistantMsg?.role !== 'assistant' || !assistantMsg.completedAt) return null
     let turnStartIndex = msgIndex - 1
-    while (turnStartIndex >= 0 && messages[turnStartIndex]?.role === 'assistant') {
-      turnStartIndex--
+    while (turnStartIndex >= 0) {
+      const message = messages[turnStartIndex]
+      if (!message) break
+      if (message.role === 'assistant') {
+        turnStartIndex--
+        continue
+      }
+      if (message.role === 'user' && isActivityOnlyUserMessage(message)) {
+        turnStartIndex--
+        continue
+      }
+      break
     }
     const userMsg = messages[turnStartIndex]
     if (userMsg?.role !== 'user' || !userMsg.createdAt) return null
     return assistantMsg.completedAt - userMsg.createdAt
   }
 
-  /** When the agent started working on the turn whose trace opens at msgIndex. */
+  /** When the agent started working on the turn whose trace opens at msgIndex.
+   *  Activity-only user messages between the prompt and the first assistant
+   *  message are skipped so the trace timer starts at the real prompt. */
   function getTurnStartTime(msgIndex: number): number | undefined {
-    const preceding = messages[msgIndex - 1]
-    return preceding?.role === 'user' ? preceding.createdAt : undefined
+    for (let i = msgIndex - 1; i >= 0; i--) {
+      const message = messages[i]
+      if (!message) break
+      if (message.role === 'assistant') break
+      if (isActivityOnlyUserMessage(message)) continue
+      return message.createdAt
+    }
+    return undefined
   }
 
   // ─── Agent session lifecycle ─────────────────────────────────────────────
 
   let unsubscribe: (() => void) | null = null
   let unsubscribeThreadUpdated: (() => void) | null = null
+  let unsubscribeLifecycleInheritance: (() => void) | null = null
 
   /** Resolves as soon as the session id exists; transcript and attention
    *  restoration continue independently and never block a new prompt. */
@@ -2888,6 +3233,8 @@
       void controller.load()
       localReady = Promise.resolve()
       sessionReady = Promise.resolve('')
+      void refreshCommands()
+      void refreshCapabilitySkills()
 
       return () => {
         alive = false
@@ -2919,11 +3266,34 @@
         .catch((error) => {
           reportError(error, 'Engineering lifecycle could not be loaded')
         })
+      // Restore a staged (not-yet-sent) Toolbox selection from a previous
+      // session or thread switch so the switches keep the user's last choice.
+      const stagedIntent = loadLifecycleIntent(mountedProjectId, mountedThreadId)
+      if (stagedIntent) pendingLifecycleSelection = stagedIntent
     }
+    // A sibling thread may inherit its Engineering lifecycle after this view
+    // already hydrated (the inheritance write is async). Re-read once the
+    // inheritance lands so the inherited switches show as on.
+    unsubscribeLifecycleInheritance = onEngineeringLifecycleInherited((inheritedThreadId) => {
+      if (!alive || inheritedThreadId !== thread.id || chatMode) {
+        return
+      }
+      void invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+        .then((state) => {
+          if (alive) engineeringLifecycle = state
+        })
+        .catch(() => {})
+    })
     scheduleResponseHighlightRestore(responseReferences)
     // This view owns dispatch of the thread's queued message while mounted;
     // the background dispatcher must defer to it to avoid a double send.
     queuedMessageDispatcher.markMounted(mountedProjectId, mountedThreadId)
+
+    // Slash menu inputs: harness commands and the skills visible to the
+    // thread's harness. Previously commands only loaded after a harness
+    // switch, leaving a freshly mounted thread's slash menu empty.
+    void refreshCommands()
+    void refreshCapabilitySkills()
 
     // Subscribe to agent events for streaming
     unsubscribe = subscribe('agent:event', (...args: unknown[]) => {
@@ -2992,6 +3362,7 @@
       }
       unsubscribe?.()
       unsubscribeThreadUpdated?.()
+      unsubscribeLifecycleInheritance?.()
       window.removeEventListener('resize', onResize)
       clearTimeout(copyResetTimer)
       workspaceState.sources = []
@@ -3411,6 +3782,7 @@
     const taskReferences = rendererRecovery.taskReferencesFor(oldProjectId, oldThreadId)
     const promptReferences = rendererRecovery.draftPromptReferences(oldProjectId, oldThreadId)
     rendererRecovery.clearDraft(oldProjectId, oldThreadId)
+    publishDraftActivity(oldProjectId, oldThreadId, false)
 
     const targetProject = scopeState.projectRecords.find((p) => p.id === targetProjectId)
     if (!targetProject) return
@@ -3464,10 +3836,17 @@
     try {
       if (busy) {
         userRequestedStop = true
-        await invoke('agent:abort', thread.projectId, thread.id)
-        clearLocalTurn()
-        agentRuns.setIdle(thread.projectId, thread.id)
-        providerStatus = null
+        if (controller) {
+          // Controller conversations (temporary chats) run on their own
+          // conversation id — abort that, never the parent thread.
+          await controller.abort()
+          providerStatus = null
+        } else {
+          await invoke('agent:abort', thread.projectId, thread.id)
+          clearLocalTurn()
+          agentRuns.setIdle(thread.projectId, thread.id)
+          providerStatus = null
+        }
       }
       await sendMessage('Continue', [], undefined, true, undefined, [], [], {
         action: 'Retry connection'
@@ -3541,6 +3920,21 @@
     errorMessage = ''
   }
 
+  /**
+   * A usage/rate-limit issue is a scheduled will-retry wait, not a failure:
+   * route it to the waiting card (countdown + retry scheduling) so the thread
+   * row keeps its "Waiting to retry" spinner instead of flashing an error
+   * badge while the card itself renders the will-retry treatment.
+   */
+  function setProviderStatusFromIssue(issue: AgentProviderIssue): void {
+    if (isUsageResetWaitIssue(issue)) {
+      providerStatus = { state: 'waiting', issue }
+      errorMessage = ''
+    } else {
+      setProviderError(issue)
+    }
+  }
+
   function handleAgentEvent(event: AgentEvent): void {
     // Controller-driven conversations handle their own live events.
     if (controller) return
@@ -3550,7 +3944,17 @@
       event.projectId === thread.projectId &&
       event.threadId === thread.id
     ) {
+      knownEphemeralSessionIds.add(event.sessionId)
       applySpecGenerationTrace(event.update)
+      return
+    }
+    if (
+      event.type === 'assignment.trace' &&
+      event.projectId === thread.projectId &&
+      event.threadId === thread.id
+    ) {
+      knownEphemeralSessionIds.add(event.sessionId)
+      applyAssignmentGenerationTrace(event.update)
       return
     }
     if (
@@ -3558,6 +3962,10 @@
       event.projectId === thread.projectId &&
       event.threadId === thread.id
     ) {
+      knownEphemeralSessionIds.add(event.sessionId)
+      if (event.update.type === 'refresh.failed') {
+        errorMessage = event.update.error
+      }
       return
     }
     if (
@@ -3574,6 +3982,7 @@
       event.threadId === thread.id
     ) {
       if (event.type === 'spec.ready') clearSpecGenerationTrace()
+      clearAssignmentGenerationTrace()
       clearLocalTurn()
       agentRuns.setIdle(thread.projectId, thread.id)
       if (providerStatus?.state !== 'error') providerStatus = null
@@ -3586,13 +3995,14 @@
     if (event.type === 'thread.error') {
       if (event.projectId !== thread.projectId || event.threadId !== thread.id) return
       clearSpecGenerationTrace()
+      clearAssignmentGenerationTrace()
       restoredBusy = false
       clearLocalTurn()
       agentRuns.setIdle(thread.projectId, thread.id)
       pendingPermissions = []
       pendingQuestionRequests = []
       pendingImageDescriptorError = null
-      setProviderError(event.issue)
+      setProviderStatusFromIssue(event.issue)
       void refreshCheckpoints()
       return
     }
@@ -3602,13 +4012,11 @@
       case 'message.part.updated': {
         if (event.sessionId !== sessionId) return
         acknowledgeLocalTurn()
-        if (isTodoToolPart(event.part)) {
-          const streamPartIndex = streamParts.findLastIndex((part) => part.id === event.part.id)
-          streamParts =
-            streamPartIndex === -1
-              ? [...streamParts, event.part]
-              : streamParts.map((part, index) => (index === streamPartIndex ? event.part : part))
-        }
+        const streamPartIndex = streamParts.findLastIndex((part) => part.id === event.part.id)
+        streamParts =
+          streamPartIndex === -1
+            ? [...streamParts, event.part]
+            : streamParts.map((part, index) => (index === streamPartIndex ? event.part : part))
         if (event.part.type === 'subagent') syncOpenSubagentTabs()
         break
       }
@@ -3632,7 +4040,7 @@
           // a session failure, so never surface the error banner.
           if (!userRequestedStop) {
             if (event.issue) {
-              setProviderError(event.issue)
+              setProviderStatusFromIssue(event.issue)
             } else {
               errorMessage = event.error
             }
@@ -3652,7 +4060,11 @@
           compactionInterruptedNotice =
             'Context compaction was interrupted before your message could be processed. Send it again to continue.'
         }
-        if (providerStatus?.state !== 'error') providerStatus = null
+        // Error and will-retry cards survive idle (the scheduled auto-resume
+        // owns the session now); everything else clears.
+        if (providerStatus?.state !== 'error' && providerStatus?.state !== 'waiting') {
+          providerStatus = null
+        }
         void refreshCheckpoints()
         setTimeout(() => void refreshEfficiencyKpis(), 100)
         scheduleReadySpecReconcile()
@@ -3668,7 +4080,7 @@
         pendingImageDescriptorError = null
         if (!userRequestedStop) {
           if (event.issue) {
-            setProviderError(event.issue)
+            setProviderStatusFromIssue(event.issue)
           } else {
             errorMessage = event.error ?? 'The harness session failed.'
           }
@@ -3706,8 +4118,18 @@
         } else if (event.status.state === 'waiting') {
           restoredBusy = false
           acknowledgeLocalTurn()
-          setIdleFromSession()
+          if (!setIdleFromSession()) return
           errorMessage = ''
+          // 'waiting' is the status a paused permission/question turn reports,
+          // but the only other update this triggers is the raw
+          // permission.asked/question.asked push, gated on an exact sessionId
+          // match. If that push is missed (or its sessionId no longer matches
+          // this view's current session), the request card never appears
+          // until the view remounts and re-fetches from scratch. Reconcile the
+          // authoritative pending queues the same way the 'idle' transition
+          // already does below, so a missed push self-heals instead of
+          // requiring the user to leave and come back.
+          if (reconcilesPendingAttention(event.status.state)) scheduleIdleAttention()
         } else if (event.status.state === 'idle') {
           const interruptedCompaction = compactionInterrupted()
           if (!setIdleFromSession()) return
@@ -3715,9 +4137,15 @@
             compactionInterruptedNotice =
               'Context compaction was interrupted before your message could be processed. Send it again to continue.'
           }
-          if (previousProviderStatus?.state !== 'error') providerStatus = null
+          // Error and will-retry cards survive idle; everything else clears.
+          if (
+            previousProviderStatus?.state !== 'error' &&
+            previousProviderStatus?.state !== 'waiting'
+          ) {
+            providerStatus = null
+          }
           scheduleReadySpecReconcile()
-          scheduleIdleAttention()
+          if (reconcilesPendingAttention(event.status.state)) scheduleIdleAttention()
         } else {
           clearLocalTurn()
           agentRuns.setIdle(thread.projectId, thread.id)
@@ -3725,7 +4153,7 @@
         break
       }
       case 'permission.asked': {
-        if (event.sessionId !== sessionId) return
+        if (event.sessionId !== sessionId && !knownEphemeralSessionIds.has(event.sessionId)) return
         pendingPermissions = [
           ...pendingPermissions.filter((request) => request.id !== event.permission.id),
           event.permission
@@ -3733,7 +4161,7 @@
         break
       }
       case 'permission.replied': {
-        if (event.sessionId !== sessionId) return
+        if (event.sessionId !== sessionId && !knownEphemeralSessionIds.has(event.sessionId)) return
         pendingPermissions = pendingPermissions.filter((request) => request.id !== event.requestId)
         break
       }
@@ -3841,6 +4269,22 @@
     }
   }
 
+  /** Load the skills the thread's harness can see (harness-native, global, and
+   *  CodeInOven-registered). Discovery is supplementary — the composer keeps
+   *  working when it fails. */
+  async function refreshCapabilitySkills(): Promise<void> {
+    const { projectId, id } = thread
+    try {
+      const capabilities = await invoke('agent:listContextCapabilities', projectId, id)
+      if (capabilities.harnessId !== settings.harnessId) return
+      capabilityHarnessName = capabilities.harnessName
+      capabilitySkills = capabilities.skill
+    } catch {
+      // Capability discovery is supplementary; messaging remains available.
+      capabilitySkills = []
+    }
+  }
+
   /** Hydrate the authoritative pending-question queue from the main process. */
   async function refreshPendingQuestions(): Promise<void> {
     const { projectId, id } = thread
@@ -3894,6 +4338,22 @@
     }
   }
 
+  /** Record the model executing the turn as vision-capable (the descriptor ran
+   *  for it by mistake) and continue the blocked turn without a description. */
+  async function reportImageDescriptorFalsePositive(requestId: string): Promise<void> {
+    const { projectId, id } = thread
+    const reportedModel = pendingImageDescriptorError?.requestingModel?.modelId
+    try {
+      await invoke('agent:replyImageDescriptor', projectId, id, requestId, 'false_positive')
+      if (reportedModel) visionModels.markReported(reportedModel)
+      pendingImageDescriptorError = null
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The vision report could not be saved.'
+      throw error
+    }
+  }
+
   function isTerminalThread(status: Thread['status']): boolean {
     return status === 'completed' || status === 'failed' || status === 'interrupted'
   }
@@ -3941,10 +4401,11 @@
     const pendingProjectReferences = queuedProjectReferences
     const pendingPresentation = queuedPresentation
     const pendingTaskReferences = queuedTaskReferences
+    const pendingStartAfterThreads = queuedStartAfterThreads
     if (!pending && !queuedHasContent) return
-    if (queuedStartAfterThreads.length > 0) {
+    if (pendingStartAfterThreads.length > 0) {
       const dependencies = await Promise.all(
-        queuedStartAfterThreads.map((reference) => invoke('thread:get', projectId, reference.id))
+        pendingStartAfterThreads.map((reference) => invoke('thread:get', projectId, reference.id))
       )
       if (dependencies.some((dependency) => !dependency || !isTerminalThread(dependency.status))) {
         idleAttentionHandled = false
@@ -3956,6 +4417,8 @@
     // the race, whoever claimed it will send it — never send here.
     if (!claimQueuedMessage(projectId, id)) return
     try {
+      // Dequeue only the head — remaining queued messages stay FIFO for the
+      // following idle transitions (one message per turn).
       clearQueuedState()
       await sendMessage(
         pending,
@@ -3980,7 +4443,8 @@
     void handleIdleAttention()
   }
 
-  /** Clear the in-memory queue and its persisted recovery entry. */
+  /** Clear the in-memory head entry and dequeue the persisted head message.
+   *  Remaining queued messages stay in the FIFO for the next idle turn. */
   function clearQueuedState(): void {
     queuedMessage = ''
     queuedAttachments = []
@@ -3994,29 +4458,50 @@
     rendererRecovery.clearQueuedMessage(thread.projectId, thread.id)
   }
 
-  /** Bring a persisted queued message back after a reload or thread remount. */
+  /** Bring persisted queued messages back after a reload or thread remount.
+   *  The head entry hydrates the in-memory copy; the rest stay in the store. */
   function restoreQueuedMessage(): void {
+    syncQueuedFromStore()
+    if (!queuedMessage && !queuedHasContent) return
     const entry = rendererRecovery.queuedMessageFor(thread.projectId, thread.id)
-    if (!entry || queuedMessage || queuedHasContent) return
-    queuedMessage = entry.text
-    queuedAttachments = entry.attachments
-    queuedPromptContext = entry.promptContext
-    queuedPromptReferences = entry.promptReferences
-    queuedProjectReferences = entry.projectReferences
-    queuedPresentation = entry.presentation
-    queuedTaskReferences = entry.taskReferences
-    queuedStartAfterThreads = entry.startAfterThreads
-    queuedHasContent =
-      entry.text !== '' ||
-      entry.attachments.length > 0 ||
-      Boolean(entry.promptContext) ||
-      entry.promptReferences.length > 0 ||
-      entry.projectReferences.length > 0 ||
-      entry.taskReferences.length > 0
+    if (!entry) return
     if (entry.promptReferences.length > 0) {
       responseReferencesState.setForThread(thread.projectId, thread.id, entry.promptReferences)
       scheduleResponseHighlightRestore(entry.promptReferences)
     }
+  }
+
+  /** Mirror the store's head queued message into the in-memory card state.
+   *  Keeps the card showing the next message the FIFO will actually send. */
+  function syncQueuedFromStore(): void {
+    const head = rendererRecovery.queuedMessageFor(thread.projectId, thread.id)
+    if (!head) {
+      queuedMessage = ''
+      queuedAttachments = []
+      queuedPromptContext = undefined
+      queuedPromptReferences = []
+      queuedProjectReferences = []
+      queuedPresentation = undefined
+      queuedTaskReferences = []
+      queuedStartAfterThreads = []
+      queuedHasContent = false
+      return
+    }
+    queuedMessage = head.text
+    queuedAttachments = head.attachments
+    queuedPromptContext = head.promptContext
+    queuedPromptReferences = head.promptReferences
+    queuedProjectReferences = head.projectReferences
+    queuedPresentation = head.presentation
+    queuedTaskReferences = head.taskReferences
+    queuedStartAfterThreads = head.startAfterThreads
+    queuedHasContent =
+      head.text !== '' ||
+      head.attachments.length > 0 ||
+      Boolean(head.promptContext) ||
+      head.promptReferences.length > 0 ||
+      head.projectReferences.length > 0 ||
+      head.taskReferences.length > 0
   }
 
   /** Recover response-selection annotations persisted with the composer draft
@@ -4051,6 +4536,8 @@
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
   let showQueueMenu = $state(false)
+  /** Count of messages waiting in the thread's FIFO queue (from the store). */
+  const queuedCount = $derived(rendererRecovery.queuedMessageCount(thread.projectId, thread.id))
   let composerRestoreKey = $state(0)
   let pendingQuestionRequests = $state<PendingAgentQuestionRequest[]>([])
   const resolvedQuestionRequestIds = new SvelteSet<string>()
@@ -4088,7 +4575,7 @@
     const current = workspaceState.focusComposerEditorCount
     if (current === focusComposerEditorBaseline) return
     focusComposerEditorBaseline = current
-    composer?.focusComposerAtEnd()
+    composer?.focusComposerAtSavedCaret()
   })
 
   /** Send or queue a message. When the agent is busy the text is queued and
@@ -4156,8 +4643,16 @@
     if (controller) {
       errorMessage = ''
       providerStatus = null
+      // A stale transport/load error must not keep the provider status card on
+      // screen while the new turn runs — the same rule the thread path follows
+      // by clearing cached error state at send time.
+      controller.clearError()
       userScrolledAway = false
       idleAttentionHandled = false
+      // Snapshot the selection this turn starts with before anything else can
+      // change it — identical to the thread path, so mid-turn composer edits
+      // never re-label the running trace.
+      captureLiveWorkingSelection()
       const payload: SendPayload = {
         text,
         attachments,
@@ -4213,6 +4708,9 @@
       queuedTaskReferences = taskReferences
       queuedStartAfterThreads = dependencyThreads
       queuedHasContent = true
+      // Append to the thread's FIFO queue — a later queued message sends after
+      // earlier ones, one per idle turn. The in-memory mirror then follows the
+      // store head so the queue card always shows the next message to send.
       rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
         text: msg,
         attachments,
@@ -4223,6 +4721,7 @@
         taskReferences,
         startAfterThreads: dependencyThreads
       })
+      syncQueuedFromStore()
       idleAttentionHandled = false
       void handleIdleAttention()
       return
@@ -4365,7 +4864,7 @@
       await tick()
       if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
       await sendPromise
-      if (settings.engineeringMode) {
+      if (engineeringOn) {
         await reconcileReadySpec()
         if (brainstormWorkflow?.stage === 'choice_pending') {
           clearLocalTurn()
@@ -4404,7 +4903,11 @@
 
   /** Stop the in-flight turn — wired to the composer's stop button and double Escape. */
   async function abortRun(): Promise<void> {
-    if (!busy) return
+    // A scheduled usage-reset retry leaves `busy` false (the session.status
+    // 'waiting' handler marks the run idle so the working UI doesn't stick),
+    // but the "Stop request" button on the provider card is shown for that
+    // same state — so this must not bail out before invoking the abort.
+    if (!busy && providerStatus?.state !== 'waiting') return
     const { projectId, id } = thread
     userRequestedStop = true
 
@@ -4444,8 +4947,35 @@
     }
   }
 
+  /** Send a CodeInOven utility turn — the slash spelling of the @cio-utility
+   *  composer tag. The main process owns the utility contract for that turn. */
+  function triggerCioUtilityTurn(args: string): void {
+    const request = args.trim()
+    sendComposerMessage(request ? `@cio-utility ${request}` : '@cio-utility', [])
+  }
+
+  /** Invoke a capability skill the harness does not expose as a native slash
+   *  command by sending a turn that asks the agent to load and follow it. */
+  function triggerCapabilitySkill(actionKey: string, args: string): void {
+    const skill = capabilitySkills.find((candidate) => `cio-skill:${candidate.id}` === actionKey)
+    if (!skill) return
+    const request = args.trim()
+    sendComposerMessage(
+      request ? `${request}\n\n(Use the "${skill.name}" skill for this.)` : `Use the "${skill.name}" skill.`,
+      []
+    )
+  }
+
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
     if (busy || commandExecuting) return
+    if (commandId === 'command:cio-utility') {
+      triggerCioUtilityTurn(args)
+      return
+    }
+    if (commandId.startsWith('cio-skill:')) {
+      triggerCapabilitySkill(commandId, args)
+      return
+    }
     const { projectId, id } = thread
     const command = commands.find((candidate) => actionId(candidate.id) === commandId)
     if (!command) return
@@ -4499,36 +5029,24 @@
       return
     }
 
-    if (action.id === 'mode:engineering') {
-      const engineeringMode = !settings.engineeringMode
-      updateSettings({
-        ...settings,
-        engineeringMode,
-        assignmentMode: engineeringMode ? settings.assignmentMode : false,
-        loopMode: engineeringMode ? settings.loopMode : false
-      })
+    // Engineering lifecycle stage toggles stage their selection exactly like
+    // the Engineering Toolbox: intent only, applied when a message is sent.
+    const stageToggle = /^mode:stage:(brainstorm|prd|spec|assignment|achievement)$/u.exec(action.id)
+    if (stageToggle) {
+      const current = effectiveLifecycleSelection
+      if (current.autopilot) return
+      const stage = stageToggle[1] as EngineeringLifecycleStage
+      const stages = current.stages.includes(stage)
+        ? current.stages.filter((candidate) => candidate !== stage)
+        : [...current.stages, stage]
+      selectEngineeringLifecycle({ stages, autopilot: false })
       return
     }
 
-    if (action.id === 'mode:assignment') {
-      const assignmentMode = settings.assignmentMode !== true
-      updateSettings({
-        ...settings,
-        engineeringMode: assignmentMode ? true : settings.engineeringMode,
-        assignmentMode,
-        loopMode: settings.loopMode
-      })
-      return
-    }
-
-    if (action.id === 'mode:loop') {
-      const loopMode = settings.loopMode !== true
-      updateSettings({
-        ...settings,
-        engineeringMode: loopMode ? true : settings.engineeringMode,
-        assignmentMode: settings.assignmentMode,
-        loopMode
-      })
+    if (action.id === 'mode:autopilot') {
+      const current = effectiveLifecycleSelection
+      const autopilot = !current.autopilot
+      selectEngineeringLifecycle({ stages: autopilot ? [] : current.stages, autopilot })
       return
     }
 
@@ -4550,8 +5068,46 @@
       return
     }
 
+    // App-owned slash commands (/cio-utility and capability skills) route
+    // through the same handler the composer's submit path uses.
+    if (action.id === 'command:cio-utility' || action.id.startsWith('cio-skill:')) {
+      await executeHarnessCommand(action.id, '')
+      return
+    }
+
     const command = commands.find((candidate) => actionId(candidate.id) === action.id)
     if (command) await executeHarnessCommand(command.id, '')
+  }
+
+  /** Undo a steered message that is still held before harness delivery. The
+   *  steer never reached the agent, so the session continues untouched; on
+   *  threads the text returns to the composer queue for editing/resending. */
+  async function undoHeldSteer(msg: AgentMessage): Promise<void> {
+    try {
+      await threadMessages.discardSteer(thread.projectId, conversationId, msg.id)
+      // Threads only: put the undone steer back into the FIFO composer queue
+      // so the text and attachments are not lost — the user can edit and
+      // resend. Temporary chats just drop the message.
+      if (conversationId !== thread.id) return
+      const text = msg.parts
+        .filter((part) => part.type === 'text')
+        .map((part) => part.text)
+        .join('\n\n')
+      const attachments: PromptAttachment[] = msg.parts
+        .filter((part) => part.type === 'file')
+        .map((part) => ({ mime: part.mime, url: part.url, filename: part.filename }))
+      rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
+        text,
+        attachments,
+        promptReferences: [],
+        projectReferences: [],
+        taskReferences: [],
+        startAfterThreads: []
+      })
+      syncQueuedFromStore()
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The steer could not be undone.'
+    }
   }
 
   /** Steer — send the queued message immediately as an intervention while the agent is working. */
@@ -4584,6 +5140,11 @@
     }
     clearQueuedState()
     showQueueMenu = false
+    // The steer opens a fresh trace under the steered message. Drop the
+    // durable fold loaded at mount (and its todo snapshot) — it describes the
+    // turn the steer is interrupting, and a steered continuation keeps the
+    // old turn's stream anchor, so it must never feed the new trace.
+    clearStreamParts()
     // Snap to bottom — the steer message just appeared
     userScrolledAway = false
     errorMessage = ''
@@ -4618,6 +5179,9 @@
         queuedPresentation = presentation
         queuedTaskReferences = taskReferences
         queuedHasContent = true
+        // Put it back at the front of the FIFO (steer consumed the head).
+        const remaining = rendererRecovery.queuedMessagesFor(projectId, id)
+        rendererRecovery.clearAllQueuedMessages(projectId, id)
         rendererRecovery.setQueuedMessage(projectId, id, {
           text: msg,
           attachments,
@@ -4628,6 +5192,8 @@
           taskReferences,
           startAfterThreads: []
         })
+        for (const entry of remaining) rendererRecovery.setQueuedMessage(projectId, id, entry)
+        syncQueuedFromStore()
       }
       errorMessage = error instanceof Error ? error.message : 'Steer message could not be sent.'
       if (promptReferences.length > 0) {
@@ -4659,6 +5225,21 @@
   function deleteQueuedMessage(): void {
     showQueueMenu = false
     clearQueuedState()
+  }
+
+  /** Delete every queued message for the thread. */
+  function deleteAllQueuedMessages(): void {
+    showQueueMenu = false
+    queuedMessage = ''
+    queuedAttachments = []
+    queuedPromptContext = undefined
+    queuedPromptReferences = []
+    queuedProjectReferences = []
+    queuedPresentation = undefined
+    queuedTaskReferences = []
+    queuedStartAfterThreads = []
+    queuedHasContent = false
+    rendererRecovery.clearAllQueuedMessages(thread.projectId, thread.id)
   }
 
   // ─── Permissions ───────────────────────────────────────────────────────
@@ -4834,6 +5415,7 @@
       agentRuns.setIdle(thread.projectId, thread.id)
       if (providerStatus?.state !== 'error') providerStatus = null
     }
+    if (assignment) clearAssignmentGenerationTrace()
     brainstormWorkflow = workflow
     brainstorm = activeBrainstorm
     prd = activePrd
@@ -5174,13 +5756,11 @@
       settings = engineeringLifecycle?.autopilot
         ? {
             ...settings,
-            engineeringMode: false,
             assignmentMode: true,
             loopMode: true
           }
         : {
             ...settings,
-            engineeringMode: false,
             assignmentMode: false
           }
       commitSettings(settings)
@@ -5228,8 +5808,33 @@
   async function generateAssignmentDraft(): Promise<void> {
     if (!spec || assignmentBusy) return
     assignmentBusy = true
+    assignmentFormulating = true
     assignmentError = ''
     try {
+      // The main process only generates an Assignment from an approved Spec.
+      // Sign the active Spec in place (draft -> in_review -> approved) so the
+      // explicit "Generate Assignment" action never fails on an unapproved Spec.
+      let signingSpec = spec
+      if (signingSpec.status === 'draft') {
+        signingSpec = await invoke(
+          'spec:setReview',
+          signingSpec.projectId,
+          signingSpec.threadId,
+          signingSpec.id,
+          signingSpec.version
+        )
+        spec = signingSpec
+      }
+      if (signingSpec.status === 'in_review') {
+        signingSpec = await invoke(
+          'spec:approve',
+          signingSpec.projectId,
+          signingSpec.threadId,
+          signingSpec.id,
+          signingSpec.version
+        )
+        await setActiveSpec(signingSpec)
+      }
       assignment = await invoke(
         'agent:generateAssignmentDraft',
         thread.projectId,
@@ -5253,6 +5858,7 @@
       errorMessage = assignmentError
     } finally {
       assignmentBusy = false
+      assignmentFormulating = false
     }
   }
 
@@ -5696,7 +6302,7 @@
       errorMessage = 'Prototype preview origin is not configured for this deployment.'
       return
     }
-    await invoke('shell:openExternal', new URL(previewPath, `${origin}/`).toString())
+    await openInBrowser(new URL(previewPath, `${origin}/`).toString())
   }
 
   async function saveBrainstorm(edited: BrainstormDocument): Promise<BrainstormDocument | null> {
@@ -5986,16 +6592,30 @@
       const feedback =
         notes.trim() ||
         'I want to continue discussing this Brainstorm before preparing the specification.'
-      await sendMessage(
-        feedback,
-        [],
-        undefined,
-        undefined,
-        await brainstormReviewDiscussionContext(draft, notes, reviewChanges),
-        [],
-        [],
-        workflowActionPresentation('Review Brainstorm', notes)
-      )
+      try {
+        await sendMessage(
+          feedback,
+          [],
+          undefined,
+          // A deliberate "Discuss" click must never fall into the queue-behind-
+          // busy path: `busy` can still read stale-true for a moment right
+          // after the previous turn (e.g. a prototype build) finishes, which
+          // silently deferred the message with no feedback and made it look
+          // like the click did nothing.
+          true,
+          await brainstormReviewDiscussionContext(draft, notes, reviewChanges),
+          [],
+          [],
+          workflowActionPresentation('Review Brainstorm', notes)
+        )
+      } catch (error) {
+        brainstormError =
+          error instanceof Error
+            ? error.message
+            : 'The Brainstorm discussion message failed to send.'
+        errorMessage = brainstormError
+        throw error
+      }
       return
     }
     brainstormBusy = true
@@ -6125,7 +6745,8 @@
           current.threadId,
           current.id,
           current.version,
-          `Generate one direct HiFi prototype H1 based on selected LoFi prototype ${prototypeId}. Preserve all existing LoFi prototypes and the aligned Brainstorm content.`
+          `Generate one direct HiFi prototype H1 based on selected LoFi prototype ${prototypeId}. Preserve all existing LoFi prototypes and the aligned Brainstorm content.`,
+          { fidelity: 'hifi', count: 1 }
         )
       )
     } catch (error) {
@@ -6256,7 +6877,7 @@
   }
 
   function persistQueuedStartAfterThreads(): void {
-    rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
+    rendererRecovery.updateQueuedHead(thread.projectId, thread.id, {
       text: queuedMessage,
       attachments: queuedAttachments,
       promptContext: queuedPromptContext,
@@ -6515,6 +7136,10 @@
   }
 
   async function openDurableAuditWork(): Promise<void> {
+    if (durableAuditThread) {
+      workspaceState.openThread(durableAuditThread, project)
+      return
+    }
     coordinatorDockState.setAutoOpen(true)
     contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
   }
@@ -6740,7 +7365,6 @@
         ...settings,
         ...normalized,
         permissionLevel: 'auto_review',
-        engineeringMode: false,
         assignmentMode: false,
         loopMode: false,
         loopAuditor: undefined
@@ -6786,7 +7410,6 @@
           ? {
               ...statusCardSettings,
               ...normalized,
-              engineeringMode: false,
               assignmentMode: false,
               loopMode: false
             }
@@ -6817,7 +7440,7 @@
           'achievement'
         )
       }
-      settings = { ...settings, engineeringMode: false, loopMode: false }
+      settings = { ...settings, loopMode: false }
       commitSettings(settings)
       await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
       auditState = undefined
@@ -7383,7 +8006,7 @@
             else await generateAssignmentDraft()
             return
           }
-          if (nextEngineeringSettings.engineeringMode || nextEngineeringSettings.loopMode) {
+          if (nextEngineeringSettings.assignmentMode || nextEngineeringSettings.loopMode) {
             return
           }
         }
@@ -7447,7 +8070,8 @@
       'projectFiles:search',
       thread.projectId,
       query,
-      type === 'project_rule' ? 'rules' : 'all'
+      type === 'project_rule' ? 'rules' : 'all',
+      workspaceState.activeScopeBucketIdFor(thread.projectId)
     )
   }
 
@@ -7616,7 +8240,7 @@
         proactiveAuthIssue = null
       }
     }
-    if (seniorModelChanged && normalized.engineeringMode) {
+    if (seniorModelChanged && engineeringOn) {
       syncAgentRole('seniorEngineer', {
         harnessId: normalized.harnessId,
         providerId: normalized.providerId,
@@ -7628,9 +8252,15 @@
     commitSettings(normalized)
     const persistence = invoke('thread:updateSettings', thread.projectId, thread.id, normalized)
     if (harnessChanged) {
-      void persistence.then(refreshCommands).catch(() => {
-        commands = []
-      })
+      void persistence
+        .then(() => {
+          refreshCommands()
+          refreshCapabilitySkills()
+        })
+        .catch(() => {
+          commands = []
+          capabilitySkills = []
+        })
     } else {
       persistence.catch(() => {
         // Non-fatal — the send path persists the settings again.
@@ -7681,6 +8311,45 @@
   function specActionLabel(action: SpecActionIntent): string {
     if (action === 'request') return 'Spec requested'
     return action === 'implement' ? 'Implement spec' : 'Review spec'
+  }
+
+  /**
+   * Short work-trace snippets per user message, used as tree children in the
+   * history side panel: up to three labels from the turn that follows the
+   * message (its assistant reply), stopping at the next user message.
+   */
+  function tracePreviewByUserMessage(entries: AgentMessage[]): SvelteMap<string, string[]> {
+    const TRACE_PREVIEW_LIMIT = 3
+    const SNIPPET_LIMIT = 80
+    const previews = new SvelteMap<string, string[]>()
+    let currentUser: string | null = null
+    let snippets: string[] = []
+    const push = (snippet: string): void => {
+      if (currentUser === null || snippets.length >= TRACE_PREVIEW_LIMIT) return
+      const line = snippet.trim().split('\n', 1)[0] ?? ''
+      if (line.length === 0) return
+      snippets.push(line.length > SNIPPET_LIMIT ? `${line.slice(0, SNIPPET_LIMIT)}…` : line)
+    }
+    const flush = (): void => {
+      if (currentUser !== null && snippets.length > 0) previews.set(currentUser, snippets)
+      currentUser = null
+      snippets = []
+    }
+    for (const message of entries) {
+      if (message.role === 'user') {
+        flush()
+        currentUser = message.id
+        continue
+      }
+      if (currentUser === null) continue
+      for (const part of message.parts) {
+        if (part.type === 'tool') push(part.tool)
+        else if (part.type === 'reasoning') push(part.summary ?? part.text)
+        else if (part.type === 'subagent') push(part.activity.description)
+      }
+    }
+    flush()
+    return previews
   }
 
   /** Return only content stored in the durable display parts. */
@@ -7743,8 +8412,38 @@
   let editingText = $state('')
   let editingMessageAttachments = $state<PromptAttachment[]>([])
   let editingMessageProjectReferences = $state<PromptProjectReference[]>([])
-  let messagePendingDelete = $state<AgentMessage | null>(null)
+  /** A deletion awaiting confirmation, with the scope chosen in the history panel. */
+  interface PendingMessageDelete {
+    id: string
+    content: string
+    mode: 'down' | 'single' | 'up'
+  }
+  let messagePendingDelete = $state<PendingMessageDelete | null>(null)
   let deletingMessageId = $state<string | null>(null)
+
+  /** Confirmation copy must state the exact scope of each delete mode. */
+  let deleteConfirmTitle = $derived.by(() => {
+    switch (messagePendingDelete?.mode) {
+      case 'single':
+        return 'Delete just this message?'
+      case 'up':
+        return 'Delete from this point up?'
+      default:
+        return 'Delete from this point down?'
+    }
+  })
+  let deleteConfirmBody = $derived.by(() => {
+    const content = messagePendingDelete?.content.trim() ?? ''
+    const subject = content.length > 0 ? `“${content.slice(0, 80)}”` : 'This message'
+    switch (messagePendingDelete?.mode) {
+      case 'single':
+        return `Only ${subject} and its work trace will be deleted. Earlier and later messages stay and the conversation closes over the gap.`
+      case 'up':
+        return `${subject} and every message before it will be deleted. Later messages remain as the start of the conversation.`
+      default:
+        return `${subject} and every message after it will be deleted. Earlier messages remain as the start of the conversation.`
+    }
+  })
 
   async function copyMessage(msg: AgentMessage): Promise<void> {
     try {
@@ -7769,6 +8468,33 @@
         `${thread.title} (fork)`,
         undefined,
         msg.id
+      )
+      onForked?.(forked)
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The chat could not be forked.'
+    } finally {
+      forkingMessageId = null
+    }
+  }
+
+  /** Fork from a message selected in the history side panel (by id). */
+  async function forkFromHistoryMessage(id: string): Promise<void> {
+    if (forkingMessageId || busy) return
+    const msg = messages.find((candidate) => candidate.id === id)
+    if (msg) {
+      await forkFromMessage(msg)
+      return
+    }
+    // The message may live outside the loaded window — fork by id directly.
+    forkingMessageId = id
+    try {
+      const forked = await invoke(
+        'thread:fork',
+        thread.projectId,
+        thread.id,
+        `${thread.title} (fork)`,
+        undefined,
+        id
       )
       onForked?.(forked)
     } catch (error) {
@@ -7895,23 +8621,39 @@
   /** Open the confirmation dialog before deleting history up to and including a message. */
   function requestDeleteMessage(msg: AgentMessage): void {
     if (busy) return
-    messagePendingDelete = msg
+    messagePendingDelete = { id: msg.id, content: messageText(msg), mode: 'down' }
+  }
+
+  /** Open the confirmation dialog for a deletion requested from the history side panel. */
+  function requestHistoryMessageDelete(
+    id: string,
+    content: string,
+    mode: 'down' | 'single' | 'up'
+  ): void {
+    if (busy) return
+    messagePendingDelete = { id, content, mode }
   }
 
   function cancelDeleteMessage(): void {
     messagePendingDelete = null
   }
 
-  /** Delete the message and everything after it, discarding the harness session. */
+  /** Delete history around the pending message, discarding the harness session. */
   async function confirmDeleteMessage(): Promise<void> {
-    const msg = messagePendingDelete
-    if (!msg || deletingMessageId) return
+    const pending = messagePendingDelete
+    if (!pending || deletingMessageId) return
     messagePendingDelete = null
-    deletingMessageId = msg.id
+    deletingMessageId = pending.id
     try {
-      // Truncation drops the message, everything after it, and the harness
-      // session. The next send rebinds a fresh session via prepareSessionForSend.
-      await threadMessages.truncate(thread.projectId, thread.id, msg.id)
+      // Deletion drops the chosen span and the harness session. The next send
+      // rebinds a fresh session via prepareSessionForSend, which replays the
+      // remaining mirrored transcript as context.
+      await threadMessages.remove(thread.projectId, thread.id, pending.id, pending.mode)
+      // The persisted user-message history changed — force a reload so the
+      // history panel never shows deleted messages.
+      userMessageHistoryLoaded = false
+      fullUserMessageHistory = []
+      void refreshUserMessageHistory()
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The message could not be deleted.'
     } finally {
@@ -8132,6 +8874,7 @@
             null)
           : null,
       providerName: provider?.name ?? null,
+      providerId: provider?.id ?? null,
       harnessId: selection.harnessId || null,
       harnessName: selection.harnessId
         ? (getAgentIcon(selection.harnessId)?.name ?? selection.harnessId)
@@ -8234,6 +8977,30 @@
     )
   }
 
+  /** Activity-only user messages (compaction notices, sub-agent envelopes) ride
+   *  mid-turn on the user role. They must stay invisible in the transcript but
+   *  also transparent to turn grouping: one prompt → one working trace, with
+   *  the final output after it. */
+  function isTurnStartIndex(index: number): boolean {
+    for (let i = index - 1; i >= 0; i--) {
+      const message = messages[i]
+      if (!message) break
+      if (message.role === 'assistant') return false
+      if (!isActivityOnlyUserMessage(message)) return true
+    }
+    return true
+  }
+
+  function isTurnEndIndex(index: number): boolean {
+    for (let i = index + 1; i < messages.length; i++) {
+      const message = messages[i]
+      if (!message) break
+      if (message.role === 'assistant') return false
+      if (!isActivityOnlyUserMessage(message)) return true
+    }
+    return true
+  }
+
   /** Return the index of the first assistant message of the last turn in the
    *  list. A trailing steer — a user message the agent has not responded to yet
    *  — does not end the turn it intervenes in, so the last turn is the one that
@@ -8243,31 +9010,62 @@
     for (let i = messageList.length - 1; i >= 0; i--) {
       if (messageList[i]?.role !== 'assistant') continue
       let j = i
-      while (j > 0 && messageList[j - 1]?.role === 'assistant') j--
+      while (j > 0) {
+        const previous = messageList[j - 1]
+        if (previous?.role === 'assistant') {
+          j--
+          continue
+        }
+        if (previous?.role === 'user' && isActivityOnlyUserMessage(previous)) {
+          j--
+          continue
+        }
+        break
+      }
       return j
     }
     return -1
   }
 
-  /** Collect every ordered intermediate part; only the final text is rendered below the trace. */
+  /** Collect every ordered intermediate part; only the final text is rendered below the trace.
+   *  Activity-only user messages (sub-agent envelopes, compaction notices) are
+   *  transparent: the turn spans them and their sub-agent/compaction parts are
+   *  harvested so one prompt keeps a single continuous working trace. */
   function getTurnWorkingParts(startMsgIndex: number, includeCurrentFinal: boolean): AgentPart[] {
-    const preceding = messages[startMsgIndex - 1]
     const parts: AgentPart[] = []
-    if (preceding?.role === 'user') {
+    for (let i = startMsgIndex - 1; i >= 0; i--) {
+      const preceding = messages[i]
+      if (!preceding || preceding.role !== 'user') break
       for (const part of preceding.parts) {
         if (part.type === 'compaction' || part.type === 'subagent') {
           appendWorkingPart(parts, part)
         }
       }
+      if (!isActivityOnlyUserMessage(preceding)) break
     }
     let turnEndIndex = startMsgIndex
-    while (turnEndIndex + 1 < messages.length && messages[turnEndIndex + 1]?.role !== 'user') {
-      turnEndIndex += 1
+    while (turnEndIndex + 1 < messages.length) {
+      const next = messages[turnEndIndex + 1]
+      if (!next) break
+      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
+        turnEndIndex += 1
+        continue
+      }
+      break
     }
     const finalText = getTurnFinalText(turnEndIndex)
     for (let i = startMsgIndex; i <= turnEndIndex; i++) {
       const m = messages[i]
-      if (!m || m.role === 'user') break
+      if (!m) break
+      if (m.role === 'user') {
+        if (!isActivityOnlyUserMessage(m)) break
+        for (const part of m.parts) {
+          if (part.type === 'compaction' || part.type === 'subagent') {
+            appendWorkingPart(parts, part)
+          }
+        }
+        continue
+      }
       for (const p of m.parts) {
         if (
           p.type === 'text' &&
@@ -8289,8 +9087,14 @@
    *  assistant message — the only state in which the working trace may fold. */
   function isTurnCompleted(startMsgIndex: number): boolean {
     let endIndex = startMsgIndex
-    while (endIndex + 1 < messages.length && messages[endIndex + 1]?.role !== 'user') {
-      endIndex += 1
+    while (endIndex + 1 < messages.length) {
+      const next = messages[endIndex + 1]
+      if (!next) break
+      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
+        endIndex += 1
+        continue
+      }
+      break
     }
     const last = messages[endIndex]
     return last?.role === 'assistant' && last.completedAt !== undefined
@@ -8403,30 +9207,69 @@
 
   function streamWorkingPartsForTurn(startMsgIndex: number): AgentPart[] {
     let turnEndIndex = startMsgIndex
-    while (turnEndIndex + 1 < messages.length && messages[turnEndIndex + 1]?.role !== 'user') {
-      turnEndIndex += 1
+    while (turnEndIndex + 1 < messages.length) {
+      const next = messages[turnEndIndex + 1]
+      if (!next) break
+      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
+        turnEndIndex += 1
+        continue
+      }
+      break
     }
     const finalText = getTurnFinalText(turnEndIndex)
+    // The durable stream log is thread-wide and its turn tags are not a safe
+    // scope: a steered continuation keeps the original turn's anchor, and log
+    // segments written before turn binding fold into the latest turn. Drop
+    // every durable part the mirror already persisted BEFORE this turn started
+    // so earlier traces can never bleed into the newest one; parts not yet in
+    // the mirror (the current turn's in-flight work) are exactly the gap this
+    // list exists to fill.
+    const priorPartIds = new SvelteSet<string>()
+    for (let i = 0; i < startMsgIndex; i++) {
+      for (const part of messages[i]?.parts ?? []) priorPartIds.add(part.id)
+    }
     return streamParts.filter((part) => {
       if (part.type === 'question' || isTodoToolPart(part)) return false
-      return !(part.type === 'text' && finalText?.id === part.id)
+      if (part.type === 'text' && finalText?.id === part.id) return false
+      return !priorPartIds.has(part.id)
     })
   }
 
-  /** Find the last text part in a turn ending at the given message index. */
+  /** The main-process stream fold is already scoped to the newest real user
+   *  message by event timestamp. Do not filter it against historical part IDs:
+   *  a resumed Pi process may restart its local message counter, so an old and
+   *  current part can temporarily carry the same provider-generated ID. */
+  function streamWorkingPartsForPendingTurn(): AgentPart[] {
+    return streamParts.filter((part) => part.type !== 'question' && !isTodoToolPart(part))
+  }
+
+  function withoutPendingLiveParts(parts: AgentPart[]): AgentPart[] {
+    if (!pendingLiveTurn || pendingLiveTurnParts.length === 0) return parts
+    const pendingPartIds = new SvelteSet(pendingLiveTurnParts.map((part) => part.id))
+    return parts.filter((part) => !pendingPartIds.has(part.id))
+  }
+
+  /** Find the last text part in a turn ending at the given message index.
+   *  Activity-only user messages are transparent to the turn span. */
   function getTurnFinalText(endMsgIndex: number): AgentPart | null {
     let turnStart = endMsgIndex
     for (let i = endMsgIndex; i >= 0; i--) {
-      if (messages[i]?.role === 'user') {
-        turnStart = i + 1
-        break
-      }
+      const message = messages[i]
+      if (!message) break
+      if (message.role !== 'user') continue
+      if (isActivityOnlyUserMessage(message)) continue
+      turnStart = i + 1
+      break
     }
     let finalText: AgentPart | null = null
     for (let i = turnStart; i <= endMsgIndex; i++) {
       if (i >= messages.length) break
       const message = messages[i]
-      if (!message || message.role === 'user') break
+      if (!message) break
+      if (message.role === 'user') {
+        if (isActivityOnlyUserMessage(message)) continue
+        break
+      }
       for (const p of message.parts) {
         if (p.type === 'text') finalText = p
       }
@@ -8463,9 +9306,34 @@
     findNavState.closeConversationFind()
   }
 
+  // While a run is streaming, re-pull the durable SSE log every second so the
+  // trace stays fresh even when live 'agent:event' broadcasts are not the
+  // transport (e.g. a second app instance viewing the same thread, which never
+  // receives this instance's in-process window broadcasts and would otherwise
+  // show a trace frozen at whatever was on disk at mount).
+  $effect(() => {
+    if (!busy) return
+    const poll = setInterval(() => {
+      const generation = ++streamPartsLoadGeneration
+      void invoke('thread:loadStreamParts', thread.projectId, thread.id)
+        .then((parts) => {
+          if (!alive || generation !== streamPartsLoadGeneration) return
+          streamParts = parts
+        })
+        .catch(() => {})
+    }, 1000)
+    return () => {
+      clearInterval(poll)
+      streamPartsLoadGeneration += 1
+    }
+  })
+
   onDestroy(() => {
     CSS.highlights?.delete(RESPONSE_HIGHLIGHT_NAME)
     imageUrls.destroy()
+    // Signal the main process that this thread's composer is gone so the
+    // draft-timer never fires for a composer that no longer exists.
+    publishDraftActivity(thread.projectId, thread.id, false)
   })
 </script>
 
@@ -8490,6 +9358,7 @@
     onAdd={addResponseReference}
     onElaborate={hasController ? undefined : () => openTemporarySelectionChat('elaborate')}
     onQuickChat={hasController ? undefined : () => openTemporarySelectionChat('quick')}
+    onNewThread={openSelectionInNewThread}
     onClose={closeResponseSelection}
   />
 {/if}
@@ -8587,6 +9456,7 @@
           onOpenInEditor={openBrainstormInEditor}
           onRevealInAppFile={revealBrainstormInAppFile}
           onOpenPrototype={openPrototypePreview}
+          onGenerateHifi={selectLofiPrototype}
         />
       {/key}
     {:else if studioDocument === 'prd' && studioPrd}
@@ -8669,6 +9539,7 @@
           seniorModel={seniorModelForThread()}
           favoriteModels={rendererRecovery.favoriteModels}
           recentModels={rendererRecovery.recentModels}
+          onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
           busy={assignmentBusy || busy}
           error={assignmentError}
           readOnly={studioAssignment.status !== 'draft' ||
@@ -8719,6 +9590,7 @@
           {auditSettings}
           favoriteModels={rendererRecovery.favoriteModels}
           recentModels={rendererRecovery.recentModels}
+          onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
           history={specStudioHistories.forDocument(`${spec.id}:${spec.version}`)}
           validation={specValidation}
           versions={specVersions}
@@ -8790,7 +9662,7 @@
     <!-- Scrollable conversation area -->
     <div
       bind:this={scrollEl}
-      class="conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20"
+      class="conversation-scroll conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20"
       onscroll={onScroll}
       onwheel={onWheel}
       onpointerup={captureResponseSelection}
@@ -9045,6 +9917,16 @@
                       class="mt-1 flex items-center gap-1.5 self-end opacity-0 transition-opacity group-hover:opacity-100"
                     >
                       <div class="flex items-center gap-0.5">
+                        {#if threadMessages.isSteerHeld(thread.projectId, conversationId, msg.id)}
+                          <button
+                            class="rounded p-1 text-accent transition-colors hover:bg-elevated"
+                            aria-label="Undo steer — the message has not reached the agent yet"
+                            title="Undo — the agent never receives a steered message that is undone"
+                            onclick={() => void undoHeldSteer(msg)}
+                          >
+                            <Undo2 size={12} />
+                          </button>
+                        {/if}
                         <button
                           class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                           aria-label="Copy message"
@@ -9086,9 +9968,8 @@
               {/if}
             {:else}
               <!-- Assistant message — single WorkTrace per turn containing ALL parts -->
-              {@const isTurnStart = msgIndex === 0 || messages[msgIndex - 1]?.role === 'user'}
-              {@const isTurnEnd =
-                msgIndex === messages.length - 1 || messages[msgIndex + 1]?.role === 'user'}
+              {@const isTurnStart = isTurnStartIndex(msgIndex)}
+              {@const isTurnEnd = isTurnEndIndex(msgIndex)}
               {@const isLatestTurn = msgIndex === latestTurnInfo.startIndex}
               {@const provider = messageProvider(msg)}
               {@const modelLabel = messageModelLabel(msg)}
@@ -9110,29 +9991,32 @@
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
                     {@const turnDone = isTurnCompleted(msgIndex)}
+                    {@const isCurrentAssistantTurn = isLatestTurn && !pendingLiveTurn}
                     {@const traceIsLive =
-                      threadWorking && isLatestTurn && !brainstormReportRefreshing}
+                      threadWorking && isCurrentAssistantTurn && !brainstormReportRefreshing}
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
                     {@const accumulatedTurnParts = getTurnWorkingParts(msgIndex, traceIsLive)}
-                    {@const durableTurnParts = streamWorkingPartsForTurn(msgIndex)}
+                    {@const durableTurnParts = pendingLiveTurn
+                      ? []
+                      : streamWorkingPartsForTurn(msgIndex)}
                     {@const collectedTurnParts =
-                      streamParts.length > 0 && isLatestTurn
+                      streamParts.length > 0 && isCurrentAssistantTurn
                         ? traceIsRestored
                           ? mergeWorkingParts(durableTurnParts, accumulatedTurnParts)
                           : mergeWorkingParts(accumulatedTurnParts, durableTurnParts)
-                        : accumulatedTurnParts}
+                        : withoutPendingLiveParts(accumulatedTurnParts)}
                     {@const turnParts = isAssignmentAuditorThread
                       ? collectedTurnParts.filter(
                           (part) => part.type !== 'text' || part.phase === 'commentary'
                         )
                       : collectedTurnParts}
-                    {#if turnParts.length > 0}
+                    {#if shouldMountWorkingTrace(turnParts.length, traceIsLive)}
                       <WorkingTrace
                         parts={turnParts}
-                        open={isLatestTurn || traceIsLive || traceIsRestored}
+                        open={isCurrentAssistantTurn || traceIsLive || traceIsRestored}
                         busy={traceIsLive || traceIsRestored}
-                        latest={isLatestTurn}
+                        latest={isCurrentAssistantTurn}
                         done={turnDone}
                         rehydrated={traceIsRestored}
                         startTime={isLatestTurn
@@ -9147,6 +10031,9 @@
                         providerName={useLiveAttribution
                           ? currentWorkingTraceAttribution.providerName
                           : provider?.name}
+                        providerId={useLiveAttribution
+                          ? currentWorkingTraceAttribution.providerId
+                          : provider?.id}
                         harnessId={useLiveAttribution
                           ? currentWorkingTraceAttribution.harnessId
                           : harnessId}
@@ -9156,16 +10043,16 @@
                         isFast={useLiveAttribution
                           ? currentWorkingTraceAttribution.isFast
                           : fastVariant !== null}
-                        initialOpen={isLatestTurn &&
+                        initialOpen={isCurrentAssistantTurn &&
                           agentRuns.isTraceOpen(thread.projectId, thread.id)}
-                        initialUserOpened={isLatestTurn &&
+                        initialUserOpened={isCurrentAssistantTurn &&
                           agentRuns.isTraceUserOpened(thread.projectId, thread.id)}
                         projectId={thread.projectId}
                         threadId={thread.id}
                         checkpointId={turnCheckpoint?.id ?? null}
                         checkpointPaths={turnCheckpoint?.changes.map((change) => change.path) ?? []}
                         onToggle={(open, userOpened) => {
-                          if (isLatestTurn) {
+                          if (isCurrentAssistantTurn) {
                             agentRuns.setTraceOpen(thread.projectId, thread.id, open, userOpened)
                           }
                         }}
@@ -9188,6 +10075,7 @@
                             projectId={thread.projectId}
                             favoriteModels={rendererRecovery.favoriteModels}
                             recentModels={rendererRecovery.recentModels}
+                            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                             onRetry={retryAssignmentAuditFromAuditor}
                             onModelChange={changeAuditModel}
                             onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -9228,15 +10116,27 @@
                           {#if isReadingActiveLine}
                             {@const segs = speechController.activeSegments!}
                             {@const activeIdx = speechController.visibleSegmentIndex}
+                            {@const spokenProgress = speechController.activeSegmentProgress}
                             <div class="flex flex-col gap-1.5">
                               {#each segs as seg, i (seg.id)}
+                                {@const spokenOffset =
+                                  i === activeIdx ? spokenWordOffset(seg.text, spokenProgress) : -1}
                                 <div
                                   class={i === activeIdx
                                     ? 'rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors'
                                     : 'px-2.5 py-1 opacity-80'}
                                   data-speech-line={i === activeIdx ? 'active' : undefined}
                                 >
-                                  <span class="leading-relaxed">{seg.text}</span>
+                                  <span class="leading-relaxed">
+                                    {#if spokenOffset > 0}
+                                      <span
+                                        class="rounded-sm bg-info/20 px-0.5 box-decoration-clone"
+                                        >{seg.text.slice(0, spokenOffset)}</span
+                                      >{seg.text.slice(spokenOffset)}
+                                    {:else}
+                                      {seg.text}
+                                    {/if}
+                                  </span>
                                 </div>
                               {/each}
                             </div>
@@ -9268,8 +10168,8 @@
                       {#if !busy || !isLatest}
                         <!-- Footer shown once per turn on the last assistant message -->
                         <div class="mt-1 flex flex-col">
-                          <div class="flex items-center gap-1.5">
-                            <div class="flex items-center gap-0.5">
+                          <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                            <div class="flex shrink-0 items-center gap-0.5">
                               <button
                                 class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                                 aria-label="Copy message"
@@ -9341,7 +10241,7 @@
                               </button>
                             </div>
                             <div
-                              class="pointer-events-none flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                              class="pointer-events-none flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                             >
                               <span class="flex items-center gap-1 text-[10px] text-dimmed">
                                 <AgentIcon agentId={messageHarnessId(msg)} size={14} />
@@ -9350,7 +10250,11 @@
                               {#if modelLabel}
                                 <span class="text-[10px] text-dimmed">·</span>
                                 <span class="flex items-center gap-1 text-[10px] text-dimmed">
-                                  <VendorIcon name={provider?.name ?? modelLabel} size={12} />
+                                  <VendorIcon
+                                    name={provider?.name ?? modelLabel}
+                                    id={provider?.id}
+                                    size={12}
+                                  />
                                   {modelLabel}
                                   {#if fastVariant}
                                     <Zap
@@ -9396,6 +10300,31 @@
             {/if}
           {/each}
 
+          {#if pendingLiveTurn}
+            <WorkingTrace
+              parts={pendingLiveTurnParts}
+              open
+              busy
+              latest
+              startTime={activeTurnStartTime}
+              modelLabel={currentWorkingTraceAttribution.modelLabel}
+              thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
+              providerName={currentWorkingTraceAttribution.providerName}
+              providerId={currentWorkingTraceAttribution.providerId}
+              harnessId={currentWorkingTraceAttribution.harnessId}
+              harnessName={currentWorkingTraceAttribution.harnessName}
+              isFast={currentWorkingTraceAttribution.isFast}
+              initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}
+              initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, conversationId)}
+              projectId={thread.projectId}
+              threadId={thread.id}
+              onToggle={(open, userOpened) =>
+                agentRuns.setTraceOpen(thread.projectId, conversationId, open, userOpened)}
+              onOpenSubagent={openSubagent}
+              onCiteFile={openFileCitation}
+            />
+          {/if}
+
           {#if specGenerationTraceActive && specGenerationTraceParts.length > 0}
             <WorkingTrace
               parts={specGenerationTraceParts}
@@ -9408,7 +10337,19 @@
             />
           {/if}
 
-          {#if brainstormReportRefreshing || delegatedWorkBusy || (!activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
+          {#if assignmentGenerationTraceActive && assignmentGenerationTraceParts.length > 0}
+            <WorkingTrace
+              parts={assignmentGenerationTraceParts}
+              open
+              busy
+              latest
+              startTime={assignmentGenerationTraceStartedAt}
+              projectId={thread.projectId}
+              threadId={thread.id}
+            />
+          {/if}
+
+          {#if brainstormReportRefreshing || delegatedWorkBusy || assignmentFormulating || (!pendingLiveTurn && !activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
             <div class="flex items-center gap-2 text-sm text-dimmed">
               <Loader2 size={14} class="animate-spin text-info" />
               <span>
@@ -9457,6 +10398,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 sourceLabel={item.task.workerName ?? item.worker.title}
                 sourceDetail={item.task.title}
                 retryLabel="Retry worker"
@@ -9485,7 +10427,6 @@
                   (chatMode
                     ? {
                         ...settings,
-                        engineeringMode: false,
                         assignmentMode: false,
                         loopMode: false
                       }
@@ -9498,6 +10439,10 @@
                 recentModels={chatMode
                   ? rendererRecovery.chatRecentModels
                   : rendererRecovery.recentModels}
+                onRemoveRecent={(key) =>
+                  chatMode
+                    ? rendererRecovery.removeChatRecentModel(key)
+                    : rendererRecovery.removeRecentModel(key)}
                 onModelChange={changeThreadModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
                   chatMode
@@ -9518,7 +10463,14 @@
                   errorMessage = ''
                   providerStatus = null
                   proactiveAuthIssue = null
-                  void dismissSessionError()
+                  if (controller) {
+                    // Controller conversations own their error state in the
+                    // controller's store key — clearing the thread-scoped
+                    // backend error would leave the card stuck on screen.
+                    controller.clearStatus()
+                  } else {
+                    void dismissSessionError()
+                  }
                 }}
               />
             </div>
@@ -9557,7 +10509,11 @@
               <div class="rounded-t-xl border border-border bg-surface shadow-sm">
                 <div class="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
                   <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
-                    >{queuedStartAfterThreads.length > 0 ? 'Starts after' : 'Queued'}</span
+                    >{queuedCount > 1
+                      ? `Queued · ${queuedCount}`
+                      : queuedStartAfterThreads.length > 0
+                        ? 'Starts after'
+                        : 'Queued'}</span
                   >
                   <div class="flex items-center gap-1">
                     <button
@@ -9617,6 +10573,17 @@
                             <Trash2 size={13} />
                             Delete
                           </button>
+                          {#if queuedCount > 1}
+                            <div class="mx-2 my-1 border-t"></div>
+                            <button
+                              class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
+                              role="menuitem"
+                              onclick={deleteAllQueuedMessages}
+                            >
+                              <Trash2 size={13} />
+                              Delete all ({queuedCount})
+                            </button>
+                          {/if}
                         </div>
                       {/if}
                     </div>
@@ -9695,6 +10662,18 @@
                 {:else}
                   <p class="px-3 pb-2.5 text-[12px] text-muted line-clamp-3">{queuedMessage}</p>
                 {/if}
+                {#if queuedCount > 1}
+                  <div class="border-t px-3 pb-2.5 pt-2">
+                    <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+                      Next up
+                    </p>
+                    {#each rendererRecovery
+                      .queuedMessagesFor(thread.projectId, thread.id)
+                      .slice(1) as next (next.text)}
+                      <p class="line-clamp-2 pt-1 text-[12px] text-muted">{next.text}</p>
+                    {/each}
+                  </div>
+                {/if}
               </div>
             </div>
           </div>
@@ -9712,6 +10691,7 @@
                   projectId={thread.projectId}
                   favoriteModels={rendererRecovery.favoriteModels}
                   recentModels={rendererRecovery.recentModels}
+                  onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                   onRetry={async (requestId, selection, remember) => {
                     if (remember) {
                       agentDefaults = { ...agentDefaults, imageDescriptor: selection }
@@ -9724,12 +10704,33 @@
                     await replyImageDescriptor(requestId, 'retry', selection)
                   }}
                   onIgnore={(requestId) => replyImageDescriptor(requestId, 'ignore')}
+                  onFalsePositive={(requestId) => reportImageDescriptorFalsePositive(requestId)}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                   onReorderFavorite={(draggedKey, targetKey, position) =>
                     rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 />
               {/key}
+            {/if}
+            {#if failureRetryVisible && engineeringLifecycle}
+              <EngineeringRetryCard
+                stage={engineeringLifecycle.activeStage}
+                failure={engineeringLifecycle.failure}
+                busy={engineeringLifecycleRetrying}
+                {settings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                onRetry={() => void retryEngineeringLifecycle()}
+                onCancel={() => void cancelEngineeringFailure()}
+                onModelChange={changeThreadModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+              />
             {/if}
             {#if isAssignmentAuditorThread}
               <AuditGeneratedCard
@@ -9744,6 +10745,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={auditBusy || busy}
                 onRetry={retryAssignmentAuditFromAuditor}
                 onModelChange={changeAuditModel}
@@ -9753,14 +10755,25 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openCoordinatorAuditReport}
               />
-            {:else if (pendingEngineeringEntry === 'prd' || pendingEngineeringEntry === 'spec') && !busy}
+            {:else if (pendingEngineeringEntry === 'prd' || pendingEngineeringEntry === 'spec') && !busy && !failureRetryVisible}
               <EngineeringEntryCard
                 target={pendingEngineeringEntry}
                 busy={prdBusy || brainstormBusy}
                 onBrainstormFirst={() => chooseEngineeringEntry('brainstorm_first')}
                 onJumpIn={() => chooseEngineeringEntry('jump_in')}
+                {settings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                onModelChange={changeThreadModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if brainstormWorkflow?.entryChoice && !brainstorm && !spec && brainstormGenerationFailed && !busy}
+            {:else if brainstormWorkflow?.entryChoice && !brainstorm && !spec && brainstormGenerationFailed && !busy && !failureRetryVisible}
               <BrainstormEntryChoiceCard
                 busy={brainstormBusy}
                 retryChoice={brainstormWorkflow.entryChoice}
@@ -9769,6 +10782,7 @@
                 {settings}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 onStartBrainstorm={() => chooseBrainstormEntry('brainstorm')}
                 onJumpToSpec={() => chooseBrainstormEntry('spec')}
                 onModelChange={changeSpecModel}
@@ -9778,7 +10792,7 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if brainstormWorkflow?.stage === 'choice_pending' && !busy}
+            {:else if brainstormWorkflow?.stage === 'choice_pending' && !busy && !failureRetryVisible}
               <BrainstormEntryChoiceCard
                 busy={brainstormBusy}
                 onStartBrainstorm={() => chooseBrainstormEntry('brainstorm')}
@@ -9808,9 +10822,20 @@
                   onUpdate={handleQuestionUpdate}
                   onExplain={handleQuestionExplain}
                   onQuickChat={handleQuestionQuickChat}
+                  {settings}
+                  {providers}
+                  projectId={thread.projectId}
+                  favoriteModels={rendererRecovery.favoriteModels}
+                  recentModels={rendererRecovery.recentModels}
+                  onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                  onModelChange={changeThreadModel}
+                  onToggleFavorite={(providerId, modelId, harnessId) =>
+                    rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                  onReorderFavorite={(draggedKey, targetKey, position) =>
+                    rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 />
               {/key}
-            {:else if assignmentAuditState === 'running' && assignment && !achievementAutonomous}
+            {:else if assignmentAuditState === 'running' && assignment && !achievementAutonomous && !failureRetryVisible}
               <AuditGeneratedCard
                 state="running"
                 reworkCycle={assignmentReworkCycle}
@@ -9819,6 +10844,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={auditBusy}
                 onRetry={() => void openAssignmentAuditWork()}
                 onModelChange={changeAuditModel}
@@ -9828,7 +10854,7 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openAuditStudio}
               />
-            {:else if plainEngineeringAuditRunning && !achievementAutonomous}
+            {:else if plainEngineeringAuditRunning && !achievementAutonomous && !failureRetryVisible}
               <AuditGeneratedCard
                 state="running"
                 settings={auditSettings}
@@ -9836,6 +10862,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 onRetry={generateDurableImplementationAudit}
                 onModelChange={changeAuditModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -9845,7 +10872,7 @@
                 onViewTrace={() => void openDurableAuditWork()}
                 onViewReport={openAuditStudio}
               />
-            {:else if assignmentAuditState === 'failed' && assignment && !busy && !achievementAutonomous}
+            {:else if assignmentAuditState === 'failed' && assignment && !busy && !achievementAutonomous && !failureRetryVisible}
               <AuditGeneratedCard
                 state="failed"
                 error={assignmentAuditFailure}
@@ -9858,6 +10885,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={auditBusy}
                 onRetry={generateDurableAssignmentAudit}
                 onModelChange={changeAuditModel}
@@ -9867,7 +10895,7 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openAuditStudio}
               />
-            {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow}
+            {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
               <AuditOfferCard
                 threadTitle={thread.title}
                 reworkCycle={assignmentReworkCycle}
@@ -9876,6 +10904,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={auditBusy}
                 onCancel={completeAudit}
                 onAudit={generateAudit}
@@ -9885,7 +10914,7 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if assignmentAuditState === 'report_ready' && auditReport && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow}
+            {:else if assignmentAuditState === 'report_ready' && auditReport && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
               <AuditReadyCard
                 report={auditReport}
                 {providers}
@@ -9893,6 +10922,7 @@
                 settings={auditSettings}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={auditBusy}
                 onViewReport={openAuditStudio}
                 onComplete={completeAudit}
@@ -9904,23 +10934,48 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if prd?.status === 'draft' && !busy && !specFormulating}
-              <PrdReadyCard busy={prdBusy} onReview={openPrdStudio} onFinalize={finalizePrd} />
-            {:else if brainstormWorkflow?.stage === 'drafting' && brainstorm && !busy && !specFormulating}
+            {:else if prd?.status === 'draft' && !busy && !specFormulating && !failureRetryVisible}
+              <PrdReadyCard
+                busy={prdBusy}
+                onReview={openPrdStudio}
+                onFinalize={finalizePrd}
+                {settings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                onModelChange={changeThreadModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+              />
+            {:else if brainstormWorkflow?.stage === 'drafting' && brainstorm && !busy && !specFormulating && !failureRetryVisible}
               {@const readyBrainstorm = brainstorm}
               <BrainstormReadyCard
                 version={readyBrainstorm.version}
                 prototypes={readyBrainstorm.content.prototypes ?? []}
                 busy={brainstormBusy}
                 onReview={openBrainstormStudio}
-                onSelectPrototype={selectLofiPrototype}
-                onContinueWithoutHifi={openBrainstormStudio}
+                onOpenPrototype={openPrototypePreview}
                 finalizeLabel={engineeringLifecycle?.activeStage === 'brainstorm'
                   ? 'Finalize Brainstorm'
                   : 'Prepare spec'}
                 onFinalize={() => submitBrainstormDecision('finalize', readyBrainstorm, '')}
+                {settings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                onModelChange={changeThreadModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if assignment?.status === 'draft' && !busy && !specFormulating}
+            {:else if assignment?.status === 'draft' && !busy && !specFormulating && !failureRetryVisible}
               {#key assignment.version}
                 <AssignmentReadyCard
                   {assignment}
@@ -9931,6 +10986,7 @@
                   seniorModel={seniorModelForThread()}
                   favoriteModels={rendererRecovery.favoriteModels}
                   recentModels={rendererRecovery.recentModels}
+                  onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                   busy={assignmentBusy}
                   error={assignmentError}
                   onSave={(content) => void saveAssignment(content)}
@@ -9944,13 +11000,14 @@
                     rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 />
               {/key}
-            {:else if (specReadyToolVisible || (settings.assignmentMode && spec && !assignment)) && spec && !busy && !specFormulating}
+            {:else if (specReadyToolVisible || (settings.assignmentMode && spec && !assignment)) && spec && !busy && !specFormulating && !failureRetryVisible}
               <SpecReadyCard
                 {providers}
                 projectId={thread.projectId}
                 {settings}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={busy || specBusy}
                 assignmentMode={settings.assignmentMode === true}
                 assignmentAvailable={assignment !== null}
@@ -9966,143 +11023,186 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
             {:else}
-              {#if activeTodo}
-                <AgentTodoCard items={activeTodo.items} signature={activeTodo.signature} {busy} />
+              {#if !failureRetryVisible}
+                {#if activeTodo}
+                  <AgentTodoCard items={activeTodo.items} signature={activeTodo.signature} {busy} />
+                {/if}
+                {#key composerRestoreKey}
+                  <ChatComposer
+                    bind:this={composer}
+                    placeholder={activePlanningEntry === 'brainstorm'
+                      ? 'Sr. Engineer is preparing the Brainstorm…'
+                      : activePlanningEntry === 'spec'
+                        ? 'Sr. Engineer is preparing the specification…'
+                        : assignmentFormulating
+                          ? 'Sr. Engineer is preparing the Assignment…'
+                          : specFormulating
+                            ? 'Formulating specification…'
+                            : delegatedWorkBusy
+                              ? `${delegatedActivityLabel} — message the Sr. Engineer`
+                              : busy
+                                ? `${APP_NAME} is working — type to queue a message`
+                                : 'Send a message...'}
+                    disabled={specFormulating}
+                    working={busy}
+                    onStop={abortRun}
+                    autofocus
+                    showEngineeringMode={!chatMode}
+                    engineeringLifecycle={pendingLifecycleDisplay}
+                    engineeringActive={engineeringOn}
+                    onEngineeringLifecycleSelect={selectEngineeringLifecycle}
+                    showChatModes={chatMode}
+                    {settings}
+                    onSettingsChange={updateSettings}
+                    {providers}
+                    harnessId={settings.harnessId}
+                    actions={activeActions}
+                    onActionSelect={handleActionSelection}
+                    onSlashCommand={executeHarnessCommand}
+                    contextUsage={contextUsageDisplay}
+                    efficiencyKpis={storedEfficiencyKpis}
+                    onRevealUsage={revealContextUsage}
+                    onHideUsage={hideContextUsage}
+                    usageRefreshing={refreshingAccountUsage}
+                    {harnessUsage}
+                    canCompact={supportsManualCompaction(
+                      settings.harnessId,
+                      providerStore.providers
+                    ) && !busy}
+                    {compacting}
+                    onCompact={() => void compactWork()}
+                    projectContext={composerProject}
+                    projectId={thread.projectId}
+                    threadId={thread.id}
+                    attachmentStorage={{
+                      kind: chatMode ? 'chat' : 'project',
+                      projectId: thread.projectId,
+                      threadId: thread.id
+                    }}
+                    onSwitchProject={(pid) => void switchProject(pid)}
+                    fileTagProjectId={project?.source === 'local' && project.path
+                      ? thread.projectId
+                      : undefined}
+                    assignmentId={assignment?.id}
+                    assignmentTasks={assignment?.content.tasks ?? []}
+                    initialValue={rendererRecovery.draftFor(thread.projectId, thread.id)}
+                    initialAttachments={rendererRecovery.attachmentsFor(
+                      thread.projectId,
+                      thread.id
+                    )}
+                    initialProjectReferences={rendererRecovery.projectReferencesFor(
+                      thread.projectId,
+                      thread.id
+                    )}
+                    initialTaskReferences={rendererRecovery.taskReferencesFor(
+                      thread.projectId,
+                      thread.id
+                    )}
+                    initialStartAfterThreads={rendererRecovery.startAfterThreadsFor(
+                      thread.projectId,
+                      thread.id
+                    )}
+                    onValueChange={(value) => {
+                      rendererRecovery.setDraft(thread.projectId, thread.id, value)
+                      publishDraftActivity(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                      )
+                    }}
+                    onAttachmentsChange={(files) => {
+                      rendererRecovery.setDraft(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.draftFor(thread.projectId, thread.id),
+                        files
+                      )
+                      publishDraftActivity(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                      )
+                    }}
+                    onProjectReferencesChange={(projectReferences) => {
+                      rendererRecovery.setDraft(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.draftFor(thread.projectId, thread.id),
+                        rendererRecovery.attachmentsFor(thread.projectId, thread.id),
+                        projectReferences
+                      )
+                      publishDraftActivity(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                      )
+                    }}
+                    onTaskReferencesChange={(taskReferences) => {
+                      rendererRecovery.setDraft(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.draftFor(thread.projectId, thread.id),
+                        rendererRecovery.attachmentsFor(thread.projectId, thread.id),
+                        rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
+                        taskReferences
+                      )
+                      publishDraftActivity(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                      )
+                    }}
+                    onStartAfterThreadsChange={(startAfterThreads) => {
+                      rendererRecovery.setStartAfterThreads(
+                        thread.projectId,
+                        thread.id,
+                        startAfterThreads
+                      )
+                      publishDraftActivity(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                      )
+                    }}
+                    onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
+                    references={composerReferences}
+                    onRemoveReference={removeComposerReference}
+                    onRemoveAllReferences={clearComposerReferences}
+                    onEditReference={controller ? undefined : editResponseReference}
+                    onSend={sendComposerMessage}
+                    historyMessages={userMessageTexts}
+                    hidePermissionSelector={chatMode}
+                    favoriteModels={chatMode
+                      ? rendererRecovery.chatFavoriteModels
+                      : rendererRecovery.favoriteModels}
+                    onToggleFavorite={(providerId, modelId, harnessId) =>
+                      chatMode
+                        ? rendererRecovery.toggleChatFavorite(
+                            modelKey(harnessId, providerId, modelId)
+                          )
+                        : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                    onReorderFavorite={(draggedKey, targetKey, position) =>
+                      chatMode
+                        ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
+                        : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                    recentModels={chatMode
+                      ? rendererRecovery.chatRecentModels
+                      : rendererRecovery.recentModels}
+                    onRemoveRecent={(key) =>
+                      chatMode
+                        ? rendererRecovery.removeChatRecentModel(key)
+                        : rendererRecovery.removeRecentModel(key)}
+                    onModelUsed={(modelKey) =>
+                      chatMode
+                        ? rendererRecovery.addChatRecentModel(modelKey)
+                        : rendererRecovery.addRecentModel(modelKey)}
+                    imageDescriptorDefault={agentDefaults.imageDescriptor}
+                    {imageDescriptorAskAgain}
+                    onImageDescriptorDefaultChange={setImageDescriptorDefault}
+                    onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
+                  />
+                {/key}
               {/if}
-              {#key composerRestoreKey}
-                <ChatComposer
-                  bind:this={composer}
-                  placeholder={activePlanningEntry === 'brainstorm'
-                    ? 'Sr. Engineer is preparing the Brainstorm…'
-                    : activePlanningEntry === 'spec'
-                      ? 'Sr. Engineer is preparing the specification…'
-                      : specFormulating
-                        ? 'Formulating specification…'
-                        : delegatedWorkBusy
-                          ? `${delegatedActivityLabel} — message the Sr. Engineer`
-                          : busy
-                            ? `${APP_NAME} is working — type to queue a message`
-                            : 'Send a message...'}
-                  disabled={specFormulating}
-                  working={busy}
-                  onStop={abortRun}
-                  autofocus
-                  showEngineeringMode={!chatMode}
-                  engineeringLifecycle={pendingLifecycleDisplay}
-                  onEngineeringLifecycleSelect={selectEngineeringLifecycle}
-                  onEngineeringLifecycleRetry={retryEngineeringLifecycle}
-                  showChatModes={chatMode}
-                  {settings}
-                  onSettingsChange={updateSettings}
-                  {providers}
-                  harnessId={settings.harnessId}
-                  actions={activeActions}
-                  onActionSelect={handleActionSelection}
-                  onSlashCommand={executeHarnessCommand}
-                  contextUsage={contextUsageDisplay}
-                  efficiencyKpis={storedEfficiencyKpis}
-                  onRevealUsage={revealContextUsage}
-                  onHideUsage={hideContextUsage}
-                  usageRefreshing={refreshingAccountUsage}
-                  {harnessUsage}
-                  canCompact={['opencode', 'codex'].includes(settings.harnessId) && !busy}
-                  {compacting}
-                  onCompact={() => void compactWork()}
-                  projectContext={composerProject}
-                  projectId={thread.projectId}
-                  threadId={thread.id}
-                  attachmentStorage={{
-                    kind: chatMode ? 'chat' : 'project',
-                    projectId: thread.projectId,
-                    threadId: thread.id
-                  }}
-                  onSwitchProject={(pid) => void switchProject(pid)}
-                  fileTagProjectId={project?.source === 'local' && project.path
-                    ? thread.projectId
-                    : undefined}
-                  assignmentId={assignment?.id}
-                  assignmentTasks={assignment?.content.tasks ?? []}
-                  initialValue={rendererRecovery.draftFor(thread.projectId, thread.id)}
-                  initialAttachments={rendererRecovery.attachmentsFor(thread.projectId, thread.id)}
-                  initialProjectReferences={rendererRecovery.projectReferencesFor(
-                    thread.projectId,
-                    thread.id
-                  )}
-                  initialTaskReferences={rendererRecovery.taskReferencesFor(
-                    thread.projectId,
-                    thread.id
-                  )}
-                  initialStartAfterThreads={rendererRecovery.startAfterThreadsFor(
-                    thread.projectId,
-                    thread.id
-                  )}
-                  onValueChange={(value) =>
-                    rendererRecovery.setDraft(thread.projectId, thread.id, value)}
-                  onAttachmentsChange={(files) =>
-                    rendererRecovery.setDraft(
-                      thread.projectId,
-                      thread.id,
-                      rendererRecovery.draftFor(thread.projectId, thread.id),
-                      files
-                    )}
-                  onProjectReferencesChange={(projectReferences) =>
-                    rendererRecovery.setDraft(
-                      thread.projectId,
-                      thread.id,
-                      rendererRecovery.draftFor(thread.projectId, thread.id),
-                      rendererRecovery.attachmentsFor(thread.projectId, thread.id),
-                      projectReferences
-                    )}
-                  onTaskReferencesChange={(taskReferences) =>
-                    rendererRecovery.setDraft(
-                      thread.projectId,
-                      thread.id,
-                      rendererRecovery.draftFor(thread.projectId, thread.id),
-                      rendererRecovery.attachmentsFor(thread.projectId, thread.id),
-                      rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
-                      taskReferences
-                    )}
-                  onStartAfterThreadsChange={(startAfterThreads) => {
-                    rendererRecovery.setStartAfterThreads(
-                      thread.projectId,
-                      thread.id,
-                      startAfterThreads
-                    )
-                  }}
-                  onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
-                  references={composerReferences}
-                  onRemoveReference={removeComposerReference}
-                  onRemoveAllReferences={clearComposerReferences}
-                  onEditReference={controller ? undefined : editResponseReference}
-                  onSend={sendComposerMessage}
-                  historyMessages={userMessageTexts}
-                  hidePermissionSelector={chatMode}
-                  favoriteModels={chatMode
-                    ? rendererRecovery.chatFavoriteModels
-                    : rendererRecovery.favoriteModels}
-                  onToggleFavorite={(providerId, modelId, harnessId) =>
-                    chatMode
-                      ? rendererRecovery.toggleChatFavorite(
-                          modelKey(harnessId, providerId, modelId)
-                        )
-                      : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-                  onReorderFavorite={(draggedKey, targetKey, position) =>
-                    chatMode
-                      ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
-                      : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-                  recentModels={chatMode
-                    ? rendererRecovery.chatRecentModels
-                    : rendererRecovery.recentModels}
-                  onModelUsed={(modelKey) =>
-                    chatMode
-                      ? rendererRecovery.addChatRecentModel(modelKey)
-                      : rendererRecovery.addRecentModel(modelKey)}
-                  imageDescriptorDefault={agentDefaults.imageDescriptor}
-                  {imageDescriptorAskAgain}
-                  onImageDescriptorDefaultChange={setImageDescriptorDefault}
-                  onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
-                />
-              {/key}
             {/if}
           </div>
         </div>
@@ -10154,6 +11254,7 @@
       projectId={thread.projectId}
       favoriteModels={rendererRecovery.favoriteModels}
       recentModels={rendererRecovery.recentModels}
+      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
       coordinatorWorking={busy || delegatedWorkBusy}
       onOpenAudit={() => void generateAudit(auditSettings)}
       onViewReport={openAuditStudio}
@@ -10183,6 +11284,7 @@
       projectId={thread.projectId}
       favoriteModels={rendererRecovery.favoriteModels}
       recentModels={rendererRecovery.recentModels}
+      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
       coordinatorWorking={auditBusy}
       onOpenAudit={() => void generateAudit(auditSettings)}
       onViewReport={openAuditStudio}
@@ -10278,11 +11380,13 @@
   {/snippet}
 </Modal>
 
-<Modal open={messagePendingDelete !== null} title="Delete message?" onClose={cancelDeleteMessage}>
-  <p class="text-sm text-muted">
-    This will delete the conversation history up to this point, and this message will be deleted
-    too. This cannot be undone.
-  </p>
+<Modal
+  open={messagePendingDelete !== null}
+  title={deleteConfirmTitle}
+  onClose={cancelDeleteMessage}
+>
+  <p class="text-sm text-muted">{deleteConfirmBody}</p>
+  <p class="mt-2 text-sm font-medium text-foreground">This cannot be undone.</p>
   {#snippet footer()}
     <button
       class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
@@ -10318,6 +11422,10 @@
 <style>
   .thread-view {
     container-type: inline-size;
+  }
+
+  .conversation-scroll {
+    overflow-anchor: none;
   }
 
   @container (max-width: 480px) {

@@ -6,6 +6,8 @@
     FolderInput,
     GitBranch,
     Pencil,
+    Pin,
+    PinOff,
     Trash2,
     RefreshCw,
     Wrench
@@ -14,6 +16,8 @@
 
   export type ScopeMenuAction =
     | 'edit'
+    | 'pin'
+    | 'unpin'
     | 'archive'
     | 'restore'
     | 'create-worktree'
@@ -29,6 +33,8 @@
     bucket: ScopeBucket
     onEdit: () => void
     onDelete: () => void
+    /** Provided only on surfaces where pinning is allowed (the scope view). */
+    onTogglePinned?: () => void
     onArchive?: () => void
     onRestore?: () => void
     onCreateWorktree?: () => void
@@ -46,6 +52,7 @@
     bucket,
     onEdit,
     onDelete,
+    onTogglePinned,
     onArchive,
     onRestore,
     onCreateWorktree,
@@ -87,6 +94,15 @@
           onEdit()
         }
       })
+      if (onTogglePinned && bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
+        list.push({
+          label: bucket.pinned ? 'Unpin scope' : 'Pin scope',
+          run: () => {
+            closeMenu()
+            onTogglePinned()
+          }
+        })
+      }
       if (bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
         if (isArchived) {
           list.push({
@@ -192,14 +208,6 @@
   >
     <Ellipsis size={14} />
   </button>
-  {#if isManaged}
-    <span
-      class="pointer-events-none mr-0.5 inline-flex -space-x-1.5 items-center"
-      title="Managed Git worktree scope"
-    >
-      <GitBranch size={13} class="text-muted" />
-    </span>
-  {/if}
   {#if showMenu}
     <button
       class="fixed inset-0 z-40 cursor-default"
@@ -230,6 +238,12 @@
             <Trash2 size={13} class="text-muted" />
           {:else if item.label === 'Edit'}
             <Pencil size={13} class="text-muted" />
+          {:else if item.label === 'Pin scope' || item.label === 'Unpin scope'}
+            {#if item.label === 'Pin scope'}
+              <Pin size={13} class="text-muted" />
+            {:else}
+              <PinOff size={13} class="text-muted" />
+            {/if}
           {:else}
             <GitBranch size={13} class="text-muted" />
           {/if}

@@ -1,5 +1,6 @@
 import type {
   HarnessUtilityBinding,
+  ImageDescriptorUtilityConfig,
   ResolvedUtility,
   UtilityActivation,
   UtilityConfigMap,
@@ -16,6 +17,7 @@ import type {
 import { UTILITY_KIND_VALUES } from '../../lib/types'
 import { ALL_HARNESSES_BINDING_ID } from '../../lib/types'
 import { generateId } from '../../lib/utils'
+import { RETRIEVE_MCP_HOST_TOOL_NAME } from '../../lib/gateway-tools'
 import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 
@@ -35,12 +37,27 @@ const SENSITIVE_CONFIG_KEY = /(api[-_]?key|authorization|credential|password|sec
 const WEB_TOOL_PROVIDERS = new Set<WebToolProviderId>(['exa', 'firecrawl', 'brave', 'custom'])
 
 /** Stable id of the app-seeded image-descriptor utility. */
-export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'codeinoven:image-descriptor'
+export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'cio:image-descriptor'
 /** Stable id of the app-owned, always-active MCP host recovery utility. */
-export const APP_RETRIEVE_MCP_HOST_UTILITY_ID = 'codeinoven:retrieve-mcp-host'
+export const APP_RETRIEVE_MCP_HOST_UTILITY_ID = 'cio:retrieve-mcp-host'
 /** Stable id of the browser control utility backed by the in-app browser. */
 export const APP_BROWSER_UTILITY_ID = 'cio:browser'
-const LEGACY_APP_BROWSER_UTILITY_ID = 'codeinoven:browser'
+/** Stable id of the Cua Driver computer-use MCP utility. */
+export const APP_CUA_DRIVER_UTILITY_ID = 'cio:cua-driver'
+
+/** App-owned ids seeded before the `cio:` rename, mapped to their current ids. */
+const LEGACY_APP_UTILITY_IDS: Readonly<Record<string, string>> = {
+  'codeinoven:image-descriptor': APP_IMAGE_DESCRIPTOR_UTILITY_ID,
+  'codeinoven:retrieve-mcp-host': APP_RETRIEVE_MCP_HOST_UTILITY_ID
+}
+
+function isBlankImageDescriptorConfig(config: ImageDescriptorUtilityConfig): boolean {
+  return (
+    config.harnessId.trim() === '' &&
+    config.providerId.trim() === '' &&
+    config.modelId.trim() === ''
+  )
+}
 
 interface UtilityRegistryFile {
   version: number
@@ -59,7 +76,7 @@ export class UtilityRegistryService {
   /** In-flight seeding guard so concurrent callers share one seed write. */
   private seeding: Promise<void> | null = null
 
-  constructor(private readonly storage: StorageEngine) {}
+  constructor(private readonly storage: StorageEngine) { }
 
   /** Every public entry point first guarantees the app-owned default utility. */
   private async ensureAppDefaultsSeeded(): Promise<void> {
@@ -77,6 +94,7 @@ export class UtilityRegistryService {
   /** Idempotently seed every app-owned utility when missing. */
   private async performSeed(): Promise<void> {
     const registry = await this.loadRaw()
+    const migrated = this.migrateLegacyAppUtilities(registry)
     const now = Date.now()
     const harnesses = listHarnesses()
     const defaults: UtilityDefinition[] = [
@@ -103,7 +121,7 @@ export class UtilityRegistryService {
       {
         id: APP_RETRIEVE_MCP_HOST_UTILITY_ID,
         kind: 'skill',
-        name: 'retrieve_mcp_host',
+        name: RETRIEVE_MCP_HOST_TOOL_NAME,
         description:
           'Recovers the live app-managed MCP/utility gateway host from the CodeInOven instance that owns the exact current utility turn.',
         enabled: true,
@@ -111,13 +129,13 @@ export class UtilityRegistryService {
         scope: { level: 'global' },
         config: {
           instructions:
-            'This app-owned utility is always active. If the app-managed gateway is unreachable, use the exact retrieve_mcp_host shell command supplied in the current turn instructions. Do not search for or activate this utility first; its shell transport is intentionally independent of MCP.'
+            `This app-owned utility is always active. If the app-managed gateway is unreachable, use the exact ${RETRIEVE_MCP_HOST_TOOL_NAME} shell command supplied in the current turn instructions. Do not search for or activate this utility first; its shell transport is intentionally independent of MCP.`
         },
         credentials: [],
         harnessBindings: harnesses.map((harness) => ({
           harnessId: harness.id,
           strategy: 'skill',
-          transportName: 'retrieve_mcp_host'
+          transportName: RETRIEVE_MCP_HOST_TOOL_NAME
         })),
         appOwned: true,
         createdAt: now,
@@ -142,60 +160,76 @@ export class UtilityRegistryService {
         appOwned: true,
         createdAt: now,
         updatedAt: now
-      }
-    ]
-    let registryChanged = false
-    const browserDefault = defaults.find((utility) => utility.id === APP_BROWSER_UTILITY_ID)
-    if (!browserDefault) throw new Error('The app-owned browser utility default is missing')
-    const legacyBrowserIndex = registry.utilities.findIndex(
-      (utility) => utility.id === LEGACY_APP_BROWSER_UTILITY_ID
-    )
-    const browserIndex = registry.utilities.findIndex(
-      (utility) => utility.id === APP_BROWSER_UTILITY_ID
-    )
-    if (browserIndex >= 0) {
-      const existing = registry.utilities[browserIndex]
-      const needsRefresh =
-        existing.kind !== browserDefault.kind ||
-        existing.name !== browserDefault.name ||
-        existing.description !== browserDefault.description ||
-        existing.enabled !== browserDefault.enabled ||
-        existing.activation !== browserDefault.activation ||
-        JSON.stringify(existing.scope) !== JSON.stringify(browserDefault.scope) ||
-        JSON.stringify(existing.config) !== JSON.stringify(browserDefault.config) ||
-        JSON.stringify(existing.harnessBindings) !== JSON.stringify(browserDefault.harnessBindings)
-      if (needsRefresh) {
-        registry.utilities[browserIndex] = {
-          ...browserDefault,
-          createdAt: existing.createdAt,
-          updatedAt: now
-        }
-        registryChanged = true
-      }
-      if (legacyBrowserIndex >= 0) {
-        registry.utilities.splice(legacyBrowserIndex, 1)
-        registryChanged = true
-      }
-    } else if (legacyBrowserIndex >= 0) {
-      const legacy = registry.utilities[legacyBrowserIndex]
-      registry.utilities[legacyBrowserIndex] = {
-        ...browserDefault,
-        createdAt: legacy.createdAt,
+      },
+      {
+        id: APP_CUA_DRIVER_UTILITY_ID,
+        kind: 'mcp',
+        name: 'cio:cua-driver',
+        description:
+          'MCP server for the Cua Driver computer-use agent: screenshot capture, mouse clicks, typing, scrolling, and other desktop GUI automation exposed as MCP tools over stdio.',
+        enabled: true,
+        activation: 'on_demand',
+        scope: { level: 'global' },
+        config: {
+          transport: 'stdio' as const,
+          command: 'cua-driver',
+          args: ['mcp']
+        },
+        credentials: [],
+        harnessBindings: harnesses.map((harness) => ({
+          harnessId: harness.id,
+          strategy: 'mcp' as const,
+          transportName: 'cua-driver'
+        })),
+        appOwned: true,
+        createdAt: now,
         updatedAt: now
       }
-      registryChanged = true
-    }
-
+    ]
     const existingIds = new Set(registry.utilities.map((utility) => utility.id))
     const missing = defaults.filter((utility) => !existingIds.has(utility.id))
-    if (missing.length > 0) {
+    if (missing.length > 0 || migrated) {
       registry.utilities.push(...missing)
-      registryChanged = true
-    }
-    if (registryChanged) {
       await this.storage.write(REGISTRY_PATH, registry)
     }
     this.appDefaultsSeeded = true
+  }
+
+  /**
+   * Renames legacy `codeinoven:` app-owned utilities to their current ids so
+   * registries created before the rename do not keep stale duplicates.
+   */
+  private migrateLegacyAppUtilities(registry: UtilityRegistryFile): boolean {
+    let changed = false
+    for (const [legacyId, currentId] of Object.entries(LEGACY_APP_UTILITY_IDS)) {
+      const legacyIndex = registry.utilities.findIndex((utility) => utility.id === legacyId)
+      if (legacyIndex === -1) continue
+      const legacy = registry.utilities[legacyIndex]
+      const hasCurrent = registry.utilities.some((utility) => utility.id === currentId)
+      if (!hasCurrent) {
+        registry.utilities[legacyIndex] = { ...legacy, id: currentId }
+      } else {
+        registry.utilities.splice(legacyIndex, 1)
+        // Preserve a pinned vision model from the legacy entry when the
+        // current entry is still on its blank defaults.
+        const current = registry.utilities.find((utility) => utility.id === currentId)
+        if (
+          current &&
+          legacy.kind === 'image_descriptor' &&
+          current.kind === 'image_descriptor' &&
+          !isBlankImageDescriptorConfig(legacy.config) &&
+          isBlankImageDescriptorConfig(current.config)
+        ) {
+          registry.utilities[registry.utilities.indexOf(current)] = {
+            ...current,
+            config: legacy.config,
+            updatedAt: Date.now()
+          }
+        }
+      }
+      changed = true
+    }
+    return changed
   }
 
   /** Raw registry read that never triggers seeding (used by the seed itself). */
@@ -280,7 +314,7 @@ export class UtilityRegistryService {
         )
       }
       if (current.id === APP_RETRIEVE_MCP_HOST_UTILITY_ID && patch.config !== undefined) {
-        throw new Error('The app-owned retrieve_mcp_host utility is fully managed')
+        throw new Error(`The app-owned ${RETRIEVE_MCP_HOST_TOOL_NAME} utility is fully managed`)
       }
 
       const normalized = normalizeInput({
@@ -368,8 +402,8 @@ export class UtilityRegistryService {
 
       const implicitCapability =
         utility.kind === 'web_search' ||
-        utility.kind === 'web_fetch' ||
-        utility.kind === 'computer_use'
+          utility.kind === 'web_fetch' ||
+          utility.kind === 'computer_use'
           ? utility.kind
           : undefined
       const capability = binding.nativeCapability
@@ -586,12 +620,12 @@ function parseCredentials(value: unknown): UtilityCredentialMetadata[] {
       required: entry['required'] === true,
       ...(optionalString(entry['environmentVariable'], 'Credential environment variable', 160)
         ? {
-            environmentVariable: optionalString(
-              entry['environmentVariable'],
-              'Credential environment variable',
-              160
-            )
-          }
+          environmentVariable: optionalString(
+            entry['environmentVariable'],
+            'Credential environment variable',
+            160
+          )
+        }
         : {})
     }
     if (entry['required'] !== true && entry['required'] !== false) {
@@ -632,8 +666,8 @@ function parseBindings(value: unknown): HarnessUtilityBinding[] {
       ...(entry['options'] === undefined
         ? {}
         : {
-            options: checkedNonSecretRecord(entry['options'], 'Harness binding options')
-          })
+          options: checkedNonSecretRecord(entry['options'], 'Harness binding options')
+        })
     }
     if (harnesses.has(binding.harnessId)) {
       throw new TypeError(`Duplicate harness binding: ${binding.harnessId}`)

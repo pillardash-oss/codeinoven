@@ -23,6 +23,11 @@ interface PiRpcOptions {
   onEvent?: (record: Record<string, unknown>) => void
   /** Called for dialog-style extension UI requests that need a human answer. */
   onUiRequest?: (record: Record<string, unknown>) => void
+  /**
+   * Called for fire-and-forget extension UI records (setStatus/setWidget/
+   * notify/setTitle) that carry state without expecting a reply.
+   */
+  onExtensionStatus?: (record: Record<string, unknown>) => void
   /** Called once when the pi process exits unexpectedly. */
   onExit?: (code: number | null) => void
 }
@@ -46,8 +51,10 @@ export class PiRpcClient {
   private readonly onEvent: (record: Record<string, unknown>) => void
   private readonly onExit: (code: number | null) => void
   private readonly onUiRequest: (record: Record<string, unknown>) => void
+  private readonly onExtensionStatus: (record: Record<string, unknown>) => void
   private readonly pending = new Map<string, PendingRequest>()
   private buffer = ''
+  private stderrBuffer = ''
   private nextId = 1
   private disposed = false
 
@@ -56,6 +63,7 @@ export class PiRpcClient {
     // A dialog without a consumer must still be answered or pi stalls waiting
     // for a human; the driver always supplies its own handler that surfaces it.
     this.onUiRequest = options.onUiRequest ?? ((record) => this.dismissUiDialog(record))
+    this.onExtensionStatus = options.onExtensionStatus ?? (() => undefined)
     this.onExit = options.onExit ?? (() => undefined)
     this.child = spawn(options.invocation.command, options.invocation.args, {
       ...(options.invocation.cwd ? { cwd: options.invocation.cwd } : {}),
@@ -64,13 +72,21 @@ export class PiRpcClient {
       stdio: ['pipe', 'pipe', 'pipe']
     })
     this.child.stdout?.on('data', (chunk: Buffer) => this.consume(chunk.toString()))
-    this.child.stderr?.on('data', () => undefined)
+    // Capped rolling tail so a crash reason (missing dependency, bad flag,
+    // uncaught exception) reaches the error surfaced to the user instead of
+    // a bare "exited with code 1" that gives no clue what went wrong.
+    this.child.stderr?.on('data', (chunk: Buffer) => {
+      this.stderrBuffer = `${this.stderrBuffer}${chunk.toString()}`.slice(-4_000)
+    })
     this.child.on('error', (error) => {
       this.failAll(new Error(`Failed to launch pi: ${error.message}`))
       this.onExit(null)
     })
     this.child.on('exit', (code) => {
-      this.failAll(new Error(`Pi process exited with code ${code ?? 'unknown'}`))
+      const detail = this.stderrBuffer.trim()
+      this.failAll(
+        new Error(`Pi process exited with code ${code ?? 'unknown'}${detail ? `: ${detail}` : ''}`)
+      )
       this.onExit(code)
     })
   }
@@ -99,6 +115,19 @@ export class PiRpcClient {
   /** Create a fresh Pi session bound to the current project. */
   async newSession(): Promise<void> {
     await this.send({ type: 'new_session' })
+  }
+
+  /**
+   * Load a previously persisted Pi session file so the conversation continues
+   * with its full native history. Rejects when pi rejects the switch or an
+   * extension cancels it (`session_before_switch`), so the caller can fall
+   * back to a fresh session.
+   */
+  async switchSession(sessionPath: string): Promise<void> {
+    const data = await this.send({ type: 'switch_session', sessionPath })
+    if (record(data)?.['cancelled'] === true) {
+      throw new Error('Pi cancelled the session switch (session_before_switch)')
+    }
   }
 
   /** Send a prompt turn. The response resolves at preflight; events stream after. */
@@ -201,7 +230,11 @@ export class PiRpcClient {
       // Only dialog methods block on a client response. Fire-and-forget methods
       // (notify, setStatus, setWidget, setTitle, set_editor_text) never expect a
       // reply, so answering them would be noise.
-      if (isExtensionUiDialogMethod(record['method'])) this.onUiRequest(record)
+      if (isExtensionUiDialogMethod(record['method'])) {
+        this.onUiRequest(record)
+        return
+      }
+      if (isExtensionStatusMethod(record['method'])) this.onExtensionStatus(record)
       return
     }
     this.onEvent(record)
@@ -249,7 +282,18 @@ export class PiRpcClient {
   }
 }
 
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
 /** Dialog extension UI methods that block until the client replies. */
 function isExtensionUiDialogMethod(method: unknown): boolean {
   return method === 'select' || method === 'confirm' || method === 'input' || method === 'editor'
+}
+
+/** Fire-and-forget extension UI methods that carry observable state. */
+function isExtensionStatusMethod(method: unknown): boolean {
+  return method === 'setStatus' || method === 'notify' || method === 'setWidget'
 }

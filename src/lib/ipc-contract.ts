@@ -22,12 +22,16 @@ import type {
   NativeSkillContent,
   AppConfig,
   AppConfigPatch,
+  VisionModelRecord,
   BaseUrlProvider,
   BaseUrlProviderCopyClipboardRequest,
   BaseUrlProviderCreateRequest,
+  BaseUrlProviderFetchModelsRequest,
   BaseUrlProviderUpdateRequest,
+  DiscoveredBaseUrlModel,
   BrainstormContent,
   BrainstormDecisionAction,
+  BrainstormPrototypeFidelity,
   BrainstormDocument,
   BrainstormEntryChoice,
   BrainstormProvenance,
@@ -46,6 +50,7 @@ import type {
   EngineeringLifecycleState,
   EngineeringLifecycleTransitionResult,
   ScopedHarnessCommand,
+  HeartbeatConfig,
   HistoryEntry,
   HistoryRole,
   ImageDescriptorErrorRequest,
@@ -266,7 +271,7 @@ export interface BrowserPermissionRequest {
 export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
 
 /** Where a renderer log line originated, for the durable log tag. */
-export type RendererLogSource = 'error' | 'unhandledrejection' | 'console'
+export type RendererLogSource = 'error' | 'unhandledrejection' | 'console' | 'watchdog'
 
 /** Renderer-level log levels forwarded to the main-process Logger. */
 export type RendererLogLevel = 'dev' | 'info' | 'error'
@@ -554,7 +559,14 @@ export interface IpcInvokeContract {
     BrainstormDocument | EngineeringSpec | null
   >
   'agent:reviewBrainstorm': Contract<
-    [projectId: string, threadId: string, brainstormId: string, version: number, note: string],
+    [
+      projectId: string,
+      threadId: string,
+      brainstormId: string,
+      version: number,
+      note: string,
+      prototypeRequest?: { fidelity: BrainstormPrototypeFidelity; count?: number }
+    ],
     BrainstormDocument
   >
   'agent:finalizeBrainstorm': Contract<
@@ -849,7 +861,7 @@ export interface IpcInvokeContract {
   'agent:listPermissions': Contract<[projectId: string, threadId: string], PermissionRequest[]>
   'agent:listProviders': Contract<[projectId: string], ProviderCatalog[]>
   'agent:listProviderSnapshot': Contract<[projectId: string], ProviderCatalog[]>
-  'agent:refreshProviderCatalog': Contract<[projectId: string], ProviderCatalog[]>
+  'agent:refreshProviderCatalog': Contract<[projectId: string, force?: boolean], ProviderCatalog[]>
   'agent:refreshAccountUsage': Contract<[projectId: string, threadId: string], AgentAccountUsage[]>
   'agent:getHarnessAuthStatus': Contract<[projectId: string, harnessId: string], boolean | null>
   'agent:listTools': Contract<
@@ -954,8 +966,10 @@ export interface IpcInvokeContract {
       settings: ThreadSettings,
       text: string,
       attachments: PromptAttachment[],
-      selections: string[],
-      initialContext: string | undefined
+      references: PromptReference[],
+      initialContext: string | undefined,
+      userMessageId: string | undefined,
+      displayText: string | undefined
     ],
     AgentMessage
   >
@@ -967,7 +981,9 @@ export interface IpcInvokeContract {
       settings: ThreadSettings,
       text: string,
       attachments: PromptAttachment[],
-      selections: string[]
+      references: PromptReference[],
+      userMessageId: string | undefined,
+      displayText: string | undefined
     ],
     void
   >
@@ -998,6 +1014,17 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, messageId: string],
     AgentMessage[]
   >
+  /**
+   * Delete history around a message. `down` keeps only the messages before it
+   * (truncate semantics). `single` removes the message and its turn's work
+   * trace, splicing earlier and later messages together. `up` removes the
+   * message and everything before it, keeping later messages.
+   */
+  'agent:deleteMessages': Contract<
+    [projectId: string, threadId: string, messageId: string, mode: 'down' | 'single' | 'up'],
+    AgentMessage[]
+  >
+  'agent:discardSteer': Contract<[projectId: string, threadId: string, messageId: string], void>
   'checklist:generate': Contract<
     [projectId: string, threadId: string, planContent: string],
     Checklist
@@ -1040,6 +1067,7 @@ export interface IpcInvokeContract {
   >
   'config:get': Contract<[], AppConfig>
   'config:update': Contract<[patch: AppConfigPatch], AppConfig>
+  'visionModels:list': Contract<[], VisionModelRecord[]>
   'config:syncAgentRole': Contract<[role: AgentRole, selection: AgentModelSelection], AppConfig>
   'cioPrompts:list': Contract<[], CioPromptSetting[]>
   'cioPrompts:save': Contract<[id: CioPromptId, template: string], CioPromptSetting[]>
@@ -1202,10 +1230,7 @@ export interface IpcInvokeContract {
     [],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechLlamaRuntimeStatus>
   >
-  'speech:downloadLlamaRuntime': Contract<
-    [],
-    import('./speech/types').SpeechResult<void>
-  >
+  'speech:downloadLlamaRuntime': Contract<[], import('./speech/types').SpeechResult<void>>
   'speech:requestConfirmation': Contract<
     [action: import('./speech/types').SpeechDestructiveAction, targetId: string],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechConfirmation>
@@ -1261,7 +1286,7 @@ export interface IpcInvokeContract {
   'storage:openDataDirectory': Contract<[], boolean>
   'file:read': Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>
   'file:readAsDataUrl': Contract<[filePath: string], string | null>
-  'file:readWordPreview': Contract<[filePath: string], string | null>
+  'file:readDocumentPreview': Contract<[filePath: string], string | null>
   'editors:detect': Contract<[], EditorInfo[]>
   'editors:getPreferred': Contract<[], EditorId>
   'editors:setPreferred': Contract<[editorId: EditorId], void>
@@ -1298,6 +1323,16 @@ export interface IpcInvokeContract {
     GitStatus
   >
   'git:unstage': Contract<[projectId: string, paths: string[], scopeBucketId?: string], GitStatus>
+  'git:restoreFiles': Contract<
+    [
+      projectId: string,
+      source: string,
+      paths: string[],
+      target: import('./types').GitRestoreTarget,
+      scopeBucketId?: string
+    ],
+    GitStatus
+  >
   'git:commit': Contract<[projectId: string, message: string, scopeBucketId?: string], GitStatus>
   'git:init': Contract<[projectId: string, scopeBucketId?: string], GitStatus>
   'git:branches': Contract<[projectId: string, scopeBucketId?: string], GitBranchInfo[]>
@@ -1722,6 +1757,8 @@ export interface IpcInvokeContract {
     { board: ScopeBoard; bucket: ScopeBucket }
   >
   'scope:setArchive': Contract<[projectId: string, bucketId: string, archived: boolean], ScopeBoard>
+  /** Pin or unpin a scope; pinned scopes are exempt from thread eviction. */
+  'scope:setPinned': Contract<[projectId: string, bucketId: string, pinned: boolean], ScopeBoard>
   'scope:delete': Contract<[projectId: string, bucketId: string], ScopeBoard>
   /** Create an isolated managed worktree and attach it to a scope. */
   'scope:worktree:create': Contract<
@@ -1797,13 +1834,16 @@ export interface IpcInvokeContract {
   'project:setIcon': Contract<[projectId: string, sourcePath: string], Project>
   'project:clearIcon': Contract<[projectId: string], Project>
   'project:update': Contract<[projectId: string, input: Partial<CreateProjectInput>], Project>
-  'projectFiles:list': Contract<[projectId: string, relativeDirectory: string], ProjectFileEntry[]>
+  'projectFiles:list': Contract<
+    [projectId: string, relativeDirectory: string, scopeBucketId?: string],
+    ProjectFileEntry[]
+  >
   'projectFiles:search': Contract<
-    [projectId: string, query: string, category: 'all' | 'rules'],
+    [projectId: string, query: string, category: 'all' | 'rules', scopeBucketId?: string],
     ProjectFileEntry[]
   >
   'projectFiles:resolveCitationPaths': Contract<
-    [projectId: string, candidates: string[]],
+    [projectId: string, candidates: string[], scopeBucketId?: string],
     Record<string, string | null>
   >
   'projectFiles:resolveExternalCitationPaths': Contract<
@@ -1811,46 +1851,79 @@ export interface IpcInvokeContract {
     Record<string, boolean>
   >
   'projectFiles:create': Contract<
-    [projectId: string, relativeDirectory: string, name: string],
+    [projectId: string, relativeDirectory: string, name: string, scopeBucketId?: string],
     ProjectFileEntry
   >
   'projectFiles:createDirectory': Contract<
-    [projectId: string, relativeDirectory: string, name: string],
+    [projectId: string, relativeDirectory: string, name: string, scopeBucketId?: string],
     ProjectFileEntry
   >
-  'projectFiles:delete': Contract<[projectId: string, relativePath: string], void>
-  'projectFiles:info': Contract<[projectId: string, relativePath: string], ProjectFileInfo>
-  'projectFiles:openInEditor': Contract<[projectId: string, relativePath: string], void>
-  'projectFiles:openInEditorWith': Contract<
-    [projectId: string, relativePath: string, editorId: EditorId],
+  'projectFiles:delete': Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string],
     void
   >
-  'projectFiles:saveAs': Contract<[projectId: string, relativePath: string], string | null>
+  'projectFiles:info': Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string],
+    ProjectFileInfo
+  >
+  'projectFiles:openInEditor': Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string],
+    void
+  >
+  'projectFiles:openInEditorWith': Contract<
+    [projectId: string, relativePath: string, editorId: EditorId, scopeBucketId?: string],
+    void
+  >
+  'projectFiles:saveAs': Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string],
+    string | null
+  >
   'projectFiles:paste': Contract<
     [
       sourceProjectId: string,
       sourcePath: string,
       destinationProjectId: string,
       destinationDirectory: string,
-      mode: ProjectFileTransferMode
+      mode: ProjectFileTransferMode,
+      sourceScopeBucketId?: string,
+      destinationScopeBucketId?: string
     ],
     ProjectFileEntry
   >
   'projectFiles:importPaths': Contract<
-    [projectId: string, sourcePaths: string[], destinationDirectory: string],
+    [
+      projectId: string,
+      sourcePaths: string[],
+      destinationDirectory: string,
+      scopeBucketId?: string
+    ],
     ProjectFileEntry[]
   >
   'projectFiles:dropPaths': Contract<
-    [projectId: string, sourcePaths: string[], destinationDirectory: string],
+    [
+      projectId: string,
+      sourcePaths: string[],
+      destinationDirectory: string,
+      scopeBucketId?: string
+    ],
     ProjectFileDropResult[]
   >
-  'projectFiles:read': Contract<[projectId: string, relativePath: string], ProjectTextFile>
+  'projectFiles:read': Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string],
+    ProjectTextFile
+  >
   'projectFiles:rename': Contract<
-    [projectId: string, relativePath: string, name: string],
+    [projectId: string, relativePath: string, name: string, scopeBucketId?: string],
     ProjectFileEntry
   >
   'projectFiles:save': Contract<
-    [projectId: string, relativePath: string, content: string, expectedRevision: string],
+    [
+      projectId: string,
+      relativePath: string,
+      content: string,
+      expectedRevision: string,
+      scopeBucketId?: string
+    ],
     ProjectTextFile
   >
   'providers:check': Contract<[providerId: string], ProviderConnectionInfo>
@@ -1883,10 +1956,7 @@ export interface IpcInvokeContract {
     [harnessId: string, providerId: string, apiKey: string],
     void
   >
-  'providerAccounts:beginOAuthLogin': Contract<
-    [harnessId: string, providerId: string],
-    string
-  >
+  'providerAccounts:beginOAuthLogin': Contract<[harnessId: string, providerId: string], string>
   'providerAccounts:respondOAuthPrompt': Contract<[loginId: string, value: string], void>
   'providerAccounts:cancelOAuthLogin': Contract<[loginId: string], void>
   'providerAccounts:getHidden': Contract<[harnessId: string], string[]>
@@ -1905,6 +1975,22 @@ export interface IpcInvokeContract {
     [input: BaseUrlProviderCopyClipboardRequest],
     void
   >
+  'baseUrlProviders:fetchModels': Contract<
+    [input: BaseUrlProviderFetchModelsRequest],
+    DiscoveredBaseUrlModel[]
+  >
+  'baseUrlProviders:fetchUsage': Contract<
+    [harnessId: string, id: string],
+    import('./types').CustomProviderUsage | null
+  >
+  'heartbeat:list': Contract<[], HeartbeatConfig[]>
+  'heartbeat:create': Contract<[input: Omit<HeartbeatConfig, 'id' | 'lastRun'>], HeartbeatConfig>
+  'heartbeat:update': Contract<
+    [id: string, patch: Partial<Omit<HeartbeatConfig, 'id'>>],
+    HeartbeatConfig
+  >
+  'heartbeat:delete': Contract<[id: string], boolean>
+  'heartbeat:toggle': Contract<[id: string, enabled: boolean], HeartbeatConfig>
   'gateway:list': Contract<[], import('./gateway-types').GatewayStatus[]>
   'gateway:setEnabled': Contract<
     [pluginId: string, enabled: boolean],
@@ -1948,14 +2034,40 @@ export interface IpcInvokeContract {
   'computerUse:pipBringToFront': Contract<[], void>
   'computerUse:pipDismiss': Contract<[], void>
   'pty:create': Contract<
-    [id: string, projectId: string, columns: number, rows: number],
+    [id: string, projectId: string, columns: number, rows: number, scopeBucketId?: string],
     { id: string; pid: number }
   >
   'pty:createCommand': Contract<
     [id: string, command: string, args: string[], columns: number, rows: number],
     { id: string; pid: number }
   >
+  'pty:createAction': Contract<
+    [
+      id: string,
+      projectId: string,
+      script: string,
+      variables: Record<string, string>,
+      columns: number,
+      rows: number,
+      scopeBucketId?: string
+    ],
+    { id: string; pid: number }
+  >
   'pty:destroy': Contract<[id: string], void>
+  'projectActions:list': Contract<[projectId: string], import('./project-actions').ProjectAction[]>
+  'projectActions:save': Contract<
+    [
+      projectId: string,
+      actionId: string | null,
+      input: import('./project-actions').ProjectActionInput
+    ],
+    import('./project-actions').ProjectAction
+  >
+  'projectActions:delete': Contract<[projectId: string, actionId: string], boolean>
+  'projectActions:reorder': Contract<
+    [projectId: string, orderedIds: string[]],
+    import('./project-actions').ProjectAction[]
+  >
   'repository:init': Contract<[projectPath: string], RepositoryPreflightResult>
   'repository:preflight': Contract<[projectPath: string], RepositoryPreflightResult>
   'repository:remoteOrigin': Contract<[projectPath: string], string | null>
@@ -2289,7 +2401,7 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, settings: ThreadSettings],
     Thread
   >
-  'updater:check': Contract<[], UpdaterStatus>
+  'updater:check': Contract<[explicit?: boolean], UpdaterStatus>
   'updater:getStatus': Contract<[], UpdaterStatus>
   'updater:download': Contract<[], void>
   'updater:install': Contract<[], void>

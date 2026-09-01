@@ -515,7 +515,7 @@ export class NotificationService {
     try {
       const notification = new Notification({
         id: payload.id,
-        groupId: `${APP_SLUG}-${thread.projectId}`,
+        groupId: payload.id,
         title: payload.title,
         subtitle,
         body: payload.body,
@@ -611,7 +611,7 @@ export class NotificationService {
     try {
       const notification = new Notification({
         id: payload.id,
-        groupId: `${APP_SLUG}-${thread.projectId}`,
+        groupId: payload.id,
         title: payload.title,
         subtitle,
         body: payload.body,

@@ -630,6 +630,12 @@ class ScopeState {
     })
   }
 
+  /** Record the bucket that became active for a project (e.g. a thread opened
+   *  inside it) so scope-driven surfaces can follow without a sidebar click. */
+  noteProjectBucket(projectId: string, bucketId: string): void {
+    this.lastBucketByProject.set(projectId, bucketId)
+  }
+
   lastBucketForProject(projectId: string): string {
     const saved = this.lastBucketByProject.get(projectId)
     if (saved) return saved
@@ -843,6 +849,14 @@ class ScopeState {
   /** Archive or restore a custom scope. Never touches its worktree. */
   async setArchive(projectId: string, bucketId: string, archived: boolean): Promise<void> {
     const board = await invoke('scope:setArchive', projectId, bucketId, archived)
+    const cloned = cloneBoard(board)
+    this.boards.set(projectId, cloned)
+    if (projectId === this.activeProjectId) this.board = cloned
+  }
+
+  /** Pin or unpin a scope. Pinned scopes are exempt from thread eviction. */
+  async setPinned(projectId: string, bucketId: string, pinned: boolean): Promise<void> {
+    const board = await invoke('scope:setPinned', projectId, bucketId, pinned)
     const cloned = cloneBoard(board)
     this.boards.set(projectId, cloned)
     if (projectId === this.activeProjectId) this.board = cloned

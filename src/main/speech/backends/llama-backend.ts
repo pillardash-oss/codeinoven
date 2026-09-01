@@ -60,6 +60,16 @@ export class LlamaServerSpeechBackend implements SpeechBackend {
   private port = 0
   private stderrTail = ''
 
+  /**
+   * Journal hooks wired by {@link SpeechService}. They let a later launch reap
+   * a llama-server this app spawned and left orphaned by an unclean exit,
+   * without ever touching a server the user runs outside the app.
+   */
+  constructor(
+    private readonly registerChild?: (pid: number, command: string, cwd: string) => void,
+    private readonly unregisterChild?: (pid: number) => void
+  ) {}
+
   async capabilities(): Promise<SpeechCapability[]> {
     if (!getEffectiveLlamaServerPath()) return []
     return ['cleanup']
@@ -173,6 +183,9 @@ export class LlamaServerSpeechBackend implements SpeechBackend {
     ) as unknown as ChildProcessWithoutNullStreams
     this.child = child
     this.currentModelFile = modelFile
+    this.registerChild?.(child.pid ?? 0, executable, process.cwd())
+    const pid = child.pid ?? 0
+    child.once('exit', () => this.unregisterChild?.(pid))
     let buffered = ''
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => finish(new Error('llama-server did not report its port.')), 30_000)

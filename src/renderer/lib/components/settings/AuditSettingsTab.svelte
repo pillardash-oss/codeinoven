@@ -16,6 +16,7 @@
     ProviderCatalog,
     ThinkingLevel
   } from '$shared/types'
+  import { DEFAULT_HARNESS } from '$shared/harness-default'
 
   interface Props {
     config: AppConfig
@@ -200,11 +201,12 @@
               <ModelPicker
                 {providers}
                 projectId={rendererRecovery.selectedProjectId}
-                harnessId={selection?.harnessId ?? providers[0]?.harnessId ?? 'opencode'}
+                harnessId={selection?.harnessId ?? providers[0]?.harnessId ?? DEFAULT_HARNESS}
                 providerId={selection?.providerId ?? ''}
                 modelId={selection?.modelId ?? ''}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 side="bottom"
                 variant="field"
                 label={selection ? undefined : 'Choose model'}
@@ -282,11 +284,12 @@
           <ModelPicker
             {providers}
             projectId={rendererRecovery.selectedProjectId}
-            harnessId={defaults.imageDescriptor?.harnessId ?? providers[0]?.harnessId ?? 'opencode'}
+            harnessId={defaults.imageDescriptor?.harnessId ?? providers[0]?.harnessId ?? DEFAULT_HARNESS}
             providerId={defaults.imageDescriptor?.providerId ?? ''}
             modelId={defaults.imageDescriptor?.modelId ?? ''}
             favoriteModels={rendererRecovery.favoriteModels}
             recentModels={rendererRecovery.recentModels}
+            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
             visionOnly
             side="bottom"
             variant="field"

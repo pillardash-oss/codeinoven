@@ -67,6 +67,11 @@ export function logRendererError(message: string, cause?: unknown): void {
   send('error', message, detail.stack, 'error')
 }
 
+/** Forward a dev-only diagnostic (never surfaced in production) to the durable log. */
+export function logRendererDev(message: string): void {
+  send('dev', message, undefined, 'watchdog')
+}
+
 /**
  * Install window-level error handlers and `console.error` interception so every
  * renderer JS error is captured and forwarded to the main-process durable log.
