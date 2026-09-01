@@ -17,6 +17,10 @@ export interface TerminalSession {
   ptySpawned: boolean
   /** Owning project, resolved once the terminal attaches to a panel. */
   projectId: string | null
+  /** Owning thread, captured at attach time so respawns can re-create the PTY. */
+  threadId: string | null
+  /** Scope bucket captured with the thread binding, or null for the project root. */
+  scopeBucketId: string | null
   /** Consecutive immediate shell exits since the last healthy (2s) uptime. */
   respawnCount: number
   kind: 'shell' | 'action'
@@ -133,6 +137,8 @@ class TerminalSessionManager {
       container.replaceChildren(session.host)
     }
     session.fitAddon.fit()
+    session.threadId = threadId
+    session.scopeBucketId = scopeBucketId ?? null
     await this.ensurePty(session, projectId, threadId, scopeBucketId)
     session.term.focus()
   }
@@ -259,6 +265,8 @@ class TerminalSessionManager {
       exited: false,
       ptySpawned: false,
       projectId: null,
+      threadId: null,
+      scopeBucketId: null,
       respawnCount: 0,
       kind: 'shell'
     }
@@ -311,7 +319,12 @@ class TerminalSessionManager {
       session.respawnCount += 1
       session.ptySpawned = false
       try {
-        await this.ensurePty(session, session.projectId)
+        await this.ensurePty(
+          session,
+          session.projectId,
+          session.threadId ?? '',
+          session.scopeBucketId ?? undefined
+        )
         session.exited = false
         // A shell that survives this window is healthy, so reset the guard.
         respawnTimer = setTimeout(() => {

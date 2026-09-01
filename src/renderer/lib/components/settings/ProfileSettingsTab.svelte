@@ -9,12 +9,11 @@
     AccountUsageBreakdown,
     LocalProfileAnalytics,
     LocalProfileAnalyticsRange,
-    LocalProfileModelPerformance,
     LocalProfileProjectBreakdown,
+    LocalProfileRankingModeStats,
     LocalProfileUsageBreakdown,
     LocalProfileUsageHour,
-    ThinkingLevel,
-    TurnOutcomeTaskType
+    ThinkingLevel
   } from '$shared/types'
   import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -23,7 +22,6 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
 
   type ThinkingFilter = 'all' | ThinkingLevel
-  type TaskFilter = 'all' | TurnOutcomeTaskType
   type RangePreset = 'today' | 'yesterday' | '7d' | '30d' | 'year' | 'custom'
   type ModelRankMetric = 'cost' | 'tokens' | 'runtime'
 
@@ -100,15 +98,12 @@
     activityDays: [],
     dailyUsage: [],
     hourlyUsage: [],
-    modelPerformance: [],
+    modelRankings: [],
     responseDurationMs: 0,
-    feedbackCost: {
-      outcomes: 0,
-      pricedOutcomes: 0,
+    gradingSpend: {
       costUsd: 0,
       knownCostUsd: 0,
-      estimatedCostUsd: 0,
-      tokensTotal: 0
+      estimatedCostUsd: 0
     },
     generatedAt: 0
   }
@@ -270,7 +265,6 @@
   )
 
   let thinkingFilter = $state<ThinkingFilter>('all')
-  let taskFilter = $state<TaskFilter>('all')
 
   const topModels = $derived.by(() => {
     const grouped = new SvelteMap<string, LocalProfileUsageBreakdown>()
@@ -319,12 +313,7 @@
     usage.models.filter((model) =>
       thinkingFilter === 'all' ? true : model.thinkingLevel === thinkingFilter
     )
-  )
-  const filteredPerformance = $derived(
-    usage.modelPerformance.filter((entry) =>
-      taskFilter === 'all' ? true : entry.taskType === taskFilter
-    )
-  )
+ )
 
   function thinkingLevelLabel(level: ThinkingLevel): string {
     return (
@@ -333,31 +322,18 @@
     )
   }
 
-  function taskTypeLabel(taskType: TurnOutcomeTaskType): string {
-    switch (taskType) {
-      case 'main':
-        return 'Main work'
-      case 'audit':
-        return 'Audit'
-      case 'assignment':
-        return 'Assignment'
-    }
+  function rankingScoreLabel(stats: LocalProfileRankingModeStats): string {
+    if (stats.samples === 0 || stats.averageScore === null) return '—'
+    return `${stats.averageScore.toFixed(1)}/10`
   }
 
-  function successRateLabel(entry: LocalProfileModelPerformance): string {
-    if (entry.outcomes === 0 || entry.successRate === null) return 'No graded sessions yet'
-    return `${Math.round(entry.successRate * 100)}%`
+  function rankingSamplesLabel(stats: LocalProfileRankingModeStats): string {
+    return stats.samples === 1 ? '1 conversation' : `${stats.samples} conversations`
   }
 
-  function averageGradeLabel(entry: LocalProfileModelPerformance): string {
-    if (entry.averageGrade === null) return ''
-    return `avg ${entry.averageGrade.toFixed(1)}/5`
-  }
-
-  function successRateWidth(entry: LocalProfileModelPerformance): string {
-    const rate = entry.successRate
-    if (rate === null) return '0%'
-    return `${Math.max(4, Math.min(100, rate * 100))}%`
+  function rankingDurationLabel(stats: LocalProfileRankingModeStats): string {
+    if (stats.samples === 0 || stats.averageDurationMs === null) return '—'
+    return formatDuration(stats.averageDurationMs)
   }
 
   function localDateKey(date: Date): string {
@@ -1488,114 +1464,93 @@
     </section>
   </div>
 
-  <section class="mt-4 rounded-xl border" aria-labelledby="model-performance-heading">
+  <section class="mt-4 rounded-xl border" aria-labelledby="model-ranking-heading">
     <div class="border-b px-4 py-3">
-      <h2 id="model-performance-heading" class="text-sm font-semibold">Best model by feedback</h2>
+      <h2 id="model-ranking-heading" class="text-sm font-semibold">Model rankings</h2>
       <p class="mt-0.5 text-xs text-muted">
+        One-shot and multi-shot results for each harness, provider, model, and thinking level.
+      </p>
+      {#if usage.gradingSpend.costUsd > 0}
+        <p class="mt-2 text-xs">
+          <span class="font-semibold tabular-nums text-foreground">
+            {formatCost(usage.gradingSpend.costUsd)} spent
+          </span>
+          <span class="text-dimmed"> across ranked conversations </span>
+        </p>
+      {/if}
+    </div>
+    {#if usage.modelRankings.length > 0}
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead>
+            <tr class="border-b text-[11px] uppercase tracking-wide text-muted">
+              <th scope="col" class="px-4 py-2 font-medium">Configuration</th>
+              <th scope="col" class="px-4 py-2 font-medium">One-shot</th>
+              <th scope="col" class="px-4 py-2 font-medium">Multi-shot</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            {#each usage.modelRankings.slice(0, 10) as entry (`${entry.harnessId}:${entry.providerId}:${entry.modelId}:${entry.thinkingLevel}:${entry.rubricVersion}`)}
+              <tr>
+                <td class="max-w-56 px-4 py-3">
+                  <span class="flex min-w-0 items-center gap-1.5 font-semibold">
+                    {#if getAgentIcon(entry.harnessId)}
+                      <img
+                        class="h-4 w-4 shrink-0 object-contain"
+                        src={getAgentIcon(entry.harnessId)?.iconUrl}
+                        alt=""
+                      />
+                    {/if}
+                    <VendorIcon
+                      name={entry.providerId || entry.modelId}
+                      id={entry.providerId}
+                      size={15}
+                    />
+                    <span class="truncate">{entry.modelId}</span>
+                  </span>
+                  <span class="mt-1 flex flex-wrap items-center gap-1 text-[10px] text-muted">
+                    {#if entry.thinkingLevel}
+                      <span class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 capitalize">
+                        <Brain size={9} />
+                        {entry.thinkingLevel}
+                      </span>
+                    {/if}
+                    <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5">
+                      {entry.harnessId}
+                    </span>
+                    <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5">
+                      rubric {entry.rubricVersion}
+                    </span>
+                  </span>
+                </td>
+                <td class="px-4 py-3 tabular-nums">
+                  <div class="font-semibold text-foreground">{rankingScoreLabel(entry.oneShot)}</div>
+                  <div class="mt-0.5 text-[11px] text-dimmed">
+                    {rankingSamplesLabel(entry.oneShot)}
+                    {#if entry.oneShot.samples > 0}
+                      · {rankingDurationLabel(entry.oneShot)} avg
+                    {/if}
+                  </div>
+                </td>
+                <td class="px-4 py-3 tabular-nums">
+                  <div class="font-semibold text-foreground">{rankingScoreLabel(entry.multiShot)}</div>
+                  <div class="mt-0.5 text-[11px] text-dimmed">
+                    {rankingSamplesLabel(entry.multiShot)}
+                    {#if entry.multiShot.samples > 0}
+                      · {rankingDurationLabel(entry.multiShot)} avg
+                    {/if}
+                  </div>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {:else}
+      <p class="px-4 py-8 text-center text-xs text-muted">
         The more you use CodeInOven, the more models that do a good job will appear here.
       </p>
-      {#if usage.feedbackCost.outcomes > 0}
-        <p class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-          <span class="font-semibold tabular-nums text-foreground">
-            {formatCost(usage.feedbackCost.costUsd)} spent
-          </span>
-          <span class="text-dimmed">
-            across {usage.feedbackCost.outcomes} scored sessions{usage.feedbackCost.pricedOutcomes <
-            usage.feedbackCost.outcomes
-              ? ` · ${usage.feedbackCost.outcomes - usage.feedbackCost.pricedOutcomes} without a reported cost`
-              : ''}
-          </span>
-        </p>
-      {/if}
-      {#if usage.modelPerformance.length > 0}
-        <div
-          class="mt-3 flex flex-wrap items-center gap-1"
-          role="group"
-          aria-label="Filter model performance by task type"
-        >
-          <button
-            type="button"
-            class="flex h-7 items-center rounded-lg px-2.5 text-[11px] font-medium {taskFilter ===
-            'all'
-              ? 'bg-overlay text-foreground'
-              : 'text-muted hover:bg-elevated hover:text-foreground'}"
-            aria-pressed={taskFilter === 'all'}
-            onclick={() => (taskFilter = 'all')}
-          >
-            All tasks
-          </button>
-          {#each ['main', 'audit', 'assignment'] as task (task)}
-            <button
-              type="button"
-              class="flex h-7 items-center rounded-lg px-2.5 text-[11px] font-medium {taskFilter ===
-              task
-                ? 'bg-overlay text-foreground'
-                : 'text-muted hover:bg-elevated hover:text-foreground'}"
-              aria-pressed={taskFilter === task}
-              onclick={() => (taskFilter = task as TaskFilter)}
-            >
-              {taskTypeLabel(task as TurnOutcomeTaskType)}
-            </button>
-          {/each}
-        </div>
-      {/if}
-    </div>
-    <div class="divide-y">
-      {#each filteredPerformance.slice(0, 10) as entry (`${entry.harnessId}:${entry.providerId}:${entry.modelId}:${entry.thinkingLevel}:${entry.taskType}`)}
-        <div class="px-4 py-3">
-          <div class="flex items-center justify-between gap-4 text-xs">
-            <span class="flex min-w-0 items-center gap-1.5 truncate font-semibold">
-              {#if getAgentIcon(entry.harnessId)}
-                <img
-                  class="h-4 w-4 shrink-0 object-contain"
-                  src={getAgentIcon(entry.harnessId)?.iconUrl}
-                  alt=""
-                />
-              {/if}
-              <VendorIcon
-                name={entry.providerId || entry.modelId}
-                id={entry.providerId}
-                size={15}
-              />
-              <span class="truncate">{entry.modelId}</span>
-              {#if entry.thinkingLevel}
-                <span
-                  class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
-                  title={`Thinking level: ${entry.thinkingLevel}`}
-                  aria-label={`Thinking level: ${entry.thinkingLevel}`}
-                >
-                  <Brain size={9} />
-                  {entry.thinkingLevel}
-                </span>
-              {/if}
-              <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[9px] text-muted">
-                {taskTypeLabel(entry.taskType)}
-              </span>
-            </span>
-            <span class="shrink-0 tabular-nums text-muted">
-              {successRateLabel(entry)}
-            </span>
-          </div>
-          <div class="mt-2 h-1 overflow-hidden rounded-full bg-raised">
-            <div
-              class="h-full rounded-full {entry.successRate !== null && entry.successRate >= 0.5
-                ? 'bg-primary'
-                : 'bg-danger/70'}"
-              style:width={successRateWidth(entry)}
-            ></div>
-          </div>
-          <p class="mt-1.5 text-[11px] tabular-nums text-dimmed">
-            {entry.outcomes} sessions · {averageGradeLabel(entry)}{entry.costUsd > 0
-              ? ` · ${formatCost(entry.costUsd)} total`
-              : ''}
-          </p>
-        </div>
-      {:else}
-        <p class="px-4 py-8 text-center text-xs text-muted">
-          The more you use CodeInOven, the more models that do a good job will appear here.
-        </p>
-      {/each}
-    </div>
+    {/if}
   </section>
 
   <section class="mt-4 rounded-xl border" aria-labelledby="utility-usage-heading">

@@ -71,7 +71,7 @@ import {
 import { parseThreadContextUsage } from '../database/repositories/thread-repo'
 import { AttachmentGrantRepo } from '../database/repositories/attachment-grant-repo'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
-import { TurnFeedbackRepo } from '../database/repositories/turn-feedback-repo'
+import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
 import { NoteRepo } from '../database/repositories/note-repo'
 import { readDocumentPreviewHtml } from '../drivers/document-attachment'
 import {
@@ -2190,8 +2190,6 @@ export function registerIpcHandlers(
     | 'activeTurnChangeSummary'
     | 'hasActiveProcessesInScope'
     | 'abort'
-    | 'handleThreadReadForGrading'
-    | 'handleThreadDraftChangedForGrading'
   > &
     Partial<Pick<ChatEngine, 'runVirtualTask'>>,
   options: RegisterIpcHandlersOptions = {}
@@ -2277,7 +2275,7 @@ export function registerIpcHandlers(
   const memoryService = new MemoryService(storage)
   const attachmentGrantRepo = new AttachmentGrantRepo(database)
   const harnessUsageRepo = new HarnessUsageRepo(database)
-  const turnFeedbackRepo = new TurnFeedbackRepo(database)
+  const modelRankingRepo = new ModelRankingRepo(database)
   const noteRepo = new NoteRepo(database)
 
   /**
@@ -2519,8 +2517,8 @@ export function registerIpcHandlers(
   ipcMain.handle('account:getLocalUsage', async (_, input: unknown) => {
     const range = validateLocalProfileAnalyticsRange(input)
     const analytics = await harnessUsageRepo.profileAnalytics(range)
-    analytics.modelPerformance = turnFeedbackRepo.modelPerformance(range)
-    analytics.feedbackCost = turnFeedbackRepo.feedbackCost(range)
+    analytics.modelRankings = modelRankingRepo.analytics()
+    analytics.gradingSpend = modelRankingRepo.gradingSpend()
     return analytics
   })
   if (!options.hydrationHandlersRegistered) {
@@ -7499,19 +7497,17 @@ export function registerIpcHandlers(
     return threadManager.efficiencyKpisFor(safeProjectId, safeThreadId)
   })
   ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
-    // Opening a thread to read the final output anchors the LLM grading
-    // countdown for its pending turn outcomes.
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    chatEngine?.handleThreadReadForGrading(projectId, safeThreadId)
     return threadManager.markRead(projectId, safeThreadId)
   })
   ipcMain.handle(
     'thread:draftActivity',
     (_, projectId: string, threadId: string, drafting: boolean) => {
-      const safeProjectId = validateEntityId(projectId, 'Project ID')
-      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      // Composer activity no longer anchors any grading deadline: ranking
+      // conversations close on thread deletion or the inactivity deadline.
+      validateEntityId(projectId, 'Project ID')
+      validateEntityId(threadId, 'Thread ID')
       validateBoolean(drafting, 'Drafting')
-      chatEngine?.handleThreadDraftChangedForGrading(safeProjectId, safeThreadId, drafting)
     }
   )
   ipcMain.handle('thread:reorder', (_, projectId: unknown, orderedIds: unknown) =>
