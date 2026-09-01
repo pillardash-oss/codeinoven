@@ -4676,9 +4676,7 @@ export class ChatEngine {
     return processes.map((process) => ({
       ...process,
       ...(process.projectId ? { projectName: projectNames.get(process.projectId) ?? null } : {}),
-      ...(process.threadId
-        ? { threadTitle: threadTitles.get(process.threadId) ?? null }
-        : {})
+      ...(process.threadId ? { threadTitle: threadTitles.get(process.threadId) ?? null } : {})
     }))
   }
 
@@ -20758,6 +20756,19 @@ export class ChatEngine {
       return
     }
     if (event.type === 'session.status' && event.status.state !== 'idle') {
+      // Provider failures do not always arrive as `session.error`: some
+      // harnesses (e.g. pi's `agent_settled`, usage/rate-limit windows) report
+      // them as a terminal `error` status or a `waiting` usage-reset. Ignoring
+      // those left auxiliary flows (image descriptor, titles, temporary chats)
+      // hanging until the inactivity window expired. Fail them immediately
+      // with the real provider message so recovery — the descriptor's fallback
+      // model chain, or the user card — starts at once.
+      const status = event.status
+      if (status.state === 'error' || (status.state === 'waiting' && status.issue !== undefined)) {
+        this.clearCompletionWaiter(event.sessionId)
+        waiter.reject(new Error(status.issue?.message ?? 'Agent session failed'))
+        return
+      }
       waiter.active = true
       waiter.refresh()
       return
