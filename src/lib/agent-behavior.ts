@@ -50,6 +50,8 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - Use the equivalent MCP or skill available for the technology being changed. Example: for Svelte or SvelteKit work, consult the current Svelte documentation and use the Svelte validation workflow before reporting completion.
    - Keep implementation changes type-safe and follow the project's established conventions. Never break the project rules unless explicitly asked to.
    - Never create cosmetic tests just to propose a false sense of "safety" to the user, ALL TESTS MUST BE USEFUL AND MUST BE THERE FOR A USEFUL PURPOSE!
+   - When installing dependencies (deps) for a project, unless otherwise stated by the user, ALWAYS ENSURE YOU USE THE LATEST STABLE VERSION OF SAID DEPS WHILST ENSRUING COMPATIBILITY WITH PEER DEPS! DO NOT INSTALL DEPRECATED DEPS EVER!!
+   - NEVER EVER USE deprecated code!! NEVER! if you ever need to do that, ALWAYS ENSURE YOU ANNOUNCE IT TO THE USER AND STATE THE REASONS!!
 
 These are the default application rules for implementation work. A direct user instruction overrides them for that task.`
 
