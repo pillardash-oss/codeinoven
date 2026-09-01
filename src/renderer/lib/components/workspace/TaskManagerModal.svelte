@@ -331,7 +331,6 @@
             {thermalLabel()}
           </span>
         {/if}
-        <span class="ml-auto text-dimmed">Updates only when opened or refreshed</span>
       </div>
     {/if}
 
