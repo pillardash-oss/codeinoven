@@ -5,7 +5,7 @@ import type {
   AgentRole,
   AgentSessionStatus,
   AgentRunningProcess,
-  TaskManagerProcess,
+  TaskManagerSnapshot,
   AssignmentModelSelection,
   AssignmentPlan,
   AssignmentPlanContent,
@@ -895,7 +895,7 @@ export interface IpcInvokeContract {
   'agent:listProcesses': Contract<[projectId: string, threadId: string], AgentRunningProcess[]>
   'agent:killProcess': Contract<[projectId: string, threadId: string, pid: number], void>
   'agent:killThreadProcesses': Contract<[projectId: string, threadId: string], void>
-  'taskManager:list': Contract<[], TaskManagerProcess[]>
+  'taskManager:list': Contract<[], TaskManagerSnapshot>
   'taskManager:killProcess': Contract<[pid: number, force: boolean], void>
   'capabilities:readSkill': Contract<[source: AgentCapabilitySource], NativeSkillContent | null>
   'capabilities:updateSkill': Contract<

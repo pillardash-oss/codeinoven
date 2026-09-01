@@ -18,6 +18,8 @@ interface ProcessSnapshotEntry {
   pid: number
   parentPid: number
   command: string
+  cpuPercent: number | null
+  memoryBytes: number | null
 }
 
 interface ProcessOwner {
@@ -68,16 +70,30 @@ function windowsEntries(value: unknown): ProcessSnapshotEntry[] {
         : typeof name === 'string'
           ? name
           : `Process ${pid}`
-    return [{ pid, parentPid, command }]
+    const cpuPercent = item?.['CpuPercent']
+    const memoryBytes = item?.['MemoryBytes']
+    return [
+      {
+        pid,
+        parentPid,
+        command,
+        cpuPercent: typeof cpuPercent === 'number' ? cpuPercent : null,
+        memoryBytes: typeof memoryBytes === 'number' ? memoryBytes : null
+      }
+    ]
   })
 }
 
 async function snapshotWindowsProcesses(): Promise<ProcessSnapshotEntry[]> {
   const script = [
-    'Get-CimInstance Win32_Process',
-    'Select-Object ProcessId,ParentProcessId,Name,CommandLine',
-    'ConvertTo-Json -Compress'
-  ].join(' | ')
+    '$perf = @{}',
+    'Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | ForEach-Object { $perf[[int]$_.IDProcess] = $_ }',
+    'Get-CimInstance Win32_Process | ForEach-Object {',
+    '  $sample = $perf[[int]$_.ProcessId]',
+    '  $cpu = if ($sample) { [double]$sample.PercentProcessorTime } else { $null }',
+    '  [PSCustomObject]@{ ProcessId = [int]$_.ProcessId; ParentProcessId = [int]$_.ParentProcessId; Name = $_.Name; CommandLine = $_.CommandLine; CpuPercent = $cpu; MemoryBytes = [double]$_.WorkingSetSize }',
+    '} | ConvertTo-Json -Compress'
+  ].join('; ')
   const { stdout } = await execFileAsync('powershell.exe', [
     '-NoProfile',
     '-NonInteractive',
@@ -89,15 +105,17 @@ async function snapshotWindowsProcesses(): Promise<ProcessSnapshotEntry[]> {
 }
 
 async function snapshotUnixProcesses(): Promise<ProcessSnapshotEntry[]> {
-  const { stdout } = await execFileAsync('ps', ['-axo', 'pid=,ppid=,command='])
+  const { stdout } = await execFileAsync('ps', ['-axo', 'pid=,ppid=,%cpu=,rss=,command='])
   return stdout.split(/\r?\n/u).flatMap((line) => {
-    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/u)
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+([\d.,]+)\s+(\d+)\s+(.+)$/u)
     if (!match) return []
     return [
       {
         pid: Number(match[1]),
         parentPid: Number(match[2]),
-        command: match[3]?.trim() || `Process ${match[1]}`
+        cpuPercent: Number(match[3]?.replace(',', '.')),
+        memoryBytes: Number(match[4]) * 1024,
+        command: match[5]?.trim() || `Process ${match[1]}`
       }
     ]
   })
@@ -131,6 +149,7 @@ export class AgentProcessService implements AgentProcessObserver {
   private readonly tracked = new Map<string, Map<number, TrackedProcess>>()
   private scanInFlight: Promise<void> | null = null
   private journal: OwnedProcessJournal | null = null
+  private lastSnapshot: ProcessSnapshotEntry[] = []
 
   constructor(private readonly snapshotter: ProcessSnapshotter = defaultSnapshotter) {}
 
@@ -222,6 +241,29 @@ export class AgentProcessService implements AgentProcessObserver {
    */
   async listAll(): Promise<TaskManagerProcess[]> {
     await this.scan()
+    const snapshotByPid = new Map(this.lastSnapshot.map((entry) => [entry.pid, entry]))
+    const childrenByParent = new Map<number, ProcessSnapshotEntry[]>()
+    for (const entry of this.lastSnapshot) {
+      const children = childrenByParent.get(entry.parentPid) ?? []
+      children.push(entry)
+      childrenByParent.set(entry.parentPid, children)
+    }
+    const resourcesFor = (pid: number, tree: boolean) => {
+      const root = snapshotByPid.get(pid)
+      const entries = root ? [root, ...(tree ? descendantsOf(pid, childrenByParent) : [])] : []
+      const cpuValues = entries.flatMap((entry) =>
+        entry.cpuPercent === null || !Number.isFinite(entry.cpuPercent) ? [] : [entry.cpuPercent]
+      )
+      const memoryValues = entries.flatMap((entry) =>
+        entry.memoryBytes === null || !Number.isFinite(entry.memoryBytes) ? [] : [entry.memoryBytes]
+      )
+      return {
+        cpuPercent: cpuValues.length > 0 ? cpuValues.reduce((sum, value) => sum + value, 0) : null,
+        memoryBytes:
+          memoryValues.length > 0 ? memoryValues.reduce((sum, value) => sum + value, 0) : null,
+        resourceScope: tree ? ('tree' as const) : ('process' as const)
+      }
+    }
     const pids = new Set<number>()
     for (const processes of this.tracked.values()) {
       for (const process of processes.values()) pids.add(process.pid)
@@ -244,7 +286,8 @@ export class AgentProcessService implements AgentProcessObserver {
           cwd: root.cwd,
           projectId: owner.projectId,
           threadId: owner.threadId,
-          ports: portsByPid.get(root.pid) ?? []
+          ports: portsByPid.get(root.pid) ?? [],
+          ...resourcesFor(root.pid, true)
         })
       }
       for (const process of this.tracked.get(sessionId)?.values() ?? []) {
@@ -257,7 +300,8 @@ export class AgentProcessService implements AgentProcessObserver {
           cwd: process.cwd,
           projectId: owner.projectId,
           threadId: owner.threadId,
-          ports: portsByPid.get(process.pid) ?? []
+          ports: portsByPid.get(process.pid) ?? [],
+          ...resourcesFor(process.pid, false)
         })
       }
     }
@@ -273,7 +317,8 @@ export class AgentProcessService implements AgentProcessObserver {
         cwd: root.cwd,
         projectId: null,
         threadId: null,
-        ports: portsByPid.get(root.pid) ?? []
+        ports: portsByPid.get(root.pid) ?? [],
+        ...resourcesFor(root.pid, true)
       })
     }
     for (const process of this.tracked.get(APP_SCOPE)?.values() ?? []) {
@@ -286,7 +331,8 @@ export class AgentProcessService implements AgentProcessObserver {
         cwd: process.cwd,
         projectId: null,
         threadId: null,
-        ports: portsByPid.get(process.pid) ?? []
+        ports: portsByPid.get(process.pid) ?? [],
+        ...resourcesFor(process.pid, false)
       })
     }
     return [...unique.values()].sort((left, right) => left.startedAt - right.startedAt)
@@ -554,6 +600,7 @@ export class AgentProcessService implements AgentProcessObserver {
   private async performScan(): Promise<void> {
     try {
       const snapshot = await this.snapshotter()
+      this.lastSnapshot = snapshot
       const currentByPid = new Map(snapshot.map((entry) => [entry.pid, entry]))
       const childrenByParent = new Map<number, ProcessSnapshotEntry[]>()
       for (const entry of snapshot) {

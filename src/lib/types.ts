@@ -1766,10 +1766,25 @@ export interface TaskManagerProcess extends AgentRunningProcess {
   projectId: string | null
   threadId: string | null
   ports: number[]
+  /** Best-effort CPU use reported by the operating system for this process or tree. */
+  cpuPercent: number | null
+  /** Resident/working-set memory for this process or tree. */
+  memoryBytes: number | null
+  /** Harness roots include their descendants; descendant rows describe one process. */
+  resourceScope: 'process' | 'tree'
   /** Display name of the owning project, resolved at IPC time. */
   projectName?: string | null
   /** Display title of the owning thread, resolved at IPC time. */
   threadTitle?: string | null
+}
+
+export interface TaskManagerSnapshot {
+  processes: TaskManagerProcess[]
+  power: {
+    source: 'ac' | 'battery'
+    thermalState: 'unknown' | 'nominal' | 'fair' | 'serious' | 'critical'
+  }
+  sampledAt: number
 }
 
 /** Provider-neutral lifecycle state for one delegated child-agent task. */

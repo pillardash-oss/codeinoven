@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, powerMonitor } from 'electron'
 import { readdir, readFile } from 'fs/promises'
 import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
@@ -147,7 +147,7 @@ import type {
   AgentCapabilitySource,
   AgentRunningProcess,
   NativeMcpContent,
-  TaskManagerProcess,
+  TaskManagerSnapshot,
   AssignmentPlan,
   AssignmentPlanContent,
   AssignmentFollowUpTaskInput,
@@ -4661,7 +4661,7 @@ export class ChatEngine {
   }
 
   /** App-wide process list for the task manager (all projects and app scope). */
-  async listTaskManagerProcesses(): Promise<TaskManagerProcess[]> {
+  async listTaskManagerProcesses(): Promise<TaskManagerSnapshot> {
     const processes = await this.agentProcesses.listAll()
     const projectNames = new Map<string, string>()
     const threadTitles = new Map<string, string>()
@@ -4676,11 +4676,20 @@ export class ChatEngine {
         threadTitles.set(threadId, thread?.title ?? threadId)
       }
     }
-    return processes.map((process) => ({
+    const resolvedProcesses = processes.map((process) => ({
       ...process,
       ...(process.projectId ? { projectName: projectNames.get(process.projectId) ?? null } : {}),
       ...(process.threadId ? { threadTitle: threadTitles.get(process.threadId) ?? null } : {})
     }))
+    return {
+      processes: resolvedProcesses,
+      power: {
+        source: powerMonitor.isOnBatteryPower() ? 'battery' : 'ac',
+        thermalState:
+          process.platform === 'darwin' ? powerMonitor.getCurrentThermalState() : 'unknown'
+      },
+      sampledAt: Date.now()
+    }
   }
 
   /** Kill an app-owned process by pid for the task manager (graceful or force). */

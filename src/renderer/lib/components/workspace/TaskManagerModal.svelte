@@ -1,5 +1,16 @@
 <script lang="ts">
-  import { ExternalLink, Plug, SquareTerminal, Trash2, X } from '@lucide/svelte'
+  import {
+    Battery,
+    Cpu,
+    ExternalLink,
+    MemoryStick,
+    Plug,
+    RefreshCw,
+    SquareTerminal,
+    Thermometer,
+    Trash2,
+    X
+  } from '@lucide/svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -9,7 +20,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-  import type { Project, TaskManagerProcess } from '$shared/types'
+  import type { Project, TaskManagerProcess, TaskManagerSnapshot } from '$shared/types'
 
   interface Props {
     open: boolean
@@ -19,9 +30,9 @@
   let { open, onClose }: Props = $props()
 
   let processes = $state<TaskManagerProcess[]>([])
-  /** True during a user-triggered refresh or the first load; drives the refresh
-   *  spinner and the "Checking running processes…" state. Quiet 5s background
-   *  polls do not set this so a populated modal never flashes a loading state. */
+  let power = $state<TaskManagerSnapshot['power']>({ source: 'ac', thermalState: 'unknown' })
+  let sampledAt = $state(0)
+  /** True only during the initial open-time snapshot or an explicit refresh. */
   let checking = $state(false)
   let error = $state('')
   let selected = new SvelteSet<number>()
@@ -40,27 +51,16 @@
     checking = true
     error = ''
     try {
-      const nextProcesses = await invoke('taskManager:list')
-      processes = nextProcesses
+      const snapshot = await invoke('taskManager:list')
+      processes = snapshot.processes
+      power = snapshot.power
+      sampledAt = snapshot.sampledAt
       pruneSelection()
-      void ensureProjectIcons(nextProcesses)
+      void ensureProjectIcons(snapshot.processes)
     } catch (loadError) {
       error = loadError instanceof Error ? loadError.message : 'Processes could not be loaded.'
     } finally {
       checking = false
-    }
-  }
-
-  /** Silent refresh used by the 5s cadence: updates the list without toggling
-   *  the spinner so a populated modal never flashes a loading state. */
-  async function refreshQuietly(): Promise<void> {
-    try {
-      const nextProcesses = await invoke('taskManager:list')
-      processes = nextProcesses
-      pruneSelection()
-      void ensureProjectIcons(nextProcesses)
-    } catch {
-      // Swallow background poll errors; the last good snapshot stays visible.
     }
   }
 
@@ -81,19 +81,6 @@
     queueMicrotask(() => {
       if (open) void load()
     })
-  })
-
-  // Keep the process list live: quiet reload every 5s and re-render durations
-  // on the same cadence so the modal stays current without being noisy.
-  let now = $state(0)
-  $effect(() => {
-    if (!open) return
-    now = Date.now()
-    const timer = setInterval(() => {
-      now = Date.now()
-      void refreshQuietly()
-    }, 5_000)
-    return () => clearInterval(timer)
   })
 
   function processName(command: string): string {
@@ -157,13 +144,34 @@
   }
 
   function formatDuration(startedAt: number): string {
-    const seconds = Math.max(0, Math.floor((now - startedAt) / 1000))
+    const seconds = Math.max(0, Math.floor((sampledAt - startedAt) / 1000))
     const hours = Math.floor(seconds / 3600)
     const minutes = Math.floor((seconds % 3600) / 60)
     const secs = seconds % 60
     if (hours > 0) return `${hours}h ${minutes}m`
     if (minutes > 0) return `${minutes}m ${secs}s`
     return `${secs}s`
+  }
+
+  function formatMemory(bytes: number | null): string {
+    if (bytes === null) return 'Unavailable'
+    const mebibytes = bytes / 1024 / 1024
+    if (mebibytes < 1024) return `${mebibytes.toFixed(mebibytes < 10 ? 1 : 0)} MB`
+    return `${(mebibytes / 1024).toFixed(1)} GB`
+  }
+
+  function formatCpu(percent: number | null): string {
+    if (percent === null) return 'Unavailable'
+    return `${percent.toFixed(percent < 10 ? 1 : 0)}%`
+  }
+
+  function powerLabel(): string {
+    return power.source === 'battery' ? 'On battery' : 'Plugged in'
+  }
+
+  function thermalLabel(): string {
+    const state = power.thermalState
+    return `${state.slice(0, 1).toUpperCase()}${state.slice(1)} thermal pressure`
   }
 
   function shortPath(cwd: string | null, max = 44): string {
@@ -313,6 +321,31 @@
       </div>
     {/if}
 
+    {#if !checking}
+      <div
+        class="flex min-h-9 shrink-0 items-center gap-3 border-b border-border bg-raised px-5 text-[10px] text-muted tabular-nums"
+      >
+        <span class="inline-flex items-center gap-1.5" title="Current system power source">
+          {#if power.source === 'battery'}
+            <Battery size={13} />
+          {:else}
+            <Plug size={13} />
+          {/if}
+          {powerLabel()}
+        </span>
+        {#if power.thermalState !== 'unknown' && power.thermalState !== 'nominal'}
+          <span
+            class="inline-flex items-center gap-1.5 text-danger"
+            title="Current macOS thermal pressure"
+          >
+            <Thermometer size={13} />
+            {thermalLabel()}
+          </span>
+        {/if}
+        <span class="ml-auto text-dimmed">Updates only when opened or refreshed</span>
+      </div>
+    {/if}
+
     <div class="min-h-0 flex-1 overflow-y-auto">
       {#if checking}
         <div class="flex h-full flex-col items-center justify-center gap-3" aria-live="polite">
@@ -400,6 +433,24 @@
                 <div
                   class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-dimmed tabular-nums"
                 >
+                  <span
+                    class="inline-flex items-center gap-1 text-muted"
+                    title={process.resourceScope === 'tree'
+                      ? 'CPU used by this process and its descendants'
+                      : 'CPU used by this process'}
+                  >
+                    <Cpu size={11} />
+                    {formatCpu(process.cpuPercent)}
+                  </span>
+                  <span
+                    class="inline-flex items-center gap-1 text-muted"
+                    title={process.resourceScope === 'tree'
+                      ? 'Memory used by this process and its descendants'
+                      : 'Memory used by this process'}
+                  >
+                    <MemoryStick size={11} />
+                    {formatMemory(process.memoryBytes)}
+                  </span>
                   <span>PID {process.pid}</span>
                   <span>{formatDuration(process.startedAt)}</span>
                   <span class="min-w-0 truncate" title={process.cwd ?? undefined}>
@@ -462,6 +513,7 @@
             ></span>
             Refresh
           {:else}
+            <RefreshCw size={13} />
             Refresh
           {/if}
         </button>
