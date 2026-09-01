@@ -2504,8 +2504,8 @@ export function registerIpcHandlers(
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('config:get', () => storage.getConfig())
-    ipcMain.handle('visionModels:list', () => storage.getVisionModels())
   }
+  ipcMain.handle('visionModels:list', () => storage.getVisionModels())
   const projectActionsPath = (projectId: string): string =>
     `projects/${validateEntityId(projectId, 'Project ID')}/actions.json`
   const readProjectActions = async (projectId: string): Promise<ProjectAction[]> => {
@@ -4641,14 +4641,12 @@ export function registerIpcHandlers(
       validateEntityId(bucketId, 'Scope bucket ID')
     )
   )
-  ipcMain.handle(
-    'scope:setPinned',
-    (_, projectId: unknown, bucketId: unknown, pinned: unknown) =>
-      scopeManager.setPinned(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(bucketId, 'Scope bucket ID'),
-        validateBoolean(pinned, 'Pinned')
-      )
+  ipcMain.handle('scope:setPinned', (_, projectId: unknown, bucketId: unknown, pinned: unknown) =>
+    scopeManager.setPinned(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(bucketId, 'Scope bucket ID'),
+      validateBoolean(pinned, 'Pinned')
+    )
   )
   ipcMain.handle('scope:setWorktreeDefaults', (_, projectId: unknown, defaults: unknown) =>
     scopeManager.setWorktreeDefaults(
