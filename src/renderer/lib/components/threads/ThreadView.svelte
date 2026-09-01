@@ -13,10 +13,6 @@
 
   /** Persists each thread's scroll position across component remounts. */
   const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
-  /** Small first paint for a cached long thread. The rest mounts after the
-   * browser has displayed the selected thread once. */
-  const INITIAL_THREAD_PAINT_LIMIT = 12
-  const INITIAL_THREAD_PAINT_BATCH_SIZE = 6
   const HISTORY_WINDOW_SIZE = 40
   const HISTORY_PRELOAD_THRESHOLD = 240
 
@@ -141,7 +137,7 @@
     type StartAfterThreadReference
   } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey, parseModelKey } from '$lib/model-keys'
-  import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -166,7 +162,6 @@
   import type {
     Thread,
     ThreadMessageCursor,
-    ThreadMessagePage,
     ThreadSettings,
     ThreadContextUsage,
     ThinkingLevel,
@@ -313,37 +308,9 @@
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
   let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
-  /** Stage only this component's initial mount. Streaming and optimistic
-   * appends never restart this window or remove an existing message afterward. */
-  let initialThreadPaintComplete = $state(false)
-  let initialThreadPaintLimit = $state(INITIAL_THREAD_PAINT_LIMIT)
-  let initialThreadPaintFrame = 0
-  let visibleMessages = $derived(
-    initialThreadPaintComplete ? messages : messages.slice(-initialThreadPaintLimit)
-  )
-
-  function revealInitialThreadMessages(): void {
-    if (!alive || initialThreadPaintComplete) return
-    const targetMessageCount = messages.length
-    const revealBatch = (): void => {
-      if (!alive) return
-      const nextLimit = Math.min(
-        targetMessageCount,
-        initialThreadPaintLimit + INITIAL_THREAD_PAINT_BATCH_SIZE
-      )
-      initialThreadPaintLimit = nextLimit
-      if (nextLimit >= targetMessageCount) {
-        initialThreadPaintComplete = true
-        return
-      }
-      initialThreadPaintFrame = requestAnimationFrame(revealBatch)
-    }
-    // The second frame guarantees Chromium can paint the newest tail before
-    // older message blocks begin mounting in bounded batches.
-    initialThreadPaintFrame = requestAnimationFrame(() => {
-      initialThreadPaintFrame = requestAnimationFrame(revealBatch)
-    })
-  }
+  // Keep the mounted list stable. The message store bounds the initial page;
+  // older history is added only when the reader reaches the history edge.
+  let visibleMessages = $derived(messages)
   /** The latest turn that already has an assistant message. A newly submitted
    *  user follow-up is handled separately until its first assistant message is
    *  mirrored, so it can never lend live state to the preceding trace. */
@@ -3261,7 +3228,7 @@
 
     if (controller) {
       controller.mount()
-      void Promise.resolve(controller.load()).then(revealInitialThreadMessages)
+      void controller.load()
       localReady = Promise.resolve()
       sessionReady = Promise.resolve('')
       void refreshCommands()
@@ -3277,7 +3244,6 @@
           })
         }
         window.removeEventListener('resize', onResize)
-        cancelAnimationFrame(initialThreadPaintFrame)
         clearTimeout(copyResetTimer)
         // Controller-driven views never published the global state below, so
         // their teardown must not clear it either — clearing would clobber the
@@ -3386,9 +3352,6 @@
         void sendMessage(draft, files, undefined, undefined, undefined, [], [], undefined, [], true)
       }
     })
-    if (loaded) revealInitialThreadMessages()
-    else void localReady.then(revealInitialThreadMessages)
-
     return () => {
       alive = false
       queuedMessageDispatcher.markUnmounted(mountedProjectId, mountedThreadId)
@@ -3403,7 +3366,6 @@
       unsubscribeThreadUpdated?.()
       unsubscribeLifecycleInheritance?.()
       window.removeEventListener('resize', onResize)
-      cancelAnimationFrame(initialThreadPaintFrame)
       clearTimeout(copyResetTimer)
       workspaceState.sources = []
       workspaceState.jumpToMessage = null
@@ -3585,15 +3547,15 @@
       return
     }
     try {
-      const [threadData, page, config] = await Promise.all([
+      const [threadData, , config] = await Promise.all([
         invoke('thread:get', projectId, id),
         threadMessages.loaded(projectId, id)
-          ? Promise.resolve<ThreadMessagePage | null>(null)
-          : invoke('thread:loadMessages', projectId, id, undefined, HISTORY_WINDOW_SIZE),
+          ? Promise.resolve()
+          : threadMessages.load(projectId, id, THREAD_MESSAGE_PRELOAD_WINDOW),
         invoke('config:get')
       ])
       if (!alive) return
-      olderMessagesAvailable = page?.hasOlder ?? threadMessages.hasOlder(projectId, id)
+      olderMessagesAvailable = threadMessages.hasOlder(projectId, id)
       if (threadData?.settings) {
         settings = chatMode
           ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
@@ -3603,9 +3565,6 @@
       imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
       autoRetryAfterReset = config.autoRetryAfterReset === true
       auditSettings = auditSettingsForThread()
-      // Merge the newest mirror page with optimistic messages and any older
-      // pages already loaded for this thread.
-      if (page) threadMessages.mergePage(projectId, id, page.messages)
       // Re-bind the thread's persisted session so its live events keep routing
       // to this cache (and the background queue dispatcher) even when the
       // renderer never sent a message on this mount.
