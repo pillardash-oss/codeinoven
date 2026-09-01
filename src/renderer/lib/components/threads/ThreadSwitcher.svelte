@@ -20,6 +20,8 @@
      *  because a native view stacks above all renderer DOM. */
     nativeAvailable?: boolean
     onSelect: (thread: Thread) => void | Promise<void>
+    onPreview?: (thread: Thread) => void
+    onPreviewEnd?: (thread: Thread) => void
   }
 
   let {
@@ -28,7 +30,9 @@
     projectIconUrls,
     selectedThreadId,
     nativeAvailable = false,
-    onSelect
+    onSelect,
+    onPreview = () => {},
+    onPreviewEnd = () => {}
   }: Props = $props()
 
   let open = $state(false)
@@ -36,6 +40,7 @@
    *  keyboard handling, so the DOM dialog and the renderer's window handlers
    *  must step aside while it is focused. */
   let nativeSessionActive = $state(false)
+  let nativePreviewThreadId: string | null = null
   let highlightedIndex = $state(0)
   let contentElement = $state<HTMLElement | null>(null)
   let previousFocus: HTMLElement | null = null
@@ -142,6 +147,10 @@
     const highlightedThreadId = payload.highlightedThreadId
     if (highlightedThreadId) {
       const thread = threads.find((candidate) => candidate.id === highlightedThreadId)
+      if (thread) {
+        nativePreviewThreadId = thread.id
+        onPreview(thread)
+      }
       if (thread && !threadMessages.loaded(thread.projectId, thread.id)) {
         void threadMessages.preload(thread.projectId, thread.id)
       }
@@ -151,12 +160,16 @@
   function closeNative(): void {
     if (!nativeSessionActive) return
     nativeSessionActive = false
+    const highlighted = threads.find((thread) => thread.id === nativePreviewThreadId)
+    if (highlighted) onPreviewEnd(highlighted)
+    nativePreviewThreadId = null
     void invoke('switcher:close').catch(() => {})
   }
 
   async function handleNativeSelect(threadId: string): Promise<void> {
     if (!nativeSessionActive) return
     nativeSessionActive = false
+    nativePreviewThreadId = null
     void invoke('switcher:close').catch(() => {})
     const thread = threads.find((candidate) => candidate.id === threadId)
     if (!thread) return
@@ -166,8 +179,12 @@
 
   function handleNativeHighlight(threadId: string): void {
     const thread = threads.find((candidate) => candidate.id === threadId)
-    if (!thread || threadMessages.loaded(thread.projectId, thread.id)) return
-    void threadMessages.preload(thread.projectId, thread.id)
+    if (!thread) return
+    nativePreviewThreadId = thread.id
+    onPreview(thread)
+    if (!threadMessages.loaded(thread.projectId, thread.id)) {
+      void threadMessages.preload(thread.projectId, thread.id)
+    }
   }
 
   // While a native session is active the overlay owns the keyboard, so the
@@ -187,6 +204,9 @@
     })
     const unsubscribeClosed = subscribe('switcher:closed', () => {
       nativeSessionActive = false
+      const previewed = threads.find((thread) => thread.id === nativePreviewThreadId)
+      if (previewed) onPreviewEnd(previewed)
+      nativePreviewThreadId = null
     })
     return () => {
       unsubscribeSelect()
@@ -201,8 +221,11 @@
     if (!open) return
     const thread = threads[highlightedIndex]
     if (!thread) return
-    if (threadMessages.loaded(thread.projectId, thread.id)) return
-    void threadMessages.preload(thread.projectId, thread.id)
+    onPreview(thread)
+    if (!threadMessages.loaded(thread.projectId, thread.id)) {
+      void threadMessages.preload(thread.projectId, thread.id)
+    }
+    return () => onPreviewEnd(thread)
   })
 
   function handleWindowKeydown(event: KeyboardEvent): void {

@@ -6,6 +6,8 @@
     /** All pinned visible tasks, already in global pin order. */
     threads: Thread[]
     selectedThreadId: string | null
+    onPreview?: (thread: Thread) => void
+    onPreviewEnd?: (thread: Thread) => void
     /** Resolves the project icon URL for a thread's project. */
     getProjectIconUrl: (projectId: string) => string | null
     onOpen: (t: Thread) => void
@@ -19,6 +21,8 @@
   let {
     threads,
     selectedThreadId,
+    onPreview,
+    onPreviewEnd,
     getProjectIconUrl,
     onOpen,
     onRename,
@@ -42,6 +46,8 @@
           compact
           projectIconUrl={getProjectIconUrl(thread.projectId)}
           selected={selectedThreadId === thread.id}
+          {onPreview}
+          {onPreviewEnd}
           {onOpen}
           {onRename}
           {onTogglePin}

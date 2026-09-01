@@ -182,7 +182,7 @@
 
   const INITIAL_THREAD_LIMIT = 100
   const HISTORY_PAGE_LIMIT = 50
-  const THREAD_VIEW_CACHE_LIMIT = 3
+  const THREAD_VIEW_CACHE_LIMIT = 4
 
   let projects = $state<Project[]>([])
   let allThreads = $state<Thread[]>([])
@@ -378,17 +378,65 @@
   let cachedThreadViews = $state.raw<Thread[]>(selectedThread ? [selectedThread] : [])
   // svelte-ignore state_referenced_locally
   let lastCachedThreadId: string | null = selectedThread?.id ?? null
+  let speculativeThreadId: string | null = null
+  let speculativeThreadWasCached = false
+  let speculativeEvictedThread: Thread | null = null
 
-  /** Retain the three most recently selected conversation trees. The selected
-   *  entry is most-recently used; a fourth distinct selection evicts the tail. */
+  /** Mount one likely destination before selection. Moving to another row
+   *  cancels the previous speculative tree before starting its replacement. */
+  function previewThreadView(thread: Thread): void {
+    if (thread.id === selectedThread?.id || thread.id === speculativeThreadId) return
+    const previousSpeculativeId = speculativeThreadId
+    const previousWasCached = speculativeThreadWasCached
+    const restored = speculativeEvictedThread
+    const base = cachedThreadViews.filter(
+      (cached) => !(cached.id === previousSpeculativeId && !previousWasCached)
+    )
+    if (restored && !base.some((cached) => cached.id === restored.id)) base.push(restored)
+
+    speculativeThreadWasCached = base.some((cached) => cached.id === thread.id)
+    speculativeThreadId = thread.id
+    const next = [thread, ...base.filter((cached) => cached.id !== thread.id)]
+    speculativeEvictedThread = next[THREAD_VIEW_CACHE_LIMIT] ?? null
+    cachedThreadViews = next.slice(0, THREAD_VIEW_CACHE_LIMIT)
+  }
+
+  function cancelThreadPreview(thread: Thread): void {
+    if (thread.id !== speculativeThreadId) return
+    const wasCached = speculativeThreadWasCached
+    const evicted = speculativeEvictedThread
+    speculativeThreadId = null
+    speculativeThreadWasCached = false
+    speculativeEvictedThread = null
+    if (thread.id === selectedThread?.id) return
+    const next = wasCached
+      ? [...cachedThreadViews]
+      : cachedThreadViews.filter((cached) => cached.id !== thread.id)
+    if (evicted && !next.some((cached) => cached.id === evicted.id)) next.push(evicted)
+    cachedThreadViews = next.slice(0, THREAD_VIEW_CACHE_LIMIT)
+  }
+
+  /** Retain the four most recently selected conversation trees. The selected
+   *  entry is most-recently used; a fifth distinct selection evicts the tail. */
   $effect(() => {
     const current = selectedThread
     if (!current || current.id === lastCachedThreadId) return
     lastCachedThreadId = current.id
-    cachedThreadViews = [
-      current,
-      ...cachedThreadViews.filter((cached) => cached.id !== current.id)
-    ].slice(0, THREAD_VIEW_CACHE_LIMIT)
+    const supersededPreviewId =
+      speculativeThreadId && speculativeThreadId !== current.id && !speculativeThreadWasCached
+        ? speculativeThreadId
+        : null
+    const evictedByPreview = speculativeEvictedThread
+    speculativeThreadId = null
+    speculativeThreadWasCached = false
+    speculativeEvictedThread = null
+    const base = cachedThreadViews.filter(
+      (cached) => cached.id !== current.id && cached.id !== supersededPreviewId
+    )
+    if (evictedByPreview && !base.some((cached) => cached.id === evictedByPreview.id)) {
+      base.push(evictedByPreview)
+    }
+    cachedThreadViews = [current, ...base].slice(0, THREAD_VIEW_CACHE_LIMIT)
   })
 
   let selectedThreadHasDraft = $derived(
@@ -3305,6 +3353,8 @@
                     <ThreadRow
                       {thread}
                       selected={selectedThread?.id === thread.id}
+                      onPreview={previewThreadView}
+                      onPreviewEnd={cancelThreadPreview}
                       compact
                       hideScope
                       onOpen={openScopedThread}
@@ -3341,6 +3391,8 @@
                   <ThreadRow
                     {thread}
                     selected={selectedThread?.id === thread.id}
+                    onPreview={previewThreadView}
+                    onPreviewEnd={cancelThreadPreview}
                     onOpen={openThread}
                     onRename={handleRename}
                     onTogglePin={togglePin}
@@ -3360,6 +3412,8 @@
                 <ThreadRow
                   {thread}
                   selected={selectedThread?.id === thread.id}
+                  onPreview={previewThreadView}
+                  onPreviewEnd={cancelThreadPreview}
                   onOpen={openThread}
                   onRename={handleRename}
                   onTogglePin={togglePin}
@@ -3392,6 +3446,8 @@
                   <ThreadSearchResultRow
                     {result}
                     selected={selectedThread?.id === result.thread.id}
+                    onPreview={previewThreadView}
+                    onPreviewEnd={cancelThreadPreview}
                     onOpen={openThread}
                   />
                 {/each}
@@ -3413,6 +3469,8 @@
                       compact
                       projectIconUrl={getThreadIcon(thread)}
                       selected={selectedThread?.id === thread.id}
+                      onPreview={previewThreadView}
+                      onPreviewEnd={cancelThreadPreview}
                       onOpen={openThread}
                       onRename={handleRename}
                       onTogglePin={togglePin}
@@ -3431,6 +3489,8 @@
                   {thread}
                   projectIconUrl={getThreadIcon(thread)}
                   selected={selectedThread?.id === thread.id}
+                  onPreview={previewThreadView}
+                  onPreviewEnd={cancelThreadPreview}
                   onOpen={openThread}
                   onRename={handleRename}
                   onTogglePin={togglePin}
@@ -3459,6 +3519,8 @@
           <PinnedSection
             threads={pinnedThreads}
             selectedThreadId={selectedThread?.id ?? null}
+            onPreview={previewThreadView}
+            onPreviewEnd={cancelThreadPreview}
             getProjectIconUrl={(projectId) => {
               const project = projects.find((p) => p.id === projectId)
               return project ? getProjectIcon(project, projectIcons.get(project.id)) : null
@@ -3565,6 +3627,8 @@
                                 <ThreadSearchResultRow
                                   {result}
                                   selected={selectedThread?.id === result.thread.id}
+                                  onPreview={previewThreadView}
+                                  onPreviewEnd={cancelThreadPreview}
                                   onOpen={openThread}
                                 />
                               {/each}
@@ -3575,6 +3639,8 @@
                                 <ThreadRow
                                   {thread}
                                   selected={selectedThread?.id === thread.id}
+                                  onPreview={previewThreadView}
+                                  onPreviewEnd={cancelThreadPreview}
                                   onOpen={openThread}
                                   onRename={handleRename}
                                   onTogglePin={togglePin}
@@ -3767,6 +3833,8 @@
                               <ThreadSearchResultRow
                                 {result}
                                 selected={selectedThread?.id === result.thread.id}
+                                onPreview={previewThreadView}
+                                onPreviewEnd={cancelThreadPreview}
                                 onOpen={openThread}
                               />
                             {/each}
@@ -3777,6 +3845,8 @@
                               <ThreadRow
                                 {thread}
                                 selected={selectedThread?.id === thread.id}
+                                onPreview={previewThreadView}
+                                onPreviewEnd={cancelThreadPreview}
                                 onOpen={openThread}
                                 onRename={handleRename}
                                 onTogglePin={togglePin}
@@ -4786,6 +4856,8 @@
   selectedThreadId={selectedThread?.id ?? null}
   nativeAvailable={browserNativeVisible}
   onSelect={openThreadFromSwitcher}
+  onPreview={previewThreadView}
+  onPreviewEnd={cancelThreadPreview}
 />
 
 {#if terminalFullscreenTabId && fullscreenTerminalTabs.length > 0}

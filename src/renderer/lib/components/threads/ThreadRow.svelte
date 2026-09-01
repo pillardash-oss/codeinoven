@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import type { Component } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import {
@@ -69,6 +69,9 @@
     onTogglePin?: (t: Thread) => void
     onDelete?: (t: Thread) => Promise<void>
     onFork?: (t: Thread) => void
+    /** Begin or cancel speculative rendering while this row is intentionally hovered. */
+    onPreview?: (t: Thread) => void
+    onPreviewEnd?: (t: Thread) => void
     /** Optional callback fired when the rename input changes (for move-on-edit behaviour). */
     onRenameInputChange?: (t: Thread) => void
     /** Callback for drag-to-reorder within the same list; position is relative to this item. */
@@ -88,6 +91,8 @@
     onTogglePin = () => {},
     onDelete = async () => {},
     onFork = () => {},
+    onPreview = () => {},
+    onPreviewEnd = () => {},
     onRenameInputChange,
     onMoveThread
   }: Props = $props()
@@ -162,6 +167,7 @@
    *  loading through the open view, so it never needs this). */
   function preloadMessages(): void {
     if (picker || selected) return
+    onPreview(thread)
     if (threadMessages.loaded(thread.projectId, thread.id)) return
     void threadMessages.preload(thread.projectId, thread.id)
   }
@@ -591,8 +597,15 @@
     hovered = false
     clearTimeout(popoverTimer)
     clearTimeout(preloadTimer)
+    onPreviewEnd(thread)
     showPopover = false
   }
+
+  onDestroy(() => {
+    clearTimeout(preloadTimer)
+    clearTimeout(popoverTimer)
+    onPreviewEnd(thread)
+  })
 
   /**
    * Touch has no hover and no right click, so a long press stands in for both:
