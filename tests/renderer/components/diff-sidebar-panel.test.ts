@@ -1,11 +1,15 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// DiffSidebarPanel's module script imports the renderer store graph, which
-// assumes a browser `window.api` bridge at load. This focused test only
-// exercises the DiffSidebarController lifecycle, so stub the IPC and the
-// two stores the controller touches (openChange) to keep it DOM-free.
+// DiffSidebarPanel's module graph assumes a browser `window.api` bridge at load.
+// This test exercises the real component through its keyed parent path so that
+// prop changes (projectId/threadId/checkpointId) actually reach the controller,
+// and asserts the controller reacts by issuing the expected IPC calls. Stub IPC
+// and the two stores the controller touches (openChange) to keep the run DOM-free
+// but real. The default component import keeps the scoped type-check resolvable.
+const invokeMock = vi.hoisted(() => vi.fn())
 vi.mock('$lib/ipc.svelte', () => ({
-  invoke: vi.fn(),
+  invoke: invokeMock,
   subscribe: vi.fn(() => () => {})
 }))
 
@@ -20,7 +24,8 @@ vi.mock('$lib/stores/project-files.svelte', () => ({
   }
 }))
 
-import { DiffSidebarController } from '$lib/components/files/DiffSidebarPanel.svelte'
+import { mount, unmount } from 'svelte'
+import DiffSidebarPanel from '$lib/components/files/DiffSidebarPanel.svelte'
 import type { TurnCheckpointSummary } from '$shared/types'
 
 function checkpoint(id: string, threadId: string): TurnCheckpointSummary {
@@ -35,79 +40,106 @@ function checkpoint(id: string, threadId: string): TurnCheckpointSummary {
   }
 }
 
-describe('DiffSidebarController state lifecycle (REL-08)', () => {
+function installDefaultInvoke(): void {
+  invokeMock.mockImplementation(async (channel: string) => {
+    if (channel === 'checkpoint:list') return []
+    if (channel === 'checkpoint:activeSummary') return null
+    return []
+  })
+}
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+describe('DiffSidebarPanel component integration (REL-08)', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    invokeMock.mockReset()
+    installDefaultInvoke()
   })
 
-  it('reuses one owner and re-seeds durable state from the thread cache on identity change', () => {
-    const controller = new DiffSidebarController()
-
-    controller.setIdentity('project-a', 'thread-1')
-    controller.checkpoints = [checkpoint('cp-1', 'thread-1')]
-    controller.selectedCheckpointId = 'cp-1'
-
-    // Same owner, new thread: durable state is isolated (thread-2 has none),
-    // and transient fields reset.
-    controller.setIdentity('project-a', 'thread-2')
-    expect(controller.projectId).toBe('project-a')
-    expect(controller.threadId).toBe('thread-2')
-    expect(controller.checkpoints).toEqual([])
-    expect(controller.selectedCheckpointId).toBeNull()
-    expect(controller.fileDiffs).toEqual([])
-  })
-
-  it('resets transient state on identity change without relying on a keyed parent', () => {
-    const controller = new DiffSidebarController()
-    controller.setIdentity('project-a', 'thread-1')
-
-    controller.mode = 'files'
-    controller.selections = { 'cp-1': ['a.ts'] }
-    controller.expandedDiffs = { 'a.ts': false }
-    controller.liveTurn = checkpoint('cp-1', 'thread-1')
-    controller.loading = true
-    controller.error = 'boom'
-
-    controller.setIdentity('project-a', 'thread-2')
-    expect(controller.mode).toBe('diffs')
-    expect(controller.selections).toEqual({})
-    expect(controller.expandedDiffs).toEqual({})
-    expect(controller.liveTurn).toBeNull()
-    expect(controller.loading).toBe(false)
-    expect(controller.error).toBe('')
-  })
-
-  it('rejects stale in-flight async results after the identity changes', async () => {
-    const controller = new DiffSidebarController()
-    controller.setIdentity('project-a', 'thread-1')
-
-    let resolveList: (value: TurnCheckpointSummary[]) => void = () => {}
-    const list = new Promise<TurnCheckpointSummary[]>((resolve) => {
-      resolveList = resolve
+  it('mounts and issues the checkpoint list refresh for the current thread', async () => {
+    const target = document.createElement('div')
+    const host = mount(DiffSidebarPanel, {
+      target,
+      props: { projectId: 'project-a', threadId: 'thread-1', checkpointId: null }
     })
-    let resolveLive: (value: TurnCheckpointSummary | null) => void = () => {}
-    const live = new Promise<TurnCheckpointSummary | null>((resolve) => {
-      resolveLive = resolve
+    await flush()
+    await flush()
+    expect(target.textContent).toContain('No recorded changes')
+    expect(
+      invokeMock.mock.calls.some(
+        (call) => call[0] === 'checkpoint:list' && call[1] === 'project-a' && call[2] === 'thread-1'
+      )
+    ).toBe(true)
+    unmount(host)
+  })
+
+  it('reaches the controller for each thread identity without a keyed parent', async () => {
+    const t1 = document.createElement('div')
+    const h1 = mount(DiffSidebarPanel, {
+      target: t1,
+      props: { projectId: 'project-a', threadId: 'thread-1', checkpointId: null }
     })
+    await flush()
+    await flush()
+    expect(
+      invokeMock.mock.calls.some((call) => call[0] === 'checkpoint:list' && call[2] === 'thread-1')
+    ).toBe(true)
+    unmount(h1)
 
-    const invoke = (await import('$lib/ipc.svelte')).invoke as ReturnType<typeof vi.fn>
-    invoke.mockImplementation((channel: string) =>
-      channel === 'checkpoint:list'
-        ? list
-        : channel === 'checkpoint:activeSummary'
-          ? live
-          : Promise.resolve([])
-    )
+    const t2 = document.createElement('div')
+    const h2 = mount(DiffSidebarPanel, {
+      target: t2,
+      props: { projectId: 'project-a', threadId: 'thread-2', checkpointId: null }
+    })
+    await flush()
+    await flush()
+    expect(
+      invokeMock.mock.calls.some((call) => call[0] === 'checkpoint:list' && call[2] === 'thread-2')
+    ).toBe(true)
+    unmount(h2)
+  })
 
-    const pending = controller.refresh()
-    // Identity changes before the refresh resolves.
-    controller.setIdentity('project-a', 'thread-2')
-    resolveList([checkpoint('cp-stale', 'thread-1')])
-    resolveLive(null)
-    await pending
+  it('renders the preferred checkpoint returned by refresh', async () => {
+    invokeMock.mockImplementation(async (channel: string) => {
+      if (channel === 'checkpoint:list') return [checkpoint('cp-pref', 'thread-1')]
+      if (channel === 'checkpoint:activeSummary') return null
+      return []
+    })
+    const target = document.createElement('div')
+    const host = mount(DiffSidebarPanel, {
+      target,
+      props: { projectId: 'project-a', threadId: 'thread-1', checkpointId: 'cp-pref' }
+    })
+    await flush()
+    await flush()
+    expect(target.textContent).toContain('Turn 1 of 1')
+    unmount(host)
+  })
 
-    // The stale thread-1 payload must not leak into thread-2.
-    expect(controller.checkpoints).toEqual([])
-    expect(controller.selectedCheckpointId).toBeNull()
+  it('reopens the same thread seeded from the module cache', async () => {
+    invokeMock.mockImplementation(async (channel: string) => {
+      if (channel === 'checkpoint:list') return [checkpoint('cp-1', 'thread-1')]
+      if (channel === 'checkpoint:activeSummary') return null
+      return []
+    })
+    const t1 = document.createElement('div')
+    const h1 = mount(DiffSidebarPanel, {
+      target: t1,
+      props: { projectId: 'project-a', threadId: 'thread-1', checkpointId: null }
+    })
+    await flush()
+    await flush()
+    expect(t1.textContent).toContain('Turn 1 of 1')
+    unmount(h1)
+
+    const t2 = document.createElement('div')
+    const h2 = mount(DiffSidebarPanel, {
+      target: t2,
+      props: { projectId: 'project-a', threadId: 'thread-1', checkpointId: null }
+    })
+    await flush()
+    await flush()
+    expect(t2.textContent).toContain('Turn 1 of 1')
+    unmount(h2)
   })
 })

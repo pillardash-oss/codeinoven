@@ -1,5 +1,5 @@
 <script module lang="ts">
-  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+  import { SvelteSet } from 'svelte/reactivity'
   import type { TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { LatestRequestGuard } from '$lib/refresh-guard'
@@ -12,40 +12,29 @@
   interface DiffPanelCache {
     checkpoints: TurnCheckpointSummary[]
     selectedCheckpointId: string | null
-    fileDiffsByCheckpoint: SvelteMap<string, TurnCheckpointFileDiff[]>
+    fileDiffsByCheckpoint: Record<string, TurnCheckpointFileDiff[]>
   }
 
-  const panelCache = new SvelteMap<string, DiffPanelCache>()
-
-  function cacheKeyFor(projectId: string, threadId: string): string {
-    return `${projectId}:${threadId}`
-  }
-
-  function getOrCreateCache(projectId: string, threadId: string): DiffPanelCache {
-    const key = cacheKeyFor(projectId, threadId)
-    let entry = panelCache.get(key)
-    if (!entry) {
-      entry = {
-        checkpoints: [],
-        selectedCheckpointId: null,
-        fileDiffsByCheckpoint: new SvelteMap()
-      }
-      panelCache.set(key, entry)
-    }
-    return entry
-  }
+  // A plain module-level object (not reactive state) so re-seeding can read it
+  // from inside a reactive effect without triggering state_unsafe_mutation. The
+  // entries and their diff maps are plain Records so the controller can re-seed
+  // with direct property access (no function calls) inside an effect.
+  const panelCache: Record<string, DiffPanelCache> = {}
 
   /**
-   * Owns the panel's complete state for one mounted instance. The identity is
-   * the `projectId:threadId` pair; switching identity re-seeds durable state
-   * from the shared cache and resets every transient field, so the panel stays
-   * correct when a parent reuses this instance across threads instead of keying
-   * it. A generation counter invalidates any in-flight async work from a prior
-   * identity so stale results can never overwrite the current thread.
+   * Owns the complete panel state for one mounted instance. The parent may reuse
+   * this instance across threads (no `{#key}`); an internal effect watches the
+   * identity fields and re-seeds durable state from the shared cache while
+   * resetting every transient field, so the panel stays correct without relying
+   * on a keyed parent. A generation counter invalidates any in-flight async work
+   * from a prior identity so stale results never overwrite the current thread.
    */
   export class DiffSidebarController {
     projectId = $state('')
     threadId = $state('')
+    checkpointId = $state<string | null>(null)
+    revealPath = $state<string | null>(null)
+    revealNonce = $state(0)
     checkpoints = $state<TurnCheckpointSummary[]>([])
     /** The running turn's live change summary — absent once the turn completes. */
     liveTurn = $state<TurnCheckpointSummary | null>(null)
@@ -66,69 +55,54 @@
     private refreshGuard = new LatestRequestGuard()
     private generation = 0
     private cache: DiffPanelCache | null = null
-    private revealTarget: string | null = null
-    private revealNonce = 0
-    private preferredCheckpointId: string | null = null
+    private lastSeededKey: string | null = null
     private pollTimer: ReturnType<typeof setInterval> | null = null
     private unsubscribeEvents: (() => void) | null = null
 
     constructor() {
-      this.setIdentity('', '')
+      // React to identity changes: re-seed durable state from the shared cache
+      // and reset transient state. Runs whenever projectId/threadId change and
+      // again on mount, without mutating state during a derived evaluation. The
+      // generation only advances on a real switch from a prior identity, so the
+      // first seed (mount or the parent handing in a thread) does not invalidate
+      // the refresh issued right after it.
+      $effect.root(() => {
+        $effect(() => {
+          if (!this.projectId || !this.threadId) return
+          const key = `${this.projectId}:${this.threadId}`
+          if (key === this.lastSeededKey) return
+          const switched = this.lastSeededKey !== null
+          this.lastSeededKey = key
+          if (switched) this.generation += 1
+          let entry = panelCache[key]
+          if (!entry) {
+            entry = { checkpoints: [], selectedCheckpointId: null, fileDiffsByCheckpoint: {} }
+            panelCache[key] = entry
+          }
+          this.cache = entry
+          this.checkpoints = entry.checkpoints
+          this.selectedCheckpointId = entry.selectedCheckpointId
+          const cachedDiffs = entry.selectedCheckpointId
+            ? (entry.fileDiffsByCheckpoint[entry.selectedCheckpointId] ?? null)
+            : null
+          this.fileDiffs = cachedDiffs ?? []
+          this.loadedDiffKey = cachedDiffs ? entry.selectedCheckpointId : null
+          this.liveTurn = null
+          this.liveRevision = 0
+          this.loading = false
+          this.error = ''
+          this.restoringId = null
+          this.selections = {}
+          this.mode = 'diffs'
+          this.loadingDiffs = false
+          this.expandedDiffs = {}
+          this.flashPath = null
+        })
+      })
     }
 
-    setIdentity(projectId: string, threadId: string): void {
-      if (projectId === this.projectId && threadId === this.threadId) return
-      this.generation += 1
-      this.projectId = projectId
-      this.threadId = threadId
-      this.cache = getOrCreateCache(projectId, threadId)
-      this.checkpoints = this.cache.checkpoints
-      this.selectedCheckpointId = this.cache.selectedCheckpointId
-      const cachedDiffs = this.cache.selectedCheckpointId
-        ? (this.cache.fileDiffsByCheckpoint.get(this.cache.selectedCheckpointId) ?? null)
-        : null
-      this.fileDiffs = cachedDiffs ?? []
-      this.loadedDiffKey = cachedDiffs ? this.cache.selectedCheckpointId : null
-      this.liveTurn = null
-      this.liveRevision = 0
-      this.loading = false
-      this.error = ''
-      this.restoringId = null
-      this.selections = {}
-      this.mode = 'diffs'
-      this.loadingDiffs = false
-      this.expandedDiffs = {}
-      this.flashPath = null
-      this.revealTarget = null
-      this.revealNonce = 0
-      this.preferredCheckpointId = null
-    }
-
-    /** Runs on every prop update; no-ops unless the identity actually changed. */
-    syncIdentity(projectId: string, threadId: string): string {
-      this.setIdentity(projectId, threadId)
-      return `${projectId}:${threadId}`
-    }
-
-    /** Adopts the parent-preferred checkpoint and pulls it into view when it changes. */
-    syncPreferredCheckpoint(checkpointId: string | null): string | null {
-      if (checkpointId === this.preferredCheckpointId) return checkpointId
-      this.preferredCheckpointId = checkpointId
-      if (checkpointId && this.projectId) void this.refresh(checkpointId)
-      return checkpointId
-    }
-
-    /** Records the latest reveal request so the next diff render applies it. */
-    requestReveal(path: string | null, nonce: number): string | null {
-      if (!path || nonce <= 0) return null
-      this.revealTarget = path
-      this.revealNonce = nonce
-      this.applyReveal()
-      return path
-    }
-
-    private applyReveal(): void {
-      const target = this.revealTarget
+    applyReveal(): void {
+      const target = this.revealPath
       if (!target || this.revealNonce <= 0) return
       if (!this.fileDiffs.some((diff) => diff.path === target)) return
       const el = this.scrollContainer?.querySelector<HTMLElement>(
@@ -175,7 +149,7 @@
       }
     }
 
-    async refresh(preferredCheckpointId = this.selectedCheckpointId): Promise<void> {
+    async refresh(preferredCheckpointId = this.checkpointId ?? this.selectedCheckpointId): Promise<void> {
       const request = this.refreshGuard.begin()
       const generation = this.generation
       this.loading = true
@@ -253,7 +227,7 @@
         { ...this.expandedDiffs }
       )
       this.loadingDiffs = false
-      this.cache?.fileDiffsByCheckpoint.set(key, this.fileDiffs)
+      if (this.cache) this.cache.fileDiffsByCheckpoint[key] = this.fileDiffs
       this.applyReveal()
     }
 
@@ -413,15 +387,22 @@
 
   let { projectId, threadId, checkpointId, revealPath = null, revealNonce = 0 }: Props = $props()
 
-  // One owner per mounted instance, selected by the current thread identity. When
-  // the parent reuses this instance across threads (no `{#key}`), syncIdentity
-  // re-seeds the correct thread's cache and resets transient state.
+  // One owner per mounted instance. Each $effect runs whenever its prop changes
+  // and syncs that prop into the controller through a direct field write — the
+  // identity re-seed happens inside the controller itself, so prop changes reach
+  // the correct thread's state without mutating during a derived evaluation.
   const controller = new DiffSidebarController()
-  // Reactive identity/reveal sync without $effect: these re-run when their prop
-  // dependencies change and re-seed/reset the shared controller accordingly.
-  const _identity = $derived(controller.syncIdentity(projectId, threadId))
-  const _preferred = $derived(controller.syncPreferredCheckpoint(checkpointId))
-  const _reveal = $derived(controller.requestReveal(revealPath, revealNonce))
+  $effect(() => {
+    controller.projectId = projectId
+    controller.threadId = threadId
+  })
+  $effect(() => {
+    controller.checkpointId = checkpointId
+  })
+  $effect(() => {
+    controller.revealPath = revealPath
+    controller.revealNonce = revealNonce
+  })
 
   function bindScrollContainer(node: HTMLElement): void {
     controller.scrollContainer = node
