@@ -67,7 +67,7 @@ import {
   PI_STATUS_WORKING
 } from './pi-status-extension'
 import { PI_USAGE_EXTENSION_KEY } from './pi-usage-extension'
-import { fetchPiProviderCredits } from './pi-provider-usage'
+import { fetchPiProviderUsage } from './pi-provider-usage'
 import { PiRpcClient } from './pi-rpc-client'
 import {
   prepareHarnessInvocation,
@@ -1995,8 +1995,9 @@ export class PiDriver extends PersistentCliDriver {
           ? sessionCache.windows
           : undefined))
       : (sessionCache?.windows ?? [...persisted.values()].at(-1))
-    const windows = providerWindows ?? []
-    const credits = (providerId ? await fetchPiProviderCredits(providerId) : null) ?? undefined
+    const providerUsage = providerId ? await fetchPiProviderUsage(providerId) : null
+    const windows = providerWindows?.length ? providerWindows : (providerUsage?.rateLimits ?? [])
+    const credits = providerUsage?.credits
     if (!client) {
       return windows.length > 0 || credits ? { rateLimits: windows, credits } : null
     }

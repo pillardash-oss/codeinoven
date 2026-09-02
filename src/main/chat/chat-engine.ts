@@ -3317,23 +3317,24 @@ export class ChatEngine {
       [...harnessIds].map(async (harnessId): Promise<AgentAccountUsage | null> => {
         try {
           const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
+          const providerId =
+            providerByHarness.get(harnessId) ?? thread.settings?.providerId ?? harnessId
           const nativeTelemetry = driver.readAccountUsage
-            ? await driver.readAccountUsage(projectPath, thread.settings?.providerId)
+            ? await driver.readAccountUsage(projectPath, providerId)
             : null
           // OpenUsage is keyed by PROVIDER, not harness: resolve the provider
           // the harness session actually ran against (e.g. a pi thread pointed
           // at Z.AI queries "z-ai", not "pi").
-          const openUsageProviderId =
-            providerByHarness.get(harnessId) ?? thread.settings?.providerId ?? harnessId
-          const openUsage = openUsageProviderId
-            ? await this.openUsage.readProviderUsage(openUsageProviderId)
-            : null
+          const openUsage = await this.openUsage.readProviderUsage(
+            providerId,
+            harnessId === 'pi' ? ['pi'] : []
+          )
           // A custom provider with a user-defined usage route answers the
           // quota question directly when the harness itself reports nothing.
           const customUsage =
             nativeTelemetry?.rateLimits.length || openUsage?.rateLimits.length
               ? null
-              : await this.readCustomProviderUsage(harnessId, thread.settings?.providerId)
+              : await this.readCustomProviderUsage(harnessId, providerId)
           const telemetry =
             nativeTelemetry || openUsage || customUsage
               ? {
@@ -3365,7 +3366,6 @@ export class ChatEngine {
           ) {
             return null
           }
-          const providerId = providerByHarness.get(harnessId) ?? thread.settings?.providerId ?? ''
           return { harnessId, providerId, ...telemetry }
         } catch (error) {
           Logger.dev('On-demand account usage refresh unavailable:', error)
