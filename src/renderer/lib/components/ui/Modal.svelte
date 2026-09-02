@@ -111,7 +111,11 @@
        contexts (e.g. the app header's z-40) and always paints above the
        underlying view. -->
   <Portal>
-    <div class="fixed inset-0 z-60 flex items-center justify-center">
+    <!-- pointer-events-auto: any open bits-ui modal dialog (e.g. the browser
+         fullscreen panel) sets `body { pointer-events: none }` and only
+         re-enables it on its own content, which would leave this portal
+         visible but completely unclickable. -->
+    <div class="pointer-events-auto fixed inset-0 z-60 flex items-center justify-center">
       <!-- Backdrop — 13% opacity so the workspace stays visible behind -->
       <button
         class="absolute inset-0 bg-overlay/70 backdrop-blur-[1px]"

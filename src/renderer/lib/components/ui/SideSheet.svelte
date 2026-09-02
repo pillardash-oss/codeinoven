@@ -41,7 +41,10 @@
 />
 
 {#if open}
-  <div class="fixed inset-0 z-50">
+  <!-- pointer-events-auto: an open bits-ui modal dialog sets
+       `body { pointer-events: none }`, which would make this sheet visible
+       but unclickable. -->
+  <div class="pointer-events-auto fixed inset-0 z-50">
     <button
       class="absolute inset-0 bg-overlay/70 backdrop-blur-[1px]"
       aria-label="Close panel"
