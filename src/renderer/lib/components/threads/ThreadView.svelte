@@ -514,9 +514,10 @@
 
   let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
   let pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
-  /** Staged (intent-only) Independent Audit toggle: like the Toolbox, toggles
-   *  are intent until send. `null` means nothing is staged; `true`/`false` is
-   *  the staged switch position. Committed when the user sends a message. */
+  /** Staged (intent-only) Independent Audit toggle: turning the switch on
+   *  stages the choice and docks the audit coordinator immediately. `null`
+   *  means nothing is staged; `true`/`false` is the staged switch position.
+   *  Clicking "Run audit" in the coordinator is what commits it durably. */
   let pendingIndependentAudit = $state<boolean | null>(null)
   let lifecycleCancelModalOpen = $state(false)
   /** True while the Engineering lifecycle retry from the failure card is running. */
@@ -2053,19 +2054,6 @@
         clearLifecycleIntent(thread.projectId, thread.id)
         await applyLifecycleSelection(staged)
       }
-      // A staged Independent Audit toggle commits exactly here: the send is
-      // the moment the mutual exclusion with Engineering becomes durable.
-      if (pendingIndependentAudit === true) {
-        try {
-          await invoke('thread:setIndependentAudit', thread.projectId, thread.id, true)
-          pendingIndependentAudit = null
-          clearIndependentAuditIntent(thread.projectId, thread.id)
-        } catch (error) {
-          // Keep the staged intent so the switch keeps showing the user's
-          // choice; the send itself is never blocked by the audit flag.
-          reportError(error, 'The independent audit could not be enabled.')
-        }
-      }
       await sendMessage(
         text,
         attachments,
@@ -2445,7 +2433,10 @@
   let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | 'audit' | null => {
     if (isAssignmentAuditorThread) return null
     if (assignment && assignment.status !== 'draft') return 'assignment'
-    if (independentAuditEnabled) return 'audit'
+    // A staged (not-yet-run) Independent Audit already docks its coordinator:
+    // the sidebar appears the moment the switch is turned on, and clicking
+    // "Run audit" there is what commits the choice durably.
+    if (independentAuditDisplayEnabled) return 'audit'
     if (achievementTriggered && spec) return 'achievement'
     if (plainEngineeringAuditAvailable && spec) return 'audit'
     return null
@@ -7408,7 +7399,9 @@
   }
 
   /** Run an independent (spec-less) audit from the audit coordinator. The
-   *  report joins the thread's existing report versions in Spec Studio. */
+   *  report joins the thread's existing report versions in Spec Studio.
+   *  Clicking "Run audit" is the commit: the staged switch becomes durable
+   *  here, which is what locks Engineering out for the thread's lifetime. */
   async function generateIndependentAudit(selected: ThreadSettings): Promise<void> {
     auditBusy = true
     auditError = ''
@@ -7418,6 +7411,11 @@
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
     )
     try {
+      if (!independentAuditEnabled) {
+        await invoke('thread:setIndependentAudit', thread.projectId, thread.id, true)
+        pendingIndependentAudit = null
+        clearIndependentAuditIntent(thread.projectId, thread.id)
+      }
       durableAuditThread = await invoke(
         'agent:ensureIndependentAuditorThread',
         thread.projectId,
@@ -7448,11 +7446,11 @@
 
   /** Toggle the independent audit. Enabling is permanent once the first run
    *  starts, and excludes engineering modes for this thread's lifetime. */
-  /** Toggle the Independent Audit. Like the Toolbox, toggles are intent:
-   *  turning it on stages the choice (the Engineering Toolbox disappears;
-   *  turning it off brings it back) and sending a message commits it. A
-   *  committed audit that has not started its first run can still be turned
-   *  off, which brings the Toolbox back. */
+  /** Toggle the Independent Audit. Turning it on stages the choice: the
+   *  Engineering Toolbox disappears and the audit coordinator docks into the
+   *  sidebar right away. Turning it off discards the staging (or disables a
+   *  committed audit that has not started its first run), which brings the
+   *  Toolbox back. Clicking "Run audit" in the coordinator commits. */
   async function toggleIndependentAudit(enabled: boolean): Promise<void> {
     if (independentAuditInitialized) return
     if (enabled) {
@@ -11533,7 +11531,7 @@
 {/snippet}
 
 {#snippet auditCoordinatorPanel()}
-  {#if independentAuditEnabled}
+  {#if independentAuditDisplayEnabled}
     <IndependentAuditCoordinatorPanel
       running={independentAuditRunning}
       auditThread={durableAuditThread}
