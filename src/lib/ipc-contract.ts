@@ -1360,6 +1360,7 @@ export interface IpcInvokeContract {
   'git:commit': Contract<[projectId: string, message: string, scopeBucketId?: string], GitStatus>
   'git:init': Contract<[projectId: string, scopeBucketId?: string], GitStatus>
   'git:branches': Contract<[projectId: string, scopeBucketId?: string], GitBranchInfo[]>
+  'git:defaultBranch': Contract<[projectId: string, scopeBucketId?: string], string | null>
   'git:checkout': Contract<[projectId: string, branch: string, scopeBucketId?: string], GitStatus>
   'git:createBranch': Contract<[projectId: string, name: string, scopeBucketId?: string], GitStatus>
   'git:createTrackingBranch': Contract<

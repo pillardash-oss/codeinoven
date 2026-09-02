@@ -42,6 +42,7 @@
     ExternalLink,
     Eye,
     GitPullRequest,
+    Info,
     Loader2,
     Sparkles,
     TriangleAlert
@@ -153,6 +154,13 @@
   let pushErrorDetails = $state('')
   /** A failed commit, push, or PR creation owned by this submission attempt. */
   let createError = $state('')
+  /**
+   * Set when the 422 above was GitHub having nothing to compare (`head`
+   * already merged into `base`) rather than a real validation failure — the
+   * displayed "ahead" count can go stale between compare and submit if
+   * another merge lands in between, e.g. an automated promotion PR.
+   */
+  let createErrorIsNoCommits = $state(false)
   /** Which recovery action is running ('merge' | 'rebase'), to disable buttons. */
   let recoverMode = $state<'merge' | 'rebase' | null>(null)
   /** True while a prepared divergence-resolution thread is being opened. */
@@ -369,6 +377,7 @@
     pushRejected = false
     pushErrorDetails = ''
     createError = ''
+    createErrorIsNoCommits = false
     if (sameBranch) {
       comparing = false
       return
@@ -421,6 +430,7 @@
     pushRejected = false
     pushErrorDetails = ''
     createError = ''
+    createErrorIsNoCommits = false
     submitting = true
     try {
       // Decided up front: after the commit below, the refreshed status clears
@@ -485,7 +495,21 @@
       result = reference
       onCreated?.()
     } else if (!gitState.githubPermission) {
-      createError = gitState.error ?? 'GitHub did not create the pull request. Try again.'
+      const message = gitState.error ?? 'GitHub did not create the pull request. Try again.'
+      createError = message
+      if (/HTTP 422/u.test(message) && originIdentity) {
+        // GitHub's 422 for "nothing to merge" is indistinguishable from other
+        // validation failures by message text alone, so re-check for real.
+        const fresh = await gitState.comparePullRequests(
+          projectId,
+          originIdentity.owner,
+          originIdentity.repo,
+          base,
+          head
+        )
+        compare = fresh
+        createErrorIsNoCommits = fresh !== null && !fresh.hasChanges
+      }
     }
   }
 
@@ -499,6 +523,7 @@
     pushRejected = false
     pushErrorDetails = ''
     createError = ''
+    createErrorIsNoCommits = false
     recoverMode = mode
     try {
       await gitState.pullIntegrate(projectId, 'origin', head, mode)
@@ -717,13 +742,19 @@
 
   onDestroy(clearComposeTimers)
 
-  function initializeBranchSelection(): void {
+  async function initializeBranchSelection(): Promise<void> {
     if (!originIdentity || branches.length === 0) return
     if (!head || !branches.includes(head)) {
       head = branch && branches.includes(branch) ? branch : branches[0]
     }
     if (!base || !branches.includes(base)) {
-      base = branches.includes('main') ? 'main' : branches[0]
+      const remoteDefault = await gitState.getDefaultBranch(projectId)
+      base =
+        remoteDefault && branches.includes(remoteDefault)
+          ? remoteDefault
+          : branches.includes('main')
+            ? 'main'
+            : branches[0]
     }
     if (head && base && !initialCompareStarted) {
       initialCompareStarted = true
@@ -733,7 +764,7 @@
 
   onMount(() => {
     gitState.activate(projectId, scopeBucketId)
-    void loadOrigin().then(initializeBranchSelection)
+    void loadOrigin().then(() => void initializeBranchSelection())
   })
 </script>
 
@@ -1151,7 +1182,21 @@
         </div>
       {/if}
 
-      {#if createError}
+      {#if createError && createErrorIsNoCommits}
+        <div class="rounded-lg border border-border bg-elevated px-3 py-2.5" role="status">
+          <div class="flex items-start gap-2">
+            <Info size={14} class="mt-0.5 shrink-0 text-dimmed" />
+            <div class="min-w-0">
+              <p class="text-[10px] font-semibold text-foreground">Nothing to merge</p>
+              <p class="mt-0.5 text-[9px] leading-relaxed text-dimmed">
+                <span class="font-medium text-foreground">{head}</span> is already up to date with
+                <span class="font-medium text-foreground">{base}</span> — there are no commits left
+                to open a pull request for. It was likely merged elsewhere while this panel was open.
+              </p>
+            </div>
+          </div>
+        </div>
+      {:else if createError}
         <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2.5" role="alert">
           <div class="flex items-start gap-2">
             <TriangleAlert size={14} class="mt-0.5 shrink-0 text-danger" />

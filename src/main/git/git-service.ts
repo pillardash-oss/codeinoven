@@ -597,6 +597,28 @@ export class GitService {
     })
   }
 
+  /**
+   * The remote's actual default branch (e.g. "nightly" instead of "main"),
+   * resolved from origin/HEAD rather than guessed from branch names.
+   */
+  async getDefaultBranch(projectPath: string): Promise<string | null> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      return this.wrapError(projectPath, 'read', async () => {
+        const git = this.client(directory)
+        try {
+          const ref = await git.raw(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
+          const name = String(ref).trim()
+          const prefix = 'origin/'
+          if (name.startsWith(prefix)) return name.slice(prefix.length)
+          return name || null
+        } catch {
+          return null
+        }
+      })
+    })
+  }
+
   async checkout(projectPath: string, branch: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)

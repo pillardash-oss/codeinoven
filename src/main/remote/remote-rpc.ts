@@ -1810,6 +1810,13 @@ export class RemoteRpcDispatcher {
             args[1] === undefined ? undefined : this.string(args[1])
           )
         )
+      case 'git:defaultBranch':
+        return this.gitService.getDefaultBranch(
+          await this.resolveProjectPath(
+            this.string(args[0]),
+            args[1] === undefined ? undefined : this.string(args[1])
+          )
+        )
       case 'git:checkout':
         return this.syncBranchAfterCheckout(
           this.string(args[0]),
