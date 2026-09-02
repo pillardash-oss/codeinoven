@@ -1,4 +1,4 @@
-import type { AgentProviderIssue, AgentProviderIssueKind } from './types'
+import type { AgentProviderIssue, AgentProviderIssueKind, AgentRateLimitWindow } from './types'
 
 /**
  * True when a provider issue represents a usage/rate-limit reset wait rather
@@ -125,14 +125,66 @@ export function parseUsageResetAt(message: string, now = Date.now()): number | u
   // countdown instead of an absolute timestamp, e.g. "Resets in 1hr 53min"
   // or "Resets in 2h 5m". Convert that into an absolute retryAt too, or this
   // class of message is left with no reset time and can't schedule a resume.
-  const relative = /resets?\s+in\s+(?:(\d+)\s*h(?:ou)?rs?)?\s*(?:(\d+)\s*m(?:in)?s?)?/iu.exec(message)
-  if (relative && (relative[1] || relative[2])) {
-    const hours = Number(relative[1] ?? 0)
-    const minutes = Number(relative[2] ?? 0)
-    const deltaMs = (hours * 60 + minutes) * 60_000
+  const relative =
+    /resets?\s+in\s+(?:(\d+)\s*d(?:ays?)?)?\s*(?:(\d+)\s*h(?:(?:ou)?rs?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?)?)?)?/iu.exec(
+      message
+    )
+  if (relative && (relative[1] || relative[2] || relative[3])) {
+    const days = Number(relative[1] ?? 0)
+    const hours = Number(relative[2] ?? 0)
+    const minutes = Number(relative[3] ?? 0)
+    const deltaMs = (days * 24 * 60 + hours * 60 + minutes) * 60_000
     if (deltaMs > 0) return now + deltaMs
   }
   return undefined
+}
+
+/**
+ * Convert a structured usage-limit issue into the exhausted quota window the
+ * usage meter expects. Provider headers and account APIs remain preferable,
+ * but a provider's explicit limit notice is authoritative telemetry too and
+ * must not produce a limit card with an empty usage panel beside it.
+ */
+export function rateLimitWindowFromProviderIssue(
+  issue: Pick<AgentProviderIssue, 'kind' | 'message' | 'retryAt' | 'retryable'>,
+  now = Date.now()
+): AgentRateLimitWindow | null {
+  if (!isUsageResetWaitIssue(issue)) return null
+  const normalized = extractProviderErrorEnvelope(issue.message).message.toLowerCase()
+  const hourWindow = /(\d+)\s*[- ]?h(?:(?:ou)?rs?)?/iu.exec(normalized)
+  const hours = hourWindow ? Number(hourWindow[1]) : undefined
+  const label = normalized.includes('weekly')
+    ? 'Weekly limit'
+    : normalized.includes('monthly')
+      ? 'Monthly limit'
+      : normalized.includes('daily')
+        ? 'Daily limit'
+        : hours !== undefined && Number.isFinite(hours)
+          ? `${hours}-hour limit`
+          : normalized.includes('session')
+            ? 'Session limit'
+            : issue.kind === 'rate_limit'
+              ? 'Rate limit'
+              : 'Usage limit'
+  const windowMinutes = normalized.includes('weekly')
+    ? 10_080
+    : normalized.includes('monthly')
+      ? 43_200
+      : normalized.includes('daily')
+        ? 1_440
+        : hours !== undefined && Number.isFinite(hours)
+          ? hours * 60
+          : undefined
+  const resetsAt = issue.retryAt ?? parseUsageResetAt(issue.message, now)
+  return {
+    id: `provider-issue:${label.toLowerCase().replaceAll(/[^a-z0-9]+/gu, '-')}`,
+    label,
+    status: 'exhausted',
+    usedPercent: 100,
+    remaining: 0,
+    ...(resetsAt === undefined ? {} : { resetsAt }),
+    ...(windowMinutes === undefined ? {} : { windowMinutes })
+  }
 }
 
 /**

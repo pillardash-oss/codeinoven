@@ -108,7 +108,7 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { isUsageResetWaitIssue } from '$shared/provider-issue'
+  import { isUsageResetWaitIssue, rateLimitWindowFromProviderIssue } from '$shared/provider-issue'
   import { copyText } from '$lib/copy-text'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
@@ -905,6 +905,12 @@
       visibleProviderStatus.issue === proactiveAuthIssue
   )
   const providerName = $derived(harnessDisplayName(settings.harnessId))
+  const providerIssueRateLimits = $derived.by(() => {
+    const issue = visibleProviderStatus?.issue
+    if (!issue) return []
+    const limit = rateLimitWindowFromProviderIssue(issue)
+    return limit ? [limit] : []
+  })
   /** Harness that actually produced the visible provider issue. When it differs
    *  from the thread's current harness (e.g. a Codex usage-limit card still on
    *  screen while the user already switched the thread to OpenCode), the badge
@@ -1314,6 +1320,7 @@
       contextUsed === undefined &&
       latestTokens === undefined &&
       latestRateLimits === undefined &&
+      providerIssueRateLimits.length === 0 &&
       latestCredits === undefined &&
       costUsd <= 0
     ) {
@@ -1328,7 +1335,7 @@
         : {}),
       costUsd,
       ...(latestTokens ? { tokens: latestTokens } : {}),
-      rateLimits: latestRateLimits ?? [],
+      rateLimits: providerIssueRateLimits.length ? providerIssueRateLimits : (latestRateLimits ?? []),
       ...(latestCredits ? { credits: latestCredits } : {})
     }
   })
@@ -1468,6 +1475,20 @@
           costUsd: 0,
           rateLimits: usage.rateLimits,
           ...(usage.credits ? { credits: usage.credits } : {})
+        }
+      }
+    }
+    if (providerIssueRateLimits.length > 0 && visibleProviderStatus) {
+      const harnessId = visibleProviderStatus.issue.harnessId ?? settings.harnessId
+      const entry = byHarness[harnessId]
+      if (entry) {
+        entry.rateLimits = providerIssueRateLimits
+      } else {
+        byHarness[harnessId] = {
+          harnessId,
+          providerId: settings.providerId,
+          costUsd: 0,
+          rateLimits: providerIssueRateLimits
         }
       }
     }
