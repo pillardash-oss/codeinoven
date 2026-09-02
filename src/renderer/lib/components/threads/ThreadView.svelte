@@ -332,10 +332,10 @@
    *  tail with the newest `mountedCount` messages. */
   let windowStartId = $state<string | null>(null)
   /** Absolute index of the first mounted message. If the anchored message
-   *  left the store (truncated/deleted), fall back to the tail-relative
-   *  window without touching state — deriveds must stay pure. The newest
-   *  turn is always covered: [prompt][working trace][final output] may never
-   *  partially unmount, no matter how many trace entries it grows. */
+   *  left the store (truncated/deleted), fall back without touching state —
+   *  deriveds must stay pure. A minimum of TWO pages is always mounted: the
+   *  current working page ([prompt][trace][output]) and the previous page,
+   *  even when it sits out of the viewport. */
   let mountedStartIndex = $derived.by(() => {
     if (hasController) return 0
     if (windowStartId) {
@@ -345,7 +345,8 @@
     const countStart = Math.max(0, messages.length - mountedCount)
     const turnStart = latestTurnInfo.startIndex
     if (turnStart < 0) return countStart
-    return Math.min(countStart, turnStart)
+    const covered = promptPagesBefore(turnStart, 2)
+    return Math.min(countStart, covered === -1 ? 0 : covered)
   })
   /** The mounted window: everything from the reader's anchor (or the newest
    *  `mountedCount` messages) to the live tail. The message store may hold
@@ -3141,19 +3142,27 @@
 
   let loadingOlderMessages = $state(false)
 
-  /** Index of the first message of the turn immediately before `fromIndex`,
-   *  or null when that turn is not fully present in the store yet. Walking
-   *  back from the end of the previous turn, the first non-activity user
-   *  message is its prompt — everything between belongs to that turn. */
-  function findPreviousTurnStart(fromIndex: number): number | null {
-    for (let i = fromIndex - 1; i >= 0; i--) {
-      const message = messages[i]
-      if (!message) break
-      if (message.role !== 'user') continue
-      if (isActivityOnlyUserMessage(message)) continue
-      return i
+  /** Walk back `pages` user-prompt page starts from `fromIndex`. Returns the
+   *  index of the prompt that begins the `pages`-th older page, or -1 when
+   *  the store does not hold that many complete pages. Every prompt found in
+   *  the store defines a complete page: the store is contiguous, and a
+   *  prompt is by definition the first message of its turn. */
+  function promptPagesBefore(fromIndex: number, pages: number): number {
+    let cursor = fromIndex
+    for (let page = 0; page < pages; page++) {
+      let found = -1
+      for (let i = cursor - 1; i >= 0; i--) {
+        const message = messages[i]
+        if (!message) return -1
+        if (message.role !== 'user') continue
+        if (isActivityOnlyUserMessage(message)) continue
+        found = i
+        break
+      }
+      if (found === -1) return -1
+      cursor = found
     }
-    return null
+    return cursor
   }
 
   async function loadOlderMessages(): Promise<void> {
@@ -3170,12 +3179,12 @@
     // fetch loop needs no scroll compensation at all.
     windowStartId ??= messages[Math.max(0, messages.length - mountedCount)]?.id ?? null
     try {
-      // One click loads exactly one turn: [user message][working trace]
-      // [final output]. Fetch only while the previous turn is incomplete in
-      // the store — it usually already holds the whole turn, making the
-      // click pure client-side work.
-      for (let attempt = 0; attempt < 6; attempt++) {
-        if (findPreviousTurnStart(mountedStartIndex) !== null) break
+      // One click loads THREE pages: the store usually already holds some of
+      // them, so fetch only while it does not — each fetch is a bounded
+      // 40-message page and turns that span more than one page keep it
+      // fetching until all three page starts exist in the store.
+      for (let attempt = 0; attempt < 30; attempt++) {
+        if (promptPagesBefore(mountedStartIndex, 3) !== -1) break
         const el = scrollEl
         if (!el || !olderMessagesAvailable) break
         const oldest = messages[0]
@@ -3201,14 +3210,14 @@
         mountedCount += page.messages.length
         await tick()
       }
-      // Move the anchor back one turn — or to the thread's very beginning
-      // when the oldest stretch is a headless remainder — then keep the
-      // reader's viewport stable across the mount.
+      // Move the anchor back three pages — or to the thread's very beginning
+      // when fewer complete pages exist — then keep the reader's viewport
+      // stable across the mount.
       const el = scrollEl
       const previousHeight = el?.scrollHeight ?? 0
       const previousTop = el?.scrollTop ?? 0
-      const turnStart = findPreviousTurnStart(mountedStartIndex)
-      const target = turnStart ?? 0
+      const walked = promptPagesBefore(mountedStartIndex, 3)
+      const target = walked === -1 ? 0 : walked
       if (target < mountedStartIndex) {
         windowStartId = messages[target]?.id ?? null
         // Keep the tail-relative count in sync so releasing the anchor at
