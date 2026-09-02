@@ -626,6 +626,35 @@ function findToolPart(
 interface PiTurnState {
   assistantMessageId: string | null
   turnIndex: number
+  /** Streamed part ids already announced with a placeholder
+   *  `message.part.updated`, so their first delta only needs the delta. */
+  announcedStreamParts?: Set<string>
+}
+
+/**
+ * Announce a streamed text/reasoning part with an empty placeholder
+ * `message.part.updated` before its first delta. Pi's RPC stream emits
+ * `message.part.delta` records without ever publishing the part they append
+ * to (`message_start` carries no parts), and every downstream mirror drops
+ * deltas for a part that does not exist yet — so pi's streaming text and
+ * reasoning never appeared live and the working trace stayed empty until
+ * `message_end`, with the final output often beating any visible trace.
+ * The claude-code and codex drivers announce parts up front
+ * (`content_block_start` / `item.started`); this gives pi the same behavior.
+ */
+function announceStreamPart(
+  sessionId: string,
+  turnState: PiTurnState,
+  part: AgentPart
+): SessionAgentEvent[] {
+  let announced = turnState.announcedStreamParts
+  if (!announced) {
+    announced = new Set<string>()
+    turnState.announcedStreamParts = announced
+  }
+  if (announced.has(part.id)) return []
+  announced.add(part.id)
+  return [{ type: 'message.part.updated', sessionId, part }]
 }
 
 /** Highest driver-generated assistant index already present for this app
@@ -674,6 +703,7 @@ export function mapPiRecord(
   if (type === 'turn_start') {
     turnState.turnIndex += 1
     turnState.assistantMessageId = null
+    turnState.announcedStreamParts?.clear()
     return { events: [] }
   }
 
@@ -697,13 +727,20 @@ export function mapPiRecord(
     if (eventType === 'text_delta') {
       const delta = stringValue(event?.['delta'])
       if (!delta) return { events: [] }
+      const partId = `${messageId}:text:${contentIndex}`
       return {
         events: [
+          ...announceStreamPart(context.sessionId, turnState, {
+            type: 'text',
+            id: partId,
+            messageID: messageId,
+            text: ''
+          }),
           {
             type: 'message.part.delta',
             sessionId: context.sessionId,
             messageId,
-            partId: `${messageId}:text:${contentIndex}`,
+            partId,
             field: 'text',
             delta
           }
@@ -713,13 +750,20 @@ export function mapPiRecord(
     if (eventType === 'thinking_delta') {
       const delta = stringValue(event?.['delta'])
       if (!delta) return { events: [] }
+      const partId = `${messageId}:reasoning:${contentIndex}`
       return {
         events: [
+          ...announceStreamPart(context.sessionId, turnState, {
+            type: 'reasoning',
+            id: partId,
+            messageID: messageId,
+            text: ''
+          }),
           {
             type: 'message.part.delta',
             sessionId: context.sessionId,
             messageId,
-            partId: `${messageId}:reasoning:${contentIndex}`,
+            partId,
             field: 'text',
             delta
           }
@@ -1005,9 +1049,7 @@ export function mapPiRecord(
       }
     }
     const finalError =
-      stringValue(entry['finalError']) ??
-      stringValue(entry['errorMessage']) ??
-      'Pi retries failed'
+      stringValue(entry['finalError']) ?? stringValue(entry['errorMessage']) ?? 'Pi retries failed'
     // When the retries were exhausted against a usage window, the final error
     // still classifies as a reset wait — surface it with a concrete retryAt so
     // the engine converts it into the will-retry card and auto-resumes later,
@@ -1948,9 +1990,9 @@ export class PiDriver extends PersistentCliDriver {
     // only when it matches the requested provider (or no provider was given).
     const providerWindows = providerId
       ? (persisted.get(providerId) ??
-         (sessionCache && (sessionCache.providerId === providerId || !sessionCache.providerId)
-           ? sessionCache.windows
-           : undefined))
+        (sessionCache && (sessionCache.providerId === providerId || !sessionCache.providerId)
+          ? sessionCache.windows
+          : undefined))
       : (sessionCache?.windows ?? [...persisted.values()].at(-1))
     const windows = providerWindows ?? []
     const credits = (providerId ? await fetchPiProviderCredits(providerId) : null) ?? undefined
@@ -2689,7 +2731,10 @@ export class PiDriver extends PersistentCliDriver {
    * provider response's rate-limit headers. Mapped into display windows and
    * cached per session until the next provider response refreshes them.
    */
-  private async handleUsageStatus(record: Record<string, unknown>, sessionId: string): Promise<void> {
+  private async handleUsageStatus(
+    record: Record<string, unknown>,
+    sessionId: string
+  ): Promise<void> {
     const text = stringValue(record['statusText'])
     if (!text) return
     let payload: unknown
