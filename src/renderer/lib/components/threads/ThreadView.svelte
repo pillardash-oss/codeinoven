@@ -4899,11 +4899,11 @@
     userScrolledAway = false
     idleAttentionHandled = false
 
-    // Persist settings as last-used. On the Chats tab a project-model fallback
-    // must not lock itself in as the chat's own choice — explicit chat model
-    // changes are already persisted by updateSettings.
+    // Persist settings as last-used. On the Chats tab this seeds the chat's own
+    // store, so the next chat inherits this chat's model, thinking level, and
+    // File System state — never the project view's configuration.
     if (chatMode) {
-      if (chatSettings.lastUsed.modelId) chatSettings.commit(settings)
+      chatSettings.commit(settings)
     } else {
       threadSettings.commit(settings)
     }

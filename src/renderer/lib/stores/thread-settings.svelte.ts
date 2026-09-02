@@ -91,27 +91,19 @@ export const threadSettings = new ThreadSettingsStore(THREAD_SETTINGS_KEY, DEFAU
 export const chatSettings = new ThreadSettingsStore(CHAT_SETTINGS_KEY, CHAT_DEFAULT_SETTINGS)
 
 /**
- * The effective settings for a chat: the chat's own last-used model once the
- * user has picked one, otherwise the last project model — so a fresh chat
- * starts on whatever model the user is already using for project work. Chats
- * never inject the Engineering workflow. A fallback never counts as a chat
- * selection, so it stays live until the user explicitly chooses a chat model.
+ * The effective settings for a chat: the chat's own last-used settings.
+ * Chats keep their own storage (model, thinking level, File System, permiss-
+ * ions), so a new chat always inherits the previous chat's configuration —
+ * never the project view's model or thinking level.
  *
  * Web-only chats stay pinned to auto review. Once the user turns on File
  * System, the permission picker unlocks up to Full Access, so that level is
  * carried through here instead of being clobbered back to auto review.
  */
 export function chatEffectiveSettings(): ThreadSettings {
-  const project = threadSettings.lastUsed
   const chat = chatSettings.lastUsed
-  if (chat.modelId) return { ...chat }
   return {
-    ...project,
     ...chat,
-    harnessId: project.harnessId,
-    providerId: project.providerId,
-    modelId: project.modelId,
-    thinkingLevel: project.thinkingLevel,
     permissionLevel: chat.fileSystemMode ? chat.permissionLevel : ('auto_review' as const)
   }
 }
