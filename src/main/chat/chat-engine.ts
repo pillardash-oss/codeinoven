@@ -385,7 +385,7 @@ const AUDIT_REPORT_JSON_CONTRACT =
  *  can embed it. */
 export const CITATION_SYSTEM_INSTRUCTION = [
   'Cite the source of every factual claim you report.',
-  'Cite local files with their project-rooted relative path (e.g. `src/app.html`), never a bare filename such as `app.html` and never a full absolute filesystem path — the relative form renders as a clickable citation the user can open.',
+  'Cite local files with their project-rooted relative path, never a bare filename such as `app.html` and never a full absolute filesystem path. State the path plainly — do NOT wrap it in backticks or code formatting, because backticked paths render as read-only code instead of a clickable citation the user can open. Do not construct a link yourself; state the path and, when possible, the line number, and the application handles the rest.',
   'Cite external references as Markdown links, e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`, never as bare text such as "pr issue #155".',
   'Never cite a source you did not inspect or retrieve; when a claim cannot be verified, state that limitation instead of padding the report with references.'
 ].join(' ')

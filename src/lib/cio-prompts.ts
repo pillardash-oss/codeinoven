@@ -72,7 +72,7 @@ export const CIO_PROMPT_TEMPLATE_TAGS = [
 ] as const
 
 const CITATIONS =
-  'Cite every factual claim. Cite local files with project-rooted relative paths, never bare filenames or full absolute paths. Cite external references as Markdown links. Never cite a source you did not inspect; state limitations explicitly.'
+  'Cite every factual claim. Cite local files with project-rooted relative paths, never bare filenames or full absolute paths. When citing a local file from the current working directory, state the path plainly — do NOT wrap it in backticks or code formatting, because backticked paths render as read-only code and are no longer clickable. Do not attempt to construct a link yourself; simply state the path and, when possible, the line number, and the application will handle turning it into a clickable source link. Cite external references as Markdown links. Never cite a source you did not inspect; state limitations explicitly.'
 const MERMAID =
   'Use a fenced mermaid block when a multi-step flow, lifecycle, hierarchy, or relationship is materially clearer as a diagram. Keep diagrams concise and parse-valid.'
 const QUESTION =
