@@ -309,70 +309,50 @@
   const savedScrollState = threadScrollPositions.get(thread.id)
   let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
   /** Minimum first paint: only the newest few messages mount on the first
-   *  frame, so a long thread paints instantly on switch. The rest of the
-   *  cached window then fills in progressively, one small batch per frame.
-   *  The reveal window is an absolute start index, so streaming or optimistic
-   *  appends can never shift, shrink, or restart it — the previous
-   *  slice-from-the-end window broke exactly that way. */
+   *  frame, so a long thread paints instantly on switch. */
   const INITIAL_PAINT_MESSAGES = 4
-  /** Messages mounted per frame while the cached window fills in. A warm
-   *  store can hold dozens of messages (pages merged while the reader scrolled
-   *  earlier, including multi-hundred-KB blocks); mounting them in one flush
-   *  blocks the renderer for the whole parse+DOM cost, which is exactly the
-   *  switch-back delay this staging exists to prevent. Batches mount content
-   *  above the viewport only, so content-visibility keeps them layout-free
-   *  and the reader at the bottom never sees a step. */
-  const INITIAL_REVEAL_BATCH = 6
-  let initialPaintComplete = $state(false)
-  // Warm-cache capture: the store may already hold a large window for this
-  // thread, so the very first render must already be staged — the component
-  // script runs before the first paint, so no effect can set this in time.
-  // (mountedThread is a plain const captured from the prop above.)
-  let initialPaintStartIndex = $state(
-    Math.max(
-      0,
-      threadMessages.messages(mountedThread.projectId, mountedThread.id).length -
-        INITIAL_PAINT_MESSAGES
+  /** Messages mounted per frame while the window auto-fills after mount. */
+  const INITIAL_REVEAL_BATCH = 12
+  let mountedCount = $state(
+    Math.min(
+      threadMessages.messages(mountedThread.projectId, mountedThread.id).length,
+      INITIAL_PAINT_MESSAGES
     )
   )
   let initialPaintRevealFrame = 0
-  // Keep the mounted list stable. The message store bounds the initial page;
-  // older history is added only when the reader reaches the history edge.
+  /** The mounted window: a bounded count of the NEWEST messages. The message
+   *  store may hold hundreds of merged pages, but only this window mounts —
+   *  remounting a whole multi-megabyte transcript on every thread switch was
+   *  the switch-back delay. History beyond the window mounts only when the
+   *  reader scrolls up (or jumps to it), never automatically. */
   let visibleMessages = $derived(
-    initialPaintComplete ? messages : messages.slice(initialPaintStartIndex)
+    hasController ? messages : messages.slice(Math.max(0, messages.length - mountedCount))
   )
 
-  /** Begin the progressive fill-in of the cached window behind the first
-   *  paint. Runs once messages first become available for this mount —
-   *  straight away on a warm cache, after the bounded preload resolves
-   *  otherwise. No-op when the initial capture already revealed everything. */
+  /** Auto-fill the mounted window up to HISTORY_WINDOW_SIZE after the first
+   *  paint, one batch per frame. Batches mount above the viewport only, so
+   *  content-visibility keeps them layout-free and a reader at the bottom
+   *  never sees a step. This is the only automatic fill-in — nothing beyond
+   *  the window mounts without the reader scrolling up. */
   function beginInitialPaintReveal(): void {
-    if (!alive || initialPaintComplete) return
-    const count = messages.length
-    if (count === 0) return
-    if (initialPaintStartIndex === 0) {
-      // Cold cache (or controller-backed view): anchor the first paint to the
-      // newest tail now that the messages exist.
-      initialPaintStartIndex = Math.max(0, count - INITIAL_PAINT_MESSAGES)
+    if (!alive || hasController) return
+    if (mountedCount === 0 && messages.length > 0) {
+      mountedCount = Math.min(messages.length, INITIAL_PAINT_MESSAGES)
     }
-    if (initialPaintStartIndex === 0) {
-      initialPaintComplete = true
-      return
-    }
-    revealInitialBatch()
+    scheduleInitialReveal()
   }
 
-  function revealInitialBatch(): void {
-    if (!alive || initialPaintComplete) return
+  function scheduleInitialReveal(): void {
+    if (!alive) return
+    if (mountedCount >= Math.min(messages.length, HISTORY_WINDOW_SIZE)) return
     initialPaintRevealFrame = requestAnimationFrame(() => {
       if (!alive) return
+      const fillTarget = Math.min(messages.length, HISTORY_WINDOW_SIZE)
+      if (mountedCount >= fillTarget) return
       const el = scrollEl
       const previousTop = el?.scrollTop ?? 0
       const previousHeight = el?.scrollHeight ?? 0
-      initialPaintStartIndex = Math.max(0, initialPaintStartIndex - INITIAL_REVEAL_BATCH)
-      if (initialPaintStartIndex === 0) {
-        initialPaintComplete = true
-      }
+      mountedCount = Math.min(fillTarget, mountedCount + INITIAL_REVEAL_BATCH)
       // The batch mounted above the viewport. A reader at the bottom is
       // re-anchored by the tail-follow ResizeObserver; a reader away from the
       // bottom keeps their exact viewport across the off-screen mount.
@@ -380,7 +360,7 @@
         const grown = el.scrollHeight - previousHeight
         if (grown > 0) el.scrollTop = previousTop + grown
       }
-      if (!initialPaintComplete) revealInitialBatch()
+      scheduleInitialReveal()
     })
   }
   /** The latest turn that already has an assistant message. A newly submitted
@@ -413,7 +393,9 @@
   let fullUserMessageHistory = $state<UserMessageSummary[]>([])
   let userMessageHistoryLoaded = false
   let userMessageHistoryLoading: Promise<void> | null = null
-  let hasOlderMessages = $derived(controller?.hasOlder ?? olderMessagesAvailable)
+  let hasOlderMessages = $derived(
+    controller?.hasOlder ?? (olderMessagesAvailable || mountedCount < messages.length)
+  )
   let userMessageTexts = $derived(
     messages
       .filter((msg) => msg.role === 'user')
@@ -2746,6 +2728,12 @@
     if (jumpLoading) return
     const cachedIndex = messages.findIndex((message) => message.id === id)
     if (cachedIndex >= 0) {
+      // The store holds the target but the mounted window may not — grow the
+      // window to cover it (plus context) before scrolling.
+      if (!hasController && mountedCount < messages.length - cachedIndex) {
+        mountedCount = Math.min(messages.length, messages.length - cachedIndex + 8)
+        await tick()
+      }
       document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       return
     }
@@ -2763,6 +2751,7 @@
       const targetIndex = messages.findIndex((message) => message.id === id)
       if (targetIndex >= 0) {
         olderMessagesAvailable = page.hasOlder
+        mountedCount = Math.max(mountedCount, messages.length - targetIndex + 8)
         await tick()
         document
           .getElementById(`msg-${id}`)
@@ -2802,6 +2791,7 @@
         const targetIndex = messages.findIndex((message) => message.id === messageId)
         if (targetIndex < 0) return
         olderMessagesAvailable = page.hasOlder
+        mountedCount = Math.max(mountedCount, messages.length - targetIndex + 8)
         await tick()
         if (page.hasNewer) {
           const newest = page.messages[page.messages.length - 1]
@@ -3076,6 +3066,27 @@
       await controller.loadOlder()
       return
     }
+    // The store may already hold history the mounted window excludes (pages
+    // merged on an earlier visit). Expanding the window from memory needs no
+    // IPC and no re-parse — grow it and keep the reader's viewport fixed.
+    if (mountedCount < messages.length) {
+      const el = scrollEl
+      const previousHeight = el.scrollHeight
+      const previousTop = el.scrollTop
+      mountedCount = Math.min(messages.length, mountedCount + HISTORY_WINDOW_SIZE)
+      await tick()
+      const after = scrollEl
+      if (after) {
+        after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
+        threadScrollPositions.set(thread.id, {
+          top: after.scrollTop,
+          awayFromBottom: userScrolledAway
+        })
+      }
+      // Real history may still sit beyond the store — fall through to the IPC
+      // path only when the expanded window's edge is still within reach.
+      if (!olderMessagesAvailable || !after || !nearHistoryEdge(after)) return
+    }
     loadingOlderMessages = true
     // Loading history is an explicit request to inspect the past.
     userScrolledAway = true
@@ -3108,6 +3119,9 @@
         olderMessagesAvailable = page.hasOlder
         if (page.messages.length === 0) break
         threadMessages.mergePage(thread.projectId, thread.id, page.messages)
+        // The page prepended — grow the window by the same amount so the
+        // messages the reader was looking at stay mounted above the new page.
+        mountedCount += page.messages.length
         await tick()
         const after = scrollEl
         if (after) {
