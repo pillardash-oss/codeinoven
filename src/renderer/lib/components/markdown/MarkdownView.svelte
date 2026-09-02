@@ -2,6 +2,7 @@
   import { onDestroy } from 'svelte'
   import type { Token, Tokens } from 'marked'
   import CodeBlock from './CodeBlock.svelte'
+  import LongTextBlock from './LongTextBlock.svelte'
   import MermaidDiagram from './MermaidDiagram.svelte'
   import FileCitationContextMenu from './FileCitationContextMenu.svelte'
   import { blockHtml, fileCitationTarget, lexMarkdownCached } from './markdown'
@@ -108,7 +109,71 @@
     })
   })
 
-  const tokens = $derived(lexMarkdownCached(lexedText, lexedAllowHtml))
+  /** Any single line longer than this never enters the markdown pipeline or
+   *  the DOM as one unbroken run. A 500KB single-line dump would otherwise
+   *  cost marked's inline tokenizer, DOMPurify, and soft-wrap layout the full
+   *  price at once; it renders collapsed via `LongTextBlock` instead. */
+  const LONG_LINE_LIMIT = 2_000
+
+  interface MarkdownSegment {
+    kind: 'markdown' | 'long'
+    text: string
+  }
+
+  /** Fence-aware split of the source at over-long lines. Lines inside a
+   *  fenced code block stay with their fence (CodeBlock already bounds
+   *  highlight cost and scrolls horizontally); everything else keeps its
+   *  normal markdown rendering. With no over-long line this yields exactly
+   *  one markdown segment, so normal messages are unaffected. */
+  function splitLongLineSegments(source: string): MarkdownSegment[] {
+    if (!source.includes('\n') && source.length <= LONG_LINE_LIMIT) {
+      return [{ kind: 'markdown', text: source }]
+    }
+    const lines = source.split('\n')
+    let anyLong = false
+    for (const line of lines) {
+      if (line.length > LONG_LINE_LIMIT) {
+        anyLong = true
+        break
+      }
+    }
+    if (!anyLong) return [{ kind: 'markdown', text: source }]
+    const segments: MarkdownSegment[] = []
+    let buffer: string[] = []
+    let fenceCharacter = ''
+    let fenceLength = 0
+    let inFence = false
+    const flush = (): void => {
+      if (buffer.length > 0) {
+        segments.push({ kind: 'markdown', text: buffer.join('\n') })
+        buffer = []
+      }
+    }
+    for (const line of lines) {
+      const fence = inFence
+        ? line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/)
+        : line.match(/^ {0,3}(`{3,}|~{3,})/)
+      if (fence) {
+        if (!inFence) {
+          inFence = true
+          fenceCharacter = fence[1][0]
+          fenceLength = fence[1].length
+        } else if (fence[1][0] === fenceCharacter && fence[1].length >= fenceLength) {
+          inFence = false
+        }
+      }
+      if (!inFence && line.length > LONG_LINE_LIMIT) {
+        flush()
+        segments.push({ kind: 'long', text: line })
+      } else {
+        buffer.push(line)
+      }
+    }
+    flush()
+    return segments
+  }
+
+  const segments = $derived(splitLongLineSegments(lexedText))
 
   function renderBlockHtml(token: Token): string {
     const html = blockHtml(token, allowHtml)
@@ -326,7 +391,13 @@
     onfocusin={handleFocusIn}
     onfocusout={handleFocusOut}
   >
-    {@render renderBlocks(tokens)}
+    {#each segments as seg, segIndex (segIndex)}
+      {#if seg.kind === 'long'}
+        <LongTextBlock text={seg.text} />
+      {:else}
+        {@render renderBlocks(lexMarkdownCached(seg.text, lexedAllowHtml))}
+      {/if}
+    {/each}
   </div>
 </FileCitationContextMenu>
 
