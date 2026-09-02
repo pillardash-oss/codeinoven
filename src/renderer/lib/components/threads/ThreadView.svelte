@@ -328,14 +328,33 @@
     )
   )
   let initialPaintRevealFrame = 0
-  /** The mounted window: a bounded count of the NEWEST messages. The message
-   *  store may hold hundreds of merged pages, but only this window mounts —
-   *  remounting a whole multi-megabyte transcript on every thread switch was
-   *  the switch-back delay. History beyond the window mounts only when the
-   *  reader scrolls up (or jumps to it), never automatically. */
-  let visibleMessages = $derived(
-    hasController ? messages : messages.slice(Math.max(0, messages.length - mountedCount))
-  )
+  /** Id of the first mounted message while the reader is scrolled up. With an
+   *  anchor pinned, the window runs from what the reader is reading all the
+   *  way to the live tail and GROWS with the stream instead of sliding with
+   *  it — a working turn appending trace entries can never unmount the
+   *  message and trace the reader is steering against. Null = follow the
+   *  tail with the newest `mountedCount` messages. */
+  let windowStartId = $state<string | null>(null)
+  /** Absolute index of the first mounted message. If the anchored message
+   *  left the store (truncated/deleted), fall back to the tail-relative
+   *  window without touching state — deriveds must stay pure. */
+  let mountedStartIndex = $derived.by(() => {
+    if (hasController) return 0
+    if (windowStartId) {
+      const anchorIndex = messages.findIndex((message) => message.id === windowStartId)
+      if (anchorIndex >= 0) return anchorIndex
+    }
+    return Math.max(0, messages.length - mountedCount)
+  })
+  /** The mounted window: everything from the reader's anchor (or the newest
+   *  `mountedCount` messages) to the live tail. The message store may hold
+   *  hundreds of merged pages, but only this window mounts — remounting a
+   *  whole multi-megabyte transcript on every thread switch was the
+   *  switch-back delay. History beyond the window mounts only when the
+   *  reader scrolls up (or jumps to it), never automatically. The window
+   *  always extends to the tail, so streaming trace entries render the
+   *  moment they land — never staged, never evicted from below the reader. */
+  let visibleMessages = $derived(hasController ? messages : messages.slice(mountedStartIndex))
 
   /** Auto-fill the mounted window up to HISTORY_WINDOW_SIZE after the first
    *  paint, one batch per frame. Batches mount above the viewport only, so
@@ -402,7 +421,7 @@
   let userMessageHistoryLoaded = false
   let userMessageHistoryLoading: Promise<void> | null = null
   let hasOlderMessages = $derived(
-    controller?.hasOlder ?? (olderMessagesAvailable || mountedCount < messages.length)
+    controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
   let userMessageTexts = $derived(
     messages
@@ -2767,10 +2786,10 @@
     if (jumpLoading) return
     const cachedIndex = messages.findIndex((message) => message.id === id)
     if (cachedIndex >= 0) {
-      // The store holds the target but the mounted window may not — grow the
-      // window to cover it (plus context) before scrolling.
-      if (!hasController && mountedCount < messages.length - cachedIndex) {
-        mountedCount = Math.min(messages.length, messages.length - cachedIndex + 8)
+      // The store holds the target but the mounted window may not — move the
+      // anchor back to cover it (plus context) before scrolling.
+      if (!hasController && mountedStartIndex > cachedIndex) {
+        windowStartId = messages[Math.max(0, cachedIndex - 8)]?.id ?? null
         await tick()
       }
       document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -2790,7 +2809,9 @@
       const targetIndex = messages.findIndex((message) => message.id === id)
       if (targetIndex >= 0) {
         olderMessagesAvailable = page.hasOlder
-        mountedCount = Math.max(mountedCount, messages.length - targetIndex + 8)
+        if (!hasController && mountedStartIndex > targetIndex) {
+          windowStartId = messages[Math.max(0, targetIndex - 8)]?.id ?? null
+        }
         await tick()
         document
           .getElementById(`msg-${id}`)
@@ -2830,7 +2851,9 @@
         const targetIndex = messages.findIndex((message) => message.id === messageId)
         if (targetIndex < 0) return
         olderMessagesAvailable = page.hasOlder
-        mountedCount = Math.max(mountedCount, messages.length - targetIndex + 8)
+        if (!hasController && mountedStartIndex > targetIndex) {
+          windowStartId = messages[Math.max(0, targetIndex - 8)]?.id ?? null
+        }
         await tick()
         if (page.hasNewer) {
           const newest = page.messages[page.messages.length - 1]
@@ -3073,7 +3096,18 @@
 
   function onScroll(): void {
     if (!scrollEl) return
-    userScrolledAway = !isAtBottom(scrollEl)
+    const away = !isAtBottom(scrollEl)
+    // Pin the window to what the reader is reading the moment they leave the
+    // tail, and release it back to the tail-relative window when they return.
+    // While pinned, a streaming turn grows the window instead of sliding it —
+    // the message and trace under the reader can never be unmounted by new
+    // entries arriving at the tail.
+    if (away && !userScrolledAway) {
+      windowStartId = visibleMessages[0]?.id ?? null
+    } else if (!away && userScrolledAway) {
+      windowStartId = null
+    }
+    userScrolledAway = away
     // Self-heal: the mounted window must never sit at zero while the store
     // holds messages — a windowed view that collapsed to nothing would leave
     // the reader staring at a blank transcript.
@@ -3113,12 +3147,17 @@
     }
     // The store may already hold history the mounted window excludes (pages
     // merged on an earlier visit). Expanding the window from memory needs no
-    // IPC and no re-parse — grow it and keep the reader's viewport fixed.
-    if (mountedCount < messages.length) {
+    // IPC and no re-parse — move the anchor back and keep the reader's
+    // viewport fixed.
+    if (mountedStartIndex > 0) {
       const el = scrollEl
       const previousHeight = el.scrollHeight
       const previousTop = el.scrollTop
-      mountedCount = Math.min(messages.length, mountedCount + MOUNTED_EXPAND_BATCH)
+      const nextStart = Math.max(0, mountedStartIndex - MOUNTED_EXPAND_BATCH)
+      windowStartId = messages[nextStart]?.id ?? null
+      // Keep the tail-relative count in sync so releasing the anchor at the
+      // bottom never shrinks the window below what is already mounted.
+      mountedCount = Math.max(mountedCount, messages.length - nextStart)
       await tick()
       const after = scrollEl
       if (after) {
@@ -3135,6 +3174,12 @@
     loadingOlderMessages = true
     // Loading history is an explicit request to inspect the past.
     userScrolledAway = true
+    // Pin the window to the current oldest mounted message before the IPC
+    // page prepends — otherwise the tail-relative window would slide down and
+    // unmount what the reader is looking at.
+    if (!hasController) {
+      windowStartId ??= messages[Math.max(0, messages.length - mountedCount)]?.id ?? null
+    }
     try {
       // Backfill ahead of the reader: keep fetching bounded batches until
       // roughly two viewports of transcript sit above the fold, so scrolling
@@ -3164,8 +3209,8 @@
         olderMessagesAvailable = page.hasOlder
         if (page.messages.length === 0) break
         threadMessages.mergePage(thread.projectId, thread.id, page.messages)
-        // The page prepended — grow the window by the same amount so the
-        // messages the reader was looking at stay mounted above the new page.
+        // The page prepended — keep the tail-relative count in sync so the
+        // window semantics stay consistent if the anchor is later released.
         mountedCount += page.messages.length
         await tick()
         const after = scrollEl
@@ -3239,6 +3284,7 @@
     // lock synchronously and re-anchoring a tick later keeps the tail engaged
     // even if the bottom grew between the click and this snap's scroll event.
     userScrolledAway = false
+    windowStartId = null
     scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
     void tick().then(() => {
       if (!scrollEl || userScrolledAway) return
@@ -11308,7 +11354,7 @@
                     engineeringLifecycle={pendingLifecycleDisplay}
                     engineeringActive={engineeringOn}
                     onEngineeringLifecycleSelect={selectEngineeringLifecycle}
-                    independentAuditAvailable={independentAuditAvailable}
+                    {independentAuditAvailable}
                     independentAuditEnabled={independentAuditDisplayEnabled}
                     onIndependentAuditToggle={toggleIndependentAudit}
                     engineeringToolboxHidden={independentAuditDisplayEnabled}
