@@ -102,6 +102,43 @@
   const TRACE_SCROLL_THRESHOLD = 32
   let traceScrollEl = $state<HTMLDivElement>()
   let traceAtBottom = $state(true)
+  /** The trace renders its own pagination: the newest 15 entries first, and
+   *  one older page (15 more) whenever the reader scrolls the trace's inner
+   *  scroller until the ante-penultimate rendered item is in view. The header
+   *  count always reflects the FULL entry count — the window limits what
+   *  mounts, never what is reported. Entries come from the already-loaded
+   *  message cache, so paging here costs no IPC. */
+  const TRACE_PAGE_SIZE = 15
+  let traceWindow = $state(TRACE_PAGE_SIZE)
+  const pagedParts = $derived(visibleParts.slice(Math.max(0, visibleParts.length - traceWindow)))
+
+  /** Prepend one older page of trace entries, keeping the reader's viewport
+   *  stable across the mount (same compensation the conversation list uses). */
+  function expandTracePage(): void {
+    if (traceWindow >= visibleParts.length) return
+    const el = traceScrollEl
+    const previousHeight = el?.scrollHeight ?? 0
+    const previousTop = el?.scrollTop ?? 0
+    traceWindow = Math.min(visibleParts.length, traceWindow + TRACE_PAGE_SIZE)
+    void tick().then(() => {
+      if (!el) return
+      const grown = el.scrollHeight - previousHeight
+      if (grown > 0) el.scrollTop = previousTop + grown
+    })
+  }
+
+  /** Load the next older page once the ante-penultimate rendered entry
+   *  (third from the top of the current window) enters the scroller's view. */
+  function maybeExpandOlderEntries(element: HTMLDivElement): void {
+    if (traceWindow >= visibleParts.length) return
+    const third = element.children[2] as HTMLElement | undefined
+    if (!third) return
+    const scrollerRect = element.getBoundingClientRect()
+    const thirdRect = third.getBoundingClientRect()
+    const visibleInScroller =
+      thirdRect.bottom > scrollerRect.top && thirdRect.top < scrollerRect.bottom
+    if (visibleInScroller) expandTracePage()
+  }
 
   // When no explicit start is available, fall back to the earliest working
   // part timestamp so the timer keeps counting even at message boundaries.
@@ -214,6 +251,7 @@
     if (!element) return
     traceAtBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight <= TRACE_SCROLL_THRESHOLD
+    maybeExpandOlderEntries(element)
   }
 
   // New live parts follow the trace only while the user remains at its bottom.
@@ -455,10 +493,10 @@
   {#if isOpen}
     <div
       bind:this={traceScrollEl}
-      class="max-h-[min(55vh,36rem)] overflow-y-auto px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2"
+      class="max-h-[min(55vh,36rem)] overflow-y-auto overscroll-contain px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2"
       onscroll={onTraceScroll}
     >
-      {#each visibleParts as part (part.id)}
+      {#each pagedParts as part (part.id)}
         {#if part.type === 'reasoning'}
           <ThinkingBlock
             {part}
