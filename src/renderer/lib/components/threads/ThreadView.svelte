@@ -310,13 +310,31 @@
   let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
   /** Minimum first paint: only the newest few messages mount on the first
    *  frame, so a long thread paints instantly on switch. The rest of the
-   *  preloaded window reveals in a single step after the browser has
-   *  displayed the tail once. The reveal window is an absolute start index,
-   *  so streaming or optimistic appends can never shift, shrink, or restart
-   *  it — the previous slice-from-the-end window broke exactly that way. */
+   *  cached window then fills in progressively, one small batch per frame.
+   *  The reveal window is an absolute start index, so streaming or optimistic
+   *  appends can never shift, shrink, or restart it — the previous
+   *  slice-from-the-end window broke exactly that way. */
   const INITIAL_PAINT_MESSAGES = 4
+  /** Messages mounted per frame while the cached window fills in. A warm
+   *  store can hold dozens of messages (pages merged while the reader scrolled
+   *  earlier, including multi-hundred-KB blocks); mounting them in one flush
+   *  blocks the renderer for the whole parse+DOM cost, which is exactly the
+   *  switch-back delay this staging exists to prevent. Batches mount content
+   *  above the viewport only, so content-visibility keeps them layout-free
+   *  and the reader at the bottom never sees a step. */
+  const INITIAL_REVEAL_BATCH = 6
   let initialPaintComplete = $state(false)
-  let initialPaintStartIndex = $state(0)
+  // Warm-cache capture: the store may already hold a large window for this
+  // thread, so the very first render must already be staged — the component
+  // script runs before the first paint, so no effect can set this in time.
+  // (mountedThread is a plain const captured from the prop above.)
+  let initialPaintStartIndex = $state(
+    Math.max(
+      0,
+      threadMessages.messages(mountedThread.projectId, mountedThread.id).length -
+        INITIAL_PAINT_MESSAGES
+    )
+  )
   let initialPaintRevealFrame = 0
   // Keep the mounted list stable. The message store bounds the initial page;
   // older history is added only when the reader reaches the history edge.
@@ -324,30 +342,45 @@
     initialPaintComplete ? messages : messages.slice(initialPaintStartIndex)
   )
 
-  /** Schedule the single-step reveal of the remaining preloaded messages.
-   *  Runs once messages first become available for this mount — straight
-   *  away on a warm cache, after the bounded preload resolves otherwise. */
+  /** Begin the progressive fill-in of the cached window behind the first
+   *  paint. Runs once messages first become available for this mount —
+   *  straight away on a warm cache, after the bounded preload resolves
+   *  otherwise. No-op when the initial capture already revealed everything. */
   function beginInitialPaintReveal(): void {
     if (!alive || initialPaintComplete) return
     const count = messages.length
     if (count === 0) return
-    initialPaintStartIndex = Math.max(0, count - INITIAL_PAINT_MESSAGES)
+    if (initialPaintStartIndex === 0) {
+      // Cold cache (or controller-backed view): anchor the first paint to the
+      // newest tail now that the messages exist.
+      initialPaintStartIndex = Math.max(0, count - INITIAL_PAINT_MESSAGES)
+    }
     if (initialPaintStartIndex === 0) {
       initialPaintComplete = true
       return
     }
-    // One reveal step — never batched growth. After the browser has painted
-    // the newest tail, mount the whole preloaded window in a single frame.
-    // The tail-follow ResizeObserver re-anchors the bottom before paint, so
-    // the reveal is invisible to a reader sitting at the bottom.
+    revealInitialBatch()
+  }
+
+  function revealInitialBatch(): void {
+    if (!alive || initialPaintComplete) return
     initialPaintRevealFrame = requestAnimationFrame(() => {
-      initialPaintRevealFrame = requestAnimationFrame(() => {
-        if (!alive) return
+      if (!alive) return
+      const el = scrollEl
+      const previousTop = el?.scrollTop ?? 0
+      const previousHeight = el?.scrollHeight ?? 0
+      initialPaintStartIndex = Math.max(0, initialPaintStartIndex - INITIAL_REVEAL_BATCH)
+      if (initialPaintStartIndex === 0) {
         initialPaintComplete = true
-        if (!userScrolledAway && scrollEl) {
-          scrollEl.scrollTop = scrollEl.scrollHeight
-        }
-      })
+      }
+      // The batch mounted above the viewport. A reader at the bottom is
+      // re-anchored by the tail-follow ResizeObserver; a reader away from the
+      // bottom keeps their exact viewport across the off-screen mount.
+      if (el && userScrolledAway) {
+        const grown = el.scrollHeight - previousHeight
+        if (grown > 0) el.scrollTop = previousTop + grown
+      }
+      if (!initialPaintComplete) revealInitialBatch()
     })
   }
   /** The latest turn that already has an assistant message. A newly submitted
