@@ -6728,6 +6728,15 @@ export class ChatEngine {
       parentTurnId: messageId
     }
     const utilitySetupRequested = origin === 'user' && isCioUtilityRequest(text)
+    // A web-only chat skips the app gateway only when the harness can search
+    // the web natively (claude-code, codex, cline, antigravity) or cannot host
+    // the gateway at all. Pi has NO native web tools — the gateway is its only
+    // path to web search/fetch — so it must receive the gateway or a
+    // File-System-OFF chat can reach neither the internet nor the file system.
+    const driverHasNativeWebSearch = (driver.capabilities.nativeUtilities ?? []).includes(
+      'web_search'
+    )
+    const driverCanPublishGateway = typeof driver.publishUtilityGatewayEndpoint === 'function'
     const utilityInstructionsPromise = this.prepareTurnUtilities(
       driver,
       projectId,
@@ -6736,8 +6745,10 @@ export class ChatEngine {
       projectPath,
       settings,
       utilityBudgetContext,
-      // Web-only chat deliberately has no app gateway.
-      isChatThread && !chatFileSystemEnabled && !utilitySetupRequested,
+      isChatThread &&
+        !chatFileSystemEnabled &&
+        !utilitySetupRequested &&
+        (driverHasNativeWebSearch || !driverCanPublishGateway),
       // OpenCode sessions use the shared project server. The app gateway is
       // session-scoped by its capability token, so utilities do not justify a
       // second `opencode serve` process or listening port for any normal turn.
