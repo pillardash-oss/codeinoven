@@ -3831,6 +3831,23 @@ export interface MemoryProposal {
   status: 'pending' | 'approved' | 'rejected'
 }
 
+/** A completed turn whose memory extraction failed and is queued for retry. */
+export interface DeferredMemoryExtraction {
+  id: string
+  projectId?: string
+  threadId?: string
+  /** Capped user material captured at gate time. */
+  userMessage: string
+  /** Capped assistant material captured at gate time. */
+  assistantResponse: string
+  /** Why the first extraction attempt failed (for diagnostics). */
+  reason: string
+  createdAt: number
+  attempts: number
+  lastError?: string
+  lastAttemptAt?: number
+}
+
 /** Which bucket of memory an export/import targets. */
 export type MemoryExportKind = 'projects' | 'chats' | 'both' | 'project'
 

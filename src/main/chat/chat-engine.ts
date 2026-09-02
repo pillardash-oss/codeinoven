@@ -20828,58 +20828,142 @@ export class ChatEngine {
     references: PromptReference[]
   ): Promise<void> {
     const current = await this.memoryService.current(projectId, threadId)
-    if (!current.enabled) return
-
-    // Deterministic extraction gate (A-06): skip the auxiliary model call when
-    // no durable candidate is detected, the conversation is debounced, or the
-    // material exceeds the separately configurable cheap-model budget. Input
-    // and cost for every actual model attempt are recorded inside
-    // `generateMemoryProposal` (each structured/fallback attempt).
-    const extraction = await this.memoryService.evaluateMemoryExtraction({
-      userMessage: composeMemoryUserInput(userMessage, references),
-      candidateUserMessage: composeMemoryCandidateInput(userMessage, references),
-      assistantResponse,
-      projectId,
-      threadId
-    })
-    if (!extraction.run) return
-
-    let decision: StructuredMemoryProposal
-    try {
-      decision = await this.generateMemoryProposal(
-        extraction.userInput,
-        extraction.assistantInput,
+    if (current.enabled) {
+      // Deterministic extraction gate (A-06): skip the auxiliary model call when
+      // no durable candidate is detected, the conversation is debounced, or the
+      // material exceeds the separately configurable cheap-model budget. Input
+      // and cost for every actual model attempt are recorded inside
+      // `generateMemoryProposal` (each structured/fallback attempt).
+      const extraction = await this.memoryService.evaluateMemoryExtraction({
+        userMessage: composeMemoryUserInput(userMessage, references),
+        candidateUserMessage: composeMemoryCandidateInput(userMessage, references),
+        assistantResponse,
         projectId,
-        threadId,
-        parentTurnId,
-        driver,
-        projectPath,
-        settings
-      )
-    } catch (error) {
-      Logger.dev('Memory decision unavailable; skipped proposal', {
-        harnessId: driver.id,
-        error: error instanceof Error ? error.message : String(error)
+        threadId
       })
-      return
+      if (extraction.run) {
+        let decision: StructuredMemoryProposal | null
+        try {
+          decision = await this.generateMemoryProposal(
+            extraction.userInput,
+            extraction.assistantInput,
+            projectId,
+            threadId,
+            parentTurnId,
+            driver,
+            projectPath,
+            settings
+          )
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          Logger.dev('Memory decision unavailable; queued for retry', {
+            harnessId: driver.id,
+            error: reason
+          })
+          await this.memoryService
+            .deferMemoryExtraction({
+              userMessage: extraction.userInput,
+              assistantResponse: extraction.assistantInput,
+              reason,
+              projectId,
+              threadId
+            })
+            .catch((deferError) =>
+              Logger.error('Failed to queue deferred memory extraction', {
+                error: deferError instanceof Error ? deferError.message : String(deferError)
+              })
+            )
+          decision = null
+        }
+        if (decision) {
+          if (decision.propose) {
+            await this.submitMemoryProposal(
+              {
+                label: decision.title,
+                content: decision.content,
+                category: decision.category,
+                priority: decision.priority,
+                scope: decision.scope,
+                modelKeys:
+                  decision.category === 'models'
+                    ? [modelKey(driver.id, settings.providerId, settings.modelId)]
+                    : undefined
+              },
+              projectId,
+              threadId
+            )
+          }
+          // The extraction model just answered successfully, so this is the
+          // right moment to retry any extractions a previous provider outage
+          // deferred — no memory is lost to a transient failure.
+          await this.drainDeferredMemoryExtractions(
+            driver,
+            projectPath,
+            settings,
+            projectId,
+            threadId
+          )
+        }
+      }
     }
-    if (!decision.propose) return
+  }
 
-    await this.submitMemoryProposal(
-      {
-        label: decision.title,
-        content: decision.content,
-        category: decision.category,
-        priority: decision.priority,
-        scope: decision.scope,
-        modelKeys:
-          decision.category === 'models'
-            ? [modelKey(driver.id, settings.providerId, settings.modelId)]
-            : undefined
-      },
-      projectId,
-      threadId
-    )
+  /**
+   * Retry deferred memory extractions after a model success. Each queued
+   * candidate is re-run through `generateMemoryProposal` with the currently
+   * working driver; a failed retry increments its attempt count and stops the
+   * drain, since the provider is likely still unavailable.
+   */
+  private async drainDeferredMemoryExtractions(
+    driver: HarnessDriver,
+    projectPath: string,
+    settings: ThreadSettings,
+    projectId: string,
+    threadId: string
+  ): Promise<void> {
+    const deferred = await this.memoryService.readDeferredExtractions(projectId)
+    for (const item of deferred) {
+      const itemProjectId = item.projectId ?? projectId
+      const itemThreadId = item.threadId ?? threadId
+      try {
+        const decision = await this.generateMemoryProposal(
+          item.userMessage,
+          item.assistantResponse,
+          itemProjectId,
+          itemThreadId,
+          `deferred-${item.createdAt}`,
+          driver,
+          projectPath,
+          settings
+        )
+        if (decision.propose) {
+          await this.submitMemoryProposal(
+            {
+              label: decision.title,
+              content: decision.content,
+              category: decision.category,
+              priority: decision.priority,
+              scope: decision.scope,
+              modelKeys:
+                decision.category === 'models'
+                  ? [modelKey(driver.id, settings.providerId, settings.modelId)]
+                  : undefined
+            },
+            itemProjectId,
+            itemThreadId
+          )
+        }
+        await this.memoryService.removeDeferredExtraction(item.id, item.projectId)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        Logger.dev('Deferred memory extraction retry failed', {
+          deferredId: item.id,
+          error: message
+        })
+        await this.memoryService.recordDeferredExtractionFailure(item.id, message, item.projectId)
+        return
+      }
+    }
   }
 
   private async generateMemoryProposal(
