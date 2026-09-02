@@ -14,7 +14,6 @@
   /** Persists each thread's scroll position across component remounts. */
   const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
   const HISTORY_WINDOW_SIZE = 40
-  const HISTORY_PRELOAD_THRESHOLD = 240
 
   import {
     AudioLines,
@@ -44,6 +43,7 @@
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { normalizeComposerMessage, spaceOutProjectReferences } from '../chats/composer-mentions'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
@@ -2090,14 +2090,7 @@
   }
 
   function temporaryConversationContext(): string {
-    return messages
-      .map((message) => {
-        const text = messageText(message).trim()
-        return text ? `${message.role.toUpperCase()}: ${text}` : ''
-      })
-      .filter(Boolean)
-      .join('\n\n')
-      .slice(-80_000)
+    return temporaryChatContext(messages, messageText)
   }
 
   function openTemporarySelectionChat(mode: 'elaborate' | 'quick'): void {
@@ -3135,17 +3128,9 @@
       awayFromBottom: userScrolledAway
     })
     scheduleResponseBubbleUpdate()
-    if (nearHistoryEdge(scrollEl)) void loadOlderMessages()
-  }
-
-  /** Whether the viewport is close enough to the loaded-history boundary that
-   *  an older page should already be streaming in. Scales with the transcript:
-   *  a fixed pixel threshold only triggers once the user has exhausted every
-   *  row in the current batch, so keep up to ~a quarter of the transcript (max
-   *  2400px) buffered ahead of them. */
-  function nearHistoryEdge(el: HTMLDivElement): boolean {
-    const trigger = Math.max(HISTORY_PRELOAD_THRESHOLD, Math.min(el.scrollHeight * 0.25, 2400))
-    return el.scrollTop <= trigger
+    // History is button-driven by design: scrolling to the top of the
+    // conversation never auto-loads older pages. The "Load earlier messages"
+    // button is the only trigger for the conversation-level history fetch.
   }
 
   /** Release the tail-follow lock synchronously when the user starts scrolling up. */
@@ -3185,7 +3170,7 @@
       }
       // Real history may still sit beyond the store — fall through to the IPC
       // path only when the expanded window's edge is still within reach.
-      if (!olderMessagesAvailable || !after || !nearHistoryEdge(after)) return
+      if (!olderMessagesAvailable || !after) return
     }
     loadingOlderMessages = true
     // Loading history is an explicit request to inspect the past.
@@ -3203,9 +3188,12 @@
       for (let pageCount = 0; pageCount < 6; pageCount++) {
         const el = scrollEl
         if (!el || !olderMessagesAvailable) break
-        const stillNearEdge =
-          nearHistoryEdge(el) || el.scrollHeight < el.clientHeight * 2 + el.scrollTop
-        if (pageCount > 0 && !stillNearEdge) break
+        // A page is a whole turn: user message, its working trace, the
+        // agent's final output. After the first fetch, keep paging only while
+        // the loaded boundary sits mid-turn (the oldest mounted message is a
+        // trace/assistant entry whose prompt is still further back), so the
+        // button never reveals a headless half-turn.
+        if (pageCount > 0 && isTurnStartIndex(mountedStartIndex)) break
         const oldest = messages[0]
         if (!oldest) {
           olderMessagesAvailable = false

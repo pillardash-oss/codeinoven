@@ -22003,10 +22003,13 @@ export function formatHistoryRecap(
     latestCompactionIndex === -1 ? messages : messages.slice(latestCompactionIndex)
   const transcript = formatConversationTranscript(relevantMessages, { includeHidden: true })
   if (!transcript) return ''
-  const budgetedTranscript =
-    options.maxInputTokens === undefined
-      ? transcript.slice(-24_000)
-      : truncateToTokenBudget(transcript, options.maxInputTokens)
+  // Character-bound callers (temporary chats) still get a generous token
+  // budget — 50k keeps most of a long coding thread intact instead of the
+  // tail-only slice that starved temporary chats of anchor context.
+  const budgetedTranscript = truncateToTokenBudget(
+    transcript,
+    options.maxInputTokens ?? 50_000
+  )
   return [
     'This thread continues an earlier conversation. Transcript restored from history:',
     budgetedTranscript,

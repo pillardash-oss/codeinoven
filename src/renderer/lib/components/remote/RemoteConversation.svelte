@@ -30,6 +30,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { messageId } from '$shared/id'
   import { isTodoToolPart } from '$lib/agent-todos'
+  import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { copyText } from '$lib/copy-text'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -1122,14 +1123,7 @@
 
   /** Full-transcript context for a temporary chat, matching desktop. */
   function temporaryConversationContext(): string {
-    return messages
-      .map((message) => {
-        const text = textFor(message).trim()
-        return text ? `${message.role.toUpperCase()}: ${text}` : ''
-      })
-      .filter(Boolean)
-      .join('\n\n')
-      .slice(-80_000)
+    return temporaryChatContext(messages, textFor)
   }
 
   function openTemporarySelectionChat(mode: 'elaborate' | 'quick'): void {
