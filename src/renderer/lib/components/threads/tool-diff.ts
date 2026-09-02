@@ -187,10 +187,27 @@ function patchDiffs(source: string, fallbackPath: string): ToolFileDiff[] {
     .map(([path, lines]) => ({ path, ...bounded(compactContext(lines)) }))
 }
 
+/** Cline's replace_in_file tool sends SEARCH/REPLACE blocks, not a unified
+ *  diff/patch, under the same `diff` key other tools use for real patches. */
+function searchReplaceDiffs(source: string, path: string): ToolFileDiff[] {
+  const blockPattern =
+    /(?:<{5,7}|-{5,7})\s*SEARCH\r?\n([\s\S]*?)\r?\n={5,7}\r?\n([\s\S]*?)\r?\n(?:>{5,7}|\+{5,7})\s*REPLACE/gu
+  const lines: ToolDiffLine[] = []
+  let matched = false
+  for (const match of source.matchAll(blockPattern)) {
+    matched = true
+    lines.push(...snippetDiff(match[1] ?? '', match[2] ?? ''))
+  }
+  return matched ? [{ path, ...bounded(lines) }] : []
+}
+
 function recordDiff(record: Record<string, unknown>, fallbackPath: string): ToolFileDiff[] {
   const path = filePath(record, fallbackPath)
   const patch = firstString(record, ['diff', 'patch'])
-  if (patch) return patchDiffs(patch, path)
+  if (patch) {
+    const searchReplace = searchReplaceDiffs(patch, path)
+    return searchReplace.length > 0 ? searchReplace : patchDiffs(patch, path)
+  }
 
   const before = firstString(record, ['old_string', 'oldString', 'old_str', 'before', 'oldText'])
   const after = firstString(record, ['new_string', 'newString', 'new_str', 'after', 'newText'])
@@ -218,7 +235,9 @@ export function toolFileDiffs(part: Extract<AgentPart, { type: 'tool' }>): ToolF
     !normalizedName.includes('patch') &&
     !normalizedName.includes('write') &&
     !normalizedName.includes('create') &&
-    !normalizedName.includes('filechange')
+    !normalizedName.includes('filechange') &&
+    !normalizedName.includes('replace') &&
+    !normalizedName.includes('newfile')
   ) {
     return []
   }

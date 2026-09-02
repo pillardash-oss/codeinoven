@@ -506,6 +506,9 @@ const MUTATING_FILE_TOOLS = new Set([
   'notebookedit',
   'patch',
   'replacefilecontent',
+  'replaceinfile',
+  'newfile',
+  'searchandreplace',
   'writefile',
   'writetofile',
   'write'
