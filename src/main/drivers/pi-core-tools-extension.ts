@@ -84,6 +84,23 @@ import { Type } from 'typebox'
 const CIO_PERMISSION_MARKER = 'cio-permission:'
 const CIO_QUESTION_MARKER = 'cio-question:'
 const CIO_SYSTEM_PROMPT_PATH = '__CIO_SYSTEM_PROMPT_PATH__'
+const CIO_ALLOWED_TOOLS_PATH = '__CIO_ALLOWED_TOOLS_PATH__'
+
+// The tools pi bundles itself. When the driver hands this session a tool
+// allowlist (File-System-OFF chat threads), every call to one of these that
+// the allowlist does not name is routed through the permission card so the
+// app's policy can auto-approve attached files and ask for everything else.
+// Custom tools (question, todo, gateway, spawn) are never restricted here.
+const CIO_PI_BUILTIN_TOOLS = new Set([
+  'read',
+  'write',
+  'edit',
+  'bash',
+  'grep',
+  'find',
+  'ls',
+  'powershell'
+])
 
 // Pi's own bundled system prompt opens with a "you are an assistant" framing
 // that pushes models toward generic chatbot hedging (permission-seeking,
@@ -114,6 +131,23 @@ function loadCioSystemPrompt() {
     return readFileSync(CIO_SYSTEM_PROMPT_PATH, 'utf8').trim()
   } catch {
     return ''
+  }
+}
+
+// The driver rewrites this file per turn with the session's allowed built-in
+// tool names (empty JSON array = unrestricted). Read at every tool call so a
+// File-System toggle takes effect without restarting the pi session.
+function loadCioAllowedTools() {
+  try {
+    const raw = readFileSync(CIO_ALLOWED_TOOLS_PATH, 'utf8').trim()
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(function (entry) {
+      return typeof entry === 'string'
+    })
+  } catch {
+    return []
   }
 }
 
@@ -966,6 +1000,39 @@ export default function codeInOvenCoreToolsExtension(pi) {
       }
     }
     const hit = evaluateGate(event.toolName, input, ctx.cwd)
+    // File-System-OFF chat threads publish a tool allowlist; any pi built-in
+    // the allowlist does not name requires an explicit permission card. The
+    // app's policy auto-approves reads of files the user attached and asks
+    // for everything else, so attachment access keeps working while the
+    // broader file system stays gated.
+    const allowedTools = loadCioAllowedTools()
+    if (
+      !hit &&
+      allowedTools.length > 0 &&
+      CIO_PI_BUILTIN_TOOLS.has(event.toolName) &&
+      !allowedTools.includes(event.toolName)
+    ) {
+      const command = typeof input['command'] === 'string' ? input['command'] : undefined
+      const path = firstString(input['path'], input['file_path'], input['filePath'], input['filename'])
+      const payload = {
+        permission: command === undefined ? event.toolName : 'shell',
+        patterns: command === undefined && path !== undefined ? [path] : [],
+        tool: event.toolName,
+        ...(command === undefined ? {} : { command })
+      }
+      const approved = await ctx.ui.confirm(
+        'Permission needed: this chat has no file-system access — using ' + event.toolName + ' requires your approval',
+        CIO_PERMISSION_MARKER + JSON.stringify(payload)
+      )
+      if (approved) return undefined
+      return {
+        block: true,
+        reason:
+          'The user denied this action: this chat has no file-system access, so ' +
+          event.toolName +
+          ' is not available. Do not retry it as-is; work from the files the user attached, or ask the user to enable File System for this chat.'
+      }
+    }
     if (!hit) return undefined
     const payload = {
       permission: hit.permission,
