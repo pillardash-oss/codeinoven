@@ -334,7 +334,7 @@ export function abbreviatedWorkspaceGuard(
     projectLine,
     "Unless the user explicitly names the agent harness or CodeInOven itself, every request refers to the current open project and nothing else.",
     'Keep every non-source output inside the project\'s `.cio/` scratch space; under normal scoped chat, never create or modify `.cio/specs/` (Engineer-mode lifecycle files are platform-owned).',
-    'Cite local files with project-rooted relative paths (e.g. `src/app.html`) — never a bare filename or an absolute filesystem path.'
+    'Cite local files with project-rooted relative paths — never a bare filename or an absolute filesystem path. State the path plainly, not in backticks or code formatting, so it renders as a clickable citation; include the line number when possible.',
   ].join(' ')
 }
 

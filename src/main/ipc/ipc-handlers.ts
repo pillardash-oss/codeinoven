@@ -2343,50 +2343,57 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'engineeringLifecycle:start',
-    (_, projectId: unknown, threadId: unknown, stage: unknown) =>
-      engineeringLifecycleEngine.start(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
+    async (_, projectId: unknown, threadId: unknown, stage: unknown) => {
+      const ids = await waitForThreadReady(projectId, threadId)
+      return engineeringLifecycleEngine.start(
+        ids.projectId,
+        ids.threadId,
         stage === undefined || stage === null ? undefined : validateEngineeringLifecycleStage(stage)
       )
+    }
   )
   ipcMain.handle(
     'engineeringLifecycle:complete',
-    (_, projectId: unknown, threadId: unknown, stage: unknown) =>
-      engineeringLifecycleEngine.completeStage(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
+    async (_, projectId: unknown, threadId: unknown, stage: unknown) => {
+      const ids = await waitForThreadReady(projectId, threadId)
+      return engineeringLifecycleEngine.completeStage(
+        ids.projectId,
+        ids.threadId,
         validateEngineeringLifecycleStage(stage)
       )
+    }
   )
   ipcMain.handle(
     'engineeringLifecycle:resume',
-    (_, projectId: unknown, threadId: unknown, resumeToken: unknown, decision: unknown) =>
-      engineeringLifecycleEngine.resume(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
+    async (_, projectId: unknown, threadId: unknown, resumeToken: unknown, decision: unknown) => {
+      const ids = await waitForThreadReady(projectId, threadId)
+      return engineeringLifecycleEngine.resume(
+        ids.projectId,
+        ids.threadId,
         validateEngineeringLifecycleResumeToken(resumeToken),
         validateEngineeringLifecycleDecision(decision)
       )
+    }
   )
   ipcMain.handle(
     'engineeringLifecycle:retry',
-    (_, projectId: unknown, threadId: unknown, resumeToken: unknown) =>
-      engineeringLifecycleEngine.retry(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
+    async (_, projectId: unknown, threadId: unknown, resumeToken: unknown) => {
+      const ids = await waitForThreadReady(projectId, threadId)
+      return engineeringLifecycleEngine.retry(
+        ids.projectId,
+        ids.threadId,
         validateEngineeringLifecycleResumeToken(resumeToken)
       )
+    }
   )
   ipcMain.handle(
     'engineeringLifecycle:cancel',
     async (_, projectId: unknown, threadId: unknown, confirmed: unknown) => {
       if (confirmed !== true)
         throw new TypeError('Engineering lifecycle cancellation requires confirmation')
-      const pid = validateEntityId(projectId, 'Project ID')
-      const tid = validateEntityId(threadId, 'Thread ID')
-      const before = engineeringLifecycleEngine.get(pid, tid)
-      const result = engineeringLifecycleEngine.cancel(pid, tid)
+      const ids = await waitForThreadReady(projectId, threadId)
+      const before = engineeringLifecycleEngine.get(ids.projectId, ids.threadId)
+      const result = engineeringLifecycleEngine.cancel(ids.projectId, ids.threadId)
       // A user-initiated stop must halt the in-flight generation turn too,
       // otherwise the thread stays planning/executing and is re-surfaced on
       // view switch or resumed by restart recovery. abort() tears down the
@@ -2399,7 +2406,7 @@ export function registerIpcHandlers(
           before.selection !== 'none') &&
         chatEngine?.abort
       ) {
-        await chatEngine.abort(pid, tid)
+        await chatEngine.abort(ids.projectId, ids.threadId)
       }
       return result
     }

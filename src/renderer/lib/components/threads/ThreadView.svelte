@@ -14,7 +14,6 @@
   /** Persists each thread's scroll position across component remounts. */
   const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
   const HISTORY_WINDOW_SIZE = 40
-  const HISTORY_PRELOAD_THRESHOLD = 240
 
   import {
     AudioLines,
@@ -44,6 +43,7 @@
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { normalizeComposerMessage, spaceOutProjectReferences } from '../chats/composer-mentions'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
@@ -108,7 +108,7 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { isUsageResetWaitIssue } from '$shared/provider-issue'
+  import { isUsageResetWaitIssue, rateLimitWindowFromProviderIssue } from '$shared/provider-issue'
   import { copyText } from '$lib/copy-text'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
@@ -176,6 +176,7 @@
     AgentPart,
     AgentEvent,
     AgentContextUsage,
+    AgentRateLimitWindow,
     AgentHarnessUsage,
     AgentAccountUsage,
     AgentProviderIssue,
@@ -317,10 +318,6 @@
   const INITIAL_PAINT_MESSAGES = 4
   /** Messages mounted per frame while the window auto-fills after mount. */
   const INITIAL_REVEAL_BATCH = 12
-  /** Messages added to the mounted window per upward-scroll expansion. Half
-   *  a history page keeps each mount hitch short — a full page in one flush
-   *  reads as a lurch while scrolling, many small reads as continuous. */
-  const MOUNTED_EXPAND_BATCH = 20
   let mountedCount = $state(
     Math.min(
       threadMessages.messages(mountedThread.projectId, mountedThread.id).length,
@@ -328,14 +325,49 @@
     )
   )
   let initialPaintRevealFrame = 0
-  /** The mounted window: a bounded count of the NEWEST messages. The message
-   *  store may hold hundreds of merged pages, but only this window mounts —
-   *  remounting a whole multi-megabyte transcript on every thread switch was
-   *  the switch-back delay. History beyond the window mounts only when the
-   *  reader scrolls up (or jumps to it), never automatically. */
-  let visibleMessages = $derived(
-    hasController ? messages : messages.slice(Math.max(0, messages.length - mountedCount))
-  )
+  /** Id of the first mounted message while the reader is scrolled up. With an
+   *  anchor pinned, the window runs from what the reader is reading all the
+   *  way to the live tail and GROWS with the stream instead of sliding with
+   *  it — a working turn appending trace entries can never unmount the
+   *  message and trace the reader is steering against. Null = follow the
+   *  tail with the newest `mountedCount` messages. */
+  let windowStartId = $state<string | null>(null)
+  /** Absolute index of the first mounted message. If the anchored message
+   *  left the store (truncated/deleted), fall back without touching state —
+   *  deriveds must stay pure. A minimum of TWO pages is always mounted: the
+   *  current working page ([prompt][trace][output]) and the previous page,
+   *  even when it sits out of the viewport. */
+  let mountedStartIndex = $derived.by(() => {
+    if (hasController) return 0
+    if (windowStartId) {
+      const anchorIndex = messages.findIndex((message) => message.id === windowStartId)
+      if (anchorIndex >= 0) return anchorIndex
+    }
+    const countStart = Math.max(0, messages.length - mountedCount)
+    const turnStart = latestTurnInfo.startIndex
+    if (turnStart < 0) {
+      // A fresh thread has an optimistic prompt before it has an assistant
+      // message, so it is not a complete turn yet. Keep that prompt mounted
+      // instead of treating it as history hidden behind the load button.
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index]
+        if (message?.role !== 'user' || isActivityOnlyUserMessage(message)) continue
+        return Math.min(countStart, index)
+      }
+      return countStart
+    }
+    const covered = promptPagesBefore(turnStart, 2)
+    return Math.min(countStart, covered === -1 ? 0 : covered)
+  })
+  /** The mounted window: everything from the reader's anchor (or the newest
+   *  `mountedCount` messages) to the live tail. The message store may hold
+   *  hundreds of merged pages, but only this window mounts — remounting a
+   *  whole multi-megabyte transcript on every thread switch was the
+   *  switch-back delay. History beyond the window mounts only when the
+   *  reader scrolls up (or jumps to it), never automatically. The window
+   *  always extends to the tail, so streaming trace entries render the
+   *  moment they land — never staged, never evicted from below the reader. */
+  let visibleMessages = $derived(hasController ? messages : messages.slice(mountedStartIndex))
 
   /** Auto-fill the mounted window up to HISTORY_WINDOW_SIZE after the first
    *  paint, one batch per frame. Batches mount above the viewport only, so
@@ -402,7 +434,7 @@
   let userMessageHistoryLoaded = false
   let userMessageHistoryLoading: Promise<void> | null = null
   let hasOlderMessages = $derived(
-    controller?.hasOlder ?? (olderMessagesAvailable || mountedCount < messages.length)
+    controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
   let userMessageTexts = $derived(
     messages
@@ -514,9 +546,10 @@
 
   let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
   let pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
-  /** Staged (intent-only) Independent Audit toggle: like the Toolbox, toggles
-   *  are intent until send. `null` means nothing is staged; `true`/`false` is
-   *  the staged switch position. Committed when the user sends a message. */
+  /** Staged (intent-only) Independent Audit toggle: turning the switch on
+   *  stages the choice and docks the audit coordinator immediately. `null`
+   *  means nothing is staged; `true`/`false` is the staged switch position.
+   *  Clicking "Run audit" in the coordinator is what commits it durably. */
   let pendingIndependentAudit = $state<boolean | null>(null)
   let lifecycleCancelModalOpen = $state(false)
   /** True while the Engineering lifecycle retry from the failure card is running. */
@@ -883,6 +916,33 @@
       visibleProviderStatus.issue === proactiveAuthIssue
   )
   const providerName = $derived(harnessDisplayName(settings.harnessId))
+  const providerIssueRateLimits = $derived.by(() => {
+    const issue = visibleProviderStatus?.issue
+    if (!issue) return []
+    const limit = rateLimitWindowFromProviderIssue(issue)
+    return limit ? [limit] : []
+  })
+  function mergeRateLimitWindows(
+    reported: readonly AgentRateLimitWindow[],
+    authoritative: readonly AgentRateLimitWindow[]
+  ): AgentRateLimitWindow[] {
+    const merged = [...reported]
+    for (const incoming of authoritative) {
+      const match = merged.findIndex(
+        (candidate) =>
+          (incoming.windowMinutes !== undefined &&
+            candidate.windowMinutes === incoming.windowMinutes) ||
+          candidate.label.toLowerCase() === incoming.label.toLowerCase()
+      )
+      if (match === -1) {
+        merged.push(incoming)
+      } else {
+        const current = merged[match]
+        if (current) merged[match] = { ...current, ...incoming, id: current.id }
+      }
+    }
+    return merged
+  }
   /** Harness that actually produced the visible provider issue. When it differs
    *  from the thread's current harness (e.g. a Codex usage-limit card still on
    *  screen while the user already switched the thread to OpenCode), the badge
@@ -1292,6 +1352,7 @@
       contextUsed === undefined &&
       latestTokens === undefined &&
       latestRateLimits === undefined &&
+      providerIssueRateLimits.length === 0 &&
       latestCredits === undefined &&
       costUsd <= 0
     ) {
@@ -1306,7 +1367,7 @@
         : {}),
       costUsd,
       ...(latestTokens ? { tokens: latestTokens } : {}),
-      rateLimits: latestRateLimits ?? [],
+      rateLimits: mergeRateLimitWindows(latestRateLimits ?? [], providerIssueRateLimits),
       ...(latestCredits ? { credits: latestCredits } : {})
     }
   })
@@ -1446,6 +1507,20 @@
           costUsd: 0,
           rateLimits: usage.rateLimits,
           ...(usage.credits ? { credits: usage.credits } : {})
+        }
+      }
+    }
+    if (providerIssueRateLimits.length > 0 && visibleProviderStatus) {
+      const harnessId = visibleProviderStatus.issue.harnessId ?? settings.harnessId
+      const entry = byHarness[harnessId]
+      if (entry) {
+        entry.rateLimits = mergeRateLimitWindows(entry.rateLimits, providerIssueRateLimits)
+      } else {
+        byHarness[harnessId] = {
+          harnessId,
+          providerId: settings.providerId,
+          costUsd: 0,
+          rateLimits: providerIssueRateLimits
         }
       }
     }
@@ -2053,19 +2128,6 @@
         clearLifecycleIntent(thread.projectId, thread.id)
         await applyLifecycleSelection(staged)
       }
-      // A staged Independent Audit toggle commits exactly here: the send is
-      // the moment the mutual exclusion with Engineering becomes durable.
-      if (pendingIndependentAudit === true) {
-        try {
-          await invoke('thread:setIndependentAudit', thread.projectId, thread.id, true)
-          pendingIndependentAudit = null
-          clearIndependentAuditIntent(thread.projectId, thread.id)
-        } catch (error) {
-          // Keep the staged intent so the switch keeps showing the user's
-          // choice; the send itself is never blocked by the audit flag.
-          reportError(error, 'The independent audit could not be enabled.')
-        }
-      }
       await sendMessage(
         text,
         attachments,
@@ -2083,14 +2145,7 @@
   }
 
   function temporaryConversationContext(): string {
-    return messages
-      .map((message) => {
-        const text = messageText(message).trim()
-        return text ? `${message.role.toUpperCase()}: ${text}` : ''
-      })
-      .filter(Boolean)
-      .join('\n\n')
-      .slice(-80_000)
+    return temporaryChatContext(messages, messageText)
   }
 
   function openTemporarySelectionChat(mode: 'elaborate' | 'quick'): void {
@@ -2445,7 +2500,10 @@
   let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | 'audit' | null => {
     if (isAssignmentAuditorThread) return null
     if (assignment && assignment.status !== 'draft') return 'assignment'
-    if (independentAuditEnabled) return 'audit'
+    // A staged (not-yet-run) Independent Audit already docks its coordinator:
+    // the sidebar appears the moment the switch is turned on, and clicking
+    // "Run audit" there is what commits the choice durably.
+    if (independentAuditDisplayEnabled) return 'audit'
     if (achievementTriggered && spec) return 'achievement'
     if (plainEngineeringAuditAvailable && spec) return 'audit'
     return null
@@ -2485,6 +2543,22 @@
       contextSidebarState.openCoordinator(thread.projectId, thread.id, label)
     }
     return dispose
+  })
+
+  /** Turning the Independent Audit switch off undocks the coordinator AND
+   *  closes the sidebar shell that the switch opened. Tracked per thread so a
+   *  thread switch never closes another thread's coordinator tab. */
+  let independentCoordinatorThreadId = $state<string | null>(null)
+  $effect(() => {
+    const threadId = thread.id
+    if (independentAuditDisplayEnabled) {
+      independentCoordinatorThreadId = threadId
+      return
+    }
+    if (independentCoordinatorThreadId === threadId) {
+      independentCoordinatorThreadId = null
+      contextSidebarState.closeCoordinator(thread.projectId, threadId)
+    }
   })
 
   type AssignmentAuditDisplayState = Thread['auditState'] | 'failed'
@@ -2776,10 +2850,10 @@
     if (jumpLoading) return
     const cachedIndex = messages.findIndex((message) => message.id === id)
     if (cachedIndex >= 0) {
-      // The store holds the target but the mounted window may not — grow the
-      // window to cover it (plus context) before scrolling.
-      if (!hasController && mountedCount < messages.length - cachedIndex) {
-        mountedCount = Math.min(messages.length, messages.length - cachedIndex + 8)
+      // The store holds the target but the mounted window may not — move the
+      // anchor back to cover it (plus context) before scrolling.
+      if (!hasController && mountedStartIndex > cachedIndex) {
+        windowStartId = messages[Math.max(0, cachedIndex - 8)]?.id ?? null
         await tick()
       }
       document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -2799,7 +2873,9 @@
       const targetIndex = messages.findIndex((message) => message.id === id)
       if (targetIndex >= 0) {
         olderMessagesAvailable = page.hasOlder
-        mountedCount = Math.max(mountedCount, messages.length - targetIndex + 8)
+        if (!hasController && mountedStartIndex > targetIndex) {
+          windowStartId = messages[Math.max(0, targetIndex - 8)]?.id ?? null
+        }
         await tick()
         document
           .getElementById(`msg-${id}`)
@@ -2839,7 +2915,9 @@
         const targetIndex = messages.findIndex((message) => message.id === messageId)
         if (targetIndex < 0) return
         olderMessagesAvailable = page.hasOlder
-        mountedCount = Math.max(mountedCount, messages.length - targetIndex + 8)
+        if (!hasController && mountedStartIndex > targetIndex) {
+          windowStartId = messages[Math.max(0, targetIndex - 8)]?.id ?? null
+        }
         await tick()
         if (page.hasNewer) {
           const newest = page.messages[page.messages.length - 1]
@@ -3082,7 +3160,18 @@
 
   function onScroll(): void {
     if (!scrollEl) return
-    userScrolledAway = !isAtBottom(scrollEl)
+    const away = !isAtBottom(scrollEl)
+    // Pin the window to what the reader is reading the moment they leave the
+    // tail, and release it back to the tail-relative window when they return.
+    // While pinned, a streaming turn grows the window instead of sliding it —
+    // the message and trace under the reader can never be unmounted by new
+    // entries arriving at the tail.
+    if (away && !userScrolledAway) {
+      windowStartId = visibleMessages[0]?.id ?? null
+    } else if (!away && userScrolledAway) {
+      windowStartId = null
+    }
+    userScrolledAway = away
     // Self-heal: the mounted window must never sit at zero while the store
     // holds messages — a windowed view that collapsed to nothing would leave
     // the reader staring at a blank transcript.
@@ -3094,17 +3183,9 @@
       awayFromBottom: userScrolledAway
     })
     scheduleResponseBubbleUpdate()
-    if (nearHistoryEdge(scrollEl)) void loadOlderMessages()
-  }
-
-  /** Whether the viewport is close enough to the loaded-history boundary that
-   *  an older page should already be streaming in. Scales with the transcript:
-   *  a fixed pixel threshold only triggers once the user has exhausted every
-   *  row in the current batch, so keep up to ~a quarter of the transcript (max
-   *  2400px) buffered ahead of them. */
-  function nearHistoryEdge(el: HTMLDivElement): boolean {
-    const trigger = Math.max(HISTORY_PRELOAD_THRESHOLD, Math.min(el.scrollHeight * 0.25, 2400))
-    return el.scrollTop <= trigger
+    // History is button-driven by design: scrolling to the top of the
+    // conversation never auto-loads older pages. The "Load earlier messages"
+    // button is the only trigger for the conversation-level history fetch.
   }
 
   /** Release the tail-follow lock synchronously when the user starts scrolling up. */
@@ -3114,53 +3195,56 @@
 
   let loadingOlderMessages = $state(false)
 
+  /** Walk back `pages` user-prompt page starts from `fromIndex`. Returns the
+   *  index of the prompt that begins the `pages`-th older page, or -1 when
+   *  the store does not hold that many complete pages. Every prompt found in
+   *  the store defines a complete page: the store is contiguous, and a
+   *  prompt is by definition the first message of its turn. */
+  function promptPagesBefore(fromIndex: number, pages: number): number {
+    let cursor = fromIndex
+    for (let page = 0; page < pages; page++) {
+      let found = -1
+      for (let i = cursor - 1; i >= 0; i--) {
+        const message = messages[i]
+        if (!message) return -1
+        if (message.role !== 'user') continue
+        if (isActivityOnlyUserMessage(message)) continue
+        found = i
+        break
+      }
+      if (found === -1) return -1
+      cursor = found
+    }
+    return cursor
+  }
+
   async function loadOlderMessages(): Promise<void> {
     if (!scrollEl || loadingOlderMessages || !hasOlderMessages) return
     if (controller) {
       await controller.loadOlder()
       return
     }
-    // The store may already hold history the mounted window excludes (pages
-    // merged on an earlier visit). Expanding the window from memory needs no
-    // IPC and no re-parse — grow it and keep the reader's viewport fixed.
-    if (mountedCount < messages.length) {
-      const el = scrollEl
-      const previousHeight = el.scrollHeight
-      const previousTop = el.scrollTop
-      mountedCount = Math.min(messages.length, mountedCount + MOUNTED_EXPAND_BATCH)
-      await tick()
-      const after = scrollEl
-      if (after) {
-        after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
-        threadScrollPositions.set(thread.id, {
-          top: after.scrollTop,
-          awayFromBottom: userScrolledAway
-        })
-      }
-      // Real history may still sit beyond the store — fall through to the IPC
-      // path only when the expanded window's edge is still within reach.
-      if (!olderMessagesAvailable || !after || !nearHistoryEdge(after)) return
-    }
     loadingOlderMessages = true
     // Loading history is an explicit request to inspect the past.
     userScrolledAway = true
+    // Pin the window before anything prepends — with an anchor pinned, the
+    // mounted content cannot change no matter what merges behind it, so the
+    // fetch loop needs no scroll compensation at all.
+    windowStartId ??= messages[Math.max(0, messages.length - mountedCount)]?.id ?? null
     try {
-      // Backfill ahead of the reader: keep fetching bounded batches until
-      // roughly two viewports of transcript sit above the fold, so scrolling
-      // up never lands on the boundary of the currently loaded batch.
-      for (let pageCount = 0; pageCount < 6; pageCount++) {
+      // One click loads THREE pages: the store usually already holds some of
+      // them, so fetch only while it does not — each fetch is a bounded
+      // 40-message page and turns that span more than one page keep it
+      // fetching until all three page starts exist in the store.
+      for (let attempt = 0; attempt < 30; attempt++) {
+        if (promptPagesBefore(mountedStartIndex, 3) !== -1) break
         const el = scrollEl
         if (!el || !olderMessagesAvailable) break
-        const stillNearEdge =
-          nearHistoryEdge(el) || el.scrollHeight < el.clientHeight * 2 + el.scrollTop
-        if (pageCount > 0 && !stillNearEdge) break
         const oldest = messages[0]
         if (!oldest) {
           olderMessagesAvailable = false
           break
         }
-        const previousHeight = el.scrollHeight
-        const previousTop = el.scrollTop
         const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
         const page = await invoke(
           'thread:loadMessages',
@@ -3171,11 +3255,27 @@
         )
         if (!alive) return
         olderMessagesAvailable = page.hasOlder
-        if (page.messages.length === 0) break
+        if (page.messages.length === 0) {
+          olderMessagesAvailable = false
+          break
+        }
         threadMessages.mergePage(thread.projectId, thread.id, page.messages)
-        // The page prepended — grow the window by the same amount so the
-        // messages the reader was looking at stay mounted above the new page.
         mountedCount += page.messages.length
+        await tick()
+      }
+      // Move the anchor back three pages — or to the thread's very beginning
+      // when fewer complete pages exist — then keep the reader's viewport
+      // stable across the mount.
+      const el = scrollEl
+      const previousHeight = el?.scrollHeight ?? 0
+      const previousTop = el?.scrollTop ?? 0
+      const walked = promptPagesBefore(mountedStartIndex, 3)
+      const target = walked === -1 ? 0 : walked
+      if (target < mountedStartIndex) {
+        windowStartId = messages[target]?.id ?? null
+        // Keep the tail-relative count in sync so releasing the anchor at
+        // the bottom never shrinks the window below what is mounted.
+        mountedCount = Math.max(mountedCount, messages.length - target)
         await tick()
         const after = scrollEl
         if (after) {
@@ -3188,7 +3288,7 @@
       }
     } catch {
       // A transient page failure leaves the current window intact; the next
-      // scroll or button press can retry from the same cursor.
+      // button press can retry from the same cursor.
     } finally {
       loadingOlderMessages = false
     }
@@ -3248,6 +3348,7 @@
     // lock synchronously and re-anchoring a tick later keeps the tail engaged
     // even if the bottom grew between the click and this snap's scroll event.
     userScrolledAway = false
+    windowStartId = null
     scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
     void tick().then(() => {
       if (!scrollEl || userScrolledAway) return
@@ -7408,7 +7509,9 @@
   }
 
   /** Run an independent (spec-less) audit from the audit coordinator. The
-   *  report joins the thread's existing report versions in Spec Studio. */
+   *  report joins the thread's existing report versions in Spec Studio.
+   *  Clicking "Run audit" is the commit: the staged switch becomes durable
+   *  here, which is what locks Engineering out for the thread's lifetime. */
   async function generateIndependentAudit(selected: ThreadSettings): Promise<void> {
     auditBusy = true
     auditError = ''
@@ -7418,6 +7521,11 @@
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
     )
     try {
+      if (!independentAuditEnabled) {
+        await invoke('thread:setIndependentAudit', thread.projectId, thread.id, true)
+        pendingIndependentAudit = null
+        clearIndependentAuditIntent(thread.projectId, thread.id)
+      }
       durableAuditThread = await invoke(
         'agent:ensureIndependentAuditorThread',
         thread.projectId,
@@ -7448,11 +7556,11 @@
 
   /** Toggle the independent audit. Enabling is permanent once the first run
    *  starts, and excludes engineering modes for this thread's lifetime. */
-  /** Toggle the Independent Audit. Like the Toolbox, toggles are intent:
-   *  turning it on stages the choice (the Engineering Toolbox disappears;
-   *  turning it off brings it back) and sending a message commits it. A
-   *  committed audit that has not started its first run can still be turned
-   *  off, which brings the Toolbox back. */
+  /** Toggle the Independent Audit. Turning it on stages the choice: the
+   *  Engineering Toolbox disappears and the audit coordinator docks into the
+   *  sidebar right away. Turning it off discards the staging (or disables a
+   *  committed audit that has not started its first run), which brings the
+   *  Toolbox back. Clicking "Run audit" in the coordinator commits. */
   async function toggleIndependentAudit(enabled: boolean): Promise<void> {
     if (independentAuditInitialized) return
     if (enabled) {
@@ -11310,7 +11418,7 @@
                     engineeringLifecycle={pendingLifecycleDisplay}
                     engineeringActive={engineeringOn}
                     onEngineeringLifecycleSelect={selectEngineeringLifecycle}
-                    independentAuditAvailable={independentAuditAvailable}
+                    {independentAuditAvailable}
                     independentAuditEnabled={independentAuditDisplayEnabled}
                     onIndependentAuditToggle={toggleIndependentAudit}
                     engineeringToolboxHidden={independentAuditDisplayEnabled}
@@ -11533,7 +11641,7 @@
 {/snippet}
 
 {#snippet auditCoordinatorPanel()}
-  {#if independentAuditEnabled}
+  {#if independentAuditDisplayEnabled}
     <IndependentAuditCoordinatorPanel
       running={independentAuditRunning}
       auditThread={durableAuditThread}

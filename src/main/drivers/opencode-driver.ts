@@ -65,23 +65,18 @@ import { buildTitlePrompt, HEARTBEAT_PROMPT, sanitizeGeneratedTitle } from '../c
 import { buildRankingGradePrompt, parseRankingGrade } from '../chat/turn-grader-prompt'
 import { leanAgentConfigMap } from '../opencode/opencode-agent-definitions'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
+import {
+  mapOpenCodeAccountUsage,
+  OPENCODE_ACCOUNT_PROVIDER_IDS,
+  OPENCODE_ACCOUNT_USAGE_ENDPOINT
+} from './opencode-provider-usage'
+
+export { mapOpenCodeAccountUsage } from './opencode-provider-usage'
 
 /** Time allowed for an opencode server to announce its port before giving up. */
 const SERVER_START_TIMEOUT_MS = 25000
 const MODEL_DISCOVERY_TIMEOUT_MS = 20_000
 const ACCOUNT_USAGE_TIMEOUT_MS = 10_000
-const ACCOUNT_USAGE_ENDPOINT = 'https://opencode.ai/zen/go/v1/usage'
-const OPENCODE_ACCOUNT_PROVIDER_IDS = ['opencode-go', 'opencode'] as const
-const OPENCODE_USAGE_WINDOWS: ReadonlyArray<{
-  id: string
-  key: string
-  label: string
-  windowMinutes?: number
-}> = [
-  { id: 'rolling', key: 'rolling', label: '5-hour limit', windowMinutes: 300 },
-  { id: 'weekly', key: 'weekly', label: 'Weekly limit', windowMinutes: 10_080 },
-  { id: 'monthly', key: 'monthly', label: 'Monthly limit' }
-]
 
 /** Reasoning-effort variants offered for custom reasoning models. */
 const STANDARD_THINKING_VARIANTS: ReadonlyArray<{ id: string; label: string }> = [
@@ -130,11 +125,6 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-function timestampValue(value: unknown): number | undefined {
-  const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN
-  return Number.isFinite(parsed) ? parsed : undefined
-}
-
 function apiKeyFromOpenCodeAuth(value: unknown): string | undefined {
   const auth = recordValue(value)
   if (!auth) return undefined
@@ -144,32 +134,6 @@ function apiKeyFromOpenCodeAuth(value: unknown): string | undefined {
     if (key) return key
   }
   return undefined
-}
-
-/** Normalize OpenCode Go's account-wide quota windows for the battery popover. */
-export function mapOpenCodeAccountUsage(value: unknown): AgentRateLimitWindow[] {
-  const usage = recordValue(recordValue(value)?.['usage'])
-  if (!usage) return []
-  return OPENCODE_USAGE_WINDOWS.flatMap((definition) => {
-    const window = recordValue(usage[definition.key])
-    if (!window) return []
-    const percent = numberValue(window['percent'])
-    const resetsAt = timestampValue(window['resetsAt'])
-    if (percent === undefined && resetsAt === undefined) return []
-    const status = stringValue(window['status'])
-    return [
-      {
-        id: `opencode-go:${definition.id}`,
-        label: definition.label,
-        ...(status ? { status } : {}),
-        ...(percent === undefined ? {} : { usedPercent: Math.max(0, Math.min(100, percent)) }),
-        ...(resetsAt === undefined ? {} : { resetsAt }),
-        ...(definition.windowMinutes === undefined
-          ? {}
-          : { windowMinutes: definition.windowMinutes })
-      }
-    ]
-  })
 }
 
 function openCodeAuthPaths(environment: NodeJS.ProcessEnv): string[] {
@@ -2060,7 +2024,7 @@ export class OpenCodeDriver implements HarnessDriver {
     try {
       const apiKey = await this.readOpenCodeApiKey()
       if (!apiKey) return null
-      const response = await fetch(ACCOUNT_USAGE_ENDPOINT, {
+      const response = await fetch(OPENCODE_ACCOUNT_USAGE_ENDPOINT, {
         headers: { Authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(ACCOUNT_USAGE_TIMEOUT_MS)
       })

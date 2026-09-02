@@ -3,6 +3,11 @@ import { join } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import type { AgentRateLimitWindow, AgentUsageCredits } from '../../lib/types'
 import { Logger } from '../system/logger'
+import {
+  mapOpenCodeAccountUsage,
+  OPENCODE_ACCOUNT_PROVIDER_IDS,
+  OPENCODE_ACCOUNT_USAGE_ENDPOINT
+} from './opencode-provider-usage'
 
 /**
  * On-demand prepaid-credit balances for pi's gateway providers. Pi stores
@@ -95,6 +100,9 @@ export async function fetchPiProviderUsage(
       if (balance !== undefined) {
         credits = { hasCredits: true, balance }
       }
+    } else if (OPENCODE_ACCOUNT_PROVIDER_IDS.some((candidate) => candidate === providerId)) {
+      const body = await fetchJson(OPENCODE_ACCOUNT_USAGE_ENDPOINT, credential)
+      rateLimits.push(...mapOpenCodeAccountUsage(body))
     } else if (providerId === 'openrouter') {
       const body = await fetchJson('https://openrouter.ai/api/v1/key', credential)
       const data =

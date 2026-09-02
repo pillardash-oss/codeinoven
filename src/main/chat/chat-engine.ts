@@ -385,7 +385,7 @@ const AUDIT_REPORT_JSON_CONTRACT =
  *  can embed it. */
 export const CITATION_SYSTEM_INSTRUCTION = [
   'Cite the source of every factual claim you report.',
-  'Cite local files with their project-rooted relative path (e.g. `src/app.html`), never a bare filename such as `app.html` and never a full absolute filesystem path — the relative form renders as a clickable citation the user can open.',
+  'Cite local files with their project-rooted relative path, never a bare filename such as `app.html` and never a full absolute filesystem path. State the path plainly — do NOT wrap it in backticks or code formatting, because backticked paths render as read-only code instead of a clickable citation the user can open. Do not construct a link yourself; state the path and, when possible, the line number, and the application handles the rest.',
   'Cite external references as Markdown links, e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`, never as bare text such as "pr issue #155".',
   'Never cite a source you did not inspect or retrieve; when a claim cannot be verified, state that limitation instead of padding the report with references.'
 ].join(' ')
@@ -2787,6 +2787,7 @@ export class ChatEngine {
   async listQuestions(projectId: string, threadId: string): Promise<PendingAgentQuestionRequest[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.sessionId) return []
     // Pending provider questions belong to the thread's bound session, which
@@ -3303,6 +3304,7 @@ export class ChatEngine {
    */
   async refreshAccountUsage(projectId: string, threadId: string): Promise<AgentAccountUsage[]> {
     const projectIdSafe = validateEntityId(projectId, 'Project ID')
+    await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectIdSafe, threadId)
     if (!thread) return []
     const usageRows = this.threadManager.harnessUsageFor(projectIdSafe, threadId)
@@ -3885,6 +3887,12 @@ export class ChatEngine {
   ): Promise<AgentContextCapabilities> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    // A thread created optimistically may still be finalizing its DB row; wait
+    // for persistence before querying it, mirroring ensureSession/sendMessage.
+    await this.threadCreation?.awaitReady(threadId)
+    if (this.threadCreation?.didFinalizationFail(threadId)) {
+      throw new Error(`Thread not found: ${threadId} (its creation did not complete)`)
+    }
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
     const harnessId = thread.settings?.harnessId ?? DEFAULT_HARNESS
@@ -4283,6 +4291,7 @@ export class ChatEngine {
   async loadMessages(projectId: string, threadId: string): Promise<AgentMessage[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return []
     if (!thread.sessionId) {
@@ -4651,6 +4660,7 @@ export class ChatEngine {
   async listArtifacts(projectId: string, threadId: string): Promise<AgentArtifact[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return []
     const messages = await this.loadMessages(projectId, threadId)
@@ -5220,6 +5230,7 @@ export class ChatEngine {
   async getSessionStatus(projectId: string, threadId: string): Promise<AgentSessionStatus | null> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return null
     if (!thread.sessionId) {
@@ -6728,6 +6739,15 @@ export class ChatEngine {
       parentTurnId: messageId
     }
     const utilitySetupRequested = origin === 'user' && isCioUtilityRequest(text)
+    // A web-only chat skips the app gateway only when the harness can search
+    // the web natively (claude-code, codex, cline, antigravity) or cannot host
+    // the gateway at all. Pi has NO native web tools — the gateway is its only
+    // path to web search/fetch — so it must receive the gateway or a
+    // File-System-OFF chat can reach neither the internet nor the file system.
+    const driverHasNativeWebSearch = (driver.capabilities.nativeUtilities ?? []).includes(
+      'web_search'
+    )
+    const driverCanPublishGateway = typeof driver.publishUtilityGatewayEndpoint === 'function'
     const utilityInstructionsPromise = this.prepareTurnUtilities(
       driver,
       projectId,
@@ -6736,8 +6756,10 @@ export class ChatEngine {
       projectPath,
       settings,
       utilityBudgetContext,
-      // Web-only chat deliberately has no app gateway.
-      isChatThread && !chatFileSystemEnabled && !utilitySetupRequested,
+      isChatThread &&
+        !chatFileSystemEnabled &&
+        !utilitySetupRequested &&
+        (driverHasNativeWebSearch || !driverCanPublishGateway),
       // OpenCode sessions use the shared project server. The app gateway is
       // session-scoped by its capability token, so utilities do not justify a
       // second `opencode serve` process or listening port for any normal turn.
@@ -9686,6 +9708,12 @@ export class ChatEngine {
   async listCommands(projectId: string, threadId: string): Promise<ScopedHarnessCommand[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    // A thread created optimistically may still be finalizing its DB row; wait
+    // for persistence before querying it, mirroring ensureSession/sendMessage.
+    await this.threadCreation?.awaitReady(threadId)
+    if (this.threadCreation?.didFinalizationFail(threadId)) {
+      throw new Error(`Thread not found: ${threadId} (its creation did not complete)`)
+    }
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
     const driverId = thread.settings?.harnessId ?? DEFAULT_HARNESS
@@ -22003,10 +22031,13 @@ export function formatHistoryRecap(
     latestCompactionIndex === -1 ? messages : messages.slice(latestCompactionIndex)
   const transcript = formatConversationTranscript(relevantMessages, { includeHidden: true })
   if (!transcript) return ''
-  const budgetedTranscript =
-    options.maxInputTokens === undefined
-      ? transcript.slice(-24_000)
-      : truncateToTokenBudget(transcript, options.maxInputTokens)
+  // Character-bound callers (temporary chats) still get a generous token
+  // budget — 50k keeps most of a long coding thread intact instead of the
+  // tail-only slice that starved temporary chats of anchor context.
+  const budgetedTranscript = truncateToTokenBudget(
+    transcript,
+    options.maxInputTokens ?? 50_000
+  )
   return [
     'This thread continues an earlier conversation. Transcript restored from history:',
     budgetedTranscript,

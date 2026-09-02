@@ -1171,6 +1171,16 @@ class ContextSidebarState {
     return context?.tabs.some((tab) => tab.kind === 'coordinator') ?? false
   }
 
+  /** Close the coordinator tab for a thread whose coordination ended — e.g.
+   *  the Independent Audit switch was turned off before its first run. The
+   *  whole sidebar shell closes with the tab, not just the panel. */
+  closeCoordinator(projectId: string, threadId: string): void {
+    const context = this.contexts[contextKey(projectId, threadId)]
+    const tab = context?.tabs.find((candidate) => candidate.kind === 'coordinator')
+    if (!tab) return
+    this.close(tab.id)
+  }
+
   openMemory(projectId: string, threadId: string, section?: MemorySection): void {
     const context = this.ensureProjectContext(projectId)
     const id = `memory:${projectId}`

@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { mkdir, readFile, readdir, rm, unlink, writeFile } from 'fs/promises'
+import { chmod, mkdir, readFile, readdir, rm, unlink, writeFile } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
 import type {
@@ -13,7 +13,7 @@ import type {
   ThinkingPreset
 } from '../../lib/types'
 import { permissionPatterns } from '../../lib/agent-interactions'
-import { classifyProviderIssue } from '../../lib/provider-issue'
+import { classifyProviderIssue, parseUsageResetAt } from '../../lib/provider-issue'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -33,6 +33,7 @@ import type {
 import { PermissionPolicy, type PermissionRequest } from '../permissions/permission-policy'
 import { Logger } from '../system/logger'
 import { buildProcessEnvironment } from './cli-environment'
+import { attachmentTarget } from './attachment-reference'
 import { resolveHarnessRuntime, runHarnessCommand } from './harness-runtime'
 import { attachmentReferences } from './attachment-reference'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -429,6 +430,60 @@ interface ClineApprovalBridge {
   handled: Set<string>
 }
 
+const CLINE_WEB_ONLY_TOOL_NAMES = new Set(['question', 'webfetch', 'websearch', 'gemini_quota'])
+
+function isClineWebOnlyTurn(allowedTools: readonly string[] | undefined): boolean {
+  return (
+    allowedTools !== undefined &&
+    allowedTools.some((tool) => tool === 'webfetch' || tool === 'websearch') &&
+    allowedTools.every((tool) => CLINE_WEB_ONLY_TOOL_NAMES.has(tool))
+  )
+}
+
+function clineWebOnlyHook(allowedAttachmentPaths: readonly string[]): string {
+  return `#!/usr/bin/env node
+import { readFileSync } from 'node:fs'
+import { isAbsolute, resolve } from 'node:path'
+
+const allowedPaths = new Set(${JSON.stringify(allowedAttachmentPaths)}.map((path) => resolve(path)))
+const payload = JSON.parse(readFileSync(0, 'utf8'))
+const request = payload.preToolUse ?? {}
+const tool = request.tool ?? request.toolName ?? ''
+const parameters = request.parameters ?? {}
+
+function values(value) {
+  if (typeof value === 'string') return [value]
+  if (Array.isArray(value)) return value.flatMap(values)
+  if (!value || typeof value !== 'object') return []
+  return Object.entries(value).flatMap(([key, nested]) =>
+    ['path', 'filePath', 'file_path', 'paths', 'files', 'file_paths'].includes(key)
+      ? values(nested)
+      : []
+  )
+}
+
+const webTools = new Set(['fetch_web_content', 'web_search', 'websearch', 'webfetch'])
+const neutralTools = new Set(['ask_question', 'submit_and_exit'])
+let allowed = webTools.has(tool) || neutralTools.has(tool)
+if (tool === 'read_files') {
+  const paths = values(parameters)
+  allowed = paths.length > 0 && paths.every((path) => {
+    if (!isAbsolute(path)) return false
+    return allowedPaths.has(resolve(path))
+  })
+}
+
+process.stdout.write(JSON.stringify(
+  allowed
+    ? { cancel: false }
+    : {
+        cancel: true,
+        errorMessage: 'This inbox chat can use the web and read files explicitly attached by the user, but it cannot access other local files or run local commands.'
+      }
+))
+`
+}
+
 /** Map Cline's tool names onto the app's provider-neutral permission names. */
 function clineToolPermission(toolName: string): string {
   const normalized = toolName.toLowerCase()
@@ -589,6 +644,7 @@ function mapCurrentClineRecord(
     const error = stringValue(entry['message']) ?? stringValue(entry['error'])
     if (!error) return null
     const kind = classifyProviderIssue(error)
+    const retryAt = kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(error) : undefined
     return {
       events: [
         {
@@ -600,7 +656,8 @@ function mapCurrentClineRecord(
             message: error,
             rawError: error,
             harnessId: 'cline',
-            retryable: kind !== 'billing'
+            retryable: kind !== 'billing',
+            ...(retryAt === undefined ? {} : { retryAt })
           }
         }
       ]
@@ -900,6 +957,8 @@ export class ClineDriver extends PersistentCliDriver {
   private turnCounts = new Map<string, number>()
   /** Approval bridges keyed by CodeInOven session id; cleaned up on turn end. */
   private approvalBridges = new Map<string, ClineApprovalBridge>()
+  /** Web-only hook directories keyed by CodeInOven session id. */
+  private webOnlyHookDirectories = new Map<string, string>()
 
   constructor(
     storage: StorageEngine,
@@ -1119,11 +1178,17 @@ export class ClineDriver extends PersistentCliDriver {
     const thinking = CLINE_THINKING_LEVELS[options.settings.thinkingLevel]
     if (thinking) args.push('--thinking', thinking)
 
-    if (options.settings.permissionLevel === 'full_access') {
+    const webOnlyTurn = isClineWebOnlyTurn(options.allowedTools)
+    const webOnlyHookDirectory = webOnlyTurn
+      ? await this.prepareWebOnlyHook(session.id, options)
+      : undefined
+
+    if (options.settings.permissionLevel === 'full_access' || webOnlyTurn) {
       args.push('--auto-approve', 'true')
     } else {
       args.push('--auto-approve', 'false')
     }
+    if (webOnlyHookDirectory) args.push('--hooks-dir', webOnlyHookDirectory)
 
     args.push('-c', projectPath)
 
@@ -1147,7 +1212,7 @@ export class ClineDriver extends PersistentCliDriver {
     env['CLINE_SESSION_BACKEND_MODE'] = 'local'
 
     let onProcessExit: (() => void) | undefined
-    if (options.settings.permissionLevel !== 'full_access') {
+    if (options.settings.permissionLevel !== 'full_access' && !webOnlyTurn) {
       const bridge = await this.startApprovalBridge(
         session.id,
         projectPath,
@@ -1156,6 +1221,8 @@ export class ClineDriver extends PersistentCliDriver {
       env['CLINE_TOOL_APPROVAL_MODE'] = 'desktop'
       env['CLINE_TOOL_APPROVAL_DIR'] = bridge.directory
       onProcessExit = () => this.stopApprovalBridge(session.id)
+    } else if (webOnlyHookDirectory) {
+      onProcessExit = () => this.stopWebOnlyHook(session.id)
     }
 
     return {
@@ -1165,6 +1232,33 @@ export class ClineDriver extends PersistentCliDriver {
       parseStderrJson: true,
       ...(onProcessExit ? { onProcessExit } : {})
     }
+  }
+
+  private async prepareWebOnlyHook(sessionId: string, options: SendPromptOptions): Promise<string> {
+    const safeSessionId = sessionId.replace(/[^a-zA-Z0-9._-]+/gu, '_')
+    const relativeDirectory = `drivers/cline/hooks/${safeSessionId}`
+    const relativeHookPath = `${relativeDirectory}/PreToolUse`
+    const attachmentPaths = (
+      await Promise.all(
+        options.attachments.map(async (attachment) => {
+          const target = await attachmentTarget(attachment)
+          return /^(?:data:|https?:\/\/)/u.test(target) ? null : target
+        })
+      )
+    ).filter((path): path is string => path !== null)
+    await this.storage.writeRaw(relativeHookPath, clineWebOnlyHook(attachmentPaths))
+    const hookPath = this.storage.resolve(relativeHookPath)
+    await chmod(hookPath, 0o700)
+    const directory = this.storage.resolve(relativeDirectory)
+    this.webOnlyHookDirectories.set(sessionId, directory)
+    return directory
+  }
+
+  private stopWebOnlyHook(sessionId: string): void {
+    const directory = this.webOnlyHookDirectories.get(sessionId)
+    if (!directory) return
+    this.webOnlyHookDirectories.delete(sessionId)
+    void rm(directory, { recursive: true, force: true }).catch(() => undefined)
   }
 
   private async startApprovalBridge(
@@ -1321,12 +1415,16 @@ export class ClineDriver extends PersistentCliDriver {
 
   override async deleteSession(projectPath: string, sessionId: string): Promise<void> {
     this.stopApprovalBridge(sessionId)
+    this.stopWebOnlyHook(sessionId)
     await super.deleteSession(projectPath, sessionId)
   }
 
   override dispose(): void {
     for (const sessionId of [...this.approvalBridges.keys()]) {
       this.stopApprovalBridge(sessionId)
+    }
+    for (const sessionId of [...this.webOnlyHookDirectories.keys()]) {
+      this.stopWebOnlyHook(sessionId)
     }
     this.turnStates.clear()
     this.turnCounts.clear()

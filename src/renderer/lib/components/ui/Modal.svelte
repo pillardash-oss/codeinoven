@@ -1,6 +1,6 @@
 <script lang="ts">
   import { X } from '@lucide/svelte'
-  import { Portal } from 'bits-ui'
+  import { Dialog } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -83,59 +83,48 @@
     return () => contextSidebarState.setFullscreenSurfaceActive(suppressionKey, false)
   })
 
-  function setupModal(panel: HTMLElement): () => void {
-    const unregisterOverlayClose = registerOverlayClose(() => onClose())
-    const animationFrame = requestAnimationFrame(() => {
-      const inputField = firstFocusable(panel, INPUT_FIELD_SELECTOR)
-      const defaultAction = primaryAction(panel)
+  let panelEl = $state<HTMLElement | null>(null)
 
-      ;(inputField ?? defaultAction)?.focus({ preventScroll: true })
-    })
+  $effect(() => {
+    if (!open) return
+    return registerOverlayClose(() => onClose())
+  })
 
-    return () => {
-      cancelAnimationFrame(animationFrame)
-      unregisterOverlayClose()
-    }
+  function focusInitialElement(event: Event) {
+    // Own the initial focus (input field, else the primary action) instead
+    // of bits-ui's default of focusing the panel itself.
+    event.preventDefault()
+    if (!panelEl) return
+    const inputField = firstFocusable(panelEl, INPUT_FIELD_SELECTOR)
+    const defaultAction = primaryAction(panelEl)
+    ;(inputField ?? defaultAction)?.focus({ preventScroll: true })
   }
 </script>
 
-<svelte:window
-  onkeydown={(e: KeyboardEvent) => {
-    if (!open) return
-    if (e.key === 'Escape') onClose()
-  }}
-/>
-
-{#if open}
-  <!-- Rendered through a portal so the overlay escapes ancestor stacking
-       contexts (e.g. the app header's z-40) and always paints above the
-       underlying view. -->
-  <Portal>
-    <div class="fixed inset-0 z-60 flex items-center justify-center">
-      <!-- Backdrop — 13% opacity so the workspace stays visible behind -->
-      <button
-        class="absolute inset-0 bg-overlay/70 backdrop-blur-[1px]"
-        aria-label="Close modal"
-        onclick={closeOnBackdrop ? onClose : undefined}
-      ></button>
-
-      <!-- Panel -->
-      <div
-        class="relative mx-6 flex max-h-[calc(100vh-3rem)] w-full flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {fill
+<Dialog.Root {open} onOpenChange={(next) => !next && onClose()}>
+  <Dialog.Portal>
+    <!-- 13% opacity so the workspace stays visible behind -->
+    <Dialog.Overlay class="fixed inset-0 z-60 bg-overlay/70 backdrop-blur-[1px]" />
+    <div class="pointer-events-none fixed inset-0 z-60 flex items-center justify-center">
+      <Dialog.Content
+        bind:ref={panelEl}
+        onOpenAutoFocus={focusInitialElement}
+        onInteractOutside={(event) => {
+          if (!closeOnBackdrop) event.preventDefault()
+        }}
+        class="pointer-events-auto relative mx-6 flex max-h-[calc(100vh-3rem)] w-full flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {fill
           ? 'h-[calc(100vh-3rem)]'
           : ''} {widths[size]}"
-        {@attach setupModal}
       >
         <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
-          <h2 class="text-base font-semibold">{title}</h2>
-          <button
+          <Dialog.Title class="text-base font-semibold">{title}</Dialog.Title>
+          <Dialog.Close
             class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
             aria-label="Close"
             title="Close"
-            onclick={onClose}
           >
             <X size={16} />
-          </button>
+          </Dialog.Close>
         </div>
 
         <div class="min-h-0 flex-1 {contentClass}">
@@ -150,7 +139,7 @@
             {@render footer()}
           </div>
         {/if}
-      </div>
+      </Dialog.Content>
     </div>
-  </Portal>
-{/if}
+  </Dialog.Portal>
+</Dialog.Root>

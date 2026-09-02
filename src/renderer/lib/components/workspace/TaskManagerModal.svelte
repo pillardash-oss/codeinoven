@@ -287,6 +287,34 @@
     }
   }
 
+  /**
+   * Navigate to the project/thread that owns a process: focus its thread in the
+   * workspace and close the modal. Falls back to the first non-archived thread
+   * of the owning project, then creates a new thread if none exist. Processes
+   * with no owning project are not navigable.
+   */
+  async function navigateToProcess(process: TaskManagerProcess): Promise<void> {
+    if (!process.projectId) return
+    error = ''
+    try {
+      const target = await resolveTarget(process)
+      if (!target) {
+        error = `No project available to open ${process.pid}.`
+        return
+      }
+      const [thread, project] = await Promise.all([
+        invoke('thread:get', target.projectId, target.threadId),
+        invoke('project:get', target.projectId)
+      ])
+      if (thread && project) {
+        workspaceState.openThread(thread, project)
+      }
+      onClose()
+    } catch (navigateError) {
+      error = navigateError instanceof Error ? navigateError.message : 'Could not open the process.'
+    }
+  }
+
   /** Gracefully end every currently selected process. */
   async function endSelected(): Promise<void> {
     const targets = selectedProcesses
@@ -402,7 +430,7 @@
                   <SquareTerminal size={15} />
                 {/if}
               </span>
-              <div class="min-w-0 flex-1">
+              {#snippet processContent()}
                 <div class="flex items-center gap-2">
                   <p class="truncate text-sm font-semibold text-foreground">
                     {processName(process.command)}
@@ -457,7 +485,21 @@
                   </span>
                   <span class="shrink-0">{locationLabel(process)}</span>
                 </div>
-              </div>
+              {/snippet}
+              {#if process.projectId}
+                <button
+                  type="button"
+                  class="min-w-0 flex-1 cursor-pointer text-left"
+                  title={`Open ${processName(process.command)} in ${locationLabel(process)}`}
+                  onclick={() => void navigateToProcess(process)}
+                >
+                  {@render processContent()}
+                </button>
+              {:else}
+                <div class="min-w-0 flex-1">
+                  {@render processContent()}
+                </div>
+              {/if}
               <div class="flex shrink-0 items-center gap-1">
                 <button
                   type="button"

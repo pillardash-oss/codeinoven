@@ -224,6 +224,37 @@ export class PermissionPolicy {
       )
     }
 
+    // File-System-OFF chats only auto-approve reads confined to the attached
+    // files. Shell commands, writes, and reads elsewhere must ask — the agent
+    // must not reach the broader file system (or the shell) unprompted.
+    if (this.restrictToAllowed) {
+      const confinedRead =
+        commands.length === 0 &&
+        isSafeAutoPermission(permission) &&
+        paths.length > 0 &&
+        paths.every((path) => {
+          if (hasTraversal(path)) return false
+          const resolvedPath = isAbsolute(path) ? resolve(path) : resolve(this.projectRoot, path)
+          return this.isAllowedPath(resolvedPath)
+        })
+      if (!confinedRead) {
+        return this.createDecision(
+          'ask',
+          false,
+          'This chat is restricted to the files you attached; anything beyond that needs your approval.',
+          risk,
+          scope
+        )
+      }
+      return this.createDecision(
+        'auto_review',
+        true,
+        'Auto-approved: a read of a file the user attached to this chat.',
+        risk,
+        scope
+      )
+    }
+
     const pathReason = this.getAutoReviewPathReason(paths)
     if (pathReason) {
       return this.createDecision('ask', false, pathReason, risk, scope)

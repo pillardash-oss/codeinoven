@@ -1459,6 +1459,9 @@ export class PiDriver extends PersistentCliDriver {
    * or duplicated content.
    */
   private cioSystemPromptPaths = new Map<string, string>()
+  /** Storage-relative allowed-tools handoff file per session, rewritten per turn
+   *  so the extension's tool gate reflects the current File-System setting. */
+  private cioAllowedToolsPaths = new Map<string, string>()
   /** Session-keyed absolute paths to the materialized single "cio-core-tools"
    *  extension module (status + usage + gateway + core tools composed), passed
    *  to `--extension`. */
@@ -1821,6 +1824,9 @@ export class PiDriver extends PersistentCliDriver {
     if (options.systemPrompt) {
       await this.publishCioSystemPrompt(session.id, options.systemPrompt)
     }
+    // Publish every turn: an empty list clears a previous restriction, so a
+    // mid-session File-System toggle takes effect without a session restart.
+    await this.publishCioAllowedTools(session.id, options.allowedTools)
     const prompt = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
 
     try {
@@ -3060,20 +3066,24 @@ export class PiDriver extends PersistentCliDriver {
       const directory = join('runtime', 'cio-core-tools', sessionId)
       const handoffRelative = join(directory, 'gateway-handoff.json')
       const systemPromptRelative = join(directory, 'system-prompt.txt')
+      const allowedToolsRelative = join(directory, 'allowed-tools.json')
       const extensionRelative = join(directory, 'cio-core-tools.ts')
       // Empty endpoint values: the gateway tools surface a clear gateway-inactive
       // error until the first direct-gateway turn publishes the real { url, token }.
       await this.storage.writeRaw(handoffRelative, JSON.stringify({ url: '', token: '' }))
       await this.storage.writeRaw(systemPromptRelative, '')
+      await this.storage.writeRaw(allowedToolsRelative, '[]')
       await this.storage.writeRaw(
         extensionRelative,
         piCioCoreToolsExtension({
           gatewayHandoffPath: this.storage.resolve(handoffRelative),
-          systemPromptPath: this.storage.resolve(systemPromptRelative)
+          systemPromptPath: this.storage.resolve(systemPromptRelative),
+          allowedToolsPath: this.storage.resolve(allowedToolsRelative)
         })
       )
       this.gatewayHandoffPaths.set(sessionId, handoffRelative)
       this.cioSystemPromptPaths.set(sessionId, systemPromptRelative)
+      this.cioAllowedToolsPaths.set(sessionId, allowedToolsRelative)
       const extensionAbsolute = this.storage.resolve(extensionRelative)
       this.cioCoreToolsExtensionPaths.set(sessionId, extensionAbsolute)
       // Flush an endpoint that arrived before this materialization (first turn
@@ -3102,6 +3112,24 @@ export class PiDriver extends PersistentCliDriver {
       await this.storage.writeRaw(path, systemPrompt)
     } catch (error) {
       Logger.dev('Pi core-tools system-prompt handoff update failed:', error)
+    }
+  }
+
+  /** Rewrite the session's allowed-tools handoff file so the extension's tool
+   *  gate reflects the current permission scope (web-only chat vs. file
+   *  access). Undefined/empty publishes an unrestricted session. Never blocks
+   *  the turn when the extension was not materialized. */
+  private async publishCioAllowedTools(sessionId: string, allowedTools?: string[]): Promise<void> {
+    const path = this.cioAllowedToolsPaths.get(sessionId)
+    if (!path) return
+    try {
+      // Some allowlists are authored in OpenCode tool naming; map the aliases
+      // onto pi's built-in tool names so the gate matches intent.
+      const aliases: Record<string, string> = { glob: 'find', list: 'ls' }
+      const names = (allowedTools ?? []).map((tool) => aliases[tool] ?? tool)
+      await this.storage.writeRaw(path, JSON.stringify(names))
+    } catch (error) {
+      Logger.dev('Pi core-tools allowed-tools handoff update failed:', error)
     }
   }
 
