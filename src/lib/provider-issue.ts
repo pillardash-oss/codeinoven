@@ -123,10 +123,11 @@ export function parseUsageResetAt(message: string, now = Date.now()): number | u
   }
   // Some harnesses (e.g. opencode's usage-cap notice) report a relative
   // countdown instead of an absolute timestamp, e.g. "Resets in 1hr 53min"
-  // or "Resets in 2h 5m". Convert that into an absolute retryAt too, or this
-  // class of message is left with no reset time and can't schedule a resume.
+  // or "Resets in 2h 5m". Cline phrases the same countdown as "Try again in
+  // 13m". Convert either into an absolute retryAt, or this class of message
+  // is left with no reset time and can't schedule a resume.
   const relative =
-    /resets?\s+in\s+(?:(\d+)\s*d(?:ays?)?)?\s*(?:(\d+)\s*h(?:(?:ou)?rs?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?)?)?)?/iu.exec(
+    /(?:resets?|try again)\s+in\s+(?:(\d+)\s*d(?:ays?)?)?\s*(?:(\d+)\s*h(?:(?:ou)?rs?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?)?)?)?/iu.exec(
       message
     )
   if (relative && (relative[1] || relative[2] || relative[3])) {
