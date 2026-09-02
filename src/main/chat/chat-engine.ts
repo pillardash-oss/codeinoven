@@ -2787,6 +2787,7 @@ export class ChatEngine {
   async listQuestions(projectId: string, threadId: string): Promise<PendingAgentQuestionRequest[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.sessionId) return []
     // Pending provider questions belong to the thread's bound session, which
@@ -3303,6 +3304,7 @@ export class ChatEngine {
    */
   async refreshAccountUsage(projectId: string, threadId: string): Promise<AgentAccountUsage[]> {
     const projectIdSafe = validateEntityId(projectId, 'Project ID')
+    await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectIdSafe, threadId)
     if (!thread) return []
     const usageRows = this.threadManager.harnessUsageFor(projectIdSafe, threadId)
@@ -3885,6 +3887,12 @@ export class ChatEngine {
   ): Promise<AgentContextCapabilities> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    // A thread created optimistically may still be finalizing its DB row; wait
+    // for persistence before querying it, mirroring ensureSession/sendMessage.
+    await this.threadCreation?.awaitReady(threadId)
+    if (this.threadCreation?.didFinalizationFail(threadId)) {
+      throw new Error(`Thread not found: ${threadId} (its creation did not complete)`)
+    }
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
     const harnessId = thread.settings?.harnessId ?? DEFAULT_HARNESS
@@ -4283,6 +4291,7 @@ export class ChatEngine {
   async loadMessages(projectId: string, threadId: string): Promise<AgentMessage[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return []
     if (!thread.sessionId) {
@@ -4651,6 +4660,7 @@ export class ChatEngine {
   async listArtifacts(projectId: string, threadId: string): Promise<AgentArtifact[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return []
     const messages = await this.loadMessages(projectId, threadId)
@@ -5220,6 +5230,7 @@ export class ChatEngine {
   async getSessionStatus(projectId: string, threadId: string): Promise<AgentSessionStatus | null> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return null
     if (!thread.sessionId) {
@@ -9697,6 +9708,12 @@ export class ChatEngine {
   async listCommands(projectId: string, threadId: string): Promise<ScopedHarnessCommand[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    // A thread created optimistically may still be finalizing its DB row; wait
+    // for persistence before querying it, mirroring ensureSession/sendMessage.
+    await this.threadCreation?.awaitReady(threadId)
+    if (this.threadCreation?.didFinalizationFail(threadId)) {
+      throw new Error(`Thread not found: ${threadId} (its creation did not complete)`)
+    }
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
     const driverId = thread.settings?.harnessId ?? DEFAULT_HARNESS
