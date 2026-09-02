@@ -166,6 +166,20 @@
     await updateConfig({ agentDefaults: next })
   }
 
+  /** Whether two selections point at the same vision model. */
+  function sameModel(
+    a: AgentModelSelection | undefined,
+    b: AgentModelSelection | undefined
+  ): boolean {
+    return (
+      a !== undefined &&
+      b !== undefined &&
+      a.harnessId === b.harnessId &&
+      a.providerId === b.providerId &&
+      a.modelId === b.modelId
+    )
+  }
+
   async function selectImageDescriptorFallback(
     providerId: string,
     modelId: string,
@@ -372,6 +386,10 @@
         </p>
         {#if !defaults.imageDescriptorFallback}
           <p class="mt-1 text-[11px] text-dimmed">Not set · primary failures ask you for a model</p>
+        {:else if sameModel(defaults.imageDescriptor, defaults.imageDescriptorFallback)}
+          <p class="mt-1 text-[11px] text-danger">
+            Same model as the primary — it cannot act as a fallback.
+          </p>
         {/if}
       </div>
       <div class="flex w-60 shrink-0 items-center gap-1.5">
