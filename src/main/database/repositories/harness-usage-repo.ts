@@ -921,9 +921,7 @@ export class HarnessUsageRepo {
       // the IPC layer overlays them.
       modelRankings: [],
       gradingSpend: {
-        costUsd: 0,
-        knownCostUsd: 0,
-        estimatedCostUsd: 0
+        costUsd: 0
       },
       generatedAt: Date.now()
     }

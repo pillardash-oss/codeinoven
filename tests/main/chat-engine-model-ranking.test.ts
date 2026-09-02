@@ -230,8 +230,8 @@ describe('ChatEngine model-ranking pipeline', () => {
     expect(snapshotRow(db)).toBeUndefined()
   })
 
-  it('upgrades an open snapshot to multi_shot and closes it when the follow-up completes', async () => {
-    const engine = await makeEngine(makeFakeDriver([]))
+  it('upgrades an open snapshot to multi_shot and keeps the window open', async () => {
+    const engine = await makeEngine(makeFakeDriver([null]))
     const db = temporaryDatabases[0]
     seedProject(db, 'p1', 't1')
 
@@ -251,13 +251,15 @@ describe('ChatEngine model-ranking pipeline', () => {
     expect(row?.['shot_category']).toBe('multi_shot')
     expect(row?.['follow_up_text']).toBe('now add tests for it')
     expect(row?.['ended_at']).toBe(followUpEnded)
-    expect(row?.['closed_at_ms']).not.toBeNull()
-    // The upgrade is a plain classification update, never a failure marker.
+    // The window stays open: grading happens once, at close (deletion or
+    // inactivity), never mid-conversation.
+    expect(row?.['closed_at_ms']).toBeNull()
     expect(row?.['status']).toBe('pending')
+    expect(row?.['due_at_ms']).toBeGreaterThan(Date.now() + 23 * 3_600_000)
   })
 
-  it('starts a new first_shot window for a third substantive prompt', async () => {
-    const engine = await makeEngine(makeFakeDriver([]))
+  it('keeps later exchanges in the same multi_shot window with accumulated context', async () => {
+    const engine = await makeEngine(makeFakeDriver([null]))
     const db = temporaryDatabases[0]
     seedProject(db, 'p1', 't1')
 
@@ -271,18 +273,23 @@ describe('ChatEngine model-ranking pipeline', () => {
       userMessage('turn-3', 'now add tests', Date.now() - 45_000),
       assistantMessage('turn-4', 'Tests added.', Date.now() - 40_000)
     )
+    const thirdEnded = Date.now() - 30_000
     await capture(
       engine,
-      userMessage('turn-5', 'also update the changelog', Date.now() - 35_000),
-      assistantMessage('turn-6', 'Changelog updated.', Date.now() - 30_000)
+      userMessage('turn-5', 'also update the changelog', thirdEnded - 5_000),
+      assistantMessage('turn-6', 'Changelog updated.', thirdEnded)
     )
 
+    // One window per conversation: the third exchange never opens a new
+    // first_shot window, so one-shot statistics stay unpolluted.
     const rows = db.all('SELECT * FROM model_ranking_snapshots ORDER BY started_at') as Array<
       Record<string, unknown>
     >
-    expect(rows).toHaveLength(2)
+    expect(rows).toHaveLength(1)
     expect(rows[0]?.['shot_category']).toBe('multi_shot')
-    expect(rows[1]?.['shot_category']).toBe('first_shot')
+    expect(rows[0]?.['follow_up_text']).toBe('now add tests\n\nalso update the changelog')
+    expect(rows[0]?.['ended_at']).toBe(thirdEnded)
+    expect(rows[0]?.['closed_at_ms']).toBeNull()
   })
 
   it('closes open snapshots when their threads are deleted and grades them', async () => {

@@ -2209,9 +2209,9 @@ export interface LocalProfileAnalytics {
   dailyUsage: LocalProfileUsageDay[]
   /** Total model and utility consumption by local hour of day. */
   hourlyUsage: LocalProfileUsageHour[]
-  /** Harness/provider/model/thinking-level 0–10 ranking aggregates. */
+  /** Harness/provider/model/thinking-level 0–10 ranking aggregates (all-time, not period-scoped). */
   modelRankings: LocalProfileModelRanking[]
-  /** What the ranked sessions cost to gather in this period. */
+  /** All-time priced cost of every ranked session folded into the aggregates. */
   gradingSpend: LocalProfileGradingSpend
   generatedAt: number
 }
@@ -2293,11 +2293,9 @@ export interface LocalProfileModelRanking {
   updatedAt: number
 }
 
-/** What the ranked sessions cost to gather (scoped to a period). */
+/** All-time priced cost of the ranked sessions (aggregate is not period-scoped). */
 export interface LocalProfileGradingSpend {
   costUsd: number
-  knownCostUsd: number
-  estimatedCostUsd: number
 }
 
 /** Account identity plus the cloud-backed workstation profile data. */

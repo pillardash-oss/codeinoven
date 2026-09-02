@@ -72,7 +72,7 @@ describe('ModelRankingSnapshotRepo', () => {
     }
   })
 
-  it('upgrades an open snapshot to multi_shot and closes it for immediate grading', async () => {
+  it('upgrades an open snapshot to multi_shot without closing the window', async () => {
     const db = await seededDb('t1')
     try {
       const repo = new ModelRankingSnapshotRepo(db)
@@ -80,14 +80,55 @@ describe('ModelRankingSnapshotRepo', () => {
       const open = repo.openForThread('t1')
       expect(open?.shot_category).toBe('first_shot')
 
-      repo.upgradeToMultiShot(open?.id ?? '', 'still broken', 90_000)
+      repo.registerCompletedExchange(open?.id ?? '', 'still broken', 90_000, 90_000 + 24 * 3_600_000)
       const upgraded = snapshot(db, 't1')
       expect(upgraded?.shot_category).toBe('multi_shot')
       expect(upgraded?.follow_up_text).toBe('still broken')
       expect(upgraded?.ended_at).toBe(90_000)
-      expect(upgraded?.closed_at_ms).not.toBeNull()
-      // Once closed, no open snapshot remains for the thread.
-      expect(repo.openForThread('t1')).toBeNull()
+      // The window stays open: grading happens once, at close.
+      expect(upgraded?.closed_at_ms).toBeNull()
+      expect(upgraded?.status).toBe('pending')
+      expect(upgraded?.due_at_ms).toBe(90_000 + 24 * 3_600_000)
+      expect(repo.openForThread('t1')).not.toBeNull()
+    } finally {
+      destroyTestDb(db)
+    }
+  })
+
+  it('accumulates repeated follow-ups into the judge context', async () => {
+    const db = await seededDb('t1')
+    try {
+      const repo = new ModelRankingSnapshotRepo(db)
+      repo.insert(input('t1'))
+      const open = repo.openForThread('t1')
+      repo.registerCompletedExchange(open?.id ?? '', 'first follow-up', 90_000, 100_000)
+      repo.registerCompletedExchange(open?.id ?? '', 'second follow-up', 130_000, 140_000)
+
+      const row = snapshot(db, 't1')
+      expect(row?.shot_category).toBe('multi_shot')
+      expect(row?.follow_up_text).toBe('first follow-up\n\nsecond follow-up')
+      expect(row?.ended_at).toBe(130_000)
+      expect(row?.due_at_ms).toBe(140_000)
+    } finally {
+      destroyTestDb(db)
+    }
+  })
+
+  it('pulls a claimed (processing) snapshot back to pending when a follow-up lands', async () => {
+    const db = await seededDb('t1')
+    try {
+      const repo = new ModelRankingSnapshotRepo(db)
+      repo.insert(input('t1', { dueAtMs: 500 }))
+      const claimed = repo.claimDueBatch(1_000, 3)
+      expect(claimed[0]?.status).toBe('processing')
+
+      repo.registerCompletedExchange(claimed[0]?.id ?? '', 'late follow-up', 2_000, 2_000 + 86_400_000)
+      const row = snapshot(db, 't1')
+      expect(row?.status).toBe('pending')
+      expect(row?.follow_up_text).toBe('late follow-up')
+
+      // The in-flight drain can no longer score or delete the stale claim.
+      expect(repo.deleteScoredInTransaction(claimed[0]?.id ?? '', () => undefined)).toBe(false)
     } finally {
       destroyTestDb(db)
     }

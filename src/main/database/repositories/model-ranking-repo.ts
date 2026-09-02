@@ -28,8 +28,6 @@ export interface ModelRankingIncrement {
 
 interface GradingSpendRow {
   cost_usd: number
-  known_cost_usd: number
-  estimated_cost_usd: number
 }
 
 /**
@@ -122,20 +120,12 @@ export class ModelRankingRepo {
     )
   }
 
-  /** Total priced cost of every ranked session folded into the aggregate. */
+  /** All-time priced cost of every ranked session folded into the aggregate. */
   gradingSpend(): LocalProfileGradingSpend {
     const row = this.db.get<GradingSpendRow>(
-      `SELECT
-         COALESCE(SUM(one_shot_cost_usd + multi_shot_cost_usd), 0) AS cost_usd,
-         0 AS known_cost_usd,
-         0 AS estimated_cost_usd
-       FROM model_rankings`
+      'SELECT COALESCE(SUM(one_shot_cost_usd + multi_shot_cost_usd), 0) AS cost_usd FROM model_rankings'
     )
-    return {
-      costUsd: row?.cost_usd ?? 0,
-      knownCostUsd: row?.known_cost_usd ?? 0,
-      estimatedCostUsd: row?.estimated_cost_usd ?? 0
-    }
+    return { costUsd: row?.cost_usd ?? 0 }
   }
 
   /** IPC-shaped view of the aggregates; averages are always sum ÷ count. */

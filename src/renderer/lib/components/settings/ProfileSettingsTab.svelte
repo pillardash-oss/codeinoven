@@ -101,9 +101,7 @@
     modelRankings: [],
     responseDurationMs: 0,
     gradingSpend: {
-      costUsd: 0,
-      knownCostUsd: 0,
-      estimatedCostUsd: 0
+      costUsd: 0
     },
     generatedAt: 0
   }

@@ -1,3 +1,4 @@
+import { Logger } from '../../system/logger'
 import type { Database } from '../database'
 import type {
   ModelRankingSnapshotRow,
@@ -36,9 +37,13 @@ export interface OpenRankingSnapshotInput {
 export class ModelRankingSnapshotRepo {
   constructor(private db: Database) {}
 
-  /** Capture one open conversation window. Replays (same id) are no-ops. */
-  insertViaWorker(input: OpenRankingSnapshotInput): void {
-    void this.insertViaWorkerAsync(input)
+  /**
+   * Capture one open conversation window. Replays (same id) are no-ops.
+   * Resolves once the row is durably persisted (worker write, primary
+   * fallback), so callers can arm the drain timer against a settled queue.
+   */
+  async insertViaWorker(input: OpenRankingSnapshotInput): Promise<void> {
+    await this.insertViaWorkerAsync(input)
   }
 
   private async insertViaWorkerAsync(input: OpenRankingSnapshotInput): Promise<void> {
@@ -70,8 +75,7 @@ export class ModelRankingSnapshotRepo {
       ]
     )
     if (!result.ok) {
-      // The primary path is the offline-safe fallback and surfaces the error.
-      this.insert(input)
+      Logger.dev('Ranking snapshot insert failed on both worker and primary:', result.error)
     }
   }
 
@@ -104,7 +108,7 @@ export class ModelRankingSnapshotRepo {
     )
   }
 
-  /** The still-open snapshot for a thread (accepting follow-ups), or null. */
+  /** The still-open snapshot for a thread (accepting further exchanges), or null. */
   openForThread(threadId: string): ModelRankingSnapshotRow | null {
     const row = this.db.get<ModelRankingSnapshotRow>(
       `SELECT * FROM model_ranking_snapshots
@@ -117,23 +121,33 @@ export class ModelRankingSnapshotRepo {
   }
 
   /**
-   * A substantive follow-up arrived and its answer completed: upgrade the
-   * window to multi_shot, store the follow-up prompt, and close it for
-   * immediate grading. A plain update — never a failure marker.
+   * A completed later exchange on the still-open conversation window: upgrade
+   * the classification to multi_shot, append the follow-up prompt as judge
+   * context, and slide the inactivity deadline. The window stays open — a
+   * conversation is graded exactly once, at close. A plain update, never a
+   * failure marker.
+   *
+   * If the drain had already claimed the row ('processing', inactivity
+   * deadline elapsed mid-conversation), the row is reset to 'pending' so the
+   * in-flight judge result is discarded (its delete guard no longer matches)
+   * and the conversation is graded later with the full follow-up context.
    */
-  upgradeToMultiShot(id: string, followUpText: string, endedAt: number): void {
+  registerCompletedExchange(id: string, followUpText: string, endedAt: number, nextDueAtMs: number): void {
     this.db.run(
       `UPDATE model_ranking_snapshots
        SET shot_category = 'multi_shot',
-           follow_up_text = ?,
+           follow_up_text = substr(
+             CASE WHEN follow_up_text IS NULL OR follow_up_text = ''
+                  THEN ? ELSE follow_up_text || char(10) || char(10) || ? END,
+             -12000),
            ended_at = ?,
-           closed_at_ms = ?,
-           due_at_ms = ?
-       WHERE id = ? AND closed_at_ms IS NULL AND status = 'pending'`,
+           due_at_ms = ?,
+           status = 'pending'
+       WHERE id = ? AND closed_at_ms IS NULL AND status IN ('pending','processing')`,
+      followUpText,
       followUpText,
       endedAt,
-      Date.now(),
-      Date.now(),
+      nextDueAtMs,
       id
     )
   }
@@ -230,26 +244,34 @@ export class ModelRankingSnapshotRepo {
   /**
    * Recovery path: re-queue exhausted 'failed' rows whose last attempt is
    * older than the cooldown, with a reset backoff, so a persistent judge
-   * outage cannot strand rows forever. Runs inside the regular drain.
+   * outage cannot strand rows forever. Runs inside the guarded drain; routed
+   * through the database worker because the sweep is unbounded.
    */
-  requeueFailedForRecovery(cooldownMs: number, nowMs: number): void {
-    this.db.run(
+  async requeueFailedForRecovery(cooldownMs: number, nowMs: number): Promise<void> {
+    const result = await this.db.executeViaWorker(
       `UPDATE model_ranking_snapshots
        SET status = 'pending', due_at_ms = ?, attempt_count = 0
        WHERE status = 'failed' AND last_attempt_at_ms IS NOT NULL AND last_attempt_at_ms <= ?`,
-      nowMs,
-      nowMs - cooldownMs
+      [nowMs, nowMs - cooldownMs]
     )
+    if (!result.ok) {
+      Logger.dev('Ranking failed-snapshot recovery sweep failed:', result.error)
+    }
   }
 
   /**
    * Restart safety: rows left 'processing' by a crash (claimed but never
-   * scored or deferred) return to the pending queue on startup.
+   * scored or deferred) return to the pending queue on startup. Routed through
+   * the database worker because the sweep is unbounded.
    */
-  requeueStaleProcessing(): void {
-    this.db.run(
-      `UPDATE model_ranking_snapshots SET status = 'pending' WHERE status = 'processing'`
+  async requeueStaleProcessing(): Promise<void> {
+    const result = await this.db.executeViaWorker(
+      `UPDATE model_ranking_snapshots SET status = 'pending' WHERE status = 'processing'`,
+      []
     )
+    if (!result.ok) {
+      Logger.dev('Ranking stale-claim recovery sweep failed:', result.error)
+    }
   }
 
   /** Earliest queued close deadline, used to arm one process-wide wake-up. */

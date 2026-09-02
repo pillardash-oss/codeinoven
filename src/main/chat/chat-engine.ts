@@ -19569,8 +19569,8 @@ export class ChatEngine {
     this.gradeDrainRunning = true
     let processed = 0
     try {
-      if (requeueStale) this.rankingSnapshotRepo.requeueStaleProcessing()
-      this.rankingSnapshotRepo.requeueFailedForRecovery(
+      if (requeueStale) await this.rankingSnapshotRepo.requeueStaleProcessing()
+      await this.rankingSnapshotRepo.requeueFailedForRecovery(
         ChatEngine.RANKING_RECOVERY_COOLDOWN_MS,
         Date.now()
       )
@@ -19651,14 +19651,16 @@ export class ChatEngine {
   }
 
   /**
-   * Capture one ranking snapshot for a completed, error-free turn that
-   * answered a visible user message. The first substantive exchange opens a
-   * `first_shot` window; a substantive follow-up upgrades it to `multi_shot`
-   * and closes it for immediate grading — never a failure marker. A third
-   * substantive prompt (or a greeting-excluded thread) starts a new window.
-   * Greeting-only first prompts never enter the queue, so they never consume
-   * judge tokens. Document-generating workflows (brainstorm, PRD) and
-   * audit-report threads are excluded, as are internal orchestration turns.
+   * Capture or extend the ranking window for a completed, error-free turn
+   * that answered a visible user message. One snapshot per conversation: the
+   * first substantive exchange opens a `first_shot` window; every completed
+   * later exchange upgrades it to `multi_shot`, appends its prompt as judge
+   * context, and slides the inactivity deadline. The window stays open until
+   * the conversation closes — thread deletion or the inactivity deadline —
+   * and is graded exactly once at that point. Greeting-only first prompts
+   * never enter the queue, so they never consume judge tokens.
+   * Document-generating workflows (brainstorm, PRD) and audit-report threads
+   * are excluded, as are internal orchestration turns.
    */
   private async openRankingSnapshot(
     thread: Thread | null,
@@ -19684,16 +19686,25 @@ export class ChatEngine {
     const parentText = textForMessage(parentMessage)
     const open = this.rankingSnapshotRepo.openForThread(threadId)
     if (open) {
-      // Substantive follow-up on the open window: upgrade and close for
-      // immediate grading. Classification and processing status stay
-      // independent — this is a plain update, not a failure marker.
-      this.rankingSnapshotRepo.upgradeToMultiShot(open.id, parentText.slice(0, 6_000), endedAt)
+      // Later exchange on the still-open window: upgrade to multi_shot, append
+      // the follow-up prompt as judge context, and slide the inactivity
+      // deadline. If the drain had already claimed the row, it is reset to
+      // pending and the stale judge result is discarded by its delete guard.
+      this.rankingSnapshotRepo.registerCompletedExchange(
+        open.id,
+        parentText.slice(0, 6_000),
+        endedAt,
+        endedAt + ChatEngine.RANKING_INACTIVITY_CLOSE_MS
+      )
       this.scheduleRankingDrain()
       return
     }
     if (isGreetingOnly(parentText)) return
     const { costUsd, costStatus } = this.assistantTurnCostAccounting(turnAssistant)
-    this.rankingSnapshotRepo.insertViaWorker({
+    // Await the durable insert so the drain timer is armed against a settled
+    // queue — otherwise a session ending right after capture could miss the
+    // inactivity deadline until the next trigger or restart.
+    await this.rankingSnapshotRepo.insertViaWorker({
       threadId,
       projectId,
       shotCategory: 'first_shot',
