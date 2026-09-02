@@ -13,7 +13,7 @@ import type {
   ThinkingPreset
 } from '../../lib/types'
 import { permissionPatterns } from '../../lib/agent-interactions'
-import { classifyProviderIssue } from '../../lib/provider-issue'
+import { classifyProviderIssue, parseUsageResetAt } from '../../lib/provider-issue'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -644,6 +644,7 @@ function mapCurrentClineRecord(
     const error = stringValue(entry['message']) ?? stringValue(entry['error'])
     if (!error) return null
     const kind = classifyProviderIssue(error)
+    const retryAt = kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(error) : undefined
     return {
       events: [
         {
@@ -655,7 +656,8 @@ function mapCurrentClineRecord(
             message: error,
             rawError: error,
             harnessId: 'cline',
-            retryable: kind !== 'billing'
+            retryable: kind !== 'billing',
+            ...(retryAt === undefined ? {} : { retryAt })
           }
         }
       ]
