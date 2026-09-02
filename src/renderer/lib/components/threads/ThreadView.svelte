@@ -9825,6 +9825,7 @@
           {/if}
           <!-- Messages -->
           {#each visibleMessages as msg, msgIndex (msg.id)}
+            {@const absIndex = msgIndex + (messages.length - visibleMessages.length)}
             {#if msg.role === 'user'}
               {#if !isAssignmentAuditorThread && !isActivityOnlyUserMessage(msg)}
                 <div id={`msg-${msg.id}`} class="message-block group flex min-w-0 flex-col">
@@ -9864,7 +9865,7 @@
                       </button>
                     </div>
                   {:else}
-                    {@const previousTurnAudit = getPreviousTurnAudit(msgIndex)}
+                    {@const previousTurnAudit = getPreviousTurnAudit(absIndex)}
                     {@const explicitPresentation = explicitMessagePresentation(msg)}
                     {#if previousTurnAudit}
                       <div class="mb-1 flex items-center gap-1.5 self-end text-[10px] text-dimmed">
@@ -10102,9 +10103,9 @@
               {/if}
             {:else}
               <!-- Assistant message — single WorkTrace per turn containing ALL parts -->
-              {@const isTurnStart = isTurnStartIndex(msgIndex)}
-              {@const isTurnEnd = isTurnEndIndex(msgIndex)}
-              {@const isLatestTurn = msgIndex === latestTurnInfo.startIndex}
+              {@const isTurnStart = isTurnStartIndex(absIndex)}
+              {@const isTurnEnd = isTurnEndIndex(absIndex)}
+              {@const isLatestTurn = absIndex === latestTurnInfo.startIndex}
               {@const provider = messageProvider(msg)}
               {@const modelLabel = messageModelLabel(msg)}
               {@const msgThinking = messageThinkingLevel(msg)}
@@ -10112,28 +10113,28 @@
               {@const harnessId = messageHarnessId(msg)}
               {@const harnessName = messageHarnessName(msg)}
               {@const useLiveAttribution = isLatestTurn && liveBusy}
-              {@const isLatest = msgIndex === messages.length - 1}
+              {@const isLatest = absIndex === messages.length - 1}
               {@const questionParts = msg.parts.filter(
                 (p): p is Extract<AgentPart, { type: 'question' }> => p.type === 'question'
               )}
-              {@const turnDuration = getCurrentTurnDuration(msgIndex)}
-              {@const turnCheckpoint = checkpointForTurn(msgIndex)}
+              {@const turnDuration = getCurrentTurnDuration(absIndex)}
+              {@const turnCheckpoint = checkpointForTurn(absIndex)}
               {@const turnAuditReport =
-                isAssignmentAuditorThread && isTurnEnd ? auditReportForTurn(msgIndex) : null}
+                isAssignmentAuditorThread && isTurnEnd ? auditReportForTurn(absIndex) : null}
 
               {#if isTurnStart || questionParts.length > 0 || isTurnEnd}
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
-                    {@const turnDone = isTurnCompleted(msgIndex)}
+                    {@const turnDone = isTurnCompleted(absIndex)}
                     {@const isCurrentAssistantTurn = isLatestTurn && !pendingLiveTurn}
                     {@const traceIsLive =
                       threadWorking && isCurrentAssistantTurn && !brainstormReportRefreshing}
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
-                    {@const accumulatedTurnParts = getTurnWorkingParts(msgIndex, traceIsLive)}
+                    {@const accumulatedTurnParts = getTurnWorkingParts(absIndex, traceIsLive)}
                     {@const durableTurnParts = pendingLiveTurn
                       ? []
-                      : streamWorkingPartsForTurn(msgIndex)}
+                      : streamWorkingPartsForTurn(absIndex)}
                     {@const collectedTurnParts =
                       streamParts.length > 0 && isCurrentAssistantTurn
                         ? traceIsRestored
@@ -10154,8 +10155,8 @@
                         done={turnDone}
                         rehydrated={traceIsRestored}
                         startTime={isLatestTurn
-                          ? (getTurnStartTime(msgIndex) ?? activeTurnStartTime)
-                          : getTurnStartTime(msgIndex)}
+                          ? (getTurnStartTime(absIndex) ?? activeTurnStartTime)
+                          : getTurnStartTime(absIndex)}
                         modelLabel={useLiveAttribution
                           ? currentWorkingTraceAttribution.modelLabel
                           : modelLabel}
@@ -10223,7 +10224,7 @@
                         {/if}
                       {/if}
                     {:else}
-                      {@const turnFinalText = getTurnFinalText(msgIndex)}
+                      {@const turnFinalText = getTurnFinalText(absIndex)}
                       {@const finalAnswerReady =
                         turnFinalText?.type === 'text' &&
                         turnFinalText.text.trim().length > 0 &&
@@ -10284,7 +10285,7 @@
                         </div>
                       {/if}
 
-                      {#if turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(msgIndex, turnCheckpoint)}
+                      {#if turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(absIndex, turnCheckpoint)}
                         <div class="mt-3">
                           <RunChangesCard
                             checkpoint={turnCheckpoint}
