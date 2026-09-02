@@ -345,7 +345,17 @@
     }
     const countStart = Math.max(0, messages.length - mountedCount)
     const turnStart = latestTurnInfo.startIndex
-    if (turnStart < 0) return countStart
+    if (turnStart < 0) {
+      // A fresh thread has an optimistic prompt before it has an assistant
+      // message, so it is not a complete turn yet. Keep that prompt mounted
+      // instead of treating it as history hidden behind the load button.
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index]
+        if (message?.role !== 'user' || isActivityOnlyUserMessage(message)) continue
+        return Math.min(countStart, index)
+      }
+      return countStart
+    }
     const covered = promptPagesBefore(turnStart, 2)
     return Math.min(countStart, covered === -1 ? 0 : covered)
   })
