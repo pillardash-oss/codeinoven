@@ -5364,6 +5364,14 @@ export function registerIpcHandlers(
       )
     )
   )
+  ipcMain.handle('git:defaultBranch', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.getDefaultBranch(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
+  )
   ipcMain.handle(
     'git:checkout',
     async (_, projectId: unknown, branch: unknown, scopeBucketId?: unknown) => {

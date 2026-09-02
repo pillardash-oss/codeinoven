@@ -256,6 +256,7 @@ const INVOKE_CHANNELS = [
   'git:commit',
   'git:init',
   'git:branches',
+  'git:defaultBranch',
   'git:checkout',
   'git:createBranch',
   'git:createTrackingBranch',

@@ -1288,6 +1288,21 @@ export class GitState {
   }
 
   /**
+   * The remote's actual default branch, so the PR form can preselect the
+   * real base instead of guessing "main" for repos that target something else.
+   */
+  async getDefaultBranch(projectId: string): Promise<string | null> {
+    try {
+      const scopeBucketId = this.scopeFor(projectId)
+      return scopeBucketId
+        ? await invoke('git:defaultBranch', projectId, scopeBucketId)
+        : await invoke('git:defaultBranch', projectId)
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * Compare two refs so the create-PR form can gate on there being a real
    * change. Returns null on failure so the form can disable creation safely.
    */
