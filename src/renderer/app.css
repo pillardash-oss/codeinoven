@@ -658,16 +658,15 @@ body {
 
 /* ─── Conversation message blocks ────────────────────────────────────────── */
 /*
- * The browser skips layout and paint entirely for message blocks that are off
- * screen, which keeps long conversations (and pages containing very long
- * single-line output) cheap to scroll and paint. `auto` in
- * `contain-intrinsic-size` makes the browser remember each block's real
- * rendered size, so after a block is displayed once the estimate is exact and
- * scrollbar behavior is unchanged.
+ * Note: content-visibility was removed here deliberately. It once carried its
+ * weight when the whole transcript mounted, but the mounted window is now
+ * bounded (~40 messages) and oversized single runs render collapsed via
+ * LongTextBlock, so there is nothing left for it to skip — and its
+ * near-viewport misclassification during batch mounts above the scroll
+ * position was observed to blank the entire conversation while the reader was
+ * scrolled up (recovered only on the next paint). The entrance fade stays.
  */
 .message-block {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 320px;
   /* Subtle entrance: window fills and streaming appends mount blocks in
    * batches, and a hard pop-in reads as jank. A short opacity-only fade
    * (no transform — a transform here would briefly become the containing

@@ -3083,6 +3083,12 @@
   function onScroll(): void {
     if (!scrollEl) return
     userScrolledAway = !isAtBottom(scrollEl)
+    // Self-heal: the mounted window must never sit at zero while the store
+    // holds messages — a windowed view that collapsed to nothing would leave
+    // the reader staring at a blank transcript.
+    if (!hasController && mountedCount === 0 && messages.length > 0) {
+      mountedCount = Math.min(messages.length, HISTORY_WINDOW_SIZE)
+    }
     threadScrollPositions.set(thread.id, {
       top: scrollEl.scrollTop,
       awayFromBottom: userScrolledAway
