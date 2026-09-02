@@ -2246,6 +2246,8 @@ export interface ModelRankingSnapshotRow {
   cost_status: 'known' | 'estimated' | 'unavailable' | null
   attempt_count: number
   last_attempt_at_ms: number | null
+  /** Unique tag of the current drain claim; NULL while not claimed. */
+  claim_token: string | null
   created_at: number
 }
 

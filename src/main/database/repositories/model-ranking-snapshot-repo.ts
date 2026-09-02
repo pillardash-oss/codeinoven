@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import { Logger } from '../../system/logger'
 import type { Database } from '../database'
 import type {
@@ -128,9 +129,10 @@ export class ModelRankingSnapshotRepo {
    * failure marker.
    *
    * If the drain had already claimed the row ('processing', inactivity
-   * deadline elapsed mid-conversation), the row is reset to 'pending' so the
-   * in-flight judge result is discarded (its delete guard no longer matches)
-   * and the conversation is graded later with the full follow-up context.
+   * deadline elapsed mid-conversation), the row is reset to 'pending' and its
+   * claim token cleared, so the in-flight judge result is discarded (its
+   * delete guard no longer matches) and the conversation is graded later with
+   * the full follow-up context.
    */
   registerCompletedExchange(id: string, followUpText: string, endedAt: number, nextDueAtMs: number): void {
     this.db.run(
@@ -142,7 +144,8 @@ export class ModelRankingSnapshotRepo {
              -12000),
            ended_at = ?,
            due_at_ms = ?,
-           status = 'pending'
+           status = 'pending',
+           claim_token = NULL
        WHERE id = ? AND closed_at_ms IS NULL AND status IN ('pending','processing')`,
       followUpText,
       followUpText,
@@ -170,11 +173,15 @@ export class ModelRankingSnapshotRepo {
    * Atomically claim up to `limit` due pending snapshots: the SELECT picks the
    * oldest due rows and the outer UPDATE flips them to 'processing' in the
    * same statement, so overlapping drains can never claim the same row twice.
+   * Every claim carries a unique generation token; score, delete, and defer
+   * operations are guarded by it, so a stale judge result from a previous
+   * claim generation can never apply to a re-claimed row.
    */
   claimDueBatch(nowMs: number, limit = 3): ModelRankingSnapshotRow[] {
+    const claimToken = randomUUID()
     return this.db.all<ModelRankingSnapshotRow>(
       `UPDATE model_ranking_snapshots
-       SET status = 'processing'
+       SET status = 'processing', claim_token = ?
        WHERE id IN (
          SELECT id FROM model_ranking_snapshots
          WHERE status = 'pending' AND due_at_ms <= ?
@@ -182,6 +189,7 @@ export class ModelRankingSnapshotRepo {
          LIMIT ?
        )
        RETURNING *`,
+      claimToken,
       nowMs,
       limit
     )
@@ -190,16 +198,23 @@ export class ModelRankingSnapshotRepo {
   /**
    * Apply the score to the aggregate and hard-delete the snapshot in one
    * transaction, so a crash between the two can never double-count. Returns
-   * false when the row vanished or was not in the claimed state.
+   * false when the row vanished, was not in the claimed state, or was
+   * re-claimed by a later drain generation (stale judge result discarded).
    */
-  deleteScoredInTransaction(id: string, applyScore: () => void): boolean {
+  deleteScoredInTransaction(id: string, claimToken: string, applyScore: () => void): boolean {
     return this.db.transaction<boolean>(() => {
       const claimed = this.db.get<{ id: string }>(
-        `SELECT id FROM model_ranking_snapshots WHERE id = ? AND status = 'processing'`,
-        id
+        `SELECT id FROM model_ranking_snapshots
+         WHERE id = ? AND status = 'processing' AND claim_token = ?`,
+        id,
+        claimToken
       )
       if (!claimed) return false
-      this.db.run('DELETE FROM model_ranking_snapshots WHERE id = ?', id)
+      this.db.run(
+        'DELETE FROM model_ranking_snapshots WHERE id = ? AND status = ' + "'processing' AND claim_token = ?",
+        id,
+        claimToken
+      )
       applyScore()
       return true
     })
@@ -209,35 +224,45 @@ export class ModelRankingSnapshotRepo {
    * Judge failure bookkeeping. Under the attempt cap the row returns to
    * 'pending' with bounded exponential backoff; at the cap it parks as
    * 'failed' with its attempt count preserved for recovery — never deleted
-   * unscored, never counted in the aggregate.
+   * unscored, never counted in the aggregate. Token-guarded: only the current
+   * claim generation can defer or park the row.
    */
-  deferOrPark(id: string, attemptCap: number, retryBaseMs: number, nowMs: number): void {
+  deferOrPark(
+    id: string,
+    claimToken: string,
+    attemptCap: number,
+    retryBaseMs: number,
+    nowMs: number
+  ): void {
     const row = this.db.get<{ attempt_count: number }>(
-      "SELECT attempt_count FROM model_ranking_snapshots WHERE id = ? AND status = 'processing'",
-      id
+      "SELECT attempt_count FROM model_ranking_snapshots WHERE id = ? AND status = 'processing' AND claim_token = ?",
+      id,
+      claimToken
     )
     if (!row) return
     const nextAttempt = row.attempt_count + 1
     if (nextAttempt >= attemptCap) {
       this.db.run(
         `UPDATE model_ranking_snapshots
-         SET status = 'failed', attempt_count = ?, last_attempt_at_ms = ?
-         WHERE id = ? AND status = 'processing'`,
+         SET status = 'failed', attempt_count = ?, last_attempt_at_ms = ?, claim_token = NULL
+         WHERE id = ? AND status = 'processing' AND claim_token = ?`,
         nextAttempt,
         nowMs,
-        id
+        id,
+        claimToken
       )
       return
     }
     const retryDelay = retryBaseMs * 2 ** Math.min(row.attempt_count, 4)
     this.db.run(
       `UPDATE model_ranking_snapshots
-       SET status = 'pending', due_at_ms = ?, attempt_count = ?, last_attempt_at_ms = ?
-       WHERE id = ? AND status = 'processing'`,
+       SET status = 'pending', due_at_ms = ?, attempt_count = ?, last_attempt_at_ms = ?, claim_token = NULL
+       WHERE id = ? AND status = 'processing' AND claim_token = ?`,
       nowMs + retryDelay,
       nextAttempt,
       nowMs,
-      id
+      id,
+      claimToken
     )
   }
 
@@ -266,7 +291,9 @@ export class ModelRankingSnapshotRepo {
    */
   async requeueStaleProcessing(): Promise<void> {
     const result = await this.db.executeViaWorker(
-      `UPDATE model_ranking_snapshots SET status = 'pending' WHERE status = 'processing'`,
+      `UPDATE model_ranking_snapshots
+       SET status = 'pending', claim_token = NULL
+       WHERE status = 'processing'`,
       []
     )
     if (!result.ok) {

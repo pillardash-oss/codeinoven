@@ -653,6 +653,7 @@ export class Database {
     connection.transaction(() => {
       this.migrateModelRankingTables(connection)
       connection.exec(DATABASE_SCHEMA_SQL)
+      this.migrateModelRankingSnapshotClaimToken(connection)
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
@@ -723,6 +724,22 @@ export class Database {
                COALESCE(legacy.thinking_level, '')
     `)
     target.exec('DROP TABLE turn_feedback')
+  }
+
+  /**
+   * Databases created before claim-token tagging carry a `claim_token`-less
+   * snapshot queue. Add the column in place (nullable, no backfill needed —
+   * unclaimed rows are NULL by definition). Idempotent and safe to re-run.
+   */
+  migrateModelRankingSnapshotClaimToken(connection?: DatabaseType): void {
+    const target = connection ?? this.requireDb()
+    const columns = new Set<string>(
+      (target.prepare('PRAGMA table_info(model_ranking_snapshots)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.size === 0 || columns.has('claim_token')) return
+    target.exec('ALTER TABLE model_ranking_snapshots ADD COLUMN claim_token TEXT')
   }
 
   /**

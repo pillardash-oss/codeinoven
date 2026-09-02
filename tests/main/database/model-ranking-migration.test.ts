@@ -178,6 +178,59 @@ describe('model ranking legacy migration', () => {
     }
   })
 
+  it('adds the claim_token column to pre-existing snapshot tables in place', async () => {
+    const db = await createTestDb()
+    try {
+      // Simulate a database created before claim-token tagging.
+      db.run('DROP TABLE model_ranking_snapshots')
+      db.run(
+        `CREATE TABLE model_ranking_snapshots (
+           id             TEXT PRIMARY KEY NOT NULL,
+           thread_id      TEXT,
+           project_id     TEXT NOT NULL,
+           shot_category  TEXT NOT NULL,
+           status         TEXT NOT NULL,
+           harness_id     TEXT NOT NULL,
+           provider_id    TEXT NOT NULL DEFAULT '',
+           model_id       TEXT NOT NULL,
+           thinking_level TEXT NOT NULL DEFAULT '',
+           started_at     INTEGER NOT NULL,
+           ended_at       INTEGER NOT NULL,
+           closed_at_ms   INTEGER,
+           due_at_ms      INTEGER NOT NULL,
+           user_message_text     TEXT NOT NULL DEFAULT '',
+           assistant_output_text TEXT NOT NULL DEFAULT '',
+           attempt_count       INTEGER NOT NULL DEFAULT 0,
+           created_at     INTEGER NOT NULL
+         )`
+      )
+      db.run(
+        `INSERT INTO model_ranking_snapshots(
+           id, project_id, shot_category, status, harness_id, model_id,
+           started_at, ended_at, due_at_ms, created_at
+         ) VALUES('ranking:old', 'p', 'first_shot', 'pending', 'pi', 'gpt-5', 1, 2, 3, 1)`
+      )
+
+      db.migrateModelRankingSnapshotClaimToken()
+
+      const columns = (db.all('PRAGMA table_info(model_ranking_snapshots)') as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+      expect(columns).toContain('claim_token')
+      // The pre-existing row survives with a NULL token (unclaimed).
+      const row = db.get('SELECT id, claim_token FROM model_ranking_snapshots') as {
+        id: string
+        claim_token: string | null
+      }
+      expect(row?.id).toBe('ranking:old')
+      expect(row?.claim_token).toBeNull()
+      // Idempotent re-run is a no-op.
+      expect(() => db.migrateModelRankingSnapshotClaimToken()).not.toThrow()
+    } finally {
+      destroyTestDb(db)
+    }
+  })
+
   it('is a no-op on databases that never carried the legacy table', async () => {
     const db = await createTestDb()
     try {

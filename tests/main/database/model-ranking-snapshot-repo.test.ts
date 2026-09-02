@@ -128,7 +128,9 @@ describe('ModelRankingSnapshotRepo', () => {
       expect(row?.follow_up_text).toBe('late follow-up')
 
       // The in-flight drain can no longer score or delete the stale claim.
-      expect(repo.deleteScoredInTransaction(claimed[0]?.id ?? '', () => undefined)).toBe(false)
+      expect(
+        repo.deleteScoredInTransaction(claimed[0]?.id ?? '', claimed[0]?.claim_token ?? '', () => undefined)
+      ).toBe(false)
     } finally {
       destroyTestDb(db)
     }
@@ -162,14 +164,33 @@ describe('ModelRankingSnapshotRepo', () => {
       repo.insert(input('t1'))
       const claimed = repo.claimDueBatch(Date.now(), 3)
       expect(claimed).toHaveLength(1)
+      expect(claimed[0]?.claim_token).toBeTruthy()
 
       let scoreApplied = 0
-      const deleted = repo.deleteScoredInTransaction(claimed[0]?.id ?? '', () => {
-        scoreApplied += 1
-      })
+      const deleted = repo.deleteScoredInTransaction(
+        claimed[0]?.id ?? '',
+        claimed[0]?.claim_token ?? '',
+        () => {
+          scoreApplied += 1
+        }
+      )
       expect(deleted).toBe(true)
       expect(scoreApplied).toBe(1)
       expect(snapshot(db, 't1')).toBeUndefined()
+
+      // A result from a previous claim generation can never score the row.
+      repo.insert(input('t1'))
+      const second = repo.claimDueBatch(Date.now(), 3)
+      expect(
+        repo.deleteScoredInTransaction(
+          second[0]?.id ?? '',
+          claimed[0]?.claim_token ?? '',
+          () => {
+            scoreApplied += 1
+          }
+        )
+      ).toBe(false)
+      expect(scoreApplied).toBe(1)
     } finally {
       destroyTestDb(db)
     }
@@ -182,21 +203,29 @@ describe('ModelRankingSnapshotRepo', () => {
       repo.insert(input('t1'))
       const claimed = repo.claimDueBatch(Date.now(), 3)
       const id = claimed[0]?.id ?? ''
+      const token = claimed[0]?.claim_token ?? ''
       const base = 5 * 60_000
 
-      repo.deferOrPark(id, 3, base, 1_000_000)
+      repo.deferOrPark(id, token, 3, base, 1_000_000)
       const retried = snapshot(db, 't1')
       expect(retried?.status).toBe('pending')
       expect(retried?.attempt_count).toBe(1)
       expect(retried?.due_at_ms).toBe(1_000_000 + base)
 
-      repo.claimDueBatch(Date.now(), 3)
-      repo.deferOrPark(id, 3, base, 2_000_000)
-      repo.claimDueBatch(Date.now(), 3)
-      repo.deferOrPark(id, 3, base, 3_000_000)
+      const second = repo.claimDueBatch(Date.now(), 3)
+      const secondToken = second[0]?.claim_token ?? ''
+      expect(secondToken).not.toBe(token)
+      repo.deferOrPark(id, secondToken, 3, base, 2_000_000)
+      const third = repo.claimDueBatch(Date.now(), 3)
+      repo.deferOrPark(id, third[0]?.claim_token ?? '', 3, base, 3_000_000)
       const parked = snapshot(db, 't1')
       expect(parked?.status).toBe('failed')
       expect(parked?.attempt_count).toBe(3)
+
+      // A stale generation token can neither defer nor park the parked row.
+      repo.deferOrPark(id, token, 3, base, 3_500_000)
+      expect(snapshot(db, 't1')?.status).toBe('failed')
+      expect(snapshot(db, 't1')?.attempt_count).toBe(3)
 
       // Recovery requeue resets the backoff after the cooldown.
       repo.requeueFailedForRecovery(24 * 3_600_000, 3_000_000)

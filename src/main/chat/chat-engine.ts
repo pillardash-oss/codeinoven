@@ -19583,7 +19583,10 @@ export class ChatEngine {
         const score = await this.gradeCandidateCore(row.project_id, candidate)
         if (score !== null) {
           const durationMs = Math.max(0, row.ended_at - row.started_at)
-          const applied = this.rankingSnapshotRepo.deleteScoredInTransaction(row.id, () => {
+          const applied = this.rankingSnapshotRepo.deleteScoredInTransaction(
+            row.id,
+            row.claim_token ?? '',
+            () => {
             this.rankingRepo.increment({
               harnessId: row.harness_id,
               providerId: row.provider_id,
@@ -19596,13 +19599,14 @@ export class ChatEngine {
               rubricVersion: RANKING_RUBRIC_VERSION
             })
           })
-          // The snapshot vanished mid-drain (restart recovery already
-          // re-queued it); never defer or double-count it.
+          // The snapshot vanished mid-drain or was re-claimed by a later
+          // generation (stale judge result); never defer or double-count it.
           if (applied) processed += 1
           continue
         }
         this.rankingSnapshotRepo.deferOrPark(
           row.id,
+          row.claim_token ?? '',
           ChatEngine.RANKING_ATTEMPT_CAP,
           ChatEngine.RANKING_RETRY_BASE_MS,
           Date.now()

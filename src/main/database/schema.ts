@@ -331,6 +331,7 @@ export const MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL = `
   cost_status    TEXT CHECK(cost_status IN ('known','estimated','unavailable')),
   attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
   last_attempt_at_ms  INTEGER,
+  claim_token         TEXT,
   created_at     INTEGER NOT NULL`
 
 export const ATTACHMENT_GRANTS_SQL = `
@@ -866,7 +867,9 @@ ${MODEL_RANKING_INDEXES_SQL}
 -- insert a row. The cheap-model judge scores the closed conversation 0–10,
 -- the aggregate is updated exactly once, and the row is hard-deleted.
 -- Judge failures retry with bounded backoff and remain as status='failed'
--- for recovery — never deleted unscored.
+-- for recovery — never deleted unscored. Each claim is tagged with a unique
+-- claim_token; score/delete/defer apply only to the current claim generation,
+-- so a stale in-flight judge result can never land on a re-claimed row.
 CREATE TABLE IF NOT EXISTS model_ranking_snapshots (${MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL});
 
 ${MODEL_RANKING_SNAPSHOT_INDEXES_SQL}`

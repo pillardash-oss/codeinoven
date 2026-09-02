@@ -183,6 +183,12 @@ function snapshotRow(db: Database): Record<string, unknown> | undefined {
     | undefined
 }
 
+/** Let pending microtasks (drain claim, judge dispatch) settle. */
+async function flushMicrotasksLikeTurnPipeline(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 function aggregateRow(db: Database): Record<string, unknown> | undefined {
   return db.get('SELECT * FROM model_rankings LIMIT 1') as Record<string, unknown> | undefined
 }
@@ -429,6 +435,66 @@ describe('ChatEngine model-ranking pipeline', () => {
     const aggregate = aggregateRow(db)
     expect(aggregate?.['one_shot_score_sum']).toBe(7)
     expect(aggregate?.['one_shot_samples']).toBe(1)
+  })
+
+  it('never applies a stale pre-follow-up judge result to a re-claimed row', async () => {
+    // A judge whose results are released manually, so the stale-result race
+    // can be reproduced deterministically.
+    const releases: Array<(score: number | null) => void> = []
+    const gradeTurnCalls: Array<{ projectPath: string; options: GradeTurnOptions }> = []
+    const manualFake = {
+      gradeTurnCalls,
+      driver: {
+        gradeTurn: async (
+          projectPath: string,
+          options: GradeTurnOptions
+        ): Promise<number | null> => {
+          gradeTurnCalls.push({ projectPath, options })
+          return new Promise<number | null>((resolve) => {
+            releases.push(resolve)
+          })
+        }
+      }
+    }
+    const engine = await makeEngine(manualFake)
+    const db = temporaryDatabases[0]
+    seedProject(db, 'p1', 't1')
+    const repo = privateOf<ModelRankingSnapshotRepo>(engine, 'rankingSnapshotRepo')
+    repo.insert(snapshotInput('t1', { dueAtMs: Date.now() - 1_000 }))
+
+    // Drain 1 claims the row; its judge hangs in flight.
+    const drain1 = engine.recoverPendingRankingGrades()
+    await flushMicrotasksLikeTurnPipeline()
+    expect(gradeTurnCalls).toHaveLength(1)
+
+    // The follow-up lands mid-flight: the claimed row is pulled back to
+    // pending and its claim token is cleared.
+    const open = repo.openForThread('t1')
+    repo.registerCompletedExchange(open?.id ?? '', 'late follow-up', Date.now(), Date.now() + 86_400_000)
+
+    // The stale pre-follow-up judge result resolves — it must not score.
+    releases[0]?.(3)
+    await drain1
+    expect(aggregateRow(db)).toBeUndefined()
+    expect(snapshotRow(db)?.['status']).toBe('pending')
+
+    // The next drain re-claims with a fresh generation and judges the full
+    // conversation; only this result may apply.
+    db.run('UPDATE model_ranking_snapshots SET due_at_ms = ?', Date.now() - 1_000)
+    const drain2 = engine.recoverPendingRankingGrades()
+    await flushMicrotasksLikeTurnPipeline()
+    expect(gradeTurnCalls).toHaveLength(2)
+    expect(gradeTurnCalls[1]?.options.followUp).toBe('late follow-up')
+    releases[1]?.(8)
+    await drain2
+
+    expect(snapshotRow(db)).toBeUndefined()
+    // The late follow-up upgraded the window to multi_shot, so the re-claim
+    // scores the multi_shot bucket with the full conversation context.
+    const aggregate = aggregateRow(db)
+    expect(aggregate?.['multi_shot_score_sum']).toBe(8)
+    expect(aggregate?.['multi_shot_samples']).toBe(1)
+    expect(aggregate?.['one_shot_samples']).toBe(0)
   })
 
   it('reports ranking aggregates and grading spend through the repo views', async () => {
