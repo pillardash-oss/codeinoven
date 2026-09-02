@@ -237,7 +237,8 @@ export function toolFileDiffs(part: Extract<AgentPart, { type: 'tool' }>): ToolF
     !normalizedName.includes('create') &&
     !normalizedName.includes('filechange') &&
     !normalizedName.includes('replace') &&
-    !normalizedName.includes('newfile')
+    !normalizedName.includes('newfile') &&
+    !normalizedName.includes('delete')
   ) {
     return []
   }

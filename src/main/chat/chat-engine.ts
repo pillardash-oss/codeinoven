@@ -498,6 +498,8 @@ const SPEC_MEMORY_MAX_LESSONS = 12
 const MAX_SPEC_INSTRUCTIONS_LENGTH = 200_000
 const MUTATING_FILE_TOOLS = new Set([
   'applypatch',
+  'delete',
+  'deletefile',
   'edit',
   'editfile',
   'filechange',
