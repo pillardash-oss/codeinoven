@@ -4,7 +4,7 @@
   import CodeBlock from './CodeBlock.svelte'
   import MermaidDiagram from './MermaidDiagram.svelte'
   import FileCitationContextMenu from './FileCitationContextMenu.svelte'
-  import { blockHtml, fileCitationTarget, lexMarkdown } from './markdown'
+  import { blockHtml, fileCitationTarget, lexMarkdownCached } from './markdown'
   import { openInBrowser } from '$lib/open-in-browser'
   import { extractCitationCandidates } from '$lib/agent-source-citations'
   import { revealCitationFile, revealLocalFile } from '$lib/reveal-file'
@@ -81,7 +81,34 @@
     return { prepared, substitutions }
   })
 
-  const tokens = $derived(lexMarkdown(tagSubstitutions.prepared, allowHtml))
+  /** The text actually lexed for rendering. Starts as the initial text so the
+   *  first paint is synchronous and correct; streaming updates re-lex at most
+   *  once per animation frame below, so a burst of chunks coalesces into a
+   *  single lex. Completed messages never change text and never re-lex. */
+  // Intentional initial-value capture — the first paint must lex synchronously.
+  // svelte-ignore state_referenced_locally
+  let lexedText = $state(tagSubstitutions.prepared)
+  // svelte-ignore state_referenced_locally
+  let lexedAllowHtml = $state(allowHtml)
+  let lexFrame = 0
+  let lexPending: { text: string; allowHtml: boolean } | null = null
+
+  $effect(() => {
+    const prepared = tagSubstitutions.prepared
+    const htmlMode = allowHtml
+    if (prepared === lexedText && htmlMode === lexedAllowHtml) return
+    lexPending = { text: prepared, allowHtml: htmlMode }
+    if (lexFrame) return
+    lexFrame = requestAnimationFrame(() => {
+      lexFrame = 0
+      if (!lexPending) return
+      lexedText = lexPending.text
+      lexedAllowHtml = lexPending.allowHtml
+      lexPending = null
+    })
+  })
+
+  const tokens = $derived(lexMarkdownCached(lexedText, lexedAllowHtml))
 
   function renderBlockHtml(token: Token): string {
     const html = blockHtml(token, allowHtml)
@@ -106,6 +133,7 @@
 
   onDestroy(() => {
     if (tooltipTimer) clearTimeout(tooltipTimer)
+    if (lexFrame) cancelAnimationFrame(lexFrame)
   })
 
   function isCodeToken(token: Token): token is Tokens.Code {

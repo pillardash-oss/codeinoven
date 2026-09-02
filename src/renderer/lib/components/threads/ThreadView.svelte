@@ -9772,7 +9772,7 @@
           {#each visibleMessages as msg, msgIndex (msg.id)}
             {#if msg.role === 'user'}
               {#if !isAssignmentAuditorThread && !isActivityOnlyUserMessage(msg)}
-                <div id={`msg-${msg.id}`} class="group flex min-w-0 flex-col">
+                <div id={`msg-${msg.id}`} class="message-block group flex min-w-0 flex-col">
                   {#if editingMessageId === msg.id}
                     <RichMarkdownEditor
                       bind:this={messageEditEditor}
@@ -10187,7 +10187,7 @@
                           speechController.readingOverlayActive}
                         <div
                           id={`msg-${msg.id}`}
-                          class="min-w-0 w-full text-sm text-foreground"
+                          class="message-block min-w-0 w-full text-sm text-foreground"
                           data-assistant-response
                           data-conversation-searchable
                           data-message-id={msg.id}

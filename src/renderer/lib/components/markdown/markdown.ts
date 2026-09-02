@@ -263,6 +263,31 @@ export function lexMarkdown(text: string, allowHtml = false): Token[] {
   return resolveFootnotes(tokens)
 }
 
+/** Bounded memo cache for lexed message markdown. Completed message text is
+ *  immutable, so remounts (thread switches) hit the cache instead of re-lexing
+ *  every block. Entries hold the exact source string as key; callers treat
+ *  the returned tokens as read-only (blockHtml already memoizes its output). */
+const LEX_CACHE_LIMIT = 24
+const lexCache = new Map<string, Token[]>()
+
+export function lexMarkdownCached(text: string, allowHtml = false): Token[] {
+  const key = allowHtml ? `\u0000html\u0000${text}` : text
+  const cached = lexCache.get(key)
+  if (cached) {
+    // Refresh for LRU ordering — most recently used survives eviction.
+    lexCache.delete(key)
+    lexCache.set(key, cached)
+    return cached
+  }
+  const tokens = lexMarkdown(text, allowHtml)
+  lexCache.set(key, tokens)
+  if (lexCache.size > LEX_CACHE_LIMIT) {
+    const oldest = lexCache.keys().next().value
+    if (oldest !== undefined) lexCache.delete(oldest)
+  }
+  return tokens
+}
+
 // ─── Footnote resolution ────────────────────────────────────────────────────
 // Runs after lexing over the whole document so definitions anywhere can back
 // references elsewhere. Numbering follows GitHub: order of first reference.
@@ -438,10 +463,24 @@ function escapeHtml(value: string): string {
  * a block is still streaming. highlight.js output is escaped text plus
  * `<span class="hljs-*">` wrappers, so it needs no further sanitizing.
  */
+/** Highlighting beyond this budget is skipped — the tail renders as plain
+ *  escaped text inside the same block. Tokenizing a 100KB+ single-line dump
+ *  can block the renderer for tens of milliseconds per block, and grammar
+ *  coloring past the first screenful adds nothing a reader can perceive. */
+const HIGHLIGHT_BUDGET = 32 * 1024
+
 export function highlightCode(code: string, lang?: string): string {
   if (lang && hljs.getLanguage(lang)) {
+    // Slice BEFORE highlighting: hljs tokenizes exactly the budgeted text, so
+    // every span it emits is balanced. The remainder is appended as escaped
+    // plain text — visually uniform, structurally valid HTML.
+    const budgeted = code.length > HIGHLIGHT_BUDGET ? code.slice(0, HIGHLIGHT_BUDGET) : code
     try {
-      return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value
+      const highlighted = hljs.highlight(budgeted, { language: lang, ignoreIllegals: true }).value
+      if (budgeted.length < code.length) {
+        return highlighted + escapeHtml(code.slice(HIGHLIGHT_BUDGET))
+      }
+      return highlighted
     } catch {
       // Grammar hiccup mid-stream — plain text below is always safe.
     }

@@ -655,3 +655,17 @@ body {
     opacity: 1;
   }
 }
+
+/* ─── Conversation message blocks ────────────────────────────────────────── */
+/*
+ * The browser skips layout and paint entirely for message blocks that are off
+ * screen, which keeps long conversations (and pages containing very long
+ * single-line output) cheap to scroll and paint. `auto` in
+ * `contain-intrinsic-size` makes the browser remember each block's real
+ * rendered size, so after a block is displayed once the estimate is exact and
+ * scrollbar behavior is unchanged.
+ */
+.message-block {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
+}
