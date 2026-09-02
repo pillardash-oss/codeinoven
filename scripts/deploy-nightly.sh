@@ -8,7 +8,10 @@
 # prerelease with the GitHub tag created automatically by the workflow.
 #
 # Safety net:
-#   - Requires a clean working tree (no unpushed/uncommitted work).
+#   - Requires a clean working tree (no uncommitted changes).
+#   - Pushes any local `dev` commits to `origin/dev` first (plain push, never
+#     force) so the promotion always reflects what's actually on origin —
+#     refuses instead if local dev and origin/dev have diverged.
 #   - Sets the machine-local `nightly` branch equal to `dev`; it never
 #     force-pushes and never rewrites history. If `nightly` has commit(s) not
 #     present on `dev` AND the content differs, the promotion is REFUSED —
@@ -89,6 +92,23 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   git pull --ff-only origin dev
 else
   say "(dry-run) git pull --ff-only origin dev"
+fi
+
+# --- 2b. push local dev ahead of origin/dev before comparing against nightly -
+# The promotion is computed against origin/dev; any commits sitting locally
+# and unpushed are invisible to origin/nightly's ancestry check and to anyone
+# else, so push them up first (never force — refuses on any real divergence).
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if ! git merge-base --is-ancestor origin/dev dev; then
+    die "local dev and origin/dev have diverged (origin/dev has commits local dev lacks). Pull/rebase manually before promoting."
+  fi
+  if [[ "$(git rev-parse dev)" != "$(git rev-parse origin/dev)" ]]; then
+    say "Pushing local dev ahead of origin/dev..."
+    git push origin dev
+    ok "Pushed dev at $(git rev-parse --short dev)."
+  fi
+else
+  say "(dry-run) git push origin dev (if local dev is ahead)"
 fi
 
 DEV_SHA="$(git rev-parse dev)"
