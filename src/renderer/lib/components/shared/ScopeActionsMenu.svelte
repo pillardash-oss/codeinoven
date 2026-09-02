@@ -163,7 +163,7 @@
           })
         }
         list.push({
-          label: 'Remove worktree (keep scope)',
+          label: 'Detach worktree',
           run: () => {
             onDetach?.()
             closeMenu()

@@ -120,7 +120,7 @@
       <div class="space-y-3">
         <p class="text-sm text-foreground">
           {action === 'detach'
-            ? 'The worktree checkout is removed and this scope returns to the project directory. The scope, its threads, and the branch are kept.'
+            ? 'Detaching this worktree will leave the branch in your repo, but the worktree directory will be deleted!'
             : action === 'remove-worktree'
               ? 'The worktree will be removed from Git and this scope will be deleted.'
               : action === 'delete-scope'
