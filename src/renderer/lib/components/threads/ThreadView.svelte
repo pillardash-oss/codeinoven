@@ -317,10 +317,6 @@
   const INITIAL_PAINT_MESSAGES = 4
   /** Messages mounted per frame while the window auto-fills after mount. */
   const INITIAL_REVEAL_BATCH = 12
-  /** Messages added to the mounted window per upward-scroll expansion. Half
-   *  a history page keeps each mount hitch short — a full page in one flush
-   *  reads as a lurch while scrolling, many small reads as continuous. */
-  const MOUNTED_EXPAND_BATCH = 20
   let mountedCount = $state(
     Math.min(
       threadMessages.messages(mountedThread.projectId, mountedThread.id).length,
@@ -3140,67 +3136,48 @@
 
   let loadingOlderMessages = $state(false)
 
+  /** Index of the first message of the turn immediately before `fromIndex`,
+   *  or null when that turn is not fully present in the store yet. Walking
+   *  back from the end of the previous turn, the first non-activity user
+   *  message is its prompt — everything between belongs to that turn. */
+  function findPreviousTurnStart(fromIndex: number): number | null {
+    for (let i = fromIndex - 1; i >= 0; i--) {
+      const message = messages[i]
+      if (!message) break
+      if (message.role !== 'user') continue
+      if (isActivityOnlyUserMessage(message)) continue
+      return i
+    }
+    return null
+  }
+
   async function loadOlderMessages(): Promise<void> {
     if (!scrollEl || loadingOlderMessages || !hasOlderMessages) return
     if (controller) {
       await controller.loadOlder()
       return
     }
-    // The store may already hold history the mounted window excludes (pages
-    // merged on an earlier visit). Expanding the window from memory needs no
-    // IPC and no re-parse — move the anchor back and keep the reader's
-    // viewport fixed.
-    if (mountedStartIndex > 0) {
-      const el = scrollEl
-      const previousHeight = el.scrollHeight
-      const previousTop = el.scrollTop
-      const nextStart = Math.max(0, mountedStartIndex - MOUNTED_EXPAND_BATCH)
-      windowStartId = messages[nextStart]?.id ?? null
-      // Keep the tail-relative count in sync so releasing the anchor at the
-      // bottom never shrinks the window below what is already mounted.
-      mountedCount = Math.max(mountedCount, messages.length - nextStart)
-      await tick()
-      const after = scrollEl
-      if (after) {
-        after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
-        threadScrollPositions.set(thread.id, {
-          top: after.scrollTop,
-          awayFromBottom: userScrolledAway
-        })
-      }
-      // Real history may still sit beyond the store — fall through to the IPC
-      // path only when the expanded window's edge is still within reach.
-      if (!olderMessagesAvailable || !after) return
-    }
     loadingOlderMessages = true
     // Loading history is an explicit request to inspect the past.
     userScrolledAway = true
-    // Pin the window to the current oldest mounted message before the IPC
-    // page prepends — otherwise the tail-relative window would slide down and
-    // unmount what the reader is looking at.
-    if (!hasController) {
-      windowStartId ??= messages[Math.max(0, messages.length - mountedCount)]?.id ?? null
-    }
+    // Pin the window before anything prepends — with an anchor pinned, the
+    // mounted content cannot change no matter what merges behind it, so the
+    // fetch loop needs no scroll compensation at all.
+    windowStartId ??= messages[Math.max(0, messages.length - mountedCount)]?.id ?? null
     try {
-      // Backfill ahead of the reader: keep fetching bounded batches until
-      // roughly two viewports of transcript sit above the fold, so scrolling
-      // up never lands on the boundary of the currently loaded batch.
-      for (let pageCount = 0; pageCount < 6; pageCount++) {
+      // One click loads exactly one turn: [user message][working trace]
+      // [final output]. Fetch only while the previous turn is incomplete in
+      // the store — it usually already holds the whole turn, making the
+      // click pure client-side work.
+      for (let attempt = 0; attempt < 6; attempt++) {
+        if (findPreviousTurnStart(mountedStartIndex) !== null) break
         const el = scrollEl
         if (!el || !olderMessagesAvailable) break
-        // A page is a whole turn: user message, its working trace, the
-        // agent's final output. After the first fetch, keep paging only while
-        // the loaded boundary sits mid-turn (the oldest mounted message is a
-        // trace/assistant entry whose prompt is still further back), so the
-        // button never reveals a headless half-turn.
-        if (pageCount > 0 && isTurnStartIndex(mountedStartIndex)) break
         const oldest = messages[0]
         if (!oldest) {
           olderMessagesAvailable = false
           break
         }
-        const previousHeight = el.scrollHeight
-        const previousTop = el.scrollTop
         const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
         const page = await invoke(
           'thread:loadMessages',
@@ -3211,11 +3188,27 @@
         )
         if (!alive) return
         olderMessagesAvailable = page.hasOlder
-        if (page.messages.length === 0) break
+        if (page.messages.length === 0) {
+          olderMessagesAvailable = false
+          break
+        }
         threadMessages.mergePage(thread.projectId, thread.id, page.messages)
-        // The page prepended — keep the tail-relative count in sync so the
-        // window semantics stay consistent if the anchor is later released.
         mountedCount += page.messages.length
+        await tick()
+      }
+      // Move the anchor back one turn — or to the thread's very beginning
+      // when the oldest stretch is a headless remainder — then keep the
+      // reader's viewport stable across the mount.
+      const el = scrollEl
+      const previousHeight = el?.scrollHeight ?? 0
+      const previousTop = el?.scrollTop ?? 0
+      const turnStart = findPreviousTurnStart(mountedStartIndex)
+      const target = turnStart ?? 0
+      if (target < mountedStartIndex) {
+        windowStartId = messages[target]?.id ?? null
+        // Keep the tail-relative count in sync so releasing the anchor at
+        // the bottom never shrinks the window below what is mounted.
+        mountedCount = Math.max(mountedCount, messages.length - target)
         await tick()
         const after = scrollEl
         if (after) {
@@ -3228,7 +3221,7 @@
       }
     } catch {
       // A transient page failure leaves the current window intact; the next
-      // scroll or button press can retry from the same cursor.
+      // button press can retry from the same cursor.
     } finally {
       loadingOlderMessages = false
     }
