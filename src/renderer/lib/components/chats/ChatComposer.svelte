@@ -195,8 +195,9 @@
     independentAuditEnabled?: boolean
     /** Called when the user toggles the independent audit switch. */
     onIndependentAuditToggle?: (enabled: boolean) => void | Promise<void>
-    /** Engineering toolbox is locked (independent audit owns the workflow). */
-    engineeringToolboxDisabled?: boolean
+    /** Engineering toolbox is hidden (Independent Audit staged or enabled —
+     *  the two controls are mutually exclusive before a send commits either). */
+    engineeringToolboxHidden?: boolean
     /** Hides the permission level selector and forces auto review — chats are
      *  for questions and research, so they always run with auto permissions. */
     hidePermissionSelector?: boolean
@@ -299,7 +300,7 @@
     independentAuditAvailable = false,
     independentAuditEnabled = false,
     onIndependentAuditToggle,
-    engineeringToolboxDisabled = false,
+    engineeringToolboxHidden = false,
     hidePermissionSelector = false,
     readOnlyMode = false,
     allowAttachments = false,
@@ -2406,12 +2407,12 @@
       </div>
     {/if}
 
-    {#if showEngineeringMode && onEngineeringLifecycleSelect}
+    {#if showEngineeringMode && onEngineeringLifecycleSelect && !engineeringToolboxHidden}
       <EngineeringToolbox
         bind:this={engineeringToolbox}
         lifecycleState={engineeringLifecycle}
         active={engineeringActive === true}
-        disabled={readOnlyMode || engineeringToolboxDisabled}
+        disabled={readOnlyMode}
         onselect={onEngineeringLifecycleSelect}
       />
     {/if}

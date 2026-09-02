@@ -117,7 +117,10 @@
   import {
     loadLifecycleIntent,
     saveLifecycleIntent,
-    clearLifecycleIntent
+    clearLifecycleIntent,
+    loadIndependentAuditIntent,
+    saveIndependentAuditIntent,
+    clearIndependentAuditIntent
   } from '$lib/stores/lifecycle-intent'
   import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
   import {
@@ -511,6 +514,10 @@
 
   let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
   let pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
+  /** Staged (intent-only) Independent Audit toggle: like the Toolbox, toggles
+   *  are intent until send. `null` means nothing is staged; `true`/`false` is
+   *  the staged switch position. Committed when the user sends a message. */
+  let pendingIndependentAudit = $state<boolean | null>(null)
   let lifecycleCancelModalOpen = $state(false)
   /** True while the Engineering lifecycle retry from the failure card is running. */
   let engineeringLifecycleRetrying = $state(false)
@@ -2046,6 +2053,19 @@
         clearLifecycleIntent(thread.projectId, thread.id)
         await applyLifecycleSelection(staged)
       }
+      // A staged Independent Audit toggle commits exactly here: the send is
+      // the moment the mutual exclusion with Engineering becomes durable.
+      if (pendingIndependentAudit === true) {
+        try {
+          await invoke('thread:setIndependentAudit', thread.projectId, thread.id, true)
+          pendingIndependentAudit = null
+          clearIndependentAuditIntent(thread.projectId, thread.id)
+        } catch (error) {
+          // Keep the staged intent so the switch keeps showing the user's
+          // choice; the send itself is never blocked by the audit flag.
+          reportError(error, 'The independent audit could not be enabled.')
+        }
+      }
       await sendMessage(
         text,
         attachments,
@@ -2402,13 +2422,20 @@
   /** Independent (spec-less) audit state. Never inherited by forks or new threads. */
   let independentAuditEnabled = $derived(thread.independentAudit === true)
   let independentAuditInitialized = $derived(thread.independentAuditInitialized === true)
+  /** A staged toggle wins over the committed state, mirroring the Toolbox. */
+  let independentAuditDisplayEnabled = $derived(
+    pendingIndependentAudit !== null ? pendingIndependentAudit : independentAuditEnabled
+  )
   let independentAuditRunning = $derived(independentAuditEnabled && auditBusy)
-  /** The switch only exists once the thread has work: a bound session or a
-   *  mirrored conversation (fresh threads and empty drafts never show it). */
+  /** The switch only exists once the thread has work and no Engineering mode
+   *  is on — a staged (intent-only) Toolbox selection counts as on, so the
+   *  two controls can never be lit at the same time before a send commits
+   *  either choice. Fresh threads and empty drafts never show it. */
   let independentAuditAvailable = $derived(
     !chatMode &&
       !orchestrationChild &&
       !independentAuditInitialized &&
+      !engineeringOn &&
       (thread.sessionId !== undefined ||
         (threadMessages.loaded(thread.projectId, thread.id) &&
           threadMessages.messages(thread.projectId, thread.id).length > 0))
@@ -3381,6 +3408,9 @@
       // session or thread switch so the switches keep the user's last choice.
       const stagedIntent = loadLifecycleIntent(mountedProjectId, mountedThreadId)
       if (stagedIntent) pendingLifecycleSelection = stagedIntent
+      // Same for a staged (not-yet-sent) Independent Audit toggle.
+      const stagedAuditIntent = loadIndependentAuditIntent(mountedProjectId, mountedThreadId)
+      if (stagedAuditIntent !== null) pendingIndependentAudit = stagedAuditIntent
     }
     // A sibling thread may inherit its Engineering lifecycle after this view
     // already hydrated (the inheritance write is async). Re-read once the
@@ -7412,20 +7442,29 @@
 
   /** Toggle the independent audit. Enabling is permanent once the first run
    *  starts, and excludes engineering modes for this thread's lifetime. */
+  /** Toggle the Independent Audit. Like the Toolbox, toggles are intent:
+   *  turning it on stages the choice (the Engineering Toolbox disappears;
+   *  turning it off brings it back) and sending a message commits it. A
+   *  committed audit that has not started its first run can still be turned
+   *  off, which brings the Toolbox back. */
   async function toggleIndependentAudit(enabled: boolean): Promise<void> {
-    try {
-      await invoke('thread:setIndependentAudit', thread.projectId, thread.id, enabled)
-    } catch (error) {
-      reportError(error, 'The independent audit could not be changed.')
-      const rawError =
-        error instanceof Error ? error.message : 'The independent audit could not be changed.'
-      errorMessage = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+    if (independentAuditInitialized) return
+    if (enabled) {
+      pendingIndependentAudit = true
+      saveIndependentAuditIntent(thread.projectId, thread.id, true)
       return
     }
-    if (enabled) {
-      coordinatorDockState.setAutoOpen(true)
-      contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
+    if (independentAuditEnabled && pendingIndependentAudit === null) {
+      // Committed (pre-init) audit: disable durably so Engineering unlocks.
+      try {
+        await invoke('thread:setIndependentAudit', thread.projectId, thread.id, false)
+      } catch (error) {
+        reportError(error, 'The independent audit could not be changed.')
+        return
+      }
     }
+    pendingIndependentAudit = null
+    clearIndependentAuditIntent(thread.projectId, thread.id)
   }
 
   async function generateDurableAssignmentAudit(
@@ -11266,9 +11305,9 @@
                     engineeringActive={engineeringOn}
                     onEngineeringLifecycleSelect={selectEngineeringLifecycle}
                     independentAuditAvailable={independentAuditAvailable}
-                    independentAuditEnabled={independentAuditEnabled}
+                    independentAuditEnabled={independentAuditDisplayEnabled}
                     onIndependentAuditToggle={toggleIndependentAudit}
-                    engineeringToolboxDisabled={independentAuditEnabled}
+                    engineeringToolboxHidden={independentAuditDisplayEnabled}
                     showChatModes={chatMode}
                     {settings}
                     onSettingsChange={updateSettings}
