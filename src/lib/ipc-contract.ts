@@ -2335,6 +2335,7 @@ export interface IpcInvokeContract {
     AuditReport
   >
   'audit:complete': Contract<[projectId: string, threadId: string], Thread>
+  'audit:dismiss': Contract<[projectId: string, threadId: string], Thread>
   'audit:beginRework': Contract<[projectId: string, threadId: string], Thread>
   'audit:returnToOffer': Contract<[projectId: string, threadId: string], AssignmentPlan>
   'audit:openInEditor': Contract<

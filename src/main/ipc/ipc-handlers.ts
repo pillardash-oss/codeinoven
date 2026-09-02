@@ -3758,8 +3758,24 @@ export function registerIpcHandlers(
       await threadManager.setStatus(validProjectId, validThreadId, 'completed')
       return threadManager.setAuditState(validProjectId, validThreadId, undefined)
     }
+    // Non-assignment implementation audits settle the coordinator on `spec`
+    // while the report is under review. Accepting the report ends the audit
+    // cycle, so the thread must land on `completed` instead of staying on
+    // "Spec ready" (which also keeps it out of the done slice and blocks
+    // thread cleanup). Guarded so an actively working thread is never clobbered.
+    const thread = await threadManager.getThread(validProjectId, validThreadId)
+    if (thread && thread.status === 'spec') {
+      await threadManager.setStatus(validProjectId, validThreadId, 'completed')
+    }
     return threadManager.setAuditState(validProjectId, validThreadId, undefined)
   })
+  ipcMain.handle('audit:dismiss', (_, projectId: unknown, threadId: unknown) =>
+    threadManager.setAuditState(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID'),
+      undefined
+    )
+  )
   ipcMain.handle('audit:beginRework', (_, projectId: unknown, threadId: unknown) =>
     threadManager.setAuditState(
       validateEntityId(projectId, 'Project ID'),

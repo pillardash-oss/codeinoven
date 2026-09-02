@@ -7497,31 +7497,39 @@
     updateSettings({ ...settings, ...normalized })
   }
 
-  async function completeAudit(): Promise<void> {
+  /** `complete` accepts the audit cycle (thread lands on Done); `dismiss`
+   *  cancels the offer/report card without ending the audit cycle. */
+  async function completeAudit(outcome: 'complete' | 'dismiss' = 'complete'): Promise<void> {
     auditBusy = true
     try {
-      const updatedThread = await invoke('audit:complete', thread.projectId, thread.id)
+      const updatedThread = await invoke(
+        outcome === 'dismiss' ? 'audit:dismiss' : 'audit:complete',
+        thread.projectId,
+        thread.id
+      )
       scopeState.updateThread(updatedThread)
-      if (assignment) {
-        const coordinatorThreadId = auditWorkflowThreadId()
-        const refreshedAssignment = await invoke(
-          'assignment:getActive',
-          thread.projectId,
-          coordinatorThreadId
-        ).catch(() => null)
-        if (refreshedAssignment) assignment = refreshedAssignment
+      if (outcome === 'complete') {
+        if (assignment) {
+          const coordinatorThreadId = auditWorkflowThreadId()
+          const refreshedAssignment = await invoke(
+            'assignment:getActive',
+            thread.projectId,
+            coordinatorThreadId
+          ).catch(() => null)
+          if (refreshedAssignment) assignment = refreshedAssignment
+        }
+        if (engineeringLifecycle?.activeStage === 'achievement') {
+          engineeringLifecycle = await invoke(
+            'engineeringLifecycle:complete',
+            thread.projectId,
+            thread.id,
+            'achievement'
+          )
+        }
+        settings = { ...settings, loopMode: false }
+        commitSettings(settings)
+        await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
       }
-      if (engineeringLifecycle?.activeStage === 'achievement') {
-        engineeringLifecycle = await invoke(
-          'engineeringLifecycle:complete',
-          thread.projectId,
-          thread.id,
-          'achievement'
-        )
-      }
-      settings = { ...settings, loopMode: false }
-      commitSettings(settings)
-      await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
       auditState = undefined
       await reconcileReadySpec()
       showSpecStudio = false
@@ -10986,7 +10994,7 @@
                 recentModels={rendererRecovery.recentModels}
                 onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={auditBusy}
-                onCancel={completeAudit}
+                onCancel={() => void completeAudit('dismiss')}
                 onAudit={generateAudit}
                 onModelChange={changeAuditModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -11006,7 +11014,7 @@
                 busy={auditBusy}
                 onViewReport={openAuditStudio}
                 onComplete={completeAudit}
-                onCancel={completeAudit}
+                onCancel={() => void completeAudit('dismiss')}
                 onReaudit={reaudit}
                 onModelChange={changeAuditModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>

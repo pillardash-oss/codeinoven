@@ -518,6 +518,7 @@ const INVOKE_CHANNELS = [
   'audit:updateAnnotation',
   'audit:resolveAnnotation',
   'audit:complete',
+  'audit:dismiss',
   'audit:beginRework',
   'audit:returnToOffer',
   'audit:openInEditor',
