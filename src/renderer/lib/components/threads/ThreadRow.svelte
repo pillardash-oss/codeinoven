@@ -25,6 +25,7 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
@@ -369,6 +370,13 @@
   /** Orchestration worker/auditor threads stay silent: never presented as unread. */
   let effectiveRead = $derived(isOrchestrationChildThread(thread) || thread.read)
 
+  /** A finished temporary (side) chat on this thread is still unread — the
+   *  parent thread's own `read` flag never changes for side chats, so the
+   *  badge comes from the side-chat store instead. */
+  let hasTemporaryChatUnread = $derived(
+    temporaryChatUnread.hasUnread(thread.projectId, thread.id)
+  )
+
   /** Aggregate child activity onto the Sr. Engineer row — the public source of truth. */
   let delegatedWorkActive = $derived(
     coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
@@ -424,6 +432,10 @@
     if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
     if (thread.status === 'spec') return 'spec'
+    // An unread side chat must surface even while the parent thread itself is
+    // still working: the row keeps pulsing (the busy indicator is independent
+    // of the badge) but shows the unread dot instead of swallowing it.
+    if (hasTemporaryChatUnread) return 'unread'
     // A scheduled message (queued behind other threads) reads as pending work
     // and shows the timer badge — it is a draft in the sorting/pinning sense but
     // not something still being typed.

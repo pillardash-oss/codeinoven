@@ -3,6 +3,7 @@ import { messageId } from '$shared/id'
 import { SvelteSet } from 'svelte/reactivity'
 import { agentRuns } from './agent-runs.svelte'
 import { threadMessages } from './thread-messages.svelte'
+import { temporaryChatUnread } from './temporary-chat-unread.svelte'
 import { gitState } from './git.svelte'
 import { APP_SLUG } from '$shared/brand'
 import type { AgentSubagentActivity, ThreadSettings } from '$shared/types'
@@ -1289,6 +1290,18 @@ class ContextSidebarState {
     return tab
   }
 
+  /** Reveal the sidebar and focus one of the thread's temporary-chat tabs —
+   *  the deep-link target for a side-chat notification. Returns false when
+   *  the tab no longer exists (closed or never opened), so the caller can
+   *  drop the unread badge instead of leaving it stuck. */
+  focusTemporaryChat(projectId: string, threadId: string, temporaryChatId: string): boolean {
+    const context = this.contexts[contextKey(projectId, threadId)]
+    const id = `temporary-chat:${temporaryChatId}`
+    if (!context?.tabs.some((tab) => tab.id === id)) return false
+    this.focusInContext(context, id)
+    return true
+  }
+
   touchTemporaryChat(
     tab: TemporaryChatContextTab,
     expiresAt = Date.now() + TEMPORARY_CHAT_INACTIVITY_MS
@@ -1302,6 +1315,7 @@ class ContextSidebarState {
     if (tab.expired) return
     const temporaryChatId = tab.temporaryChatId
     tab.expired = true
+    temporaryChatUnread.clear(tab.projectId, tab.threadId, temporaryChatId)
     tab.initialContext = ''
     tab.selectionAttached = false
     tab.autoPromptMessageId = null
@@ -1317,6 +1331,7 @@ class ContextSidebarState {
     // A fresh conversation identity: drop the old cache, then regenerate the id.
     threadMessages.clear(tab.projectId, tab.temporaryChatId)
     agentRuns.clear(tab.projectId, tab.temporaryChatId)
+    temporaryChatUnread.clear(tab.projectId, tab.threadId, tab.temporaryChatId)
     this.clearTemporaryChatExpiry(tab.temporaryChatId)
     tab.temporaryChatId = crypto.randomUUID()
     tab.sessionId = null
@@ -1495,6 +1510,7 @@ class ContextSidebarState {
     const tab = context.tabs[index]
     if (tab.kind === 'temporary-chat') {
       this.clearTemporaryChatExpiry(tab.temporaryChatId)
+      temporaryChatUnread.clear(tab.projectId, tab.threadId, tab.temporaryChatId)
     }
     const closedKind = tab.kind
     context.tabs = context.tabs.filter((tab) => tab.id !== id)
@@ -1609,6 +1625,11 @@ class ContextSidebarState {
     project.visible = true
     this.browserVisible = false
     this.notificationsVisible = false
+    // Focusing a side chat is the act of reading its response — drop the
+    // parent thread's unread-side-chat badge the moment the panel surfaces.
+    if (tab.kind === 'temporary-chat') {
+      temporaryChatUnread.clear(context.projectId, context.threadId, tab.temporaryChatId)
+    }
   }
 
   private open(context: ThreadSidebarContext, tab: ContextSidebarTab): void {

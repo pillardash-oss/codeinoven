@@ -14,7 +14,7 @@
   import { INBOX_PROJECT_ID } from '$shared/types'
 
   interface Props {
-    onOpenThread?: (projectId: string, threadId: string) => void | Promise<void>
+    onOpenThread?: (projectId: string, threadId: string, temporaryChatId?: string) => void | Promise<void>
   }
 
   let { onOpenThread }: Props = $props()
@@ -41,7 +41,7 @@
     busyId = n.id
     try {
       if (onOpenThread) {
-        await onOpenThread(n.projectId, n.threadId)
+        await onOpenThread(n.projectId, n.threadId, n.temporaryChatId)
         notificationPanelState.dismiss(n.id)
         return
       }
@@ -52,7 +52,7 @@
       if (!project || !thread) return
       const openDesktopThread = workspaceState.openThreadFromNotification
       if (!openDesktopThread) return
-      await openDesktopThread(thread, project)
+      await openDesktopThread(thread, project, n.temporaryChatId)
       notificationPanelState.dismiss(n.id)
     } catch {
       // Thread or project may have been deleted

@@ -2489,6 +2489,10 @@ export interface IpcInvokeContract {
 export interface ThreadClickedPayload {
   projectId: string
   threadId: string
+  /** Present when the click came from a temporary (side) chat notification, so
+   *  the renderer can focus the side-chat panel after opening the parent
+   *  thread. Omitted for regular thread notifications. */
+  temporaryChatId?: string
 }
 
 /** One thread still being worked on, blocking the close. */

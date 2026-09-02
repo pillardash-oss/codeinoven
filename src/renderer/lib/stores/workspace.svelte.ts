@@ -123,7 +123,9 @@ class WorkspaceState {
    * regular project view stays, scope state stays, threads view stays, and
    * chat notifications switch to the chats view.  Registered by App.svelte.
    */
-  openThreadFromNotification: ((thread: Thread, project: Project) => Promise<void>) | null = null
+  openThreadFromNotification:
+    | ((thread: Thread, project: Project, temporaryChatId?: string) => Promise<void>)
+    | null = null
 
   // ─── Sources (fed by ThreadView) ───────────────────────────────────────
   sources: AgentSource[] = $state([])
