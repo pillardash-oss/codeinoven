@@ -668,4 +668,26 @@ body {
 .message-block {
   content-visibility: auto;
   contain-intrinsic-size: auto 320px;
+  /* Subtle entrance: window fills and streaming appends mount blocks in
+   * batches, and a hard pop-in reads as jank. A short opacity-only fade
+   * (no transform — a transform here would briefly become the containing
+   * block for fixed-position tooltips inside the block) masks the appearance
+   * without costing layout. Compositor-only, so it stays cheap even when
+   * dozens of blocks mount in one batch. */
+  animation: message-block-enter 150ms ease-out;
+}
+
+@keyframes message-block-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-block {
+    animation: none;
+  }
 }

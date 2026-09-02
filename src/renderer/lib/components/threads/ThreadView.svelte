@@ -313,6 +313,10 @@
   const INITIAL_PAINT_MESSAGES = 4
   /** Messages mounted per frame while the window auto-fills after mount. */
   const INITIAL_REVEAL_BATCH = 12
+  /** Messages added to the mounted window per upward-scroll expansion. Half
+   *  a history page keeps each mount hitch short — a full page in one flush
+   *  reads as a lurch while scrolling, many small reads as continuous. */
+  const MOUNTED_EXPAND_BATCH = 20
   let mountedCount = $state(
     Math.min(
       threadMessages.messages(mountedThread.projectId, mountedThread.id).length,
@@ -3073,7 +3077,7 @@
       const el = scrollEl
       const previousHeight = el.scrollHeight
       const previousTop = el.scrollTop
-      mountedCount = Math.min(messages.length, mountedCount + HISTORY_WINDOW_SIZE)
+      mountedCount = Math.min(messages.length, mountedCount + MOUNTED_EXPAND_BATCH)
       await tick()
       const after = scrollEl
       if (after) {
