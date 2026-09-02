@@ -1,5 +1,6 @@
 <script lang="ts">
   import { X } from '@lucide/svelte'
+  import { Dialog } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -33,39 +34,21 @@
   })
 </script>
 
-<svelte:window
-  onkeydown={(e: KeyboardEvent) => {
-    if (!open) return
-    if (e.key === 'Escape') onClose()
-  }}
-/>
-
-{#if open}
-  <!-- pointer-events-auto: an open bits-ui modal dialog sets
-       `body { pointer-events: none }`, which would make this sheet visible
-       but unclickable. -->
-  <div class="pointer-events-auto fixed inset-0 z-50">
-    <button
-      class="absolute inset-0 bg-overlay/70 backdrop-blur-[1px]"
-      aria-label="Close panel"
-      title="Close panel"
-      onclick={onClose}
-    ></button>
-
-    <div
-      class="absolute right-0 top-0 flex h-full w-full flex-col overflow-hidden border-l border-border bg-surface shadow-xl {width}"
+<Dialog.Root {open} onOpenChange={(next) => !next && onClose()}>
+  <Dialog.Portal>
+    <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/70 backdrop-blur-[1px]" />
+    <Dialog.Content
+      class="fixed right-0 top-0 z-50 flex h-full w-full flex-col overflow-hidden border-l border-border bg-surface shadow-xl {width}"
     >
       <div class="flex shrink-0 items-center justify-between border-b border-border px-5 py-4">
-        <h2 class="text-sm font-semibold text-foreground">{title}</h2>
-        <button
-          type="button"
+        <Dialog.Title class="text-sm font-semibold text-foreground">{title}</Dialog.Title>
+        <Dialog.Close
           class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Close"
           title="Close"
-          onclick={onClose}
         >
           <X size={16} />
-        </button>
+        </Dialog.Close>
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-5">{@render children()}</div>
@@ -77,6 +60,6 @@
           {@render footer()}
         </div>
       {/if}
-    </div>
-  </div>
-{/if}
+    </Dialog.Content>
+  </Dialog.Portal>
+</Dialog.Root>
