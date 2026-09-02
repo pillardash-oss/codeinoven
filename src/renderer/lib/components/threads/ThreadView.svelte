@@ -176,6 +176,7 @@
     AgentPart,
     AgentEvent,
     AgentContextUsage,
+    AgentRateLimitWindow,
     AgentHarnessUsage,
     AgentAccountUsage,
     AgentProviderIssue,
@@ -911,6 +912,27 @@
     const limit = rateLimitWindowFromProviderIssue(issue)
     return limit ? [limit] : []
   })
+  function mergeRateLimitWindows(
+    reported: readonly AgentRateLimitWindow[],
+    authoritative: readonly AgentRateLimitWindow[]
+  ): AgentRateLimitWindow[] {
+    const merged = [...reported]
+    for (const incoming of authoritative) {
+      const match = merged.findIndex(
+        (candidate) =>
+          (incoming.windowMinutes !== undefined &&
+            candidate.windowMinutes === incoming.windowMinutes) ||
+          candidate.label.toLowerCase() === incoming.label.toLowerCase()
+      )
+      if (match === -1) {
+        merged.push(incoming)
+      } else {
+        const current = merged[match]
+        if (current) merged[match] = { ...current, ...incoming, id: current.id }
+      }
+    }
+    return merged
+  }
   /** Harness that actually produced the visible provider issue. When it differs
    *  from the thread's current harness (e.g. a Codex usage-limit card still on
    *  screen while the user already switched the thread to OpenCode), the badge
@@ -1335,7 +1357,7 @@
         : {}),
       costUsd,
       ...(latestTokens ? { tokens: latestTokens } : {}),
-      rateLimits: providerIssueRateLimits.length ? providerIssueRateLimits : (latestRateLimits ?? []),
+      rateLimits: mergeRateLimitWindows(latestRateLimits ?? [], providerIssueRateLimits),
       ...(latestCredits ? { credits: latestCredits } : {})
     }
   })
@@ -1482,7 +1504,7 @@
       const harnessId = visibleProviderStatus.issue.harnessId ?? settings.harnessId
       const entry = byHarness[harnessId]
       if (entry) {
-        entry.rateLimits = providerIssueRateLimits
+        entry.rateLimits = mergeRateLimitWindows(entry.rateLimits, providerIssueRateLimits)
       } else {
         byHarness[harnessId] = {
           harnessId,
