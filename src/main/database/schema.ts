@@ -112,6 +112,8 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   achievement_role     TEXT CHECK(achievement_role IN ('coordinator','auditor')),
   auditor_thread_id    TEXT,
   user_input_locked    INTEGER NOT NULL DEFAULT 0,
+  independent_audit    INTEGER NOT NULL DEFAULT 0,
+  independent_audit_initialized INTEGER NOT NULL DEFAULT 0,
   created_at           INTEGER NOT NULL,
   updated_at           INTEGER NOT NULL,
   last_activity        INTEGER NOT NULL,

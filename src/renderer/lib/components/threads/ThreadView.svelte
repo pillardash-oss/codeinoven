@@ -80,6 +80,7 @@
   import AssignmentReadyCard from './AssignmentReadyCard.svelte'
   import AssignmentCoordinatorPanel from './AssignmentCoordinatorPanel.svelte'
   import AchievementCoordinatorPanel from './AchievementCoordinatorPanel.svelte'
+  import IndependentAuditCoordinatorPanel from './IndependentAuditCoordinatorPanel.svelte'
   import AuditOfferCard from './AuditOfferCard.svelte'
   import AuditReadyCard from './AuditReadyCard.svelte'
   import AuditGeneratedCard from './AuditGeneratedCard.svelte'
@@ -2398,10 +2399,26 @@
   /** Sticky: Achievement coordination remains once the flow has ever run. */
   let achievementTriggered = $derived(achievementOnly || thread.achievementRole === 'coordinator')
 
+  /** Independent (spec-less) audit state. Never inherited by forks or new threads. */
+  let independentAuditEnabled = $derived(thread.independentAudit === true)
+  let independentAuditInitialized = $derived(thread.independentAuditInitialized === true)
+  let independentAuditRunning = $derived(independentAuditEnabled && auditBusy)
+  /** The switch only exists once the thread has work: a bound session or a
+   *  mirrored conversation (fresh threads and empty drafts never show it). */
+  let independentAuditAvailable = $derived(
+    !chatMode &&
+      !orchestrationChild &&
+      !independentAuditInitialized &&
+      (thread.sessionId !== undefined ||
+        (threadMessages.loaded(thread.projectId, thread.id) &&
+          threadMessages.messages(thread.projectId, thread.id).length > 0))
+  )
+
   /** Which coordinator, if any, this thread publishes to the context dock. */
   let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | 'audit' | null => {
     if (isAssignmentAuditorThread) return null
     if (assignment && assignment.status !== 'draft') return 'assignment'
+    if (independentAuditEnabled) return 'audit'
     if (achievementTriggered && spec) return 'achievement'
     if (plainEngineeringAuditAvailable && spec) return 'audit'
     return null
@@ -7354,6 +7371,63 @@
     }
   }
 
+  /** Run an independent (spec-less) audit from the audit coordinator. The
+   *  report joins the thread's existing report versions in Spec Studio. */
+  async function generateIndependentAudit(selected: ThreadSettings): Promise<void> {
+    auditBusy = true
+    auditError = ''
+    errorMessage = ''
+    auditSettings = selected
+    rendererRecovery.addRecentModel(
+      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    )
+    try {
+      durableAuditThread = await invoke(
+        'agent:ensureIndependentAuditorThread',
+        thread.projectId,
+        thread.id,
+        selected
+      )
+      coordinatorDockState.setAutoOpen(true)
+      contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
+      const result = await invoke('agent:generateIndependentAudit', thread.projectId, thread.id, {
+        settings: selected
+      })
+      auditReport = result.report
+      durableAuditThread = result.auditorThread
+      auditVersions = await invoke(
+        'audit:listVersions',
+        thread.projectId,
+        thread.id,
+        auditReport.id
+      )
+    } catch (error) {
+      const rawError = error instanceof Error ? error.message : 'The independent audit failed.'
+      errorMessage = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+      auditError = errorMessage
+    } finally {
+      auditBusy = false
+    }
+  }
+
+  /** Toggle the independent audit. Enabling is permanent once the first run
+   *  starts, and excludes engineering modes for this thread's lifetime. */
+  async function toggleIndependentAudit(enabled: boolean): Promise<void> {
+    try {
+      await invoke('thread:setIndependentAudit', thread.projectId, thread.id, enabled)
+    } catch (error) {
+      reportError(error, 'The independent audit could not be changed.')
+      const rawError =
+        error instanceof Error ? error.message : 'The independent audit could not be changed.'
+      errorMessage = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+      return
+    }
+    if (enabled) {
+      coordinatorDockState.setAutoOpen(true)
+      contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
+    }
+  }
+
   async function generateDurableAssignmentAudit(
     selected: ThreadSettings,
     coordinatorThreadId = thread.id
@@ -11191,6 +11265,10 @@
                     engineeringLifecycle={pendingLifecycleDisplay}
                     engineeringActive={engineeringOn}
                     onEngineeringLifecycleSelect={selectEngineeringLifecycle}
+                    independentAuditAvailable={independentAuditAvailable}
+                    independentAuditEnabled={independentAuditEnabled}
+                    onIndependentAuditToggle={toggleIndependentAudit}
+                    engineeringToolboxDisabled={independentAuditEnabled}
                     showChatModes={chatMode}
                     {settings}
                     onSettingsChange={updateSettings}
@@ -11410,7 +11488,28 @@
 {/snippet}
 
 {#snippet auditCoordinatorPanel()}
-  {#if spec}
+  {#if independentAuditEnabled}
+    <IndependentAuditCoordinatorPanel
+      running={independentAuditRunning}
+      auditThread={durableAuditThread}
+      reportAvailable={auditReport !== null}
+      selectedThreadId={thread.id}
+      auditorSettings={auditSettings}
+      {providers}
+      projectId={thread.projectId}
+      favoriteModels={rendererRecovery.favoriteModels}
+      recentModels={rendererRecovery.recentModels}
+      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+      onOpenAudit={() => void generateIndependentAudit(auditSettings)}
+      onViewReport={openAuditStudio}
+      onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
+      onModelChange={changeAuditModel}
+      onToggleFavorite={(providerId, modelId, harnessId) =>
+        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+      onReorderFavorite={(draggedKey, targetKey, position) =>
+        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+    />
+  {:else if spec}
     <AchievementCoordinatorPanel
       mode="audit"
       specTitle={thread.title}

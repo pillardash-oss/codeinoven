@@ -686,6 +686,10 @@ export class ThreadManager {
         | 'achievementRole'
         | 'auditorThreadId'
         | 'userInputLocked'
+        | 'independentAudit'
+        | 'independentAuditInitialized'
+        | 'activeAuditId'
+        | 'activeAuditVersion'
       >
     >
   ): Promise<Thread> {
@@ -715,6 +719,11 @@ export class ThreadManager {
       achievementRole: input.achievementRole ?? existing.achievementRole,
       auditorThreadId: input.auditorThreadId ?? existing.auditorThreadId,
       userInputLocked: input.userInputLocked ?? existing.userInputLocked,
+      independentAudit: input.independentAudit ?? existing.independentAudit,
+      independentAuditInitialized:
+        input.independentAuditInitialized ?? existing.independentAuditInitialized,
+      activeAuditId: input.activeAuditId ?? existing.activeAuditId,
+      activeAuditVersion: input.activeAuditVersion ?? existing.activeAuditVersion,
       scopeSortOrder:
         input.scopeBucketId !== undefined &&
         input.scopeBucketId !== (existing.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
@@ -1094,6 +1103,15 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
+    // The independent audit owns the thread's workflow: engineering modes are
+    // locked out for the thread's lifetime once it is enabled.
+    if (
+      existing.independentAudit === true &&
+      (settings.assignmentMode === true || settings.loopMode === true)
+    ) {
+      throw new Error('Engineering modes are locked while the independent audit is enabled.')
+    }
+
     const loopWasEnabled = existing.settings?.loopMode === true
     const loopIsEnabled = settings.loopMode === true
     const updated: Thread = {
@@ -1137,6 +1155,56 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
     const updated: Thread = { ...existing, loopIteration, updatedAt: Date.now() }
+    await this.threadRepo.upsertViaWorker(updated)
+    this.onChange?.(updated)
+    return updated
+  }
+
+  /**
+   * Enable or disable the independent (spec-less) audit for a thread.
+   *
+   * Enabling requires prior work (a bound session or mirrored conversation),
+   * excludes orchestration threads, and is rejected while an Engineering
+   * lifecycle selection is active — the two workflows are mutually exclusive.
+   * Once the first audit run has started (`independentAuditInitialized`), the
+   * audit stays enabled for the thread's lifetime. The flag is deliberately a
+   * `Thread` field, not a `ThreadSettings` entry, so forks and new threads
+   * never inherit it.
+   */
+  async setIndependentAudit(
+    projectId: string,
+    threadId: string,
+    enabled: boolean
+  ): Promise<Thread> {
+    const existing = this.requireOwnedThread(projectId, threadId)
+    if (isOrchestrationChildThread(existing)) {
+      throw new Error('Independent audit is not available on orchestration threads.')
+    }
+    if (!enabled && existing.independentAuditInitialized === true) {
+      throw new Error('The independent audit has started and stays enabled for this thread.')
+    }
+    if (enabled && existing.independentAudit !== true) {
+      const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
+      if (
+        (lifecycle && lifecycle.selection !== 'none') ||
+        lifecycle?.startedAt !== undefined
+      ) {
+        throw new Error(
+          'Independent audit excludes Engineering modes — turn them off first or fork the thread.'
+        )
+      }
+      const hasWork =
+        existing.sessionId !== undefined ||
+        this.agentMessageRepo.countConversationByThread(threadId) > 0
+      if (!hasWork) {
+        throw new Error('The independent audit becomes available once the thread has work.')
+      }
+    }
+    const updated: Thread = {
+      ...existing,
+      independentAudit: enabled,
+      updatedAt: Date.now()
+    }
     await this.threadRepo.upsertViaWorker(updated)
     this.onChange?.(updated)
     return updated

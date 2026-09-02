@@ -435,6 +435,14 @@ export interface Thread {
   dismissedSpecVersion?: number
   /** Audit gate for the latest implementation turn. */
   auditState?: 'offered' | 'running' | 'report_ready' | 'reworking'
+  /** Independent (spec-less) audit is enabled for this thread. Excludes
+   *  engineering modes for the thread's lifetime and is never inherited by
+   *  forks or new threads created from this thread. */
+  independentAudit?: boolean
+  /** Set permanently once the first independent audit run starts; the
+   *  composer switch disappears and the audit coordinator stays for the
+   *  thread's lifetime. */
+  independentAuditInitialized?: boolean
   /** Persisted count of completed Achievement audit cycles. */
   loopIteration?: number
   /** Latest persisted audit report surfaced by the thread. */
@@ -3692,8 +3700,11 @@ export interface AuditReport {
   id: string
   projectId: string
   threadId: string
-  specId: string
-  specVersion: number
+  /** Audited specification; absent on independent (spec-less) audits. */
+  specId?: string
+  specVersion?: number
+  /** True when this report was produced by an independent spec-less audit. */
+  independent?: boolean
   /** Exact Assignment implementation graph audited, when this is an Assignment audit. */
   assignmentId?: string
   assignmentVersion?: number

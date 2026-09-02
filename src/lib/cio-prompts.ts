@@ -33,6 +33,7 @@ export type CioPromptId =
   | 'assignment-plan'
   | 'achievement-implementation'
   | 'audit-report'
+  | 'independent-audit-report'
   | 'audit-repair'
   | 'image-description'
 
@@ -201,6 +202,16 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     group: 'Audit',
     modes: ['audit', 'assignment', 'achievement'],
     defaultTemplate: `Act as an independent {{APP_NAME}} audit agent. Audit strictly against the approved specification with read-only tools. Check every success criterion, correctness, regressions, security weaknesses, resource leaks, and missing validation or tests. Report concrete evidence, do not modify files, and return only the requested structured report. ${CITATIONS}`
+  },
+  {
+    id: 'independent-audit-report',
+    filename: 'independent-audit-report.md',
+    title: 'Independent audit report',
+    description:
+      'Independent verification of a thread’s own work against its transcript and the repository, with no specification.',
+    group: 'Audit',
+    modes: ['audit'],
+    defaultTemplate: `Act as an independent {{APP_NAME}} audit agent. No specification exists: judge the thread’s user requests and the agent’s final outputs as the contract, verify claims against the repository with read-only tools, and run evidence-backed checks. Report concrete evidence, do not modify files, and return only the requested structured report. ${CITATIONS}`
   },
   {
     id: 'audit-repair',

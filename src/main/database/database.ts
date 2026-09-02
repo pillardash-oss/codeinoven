@@ -656,6 +656,7 @@ export class Database {
       this.migrateModelRankingSnapshotClaimToken(connection)
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
+      this.migrateThreadIndependentAuditColumns(connection)
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
     })()
   }
@@ -793,6 +794,25 @@ export class Database {
     if (!columns.has('autopilot')) {
       connection.exec(
         'ALTER TABLE engineering_lifecycle ADD COLUMN autopilot INTEGER NOT NULL DEFAULT 0'
+      )
+    }
+  }
+
+  /** Existing databases predate the independent (spec-less) audit thread flags. */
+  private migrateThreadIndependentAuditColumns(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('independent_audit')) {
+      connection.exec(
+        'ALTER TABLE threads ADD COLUMN independent_audit INTEGER NOT NULL DEFAULT 0'
+      )
+    }
+    if (!columns.has('independent_audit_initialized')) {
+      connection.exec(
+        'ALTER TABLE threads ADD COLUMN independent_audit_initialized INTEGER NOT NULL DEFAULT 0'
       )
     }
   }

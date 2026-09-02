@@ -44,6 +44,8 @@ interface ThreadRow {
   achievement_role: string | null
   auditor_thread_id: string | null
   user_input_locked: number
+  independent_audit: number
+  independent_audit_initialized: number
   created_at: number
   updated_at: number
   last_activity: number
@@ -156,6 +158,8 @@ function rowToThread(row: ThreadRow): Thread {
     achievementRole: (row.achievement_role as Thread['achievementRole']) ?? undefined,
     auditorThreadId: row.auditor_thread_id ?? undefined,
     userInputLocked: row.user_input_locked === 1,
+    independentAudit: row.independent_audit === 1,
+    independentAuditInitialized: row.independent_audit_initialized === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastActivity: row.last_activity,
@@ -274,8 +278,9 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   audit_state, loop_iteration, active_audit_id, active_audit_version,
   assignment_id, assignment_role, assignment_task_id,
   coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
+  independent_audit, independent_audit_initialized,
   created_at, updated_at, last_activity, working_directory
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -307,6 +312,8 @@ ON CONFLICT(id) DO UPDATE SET
   achievement_role=excluded.achievement_role,
   auditor_thread_id=excluded.auditor_thread_id,
   user_input_locked=excluded.user_input_locked,
+  independent_audit=excluded.independent_audit,
+  independent_audit_initialized=excluded.independent_audit_initialized,
   created_at=excluded.created_at,
   updated_at=excluded.updated_at,
   last_activity=excluded.last_activity,
@@ -346,6 +353,8 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.achievementRole ?? null,
     thread.auditorThreadId ?? null,
     thread.userInputLocked ? 1 : 0,
+    thread.independentAudit ? 1 : 0,
+    thread.independentAuditInitialized ? 1 : 0,
     thread.createdAt,
     thread.updatedAt,
     thread.lastActivity,

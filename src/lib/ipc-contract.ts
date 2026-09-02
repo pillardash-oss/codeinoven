@@ -797,6 +797,14 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, request: AuditGenerationRequest],
     AuditReport
   >
+  'agent:generateIndependentAudit': Contract<
+    [projectId: string, threadId: string, request: AuditGenerationRequest],
+    { report: AuditReport; auditorThread: Thread }
+  >
+  'agent:ensureIndependentAuditorThread': Contract<
+    [projectId: string, threadId: string, settings: ThreadSettings],
+    Thread
+  >
   'agent:ensureImplementationAuditorThread': Contract<
     [projectId: string, coordinatorThreadId: string, settings: ThreadSettings],
     Thread
@@ -2451,6 +2459,11 @@ export interface IpcInvokeContract {
   >
   'thread:updateSettings': Contract<
     [projectId: string, threadId: string, settings: ThreadSettings],
+    Thread
+  >
+  /** Enable/disable the independent (spec-less) audit; never inherited by forks. */
+  'thread:setIndependentAudit': Contract<
+    [projectId: string, threadId: string, enabled: boolean],
     Thread
   >
   'updater:check': Contract<[explicit?: boolean], UpdaterStatus>

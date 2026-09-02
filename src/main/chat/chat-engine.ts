@@ -272,6 +272,7 @@ import {
   requireLocalProject
 } from '../../lib/project-artifacts'
 import { messageId as createMessageId } from '../../lib/id'
+import { buildTranscriptMarkdown } from '../../lib/transcript'
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
 import {
   AuditReportValidationError,
@@ -409,7 +410,7 @@ const AUDIT_REPAIR_SYSTEM_PROMPT = [
   'Preserve the existing findings and evidence, do not inspect the project again, and return exactly one complete corrected JSON object.'
 ].join(' ')
 
-const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT = [
+const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT_LINES: readonly string[] = [
   'An Assignment audit is an evidence run, not a source-summary exercise.',
   'Before writing the report, enumerate every implementation file in scope from the Assignment, task reports and commits, repository history, and directly related imports or consumers.',
   'Inspect the repository instructions and manifests to discover its actual toolchain. Never assume a package manager, framework, or command.',
@@ -425,6 +426,31 @@ const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT = [
   'Include exitCode only for checks that ran; omit it for not_applicable checks.',
   'In addition to the normal audit fields, return auditedFiles and verification using exactly this shape: "auditedFiles":[{"path":"project/relative/path","reason":"why this file is in scope"}],"verification":{"repositoryRevision":"git revision plus dirty-state description","scope":"how the audited scope was derived","checks":[{"id":"check-id","kind":"format|lint|typecheck|test|build|other","command":"exact command or empty when not applicable","files":["project/relative/path"],"status":"passed|failed|not_applicable","exitCode":0,"evidence":"concise factual result or reason","findingIds":[]}],"utilities":[{"name":"utility or MCP name","status":"used|unavailable|not_applicable","evidence":"operation and result or concrete reason"}],"limitations":["remaining verification limitation"]}.',
   'The checks array must include format, lint, typecheck, and test results. Every audited file must appear in the files list of a format result and a lint result, including an explicit not_applicable result where that check truly does not apply.'
+]
+
+const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT = ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT_LINES.join(' ')
+
+/** Independent (spec-less) audits judge the thread's own request/output
+ *  transcript as the contract, then verify claims against the repository. */
+const INDEPENDENT_AUDIT_SYSTEM_PROMPT = [
+  `You are an independent ${APP_NAME} audit agent.`,
+  'No specification exists for this work. The user’s requests and the agent’s final outputs in the supplied transcript are the contract; judge the delivered work against them.',
+  'Verify claims against the repository using read-only tools. Check every user request, correctness, completeness, regressions, security weaknesses, memory/resource leaks, and missing validation or tests.',
+  'When deployment URLs are relevant, verify that the implementation discovers or documents explicit public environment variables, uses only a documented localhost fallback in development, and never treats an invented or example domain as production configuration.',
+  'If the code safely requires deployment-provided production values but those external values are not yet configured, record an informational deployment-readiness note and allow implementation to pass. Treat a silent production fallback or hardcoded invented domain as an actionable finding.',
+  'Report concrete evidence. Do not modify files.',
+  'Write every human-facing string as readable Markdown: use short paragraphs, blank-line separation, and lists where useful. Do not repeat the report section headings inside field values.',
+  CITATION_SYSTEM_INSTRUCTION,
+  AUDIT_REPORT_JSON_CONTRACT,
+  ...ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT_LINES.map((line) =>
+    line
+      .replace(
+        'An Assignment audit is an evidence run',
+        'An independent audit is an evidence run'
+      )
+      .replace('from the Assignment, task reports and commits,', 'from the transcript and commits,')
+  ),
+  'Return only the requested structured audit report.'
 ].join(' ')
 
 const LOOP_MAX_ITERATIONS = 8
@@ -1042,6 +1068,10 @@ registerCioPromptDefault(
   asEditableTemplate(ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT)
 )
 registerCioPromptDefault('audit-report', asEditableTemplate(AUDIT_GENERATION_SYSTEM_PROMPT))
+registerCioPromptDefault(
+  'independent-audit-report',
+  asEditableTemplate(INDEPENDENT_AUDIT_SYSTEM_PROMPT)
+)
 registerCioPromptDefault('audit-repair', asEditableTemplate(AUDIT_REPAIR_SYSTEM_PROMPT))
 registerCioPromptDefault('image-description', IMAGE_DESCRIPTOR_PROMPT)
 
@@ -1611,6 +1641,12 @@ export class ChatEngine {
     Promise<{ report: AuditReport; auditorThread: Thread }>
   >()
   private activeImplementationAuditorEnsures = new Map<string, Promise<Thread>>()
+  /** One independent (spec-less) auditor run per thread. */
+  private activeIndependentAuditRuns = new Map<
+    string,
+    Promise<{ report: AuditReport; auditorThread: Thread }>
+  >()
+  private activeIndependentAuditorEnsures = new Map<string, Promise<Thread>>()
   /** Assignment audits explicitly cancelled by Stop; late provider output must be ignored. */
   private stoppedAssignmentAuditRuns = new Set<string>()
   /** Sessions owned by stopped Assignments stay quarantined until an explicit Resume. */
@@ -2408,6 +2444,16 @@ export class ChatEngine {
       'agent:generateAudit',
       (_, projectId: string, threadId: string, request: AuditGenerationRequest) =>
         this.generateAudit(projectId, threadId, request)
+    )
+    ipcMain.handle(
+      'agent:generateIndependentAudit',
+      (_, projectId: string, threadId: string, request: AuditGenerationRequest) =>
+        this.generateIndependentAudit(projectId, threadId, request)
+    )
+    ipcMain.handle(
+      'agent:ensureIndependentAuditorThread',
+      (_, projectId: string, threadId: string, settings: ThreadSettings) =>
+        this.ensureIndependentAuditorThread(projectId, threadId, settings)
     )
     ipcMain.handle(
       'agent:ensureImplementationAuditorThread',
@@ -13124,6 +13170,299 @@ export class ChatEngine {
     return (await this.threadManager.getThread(projectId, auditor.id)) ?? auditor
   }
 
+  /**
+   * Run an independent (spec-less) audit: the thread's own request/output
+   * transcript is the contract, and the auditor verifies claims against the
+   * repository with read-only tools plus evidence-backed checks.
+   */
+  async generateIndependentAudit(
+    projectId: string,
+    threadId: string,
+    request: AuditGenerationRequest
+  ): Promise<{ report: AuditReport; auditorThread: Thread }> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const settings = validateThreadSettings(request.settings)
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread || thread.independentAudit !== true) {
+      throw new Error('Independent audit is not enabled for this thread.')
+    }
+    if (isOrchestrationChildThread(thread)) {
+      throw new Error('Independent audit is not available on orchestration threads.')
+    }
+    const key = `${projectId}:${threadId}`
+    const running = this.activeIndependentAuditRuns.get(key)
+    if (running) return running
+    const run = this.runIndependentAudit(projectId, threadId, settings)
+    this.activeIndependentAuditRuns.set(key, run)
+    try {
+      return await run
+    } finally {
+      if (this.activeIndependentAuditRuns.get(key) === run) {
+        this.activeIndependentAuditRuns.delete(key)
+      }
+    }
+  }
+
+  async ensureIndependentAuditorThread(
+    projectId: string,
+    coordinatorThreadId: string,
+    settings: ThreadSettings
+  ): Promise<Thread> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    settings = validateThreadSettings(settings)
+    const key = `${projectId}:${coordinatorThreadId}`
+    const running = this.activeIndependentAuditorEnsures.get(key)
+    if (running) return running
+    const task = this.createOrUpdateIndependentAuditor(projectId, coordinatorThreadId, settings)
+    this.activeIndependentAuditorEnsures.set(key, task)
+    try {
+      return await task
+    } finally {
+      if (this.activeIndependentAuditorEnsures.get(key) === task) {
+        this.activeIndependentAuditorEnsures.delete(key)
+      }
+    }
+  }
+
+  private async createOrUpdateIndependentAuditor(
+    projectId: string,
+    coordinatorThreadId: string,
+    settings: ThreadSettings
+  ): Promise<Thread> {
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator || coordinator.independentAudit !== true) {
+      throw new Error('Independent audit is not enabled for this thread.')
+    }
+    const auditorSettings: ThreadSettings = {
+      ...settings,
+      permissionLevel: 'auto_review',
+      assignmentMode: false,
+      loopMode: false,
+      loopAuditor: undefined
+    }
+    let auditor = coordinator.auditorThreadId
+      ? await this.threadManager.getThread(projectId, coordinator.auditorThreadId)
+      : null
+    if (
+      !auditor ||
+      auditor.achievementRole !== 'auditor' ||
+      auditor.coordinatorThreadId !== coordinatorThreadId
+    ) {
+      auditor =
+        (await this.threadManager.listThreads(projectId)).find(
+          (candidate) =>
+            candidate.achievementRole === 'auditor' &&
+            candidate.coordinatorThreadId === coordinatorThreadId
+        ) ?? null
+    }
+    if (!auditor) {
+      const names = await this.storage.getWorkerNames()
+      const name = names[randomInt(names.length)]
+      auditor = await this.threadManager.createThread({
+        projectId,
+        providerId: auditorSettings.providerId,
+        title: `audit-${name}: ${coordinator.title}`,
+        titleSource: 'manual',
+        settings: auditorSettings,
+        featureSlug: coordinator.featureSlug,
+        scopeBucketId: coordinator.scopeBucketId,
+        workingDirectory: coordinator.workingDirectory,
+        coordinatorThreadId,
+        achievementRole: 'auditor',
+        userInputLocked: true
+      })
+    }
+    if (
+      auditor.sessionId &&
+      auditor.settings?.harnessId &&
+      auditor.settings.harnessId !== auditorSettings.harnessId
+    ) {
+      await this.cleanupTurnUtilities(auditor.sessionId)
+      this.retireSessionState(auditor.sessionId)
+      await this.threadManager.clearSessionId(projectId, auditor.id)
+    }
+    await this.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
+    await this.threadManager.updateThread(projectId, auditor.id, {
+      achievementRole: 'auditor',
+      coordinatorThreadId,
+      scopeBucketId: coordinator.scopeBucketId,
+      userInputLocked: true
+    })
+    await this.threadManager.setPinned(projectId, auditor.id, true)
+    await this.threadManager.updateThread(projectId, coordinatorThreadId, {
+      auditorThreadId: auditor.id
+    })
+    return (await this.threadManager.getThread(projectId, auditor.id)) ?? auditor
+  }
+
+  private async runIndependentAudit(
+    projectId: string,
+    coordinatorThreadId: string,
+    settings: ThreadSettings
+  ): Promise<{ report: AuditReport; auditorThread: Thread }> {
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator || coordinator.independentAudit !== true) {
+      throw new Error('Independent audit is not enabled for this thread.')
+    }
+    const auditorThread = await this.ensureIndependentAuditorThread(
+      projectId,
+      coordinatorThreadId,
+      settings
+    )
+    const auditorSettings = auditorThread.settings ?? settings
+    const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
+    const { driver, projectPath } = await this.resolve(projectId, driverId, auditorThread.id)
+    const sessionId = await this.ensureSession(projectId, auditorThread.id, driverId)
+    const transcript = buildTranscriptMarkdown(
+      await this.loadMessages(projectId, coordinatorThreadId),
+      { includeTrace: false }
+    )
+    if (!transcript.trim()) {
+      throw new Error('The thread has no auditable conversation yet.')
+    }
+    const basePrompt = [
+      'Independently audit the current work of this thread.',
+      'No specification exists: the transcript below contains the user\u2019s requests and the agent\u2019s final outputs. Treat it as the contract, and verify the delivered work against the repository with read-only tools before reporting.',
+      '',
+      'Thread transcript:',
+      '',
+      transcript
+    ].join('\n')
+    const auditStartedAt = Date.now()
+    const runId = `${auditStartedAt}-${randomBytes(4).toString('hex')}`
+    let lastError: Error | null = null
+
+    // The first run permanently initializes the independent audit: the
+    // composer switch disappears and the coordinator stays for the thread's
+    // lifetime.
+    await this.threadManager.updateThread(projectId, coordinatorThreadId, {
+      independentAuditInitialized: true
+    })
+    for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
+      await this.threadManager.setStatus(projectId, auditorThread.id, 'executing')
+      this.handledIdleSessions.delete(sessionId)
+      this.markSessionWorking(sessionId)
+      const messageId = createMessageId()
+      const prompt =
+        attemptIndex === 0
+          ? basePrompt
+          : [
+              'Your previous audit response was not valid JSON.',
+              'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
+              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
+            ].join('\n\n')
+      await this.persistOutboundMessage(
+        projectId,
+        auditorThread.id,
+        messageId,
+        'Independent audit of the current thread work',
+        prompt,
+        [],
+        [],
+        [],
+        attemptIndex === 0
+          ? { action: 'Independent audit', body: 'Auditing the current thread work against its transcript and the repository.' }
+          : undefined,
+        'internal'
+      )
+      const outboundIds = this.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
+      outboundIds.add(messageId)
+      this.outboundMessageIdsBySession.set(sessionId, outboundIds)
+      const completion = this.waitForSessionCompletion(
+        sessionId,
+        ChatEngine.AUDIT_RUN_TIMEOUT_MS,
+        'Independent audit'
+      )
+      try {
+        await driver.sendPrompt(projectPath, {
+          sessionId,
+          settings: auditorSettings,
+          text: prompt,
+          attachments: [],
+          systemPrompt: await this.cioPrompt('independent-audit-report'),
+          allowedTools: AUDIT_ALLOWED_TOOLS,
+          userMessageId: messageId
+        })
+        const streamed = await completion
+        let content: AuditReportContent
+        if (streamed !== undefined) {
+          content = validateAuditReportContent(streamed, { requireVerification: true })
+        } else {
+          const messages = await driver.loadMessages(projectPath, sessionId)
+          const response = [...messages].reverse().find((message) => message.role === 'assistant')
+          if (!response) throw new Error('The Auditor returned no response')
+          if (response.error) throw new Error(response.error)
+          content =
+            response.structuredOutput !== undefined
+              ? validateAuditReportContent(response.structuredOutput, {
+                  requireVerification: true
+                })
+              : parseAuditReportContent(
+                  response.parts
+                    .filter((part) => part.type === 'text')
+                    .map((part) => part.text)
+                    .join('\n'),
+                  { requireVerification: true }
+                )
+        }
+        const checkInvocations = this.validateAssignmentAuditExecutionEvidence({
+          content,
+          messages: await driver.loadMessages(projectPath, sessionId),
+          auditStartedAt,
+          utilitySearchRequired: false
+        })
+        content = await this.persistAssignmentAuditCheckEvidence({
+          projectId,
+          threadId: coordinatorThreadId,
+          runId,
+          content,
+          checkInvocations
+        })
+        const report = await this.auditEngine.create({
+          projectId,
+          threadId: coordinatorThreadId,
+          independent: true,
+          content,
+          outcome: this.auditRequiresRework(content) ? 'rework_required' : 'passed',
+          provenance: {
+            source: 'agent',
+            actor: 'auditor',
+            harnessId: auditorSettings.harnessId,
+            providerId: auditorSettings.providerId,
+            modelId: auditorSettings.modelId
+          }
+        })
+        await this.threadManager.updateThread(projectId, coordinatorThreadId, {
+          activeAuditId: report.id,
+          activeAuditVersion: report.version
+        })
+        await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
+          read: false
+        })
+        await this.loadMessages(projectId, auditorThread.id)
+        return {
+          report,
+          auditorThread:
+            (await this.threadManager.getThread(projectId, auditorThread.id)) ?? auditorThread
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error('The Auditor failed.')
+        const correctableOutput =
+          lastError instanceof AuditReportValidationError ||
+          lastError instanceof SyntaxError ||
+          lastError.message === 'The Auditor returned no response'
+        if (!correctableOutput) break
+      } finally {
+        this.clearCompletionWaiter(sessionId)
+      }
+    }
+
+    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
+    throw lastError ?? new Error('The independent audit failed.')
+  }
+
   /** Enable Achievement coordination without changing the thread's workspace scope. */
   async ensureAchievementScope(projectId: string, coordinatorThreadId: string): Promise<Thread> {
     projectId = validateEntityId(projectId, 'Project ID')
@@ -13849,7 +14188,8 @@ export class ChatEngine {
 
   private validateAssignmentAuditExecutionEvidence(input: {
     content: AuditReportContent
-    assignment: AssignmentPlan
+    /** Assignment scope to enforce; omitted for independent (spec-less) audits. */
+    assignment?: AssignmentPlan
     messages: AgentMessage[]
     auditStartedAt: number
     utilitySearchRequired: boolean
@@ -13858,7 +14198,7 @@ export class ChatEngine {
     const checkInvocations = new Map<string, Extract<AgentPart, { type: 'tool' }>>()
     const auditedFiles = new Set(input.content.auditedFiles?.map((file) => file.path) ?? [])
     for (const expectedFile of new Set(
-      input.assignment.content.tasks.flatMap((task) => task.expectedFiles)
+      input.assignment?.content.tasks.flatMap((task) => task.expectedFiles) ?? []
     )) {
       if (!auditedFiles.has(expectedFile)) {
         issues.push(`auditedFiles is missing Assignment expected file ${expectedFile}`)

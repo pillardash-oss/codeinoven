@@ -2309,12 +2309,19 @@ export function registerIpcHandlers(
     'engineeringLifecycle:select',
     async (_, projectId: unknown, threadId: unknown, input: unknown) => {
       const ids = await waitForThreadReady(projectId, threadId)
+      const selectionInput = validateEngineeringLifecycleSelectionInput(input)
+      // The independent audit owns the workflow: engineering modes stay locked
+      // out of a thread for its lifetime once the audit switch was turned on.
+      if (selectionInput.autopilot === true || selectionInput.stages.length > 0) {
+        const auditThread = await threadManager.getThread(ids.projectId, ids.threadId)
+        if (auditThread?.independentAudit === true) {
+          throw new Error(
+            'Engineering modes are locked while the independent audit is enabled. Fork the thread to use them.'
+          )
+        }
+      }
       const previous = engineeringLifecycleEngine.get(ids.projectId, ids.threadId)
-      const next = engineeringLifecycleEngine.select(
-        ids.projectId,
-        ids.threadId,
-        validateEngineeringLifecycleSelectionInput(input)
-      )
+      const next = engineeringLifecycleEngine.select(ids.projectId, ids.threadId, selectionInput)
       // Engineering is now expressed purely through the lifecycle selection, so
       // the senior-engineer/auditor defaults attach the moment a thread first
       // gains an active selection (previously tied to the creation-time flag).
@@ -7570,6 +7577,18 @@ export function registerIpcHandlers(
       const safeSettings = validateThreadSettings(settings)
       await threadCreation.awaitReady(safeThreadId)
       return threadManager.updateSettings(safeProjectId, safeThreadId, safeSettings)
+    }
+  )
+  ipcMain.handle(
+    'thread:setIndependentAudit',
+    async (_, projectId: unknown, threadId: unknown, enabled: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      if (typeof enabled !== 'boolean') {
+        throw new Error('Independent audit toggle must be a boolean')
+      }
+      await threadCreation.awaitReady(safeThreadId)
+      return threadManager.setIndependentAudit(safeProjectId, safeThreadId, enabled)
     }
   )
   ipcMain.handle(
