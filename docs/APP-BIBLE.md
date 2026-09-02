@@ -220,6 +220,7 @@ Unless explicitly asked to run against the whole project:
 - All persistent writes are atomic (write `.tmp`, then `rename`) via the storage engine — never ad-hoc `fs.writeFile` for state.
 - Drivers implement `driver.interface.ts`; adapters implement `adapter.interface.ts`. New providers plug in via those contracts, never via special-cased branches.
 - CodeInOven's own state lives under its config directory only. Never write into a user's repository from app code.
+- Model-ranking data retention is intentional and asymmetric: `model_ranking_snapshots` is a transient grading queue whose rows are hard-deleted the moment their 0–10 judge score is applied to the permanent `model_rankings` aggregate (never deleted unscored — judge failures stay parked as `failed` for recovery). Historical reconstruction of deleted snapshots is deliberately unavailable; the aggregate stays auditable through `rubric_version`, `calc_version`, and per-category sample counts instead. Do not add archival copies or rebuild mechanisms for processed snapshots.
 
 ### 4.5 External process and package-manager invariant
 

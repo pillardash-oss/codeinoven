@@ -603,11 +603,12 @@ async function bootPostPaintServices(): Promise<void> {
     scopeRootProvider(scopeRootResolver),
     modelPricingService
   )
-  // Grade any turn outcomes whose persisted deadline elapsed while the app was
-  // closed (non-fatal: a failed sweep leaves rows pending for the next launch).
+  // Grade any ranking snapshots whose persisted close deadline elapsed while
+  // the app was closed (non-fatal: a failed sweep leaves rows queued for the
+  // next launch).
   void chatEngine
-    .recoverPendingTurnGrades()
-    .catch((error) => Logger.dev('Pending turn grade recovery failed (non-fatal):', error))
+    .recoverPendingRankingGrades()
+    .catch((error) => Logger.dev('Pending ranking grade recovery failed (non-fatal):', error))
   // Merge the app-managed lean opencode agents into the machine-wide global
   // config. Idempotent, additive-only and non-fatal; runs after first paint
   // so it never blocks the workspace, and logs a dev-only summary.
@@ -769,7 +770,16 @@ async function bootPostPaintServices(): Promise<void> {
       import('./system/restart-recovery-service')
     ])
 
-    ptyService = new PtyService(storage, database, scopeRootResolver)
+    ptyService = new PtyService(storage, database, scopeRootResolver, (process) => {
+      chatEngine?.trackPtyProcess(
+        process.scopeId,
+        process.projectId,
+        process.threadId,
+        process.pid,
+        process.command,
+        process.cwd
+      )
+    })
     // A probe that changes a harness's install state (new install, version
     // bump) invalidates cached provider catalogs so the model picker reflects it.
     providerConnection = new ProviderConnectionService(() => {

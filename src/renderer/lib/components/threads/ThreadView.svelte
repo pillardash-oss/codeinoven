@@ -13,11 +13,6 @@
 
   /** Persists each thread's scroll position across component remounts. */
   const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
-  /** Messages mounted on the very first frame after a thread switch — only the
-   *  newest tail; the rest of the loaded page reveals across the next frames. */
-  const TAIL_RENDER_INITIAL_LIMIT = 12
-  /** Delay between tail-window growth steps — one frame lets each batch paint. */
-  const TAIL_RENDER_GROW_DELAY_MS = 16
   const HISTORY_WINDOW_SIZE = 40
   const HISTORY_PRELOAD_THRESHOLD = 240
 
@@ -85,6 +80,7 @@
   import AssignmentReadyCard from './AssignmentReadyCard.svelte'
   import AssignmentCoordinatorPanel from './AssignmentCoordinatorPanel.svelte'
   import AchievementCoordinatorPanel from './AchievementCoordinatorPanel.svelte'
+  import IndependentAuditCoordinatorPanel from './IndependentAuditCoordinatorPanel.svelte'
   import AuditOfferCard from './AuditOfferCard.svelte'
   import AuditReadyCard from './AuditReadyCard.svelte'
   import AuditGeneratedCard from './AuditGeneratedCard.svelte'
@@ -121,7 +117,10 @@
   import {
     loadLifecycleIntent,
     saveLifecycleIntent,
-    clearLifecycleIntent
+    clearLifecycleIntent,
+    loadIndependentAuditIntent,
+    saveIndependentAuditIntent,
+    clearIndependentAuditIntent
   } from '$lib/stores/lifecycle-intent'
   import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
   import {
@@ -142,7 +141,7 @@
     type StartAfterThreadReference
   } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey, parseModelKey } from '$lib/model-keys'
-  import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -167,7 +166,6 @@
   import type {
     Thread,
     ThreadMessageCursor,
-    ThreadMessagePage,
     ThreadSettings,
     ThreadContextUsage,
     ThinkingLevel,
@@ -222,6 +220,7 @@
     PendingAgentQuestionRequest,
     ImageDescriptorErrorRequest,
     ImageDescriptorReplyAction,
+    AttachmentStorageScope,
     UserMessagePresentation,
     UserMessageSummary,
     UsageEfficiencyKpis,
@@ -305,6 +304,7 @@
   let messages = $derived(
     controller?.messages ?? threadMessages.messages(thread.projectId, thread.id)
   )
+  let loaded = $derived(controller?.loaded ?? threadMessages.loaded(thread.projectId, thread.id))
   /** The conversation identity for held-steer tracking: temporary chats use
    *  their own id, threads use the thread id. */
   let conversationId = $derived(controller?.conversationId ?? thread.id)
@@ -312,37 +312,65 @@
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
   let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
-  // The store already keeps the loaded history bounded to one page and grows
-  // it only when the user reaches the top. Render that page as one continuous
-  // scroll surface so the user can always scroll back down to the latest turn.
-
-  /** Frame one mounts only the newest tail — enough markdown to block the
-   *  composer for seconds if flushed all at once — then the window completes
-   *  across the next frames. Once complete it never shrinks or re-mounts:
-   *  scrolling is a pure snapshot scroll with zero runtime work. */
-  let renderLimit = $state(TAIL_RENDER_INITIAL_LIMIT)
-
+  /** Minimum first paint: only the newest few messages mount on the first
+   *  frame, so a long thread paints instantly on switch. */
+  const INITIAL_PAINT_MESSAGES = 4
+  /** Messages mounted per frame while the window auto-fills after mount. */
+  const INITIAL_REVEAL_BATCH = 12
+  /** Messages added to the mounted window per upward-scroll expansion. Half
+   *  a history page keeps each mount hitch short — a full page in one flush
+   *  reads as a lurch while scrolling, many small reads as continuous. */
+  const MOUNTED_EXPAND_BATCH = 20
+  let mountedCount = $state(
+    Math.min(
+      threadMessages.messages(mountedThread.projectId, mountedThread.id).length,
+      INITIAL_PAINT_MESSAGES
+    )
+  )
+  let initialPaintRevealFrame = 0
+  /** The mounted window: a bounded count of the NEWEST messages. The message
+   *  store may hold hundreds of merged pages, but only this window mounts —
+   *  remounting a whole multi-megabyte transcript on every thread switch was
+   *  the switch-back delay. History beyond the window mounts only when the
+   *  reader scrolls up (or jumps to it), never automatically. */
   let visibleMessages = $derived(
-    renderLimit >= messages.length ? messages : messages.slice(-renderLimit)
+    hasController ? messages : messages.slice(Math.max(0, messages.length - mountedCount))
   )
 
-  /** Complete the mount on the frame after first paint, in one step, so the
-   *  list is static for the lifetime of the view. */
-  $effect(() => {
-    if (renderLimit >= messages.length) return
-    let raf = 0
-    const timer = setTimeout(() => {
-      raf = requestAnimationFrame(() => {
-        raf = requestAnimationFrame(() => {
-          renderLimit = messages.length
-        })
-      })
-    }, TAIL_RENDER_GROW_DELAY_MS)
-    return () => {
-      clearTimeout(timer)
-      cancelAnimationFrame(raf)
+  /** Auto-fill the mounted window up to HISTORY_WINDOW_SIZE after the first
+   *  paint, one batch per frame. Batches mount above the viewport only, so
+   *  content-visibility keeps them layout-free and a reader at the bottom
+   *  never sees a step. This is the only automatic fill-in — nothing beyond
+   *  the window mounts without the reader scrolling up. */
+  function beginInitialPaintReveal(): void {
+    if (!alive || hasController) return
+    if (mountedCount === 0 && messages.length > 0) {
+      mountedCount = Math.min(messages.length, INITIAL_PAINT_MESSAGES)
     }
-  })
+    scheduleInitialReveal()
+  }
+
+  function scheduleInitialReveal(): void {
+    if (!alive) return
+    if (mountedCount >= Math.min(messages.length, HISTORY_WINDOW_SIZE)) return
+    initialPaintRevealFrame = requestAnimationFrame(() => {
+      if (!alive) return
+      const fillTarget = Math.min(messages.length, HISTORY_WINDOW_SIZE)
+      if (mountedCount >= fillTarget) return
+      const el = scrollEl
+      const previousTop = el?.scrollTop ?? 0
+      const previousHeight = el?.scrollHeight ?? 0
+      mountedCount = Math.min(fillTarget, mountedCount + INITIAL_REVEAL_BATCH)
+      // The batch mounted above the viewport. A reader at the bottom is
+      // re-anchored by the tail-follow ResizeObserver; a reader away from the
+      // bottom keeps their exact viewport across the off-screen mount.
+      if (el && userScrolledAway) {
+        const grown = el.scrollHeight - previousHeight
+        if (grown > 0) el.scrollTop = previousTop + grown
+      }
+      scheduleInitialReveal()
+    })
+  }
   /** The latest turn that already has an assistant message. A newly submitted
    *  user follow-up is handled separately until its first assistant message is
    *  mirrored, so it can never lend live state to the preceding trace. */
@@ -373,14 +401,15 @@
   let fullUserMessageHistory = $state<UserMessageSummary[]>([])
   let userMessageHistoryLoaded = false
   let userMessageHistoryLoading: Promise<void> | null = null
-  let hasOlderMessages = $derived(controller?.hasOlder ?? olderMessagesAvailable)
+  let hasOlderMessages = $derived(
+    controller?.hasOlder ?? (olderMessagesAvailable || mountedCount < messages.length)
+  )
   let userMessageTexts = $derived(
     messages
       .filter((msg) => msg.role === 'user')
       .map((msg) => messageText(msg))
       .filter((text) => text.trim().length > 0)
   )
-  let loaded = $derived(controller?.loaded ?? threadMessages.loaded(thread.projectId, thread.id))
   let busy = $derived(controller?.busy ?? agentRuns.isBusy(thread.projectId, thread.id))
   let conversationBusy = $derived(
     (controller?.busy ?? false) || agentRuns.isConversationBusy(thread.projectId, thread.id)
@@ -485,6 +514,10 @@
 
   let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
   let pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
+  /** Staged (intent-only) Independent Audit toggle: like the Toolbox, toggles
+   *  are intent until send. `null` means nothing is staged; `true`/`false` is
+   *  the staged switch position. Committed when the user sends a message. */
+  let pendingIndependentAudit = $state<boolean | null>(null)
   let lifecycleCancelModalOpen = $state(false)
   /** True while the Engineering lifecycle retry from the failure card is running. */
   let engineeringLifecycleRetrying = $state(false)
@@ -726,9 +759,12 @@
   let providers = $derived(providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached())
 
   /** Chats are for questions and research: they never inject the Engineering
-   *  workflow and always run with auto permission review. */
+   *  workflow and stay pinned to auto permission review while File System is
+   *  off. Once File System is enabled the permission picker unlocks up to Full
+   *  Access, so the user's chosen level is carried through instead of being
+   *  clobbered back to auto review. */
   function normalizeChatSettings(next: ThreadSettings): ThreadSettings {
-    return { ...next, permissionLevel: 'auto_review' }
+    return next.fileSystemMode === true ? next : { ...next, permissionLevel: 'auto_review' }
   }
 
   /** Commit to the chat-scoped last-used store on the Chats tab, and to the
@@ -2017,6 +2053,19 @@
         clearLifecycleIntent(thread.projectId, thread.id)
         await applyLifecycleSelection(staged)
       }
+      // A staged Independent Audit toggle commits exactly here: the send is
+      // the moment the mutual exclusion with Engineering becomes durable.
+      if (pendingIndependentAudit === true) {
+        try {
+          await invoke('thread:setIndependentAudit', thread.projectId, thread.id, true)
+          pendingIndependentAudit = null
+          clearIndependentAuditIntent(thread.projectId, thread.id)
+        } catch (error) {
+          // Keep the staged intent so the switch keeps showing the user's
+          // choice; the send itself is never blocked by the audit flag.
+          reportError(error, 'The independent audit could not be enabled.')
+        }
+      }
       await sendMessage(
         text,
         attachments,
@@ -2370,10 +2419,33 @@
   /** Sticky: Achievement coordination remains once the flow has ever run. */
   let achievementTriggered = $derived(achievementOnly || thread.achievementRole === 'coordinator')
 
+  /** Independent (spec-less) audit state. Never inherited by forks or new threads. */
+  let independentAuditEnabled = $derived(thread.independentAudit === true)
+  let independentAuditInitialized = $derived(thread.independentAuditInitialized === true)
+  /** A staged toggle wins over the committed state, mirroring the Toolbox. */
+  let independentAuditDisplayEnabled = $derived(
+    pendingIndependentAudit !== null ? pendingIndependentAudit : independentAuditEnabled
+  )
+  let independentAuditRunning = $derived(independentAuditEnabled && auditBusy)
+  /** The switch only exists once the thread has work and no Engineering mode
+   *  is on — a staged (intent-only) Toolbox selection counts as on, so the
+   *  two controls can never be lit at the same time before a send commits
+   *  either choice. Fresh threads and empty drafts never show it. */
+  let independentAuditAvailable = $derived(
+    !chatMode &&
+      !orchestrationChild &&
+      !independentAuditInitialized &&
+      !engineeringOn &&
+      (thread.sessionId !== undefined ||
+        (threadMessages.loaded(thread.projectId, thread.id) &&
+          threadMessages.messages(thread.projectId, thread.id).length > 0))
+  )
+
   /** Which coordinator, if any, this thread publishes to the context dock. */
   let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | 'audit' | null => {
     if (isAssignmentAuditorThread) return null
     if (assignment && assignment.status !== 'draft') return 'assignment'
+    if (independentAuditEnabled) return 'audit'
     if (achievementTriggered && spec) return 'achievement'
     if (plainEngineeringAuditAvailable && spec) return 'audit'
     return null
@@ -2704,6 +2776,12 @@
     if (jumpLoading) return
     const cachedIndex = messages.findIndex((message) => message.id === id)
     if (cachedIndex >= 0) {
+      // The store holds the target but the mounted window may not — grow the
+      // window to cover it (plus context) before scrolling.
+      if (!hasController && mountedCount < messages.length - cachedIndex) {
+        mountedCount = Math.min(messages.length, messages.length - cachedIndex + 8)
+        await tick()
+      }
       document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       return
     }
@@ -2721,6 +2799,7 @@
       const targetIndex = messages.findIndex((message) => message.id === id)
       if (targetIndex >= 0) {
         olderMessagesAvailable = page.hasOlder
+        mountedCount = Math.max(mountedCount, messages.length - targetIndex + 8)
         await tick()
         document
           .getElementById(`msg-${id}`)
@@ -2760,6 +2839,7 @@
         const targetIndex = messages.findIndex((message) => message.id === messageId)
         if (targetIndex < 0) return
         olderMessagesAvailable = page.hasOlder
+        mountedCount = Math.max(mountedCount, messages.length - targetIndex + 8)
         await tick()
         if (page.hasNewer) {
           const newest = page.messages[page.messages.length - 1]
@@ -2837,7 +2917,10 @@
   })
 
   // Feed the header count and Sources sidebar from the persisted conversation.
+  // Controller-driven views (temporary chats) are embedded panels, never the
+  // primary conversation surface — they must not publish global header state.
   $effect(() => {
+    if (hasController) return
     workspaceState.sources = sources
   })
 
@@ -2873,12 +2956,15 @@
         content,
         ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
       }))
+    if (hasController) return
     workspaceState.messageCount = userMessages.length
     workspaceState.userMessages = userMessages
   })
 
   // Expose fork/delete to the history side panel; identity-safe cleanup below.
+  // Controller-driven views (temporary chats) never publish history actions.
   $effect(() => {
+    if (hasController) return
     const actions: HistoryMessageActions = {
       fork: (id) => void forkFromHistoryMessage(id),
       requestDelete: requestHistoryMessageDelete,
@@ -2891,7 +2977,10 @@
     }
   })
 
+  // Controller-driven views (temporary chats) never feed the spec-conversation
+  // sidebar: their responses belong to the side chat, not the studio thread.
   $effect(() => {
+    if (hasController) return
     workspaceState.specAgentResponses = messages
       .filter((message) => message.role === 'assistant')
       .map((message) => ({
@@ -2915,7 +3004,11 @@
   // A persisted studio document remains available from the header. A missing
   // specification is only retryable after the current agent turn has produced
   // a final response and the generation path has reported an error.
+  // Controller-driven views (temporary chats) must not touch spec-studio state:
+  // their own showSpecStudio is always false, so publishing from them would
+  // close the studio and pop the project sidebar open while the studio is up.
   $effect(() => {
+    if (hasController) return
     const hasStudioDocument =
       brainstorm !== null ||
       prd !== null ||
@@ -2940,7 +3033,9 @@
   })
 
   // Register the header's Spec toggle; cleared when the thread view unmounts.
+  // Controller-driven views (temporary chats) never register workspace state.
   $effect(() => {
+    if (hasController) return
     workspaceState.toggleSpecStudio = () => {
       if (showSpecStudio) {
         closeSpecStudio()
@@ -2988,6 +3083,12 @@
   function onScroll(): void {
     if (!scrollEl) return
     userScrolledAway = !isAtBottom(scrollEl)
+    // Self-heal: the mounted window must never sit at zero while the store
+    // holds messages — a windowed view that collapsed to nothing would leave
+    // the reader staring at a blank transcript.
+    if (!hasController && mountedCount === 0 && messages.length > 0) {
+      mountedCount = Math.min(messages.length, HISTORY_WINDOW_SIZE)
+    }
     threadScrollPositions.set(thread.id, {
       top: scrollEl.scrollTop,
       awayFromBottom: userScrolledAway
@@ -3018,6 +3119,27 @@
     if (controller) {
       await controller.loadOlder()
       return
+    }
+    // The store may already hold history the mounted window excludes (pages
+    // merged on an earlier visit). Expanding the window from memory needs no
+    // IPC and no re-parse — grow it and keep the reader's viewport fixed.
+    if (mountedCount < messages.length) {
+      const el = scrollEl
+      const previousHeight = el.scrollHeight
+      const previousTop = el.scrollTop
+      mountedCount = Math.min(messages.length, mountedCount + MOUNTED_EXPAND_BATCH)
+      await tick()
+      const after = scrollEl
+      if (after) {
+        after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
+        threadScrollPositions.set(thread.id, {
+          top: after.scrollTop,
+          awayFromBottom: userScrolledAway
+        })
+      }
+      // Real history may still sit beyond the store — fall through to the IPC
+      // path only when the expanded window's edge is still within reach.
+      if (!olderMessagesAvailable || !after || !nearHistoryEdge(after)) return
     }
     loadingOlderMessages = true
     // Loading history is an explicit request to inspect the past.
@@ -3051,6 +3173,9 @@
         olderMessagesAvailable = page.hasOlder
         if (page.messages.length === 0) break
         threadMessages.mergePage(thread.projectId, thread.id, page.messages)
+        // The page prepended — grow the window by the same amount so the
+        // messages the reader was looking at stay mounted above the new page.
+        mountedCount += page.messages.length
         await tick()
         const after = scrollEl
         if (after) {
@@ -3233,15 +3358,17 @@
     // project boundary through the now-null live prop.
     const mountedProjectId = thread.projectId
     const mountedThreadId = thread.id
-    workspaceState.jumpToMessage = jumpToMessage
-    workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+    if (!controller) {
+      workspaceState.jumpToMessage = jumpToMessage
+      workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+    }
 
     const onResize = (): void => scheduleResponseBubbleUpdate()
     window.addEventListener('resize', onResize)
 
     if (controller) {
       controller.mount()
-      void controller.load()
+      void Promise.resolve(controller.load()).then(() => beginInitialPaintReveal())
       localReady = Promise.resolve()
       sessionReady = Promise.resolve('')
       void refreshCommands()
@@ -3258,13 +3385,19 @@
         }
         window.removeEventListener('resize', onResize)
         clearTimeout(copyResetTimer)
-        workspaceState.sources = []
-        workspaceState.jumpToMessage = null
-        if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
-          workspaceState.loadUserMessageHistory = null
+        cancelAnimationFrame(initialPaintRevealFrame)
+        // Controller-driven views never published the global state below, so
+        // their teardown must not clear it either — clearing would clobber the
+        // values published by the primary conversation view behind the panel.
+        if (!controller) {
+          workspaceState.sources = []
+          workspaceState.jumpToMessage = null
+          if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
+            workspaceState.loadUserMessageHistory = null
+          }
+          workspaceState.messageCount = 0
+          workspaceState.userMessages = []
         }
-        workspaceState.messageCount = 0
-        workspaceState.userMessages = []
         controller.unmount()
       }
     }
@@ -3281,6 +3414,9 @@
       // session or thread switch so the switches keep the user's last choice.
       const stagedIntent = loadLifecycleIntent(mountedProjectId, mountedThreadId)
       if (stagedIntent) pendingLifecycleSelection = stagedIntent
+      // Same for a staged (not-yet-sent) Independent Audit toggle.
+      const stagedAuditIntent = loadIndependentAuditIntent(mountedProjectId, mountedThreadId)
+      if (stagedAuditIntent !== null) pendingIndependentAudit = stagedAuditIntent
     }
     // A sibling thread may inherit its Engineering lifecycle after this view
     // already hydrated (the inheritance write is async). Re-read once the
@@ -3348,6 +3484,14 @@
     })
     // Task mount restores app-owned state only. Native harness transport stays
     // cold until user sends a message.
+    // Warm cache: the bounded window is already in memory (hover preloads or a
+    // recent visit), so the staged first paint can start with zero IPC waits.
+    if (
+      threadMessages.loaded(mountedProjectId, mountedThreadId) &&
+      threadMessages.messages(mountedProjectId, mountedThreadId).length > 0
+    ) {
+      beginInitialPaintReveal()
+    }
     void connectSession()
     localReady = loadLocal().then(() => {
       if (!alive) return
@@ -3360,7 +3504,6 @@
         void sendMessage(draft, files, undefined, undefined, undefined, [], [], undefined, [], true)
       }
     })
-
     return () => {
       alive = false
       queuedMessageDispatcher.markUnmounted(mountedProjectId, mountedThreadId)
@@ -3376,6 +3519,7 @@
       unsubscribeLifecycleInheritance?.()
       window.removeEventListener('resize', onResize)
       clearTimeout(copyResetTimer)
+      cancelAnimationFrame(initialPaintRevealFrame)
       workspaceState.sources = []
       workspaceState.jumpToMessage = null
       if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
@@ -3556,15 +3700,18 @@
       return
     }
     try {
-      const [threadData, page, config] = await Promise.all([
+      const [threadData, , config] = await Promise.all([
         invoke('thread:get', projectId, id),
         threadMessages.loaded(projectId, id)
-          ? Promise.resolve<ThreadMessagePage | null>(null)
-          : invoke('thread:loadMessages', projectId, id, undefined, HISTORY_WINDOW_SIZE),
+          ? Promise.resolve()
+          : threadMessages.load(projectId, id, THREAD_MESSAGE_PRELOAD_WINDOW),
         invoke('config:get')
       ])
       if (!alive) return
-      olderMessagesAvailable = page?.hasOlder ?? threadMessages.hasOlder(projectId, id)
+      olderMessagesAvailable = threadMessages.hasOlder(projectId, id)
+      // Cold cache: the bounded preload just landed — stage the first paint
+      // around the newest tail now. No-op when the warm path already revealed.
+      beginInitialPaintReveal()
       if (threadData?.settings) {
         settings = chatMode
           ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
@@ -3574,9 +3721,6 @@
       imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
       autoRetryAfterReset = config.autoRetryAfterReset === true
       auditSettings = auditSettingsForThread()
-      // Merge the newest mirror page with optimistic messages and any older
-      // pages already loaded for this thread.
-      if (page) threadMessages.mergePage(projectId, id, page.messages)
       // Re-bind the thread's persisted session so its live events keep routing
       // to this cache (and the background queue dispatcher) even when the
       // renderer never sent a message on this mount.
@@ -4336,17 +4480,43 @@
   async function replyImageDescriptor(
     requestId: string,
     action: ImageDescriptorReplyAction,
-    selection?: AgentModelSelection
+    selection?: AgentModelSelection,
+    imagePath?: string
   ): Promise<void> {
     const { projectId, id } = thread
     try {
-      await invoke('agent:replyImageDescriptor', projectId, id, requestId, action, selection)
+      await invoke(
+        'agent:replyImageDescriptor',
+        projectId,
+        id,
+        requestId,
+        action,
+        selection,
+        imagePath
+      )
       pendingImageDescriptorError = null
     } catch (error) {
       errorMessage =
         error instanceof Error ? error.message : 'The image descriptor could not be retried.'
       throw error
     }
+  }
+
+  /** Open the file picker for a replacement image on the vision error card and
+   *  hand the chosen path to the descriptor, which retries the failed image
+   *  with it. The picked file is retained in the thread's attachment scratch
+   *  (project tmp for project threads), the same stable spot pasted images
+   *  come from. */
+  async function pickImageDescriptorReplacement(requestId: string): Promise<void> {
+    const { projectId, id } = thread
+    const scope: AttachmentStorageScope = {
+      kind: chatMode ? 'chat' : 'project',
+      projectId,
+      threadId: id
+    }
+    const picked = await invoke('dialog:pickFile', scope)
+    if (!picked) return
+    await replyImageDescriptor(requestId, 'pick_image', undefined, picked)
   }
 
   /** Record the model executing the turn as vision-capable (the descriptor ran
@@ -4833,11 +5003,11 @@
     userScrolledAway = false
     idleAttentionHandled = false
 
-    // Persist settings as last-used. On the Chats tab a project-model fallback
-    // must not lock itself in as the chat's own choice — explicit chat model
-    // changes are already persisted by updateSettings.
+    // Persist settings as last-used. On the Chats tab this seeds the chat's own
+    // store, so the next chat inherits this chat's model, thinking level, and
+    // File System state — never the project view's configuration.
     if (chatMode) {
-      if (chatSettings.lastUsed.modelId) chatSettings.commit(settings)
+      chatSettings.commit(settings)
     } else {
       threadSettings.commit(settings)
     }
@@ -4972,7 +5142,9 @@
     if (!skill) return
     const request = args.trim()
     sendComposerMessage(
-      request ? `${request}\n\n(Use the "${skill.name}" skill for this.)` : `Use the "${skill.name}" skill.`,
+      request
+        ? `${request}\n\n(Use the "${skill.name}" skill for this.)`
+        : `Use the "${skill.name}" skill.`,
       []
     )
   }
@@ -7235,6 +7407,72 @@
     }
   }
 
+  /** Run an independent (spec-less) audit from the audit coordinator. The
+   *  report joins the thread's existing report versions in Spec Studio. */
+  async function generateIndependentAudit(selected: ThreadSettings): Promise<void> {
+    auditBusy = true
+    auditError = ''
+    errorMessage = ''
+    auditSettings = selected
+    rendererRecovery.addRecentModel(
+      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    )
+    try {
+      durableAuditThread = await invoke(
+        'agent:ensureIndependentAuditorThread',
+        thread.projectId,
+        thread.id,
+        selected
+      )
+      coordinatorDockState.setAutoOpen(true)
+      contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
+      const result = await invoke('agent:generateIndependentAudit', thread.projectId, thread.id, {
+        settings: selected
+      })
+      auditReport = result.report
+      durableAuditThread = result.auditorThread
+      auditVersions = await invoke(
+        'audit:listVersions',
+        thread.projectId,
+        thread.id,
+        auditReport.id
+      )
+    } catch (error) {
+      const rawError = error instanceof Error ? error.message : 'The independent audit failed.'
+      errorMessage = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+      auditError = errorMessage
+    } finally {
+      auditBusy = false
+    }
+  }
+
+  /** Toggle the independent audit. Enabling is permanent once the first run
+   *  starts, and excludes engineering modes for this thread's lifetime. */
+  /** Toggle the Independent Audit. Like the Toolbox, toggles are intent:
+   *  turning it on stages the choice (the Engineering Toolbox disappears;
+   *  turning it off brings it back) and sending a message commits it. A
+   *  committed audit that has not started its first run can still be turned
+   *  off, which brings the Toolbox back. */
+  async function toggleIndependentAudit(enabled: boolean): Promise<void> {
+    if (independentAuditInitialized) return
+    if (enabled) {
+      pendingIndependentAudit = true
+      saveIndependentAuditIntent(thread.projectId, thread.id, true)
+      return
+    }
+    if (independentAuditEnabled && pendingIndependentAudit === null) {
+      // Committed (pre-init) audit: disable durably so Engineering unlocks.
+      try {
+        await invoke('thread:setIndependentAudit', thread.projectId, thread.id, false)
+      } catch (error) {
+        reportError(error, 'The independent audit could not be changed.')
+        return
+      }
+    }
+    pendingIndependentAudit = null
+    clearIndependentAuditIntent(thread.projectId, thread.id)
+  }
+
   async function generateDurableAssignmentAudit(
     selected: ThreadSettings,
     coordinatorThreadId = thread.id
@@ -7429,31 +7667,39 @@
     updateSettings({ ...settings, ...normalized })
   }
 
-  async function completeAudit(): Promise<void> {
+  /** `complete` accepts the audit cycle (thread lands on Done); `dismiss`
+   *  cancels the offer/report card without ending the audit cycle. */
+  async function completeAudit(outcome: 'complete' | 'dismiss' = 'complete'): Promise<void> {
     auditBusy = true
     try {
-      const updatedThread = await invoke('audit:complete', thread.projectId, thread.id)
+      const updatedThread = await invoke(
+        outcome === 'dismiss' ? 'audit:dismiss' : 'audit:complete',
+        thread.projectId,
+        thread.id
+      )
       scopeState.updateThread(updatedThread)
-      if (assignment) {
-        const coordinatorThreadId = auditWorkflowThreadId()
-        const refreshedAssignment = await invoke(
-          'assignment:getActive',
-          thread.projectId,
-          coordinatorThreadId
-        ).catch(() => null)
-        if (refreshedAssignment) assignment = refreshedAssignment
+      if (outcome === 'complete') {
+        if (assignment) {
+          const coordinatorThreadId = auditWorkflowThreadId()
+          const refreshedAssignment = await invoke(
+            'assignment:getActive',
+            thread.projectId,
+            coordinatorThreadId
+          ).catch(() => null)
+          if (refreshedAssignment) assignment = refreshedAssignment
+        }
+        if (engineeringLifecycle?.activeStage === 'achievement') {
+          engineeringLifecycle = await invoke(
+            'engineeringLifecycle:complete',
+            thread.projectId,
+            thread.id,
+            'achievement'
+          )
+        }
+        settings = { ...settings, loopMode: false }
+        commitSettings(settings)
+        await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
       }
-      if (engineeringLifecycle?.activeStage === 'achievement') {
-        engineeringLifecycle = await invoke(
-          'engineeringLifecycle:complete',
-          thread.projectId,
-          thread.id,
-          'achievement'
-        )
-      }
-      settings = { ...settings, loopMode: false }
-      commitSettings(settings)
-      await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
       auditState = undefined
       await reconcileReadySpec()
       showSpecStudio = false
@@ -9702,9 +9948,10 @@
           {/if}
           <!-- Messages -->
           {#each visibleMessages as msg, msgIndex (msg.id)}
+            {@const absIndex = msgIndex + (messages.length - visibleMessages.length)}
             {#if msg.role === 'user'}
               {#if !isAssignmentAuditorThread && !isActivityOnlyUserMessage(msg)}
-                <div id={`msg-${msg.id}`} class="group flex min-w-0 flex-col">
+                <div id={`msg-${msg.id}`} class="message-block group flex min-w-0 flex-col">
                   {#if editingMessageId === msg.id}
                     <RichMarkdownEditor
                       bind:this={messageEditEditor}
@@ -9741,7 +9988,7 @@
                       </button>
                     </div>
                   {:else}
-                    {@const previousTurnAudit = getPreviousTurnAudit(msgIndex)}
+                    {@const previousTurnAudit = getPreviousTurnAudit(absIndex)}
                     {@const explicitPresentation = explicitMessagePresentation(msg)}
                     {#if previousTurnAudit}
                       <div class="mb-1 flex items-center gap-1.5 self-end text-[10px] text-dimmed">
@@ -9979,9 +10226,9 @@
               {/if}
             {:else}
               <!-- Assistant message — single WorkTrace per turn containing ALL parts -->
-              {@const isTurnStart = isTurnStartIndex(msgIndex)}
-              {@const isTurnEnd = isTurnEndIndex(msgIndex)}
-              {@const isLatestTurn = msgIndex === latestTurnInfo.startIndex}
+              {@const isTurnStart = isTurnStartIndex(absIndex)}
+              {@const isTurnEnd = isTurnEndIndex(absIndex)}
+              {@const isLatestTurn = absIndex === latestTurnInfo.startIndex}
               {@const provider = messageProvider(msg)}
               {@const modelLabel = messageModelLabel(msg)}
               {@const msgThinking = messageThinkingLevel(msg)}
@@ -9989,28 +10236,28 @@
               {@const harnessId = messageHarnessId(msg)}
               {@const harnessName = messageHarnessName(msg)}
               {@const useLiveAttribution = isLatestTurn && liveBusy}
-              {@const isLatest = msgIndex === messages.length - 1}
+              {@const isLatest = absIndex === messages.length - 1}
               {@const questionParts = msg.parts.filter(
                 (p): p is Extract<AgentPart, { type: 'question' }> => p.type === 'question'
               )}
-              {@const turnDuration = getCurrentTurnDuration(msgIndex)}
-              {@const turnCheckpoint = checkpointForTurn(msgIndex)}
+              {@const turnDuration = getCurrentTurnDuration(absIndex)}
+              {@const turnCheckpoint = checkpointForTurn(absIndex)}
               {@const turnAuditReport =
-                isAssignmentAuditorThread && isTurnEnd ? auditReportForTurn(msgIndex) : null}
+                isAssignmentAuditorThread && isTurnEnd ? auditReportForTurn(absIndex) : null}
 
               {#if isTurnStart || questionParts.length > 0 || isTurnEnd}
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
-                    {@const turnDone = isTurnCompleted(msgIndex)}
+                    {@const turnDone = isTurnCompleted(absIndex)}
                     {@const isCurrentAssistantTurn = isLatestTurn && !pendingLiveTurn}
                     {@const traceIsLive =
                       threadWorking && isCurrentAssistantTurn && !brainstormReportRefreshing}
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
-                    {@const accumulatedTurnParts = getTurnWorkingParts(msgIndex, traceIsLive)}
+                    {@const accumulatedTurnParts = getTurnWorkingParts(absIndex, traceIsLive)}
                     {@const durableTurnParts = pendingLiveTurn
                       ? []
-                      : streamWorkingPartsForTurn(msgIndex)}
+                      : streamWorkingPartsForTurn(absIndex)}
                     {@const collectedTurnParts =
                       streamParts.length > 0 && isCurrentAssistantTurn
                         ? traceIsRestored
@@ -10031,8 +10278,8 @@
                         done={turnDone}
                         rehydrated={traceIsRestored}
                         startTime={isLatestTurn
-                          ? (getTurnStartTime(msgIndex) ?? activeTurnStartTime)
-                          : getTurnStartTime(msgIndex)}
+                          ? (getTurnStartTime(absIndex) ?? activeTurnStartTime)
+                          : getTurnStartTime(absIndex)}
                         modelLabel={useLiveAttribution
                           ? currentWorkingTraceAttribution.modelLabel
                           : modelLabel}
@@ -10100,7 +10347,7 @@
                         {/if}
                       {/if}
                     {:else}
-                      {@const turnFinalText = getTurnFinalText(msgIndex)}
+                      {@const turnFinalText = getTurnFinalText(absIndex)}
                       {@const finalAnswerReady =
                         turnFinalText?.type === 'text' &&
                         turnFinalText.text.trim().length > 0 &&
@@ -10119,7 +10366,7 @@
                           speechController.readingOverlayActive}
                         <div
                           id={`msg-${msg.id}`}
-                          class="min-w-0 w-full text-sm text-foreground"
+                          class="message-block min-w-0 w-full text-sm text-foreground"
                           data-assistant-response
                           data-conversation-searchable
                           data-message-id={msg.id}
@@ -10161,7 +10408,7 @@
                         </div>
                       {/if}
 
-                      {#if turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(msgIndex, turnCheckpoint)}
+                      {#if turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(absIndex, turnCheckpoint)}
                         <div class="mt-3">
                           <RunChangesCard
                             checkpoint={turnCheckpoint}
@@ -10715,6 +10962,7 @@
                     await replyImageDescriptor(requestId, 'retry', selection)
                   }}
                   onIgnore={(requestId) => replyImageDescriptor(requestId, 'ignore')}
+                  onPickImage={(requestId) => pickImageDescriptorReplacement(requestId)}
                   onFalsePositive={(requestId) => reportImageDescriptorFalsePositive(requestId)}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
@@ -10917,7 +11165,7 @@
                 recentModels={rendererRecovery.recentModels}
                 onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={auditBusy}
-                onCancel={completeAudit}
+                onCancel={() => void completeAudit('dismiss')}
                 onAudit={generateAudit}
                 onModelChange={changeAuditModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -10937,7 +11185,7 @@
                 busy={auditBusy}
                 onViewReport={openAuditStudio}
                 onComplete={completeAudit}
-                onCancel={completeAudit}
+                onCancel={() => void completeAudit('dismiss')}
                 onReaudit={reaudit}
                 onModelChange={changeAuditModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -11062,6 +11310,10 @@
                     engineeringLifecycle={pendingLifecycleDisplay}
                     engineeringActive={engineeringOn}
                     onEngineeringLifecycleSelect={selectEngineeringLifecycle}
+                    independentAuditAvailable={independentAuditAvailable}
+                    independentAuditEnabled={independentAuditDisplayEnabled}
+                    onIndependentAuditToggle={toggleIndependentAudit}
+                    engineeringToolboxHidden={independentAuditDisplayEnabled}
                     showChatModes={chatMode}
                     {settings}
                     onSettingsChange={updateSettings}
@@ -11281,7 +11533,28 @@
 {/snippet}
 
 {#snippet auditCoordinatorPanel()}
-  {#if spec}
+  {#if independentAuditEnabled}
+    <IndependentAuditCoordinatorPanel
+      running={independentAuditRunning}
+      auditThread={durableAuditThread}
+      reportAvailable={auditReport !== null}
+      selectedThreadId={thread.id}
+      auditorSettings={auditSettings}
+      {providers}
+      projectId={thread.projectId}
+      favoriteModels={rendererRecovery.favoriteModels}
+      recentModels={rendererRecovery.recentModels}
+      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+      onOpenAudit={() => void generateIndependentAudit(auditSettings)}
+      onViewReport={openAuditStudio}
+      onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
+      onModelChange={changeAuditModel}
+      onToggleFavorite={(providerId, modelId, harnessId) =>
+        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+      onReorderFavorite={(draggedKey, targetKey, position) =>
+        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+    />
+  {:else if spec}
     <AchievementCoordinatorPanel
       mode="audit"
       specTitle={thread.title}

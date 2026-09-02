@@ -189,6 +189,15 @@
     ) => void | Promise<void>
     /** True on the Chats tab — surfaces the chat-only Engineering and File System toggles. */
     showChatModes?: boolean
+    /** Independent (spec-less) audit: the thread has work and the audit was never initialized. */
+    independentAuditAvailable?: boolean
+    /** Independent (spec-less) audit is currently enabled for this thread. */
+    independentAuditEnabled?: boolean
+    /** Called when the user toggles the independent audit switch. */
+    onIndependentAuditToggle?: (enabled: boolean) => void | Promise<void>
+    /** Engineering toolbox is hidden (Independent Audit staged or enabled —
+     *  the two controls are mutually exclusive before a send commits either). */
+    engineeringToolboxHidden?: boolean
     /** Hides the permission level selector and forces auto review — chats are
      *  for questions and research, so they always run with auto permissions. */
     hidePermissionSelector?: boolean
@@ -288,6 +297,10 @@
     engineeringActive,
     onEngineeringLifecycleSelect,
     showChatModes = false,
+    independentAuditAvailable = false,
+    independentAuditEnabled = false,
+    onIndependentAuditToggle,
+    engineeringToolboxHidden = false,
     hidePermissionSelector = false,
     readOnlyMode = false,
     allowAttachments = false,
@@ -620,6 +633,13 @@
     startAfterThreads = []
     closeStartAfterPopover()
     onStartAfterThreadsChange?.([])
+  }
+
+  /** Toggle the independent (spec-less) audit. Turning it on hands the thread
+   *  over to the audit coordinator in the context sidebar. */
+  async function toggleIndependentAudit(enabled: boolean): Promise<void> {
+    await onIndependentAuditToggle?.(enabled)
+    if (enabled) plusMenuOpen = false
   }
 
   function showModelMenu(): void {
@@ -2254,7 +2274,7 @@
             class="absolute bottom-9 left-0 z-40 w-52 rounded-xl border bg-surface p-1 shadow-lg"
             role="menu"
           >
-            {#if showChatModes || showEngineeringMode}
+            {#if showChatModes || showEngineeringMode || independentAuditAvailable}
               {#if showChatModes}
                 <!-- File System toggle (chat view) -->
                 <Switch
@@ -2276,6 +2296,32 @@
                       class={resolved.fileSystemMode ? 'text-info' : 'text-dimmed'}
                     />
                     File System
+                  </span>
+                </Switch>
+              {/if}
+
+              {#if independentAuditAvailable && projectId && !readOnlyMode}
+                <!-- Independent audit (spec-less) -->
+                <Switch
+                  checked={independentAuditEnabled}
+                  onchange={(enabled) => void toggleIndependentAudit(enabled)}
+                  title="Independent audit that uses the context of the thread to bring up an auditor to audit the current work of the agent"
+                  aria-label={independentAuditEnabled
+                    ? 'Turn off Independent audit'
+                    : 'Turn on Independent audit'}
+                  activeClass="bg-info"
+                  class="w-full justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
+                >
+                  <span
+                    class="flex min-w-0 items-center gap-2 {independentAuditEnabled
+                      ? 'text-foreground'
+                      : 'text-muted'}"
+                  >
+                    <ShieldCheck
+                      size={13}
+                      class={independentAuditEnabled ? 'text-info' : 'text-dimmed'}
+                    />
+                    Independent Audit
                   </span>
                 </Switch>
               {/if}
@@ -2361,7 +2407,7 @@
       </div>
     {/if}
 
-    {#if showEngineeringMode && onEngineeringLifecycleSelect}
+    {#if showEngineeringMode && onEngineeringLifecycleSelect && !engineeringToolboxHidden}
       <EngineeringToolbox
         bind:this={engineeringToolbox}
         lifecycleState={engineeringLifecycle}

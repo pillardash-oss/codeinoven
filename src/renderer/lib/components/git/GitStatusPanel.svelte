@@ -615,10 +615,13 @@
    */
   async function resolveConflictsLocally(pr: PullRequestSummary): Promise<void> {
     const remote = primaryRemote?.name ?? 'origin'
+    const returnBranch = gitState.status?.branch ?? 'main'
     await gitState.preparePrResolve(projectId, {
       remote,
       pullNumber: pr.number,
-      baseBranch: pr.baseRef
+      baseBranch: pr.baseRef,
+      headBranch: pr.headRef,
+      returnBranch
     })
     if (gitState.error) return
     selectedPullRequest = null
@@ -636,10 +639,13 @@
     const project = await invoke('project:get', projectId).catch(() => null)
     if (!project) return
     const remote = primaryRemote?.name ?? 'origin'
+    const returnBranch = gitState.status?.branch ?? 'main'
     await gitState.preparePrResolve(projectId, {
       remote,
       pullNumber: pr.number,
-      baseBranch: pr.baseRef
+      baseBranch: pr.baseRef,
+      headBranch: pr.headRef,
+      returnBranch
     })
     if (gitState.error) return
     const conflictedPaths = [...gitState.conflicted]
@@ -683,7 +689,7 @@
       '1. `git add -A`',
       `2. \`git commit -m "Resolve merge conflicts with ${pr.baseRef}"\``,
       '',
-      'Do NOT push — finish in the Git panel with the app push, which uses your stored GitHub credentials.'
+      'Do NOT push — after committing, the user finishes in the Git panel with the Resolve merge button, which pushes the resolution to the pull request and cleans up the temporary branch.'
     ].join('\n')
   }
 
@@ -1409,6 +1415,51 @@
   }
 
   const conflictState = $derived(gitState.conflictState)
+
+  /**
+   * A merge is in progress (MERGE_HEAD exists) and every conflicted file has
+   * been resolved and staged. Git is waiting for the merge commit, so the
+   * panel surfaces a dedicated Resolve button instead of leaving the user to
+   * figure out that a normal commit finishes the merge.
+   */
+  const mergePending = $derived(conflictState === 'merge' && conflicted.length === 0)
+
+  /** Resolve-merge modal state: optional title/description, defaults auto-generated. */
+  let resolveMergeOpen = $state(false)
+  let mergeTitle = $state('')
+  let mergeDescription = $state('')
+  const resolveMergeBusy = $derived(gitState.isBusy(['commit', 'push']))
+
+  function openResolveMerge(): void {
+    mergeTitle = ''
+    mergeDescription = ''
+    resolveMergeOpen = true
+  }
+
+  /** The commit message actually used: user text when given, a generated default otherwise. */
+  function mergeCommitMessage(): string {
+    const title = mergeTitle.trim()
+    const description = mergeDescription.trim()
+    const resolvedTitle =
+      title || `Merge ${status?.upstream ? `branch '${status.upstream}'` : 'changes'}`
+    return description ? `${resolvedTitle}\n\n${description}` : resolvedTitle
+  }
+
+  async function confirmResolveMerge(): Promise<void> {
+    if (resolveMergeBusy) return
+    await gitState.commit(projectId, mergeCommitMessage())
+    if (gitState.error) return
+    // A recorded PR-conflict session finishes itself: push the resolution back
+    // to the PR head branch, check out the original branch, delete pr-<n>.
+    // A plain local merge is already complete once committed.
+    const finished = await gitState.finishPrResolve(projectId)
+    if (!finished && gitState.prResolveSession) return
+    resolveMergeOpen = false
+    mergeTitle = ''
+    mergeDescription = ''
+    void refreshStatus()
+  }
+
   const integrateBusy = $derived(
     gitState.isBusy(['merge', 'rebase', 'stash', 'abortMerge', 'abortRebase'])
   )
@@ -3372,12 +3423,62 @@
     </Modal>
   {/if}
 
+  <!-- Completing a resolved merge: optional title/description, auto-generated when skipped -->
+  {#if resolveMergeOpen}
+    <Modal
+      open
+      title="Resolve merge"
+      onClose={() => (resolveMergeOpen = false)}
+    >
+      <div class="space-y-2">
+        <p class="text-[11px] leading-relaxed text-muted">
+          All conflicts are resolved. Give the merge commit a title and description, or leave them
+          empty to generate one automatically. Resolving also pushes the result back to the pull
+          request, restores your previous branch, and removes the temporary conflict branch.
+        </p>
+        <input
+          class="h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          placeholder="Title (e.g. Merge branch '{status?.upstream ?? 'main'}')"
+          bind:value={mergeTitle}
+          disabled={resolveMergeBusy}
+        />
+        <textarea
+          class="min-h-16 w-full resize-y rounded-md border border-border bg-elevated px-2.5 py-2 text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          placeholder="Description (optional)"
+          bind:value={mergeDescription}
+          disabled={resolveMergeBusy}
+        ></textarea>
+      </div>
+      {#snippet footer()}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            onclick={() => (resolveMergeOpen = false)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-foreground px-3 text-[11px] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+            data-modal-primary
+            disabled={resolveMergeBusy}
+            onclick={() => void confirmResolveMerge()}
+          >
+            {#if resolveMergeBusy}<Loader2 size={11} class="animate-spin" />{:else}<GitMerge size={11} />{/if}
+            Resolve
+          </button>
+        </div>
+      {/snippet}
+    </Modal>
+  {/if}
+
   <!--
     Fetch/pull/push act on the local working tree, so they only belong to the
     working-tree tabs. On the pull request tab they sat under a PR's own
     comment box implying they were part of reviewing it, which they are not.
   -->
-  {#if repoState === 'git' && status && remotes.length > 0 && activeTab !== 'pulls'}
+  {#if repoState === 'git' && status && remotes.length > 0 && activeTab !== 'pulls' && !mergePending}
     <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
       <button
         type="button"
@@ -3424,6 +3525,23 @@
           <ArrowUpFromLine size={11} />
         {/if}
         Push{status.ahead > 0 ? ` ${status.ahead}` : ''}
+      </button>
+    </div>
+  {:else if repoState === 'git' && status && mergePending}
+    <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
+      <button
+        type="button"
+        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-foreground text-[10px] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+        title="Commit the resolved files to complete the merge"
+        disabled={resolveMergeBusy}
+        onclick={openResolveMerge}
+      >
+        {#if resolveMergeBusy}
+          <Loader2 size={11} class="animate-spin" />
+        {:else}
+          <GitMerge size={11} />
+        {/if}
+        Resolve merge
       </button>
     </div>
   {/if}

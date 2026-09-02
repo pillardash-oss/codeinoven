@@ -39,9 +39,10 @@ interface ThreadMessagesEntry {
   heldSteerIds: Set<string>
 }
 
-/** Bounded window warmed on hover, matching the ThreadView history window so a
- *  preloaded thread opens to the same recent-message tail it would load live. */
-export const THREAD_MESSAGE_PRELOAD_WINDOW = 40
+/** Bounded latest-message window warmed for navigation. Keeping this smaller
+ * than a history page lets a selected thread mount once without blocking the
+ * renderer or growing the conversation across several visible frames. */
+export const THREAD_MESSAGE_PRELOAD_WINDOW = 12
 
 const EMPTY_MESSAGES: AgentMessage[] = []
 const STREAM_NOTIFICATION_DELAY_MS = 50
@@ -727,8 +728,14 @@ class ThreadMessagesStore {
       userMessageId?: string
     }
   ): Promise<void> {
-    const { text, transportText, attachments = [], references, initialContext, userMessageId } =
-      options
+    const {
+      text,
+      transportText,
+      attachments = [],
+      references,
+      initialContext,
+      userMessageId
+    } = options
     this.setRunIssue(projectId, conversationId, null)
     const { entry, messageId } = this.appendOptimistic(
       projectId,
@@ -1098,9 +1105,7 @@ class ThreadMessagesStore {
           if (event.type === 'steer.discarded') {
             // The steer never reached the harness — remove the optimistic
             // message so the conversation looks untouched.
-            entry.messages = entry.messages.filter(
-              (message) => message.id !== event.userMessageId
-            )
+            entry.messages = entry.messages.filter((message) => message.id !== event.userMessageId)
           }
         }
         this.#notify(projectId, threadId)

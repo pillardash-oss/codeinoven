@@ -622,7 +622,8 @@ export class NotificationService {
       notification.on('click', (): void => {
         this.onThreadClicked({
           projectId: thread.projectId,
-          threadId: thread.id
+          threadId: thread.id,
+          temporaryChatId
         })
       })
       notification.on('show', (): void => {
@@ -772,6 +773,7 @@ export class NotificationService {
       body,
       projectId: thread.projectId,
       threadId: thread.id,
+      temporaryChatId,
       source: 'temporary-chat',
       projectName,
       projectColor

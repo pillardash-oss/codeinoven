@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, powerMonitor } from 'electron'
 import { readdir, readFile } from 'fs/promises'
 import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
@@ -73,7 +73,10 @@ import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import type { PreparedUtilityRuntime } from '../drivers/driver.interface'
 import type { Database } from '../database/database'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
-import { TurnFeedbackRepo } from '../database/repositories/turn-feedback-repo'
+import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
+import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
+import { RANKING_RUBRIC_VERSION } from './turn-grader-prompt'
+import { isGreetingOnly } from './greeting-filter'
 import type { StorageEngine } from '../storage/storage-engine'
 import type {
   SpeechRemoteCleanupInput,
@@ -108,8 +111,10 @@ import {
 } from '../utilities/utility-orchestration-service'
 import {
   IMAGE_DESCRIPTOR_PROMPT,
+  assertReadablePartSource,
   imageDescriptorInactivityTimeoutMs,
-  resolveSelfContainedAttachment,
+  resolveImageEntries,
+  resolveVisionAttachment,
   type ImageDescriptorExecutorRequest,
   type ImageDescriptorResult,
   type ResolvedImageEntry
@@ -120,7 +125,8 @@ import {
   imageDescriptorBatchCapability,
   imageDescriptorBatchPrompt,
   runImageDescriptorBatch,
-  type ImageDescriptorBatchCapability
+  type ImageDescriptorBatchCapability,
+  type ImageDescriptorBatchRun
 } from '../services/image-descriptor'
 import type {
   AgentAccountUsage,
@@ -144,6 +150,7 @@ import type {
   AgentCapabilitySource,
   AgentRunningProcess,
   NativeMcpContent,
+  TaskManagerSnapshot,
   AssignmentPlan,
   AssignmentPlanContent,
   AssignmentFollowUpTaskInput,
@@ -192,8 +199,7 @@ import type {
   TurnCheckpointChangeSummary,
   TurnCheckpointSummary,
   ThinkingLevel,
-  TurnOutcomeBasis,
-  TurnOutcomeTaskType,
+  ModelRankingSnapshotRow,
   UsageEventDetails,
   UsageEventFeature,
   UsagePricingProvenance
@@ -266,6 +272,7 @@ import {
   requireLocalProject
 } from '../../lib/project-artifacts'
 import { messageId as createMessageId } from '../../lib/id'
+import { buildTranscriptMarkdown } from '../../lib/transcript'
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
 import {
   AuditReportValidationError,
@@ -309,6 +316,19 @@ const MEMORY_RESPONSE_BOUNDARY_INSTRUCTION = [
 
 /** Guidance injected for models that cannot see images (attachment: false). */
 const IMAGE_DESCRIPTOR_SYSTEM_NOTE = `You cannot directly see images. The application describes images attached to the user turn with the configured vision model before dispatch and supplies that evidence in the prompt. For follow-up inspection, the image descriptor is available on demand through the app gateway: search for it with ${UTILITY_SEARCH_TOOL_NAME} using kinds ["image_descriptor"], activate the result with ${UTILITY_ACTIVATE_TOOL_NAME}, then invoke its describe operation with ${UTILITY_INVOKE_TOOL_NAME} passing {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]} (or "type":"binary" with base64 data when the bytes cannot be referenced by path). The operation accepts several images per call, so batch frames at once. If the media is a video file you cannot read directly, check whether ffmpeg is available on the system (e.g., ffmpeg -version or which ffmpeg); if no system ffmpeg is found, this app bundles ffmpeg via ffmpeg-static — resolve its path and use it.`
+
+/** Whether two agent model selections identify the same vision model. */
+function isSameImageDescriptorModel(
+  a: AgentModelSelection | undefined,
+  b: AgentModelSelection
+): boolean {
+  return (
+    a !== undefined &&
+    a.harnessId === b.harnessId &&
+    a.providerId === b.providerId &&
+    a.modelId === b.modelId
+  )
+}
 
 function isImagePromptAttachment(attachment: PromptAttachment): boolean {
   if (attachment.mime.toLocaleLowerCase().startsWith('image/')) return true
@@ -390,7 +410,7 @@ const AUDIT_REPAIR_SYSTEM_PROMPT = [
   'Preserve the existing findings and evidence, do not inspect the project again, and return exactly one complete corrected JSON object.'
 ].join(' ')
 
-const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT = [
+const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT_LINES: readonly string[] = [
   'An Assignment audit is an evidence run, not a source-summary exercise.',
   'Before writing the report, enumerate every implementation file in scope from the Assignment, task reports and commits, repository history, and directly related imports or consumers.',
   'Inspect the repository instructions and manifests to discover its actual toolchain. Never assume a package manager, framework, or command.',
@@ -406,6 +426,31 @@ const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT = [
   'Include exitCode only for checks that ran; omit it for not_applicable checks.',
   'In addition to the normal audit fields, return auditedFiles and verification using exactly this shape: "auditedFiles":[{"path":"project/relative/path","reason":"why this file is in scope"}],"verification":{"repositoryRevision":"git revision plus dirty-state description","scope":"how the audited scope was derived","checks":[{"id":"check-id","kind":"format|lint|typecheck|test|build|other","command":"exact command or empty when not applicable","files":["project/relative/path"],"status":"passed|failed|not_applicable","exitCode":0,"evidence":"concise factual result or reason","findingIds":[]}],"utilities":[{"name":"utility or MCP name","status":"used|unavailable|not_applicable","evidence":"operation and result or concrete reason"}],"limitations":["remaining verification limitation"]}.',
   'The checks array must include format, lint, typecheck, and test results. Every audited file must appear in the files list of a format result and a lint result, including an explicit not_applicable result where that check truly does not apply.'
+]
+
+const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT = ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT_LINES.join(' ')
+
+/** Independent (spec-less) audits judge the thread's own request/output
+ *  transcript as the contract, then verify claims against the repository. */
+const INDEPENDENT_AUDIT_SYSTEM_PROMPT = [
+  `You are an independent ${APP_NAME} audit agent.`,
+  'No specification exists for this work. The user’s requests and the agent’s final outputs in the supplied transcript are the contract; judge the delivered work against them.',
+  'Verify claims against the repository using read-only tools. Check every user request, correctness, completeness, regressions, security weaknesses, memory/resource leaks, and missing validation or tests.',
+  'When deployment URLs are relevant, verify that the implementation discovers or documents explicit public environment variables, uses only a documented localhost fallback in development, and never treats an invented or example domain as production configuration.',
+  'If the code safely requires deployment-provided production values but those external values are not yet configured, record an informational deployment-readiness note and allow implementation to pass. Treat a silent production fallback or hardcoded invented domain as an actionable finding.',
+  'Report concrete evidence. Do not modify files.',
+  'Write every human-facing string as readable Markdown: use short paragraphs, blank-line separation, and lists where useful. Do not repeat the report section headings inside field values.',
+  CITATION_SYSTEM_INSTRUCTION,
+  AUDIT_REPORT_JSON_CONTRACT,
+  ...ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT_LINES.map((line) =>
+    line
+      .replace(
+        'An Assignment audit is an evidence run',
+        'An independent audit is an evidence run'
+      )
+      .replace('from the Assignment, task reports and commits,', 'from the transcript and commits,')
+  ),
+  'Return only the requested structured audit report.'
 ].join(' ')
 
 const LOOP_MAX_ITERATIONS = 8
@@ -1023,6 +1068,10 @@ registerCioPromptDefault(
   asEditableTemplate(ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT)
 )
 registerCioPromptDefault('audit-report', asEditableTemplate(AUDIT_GENERATION_SYSTEM_PROMPT))
+registerCioPromptDefault(
+  'independent-audit-report',
+  asEditableTemplate(INDEPENDENT_AUDIT_SYSTEM_PROMPT)
+)
 registerCioPromptDefault('audit-repair', asEditableTemplate(AUDIT_REPAIR_SYSTEM_PROMPT))
 registerCioPromptDefault('image-description', IMAGE_DESCRIPTOR_PROMPT)
 
@@ -1306,7 +1355,9 @@ interface PendingQuestionInfo {
 
 /** How the user resolved a failed image-descriptor call. */
 type ImageDescriptorUserDecision =
-  { action: 'retry'; selection?: AgentModelSelection } | { action: 'ignore' }
+  | { action: 'retry'; selection?: AgentModelSelection }
+  | { action: 'pick_image'; entry: ResolvedImageEntry }
+  | { action: 'ignore' }
 
 /** A blocked image-descriptor tool call awaiting a user decision. */
 interface PendingImageDescriptorDecision {
@@ -1526,16 +1577,16 @@ export interface VirtualTaskOptions {
 }
 
 export class ChatEngine {
-  /** Post-read window: how long the user may just read before grading fires. */
-  private static readonly GRADE_READING_WINDOW_MS = 5 * 60_000
-  /** Draft window: anchored at the first draft entry, never restarted. */
-  private static readonly GRADE_DRAFT_WINDOW_MS = 10 * 60_000
-  /** Hard fallback: unread and untouched completed turns are still evaluated. */
-  private static readonly GRADE_GENERAL_WINDOW_MS = 30 * 60_000
-  /** Failed judges retry out of band without blocking newer completed turns. */
-  private static readonly GRADE_RETRY_BASE_MS = 5 * 60_000
-  /** Bound each drain so model feedback never monopolizes the main process. */
-  private static readonly GRADE_DRAIN_BATCH_SIZE = 3
+  /** Close deadline: an untouched conversation is graded after this much inactivity. */
+  private static readonly RANKING_INACTIVITY_CLOSE_MS = 24 * 60 * 60_000
+  /** Failed judges retry out of band without blocking newer closed conversations. */
+  private static readonly RANKING_RETRY_BASE_MS = 5 * 60_000
+  /** Bounded retries before a snapshot parks as failed for recovery. */
+  private static readonly RANKING_ATTEMPT_CAP = 5
+  /** Failed snapshots re-enter the queue this long after their last attempt. */
+  private static readonly RANKING_RECOVERY_COOLDOWN_MS = 24 * 60 * 60_000
+  /** Bound each drain so model ranking never monopolizes the main process. */
+  private static readonly RANKING_DRAIN_BATCH_SIZE = 3
 
   private static readonly STREAM_BROADCAST_INTERVAL_MS = 50
   private static readonly TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
@@ -1550,6 +1601,11 @@ export class ChatEngine {
   private childSessionOwners = new Map<string, ChildSessionInfo>()
   private childCaptureTasks = new Map<string, Promise<AgentMessage[]>>()
   private pendingPermissions = new Map<string, PendingPermissionInfo>()
+  /** Memoized attachment allowlist per chat thread id. Invalidated whenever a
+   *  user message is persisted (attachments may have changed) and dropped when
+   *  the thread is deleted, avoiding a full message-record scan on every
+   *  permission request. Rebuilt lazily on first access. */
+  private chatAttachmentAllowlists = new Map<string, string[]>()
   private pendingQuestions = new Map<string, PendingQuestionInfo>()
   private pendingImageDescriptorDecisions = new Map<string, PendingImageDescriptorDecision>()
   private completionWaiters = new Map<string, SessionCompletionWaiter>()
@@ -1585,6 +1641,12 @@ export class ChatEngine {
     Promise<{ report: AuditReport; auditorThread: Thread }>
   >()
   private activeImplementationAuditorEnsures = new Map<string, Promise<Thread>>()
+  /** One independent (spec-less) auditor run per thread. */
+  private activeIndependentAuditRuns = new Map<
+    string,
+    Promise<{ report: AuditReport; auditorThread: Thread }>
+  >()
+  private activeIndependentAuditorEnsures = new Map<string, Promise<Thread>>()
   /** Assignment audits explicitly cancelled by Stop; late provider output must be ignored. */
   private stoppedAssignmentAuditRuns = new Set<string>()
   /** Sessions owned by stopped Assignments stay quarantined until an explicit Resume. */
@@ -1810,7 +1872,8 @@ export class ChatEngine {
   private baseUrlProviders: BaseUrlProviderService
   private utilityOrchestration: UtilityOrchestrationService
   private usageRepo: HarnessUsageRepo
-  private turnFeedbackRepo: TurnFeedbackRepo
+  private rankingRepo: ModelRankingRepo
+  private rankingSnapshotRepo: ModelRankingSnapshotRepo
   private gradeDrainTimer: ReturnType<typeof setTimeout> | null = null
   private gradeDrainRunning = false
   private utilityTurns = new Map<
@@ -1838,7 +1901,8 @@ export class ChatEngine {
     this.agentProcesses.attachJournal(processJournalPath)
     this.threadCreation = threadCreation ?? new ThreadCreationCoordinator()
     this.usageRepo = new HarnessUsageRepo(database)
-    this.turnFeedbackRepo = new TurnFeedbackRepo(database)
+    this.rankingRepo = new ModelRankingRepo(database)
+    this.rankingSnapshotRepo = new ModelRankingSnapshotRepo(database)
     this.projectManager = new ProjectManager(database)
     this.projectFilesService = new ProjectFilesService(this.projectManager)
     this.checkpointManager = new CheckpointManager(database)
@@ -1846,6 +1910,7 @@ export class ChatEngine {
       database,
       broadcastThreadUpdate,
       async (thread) => {
+        this.chatAttachmentAllowlists.delete(thread.id)
         await this.deleteThreadSession(thread.projectId, thread.id)
         await this.memoryService.deleteThreadMemory(thread.projectId, thread.id)
         await this.storage.remove(this.coordinatorHandoffQueuePath(thread.projectId, thread.id))
@@ -1858,10 +1923,10 @@ export class ChatEngine {
       },
       this.scopeRoots
     )
-    this.threadManager.onTurnFeedbackDeleted = (_projectId, threadIds) => {
+    this.threadManager.onThreadsDeletedForRanking = (_projectId, threadIds) => {
       void _projectId
-      this.turnFeedbackRepo.scheduleDeleted(threadIds, Date.now())
-      this.scheduleTurnFeedbackDrain()
+      this.rankingSnapshotRepo.closeForThreads(threadIds, Date.now())
+      this.scheduleRankingDrain()
     }
     this.memoryService = new MemoryService(storage)
     this.generatedArtifactService = new GeneratedArtifactService(storage)
@@ -2016,6 +2081,13 @@ export class ChatEngine {
         validateEntityId(threadId, 'Thread ID')
       )
     )
+    ipcMain.handle('taskManager:list', () => this.listTaskManagerProcesses())
+    ipcMain.handle('taskManager:killProcess', (_, pid: unknown, force: unknown) => {
+      if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) {
+        throw new TypeError('Process ID must be a positive integer')
+      }
+      return this.killTaskManagerProcess(pid, force === true)
+    })
     ipcMain.handle('capabilities:readSkill', (_, source: AgentCapabilitySource) =>
       this.capabilityDiscovery.readSkill(source)
     )
@@ -2323,8 +2395,9 @@ export class ChatEngine {
         threadId: string,
         requestId: string,
         action: ImageDescriptorReplyAction,
-        selection?: AgentModelSelection
-      ) => this.replyImageDescriptor(projectId, threadId, requestId, action, selection)
+        selection?: AgentModelSelection,
+        imagePath?: string
+      ) => this.replyImageDescriptor(projectId, threadId, requestId, action, selection, imagePath)
     )
     ipcMain.handle(
       'agent:answerQuestion',
@@ -2371,6 +2444,16 @@ export class ChatEngine {
       'agent:generateAudit',
       (_, projectId: string, threadId: string, request: AuditGenerationRequest) =>
         this.generateAudit(projectId, threadId, request)
+    )
+    ipcMain.handle(
+      'agent:generateIndependentAudit',
+      (_, projectId: string, threadId: string, request: AuditGenerationRequest) =>
+        this.generateIndependentAudit(projectId, threadId, request)
+    )
+    ipcMain.handle(
+      'agent:ensureIndependentAuditorThread',
+      (_, projectId: string, threadId: string, settings: ThreadSettings) =>
+        this.ensureIndependentAuditorThread(projectId, threadId, settings)
     )
     ipcMain.handle(
       'agent:ensureImplementationAuditorThread',
@@ -3234,23 +3317,24 @@ export class ChatEngine {
       [...harnessIds].map(async (harnessId): Promise<AgentAccountUsage | null> => {
         try {
           const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
+          const providerId =
+            providerByHarness.get(harnessId) ?? thread.settings?.providerId ?? harnessId
           const nativeTelemetry = driver.readAccountUsage
-            ? await driver.readAccountUsage(projectPath, thread.settings?.providerId)
+            ? await driver.readAccountUsage(projectPath, providerId)
             : null
           // OpenUsage is keyed by PROVIDER, not harness: resolve the provider
           // the harness session actually ran against (e.g. a pi thread pointed
           // at Z.AI queries "z-ai", not "pi").
-          const openUsageProviderId =
-            providerByHarness.get(harnessId) ?? thread.settings?.providerId ?? harnessId
-          const openUsage = openUsageProviderId
-            ? await this.openUsage.readProviderUsage(openUsageProviderId)
-            : null
+          const openUsage = await this.openUsage.readProviderUsage(
+            providerId,
+            harnessId === 'pi' ? ['pi'] : []
+          )
           // A custom provider with a user-defined usage route answers the
           // quota question directly when the harness itself reports nothing.
           const customUsage =
             nativeTelemetry?.rateLimits.length || openUsage?.rateLimits.length
               ? null
-              : await this.readCustomProviderUsage(harnessId, thread.settings?.providerId)
+              : await this.readCustomProviderUsage(harnessId, providerId)
           const telemetry =
             nativeTelemetry || openUsage || customUsage
               ? {
@@ -3282,7 +3366,6 @@ export class ChatEngine {
           ) {
             return null
           }
-          const providerId = providerByHarness.get(harnessId) ?? thread.settings?.providerId ?? ''
           return { harnessId, providerId, ...telemetry }
         } catch (error) {
           Logger.dev('On-demand account usage refresh unavailable:', error)
@@ -4576,7 +4659,7 @@ export class ChatEngine {
   }
 
   /** Running processes owned by a thread (and app-scoped pooled harness shares). */
-  listProcesses(projectId: string, threadId: string): AgentRunningProcess[] {
+  listProcesses(projectId: string, threadId: string): Promise<AgentRunningProcess[]> {
     return this.agentProcesses.list(
       validateEntityId(projectId, 'Project ID'),
       validateEntityId(threadId, 'Thread ID')
@@ -4591,6 +4674,7 @@ export class ChatEngine {
   async hasActiveProcessesInScope(projectId: string, scopeBucketId?: string): Promise<boolean> {
     projectId = validateEntityId(projectId, 'Project ID')
     const threads = await this.threadManager.listThreads(projectId)
+    let inspected = false
     for (const thread of threads) {
       if (thread.archived) continue
       if (
@@ -4599,7 +4683,9 @@ export class ChatEngine {
       ) {
         continue
       }
-      if (this.agentProcesses.list(projectId, thread.id).length > 0) return true
+      const processes = await this.agentProcesses.list(projectId, thread.id, !inspected)
+      inspected = true
+      if (processes.length > 0) return true
     }
     return false
   }
@@ -4622,6 +4708,62 @@ export class ChatEngine {
       validateEntityId(projectId, 'Project ID'),
       validateEntityId(threadId, 'Thread ID')
     )
+  }
+
+  /** App-wide process list for the task manager (all projects and app scope). */
+  async listTaskManagerProcesses(): Promise<TaskManagerSnapshot> {
+    const processes = await this.agentProcesses.listAll()
+    const projectNames = new Map<string, string>()
+    const threadTitles = new Map<string, string>()
+    for (const process of processes) {
+      const { projectId, threadId } = process
+      if (projectId && !projectNames.has(projectId)) {
+        const project = await this.projectManager.getProject(projectId)
+        projectNames.set(projectId, project?.name ?? projectId)
+      }
+      if (projectId && threadId && !threadTitles.has(threadId)) {
+        const thread = await this.threadManager.getThread(projectId, threadId)
+        threadTitles.set(threadId, thread?.title ?? threadId)
+      }
+    }
+    const resolvedProcesses = processes.map((process) => ({
+      ...process,
+      ...(process.projectId ? { projectName: projectNames.get(process.projectId) ?? null } : {}),
+      ...(process.threadId ? { threadTitle: threadTitles.get(process.threadId) ?? null } : {})
+    }))
+    return {
+      processes: resolvedProcesses,
+      power: {
+        source: powerMonitor.isOnBatteryPower() ? 'battery' : 'ac',
+        thermalState:
+          process.platform === 'darwin' ? powerMonitor.getCurrentThermalState() : 'unknown'
+      },
+      sampledAt: Date.now()
+    }
+  }
+
+  /** Kill an app-owned process by pid for the task manager (graceful or force). */
+  killTaskManagerProcess(pid: number, force: boolean): Promise<void> {
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
+      throw new TypeError('Process ID must be a positive integer')
+    }
+    return this.agentProcesses.killProcessGlobal(pid, force)
+  }
+
+  /** Register a PTY-backed terminal or action and its descendants with the
+   * same process tracker used by agent harnesses. */
+  trackPtyProcess(
+    scopeId: string | undefined,
+    projectId: string | undefined,
+    threadId: string | undefined,
+    pid: number,
+    command: string,
+    cwd: string
+  ): void {
+    if (scopeId && projectId && threadId) {
+      this.agentProcesses.claimSession(scopeId, projectId, threadId)
+    }
+    this.agentProcesses.watchProcess(scopeId, pid, command, cwd)
   }
 
   /** Delete a harness-native or app-managed skill. */
@@ -7925,6 +8067,54 @@ export class ChatEngine {
   private async executeImageDescriptor(
     request: ImageDescriptorExecutorRequest
   ): Promise<ImageDescriptorResult[]> {
+    try {
+      return await this.runImageDescriptor(request)
+    } catch (error) {
+      // A failed descriptor must never stop the thread's work. The sendPrompt
+      // and steerPrompt flows call describePromptAttachments before dispatch
+      // inside a try/catch that marks the thread 'failed'; escaping here would
+      // kill the whole turn just because the vision model could not describe
+      // an image. Degrade to per-image error results so the (text-only) model
+      // receives an explicit note instead of the thread dying.
+      Logger.error('Image descriptor failed; continuing the thread without image descriptions', {
+        projectId: request.projectId,
+        threadId: request.threadId,
+        error: error instanceof Error ? (error.stack ?? error.message) : String(error)
+      })
+      // A decision prompt (or another early step) may have cleared the parent
+      // session's watchdog before failing; always re-arm it so the real turn
+      // stays guarded after the descriptor degrades and returns.
+      this.startSessionWatchdog(request.sessionId)
+      return this.imageDescriptorFailureResults(
+        request,
+        rawErrorMessage(error) || 'The vision model could not describe the attached image.'
+      )
+    }
+  }
+
+  /**
+   * One error result per requested image. This is the degraded shape the
+   * descriptor returns whenever it cannot produce a real description (including
+   * the no-vision-model case), so the text-only model always has explicit
+   * evidence about what is missing and can continue the thread.
+   */
+  private imageDescriptorFailureResults(
+    request: ImageDescriptorExecutorRequest,
+    error: string
+  ): ImageDescriptorResult[] {
+    const message = `${error} Continue without the image description.`
+    return request.images.map((entry) => ({
+      id: entry.id,
+      source: entry.source,
+      type: entry.type,
+      description: '',
+      error: message
+    }))
+  }
+
+  private async runImageDescriptor(
+    request: ImageDescriptorExecutorRequest
+  ): Promise<ImageDescriptorResult[]> {
     const thread = await this.threadManager.getThread(request.projectId, request.threadId)
     const config = await this.storage.getConfig()
     let selection =
@@ -7932,6 +8122,10 @@ export class ChatEngine {
       thread?.settings?.imageDescriptor ??
       config.agentDefaults.imageDescriptor ??
       this.firstVisionModelFromCache(request.projectId)
+    // A configured fallback vision model is tried automatically when the
+    // primary fails, before the user is asked to pick another one.
+    const fallback =
+      thread?.settings?.imageDescriptorFallback ?? config.agentDefaults.imageDescriptorFallback
     if (!selection) {
       const decision = await this.requestImageDescriptorDecision(
         request,
@@ -7940,13 +8134,10 @@ export class ChatEngine {
         'unknown'
       )
       if (decision.action !== 'retry' || !decision.selection) {
-        return request.images.map((entry) => ({
-          id: entry.id,
-          source: entry.source,
-          type: entry.type,
-          description: '',
-          error: 'No vision model was selected. Continue without an image description.'
-        }))
+        return this.imageDescriptorFailureResults(
+          request,
+          'No vision model was selected to describe the image.'
+        )
       }
       selection = decision.selection
       await this.persistImageDescriptorSelection(request.projectId, request.threadId, selection)
@@ -7962,11 +8153,17 @@ export class ChatEngine {
          ORDER BY created_at DESC, id DESC LIMIT 1`,
         request.threadId
       )?.id
-      const capability = await this.imageDescriptorBatchCapability(request, selection)
-      try {
-        const run = await runImageDescriptorBatch(
+      // Try the whole request as one candidate run against the currently
+      // selected model; a failed batch retries once on the fallback before
+      // degrading to one safe call per image.
+      const runBatch = async (): Promise<ImageDescriptorBatchRun> => {
+        const currentCapability = await this.imageDescriptorBatchCapability(
+          request,
+          selectionRef.current
+        )
+        return runImageDescriptorBatch(
           request.images,
-          capability,
+          currentCapability,
           (images, featureCallId) =>
             this.describeImagesOnVisionModelBatch(
               request,
@@ -7976,17 +8173,43 @@ export class ChatEngine {
               featureCallId
             ),
           (image) =>
-            this.describeWithImageDescriptorRecovery(request, selectionRef, image, parentTurnId)
+            this.describeWithImageDescriptorRecovery(
+              request,
+              selectionRef,
+              fallback,
+              image,
+              parentTurnId
+            )
         )
+      }
+      try {
+        const run = await runBatch()
         return run.results
       } catch (error) {
         Logger.dev('Image descriptor batch failed; falling back to per-image calls:', error)
+        // The batch call failed before producing results: retry the whole
+        // batch once on the configured fallback model when one exists, then
+        // degrade to the per-image recovery path which itself tries the
+        // fallback and only then notifies the user.
+        if (fallback && !isSameImageDescriptorModel(fallback, selectionRef.current)) {
+          selectionRef.current = fallback
+          try {
+            const run = await runBatch()
+            return run.results
+          } catch (fallbackError) {
+            Logger.dev(
+              'Image descriptor batch failed on the fallback model; degrading to per-image calls:',
+              fallbackError
+            )
+          }
+        }
         const results: ImageDescriptorResult[] = []
         for (const image of request.images) {
           results.push(
             await this.describeWithImageDescriptorRecovery(
               request,
               selectionRef,
+              fallback,
               image,
               parentTurnId
             )
@@ -8057,7 +8280,7 @@ export class ChatEngine {
     try {
       const attachments: PromptAttachment[] = []
       for (const image of images) {
-        attachments.push(await resolveSelfContainedAttachment(image))
+        attachments.push(await resolveVisionAttachment(image))
       }
       const firstAttachment = attachments[0] ?? { mime: 'image/*' as const, url: '' }
       const timeoutMs = imageDescriptorInactivityTimeoutMs(firstAttachment, 0)
@@ -8137,8 +8360,10 @@ export class ChatEngine {
   }
 
   /**
-   * Describe one image with the vision model. When the vision call fails, the
-   * first attempt surfaces a user decision card (change model / retry / ignore)
+   * Describe one image with the vision model. When the primary vision model
+   * fails, a configured fallback model is tried automatically before the user
+   * is involved. If the fallback also fails (or none was configured), the
+   * failure surfaces a user decision card (change model / retry / ignore)
    * instead of silently handing the error to the text-only model. The decision
    * drives the retry: a new selection is persisted to the thread, and `ignore`
    * forwards whatever partial output exists (usually nothing) plus the error so
@@ -8147,10 +8372,22 @@ export class ChatEngine {
   private async describeWithImageDescriptorRecovery(
     request: ImageDescriptorExecutorRequest,
     selection: { current: AgentModelSelection },
+    fallback: AgentModelSelection | undefined,
     image: ResolvedImageEntry,
     parentTurnId?: string
   ): Promise<ImageDescriptorResult> {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    let next: AgentModelSelection = selection.current
+    let usedFallback = false
+    // The image being described can be replaced from the error card when its
+    // source is missing/unreadable; the replacement keeps the original id so
+    // its description still maps back to the same slot in the result set.
+    let currentImage: ResolvedImageEntry = image
+    // One try for the primary, one automatic try for the fallback, and one
+    // try for a model (or replacement image) picked from the user decision
+    // card — enough rounds to cover the configured pair without ever hanging
+    // the turn in a loop.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const active = next
       // A reply to the error card briefly re-arms the parent watchdog. The
       // descriptor owns its own adaptive inactivity deadline while retrying.
       this.clearSessionWatchdog(request.sessionId)
@@ -8159,12 +8396,17 @@ export class ChatEngine {
           request.projectId,
           request.threadId,
           request.projectPath,
-          selection.current,
-          image,
+          active,
+          currentImage,
           attempt,
           parentTurnId
         )
-        return { id: image.id, source: image.source, type: image.type, description }
+        return {
+          id: currentImage.id,
+          source: currentImage.source,
+          type: currentImage.type,
+          description
+        }
       } catch (error) {
         const message = this.imageDescriptorFailureMessage(error)
         const kind: AgentProviderIssueKind =
@@ -8172,54 +8414,66 @@ export class ChatEngine {
             ? 'network'
             : classifyProviderIssue(message)
         Logger.dev('Image description failed', {
-          harnessId: selection.current.harnessId,
-          providerId: selection.current.providerId,
-          modelId: selection.current.modelId,
+          harnessId: active.harnessId,
+          providerId: active.providerId,
+          modelId: active.modelId,
           error: message
         })
         const attributedMessage = `The vision model (${this.visionModelLabel(
           request.projectId,
-          selection.current
+          active
         )}) failed: ${message}`
-        if (attempt === 0) {
-          const decision = await this.requestImageDescriptorDecision(
-            request,
-            selection.current,
-            attributedMessage,
-            kind
-          )
-          if (decision.action === 'retry') {
-            if (decision.selection) {
-              selection.current = decision.selection
-              await this.persistImageDescriptorSelection(
-                request.projectId,
-                request.threadId,
-                selection.current
-              )
-            }
-            continue
+        // Automatic fallback: switch to the configured fallback model and
+        // retry silently, before interrupting the user with a decision card.
+        if (!usedFallback && fallback && !isSameImageDescriptorModel(fallback, active)) {
+          usedFallback = true
+          next = fallback
+          // Keep the shared selection on the working model so the remaining
+          // images in the same run start from it; never persist it as a
+          // permanent override of the user's configured primary.
+          selection.current = fallback
+          continue
+        }
+        const decision = await this.requestImageDescriptorDecision(
+          request,
+          active,
+          attributedMessage,
+          kind,
+          currentImage.id
+        )
+        if (decision.action === 'retry') {
+          if (decision.selection) {
+            selection.current = decision.selection
+            await this.persistImageDescriptorSelection(
+              request.projectId,
+              request.threadId,
+              selection.current
+            )
+            next = decision.selection
+          } else {
+            next = active
           }
-          return {
-            id: image.id,
-            source: image.source,
-            type: image.type,
-            description: '',
-            error: `${attributedMessage} You chose to continue. Work with the partial description above if it is usable; otherwise tell the user what is missing and suggest how to fix it.`
-          }
+          continue
+        }
+        if (decision.action === 'pick_image') {
+          // The user picked a replacement image from the error card: describe
+          // it instead of the source that is missing/unreadable.
+          currentImage = decision.entry
+          continue
         }
         return {
-          id: image.id,
-          source: image.source,
-          type: image.type,
+          id: currentImage.id,
+          source: currentImage.source,
+          type: currentImage.type,
           description: '',
-          error: `${attributedMessage} The description still failed after retry. Tell the user what is missing and suggest how to fix it.`
+          error: `${attributedMessage} You chose to continue. Work with the partial description above if it is usable; otherwise tell the user what is missing and suggest how to fix it.`
         }
       }
     }
     return {
-      id: image.id,
-      source: image.source,
-      type: image.type,
+      id: currentImage.id,
+      source: currentImage.source,
+      type: currentImage.type,
       description: '',
       error: 'Image description failed after retry'
     }
@@ -8235,7 +8489,8 @@ export class ChatEngine {
     request: ImageDescriptorExecutorRequest,
     selection: AgentModelSelection | undefined,
     error: string,
-    kind: AgentProviderIssueKind
+    kind: AgentProviderIssueKind,
+    imageId?: string
   ): Promise<ImageDescriptorUserDecision> {
     const id = generateId()
     this.clearSessionWatchdog(request.sessionId)
@@ -8265,6 +8520,7 @@ export class ChatEngine {
         error,
         kind,
         selection,
+        ...(imageId ? { imageId } : {}),
         ...(owningThread?.settings
           ? {
               requestingModel: {
@@ -8360,10 +8616,12 @@ export class ChatEngine {
     let response: AgentMessage | undefined
     let failure: string | null = null
     try {
-      // Inline local file sources as data URLs so the vision session never
-      // depends on the original path still existing (transient temp screenshots
-      // and pasted images can be deleted before the harness reads them).
-      const attachment = await resolveSelfContainedAttachment(image)
+      // Pasted/dropped images live in the project's temporary attachment
+      // directory, so pass the resolved file path to the vision session and
+      // let the harness read it itself — no base64 inflation in the prompt.
+      // A missing file throws here and surfaces via the recovery card, where
+      // the user can pick a replacement image.
+      const attachment = await resolveVisionAttachment(image)
       const timeoutMs = imageDescriptorInactivityTimeoutMs(attachment, attempt)
       const nextTimeoutMs =
         attempt === 0 ? imageDescriptorInactivityTimeoutMs(attachment, attempt + 1) : undefined
@@ -8494,6 +8752,9 @@ export class ChatEngine {
     presentation?: UserMessagePresentation,
     dispatchOrigin: 'user' | 'internal' = 'user'
   ): Promise<AgentMessage> {
+    // Attachments enter the thread here, so drop any memoized allowlist and let
+    // the next permission request rebuild it from the latest message records.
+    this.chatAttachmentAllowlists.delete(threadId)
     const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
     const existing = mirror.find((message) => message.id === messageId)
     if (existing) return existing
@@ -8554,11 +8815,6 @@ export class ChatEngine {
       completedAt: createdAt
     }
     await this.threadManager.upsertMessages(projectId, threadId, [userMessage])
-    if (dispatchOrigin === 'user') {
-      // The user reacted to the previous turn: capture the follow-up text as
-      // extra judge context for that turn's pending outcome.
-      this.noteFollowUpForGrading(threadId, displayText)
-    }
     return userMessage
   }
 
@@ -9321,18 +9577,24 @@ export class ChatEngine {
     threadId: string,
     requestId: string,
     action: ImageDescriptorReplyAction,
-    selection?: AgentModelSelection
+    selection?: AgentModelSelection,
+    imagePath?: string
   ): Promise<void> {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     requestId = validateEntityId(requestId, 'Image descriptor request ID', 256)
-    if (action !== 'retry' && action !== 'ignore' && action !== 'false_positive') {
+    if (
+      action !== 'retry' &&
+      action !== 'ignore' &&
+      action !== 'false_positive' &&
+      action !== 'pick_image'
+    ) {
       throw new TypeError('Invalid image descriptor reply')
     }
+    const pending = this.pendingImageDescriptorDecisions.get(requestId)
     if (action === 'false_positive') {
-      const requestingModel =
-        this.pendingImageDescriptorDecisions.get(requestId)?.request.requestingModel
+      const requestingModel = pending?.request.requestingModel
       if (!requestingModel) {
         throw new Error('This report needs the model that was executing the turn')
       }
@@ -9342,6 +9604,17 @@ export class ChatEngine {
         providerId: requestingModel.providerId,
         harnessId: requestingModel.harnessId
       })
+    }
+    // A replacement image picked from the error card is validated here (it
+    // must be a readable file) and keeps the failed image's id so its
+    // description still maps to the same slot in the per-image result set.
+    let replacement: ResolvedImageEntry | undefined
+    if (action === 'pick_image') {
+      const failedImageId = pending?.request.imageId
+      if (!failedImageId) {
+        throw new Error('This image descriptor request has no failed image to replace')
+      }
+      replacement = await this.buildImageDescriptorReplacement(failedImageId, imagePath)
     }
     if (action === 'retry' && selection !== undefined) {
       selection = {
@@ -9360,7 +9633,6 @@ export class ChatEngine {
         modelId: validateBoundedString(selection.modelId, 'Image descriptor model ID', 1, 256)
       }
     }
-    const pending = this.pendingImageDescriptorDecisions.get(requestId)
     if (
       !pending ||
       pending.projectId !== projectId ||
@@ -9381,11 +9653,33 @@ export class ChatEngine {
       requestId,
       action
     })
-    pending.resolve(
-      action === 'retry'
-        ? { action: 'retry', selection: selection ?? undefined }
-        : { action: 'ignore' }
-    )
+    if (action === 'retry') {
+      pending.resolve({ action: 'retry', selection: selection ?? undefined })
+    } else if (action === 'pick_image' && replacement) {
+      pending.resolve({ action: 'pick_image', entry: replacement })
+    } else {
+      pending.resolve({ action: 'ignore' })
+    }
+  }
+
+  /**
+   * Validate the replacement image picked on the error card and prepare it for
+   * the vision call. The entry keeps the failed image's id so the description
+   * maps back to the same result slot.
+   */
+  private async buildImageDescriptorReplacement(
+    imageId: string,
+    imagePath: string | undefined
+  ): Promise<ResolvedImageEntry> {
+    if (!imagePath || !imagePath.trim()) {
+      throw new TypeError('A replacement image path is required')
+    }
+    const source = imagePath.startsWith('file://') ? fileURLToPath(imagePath) : imagePath.trim()
+    const [entry] = resolveImageEntries({
+      images: [{ id: imageId, source, type: 'path' }]
+    })
+    await assertReadablePartSource(entry)
+    return entry
   }
 
   /** List slash commands exposed by the thread's active harness. */
@@ -12876,6 +13170,299 @@ export class ChatEngine {
     return (await this.threadManager.getThread(projectId, auditor.id)) ?? auditor
   }
 
+  /**
+   * Run an independent (spec-less) audit: the thread's own request/output
+   * transcript is the contract, and the auditor verifies claims against the
+   * repository with read-only tools plus evidence-backed checks.
+   */
+  async generateIndependentAudit(
+    projectId: string,
+    threadId: string,
+    request: AuditGenerationRequest
+  ): Promise<{ report: AuditReport; auditorThread: Thread }> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const settings = validateThreadSettings(request.settings)
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread || thread.independentAudit !== true) {
+      throw new Error('Independent audit is not enabled for this thread.')
+    }
+    if (isOrchestrationChildThread(thread)) {
+      throw new Error('Independent audit is not available on orchestration threads.')
+    }
+    const key = `${projectId}:${threadId}`
+    const running = this.activeIndependentAuditRuns.get(key)
+    if (running) return running
+    const run = this.runIndependentAudit(projectId, threadId, settings)
+    this.activeIndependentAuditRuns.set(key, run)
+    try {
+      return await run
+    } finally {
+      if (this.activeIndependentAuditRuns.get(key) === run) {
+        this.activeIndependentAuditRuns.delete(key)
+      }
+    }
+  }
+
+  async ensureIndependentAuditorThread(
+    projectId: string,
+    coordinatorThreadId: string,
+    settings: ThreadSettings
+  ): Promise<Thread> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    settings = validateThreadSettings(settings)
+    const key = `${projectId}:${coordinatorThreadId}`
+    const running = this.activeIndependentAuditorEnsures.get(key)
+    if (running) return running
+    const task = this.createOrUpdateIndependentAuditor(projectId, coordinatorThreadId, settings)
+    this.activeIndependentAuditorEnsures.set(key, task)
+    try {
+      return await task
+    } finally {
+      if (this.activeIndependentAuditorEnsures.get(key) === task) {
+        this.activeIndependentAuditorEnsures.delete(key)
+      }
+    }
+  }
+
+  private async createOrUpdateIndependentAuditor(
+    projectId: string,
+    coordinatorThreadId: string,
+    settings: ThreadSettings
+  ): Promise<Thread> {
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator || coordinator.independentAudit !== true) {
+      throw new Error('Independent audit is not enabled for this thread.')
+    }
+    const auditorSettings: ThreadSettings = {
+      ...settings,
+      permissionLevel: 'auto_review',
+      assignmentMode: false,
+      loopMode: false,
+      loopAuditor: undefined
+    }
+    let auditor = coordinator.auditorThreadId
+      ? await this.threadManager.getThread(projectId, coordinator.auditorThreadId)
+      : null
+    if (
+      !auditor ||
+      auditor.achievementRole !== 'auditor' ||
+      auditor.coordinatorThreadId !== coordinatorThreadId
+    ) {
+      auditor =
+        (await this.threadManager.listThreads(projectId)).find(
+          (candidate) =>
+            candidate.achievementRole === 'auditor' &&
+            candidate.coordinatorThreadId === coordinatorThreadId
+        ) ?? null
+    }
+    if (!auditor) {
+      const names = await this.storage.getWorkerNames()
+      const name = names[randomInt(names.length)]
+      auditor = await this.threadManager.createThread({
+        projectId,
+        providerId: auditorSettings.providerId,
+        title: `audit-${name}: ${coordinator.title}`,
+        titleSource: 'manual',
+        settings: auditorSettings,
+        featureSlug: coordinator.featureSlug,
+        scopeBucketId: coordinator.scopeBucketId,
+        workingDirectory: coordinator.workingDirectory,
+        coordinatorThreadId,
+        achievementRole: 'auditor',
+        userInputLocked: true
+      })
+    }
+    if (
+      auditor.sessionId &&
+      auditor.settings?.harnessId &&
+      auditor.settings.harnessId !== auditorSettings.harnessId
+    ) {
+      await this.cleanupTurnUtilities(auditor.sessionId)
+      this.retireSessionState(auditor.sessionId)
+      await this.threadManager.clearSessionId(projectId, auditor.id)
+    }
+    await this.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
+    await this.threadManager.updateThread(projectId, auditor.id, {
+      achievementRole: 'auditor',
+      coordinatorThreadId,
+      scopeBucketId: coordinator.scopeBucketId,
+      userInputLocked: true
+    })
+    await this.threadManager.setPinned(projectId, auditor.id, true)
+    await this.threadManager.updateThread(projectId, coordinatorThreadId, {
+      auditorThreadId: auditor.id
+    })
+    return (await this.threadManager.getThread(projectId, auditor.id)) ?? auditor
+  }
+
+  private async runIndependentAudit(
+    projectId: string,
+    coordinatorThreadId: string,
+    settings: ThreadSettings
+  ): Promise<{ report: AuditReport; auditorThread: Thread }> {
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator || coordinator.independentAudit !== true) {
+      throw new Error('Independent audit is not enabled for this thread.')
+    }
+    const auditorThread = await this.ensureIndependentAuditorThread(
+      projectId,
+      coordinatorThreadId,
+      settings
+    )
+    const auditorSettings = auditorThread.settings ?? settings
+    const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
+    const { driver, projectPath } = await this.resolve(projectId, driverId, auditorThread.id)
+    const sessionId = await this.ensureSession(projectId, auditorThread.id, driverId)
+    const transcript = buildTranscriptMarkdown(
+      await this.loadMessages(projectId, coordinatorThreadId),
+      { includeTrace: false }
+    )
+    if (!transcript.trim()) {
+      throw new Error('The thread has no auditable conversation yet.')
+    }
+    const basePrompt = [
+      'Independently audit the current work of this thread.',
+      'No specification exists: the transcript below contains the user\u2019s requests and the agent\u2019s final outputs. Treat it as the contract, and verify the delivered work against the repository with read-only tools before reporting.',
+      '',
+      'Thread transcript:',
+      '',
+      transcript
+    ].join('\n')
+    const auditStartedAt = Date.now()
+    const runId = `${auditStartedAt}-${randomBytes(4).toString('hex')}`
+    let lastError: Error | null = null
+
+    // The first run permanently initializes the independent audit: the
+    // composer switch disappears and the coordinator stays for the thread's
+    // lifetime.
+    await this.threadManager.updateThread(projectId, coordinatorThreadId, {
+      independentAuditInitialized: true
+    })
+    for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
+      await this.threadManager.setStatus(projectId, auditorThread.id, 'executing')
+      this.handledIdleSessions.delete(sessionId)
+      this.markSessionWorking(sessionId)
+      const messageId = createMessageId()
+      const prompt =
+        attemptIndex === 0
+          ? basePrompt
+          : [
+              'Your previous audit response was not valid JSON.',
+              'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
+              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
+            ].join('\n\n')
+      await this.persistOutboundMessage(
+        projectId,
+        auditorThread.id,
+        messageId,
+        'Independent audit of the current thread work',
+        prompt,
+        [],
+        [],
+        [],
+        attemptIndex === 0
+          ? { action: 'Independent audit', body: 'Auditing the current thread work against its transcript and the repository.' }
+          : undefined,
+        'internal'
+      )
+      const outboundIds = this.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
+      outboundIds.add(messageId)
+      this.outboundMessageIdsBySession.set(sessionId, outboundIds)
+      const completion = this.waitForSessionCompletion(
+        sessionId,
+        ChatEngine.AUDIT_RUN_TIMEOUT_MS,
+        'Independent audit'
+      )
+      try {
+        await driver.sendPrompt(projectPath, {
+          sessionId,
+          settings: auditorSettings,
+          text: prompt,
+          attachments: [],
+          systemPrompt: await this.cioPrompt('independent-audit-report'),
+          allowedTools: AUDIT_ALLOWED_TOOLS,
+          userMessageId: messageId
+        })
+        const streamed = await completion
+        let content: AuditReportContent
+        if (streamed !== undefined) {
+          content = validateAuditReportContent(streamed, { requireVerification: true })
+        } else {
+          const messages = await driver.loadMessages(projectPath, sessionId)
+          const response = [...messages].reverse().find((message) => message.role === 'assistant')
+          if (!response) throw new Error('The Auditor returned no response')
+          if (response.error) throw new Error(response.error)
+          content =
+            response.structuredOutput !== undefined
+              ? validateAuditReportContent(response.structuredOutput, {
+                  requireVerification: true
+                })
+              : parseAuditReportContent(
+                  response.parts
+                    .filter((part) => part.type === 'text')
+                    .map((part) => part.text)
+                    .join('\n'),
+                  { requireVerification: true }
+                )
+        }
+        const checkInvocations = this.validateAssignmentAuditExecutionEvidence({
+          content,
+          messages: await driver.loadMessages(projectPath, sessionId),
+          auditStartedAt,
+          utilitySearchRequired: false
+        })
+        content = await this.persistAssignmentAuditCheckEvidence({
+          projectId,
+          threadId: coordinatorThreadId,
+          runId,
+          content,
+          checkInvocations
+        })
+        const report = await this.auditEngine.create({
+          projectId,
+          threadId: coordinatorThreadId,
+          independent: true,
+          content,
+          outcome: this.auditRequiresRework(content) ? 'rework_required' : 'passed',
+          provenance: {
+            source: 'agent',
+            actor: 'auditor',
+            harnessId: auditorSettings.harnessId,
+            providerId: auditorSettings.providerId,
+            modelId: auditorSettings.modelId
+          }
+        })
+        await this.threadManager.updateThread(projectId, coordinatorThreadId, {
+          activeAuditId: report.id,
+          activeAuditVersion: report.version
+        })
+        await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
+          read: false
+        })
+        await this.loadMessages(projectId, auditorThread.id)
+        return {
+          report,
+          auditorThread:
+            (await this.threadManager.getThread(projectId, auditorThread.id)) ?? auditorThread
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error('The Auditor failed.')
+        const correctableOutput =
+          lastError instanceof AuditReportValidationError ||
+          lastError instanceof SyntaxError ||
+          lastError.message === 'The Auditor returned no response'
+        if (!correctableOutput) break
+      } finally {
+        this.clearCompletionWaiter(sessionId)
+      }
+    }
+
+    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
+    throw lastError ?? new Error('The independent audit failed.')
+  }
+
   /** Enable Achievement coordination without changing the thread's workspace scope. */
   async ensureAchievementScope(projectId: string, coordinatorThreadId: string): Promise<Thread> {
     projectId = validateEntityId(projectId, 'Project ID')
@@ -13601,7 +14188,8 @@ export class ChatEngine {
 
   private validateAssignmentAuditExecutionEvidence(input: {
     content: AuditReportContent
-    assignment: AssignmentPlan
+    /** Assignment scope to enforce; omitted for independent (spec-less) audits. */
+    assignment?: AssignmentPlan
     messages: AgentMessage[]
     auditStartedAt: number
     utilitySearchRequired: boolean
@@ -13610,7 +14198,7 @@ export class ChatEngine {
     const checkInvocations = new Map<string, Extract<AgentPart, { type: 'tool' }>>()
     const auditedFiles = new Set(input.content.auditedFiles?.map((file) => file.path) ?? [])
     for (const expectedFile of new Set(
-      input.assignment.content.tasks.flatMap((task) => task.expectedFiles)
+      input.assignment?.content.tasks.flatMap((task) => task.expectedFiles) ?? []
     )) {
       if (!auditedFiles.has(expectedFile)) {
         issues.push(`auditedFiles is missing Assignment expected file ${expectedFile}`)
@@ -18180,8 +18768,16 @@ export class ChatEngine {
 
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
     const fileSystemMode = thread?.settings?.fileSystemMode === true
-    const allowedPaths = await this.collectChatAttachmentPaths(info)
-    return { allowedPaths, restrictToAllowed: !fileSystemMode }
+    // Read the cached allowlist when present; otherwise build it once from the
+    // message records and memoize it. New user messages invalidate the entry, so
+    // this stays correct without re-scanning on every permission request.
+    const cached = this.chatAttachmentAllowlists.get(info.threadId)
+    if (cached === undefined) {
+      const allowedPaths = await this.collectChatAttachmentPaths(info)
+      this.chatAttachmentAllowlists.set(info.threadId, allowedPaths)
+      return { allowedPaths, restrictToAllowed: !fileSystemMode }
+    }
+    return { allowedPaths: cached, restrictToAllowed: !fileSystemMode }
   }
 
   /** Absolute local paths of every file the user attached to a chat thread. */
@@ -18623,7 +19219,8 @@ export class ChatEngine {
       // filtered out of the persisted mirror. Usage events and turn outcomes
       // reference the durable parent turn, so anchor them to the persisted set.
       const parentTurnId =
-        classifiedMessages.findLast((message) => message.role === 'user')?.id ?? null
+        merged.findLast((message) => message.role === 'user' && message.origin === 'user')?.id ??
+        null
       memoryParentTurnId = parentTurnId
       if (turnAssistant) {
         this.recordMessageUsageEvent(
@@ -18645,11 +19242,10 @@ export class ChatEngine {
         !contractContinuationRequired &&
         !contractBlocked
       ) {
-        await this.openTurnOutcome(
-          sessionId,
+        await this.openRankingSnapshot(
           thread,
           info.threadId,
-          mirror,
+          merged,
           parentTurnId,
           turnAssistant,
           awaitingUser
@@ -19260,75 +19856,36 @@ export class ChatEngine {
     return { costUsd, costStatus: estimated ? 'estimated' : 'known' }
   }
 
-  // ─── LLM turn grading ─────────────────────────────────────────────────────
+  // ─── LLM conversation grading (model ranking) ──────────────────────────
 
-  /** A captured turn payload staged for the judge, independent of repo row shape. */
-  private toTurnGradeCandidate(row: {
-    id: string
-    harness_id: string | null
-    provider_id: string | null
-    model_id: string | null
-    thinking_level: string | null
-    user_message_text: string
-    assistant_output_text: string
-    follow_up_text: string | null
-  }): TurnGradeCandidate | null {
-    if (!row.harness_id) return null
+  /** Minimal judge payload reconstructed from one durable queue row. */
+  private toRankingCandidate(row: ModelRankingSnapshotRow): RankingGradeCandidate {
     return {
       id: row.id,
       harnessId: row.harness_id,
-      providerId: row.provider_id ?? '',
-      modelId: row.model_id ?? '',
-      thinkingLevel: (row.thinking_level ?? 'minimal') as ThinkingLevel,
+      providerId: row.provider_id,
+      modelId: row.model_id,
+      thinkingLevel: (row.thinking_level || 'minimal') as ThinkingLevel,
       userMessage: row.user_message_text,
       assistantOutput: row.assistant_output_text,
       followUp: row.follow_up_text
     }
   }
 
-  /** Follow-up sent while an outcome was pending: captured as extra judge context. */
-  noteFollowUpForGrading(threadId: string, text: string): void {
-    this.turnFeedbackRepo.noteFollowUp(threadId, text.slice(0, 6_000))
-  }
-
   /**
-   * The user opened the thread to read the final output. The repository moves
-   * still-general rows to one durable post-read deadline; no per-thread timer
-   * is needed.
+   * Restart recovery: rows orphaned mid-claim by a crash return to the queue,
+   * then every overdue closed conversation is drained. The stale-claim sweep
+   * shares the drain guard so overlapping recoveries can never flip a row a
+   * concurrent drain is actively judging.
    */
-  async handleThreadReadForGrading(projectId: string, threadId: string): Promise<void> {
-    void projectId
-    if (!(await this.turnFeedbackRepo.hasPendingForThread(threadId))) return
-    this.turnFeedbackRepo.scheduleReading(threadId, Date.now() + ChatEngine.GRADE_READING_WINDOW_MS)
-    this.scheduleTurnFeedbackDrain()
-  }
-
-  /**
-   * Composer activity on the thread. Entering drafting anchors a fresh 10-minute
-   * window exactly once — clearing the draft or re-entering never restarts it.
-   * When it elapses, everything captured so far is graded.
-   */
-  async handleThreadDraftChangedForGrading(
-    projectId: string,
-    threadId: string,
-    drafting: boolean
-  ): Promise<void> {
-    void projectId
-    if (!drafting) return
-    if (!(await this.turnFeedbackRepo.hasPendingForThread(threadId))) return
-    this.turnFeedbackRepo.scheduleDraft(threadId, Date.now() + ChatEngine.GRADE_DRAFT_WINDOW_MS)
-    this.scheduleTurnFeedbackDrain()
-  }
-
-  /** Restart recovery drains overdue rows and re-arms the earliest future row. */
-  async recoverPendingTurnGrades(): Promise<void> {
-    await this.drainTurnFeedbackQueue()
+  async recoverPendingRankingGrades(): Promise<void> {
+    await this.drainRankingQueue(true)
   }
 
   /** Arm one process-wide wake-up for the earliest durable queue row. */
-  private scheduleTurnFeedbackDrain(delayOverrideMs?: number): void {
+  private scheduleRankingDrain(delayOverrideMs?: number): void {
     if (this.gradeDrainTimer) clearTimeout(this.gradeDrainTimer)
-    const nextDeadline = this.turnFeedbackRepo.nextPendingDeadline()
+    const nextDeadline = this.rankingSnapshotRepo.nextDueDeadline()
     if (nextDeadline === null) {
       this.gradeDrainTimer = null
       return
@@ -19336,75 +19893,83 @@ export class ChatEngine {
     const delay = delayOverrideMs ?? Math.max(0, Math.min(2_147_483_647, nextDeadline - Date.now()))
     this.gradeDrainTimer = setTimeout(() => {
       this.gradeDrainTimer = null
-      void this.drainTurnFeedbackQueue()
+      void this.drainRankingQueue()
     }, delay)
   }
 
   /**
-   * Independent post-conversation runner. Each persisted parent-turn row is a
-   * checkpoint, so later drains continue at the oldest still-pending turn and
-   * the same thread can be evaluated any number of times across its lifetime.
+   * Independent grading runner. Claims at most three closed snapshots per
+   * pass (bounded batching; never blocks the main process), scores each one,
+   * and on success applies exactly one aggregate increment plus the snapshot
+   * hard-delete in one transaction. Failed judges retry with bounded backoff
+   * up to the attempt cap, then park as failed for the recovery pass.
    */
-  private async drainTurnFeedbackQueue(): Promise<void> {
+  private async drainRankingQueue(requeueStale = false): Promise<void> {
     if (this.gradeDrainRunning) return
     this.gradeDrainRunning = true
     let processed = 0
     try {
-      const rows = this.turnFeedbackRepo.listDuePendingWithProject(Date.now())
+      if (requeueStale) await this.rankingSnapshotRepo.requeueStaleProcessing()
+      await this.rankingSnapshotRepo.requeueFailedForRecovery(
+        ChatEngine.RANKING_RECOVERY_COOLDOWN_MS,
+        Date.now()
+      )
+      const rows = this.rankingSnapshotRepo.claimDueBatch(
+        Date.now(),
+        ChatEngine.RANKING_DRAIN_BATCH_SIZE
+      )
       for (const row of rows) {
-        const basis = row.basis ?? 'general_timeout'
-        const graded = await this.gradeOutcomeCandidate(row.project_id, row, basis, null)
-        if (!graded) {
-          const exponent = Math.min(row.attempt_count, 4)
-          const retryDelay = ChatEngine.GRADE_RETRY_BASE_MS * 2 ** exponent
-          this.turnFeedbackRepo.defer(row.id, Date.now() + retryDelay)
+        const candidate = this.toRankingCandidate(row)
+        const score = await this.gradeCandidateCore(row.project_id, candidate)
+        if (score !== null) {
+          const durationMs = Math.max(0, row.ended_at - row.started_at)
+          const applied = this.rankingSnapshotRepo.deleteScoredInTransaction(
+            row.id,
+            row.claim_token ?? '',
+            () => {
+            this.rankingRepo.increment({
+              harnessId: row.harness_id,
+              providerId: row.provider_id,
+              modelId: row.model_id,
+              thinkingLevel: row.thinking_level,
+              shotCategory: row.shot_category,
+              score,
+              durationMs,
+              costUsd: row.cost_usd,
+              rubricVersion: RANKING_RUBRIC_VERSION
+            })
+          })
+          // The snapshot vanished mid-drain or was re-claimed by a later
+          // generation (stale judge result); never defer or double-count it.
+          if (applied) processed += 1
+          continue
         }
+        this.rankingSnapshotRepo.deferOrPark(
+          row.id,
+          row.claim_token ?? '',
+          ChatEngine.RANKING_ATTEMPT_CAP,
+          ChatEngine.RANKING_RETRY_BASE_MS,
+          Date.now()
+        )
         processed += 1
       }
     } finally {
       this.gradeDrainRunning = false
-      this.scheduleTurnFeedbackDrain(
-        processed >= ChatEngine.GRADE_DRAIN_BATCH_SIZE ? 100 : undefined
+      this.scheduleRankingDrain(
+        processed >= ChatEngine.RANKING_DRAIN_BATCH_SIZE ? 100 : undefined
       )
     }
   }
 
-  /** Repo-shaped wrapper keeping the once-only guard before judging. */
-  private async gradeOutcomeCandidate(
+  /** Judge one candidate and persist nothing; returns the 0–10 score, or null on judge failure. */
+  private async gradeCandidateCore(
     projectId: string,
-    row: {
-      id: string
-      harness_id: string | null
-      provider_id: string | null
-      model_id: string | null
-      thinking_level: string | null
-      user_message_text: string
-      assistant_output_text: string
-      follow_up_text: string | null
-    },
-    basis: TurnOutcomeBasis,
-    parentSessionId: string | null
-  ): Promise<boolean> {
-    const candidate = this.toTurnGradeCandidate(row)
-    if (!candidate) return false
-    const graded = await this.gradeOutcomeCore(projectId, candidate, basis, parentSessionId)
-    return graded !== null && this.turnFeedbackRepo.grade(candidate.id, basis, graded)
-  }
-
-  /** Judge one candidate and persist nothing; returns the grade, or null on judge failure. */
-  private async gradeOutcomeCore(
-    projectId: string,
-    candidate: TurnGradeCandidate,
-    _basis: TurnOutcomeBasis,
-    parentSessionId: string | null
+    candidate: RankingGradeCandidate
   ): Promise<number | null> {
-    void _basis
-    let projectPath: string
     try {
       const resolved = await this.resolve(projectId, candidate.harnessId)
-      projectPath = resolved.projectPath
       const { driver } = resolved
-      const grade = await driver.gradeTurn(projectPath, {
+      const score = await driver.gradeTurn(resolved.projectPath, {
         settings: {
           harnessId: candidate.harnessId,
           providerId: candidate.providerId,
@@ -19414,31 +19979,34 @@ export class ChatEngine {
         },
         userMessage: candidate.userMessage,
         assistantOutput: candidate.assistantOutput,
-        followUp: candidate.followUp,
-        ...(parentSessionId ? { parentSessionId } : {})
+        followUp: candidate.followUp
       })
-      Logger.dev('Turn grading completed', {
+      Logger.dev('Ranking grading completed', {
         harnessId: candidate.harnessId,
         modelId: candidate.modelId,
-        grade
+        score
       })
-      return grade
+      // A driver that violates its number-or-null contract is a judge failure.
+      return typeof score === 'number' ? score : null
     } catch (error) {
-      Logger.dev('Turn grading failed:', rawErrorMessage(error))
+      Logger.dev('Ranking grading failed:', rawErrorMessage(error))
       return null
     }
   }
 
   /**
-   * Open a pending session-outcome record for a completed, error-free turn that
-   * answered a visible user message. Document-generating workflows (brainstorm,
-   * PRD) and audit-report threads are never graded. The outcome is judged later
-   * by the cheap-model grader from the captured exchange plus any follow-up.
-   * Internal orchestration turns (spec generation, repairs, hidden recaps)
-   * never open a record.
+   * Capture or extend the ranking window for a completed, error-free turn
+   * that answered a visible user message. One snapshot per conversation: the
+   * first substantive exchange opens a `first_shot` window; every completed
+   * later exchange upgrades it to `multi_shot`, appends its prompt as judge
+   * context, and slides the inactivity deadline. The window stays open until
+   * the conversation closes — thread deletion or the inactivity deadline —
+   * and is graded exactly once at that point. Greeting-only first prompts
+   * never enter the queue, so they never consume judge tokens.
+   * Document-generating workflows (brainstorm, PRD) and audit-report threads
+   * are excluded, as are internal orchestration turns.
    */
-  private async openTurnOutcome(
-    sessionId: string,
+  private async openRankingSnapshot(
     thread: Thread | null,
     threadId: string,
     mirror: AgentMessage[],
@@ -19452,38 +20020,51 @@ export class ChatEngine {
     const parentMessage = mirror.find((message) => message.id === parentTurnId)
     if (parentMessage?.origin !== 'user') return
     if (!turnAssistant.modelId && !thread.settings.modelId) return
-    // Audit-report generation and document-drafting workflows are excluded from grading.
+    // Audit-report generation and document-drafting workflows are excluded from ranking.
     if (thread.achievementRole === 'auditor') return
     const brainstormStage = this.brainstormEngine.getWorkflowState(projectId, threadId)?.stage
     if (brainstormStage === 'drafting') return
     const prdStage = this.prdEngine.getWorkflowState(projectId, threadId)?.stage
     if (prdStage === 'drafting' || prdStage === 'brainstorming') return
-    const taskType: TurnOutcomeTaskType =
-      thread.assignmentRole === 'worker' || thread.assignmentRole === 'coordinator'
-        ? 'assignment'
-        : 'main'
+    const endedAt = turnAssistant.completedAt ?? turnAssistant.createdAt ?? Date.now()
+    const parentText = textForMessage(parentMessage)
+    const open = this.rankingSnapshotRepo.openForThread(threadId)
+    if (open) {
+      // Later exchange on the still-open window: upgrade to multi_shot, append
+      // the follow-up prompt as judge context, and slide the inactivity
+      // deadline. If the drain had already claimed the row, it is reset to
+      // pending and the stale judge result is discarded by its delete guard.
+      this.rankingSnapshotRepo.registerCompletedExchange(
+        open.id,
+        parentText.slice(0, 6_000),
+        endedAt,
+        endedAt + ChatEngine.RANKING_INACTIVITY_CLOSE_MS
+      )
+      this.scheduleRankingDrain()
+      return
+    }
+    if (isGreetingOnly(parentText)) return
     const { costUsd, costStatus } = this.assistantTurnCostAccounting(turnAssistant)
-    await this.turnFeedbackRepo.openPendingViaWorker({
-      id: `outcome:${parentTurnId}`,
-      projectId,
+    // Await the durable insert so the drain timer is armed against a settled
+    // queue — otherwise a session ending right after capture could miss the
+    // inactivity deadline until the next trigger or restart.
+    await this.rankingSnapshotRepo.insertViaWorker({
       threadId,
-      parentTurnId,
-      sessionId,
-      createdAt: turnAssistant.completedAt ?? turnAssistant.createdAt ?? Date.now(),
-      feature: taskType,
-      taskSlug: thread.featureSlug ?? null,
+      projectId,
+      shotCategory: 'first_shot',
       harnessId: turnAssistant.harnessId ?? thread.settings.harnessId,
-      providerId: turnAssistant.providerId ?? thread.settings.providerId ?? null,
-      modelId: turnAssistant.modelId ?? thread.settings.modelId ?? null,
-      thinkingLevel: turnAssistant.thinkingLevel ?? thread.settings.thinkingLevel ?? null,
-      costUsd,
-      costStatus,
-      tokensTotal: turnAssistant.tokens?.total ?? null,
-      userMessageText: textForMessage(parentMessage).slice(0, 6_000),
+      providerId: turnAssistant.providerId ?? thread.settings.providerId ?? '',
+      modelId: turnAssistant.modelId ?? thread.settings.modelId ?? '',
+      thinkingLevel: turnAssistant.thinkingLevel ?? thread.settings.thinkingLevel ?? '',
+      startedAt: parentMessage.createdAt ?? endedAt,
+      endedAt,
+      dueAtMs: endedAt + ChatEngine.RANKING_INACTIVITY_CLOSE_MS,
+      userMessageText: parentText.slice(0, 6_000),
       assistantOutputText: textForMessage(turnAssistant).slice(0, 6_000),
-      generalDeadlineMs: Date.now() + ChatEngine.GRADE_GENERAL_WINDOW_MS
+      costUsd,
+      costStatus
     })
-    this.scheduleTurnFeedbackDrain()
+    this.scheduleRankingDrain()
   }
 
   private recordAuxiliaryUsageEvent(input: {
@@ -20526,6 +21107,19 @@ export class ChatEngine {
       return
     }
     if (event.type === 'session.status' && event.status.state !== 'idle') {
+      // Provider failures do not always arrive as `session.error`: some
+      // harnesses (e.g. pi's `agent_settled`, usage/rate-limit windows) report
+      // them as a terminal `error` status or a `waiting` usage-reset. Ignoring
+      // those left auxiliary flows (image descriptor, titles, temporary chats)
+      // hanging until the inactivity window expired. Fail them immediately
+      // with the real provider message so recovery — the descriptor's fallback
+      // model chain, or the user card — starts at once.
+      const status = event.status
+      if (status.state === 'error' || (status.state === 'waiting' && status.issue !== undefined)) {
+        this.clearCompletionWaiter(event.sessionId)
+        waiter.reject(new Error(status.issue?.message ?? 'Agent session failed'))
+        return
+      }
       waiter.active = true
       waiter.refresh()
       return
@@ -20574,58 +21168,142 @@ export class ChatEngine {
     references: PromptReference[]
   ): Promise<void> {
     const current = await this.memoryService.current(projectId, threadId)
-    if (!current.enabled) return
-
-    // Deterministic extraction gate (A-06): skip the auxiliary model call when
-    // no durable candidate is detected, the conversation is debounced, or the
-    // material exceeds the separately configurable cheap-model budget. Input
-    // and cost for every actual model attempt are recorded inside
-    // `generateMemoryProposal` (each structured/fallback attempt).
-    const extraction = await this.memoryService.evaluateMemoryExtraction({
-      userMessage: composeMemoryUserInput(userMessage, references),
-      candidateUserMessage: composeMemoryCandidateInput(userMessage, references),
-      assistantResponse,
-      projectId,
-      threadId
-    })
-    if (!extraction.run) return
-
-    let decision: StructuredMemoryProposal
-    try {
-      decision = await this.generateMemoryProposal(
-        extraction.userInput,
-        extraction.assistantInput,
+    if (current.enabled) {
+      // Deterministic extraction gate (A-06): skip the auxiliary model call when
+      // no durable candidate is detected, the conversation is debounced, or the
+      // material exceeds the separately configurable cheap-model budget. Input
+      // and cost for every actual model attempt are recorded inside
+      // `generateMemoryProposal` (each structured/fallback attempt).
+      const extraction = await this.memoryService.evaluateMemoryExtraction({
+        userMessage: composeMemoryUserInput(userMessage, references),
+        candidateUserMessage: composeMemoryCandidateInput(userMessage, references),
+        assistantResponse,
         projectId,
-        threadId,
-        parentTurnId,
-        driver,
-        projectPath,
-        settings
-      )
-    } catch (error) {
-      Logger.dev('Memory decision unavailable; skipped proposal', {
-        harnessId: driver.id,
-        error: error instanceof Error ? error.message : String(error)
+        threadId
       })
-      return
+      if (extraction.run) {
+        let decision: StructuredMemoryProposal | null
+        try {
+          decision = await this.generateMemoryProposal(
+            extraction.userInput,
+            extraction.assistantInput,
+            projectId,
+            threadId,
+            parentTurnId,
+            driver,
+            projectPath,
+            settings
+          )
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          Logger.dev('Memory decision unavailable; queued for retry', {
+            harnessId: driver.id,
+            error: reason
+          })
+          await this.memoryService
+            .deferMemoryExtraction({
+              userMessage: extraction.userInput,
+              assistantResponse: extraction.assistantInput,
+              reason,
+              projectId,
+              threadId
+            })
+            .catch((deferError) =>
+              Logger.error('Failed to queue deferred memory extraction', {
+                error: deferError instanceof Error ? deferError.message : String(deferError)
+              })
+            )
+          decision = null
+        }
+        if (decision) {
+          if (decision.propose) {
+            await this.submitMemoryProposal(
+              {
+                label: decision.title,
+                content: decision.content,
+                category: decision.category,
+                priority: decision.priority,
+                scope: decision.scope,
+                modelKeys:
+                  decision.category === 'models'
+                    ? [modelKey(driver.id, settings.providerId, settings.modelId)]
+                    : undefined
+              },
+              projectId,
+              threadId
+            )
+          }
+          // The extraction model just answered successfully, so this is the
+          // right moment to retry any extractions a previous provider outage
+          // deferred — no memory is lost to a transient failure.
+          await this.drainDeferredMemoryExtractions(
+            driver,
+            projectPath,
+            settings,
+            projectId,
+            threadId
+          )
+        }
+      }
     }
-    if (!decision.propose) return
+  }
 
-    await this.submitMemoryProposal(
-      {
-        label: decision.title,
-        content: decision.content,
-        category: decision.category,
-        priority: decision.priority,
-        scope: decision.scope,
-        modelKeys:
-          decision.category === 'models'
-            ? [modelKey(driver.id, settings.providerId, settings.modelId)]
-            : undefined
-      },
-      projectId,
-      threadId
-    )
+  /**
+   * Retry deferred memory extractions after a model success. Each queued
+   * candidate is re-run through `generateMemoryProposal` with the currently
+   * working driver; a failed retry increments its attempt count and stops the
+   * drain, since the provider is likely still unavailable.
+   */
+  private async drainDeferredMemoryExtractions(
+    driver: HarnessDriver,
+    projectPath: string,
+    settings: ThreadSettings,
+    projectId: string,
+    threadId: string
+  ): Promise<void> {
+    const deferred = await this.memoryService.readDeferredExtractions(projectId)
+    for (const item of deferred) {
+      const itemProjectId = item.projectId ?? projectId
+      const itemThreadId = item.threadId ?? threadId
+      try {
+        const decision = await this.generateMemoryProposal(
+          item.userMessage,
+          item.assistantResponse,
+          itemProjectId,
+          itemThreadId,
+          `deferred-${item.createdAt}`,
+          driver,
+          projectPath,
+          settings
+        )
+        if (decision.propose) {
+          await this.submitMemoryProposal(
+            {
+              label: decision.title,
+              content: decision.content,
+              category: decision.category,
+              priority: decision.priority,
+              scope: decision.scope,
+              modelKeys:
+                decision.category === 'models'
+                  ? [modelKey(driver.id, settings.providerId, settings.modelId)]
+                  : undefined
+            },
+            itemProjectId,
+            itemThreadId
+          )
+        }
+        await this.memoryService.removeDeferredExtraction(item.id, item.projectId)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        Logger.dev('Deferred memory extraction retry failed', {
+          deferredId: item.id,
+          error: message
+        })
+        await this.memoryService.recordDeferredExtractionFailure(item.id, message, item.projectId)
+        return
+      }
+    }
   }
 
   private async generateMemoryProposal(
@@ -21469,7 +22147,7 @@ function titleAttemptsFromDriver(driver: HarnessDriver): readonly TitleAttemptAc
 }
 
 /** Minimal judge payload reconstructed from one durable queue row. */
-interface TurnGradeCandidate {
+interface RankingGradeCandidate {
   id: string
   harnessId: string
   providerId: string

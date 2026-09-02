@@ -31,6 +31,7 @@ import type {
   PrComposeInput,
   PrComposeReport,
   PrMergeMethod,
+  PrResolveOptions,
   PrReviewEvent,
   PrState,
   Project,
@@ -1069,24 +1070,60 @@ export class GitState {
   }
 
   /**
+   * When the current working tree is a temporary PR-conflict session (the
+   * `pr-<n>` branch created by `preparePrResolve`), this records everything
+   * needed to finish it automatically once the merge is resolved and
+   * committed: push back to the PR head, check out the original branch, and
+   * delete the temporary branch. Cleared after a successful finish.
+   */
+  prResolveSession = $state<(PrResolveOptions & { projectId: string }) | null>(null)
+
+  /**
    * Prepare to resolve a PR's online conflicts locally: checks out the PR head
    * as `pr-<number>` and merges the base in so the conflicts land in the working
    * tree. A conflicted result is normal and is not reported as an error — the
-   * panel hands over to the conflict UI.
+   * panel hands over to the conflict UI. Records the session so the Resolve
+   * button can finish the whole flow without manual follow-up.
    */
   async preparePrResolve(
     projectId: string,
-    options: { remote: string; pullNumber: number; baseBranch: string }
+    options: PrResolveOptions
   ): Promise<void> {
     this.markBusy('merge', true)
     this.error = null
     try {
       this.status = await invoke('git:preparePrResolve', ...this.scopedGitArgs(projectId, options))
+      this.prResolveSession = { ...options, projectId }
       await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Could not prepare PR conflict resolution')
     } finally {
       this.markBusy('merge', false)
+    }
+  }
+
+  /**
+   * Finish a recorded PR-conflict session: push the resolved merge commit back
+   * to the PR's head branch, check out the user's original branch, and delete
+   * the temporary `pr-<n>` branch. Only meaningful after the merge commit was
+   * made and `prResolveSession` still matches this project.
+   */
+  async finishPrResolve(projectId: string): Promise<boolean> {
+    const session = this.prResolveSession
+    if (!session || session.projectId !== projectId) return false
+    this.markBusy('push', true)
+    this.error = null
+    try {
+      const { projectId: _sessionProjectId, ...options } = session
+      this.status = await invoke('git:finishPrResolve', ...this.scopedGitArgs(projectId, options))
+      this.prResolveSession = null
+      await this.refresh(projectId)
+      return true
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Could not finish the PR conflict resolution')
+      return false
+    } finally {
+      this.markBusy('push', false)
     }
   }
 

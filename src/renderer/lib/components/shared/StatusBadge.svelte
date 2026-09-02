@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Component } from 'svelte'
   import { STAGE_COLORS, STATUS_TONE_COLORS, type ThreadStage } from '$lib/stores/scope.svelte'
   import type { ThreadStatusTone } from '$shared/thread-status-policy'
 
@@ -7,7 +8,9 @@
     tone?: ThreadStatusTone
     kind?: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
     color?: string
-    variant?: 'dot' | 'spinner'
+    variant?: 'dot' | 'spinner' | 'icon'
+    /** Icon (Lucide component) rendered when `variant` is 'icon'. */
+    icon?: Component | null
     size?: 'sm' | 'md' | 'lg'
     animated?: boolean
     title?: string
@@ -20,6 +23,7 @@
     kind,
     color,
     variant = 'dot',
+    icon = null,
     size = 'sm',
     animated = false,
     title,
@@ -69,6 +73,17 @@
     aria-label={label}
     title={label}
   ></span>
+{:else if variant === 'icon' && icon}
+  {@const Icon = icon}
+  <span
+    class="{className} flex shrink-0 items-center justify-center"
+    style="color: {resolvedColor}"
+    role="status"
+    aria-label={label}
+    title={label}
+  >
+    <Icon size={size === 'sm' ? 12 : size === 'md' ? 14 : 16} aria-hidden="true" />
+  </span>
 {:else}
   <span
     class="{sizeClass} shrink-0 rounded-full {animated ? 'animate-pulse' : ''} {className}"

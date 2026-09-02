@@ -1,6 +1,6 @@
 /// <reference types="node" />
 
-import { readFile, stat, readdir } from 'node:fs/promises'
+import { stat, readdir } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { generateId } from '../../lib/utils'
@@ -417,26 +417,17 @@ function normalizeFilenameSpaces(name: string): string {
   return name.replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000\s]/gu, ' ')
 }
 
-/** Read a local path source into a data URL when the harness cannot fetch it. */
-export async function readPartSourceBytes(entry: ResolvedImageEntry): Promise<Buffer | null> {
-  if (entry.type !== 'path' || entry.attachment.url.startsWith('data:')) return null
-  if (/^https?:\/\//u.test(entry.attachment.url)) return null
-  const path = await resolveReadablePartPath(entry)
-  if (!path) return null
-  return readFile(path)
-}
-
 /**
- * Resolve a local `path` source into a self-contained data-URL attachment by
- * reading its bytes in the main process. This keeps the vision session from
- * re-reading the original file path — essential for transient sources (temp
- * screenshots, pasted images) that may be deleted before the harness resolves
- * the attachment. Remote `http(s)` and already-embedded `data:` sources are
- * returned unchanged (the harness fetches or decodes those itself). An
- * unresolvable local file throws a clear error instead of handing the vision
- * session a dead file URL.
+ * Resolve a local `path` source to the exact readable file the vision session
+ * will open. Pasted and dropped images are copied into the project's temporary
+ * attachment directory before dispatch, so the path is stable for the life of
+ * the conversation; passing that path (instead of embedding the bytes) keeps
+ * the vision prompt free of base64 inflation. Remote `http(s)` and already
+ * embedded `data:` sources are returned unchanged (the harness fetches or
+ * decodes those itself). An unresolvable local file throws a clear error
+ * instead of handing the vision session a dead file URL.
  */
-export async function resolveSelfContainedAttachment(
+export async function resolveVisionAttachment(
   entry: ResolvedImageEntry
 ): Promise<PromptAttachment> {
   if (entry.type !== 'path' || entry.attachment.url.startsWith('data:')) {
@@ -449,22 +440,11 @@ export async function resolveSelfContainedAttachment(
       `Image descriptor source is not a readable file: ${entry.source}. The file may have been moved, renamed, or deleted.`
     )
   }
-  let bytes: Buffer
-  try {
-    bytes = await readFile(path)
-  } catch (error) {
-    throw new Error(
-      `Image descriptor source could not be read: ${entry.source}. ${error instanceof Error ? error.message : 'Unknown read error'}`,
-      { cause: error }
-    )
-  }
-  const mime =
-    entry.attachment.mime === 'image/*'
-      ? (sniffImageMagic(bytes.subarray(0, 32)) ?? 'image/png')
-      : entry.attachment.mime
+  // Re-derive the URL from the resolved path so a whitespace-normalized echo
+  // of the source still reaches the file that actually exists.
   return {
-    mime,
-    url: `data:${mime};base64,${bytes.toString('base64')}`,
-    filename: entry.attachment.filename
+    mime: entry.attachment.mime,
+    url: pathToFileUrl(path),
+    filename: entry.attachment.filename ?? basename(path)
   }
 }

@@ -368,7 +368,7 @@ describe('ThreadManager', () => {
     expect(persisted.find((m) => m.id === 'delta-2')?.parts).toEqual(b.parts)
   })
 
-  it('resolves pending feedback outcomes before deletion on every delete path', async () => {
+  it('closes pending ranking snapshots before deletion on every delete path', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-26T12:00:00.000Z'))
     const { manager, db } = await createManager()
@@ -378,35 +378,44 @@ describe('ThreadManager', () => {
       title: 'To delete'
     })
 
-    // A pending session outcome for the thread (as chat-engine would open it).
-    // Pending rows are detached (thread_id SET NULL) and handed to the grader
-    // via onTurnFeedbackDetached; they remain pending in the DB until judged.
+    const closeAt = Date.now()
+    // An open ranking snapshot for the thread (as chat-engine would capture
+    // it). The row survives deletion with its thread reference detached
+    // (SET NULL) so the judge can still score the raw conversation; the
+    // close-then-grade step itself is wired via onThreadsDeletedForRanking
+    // and covered by the chat-engine model-ranking tests.
     db.run(
-      `INSERT INTO turn_feedback(
-        id, thread_id, parent_turn_id, created_at, status, grade, feature,
-        harness_id, provider_id, model_id, thinking_level,
-        user_message_text, assistant_output_text
-      ) VALUES('outcome:turn-1', ?, 'turn-1', 1, 'pending', NULL, 'main', 'opencode', 'openai', 'gpt-x', 'high', '', '')`,
-      thread.id
+      `INSERT INTO model_ranking_snapshots(
+         id, thread_id, project_id, shot_category, status,
+         harness_id, provider_id, model_id, thinking_level,
+         started_at, ended_at, closed_at_ms, due_at_ms,
+         user_message_text, assistant_output_text, created_at
+       ) VALUES('ranking:turn-1', ?, 'project1', 'first_shot', 'pending',
+         'opencode', 'openai', 'gpt-x', 'high',
+         1, 2, NULL, ?, 'fix the bug', 'fixed', 1)`,
+      thread.id,
+      closeAt + 24 * 3_600_000
     )
 
     await manager.deleteThread('project1', thread.id)
 
-    // The pending outcome survived deletion (thread reference SET NULL,
-    // attribution intact) and remains pending until the grader judges it.
+    // The open snapshot survived deletion (thread reference SET NULL,
+    // attribution intact) and stays pending for the grader.
     const row = db.get(
-      'SELECT thread_id, status, grade, model_id FROM turn_feedback WHERE parent_turn_id = ?',
-      'turn-1'
+      'SELECT thread_id, status, shot_category, closed_at_ms, model_id FROM model_ranking_snapshots WHERE id = ?',
+      'ranking:turn-1'
     ) as {
       thread_id: string | null
       status: string
-      grade: number | null
+      shot_category: string
+      closed_at_ms: number | null
       model_id: string
     }
     expect(row).toBeDefined()
     expect(row.thread_id).toBeNull()
     expect(row.status).toBe('pending')
-    expect(row.grade).toBeNull()
+    expect(row.shot_category).toBe('first_shot')
+    expect(row.closed_at_ms).toBeNull()
     expect(row.model_id).toBe('gpt-x')
   })
 })

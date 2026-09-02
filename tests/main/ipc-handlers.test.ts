@@ -1159,3 +1159,64 @@ describe('cloudDeploy IPC', () => {
     await rm(storageRoot, { recursive: true, force: true })
   })
 })
+
+describe('profile analytics model rankings', () => {
+  it('returns per-configuration one-shot and multi-shot ranking aggregates', async () => {
+    const storage = new StorageEngine()
+    registerIpcHandlers(storage, database)
+
+    const now = Date.now()
+    database.run(
+      `INSERT INTO model_rankings(
+         id, harness_id, provider_id, model_id, thinking_level,
+         one_shot_score_sum, one_shot_samples, one_shot_duration_sum_ms, one_shot_cost_usd,
+         multi_shot_score_sum, multi_shot_samples, multi_shot_duration_sum_ms, multi_shot_cost_usd,
+         rubric_version, calc_version, updated_at
+       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      'pi:openai:gpt-5:high:ranking-0to10-v1',
+      'pi',
+      'openai',
+      'gpt-5',
+      'high',
+      16,
+      2,
+      90_000,
+      0.04,
+      9,
+      1,
+      120_000,
+      0.03,
+      'ranking-0to10-v1',
+      'sum-count-v1',
+      now
+    )
+
+    const range = { startAt: now - 365 * 24 * 3_600_000, endAt: now }
+    const analytics = (await handlers.get('account:getLocalUsage')?.(trustedEvent(), range)) as {
+      modelRankings: Array<{
+        harnessId: string
+        providerId: string
+        modelId: string
+        thinkingLevel: string
+        rubricVersion: string
+        oneShot: { averageScore: number | null; samples: number; averageDurationMs: number | null }
+        multiShot: { averageScore: number | null; samples: number }
+      }>
+      gradingSpend: { costUsd: number }
+    }
+
+    expect(analytics.modelRankings).toHaveLength(1)
+    const ranking = analytics.modelRankings[0]
+    expect(ranking?.harnessId).toBe('pi')
+    expect(ranking?.providerId).toBe('openai')
+    expect(ranking?.modelId).toBe('gpt-5')
+    expect(ranking?.thinkingLevel).toBe('high')
+    expect(ranking?.rubricVersion).toBe('ranking-0to10-v1')
+    expect(ranking?.oneShot.averageScore).toBe(8)
+    expect(ranking?.oneShot.samples).toBe(2)
+    expect(ranking?.oneShot.averageDurationMs).toBe(45_000)
+    expect(ranking?.multiShot.averageScore).toBe(9)
+    expect(ranking?.multiShot.samples).toBe(1)
+    expect(analytics.gradingSpend.costUsd).toBeCloseTo(0.07, 10)
+  })
+})

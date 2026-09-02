@@ -30,7 +30,7 @@
     Download,
     FileDown,
     FileDiff,
-    FileTerminal,
+    MonitorCog,
     FolderTree,
     Globe2,
     History,
@@ -151,7 +151,11 @@
     Thread,
     ThreadSearchResult
   } from '$shared/types'
-  import type { BrowserDownload, BrowserPermissionRequest } from '$shared/ipc-contract'
+  import type {
+    BrowserDownload,
+    BrowserPermissionDecision,
+    BrowserPermissionRequest
+  } from '$shared/ipc-contract'
 
   interface Props {
     /** Which sidebar the shell shows — the main content stays mounted across modes. */
@@ -915,13 +919,13 @@
     }
   }
 
-  function resolveBrowserPermission(granted: boolean): void {
+  function resolveBrowserPermission(decision: BrowserPermissionDecision): void {
     const request = activeBrowserPermission
     if (!request) return
     browserPermissionRequests = browserPermissionRequests.filter(
       (candidate) => candidate.id !== request.id
     )
-    void invoke('browser:resolvePermission', request.id, granted).catch((error: unknown) => {
+    void invoke('browser:resolvePermission', request.id, decision).catch((error: unknown) => {
       reportError(error, 'The browser permission response could not be applied.')
     })
   }
@@ -1081,7 +1085,7 @@
       workspaceTools.push({
         id: 'actions',
         label: runningActions > 0 ? `Actions (${runningActions} running)` : 'Actions',
-        icon: FileTerminal,
+        icon: MonitorCog,
         active: dockKindActive('actions'),
         countBadge: runningActions > 0 ? String(runningActions) : undefined,
         countBadgeTone: runningActions > 0 ? 'working' : undefined,
@@ -4032,6 +4036,7 @@
                   <TerminalPanel
                     terminalId={activeContextTab.terminalId}
                     projectId={activeContextTab.projectId}
+                    threadId={activeContextTab.threadId}
                     scopeBucketId={workspaceState.activeScopeBucketIdFor(
                       activeContextTab.projectId
                     )}
@@ -4040,6 +4045,7 @@
               {:else if activeContextTab.kind === 'actions'}
                 <ActionsPanel
                   projectId={activeContextTab.projectId}
+                  threadId={activeContextTab.threadId}
                   scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
                 />
               {:else if activeContextTab.kind === 'browser'}
@@ -4143,6 +4149,7 @@
                 <TerminalPanel
                   terminalId={activeDockTab.terminalId}
                   projectId={activeDockTab.projectId}
+                  threadId={activeDockTab.threadId}
                   scopeBucketId={workspaceState.activeScopeBucketIdFor(activeDockTab.projectId)}
                 />
               {/key}
@@ -4308,7 +4315,7 @@
 <Modal
   open={activeBrowserPermission !== null}
   title="Allow browser permission?"
-  onClose={() => resolveBrowserPermission(false)}
+  onClose={() => resolveBrowserPermission('dismiss')}
   closeOnBackdrop={false}
 >
   {#if activeBrowserPermission}
@@ -4337,16 +4344,24 @@
     <button
       type="button"
       class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      title="Deny browser permission"
-      onclick={() => resolveBrowserPermission(false)}
+      title="Refuse and stop asking for this permission on this site"
+      onclick={() => resolveBrowserPermission('deny')}
     >
-      Deny
+      Don&apos;t allow
+    </button>
+    <button
+      type="button"
+      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      title="Allow only this one request; ask again next time"
+      onclick={() => resolveBrowserPermission('allow-once')}
+    >
+      Allow once
     </button>
     <button
       type="button"
       class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-      title="Allow browser permission for this app session"
-      onclick={() => resolveBrowserPermission(true)}
+      title="Allow this permission for the site for this app session"
+      onclick={() => resolveBrowserPermission('allow')}
     >
       Allow
     </button>
@@ -4766,6 +4781,7 @@
         <TerminalPanel
           terminalId={terminalTab.terminalId}
           projectId={terminalTab.projectId}
+          threadId={terminalTab.threadId}
           scopeBucketId={workspaceState.activeScopeBucketIdFor(terminalTab.projectId)}
         />
       {/key}

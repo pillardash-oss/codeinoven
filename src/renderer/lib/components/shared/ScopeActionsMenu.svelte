@@ -5,6 +5,7 @@
     Ellipsis,
     FolderInput,
     GitBranch,
+    GitMerge,
     Pencil,
     Pin,
     PinOff,
@@ -24,9 +25,8 @@
     | 'adopt-worktree'
     | 'retry-setup'
     | 'repair-worktree'
+    | 'merge'
     | 'detach'
-    | 'remove-worktree'
-    | 'delete-branch'
     | 'delete'
 
   interface Props {
@@ -43,9 +43,8 @@
     onRepairWorktree?: () => void
     /** Cached health reports a repairable managed-worktree problem. */
     hasRepairableIssue?: boolean
+    onMerge?: () => void
     onDetach?: () => void
-    onRemoveWorktree?: () => void
-    onDeleteBranch?: () => void
   }
 
   let {
@@ -60,9 +59,8 @@
     onRetrySetup,
     onRepairWorktree,
     hasRepairableIssue = false,
-    onDetach,
-    onRemoveWorktree,
-    onDeleteBranch
+    onMerge,
+    onDetach
   }: Props = $props()
 
   let showMenu = $state(false)
@@ -148,6 +146,13 @@
         })
       }
       if (isManaged) {
+        list.push({
+          label: 'Merge into project…',
+          run: () => {
+            onMerge?.()
+            closeMenu()
+          }
+        })
         if (setupFailed) {
           list.push({
             label: 'Retry setup',
@@ -158,23 +163,9 @@
           })
         }
         list.push({
-          label: 'Detach to project root',
+          label: 'Detach worktree',
           run: () => {
             onDetach?.()
-            closeMenu()
-          }
-        })
-        list.push({
-          label: 'Remove worktree',
-          run: () => {
-            onRemoveWorktree?.()
-            closeMenu()
-          }
-        })
-        list.push({
-          label: 'Delete branch',
-          run: () => {
-            onDeleteBranch?.()
             closeMenu()
           }
         })
@@ -234,10 +225,12 @@
             <Archive size={13} class="text-muted" />
           {:else if item.label === 'Restore'}
             <ArchiveRestore size={13} class="text-muted" />
-          {:else if item.label === 'Delete scope' || item.label === 'Delete branch'}
+          {:else if item.label === 'Delete scope'}
             <Trash2 size={13} class="text-muted" />
           {:else if item.label === 'Edit'}
             <Pencil size={13} class="text-muted" />
+          {:else if item.label === 'Merge into project…'}
+            <GitMerge size={13} class="text-muted" />
           {:else if item.label === 'Pin scope' || item.label === 'Unpin scope'}
             {#if item.label === 'Pin scope'}
               <Pin size={13} class="text-muted" />

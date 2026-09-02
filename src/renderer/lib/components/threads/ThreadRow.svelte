@@ -1,8 +1,10 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import type { Component } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import {
     Check,
+    Clock,
     Copy,
     Pin,
     PinOff,
@@ -23,6 +25,7 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
@@ -346,6 +349,7 @@
     | 'spec'
     | 'approval'
     | 'error'
+    | 'scheduled'
 
   /** Threads with any unsent composer content read as "todo" (filled gray dot).
    *  Live dictation counts too: from the first mic press through transcription
@@ -356,8 +360,22 @@
       speechController.isCapturingThread(thread.id)
   )
 
+  /** A thread with an unsent message scheduled behind other thread(s) — its
+   *  agent has not started yet. Reads as pending/draft state, but gets a timer
+   *  badge in the working colour instead of the plain draft dot. */
+  let hasStartAfterPending = $derived(
+    rendererRecovery.hasStartAfterPending(thread.projectId, thread.id)
+  )
+
   /** Orchestration worker/auditor threads stay silent: never presented as unread. */
   let effectiveRead = $derived(isOrchestrationChildThread(thread) || thread.read)
+
+  /** A finished temporary (side) chat on this thread is still unread — the
+   *  parent thread's own `read` flag never changes for side chats, so the
+   *  badge comes from the side-chat store instead. */
+  let hasTemporaryChatUnread = $derived(
+    temporaryChatUnread.hasUnread(thread.projectId, thread.id)
+  )
 
   /** Aggregate child activity onto the Sr. Engineer row — the public source of truth. */
   let delegatedWorkActive = $derived(
@@ -414,6 +432,14 @@
     if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
     if (thread.status === 'spec') return 'spec'
+    // An unread side chat must surface even while the parent thread itself is
+    // still working: the row keeps pulsing (the busy indicator is independent
+    // of the badge) but shows the unread dot instead of swallowing it.
+    if (hasTemporaryChatUnread) return 'unread'
+    // A scheduled message (queued behind other threads) reads as pending work
+    // and shows the timer badge — it is a draft in the sorting/pinning sense but
+    // not something still being typed.
+    if (hasStartAfterPending) return 'scheduled'
     // Drafting (or the brief post-send grace) shows the todo dot.
     if (holdingDraft) return 'todo'
     if (isDraft) return 'todo'
@@ -474,7 +500,8 @@
       stage?: 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done' | 'pinned'
       tone?: 'todo' | 'working' | 'working-paused' | 'attention' | 'spec' | 'done' | 'error'
       kind?: 'completed' | 'attention' | 'error'
-      variant?: 'dot' | 'spinner'
+      variant?: 'dot' | 'spinner' | 'icon'
+      icon?: Component | null
       animated?: boolean
     } | null => {
       switch (threadState) {
@@ -484,6 +511,8 @@
           return { stage: 'todo' }
         case 'working':
           return { variant: 'spinner', stage: 'working' }
+        case 'scheduled':
+          return { variant: 'icon', stage: 'working', icon: Clock }
         case 'working-paused':
           return { variant: 'spinner', tone: 'working-paused' }
         case 'spec':
@@ -658,6 +687,7 @@
             tone={badgeProps.tone}
             kind={badgeProps.kind}
             variant={badgeProps.variant ?? 'dot'}
+            icon={badgeProps.icon}
             animated={badgeProps.animated}
             size="md"
             title={isRetryPaused
@@ -666,7 +696,9 @@
                 ? stageLabel
                 : thread.status === 'spec'
                   ? 'Spec ready'
-                  : threadState}
+                  : threadState === 'scheduled'
+                    ? 'Scheduled'
+                    : threadState}
           />
         {:else}
           <span
@@ -700,7 +732,7 @@
           </span>
         {:else}
           <span class="whitespace-nowrap text-[10px] text-dimmed">
-            {relativeTime(thread.createdAt)}
+            {relativeTime(thread.lastActivity)}
           </span>
         {/if}
       {:else if currentModelProviderName}
@@ -765,7 +797,7 @@
             <RecordingIndicator label="Speaking" tone="speech" />
           {:else}
             <span class="whitespace-nowrap text-[10px] text-dimmed">
-              {relativeTime(thread.createdAt)}
+              {relativeTime(thread.lastActivity)}
             </span>
           {/if}
         </span>
@@ -847,6 +879,7 @@
               tone={badgeProps.tone}
               kind={badgeProps.kind}
               variant={badgeProps.variant ?? 'dot'}
+              icon={badgeProps.icon}
               animated={badgeProps.animated}
               size="md"
               title={isRetryPaused
@@ -855,7 +888,9 @@
                   ? stageLabel
                   : thread.status === 'spec'
                     ? 'Spec ready'
-                    : threadState}
+                    : threadState === 'scheduled'
+                      ? 'Scheduled'
+                      : threadState}
             />
           {:else}
             <span
@@ -928,7 +963,7 @@
               : 'opacity-100'}"
             aria-hidden={hovered}
           >
-            {relativeTime(thread.createdAt)}
+            {relativeTime(thread.lastActivity)}
           </span>
         {/if}
       {:else}
@@ -1012,7 +1047,7 @@
                 : 'opacity-100'}"
               aria-hidden={hovered}
             >
-              {relativeTime(thread.createdAt)}
+              {relativeTime(thread.lastActivity)}
             </span>
           {/if}
         </span>

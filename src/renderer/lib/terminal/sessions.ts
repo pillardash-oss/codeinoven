@@ -17,6 +17,10 @@ export interface TerminalSession {
   ptySpawned: boolean
   /** Owning project, resolved once the terminal attaches to a panel. */
   projectId: string | null
+  /** Owning thread, captured at attach time so respawns can re-create the PTY. */
+  threadId: string | null
+  /** Scope bucket captured with the thread binding, or null for the project root. */
+  scopeBucketId: string | null
   /** Consecutive immediate shell exits since the last healthy (2s) uptime. */
   respawnCount: number
   kind: 'shell' | 'action'
@@ -126,13 +130,16 @@ class TerminalSessionManager {
     session: TerminalSession,
     container: HTMLDivElement,
     projectId: string,
+    threadId: string,
     scopeBucketId?: string
   ): Promise<void> {
     if (session.host.parentElement !== container) {
       container.replaceChildren(session.host)
     }
     session.fitAddon.fit()
-    await this.ensurePty(session, projectId, scopeBucketId)
+    session.threadId = threadId
+    session.scopeBucketId = scopeBucketId ?? null
+    await this.ensurePty(session, projectId, threadId, scopeBucketId)
     session.term.focus()
   }
 
@@ -140,6 +147,7 @@ class TerminalSessionManager {
     session: TerminalSession,
     container: HTMLDivElement,
     projectId: string,
+    threadId: string,
     script: string,
     variables: Record<string, string>,
     scopeBucketId?: string
@@ -154,6 +162,7 @@ class TerminalSessionManager {
           'pty:createAction',
           session.id,
           projectId,
+          threadId,
           script,
           variables,
           session.term.cols,
@@ -184,6 +193,7 @@ class TerminalSessionManager {
   private async ensurePty(
     session: TerminalSession,
     projectId: string,
+    threadId: string,
     scopeBucketId?: string
   ): Promise<void> {
     if (session.ptySpawned) return
@@ -194,6 +204,7 @@ class TerminalSessionManager {
         'pty:create',
         session.id,
         projectId,
+        threadId,
         session.term.cols,
         session.term.rows,
         scopeBucketId
@@ -254,6 +265,8 @@ class TerminalSessionManager {
       exited: false,
       ptySpawned: false,
       projectId: null,
+      threadId: null,
+      scopeBucketId: null,
       respawnCount: 0,
       kind: 'shell'
     }
@@ -306,7 +319,12 @@ class TerminalSessionManager {
       session.respawnCount += 1
       session.ptySpawned = false
       try {
-        await this.ensurePty(session, session.projectId)
+        await this.ensurePty(
+          session,
+          session.projectId,
+          session.threadId ?? '',
+          session.scopeBucketId ?? undefined
+        )
         session.exited = false
         // A shell that survives this window is healthy, so reset the guard.
         respawnTimer = setTimeout(() => {

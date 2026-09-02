@@ -277,7 +277,7 @@ describe('PiDriver', () => {
     expect(promptText).toContain('inspect')
 
     const handoff = await storageEngine.readRaw(
-      `runtime/pi-core-tools/${sessionId}/system-prompt.txt`
+      `runtime/cio-core-tools/${sessionId}/system-prompt.txt`
     )
     expect(handoff).toBe('Be surgical.')
   })

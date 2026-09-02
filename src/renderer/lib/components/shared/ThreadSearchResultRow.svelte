@@ -215,7 +215,7 @@
       <RecordingIndicator label="Speaking" tone="speech" />
     {:else}
       <span class="shrink-0 whitespace-nowrap text-[10px] text-dimmed">
-        {relativeTime(thread.createdAt)}
+        {relativeTime(thread.lastActivity)}
       </span>
     {/if}
   </span>

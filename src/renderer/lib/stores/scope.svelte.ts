@@ -13,6 +13,9 @@ import {
   type ScopeEnvironmentMode,
   type ScopeLifecycleAction,
   type ScopeLifecyclePreflight,
+  type ScopeMergeMode,
+  type ScopeMergeOutcome,
+  type ScopeMergePreflight,
   type ScopeSetupCommandSpec,
   type ScopeSlice,
   type ScopeTarget,
@@ -838,6 +841,47 @@ class ScopeState {
       default:
         return Promise.reject(new Error(`Unsupported lifecycle action for this path: ${action}`))
     }
+  }
+
+  /** Preflight merging a managed scope into another scope and mint a token. */
+  async mergeToScopePreflight(
+    projectId: string,
+    bucketId: string,
+    mergeTargetBucketId: string,
+    mode: ScopeMergeMode
+  ): Promise<ScopeMergePreflight> {
+    const source = { projectId, scopeBucketId: bucketId }
+    const dest = { projectId, scopeBucketId: mergeTargetBucketId }
+    return invoke('scope:worktree:mergePreflight', source, dest, mode)
+  }
+
+  /**
+   * Consume a delete-scope token to fully remove a managed scope: worktree,
+   * scope bucket, and (by default) its branch. Threads are handled by the
+   * caller before this runs.
+   */
+  async confirmDeleteScope(
+    projectId: string,
+    bucketId: string,
+    confirmationId: string,
+    deleteBranch = true
+  ): Promise<void> {
+    const target = { projectId, scopeBucketId: bucketId }
+    await invoke('scope:worktree:confirmDeleteScope', target, confirmationId, deleteBranch)
+    await this.reloadBoard(projectId)
+  }
+
+  /** Consume a merge token to merge a scope and apply its post-merge mode. */
+  async confirmScopeMerge(
+    projectId: string,
+    bucketId: string,
+    mergeTargetBucketId: string,
+    mode: ScopeMergeMode,
+    confirmationId: string
+  ): Promise<ScopeMergeOutcome> {
+    const source = { projectId, scopeBucketId: bucketId }
+    const dest = { projectId, scopeBucketId: mergeTargetBucketId }
+    return invoke('scope:worktree:confirmMerge', source, dest, mode, confirmationId)
   }
 
   /** Retry from a failed/interrupted setup, or continue without setup. */

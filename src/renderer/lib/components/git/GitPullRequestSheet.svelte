@@ -880,14 +880,6 @@
                   class="z-50 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
                 >
                   <div class="space-y-1.5">
-                    {#if !prComposeAgentSettings.selection}
-                      <p
-                        class="rounded-lg border border-border bg-elevated px-2.5 py-2 text-[10px] leading-relaxed text-muted"
-                      >
-                        Choose a model for Compose PR. This choice is kept separate from every
-                        thread and reused until you change it.
-                      </p>
-                    {/if}
                     <div>
                       <p
                         class="mb-1 px-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted"

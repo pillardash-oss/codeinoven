@@ -48,9 +48,11 @@
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
@@ -665,8 +667,8 @@
       navigate(isSettingsSection(tab) ? settingsViewForSection(tab) : 'settings')
     }
     workspaceState.navigateToContent = () => navigate(lastContentView)
-    workspaceState.openThreadFromNotification = (thread, project) =>
-      openThreadFromNotification(thread, project)
+    workspaceState.openThreadFromNotification = (thread, project, temporaryChatId) =>
+      openThreadFromNotification(thread, project, temporaryChatId)
     return () => {
       workspaceState.navigateToSettings = null
       workspaceState.navigateToContent = null
@@ -1223,7 +1225,8 @@
    */
   async function openThreadFromNotification(
     thread: Thread,
-    project: Project | null
+    project: Project | null,
+    temporaryChatId?: string
   ): Promise<void> {
     const isChat = thread.projectId === INBOX_PROJECT_ID
     const inScopeState =
@@ -1253,12 +1256,20 @@
     const updated = await invoke('thread:markRead', thread.projectId, thread.id)
     scopeState.updateThread(updated)
     workspaceState.updateThread(updated)
+
+    if (temporaryChatId) {
+      // A temporary (side) chat notification: opening the parent thread alone
+      // is not enough — reveal the sidebar and focus the side chat that has
+      // the unread response. When its tab no longer exists the badge would
+      // never clear, so drop it here instead.
+      if (!contextSidebarState.focusTemporaryChat(thread.projectId, thread.id, temporaryChatId)) {
+        temporaryChatUnread.clear(thread.projectId, thread.id, temporaryChatId)
+      }
+    }
   }
 
-  async function openNotificationThread({
-    projectId,
-    threadId
-  }: ThreadClickedPayload): Promise<void> {
+  async function openNotificationThread(payload: ThreadClickedPayload): Promise<void> {
+    const { projectId, threadId } = payload
     notificationPanelState.dismissForThread(projectId, threadId)
     try {
       const [project, thread] = await Promise.all([
@@ -1266,17 +1277,28 @@
         invoke('thread:get', projectId, threadId)
       ])
       if (!project || !thread) return
-      await openThreadFromNotification(thread, project)
+      await openThreadFromNotification(thread, project, payload.temporaryChatId)
     } catch {
       // The project or thread may have been deleted before the notification was clicked.
     }
   }
 
   function showAgentNotification(payload: AgentNotificationPayload): void {
-    if (
+    const onSelectedThread =
       workspaceState.selectedThread?.id === payload.threadId &&
       workspaceState.selectedThread?.projectId === payload.projectId
+    if (
+      !onSelectedThread &&
+      payload.source === 'temporary-chat' &&
+      payload.kind === 'chat-completed' &&
+      payload.temporaryChatId
     ) {
+      // The side chat finished while the user is away from its thread: flag
+      // the parent thread's row so the response is discoverable from the
+      // thread list. Cleared when the side-chat panel is focused.
+      temporaryChatUnread.markUnread(payload.projectId, payload.threadId, payload.temporaryChatId)
+    }
+    if (onSelectedThread) {
       return
     }
     notificationPanelState.add(payload)
@@ -1389,6 +1411,7 @@
     const unsubscribeThreadDeleted = subscribe('thread:deleted', (projectId, threadId) => {
       scopeState.removeThread(threadId)
       notificationPanelState.dismissForThread(projectId, threadId)
+      temporaryChatUnread.clearThread(projectId, threadId)
       if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
     })
     const unsubscribeCloseShortcut = subscribe('window:closeShortcut', () => {
@@ -1554,6 +1577,21 @@
       e.preventDefault()
       if (e.repeat) return
       handleFind()
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+      // On the plain workspace (no studio, no dirty file tab) the Cmd/Ctrl+S
+      // save chord is otherwise unused, so it folds/unfolds the left sidebar.
+      // Anywhere a save binding owns the chord (a Spec/Assignment/Brainstorm
+      // studio, or a file tab with unsaved changes) it keeps priority: we return
+      // without preventDefault so that handler saves instead of toggling.
+      if (e.repeat) return
+      const leftSidebarViews = ['projects', 'chats', 'threads']
+      const studioOpen = Boolean(document.querySelector('[data-region="spec-studio"]'))
+      const dirtyFiles = projectFilesWorkspace.getUnsavedFiles().length > 0
+      if (!leftSidebarViews.includes(activeView) || studioOpen || dirtyFiles) return
+      e.preventDefault()
+      sidebarState.toggle()
       return
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {

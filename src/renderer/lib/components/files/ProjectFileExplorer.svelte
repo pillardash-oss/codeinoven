@@ -1448,10 +1448,20 @@
 
   {#if filterOpen}
     <div
-      class="absolute left-2 right-2 top-10 z-20 rounded-xl border border-border bg-surface shadow-xl"
+      class="absolute left-2 right-2 top-7 z-20 rounded-xl border border-border bg-surface shadow-xl"
       role="search"
       aria-label="Search project files"
     >
+      <div class="flex items-center border-b border-border px-2.5 py-1">
+        <Switch
+          checked={cioSearchVisibility.includeCio}
+          label="Toggle .cio visibility"
+          class="text-[10px] font-semibold text-dimmed"
+          title="Include the .cio directory in search results"
+          aria-label="Include the .cio directory in search results"
+          onchange={(checked: boolean) => cioSearchVisibility.setIncludeCio(checked)}
+        />
+      </div>
       <div class="flex items-center gap-1 p-1.5">
         <Search size={13} class="shrink-0 text-dimmed" />
         <input
@@ -1472,16 +1482,6 @@
         >
           <X size={12} />
         </button>
-      </div>
-      <div class="flex items-center border-t border-border px-2 py-1">
-        <Switch
-          checked={cioSearchVisibility.includeCio}
-          label="cio directory"
-          class="text-[10px] font-semibold text-dimmed"
-          title="Include the .cio directory in search results"
-          aria-label="Include the .cio directory in search results"
-          onchange={(checked: boolean) => cioSearchVisibility.setIncludeCio(checked)}
-        />
       </div>
     </div>
   {/if}

@@ -1288,6 +1288,30 @@ export class GitService {
     })
   }
 
+  /**
+   * Finish a PR conflict resolution in one shot: push the resolved merge commit
+   * from the temporary `pr-<n>` branch back to the PR's head branch (which
+   * updates the PR), check the user's original branch back out, and delete the
+   * now-useless temporary branch. The temporary branch exists only to stage
+   * the conflict resolution, so nothing is left for the user to do by hand.
+   */
+  async finishPrResolve(
+    projectPath: string,
+    options: { remote: string; pullNumber: number; headBranch: string; returnBranch: string }
+  ): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const git = this.client(directory)
+      const localBranch = `pr-${options.pullNumber}`
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await git.raw(['push', options.remote, `${localBranch}:${options.headBranch}`])
+        await git.checkout(options.returnBranch)
+        await git.deleteLocalBranch(localBranch, true)
+      })
+      return this.readStatus(directory)
+    })
+  }
+
   async stash(projectPath: string, message?: string, paths?: string[]): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)

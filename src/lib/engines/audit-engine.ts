@@ -16,8 +16,11 @@ import { generateId } from '../utils'
 export interface CreateAuditReportInput {
   projectId: string
   threadId: string
-  specId: string
-  specVersion: number
+  /** Audited specification; omit for independent (spec-less) audits. */
+  specId?: string
+  specVersion?: number
+  /** True when the report comes from an independent spec-less audit. */
+  independent?: boolean
   assignmentId?: string
   assignmentVersion?: number
   reworkCycle?: number
@@ -55,6 +58,7 @@ export class AuditEngine {
       threadId: input.threadId,
       specId: input.specId,
       specVersion: input.specVersion,
+      independent: input.independent === true ? true : undefined,
       assignmentId: input.assignmentId,
       assignmentVersion: input.assignmentVersion,
       reworkCycle: input.reworkCycle,

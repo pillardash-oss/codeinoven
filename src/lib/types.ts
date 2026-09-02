@@ -280,6 +280,45 @@ export interface ScopeLifecyclePreflight {
   createdAt: number
 }
 
+/** How a scope worktree is merged back into the main project. */
+export type ScopeMergeMode = 'merge-delete' | 'merge-keep' | 'merge-move-to-default'
+
+/**
+ * State-bound preflight for merging a managed worktree scope into another
+ * scope. Mints a single-use confirmation token describing exactly what the
+ * merge (and any cleanup) will do before it happens.
+ */
+export interface ScopeMergePreflight {
+  /** The managed-worktree scope being merged (the source). */
+  sourceProjectId: string
+  sourceScopeBucketId: string
+  /** The scope the source branch is merged into (Default by default). */
+  mergeTargetScopeBucketId: string
+  /** Branch being merged from the source worktree (e.g. `cio/<slug>`). */
+  sourceBranch: string
+  /** Branch currently checked out at the merge target root. */
+  targetBranch: string
+  /** Non-archived threads owned by the source scope. */
+  threadCount: number
+  /** Dirty files in the source worktree (lost when it is removed). */
+  dirtyFiles: string[]
+  /** Commits on the source branch not reachable from any remote via the source scope. */
+  unpushedCommits: number
+  hasActiveProcesses: boolean
+  mode: ScopeMergeMode
+  /** Single-use token bound to this exact snapshot. */
+  confirmationId: string
+  createdAt: number
+}
+
+/** Result of a confirmed scope merge. */
+export interface ScopeMergeOutcome {
+  /** False when the merge landed in conflict; nothing was deleted. */
+  merged: boolean
+  /** Conflicted file paths when the merge hit conflicts. */
+  conflicted: string[]
+}
+
 /** Bounded progress events for managed-worktree creation and setup. */
 export interface ScopeWorktreeProgress {
   stage:
@@ -396,6 +435,14 @@ export interface Thread {
   dismissedSpecVersion?: number
   /** Audit gate for the latest implementation turn. */
   auditState?: 'offered' | 'running' | 'report_ready' | 'reworking'
+  /** Independent (spec-less) audit is enabled for this thread. Excludes
+   *  engineering modes for the thread's lifetime and is never inherited by
+   *  forks or new threads created from this thread. */
+  independentAudit?: boolean
+  /** Set permanently once the first independent audit run starts; the
+   *  composer switch disappears and the audit coordinator stays for the
+   *  thread's lifetime. */
+  independentAuditInitialized?: boolean
   /** Persisted count of completed Achievement audit cycles. */
   loopIteration?: number
   /** Latest persisted audit report surfaced by the thread. */
@@ -1078,6 +1125,8 @@ export interface AgentDefaultsConfig {
   auditor?: AgentModelSelection
   /** Vision model used to describe images for text-only models. */
   imageDescriptor?: AgentModelSelection
+  /** Fallback vision model tried automatically when the primary image descriptor fails. */
+  imageDescriptorFallback?: AgentModelSelection
   /** When enabled, role changes made inside a thread replace the matching global default. */
   syncFromThreadChanges: boolean
 }
@@ -1105,6 +1154,8 @@ export interface ThreadSettings {
   loopAuditor?: AgentModelSelection
   /** Vision model used to describe images for this thread's text-only model. */
   imageDescriptor?: AgentModelSelection
+  /** Fallback vision model tried automatically when the primary image descriptor fails. */
+  imageDescriptorFallback?: AgentModelSelection
 }
 
 /**
@@ -1194,7 +1245,7 @@ export interface PermissionRequest {
 }
 
 /** How the user resolved a failed image-descriptor vision-model call. */
-export type ImageDescriptorReplyAction = 'retry' | 'ignore' | 'false_positive'
+export type ImageDescriptorReplyAction = 'retry' | 'ignore' | 'false_positive' | 'pick_image'
 
 /** A model identity without thinking preferences, e.g. the model executing a turn. */
 export type ModelIdentity = Pick<AgentModelSelection, 'harnessId' | 'providerId' | 'modelId'>
@@ -1236,6 +1287,9 @@ export interface ImageDescriptorErrorRequest {
   partialOutput: string
   /** Number of images that failed in this descriptor call. */
   imageCount: number
+  /** Id of the specific image that failed, when the failure is per image.
+   *  Used to attach a replacement image picked by the user on the card. */
+  imageId?: string
   /** When the failure was surfaced. */
   createdAt: number
 }
@@ -1708,6 +1762,39 @@ export interface AgentRunningProcess {
   scope: 'thread' | 'app'
 }
 
+/**
+ * App-wide process row surfaced by the task manager. Extends the per-thread
+ * `AgentRunningProcess` with the working directory the process was launched in
+ * and the project/thread that owns it (both `null` for app-scoped pooled
+ * harness processes). `ports` lists any TCP ports the process is currently
+ * listening on (best-effort OS detection).
+ */
+export interface TaskManagerProcess extends AgentRunningProcess {
+  cwd: string | null
+  projectId: string | null
+  threadId: string | null
+  ports: number[]
+  /** Best-effort CPU use reported by the operating system for this process or tree. */
+  cpuPercent: number | null
+  /** Resident/working-set memory for this process or tree. */
+  memoryBytes: number | null
+  /** Harness roots include their descendants; descendant rows describe one process. */
+  resourceScope: 'process' | 'tree'
+  /** Display name of the owning project, resolved at IPC time. */
+  projectName?: string | null
+  /** Display title of the owning thread, resolved at IPC time. */
+  threadTitle?: string | null
+}
+
+export interface TaskManagerSnapshot {
+  processes: TaskManagerProcess[]
+  power: {
+    source: 'ac' | 'battery'
+    thermalState: 'unknown' | 'nominal' | 'fair' | 'serious' | 'critical'
+  }
+  sampledAt: number
+}
+
 /** Provider-neutral lifecycle state for one delegated child-agent task. */
 export interface AgentSubagentActivity {
   status: AgentToolStatus
@@ -2130,54 +2217,95 @@ export interface LocalProfileAnalytics {
   dailyUsage: LocalProfileUsageDay[]
   /** Total model and utility consumption by local hour of day. */
   hourlyUsage: LocalProfileUsageHour[]
-  /** Harness/provider/model/thinking-level performance scored on session outcomes. */
-  modelPerformance: LocalProfileModelPerformance[]
-  /** What the scored sessions cost to gather in this period. */
-  feedbackCost: LocalProfileFeedbackCost
+  /** Harness/provider/model/thinking-level 0–10 ranking aggregates (all-time, not period-scoped). */
+  modelRankings: LocalProfileModelRanking[]
+  /** All-time priced cost of every ranked session folded into the aggregates. */
+  gradingSpend: LocalProfileGradingSpend
   generatedAt: number
 }
 
-/** Lifecycle of one scored user session: captured pending, graded exactly once. */
-export type TurnOutcomeStatus = 'pending' | 'graded'
+/** Shot category of one ranked conversation window. */
+export type RankingShotCategory = 'first_shot' | 'multi_shot'
 
-/** What triggered the judge for a pending turn outcome. */
-export type TurnOutcomeBasis = 'deleted' | 'general_timeout' | 'read_timeout' | 'draft_timeout'
+/** Queue processing state of a ranking snapshot (workflow state, not quality). */
+export type RankingSnapshotStatus = 'pending' | 'processing' | 'scored' | 'failed'
 
-/** Task kind recorded with a turn outcome, mirroring usage_events.feature. */
-export type TurnOutcomeTaskType = 'main' | 'audit' | 'assignment'
+/** One persisted ranking snapshot row (transient grading queue entry). */
+export interface ModelRankingSnapshotRow {
+  id: string
+  /** Null after the owning thread is deleted (ON DELETE SET NULL). */
+  thread_id: string | null
+  project_id: string
+  shot_category: RankingShotCategory
+  status: RankingSnapshotStatus
+  harness_id: string
+  provider_id: string
+  model_id: string
+  thinking_level: string
+  started_at: number
+  ended_at: number
+  /** Set when the conversation window closed; null while follow-ups may land. */
+  closed_at_ms: number | null
+  due_at_ms: number
+  user_message_text: string
+  assistant_output_text: string
+  follow_up_text: string | null
+  cost_usd: number | null
+  cost_status: 'known' | 'estimated' | 'unavailable' | null
+  attempt_count: number
+  last_attempt_at_ms: number | null
+  /** Unique tag of the current drain claim; NULL while not claimed. */
+  claim_token: string | null
+  created_at: number
+}
 
-/** Aggregated LLM-judge performance for one (harness, provider, model, thinking level). */
-export interface LocalProfileModelPerformance {
+/** One persisted model-ranking aggregate row (permanent analytics record). */
+export interface ModelRankingRow {
+  id: string
+  harness_id: string
+  provider_id: string
+  model_id: string
+  thinking_level: string
+  one_shot_score_sum: number
+  one_shot_samples: number
+  one_shot_duration_sum_ms: number
+  one_shot_cost_usd: number
+  multi_shot_score_sum: number
+  multi_shot_samples: number
+  multi_shot_duration_sum_ms: number
+  multi_shot_cost_usd: number
+  rubric_version: string
+  calc_version: string
+  updated_at: number
+}
+
+/** Per-shot-category ranking statistics; averages are always sum ÷ count. */
+export interface LocalProfileRankingModeStats {
+  /** Average judge score on the 0–10 rubric, or null before the first sample. */
+  averageScore: number | null
+  samples: number
+  /** Average agent window duration in milliseconds, or null before the first sample. */
+  averageDurationMs: number | null
+  /** Sum of priced session cost in USD for this category. */
+  costUsd: number
+}
+
+/** Aggregated LLM-judge ranking for one (harness, provider, model, thinking level). */
+export interface LocalProfileModelRanking {
   harnessId: string
   providerId: string
   modelId: string
   thinkingLevel: ThinkingLevel | null
-  taskType: TurnOutcomeTaskType
-  /** Number of graded session outcomes for this combination. */
-  outcomes: number
-  /** Average of the 1–5 judge grades, or null when nothing was graded yet. */
-  averageGrade: number | null
-  /** averageGrade / 5 expressed as a fraction (0–1), or null before grading. */
-  successRate: number | null
-  /** Outcomes whose provider cost was known or estimated (priced). */
-  pricedOutcomes: number
-  /** Sum of priced outcome cost in USD for this combination. */
-  costUsd: number
-  /** Sum of reported tokens across the outcomes. */
-  tokensTotal: number
-  lastUsedAt: number
+  /** Rubric that produced these sums; migrated legacy data carries a legacy tag. */
+  rubricVersion: string
+  oneShot: LocalProfileRankingModeStats
+  multiShot: LocalProfileRankingModeStats
+  updatedAt: number
 }
 
-/** What a resolved feedback session cost to gather (scoped to a period). */
-export interface LocalProfileFeedbackCost {
-  /** Resolved session outcomes in the period. */
-  outcomes: number
-  /** Outcomes whose provider cost was known or estimated (priced). */
-  pricedOutcomes: number
+/** All-time priced cost of the ranked sessions (aggregate is not period-scoped). */
+export interface LocalProfileGradingSpend {
   costUsd: number
-  knownCostUsd: number
-  estimatedCostUsd: number
-  tokensTotal: number
 }
 
 /** Account identity plus the cloud-backed workstation profile data. */
@@ -3572,8 +3700,11 @@ export interface AuditReport {
   id: string
   projectId: string
   threadId: string
-  specId: string
-  specVersion: number
+  /** Audited specification; absent on independent (spec-less) audits. */
+  specId?: string
+  specVersion?: number
+  /** True when this report was produced by an independent spec-less audit. */
+  independent?: boolean
   /** Exact Assignment implementation graph audited, when this is an Assignment audit. */
   assignmentId?: string
   assignmentVersion?: number
@@ -3709,6 +3840,23 @@ export interface MemoryProposal {
   createdAt: number
   expiresAt: number
   status: 'pending' | 'approved' | 'rejected'
+}
+
+/** A completed turn whose memory extraction failed and is queued for retry. */
+export interface DeferredMemoryExtraction {
+  id: string
+  projectId?: string
+  threadId?: string
+  /** Capped user material captured at gate time. */
+  userMessage: string
+  /** Capped assistant material captured at gate time. */
+  assistantResponse: string
+  /** Why the first extraction attempt failed (for diagnostics). */
+  reason: string
+  createdAt: number
+  attempts: number
+  lastError?: string
+  lastAttemptAt?: number
 }
 
 /** Which bucket of memory an export/import targets. */
@@ -4041,6 +4189,10 @@ export interface PrResolveOptions {
   pullNumber: number
   /** Base branch to merge into the checked-out PR head (e.g. `main`). */
   baseBranch: string
+  /** The PR's head branch name (e.g. `feature-x`) the resolution is pushed back to. */
+  headBranch: string
+  /** The branch the user was on before the temporary `pr-<n>` branch was checked out. */
+  returnBranch: string
 }
 
 /** Merge method accepted by provider merge endpoints. */

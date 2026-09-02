@@ -19,6 +19,7 @@ type TestPty = {
   create(
     id: string,
     projectId: string,
+    threadId: string,
     cols: number,
     rows: number,
     scopeBucketId?: string
@@ -75,14 +76,12 @@ describe('PtyService scope roots', () => {
       resolve: vi.fn().mockResolvedValue({ ok: true, root: worktree })
     }
     const storage = new StorageEngine(root)
-    ptySpawn.mockImplementation(() =>
-      fakePty()
-    )
+    ptySpawn.mockImplementation(() => fakePty())
 
     const service = new PtyService(storage, db as never, scopeRoots as never)
 
     const testable = asTest(service)
-    await testable.create('term-1', 'p1', 80, 24, 'feature-scope')
+    await testable.create('term-1', 'p1', 't1', 80, 24, 'feature-scope')
     expect(testable.sessions.get('term-1')?.cwd).toBe(worktree)
     expect(ptySpawn).toHaveBeenCalled()
     expect((ptySpawn.mock.calls[0]?.[2] as { cwd: string }).cwd).toBe(worktree)
@@ -114,11 +113,9 @@ describe('PtyService scope roots', () => {
       close: vi.fn()
     }
     const storage = new StorageEngine(root)
-    ptySpawn.mockImplementation(() =>
-      fakePty()
-    )
+    ptySpawn.mockImplementation(() => fakePty())
     const service = new PtyService(storage, db as never, undefined)
-    await asTest(service).create('term-2', 'p1', 80, 24)
+    await asTest(service).create('term-2', 'p1', 't1', 80, 24)
     expect((ptySpawn.mock.calls[0]?.[2] as { cwd: string }).cwd).toBe(root)
     rmSync(root, { recursive: true, force: true })
   })

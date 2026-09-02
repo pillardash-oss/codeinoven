@@ -10,7 +10,8 @@
     ClipboardPaste,
     X,
     Check,
-    Star
+    Star,
+    Search
   } from '@lucide/svelte'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
   import { parseModelIdentityFromPath } from '../../../../lib/speech/model-path-validation'
@@ -56,6 +57,40 @@
   let importing = $state(false)
   let pasteOpen = $state(false)
   let runtimeFilter = $state<'all' | import('../../../../lib/speech/types').SpeechRuntime>('all')
+  let searchQuery = $state('')
+
+  const normalizedQuery = $derived(searchQuery.trim().toLowerCase())
+
+  const filteredHistory = $derived.by(() => {
+    if (!normalizedQuery) return speech.history.items
+    return speech.history.items.filter((attempt) => {
+      const haystack = [
+        attempt.finalTranscript,
+        attempt.rawTranscript,
+        attempt.cleanedTranscript,
+        ...attempt.errors.map((e) => e.error.message)
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      return haystack.includes(normalizedQuery)
+    })
+  })
+
+  const filteredLessons = $derived.by(() => {
+    if (!normalizedQuery) return speech.lessons
+    return speech.lessons.filter((lesson) => {
+      const haystack = [
+        lesson.instruction,
+        lesson.kind,
+        ...lesson.examples.flatMap((ex) => [ex.from, ex.to])
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      return haystack.includes(normalizedQuery)
+    })
+  })
 
   const tabs: ReadonlyArray<{ id: SoundTab; label: string }> = [
     { id: 'models', label: 'Models' },
@@ -345,12 +380,44 @@
         tab.id
           ? 'bg-elevated text-foreground'
           : 'text-muted hover:text-foreground'}"
-        onclick={() => (activeTab = tab.id)}
+        onclick={() => {
+          activeTab = tab.id
+          searchQuery = ''
+        }}
       >
         {tab.label}
       </button>
     {/each}
   </div>
+
+  {#if activeTab === 'history' || activeTab === 'learning'}
+    <label class="relative block">
+      <span class="sr-only">Search {activeTab === 'history' ? 'recording history' : 'learned lessons'}</span>
+      <Search
+        size={15}
+        class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
+        aria-hidden="true"
+      />
+      <input
+        type="search"
+        bind:value={searchQuery}
+        placeholder={activeTab === 'history'
+          ? 'Search recording history…'
+          : 'Search learned lessons…'}
+        class="w-full rounded-lg border bg-surface py-2 pl-9 pr-8 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary"
+      />
+      {#if searchQuery}
+        <button
+          type="button"
+          class="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-dimmed hover:bg-overlay hover:text-foreground"
+          title="Clear search"
+          aria-label="Clear search"
+          onclick={() => (searchQuery = '')}
+          ><X size={13} aria-hidden="true" /></button
+        >
+      {/if}
+    </label>
+  {/if}
 
   <div class="space-y-4">
     {#if activeTab === 'models'}
@@ -817,7 +884,7 @@
           >
         </div>
         <div class="max-h-[60dvh] divide-y divide-border overflow-y-auto">
-          {#each speech.history.items as attempt (attempt.id)}
+          {#each filteredHistory as attempt (attempt.id)}
             <div class="py-3">
               <div class="flex items-start gap-3">
                 <div class="min-w-0 flex-1">
@@ -882,6 +949,11 @@
             </div>
           {/each}
         </div>
+        {#if normalizedQuery && filteredHistory.length === 0}
+          <p class="py-6 text-center text-sm text-dimmed">
+            No history entries match “{searchQuery.trim()}”.
+          </p>
+        {/if}
         {#if speech.history.total > 0}<button
             type="button"
             class="mt-3 text-xs text-danger hover:underline"
@@ -910,7 +982,7 @@
             No lessons learned yet. Edit a dictation before sending and the model will learn from
             the difference.
           </p>{/if}
-        {#each speech.lessons as lesson (lesson.id)}
+        {#each filteredLessons as lesson (lesson.id)}
           <div class="flex items-center gap-3 border-t py-2 first:border-0">
             <div class="min-w-0 flex-1">
               <p class="truncate text-xs">{lesson.instruction}</p>
@@ -942,6 +1014,11 @@
             >
           </div>
         {/each}
+        {#if normalizedQuery && filteredLessons.length === 0}
+          <p class="py-6 text-center text-sm text-dimmed">
+            No lessons match “{searchQuery.trim()}”.
+          </p>
+        {/if}
       </section>
     {/if}
 

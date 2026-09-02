@@ -5,7 +5,17 @@ import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
 import { Logger } from '../system/logger'
-import { DATABASE_SCHEMA_SQL, TURN_FEEDBACK_COLUMNS_SQL } from './schema'
+import {
+  DATABASE_SCHEMA_SQL,
+  LEGACY_RUBRIC_VERSION,
+  MODEL_RANKINGS_COLUMNS_SQL,
+  MODEL_RANKING_CALC_VERSION,
+  MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL,
+  MODEL_RANKING_SNAPSHOT_INDEXES_SQL,
+  MODEL_RANKING_INDEXES_SQL,
+  USAGE_EVENTS_COLUMNS_SQL,
+  USAGE_EVENTS_INDEXES_SQL
+} from './schema'
 import {
   DatabaseWorker,
   DATABASE_WORKER_DEFAULTS,
@@ -66,9 +76,9 @@ export class Database {
 
     this.configureConnection()
     this.applySchema()
-    this.db.pragma('optimize = 0x10002')
-
     this.startMaintenanceWorker()
+    await this.migrateIndependentUsageLedger()
+    this.db.pragma('optimize = 0x10002')
 
     Logger.info('SQLite database initialised', {
       path: this.path,
@@ -641,85 +651,96 @@ export class Database {
   private applySchema(): void {
     const connection = this.requireDb()
     connection.transaction(() => {
-      this.migrateTurnFeedbackGrades(connection)
+      this.migrateModelRankingTables(connection)
       connection.exec(DATABASE_SCHEMA_SQL)
+      this.migrateModelRankingSnapshotClaimToken(connection)
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
+      this.migrateThreadIndependentAuditColumns(connection)
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
     })()
   }
 
   /**
-   * Databases predating LLM-graded turn feedback carry the useless binary
-   * pass/fail ledger (status 'success'/'corrected', regex-driven). The metric
-   * was unreliable by construction, so the history is wiped rather than
-   * translated: drop the table and let the canonical schema recreate it.
+   * One-time replacement of the legacy per-turn `turn_feedback` ledger (1–5
+   * grades) with the `model_rankings` aggregate + `model_ranking_snapshots`
+   * queue. Graded legacy rows are folded into the aggregate with the linear
+   * map grade → (grade − 1) × 2.5 under `rubric_version = 'legacy-1to5-map-v1'`
+   * (no duration information existed, so duration sums stay 0), and only then
+   * is the legacy table dropped. Idempotent: without a legacy table this is a
+   * no-op. The fold-in is a single grouped INSERT … SELECT, so large ledgers
+   * stay one bounded pass rather than per-row inserts.
    */
-  private migrateTurnFeedbackGrades(connection: DatabaseType): void {
+  migrateModelRankingTables(connection?: DatabaseType): void {
+    const target = connection ?? this.requireDb()
     const columns = new Set<string>(
-      (connection.prepare('PRAGMA table_info(turn_feedback)').all() as Array<{ name: string }>).map(
+      (target.prepare('PRAGMA table_info(turn_feedback)').all() as Array<{ name: string }>).map(
         (column) => column.name
       )
     )
-    if (columns.size > 0 && !columns.has('grade')) {
-      connection.exec('DROP TABLE turn_feedback')
+    if (columns.size === 0) return
+    if (!columns.has('grade')) {
+      // Databases predating LLM-graded turn feedback carry the useless binary
+      // pass/fail ledger (status 'success'/'corrected', regex-driven). The
+      // metric was unreliable by construction: nothing is worth translating.
+      target.exec('DROP TABLE turn_feedback')
       return
     }
-    if (columns.size === 0 || columns.has('due_at_ms')) return
-
-    // Replace the deadline-per-trigger table with one durable queue deadline.
-    // Existing grades and captured payloads survive; pending rows inherit the
-    // earliest old deadline, or a bounded general deadline when none existed.
-    connection.exec('ALTER TABLE turn_feedback RENAME TO turn_feedback_legacy')
-    connection.exec(`CREATE TABLE turn_feedback (${TURN_FEEDBACK_COLUMNS_SQL})`)
-    connection.exec(`
-      INSERT INTO turn_feedback(
-        id, thread_id, project_id, parent_turn_id, session_id, created_at,
-        resolved_at, status, basis, grade, feature, task_slug,
-        harness_id, provider_id, model_id, thinking_level,
-        cost_usd, cost_status, tokens_total,
-        user_message_text, assistant_output_text, follow_up_text,
-        reading_deadline_ms, draft_deadline_ms,
-        general_deadline_ms, due_at_ms, attempt_count, last_attempt_at_ms
+    // The aggregate must exist before the fold-in; the canonical schema's
+    // CREATE IF NOT EXISTS below stays a no-op afterwards.
+    target.exec(
+      `CREATE TABLE IF NOT EXISTS model_rankings (${MODEL_RANKINGS_COLUMNS_SQL});
+       CREATE TABLE IF NOT EXISTS model_ranking_snapshots (${MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL});`
+    )
+    target.exec(MODEL_RANKING_INDEXES_SQL)
+    target.exec(MODEL_RANKING_SNAPSHOT_INDEXES_SQL)
+    target.exec(`
+      INSERT INTO model_rankings(
+        id, harness_id, provider_id, model_id, thinking_level,
+        one_shot_score_sum, one_shot_samples, one_shot_duration_sum_ms, one_shot_cost_usd,
+        multi_shot_score_sum, multi_shot_samples, multi_shot_duration_sum_ms, multi_shot_cost_usd,
+        rubric_version, calc_version, updated_at
       )
       SELECT
-        legacy.id,
-        legacy.thread_id,
-        (SELECT project_id FROM threads WHERE id = legacy.thread_id),
-        legacy.parent_turn_id,
-        legacy.session_id,
-        legacy.created_at,
-        legacy.resolved_at,
-        legacy.status,
-        legacy.basis,
-        legacy.grade,
-        legacy.feature,
-        legacy.task_slug,
+        'legacy-' || MIN(legacy.rowid),
         legacy.harness_id,
-        legacy.provider_id,
+        COALESCE(legacy.provider_id, ''),
         legacy.model_id,
-        legacy.thinking_level,
-        legacy.cost_usd,
-        legacy.cost_status,
-        legacy.tokens_total,
-        legacy.user_message_text,
-        legacy.assistant_output_text,
-        legacy.follow_up_text,
-        legacy.reading_deadline_ms,
-        legacy.draft_deadline_ms,
-        legacy.created_at + 1800000,
-        CASE
-          WHEN legacy.status <> 'pending' THEN NULL
-          WHEN legacy.reading_deadline_ms IS NULL THEN
-            COALESCE(legacy.draft_deadline_ms, legacy.created_at + 1800000)
-          WHEN legacy.draft_deadline_ms IS NULL THEN legacy.reading_deadline_ms
-          ELSE MIN(legacy.reading_deadline_ms, legacy.draft_deadline_ms)
-        END,
+        COALESCE(legacy.thinking_level, ''),
+        SUM((legacy.grade - 1) * 2.5),
+        COUNT(*),
         0,
-        NULL
-      FROM turn_feedback_legacy AS legacy
+        COALESCE(SUM(CASE WHEN legacy.cost_status <> 'unavailable' AND legacy.cost_usd IS NOT NULL
+                          THEN legacy.cost_usd ELSE 0 END), 0),
+        0, 0, 0, 0,
+        '${LEGACY_RUBRIC_VERSION}',
+        '${MODEL_RANKING_CALC_VERSION}',
+        MAX(legacy.created_at)
+      FROM turn_feedback AS legacy
+      WHERE legacy.status = 'graded'
+        AND legacy.grade IS NOT NULL
+        AND legacy.harness_id IS NOT NULL
+        AND legacy.model_id IS NOT NULL
+      GROUP BY legacy.harness_id, COALESCE(legacy.provider_id, ''), legacy.model_id,
+               COALESCE(legacy.thinking_level, '')
     `)
-    connection.exec('DROP TABLE turn_feedback_legacy')
+    target.exec('DROP TABLE turn_feedback')
+  }
+
+  /**
+   * Databases created before claim-token tagging carry a `claim_token`-less
+   * snapshot queue. Add the column in place (nullable, no backfill needed —
+   * unclaimed rows are NULL by definition). Idempotent and safe to re-run.
+   */
+  migrateModelRankingSnapshotClaimToken(connection?: DatabaseType): void {
+    const target = connection ?? this.requireDb()
+    const columns = new Set<string>(
+      (target.prepare('PRAGMA table_info(model_ranking_snapshots)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.size === 0 || columns.has('claim_token')) return
+    target.exec('ALTER TABLE model_ranking_snapshots ADD COLUMN claim_token TEXT')
   }
 
   /**
@@ -777,6 +798,25 @@ export class Database {
     }
   }
 
+  /** Existing databases predate the independent (spec-less) audit thread flags. */
+  private migrateThreadIndependentAuditColumns(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('independent_audit')) {
+      connection.exec(
+        'ALTER TABLE threads ADD COLUMN independent_audit INTEGER NOT NULL DEFAULT 0'
+      )
+    }
+    if (!columns.has('independent_audit_initialized')) {
+      connection.exec(
+        'ALTER TABLE threads ADD COLUMN independent_audit_initialized INTEGER NOT NULL DEFAULT 0'
+      )
+    }
+  }
+
   /** Existing databases predate the append-only usage snapshot fields. */
   private migrateUsageEventColumns(connection: DatabaseType): void {
     const columns = new Set<string>(
@@ -828,6 +868,86 @@ export class Database {
         WHERE duration_ms = 0
       `)
     }
+  }
+
+  /**
+   * Detach the usage ledger from mutable conversation rows. Older schemas used
+   * cascading foreign keys to threads and messages, which erased analytics
+   * whenever retention evicted a thread. Rebuild once, snapshot project
+   * identity, and retain the text identifiers without lifecycle constraints.
+   */
+  private async migrateIndependentUsageLedger(): Promise<void> {
+    const connection = this.requireDb()
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(usage_events)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    const foreignKeys = connection.prepare('PRAGMA foreign_key_list(usage_events)').all()
+    const independent =
+      columns.has('project_id') && columns.has('project_name') && foreignKeys.length === 0
+
+    const projectIndex = `CREATE INDEX IF NOT EXISTS idx_usage_events_project
+      ON usage_events(project_id, created_at, id)`
+    if (independent) {
+      const result = await this.executeViaWorker(projectIndex, [])
+      if (!result.ok) throw new Error(result.error ?? 'Could not index the usage ledger')
+      return
+    }
+
+    const projectId = columns.has('project_id')
+      ? 'COALESCE(legacy.project_id, threads.project_id)'
+      : 'threads.project_id'
+    const projectName = columns.has('project_name')
+      ? 'COALESCE(legacy.project_name, projects.name)'
+      : 'projects.name'
+
+    const statements = [
+      {
+        sql: 'ALTER TABLE usage_events RENAME TO usage_events_legacy',
+        params: []
+      },
+      {
+        sql: `CREATE TABLE usage_events (${USAGE_EVENTS_COLUMNS_SQL})`,
+        params: []
+      },
+      {
+        sql: `INSERT INTO usage_events(
+          id, thread_id, parent_turn_id, project_id, project_name,
+          feature_call_id, attempt, feature,
+          harness_id, provider_id, model_id, thinking_level, utility_id,
+          raw_provider_usage_json,
+          tokens_uncached_input, tokens_cached_input, tokens_cache_write,
+          tokens_output, tokens_reasoning, tokens_total, raw_total, total_semantics,
+          cost_usd, cost_status, pricing_provenance_json, tool_fee_usd,
+          success, retry_cause, duration_ms, created_at
+        )
+        SELECT
+          legacy.id, legacy.thread_id, legacy.parent_turn_id, ${projectId}, ${projectName},
+          legacy.feature_call_id, legacy.attempt, legacy.feature,
+          legacy.harness_id, legacy.provider_id, legacy.model_id, legacy.thinking_level,
+          legacy.utility_id, legacy.raw_provider_usage_json,
+          legacy.tokens_uncached_input, legacy.tokens_cached_input, legacy.tokens_cache_write,
+          legacy.tokens_output, legacy.tokens_reasoning, legacy.tokens_total,
+          legacy.raw_total, legacy.total_semantics,
+          legacy.cost_usd, legacy.cost_status, legacy.pricing_provenance_json,
+          legacy.tool_fee_usd, legacy.success, legacy.retry_cause,
+          legacy.duration_ms, legacy.created_at
+        FROM usage_events_legacy AS legacy
+        LEFT JOIN threads ON threads.id = legacy.thread_id
+        LEFT JOIN projects ON projects.id = threads.project_id
+        `,
+        params: []
+      },
+      { sql: 'DROP TABLE usage_events_legacy', params: [] },
+      ...USAGE_EVENTS_INDEXES_SQL.split(';')
+        .map((sql) => sql.trim())
+        .filter(Boolean)
+        .map((sql) => ({ sql, params: [] })),
+      { sql: projectIndex, params: [] }
+    ]
+    const result = await this.transactionViaWorker(statements)
+    if (!result.ok) throw new Error(result.error ?? 'Could not migrate the usage ledger')
   }
 }
 

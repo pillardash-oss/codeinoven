@@ -18,6 +18,7 @@ import {
   validateGitPathArray,
   validateGitRelativePath,
   validateHistoryRole,
+  validateScopeMergeMode,
   validateMergeMethod,
   validateMergeTarget,
   validatePrCreateInput,
@@ -99,6 +100,14 @@ describe('IPC enum validation', () => {
     expect(validateChecklistItemStatus('in_progress')).toBe('in_progress')
     expect(() => validateHistoryRole('developer')).toThrow(TypeError)
     expect(() => validateChecklistItemStatus('done')).toThrow(TypeError)
+  })
+
+  it('validates scope merge modes', () => {
+    for (const mode of ['merge-delete', 'merge-keep', 'merge-move-to-default']) {
+      expect(validateScopeMergeMode(mode)).toBe(mode)
+    }
+    expect(() => validateScopeMergeMode('merge-rename')).toThrow(TypeError)
+    expect(() => validateScopeMergeMode(42)).toThrow(TypeError)
   })
 })
 

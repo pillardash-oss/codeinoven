@@ -84,8 +84,13 @@ export function clearDraftLabelCookie(threadId: string): void {
  * then it shows the draft-derived label when one exists (live draft text,
  * falling back to the persisted cookie), otherwise the "New Thread" placeholder.
  *
- * Reads the live draft from the renderer recovery store, so this becomes
- * reactive when called inside a `$derived`.
+ * When the composer is empty but the thread already has a message queued (e.g.
+ * scheduled behind another thread via "start after"), the queued message text
+ * labels the row just as a draft would, so a brand-new scheduled thread never
+ * reads as a blank "New Thread".
+ *
+ * Reads the live draft + queue from the renderer recovery store, so this
+ * becomes reactive when called inside a `$derived`.
  */
 export function effectiveThreadTitle(thread: {
   id: string
@@ -93,6 +98,12 @@ export function effectiveThreadTitle(thread: {
   title: string
 }): string {
   if (thread.title !== DEFAULT_THREAD_TITLE) return thread.title
-  const draftText = rendererRecovery.draftFor(thread.projectId, thread.id)
-  return deriveDraftLabel(draftText) ?? draftLabelFromCookie(thread.id) ?? thread.title
+  const { projectId, id } = thread
+  const draftText = rendererRecovery.draftFor(projectId, id)
+  const draftLabel = deriveDraftLabel(draftText)
+  if (draftLabel) return draftLabel
+  const queued = rendererRecovery.queuedMessageFor(projectId, id)
+  const queuedLabel = queued ? deriveDraftLabel(queued.text) : null
+  if (queuedLabel) return queuedLabel
+  return draftLabelFromCookie(id) ?? thread.title
 }

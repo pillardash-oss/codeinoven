@@ -1429,8 +1429,18 @@ export class RemoteRpcDispatcher {
           await this.threadManager.setStatus(projectId, threadId, 'completed')
           return this.threadManager.setAuditState(projectId, threadId, undefined)
         }
+        const thread = await this.threadManager.getThread(projectId, threadId)
+        if (thread && thread.status === 'spec') {
+          await this.threadManager.setStatus(projectId, threadId, 'completed')
+        }
         return this.threadManager.setAuditState(projectId, threadId, undefined)
       }
+      case 'audit:dismiss':
+        return this.threadManager.setAuditState(
+          this.string(args[0]),
+          this.string(args[1]),
+          undefined
+        )
       case 'audit:returnToOffer': {
         const projectId = this.string(args[0])
         const threadId = this.string(args[1])

@@ -31,9 +31,9 @@
   function labelFor(value: ScopeLifecycleAction): string {
     switch (value) {
       case 'detach':
-        return 'Detach'
-      case 'remove-worktree':
         return 'Remove Worktree'
+      case 'remove-worktree':
+        return 'Remove Worktree & Delete Scope'
       case 'delete-scope':
         return 'Delete Scope'
       case 'delete-branch':
@@ -120,7 +120,7 @@
       <div class="space-y-3">
         <p class="text-sm text-foreground">
           {action === 'detach'
-            ? 'The worktree will be removed and this scope returns to the project directory.'
+            ? 'Detaching this worktree will leave the branch in your repo, but the worktree directory will be deleted!'
             : action === 'remove-worktree'
               ? 'The worktree will be removed from Git and this scope will be deleted.'
               : action === 'delete-scope'

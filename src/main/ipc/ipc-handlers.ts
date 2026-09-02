@@ -71,7 +71,7 @@ import {
 import { parseThreadContextUsage } from '../database/repositories/thread-repo'
 import { AttachmentGrantRepo } from '../database/repositories/attachment-grant-repo'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
-import { TurnFeedbackRepo } from '../database/repositories/turn-feedback-repo'
+import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
 import { NoteRepo } from '../database/repositories/note-repo'
 import { readDocumentPreviewHtml } from '../drivers/document-attachment'
 import {
@@ -117,6 +117,7 @@ import {
   validateScopeCollapsePatch,
   validateScopeCreateInput,
   validateScopeLifecycleAction,
+  validateScopeMergeMode,
   validateScopeAdoptInput,
   validateScopeOrderIds,
   validateScopeSlice,
@@ -918,6 +919,7 @@ const AGENT_DEFAULT_FIELDS = new Set([
   'worker',
   'auditor',
   'imageDescriptor',
+  'imageDescriptorFallback',
   'syncFromThreadChanges'
 ])
 
@@ -1015,6 +1017,14 @@ function validateAgentDefaults(value: unknown): AgentDefaultsConfig {
           imageDescriptor: validateAgentModelSelection(
             value.imageDescriptor,
             'Image descriptor default'
+          )
+        }),
+    ...(value.imageDescriptorFallback === undefined
+      ? {}
+      : {
+          imageDescriptorFallback: validateAgentModelSelection(
+            value.imageDescriptorFallback,
+            'Image descriptor fallback default'
           )
         })
   }
@@ -2180,8 +2190,6 @@ export function registerIpcHandlers(
     | 'activeTurnChangeSummary'
     | 'hasActiveProcessesInScope'
     | 'abort'
-    | 'handleThreadReadForGrading'
-    | 'handleThreadDraftChangedForGrading'
   > &
     Partial<Pick<ChatEngine, 'runVirtualTask'>>,
   options: RegisterIpcHandlersOptions = {}
@@ -2229,6 +2237,17 @@ export function registerIpcHandlers(
     },
     scopeRoots
   )
+  // The merge lifecycle deletes/moves threads in the source scope after the
+  // git merge lands; the thread manager is created after the worktree service,
+  // so the service receives it here.
+  scopeWorktreeService.attachThreadLifecycle({
+    countThreadsInScope: (projectId, bucketId) =>
+      threadManager.countThreadsInScope(projectId, bucketId),
+    deleteThreadsInScope: (projectId, bucketId) =>
+      threadManager.deleteThreadsInScope(projectId, bucketId),
+    moveThreadsOutOfScope: (projectId, fromBucketId) =>
+      threadManager.moveThreadsOutOfScope(projectId, fromBucketId)
+  })
   const historyEngine = new HistoryEngine(database)
   const engineeringLifecycleEngine = new EngineeringLifecycleEngine(database)
   const planEngine = new PlanEngine(storage, database)
@@ -2256,7 +2275,7 @@ export function registerIpcHandlers(
   const memoryService = new MemoryService(storage)
   const attachmentGrantRepo = new AttachmentGrantRepo(database)
   const harnessUsageRepo = new HarnessUsageRepo(database)
-  const turnFeedbackRepo = new TurnFeedbackRepo(database)
+  const modelRankingRepo = new ModelRankingRepo(database)
   const noteRepo = new NoteRepo(database)
 
   /**
@@ -2290,12 +2309,19 @@ export function registerIpcHandlers(
     'engineeringLifecycle:select',
     async (_, projectId: unknown, threadId: unknown, input: unknown) => {
       const ids = await waitForThreadReady(projectId, threadId)
+      const selectionInput = validateEngineeringLifecycleSelectionInput(input)
+      // The independent audit owns the workflow: engineering modes stay locked
+      // out of a thread for its lifetime once the audit switch was turned on.
+      if (selectionInput.autopilot === true || selectionInput.stages.length > 0) {
+        const auditThread = await threadManager.getThread(ids.projectId, ids.threadId)
+        if (auditThread?.independentAudit === true) {
+          throw new Error(
+            'Engineering modes are locked while the independent audit is enabled. Fork the thread to use them.'
+          )
+        }
+      }
       const previous = engineeringLifecycleEngine.get(ids.projectId, ids.threadId)
-      const next = engineeringLifecycleEngine.select(
-        ids.projectId,
-        ids.threadId,
-        validateEngineeringLifecycleSelectionInput(input)
-      )
+      const next = engineeringLifecycleEngine.select(ids.projectId, ids.threadId, selectionInput)
       // Engineering is now expressed purely through the lifecycle selection, so
       // the senior-engineer/auditor defaults attach the moment a thread first
       // gains an active selection (previously tied to the creation-time flag).
@@ -2498,8 +2524,8 @@ export function registerIpcHandlers(
   ipcMain.handle('account:getLocalUsage', async (_, input: unknown) => {
     const range = validateLocalProfileAnalyticsRange(input)
     const analytics = await harnessUsageRepo.profileAnalytics(range)
-    analytics.modelPerformance = turnFeedbackRepo.modelPerformance(range)
-    analytics.feedbackCost = turnFeedbackRepo.feedbackCost(range)
+    analytics.modelRankings = modelRankingRepo.analytics()
+    analytics.gradingSpend = modelRankingRepo.gradingSpend()
     return analytics
   })
   if (!options.hydrationHandlersRegistered) {
@@ -3739,8 +3765,24 @@ export function registerIpcHandlers(
       await threadManager.setStatus(validProjectId, validThreadId, 'completed')
       return threadManager.setAuditState(validProjectId, validThreadId, undefined)
     }
+    // Non-assignment implementation audits settle the coordinator on `spec`
+    // while the report is under review. Accepting the report ends the audit
+    // cycle, so the thread must land on `completed` instead of staying on
+    // "Spec ready" (which also keeps it out of the done slice and blocks
+    // thread cleanup). Guarded so an actively working thread is never clobbered.
+    const thread = await threadManager.getThread(validProjectId, validThreadId)
+    if (thread && thread.status === 'spec') {
+      await threadManager.setStatus(validProjectId, validThreadId, 'completed')
+    }
     return threadManager.setAuditState(validProjectId, validThreadId, undefined)
   })
+  ipcMain.handle('audit:dismiss', (_, projectId: unknown, threadId: unknown) =>
+    threadManager.setAuditState(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID'),
+      undefined
+    )
+  )
   ipcMain.handle('audit:beginRework', (_, projectId: unknown, threadId: unknown) =>
     threadManager.setAuditState(
       validateEntityId(projectId, 'Project ID'),
@@ -4737,6 +4779,34 @@ export function registerIpcHandlers(
     return scopeWorktreeService.runSetupFromFailure(validatedTarget, { runSetup })
   })
   ipcMain.handle(
+    'scope:worktree:confirmDeleteScope',
+    (_, target: unknown, confirmationId: unknown, deleteBranch: unknown) =>
+      scopeWorktreeService.confirmDeleteScope(
+        validateScopeTarget(target),
+        validateConfirmationToken(confirmationId),
+        validateBoolean(deleteBranch, 'Delete branch')
+      )
+  )
+  ipcMain.handle(
+    'scope:worktree:mergePreflight',
+    (_, target: unknown, mergeTarget: unknown, mode: unknown) =>
+      scopeWorktreeService.mergePreflight(
+        validateScopeTarget(target),
+        validateScopeTarget(mergeTarget),
+        validateScopeMergeMode(mode)
+      )
+  )
+  ipcMain.handle(
+    'scope:worktree:confirmMerge',
+    (_, target: unknown, mergeTarget: unknown, mode: unknown, confirmationId: unknown) =>
+      scopeWorktreeService.confirmMerge(
+        validateScopeTarget(target),
+        validateScopeTarget(mergeTarget),
+        validateScopeMergeMode(mode),
+        validateConfirmationToken(confirmationId)
+      )
+  )
+  ipcMain.handle(
     'project:update',
     async (_, projectId: string, input: Partial<CreateProjectInput>) => {
       const project = await projectManager.updateProject(projectId, input)
@@ -5704,6 +5774,19 @@ export function registerIpcHandlers(
     'git:preparePrResolve',
     async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
       gitService.preparePrResolve(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validatePrResolveOptions(options)
+      )
+  )
+  ipcMain.handle(
+    'git:finishPrResolve',
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
+      gitService.finishPrResolve(
         await resolveProjectPath(
           validateEntityId(projectId, 'Project ID'),
           scopeBucketId === undefined
@@ -7437,19 +7520,17 @@ export function registerIpcHandlers(
     return threadManager.efficiencyKpisFor(safeProjectId, safeThreadId)
   })
   ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
-    // Opening a thread to read the final output anchors the LLM grading
-    // countdown for its pending turn outcomes.
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    chatEngine?.handleThreadReadForGrading(projectId, safeThreadId)
     return threadManager.markRead(projectId, safeThreadId)
   })
   ipcMain.handle(
     'thread:draftActivity',
     (_, projectId: string, threadId: string, drafting: boolean) => {
-      const safeProjectId = validateEntityId(projectId, 'Project ID')
-      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      // Composer activity no longer anchors any grading deadline: ranking
+      // conversations close on thread deletion or the inactivity deadline.
+      validateEntityId(projectId, 'Project ID')
+      validateEntityId(threadId, 'Thread ID')
       validateBoolean(drafting, 'Drafting')
-      chatEngine?.handleThreadDraftChangedForGrading(safeProjectId, safeThreadId, drafting)
     }
   )
   ipcMain.handle('thread:reorder', (_, projectId: unknown, orderedIds: unknown) =>
@@ -7496,6 +7577,18 @@ export function registerIpcHandlers(
       const safeSettings = validateThreadSettings(settings)
       await threadCreation.awaitReady(safeThreadId)
       return threadManager.updateSettings(safeProjectId, safeThreadId, safeSettings)
+    }
+  )
+  ipcMain.handle(
+    'thread:setIndependentAudit',
+    async (_, projectId: unknown, threadId: unknown, enabled: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      if (typeof enabled !== 'boolean') {
+        throw new Error('Independent audit toggle must be a boolean')
+      }
+      await threadCreation.awaitReady(safeThreadId)
+      return threadManager.setIndependentAudit(safeProjectId, safeThreadId, enabled)
     }
   )
   ipcMain.handle(

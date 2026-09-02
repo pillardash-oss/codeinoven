@@ -57,19 +57,17 @@ import { piCustomProvidersExtension } from './pi-providers-extension'
 import {
   CIO_PERMISSION_MARKER,
   CIO_QUESTION_MARKER,
-  CIO_SUBAGENT_MARKER,
-  piCoreToolsExtension
+  CIO_SUBAGENT_MARKER
 } from './pi-core-tools-extension'
-import { piUtilityGatewayExtension } from './pi-utility-gateway-extension'
+import { piCioCoreToolsExtension } from './pi-cio-core-tools-extension'
 import {
   PI_STATUS_COMPACTING,
   PI_STATUS_EXTENSION_KEY,
   PI_STATUS_IDLE,
-  PI_STATUS_WORKING,
-  piStatusExtension
+  PI_STATUS_WORKING
 } from './pi-status-extension'
-import { PI_USAGE_EXTENSION_KEY, piUsageExtension } from './pi-usage-extension'
-import { fetchPiProviderCredits } from './pi-provider-usage'
+import { PI_USAGE_EXTENSION_KEY } from './pi-usage-extension'
+import { fetchPiProviderUsage } from './pi-provider-usage'
 import { PiRpcClient } from './pi-rpc-client'
 import {
   prepareHarnessInvocation,
@@ -626,6 +624,35 @@ function findToolPart(
 interface PiTurnState {
   assistantMessageId: string | null
   turnIndex: number
+  /** Streamed part ids already announced with a placeholder
+   *  `message.part.updated`, so their first delta only needs the delta. */
+  announcedStreamParts?: Set<string>
+}
+
+/**
+ * Announce a streamed text/reasoning part with an empty placeholder
+ * `message.part.updated` before its first delta. Pi's RPC stream emits
+ * `message.part.delta` records without ever publishing the part they append
+ * to (`message_start` carries no parts), and every downstream mirror drops
+ * deltas for a part that does not exist yet — so pi's streaming text and
+ * reasoning never appeared live and the working trace stayed empty until
+ * `message_end`, with the final output often beating any visible trace.
+ * The claude-code and codex drivers announce parts up front
+ * (`content_block_start` / `item.started`); this gives pi the same behavior.
+ */
+function announceStreamPart(
+  sessionId: string,
+  turnState: PiTurnState,
+  part: AgentPart
+): SessionAgentEvent[] {
+  let announced = turnState.announcedStreamParts
+  if (!announced) {
+    announced = new Set<string>()
+    turnState.announcedStreamParts = announced
+  }
+  if (announced.has(part.id)) return []
+  announced.add(part.id)
+  return [{ type: 'message.part.updated', sessionId, part }]
 }
 
 /** Highest driver-generated assistant index already present for this app
@@ -674,6 +701,7 @@ export function mapPiRecord(
   if (type === 'turn_start') {
     turnState.turnIndex += 1
     turnState.assistantMessageId = null
+    turnState.announcedStreamParts?.clear()
     return { events: [] }
   }
 
@@ -697,13 +725,20 @@ export function mapPiRecord(
     if (eventType === 'text_delta') {
       const delta = stringValue(event?.['delta'])
       if (!delta) return { events: [] }
+      const partId = `${messageId}:text:${contentIndex}`
       return {
         events: [
+          ...announceStreamPart(context.sessionId, turnState, {
+            type: 'text',
+            id: partId,
+            messageID: messageId,
+            text: ''
+          }),
           {
             type: 'message.part.delta',
             sessionId: context.sessionId,
             messageId,
-            partId: `${messageId}:text:${contentIndex}`,
+            partId,
             field: 'text',
             delta
           }
@@ -713,13 +748,20 @@ export function mapPiRecord(
     if (eventType === 'thinking_delta') {
       const delta = stringValue(event?.['delta'])
       if (!delta) return { events: [] }
+      const partId = `${messageId}:reasoning:${contentIndex}`
       return {
         events: [
+          ...announceStreamPart(context.sessionId, turnState, {
+            type: 'reasoning',
+            id: partId,
+            messageID: messageId,
+            text: ''
+          }),
           {
             type: 'message.part.delta',
             sessionId: context.sessionId,
             messageId,
-            partId: `${messageId}:reasoning:${contentIndex}`,
+            partId,
             field: 'text',
             delta
           }
@@ -1005,9 +1047,7 @@ export function mapPiRecord(
       }
     }
     const finalError =
-      stringValue(entry['finalError']) ??
-      stringValue(entry['errorMessage']) ??
-      'Pi retries failed'
+      stringValue(entry['finalError']) ?? stringValue(entry['errorMessage']) ?? 'Pi retries failed'
     // When the retries were exhausted against a usage window, the final error
     // still classifies as a reset wait — surface it with a concrete retryAt so
     // the engine converts it into the will-retry card and auto-resumes later,
@@ -1367,13 +1407,11 @@ export class PiDriver extends PersistentCliDriver {
   >()
   /** Session-keyed turn handoff files carrying { url, token } for the gateway extension, storage-relative. */
   private gatewayHandoffPaths = new Map<string, string>()
-  /** Session-keyed absolute path to the materialized gateway extension module, passed to `--extension`. */
-  private gatewayExtensionPaths = new Map<string, string>()
   /**
    * Session-keyed endpoints published before the gateway extension was materialized.
    * On the first turn of a fresh session, publishUtilityGatewayEndpoint runs before
    * sendPrompt spawns Pi and materializes the handoff file, so the endpoint must be
-   * held here and flushed by materializeGatewayExtension — otherwise every first
+   * held here and flushed by materializeCioCoreToolsExtension — otherwise every first
    * cio_util_* call fails with `new URL(route, '')` → "Invalid URL".
    */
   private pendingGatewayEndpoints = new Map<string, { url: string; token: string }>()
@@ -1396,14 +1434,6 @@ export class PiDriver extends PersistentCliDriver {
    */
   private silentContinues = new Map<string, PiSilentContinueState>()
   private nativeMcpConfigSupport: Promise<boolean> | null = null
-  /** Materialized app-owned status extension path, cached across sessions. */
-  private statusExtensionPath: string | null = null
-  private statusExtensionDirectory: string | null = null
-  private statusExtensionFailed = false
-  /** Materialized app-owned usage extension path, cached across sessions. */
-  private usageExtensionPath: string | null = null
-  private usageExtensionDirectory: string | null = null
-  private usageExtensionFailed = false
   /** Latest provider rate-limit windows reported by the usage extension,
    *  per session, with the pi provider id the response came from. */
   private latestRateLimits = new Map<
@@ -1417,8 +1447,6 @@ export class PiDriver extends PersistentCliDriver {
   private persistedRateLimitsWrite: Promise<void> | null = null
   private static readonly USAGE_WINDOWS_PATH = 'runtime/pi-usage/windows.json'
   private static readonly USAGE_WINDOWS_MAX_PROVIDERS = 50
-  /** Session-keyed absolute path to the materialized core-tools extension module, passed to `--extension`. */
-  private coreToolsExtensionPaths = new Map<string, string>()
   /**
    * Session-keyed handoff file carrying the CodeInOven-composed system prompt
    * (work ethic, persistent preferences, working scope, skills), storage-relative.
@@ -1431,7 +1459,11 @@ export class PiDriver extends PersistentCliDriver {
    * or duplicated content.
    */
   private cioSystemPromptPaths = new Map<string, string>()
-  private coreToolsExtensionFailed = false
+  /** Session-keyed absolute paths to the materialized single "cio-core-tools"
+   *  extension module (status + usage + gateway + core tools composed), passed
+   *  to `--extension`. */
+  private cioCoreToolsExtensionPaths = new Map<string, string>()
+  private cioCoreToolsFailed = false
   /** WSL-aware read view of Pi's own credential store (`~/.pi/agent/auth.json`). */
   private readonly authConfig = new PiAuthConfigService(undefined, piAuthFileIo)
 
@@ -1834,10 +1866,21 @@ export class PiDriver extends PersistentCliDriver {
     ) {
       return
     }
-    if (!applied || applied.provider !== model.provider || applied.modelId !== model.modelId) {
+    // Both settings are independent; on a fresh process neither is applied, so
+    // issue them as concurrent RPC commands instead of two sequential blocking
+    // round-trips on the prompt's critical path. The RPC client correlates
+    // responses by id, so interleaved commands are safe.
+    const wantsModel =
+      !applied || applied.provider !== model.provider || applied.modelId !== model.modelId
+    const wantsLevel = !applied || applied.thinkingLevel !== level
+    if (wantsModel && wantsLevel) {
+      await Promise.all([
+        client.setModel(model.provider, model.modelId),
+        client.setThinkingLevel(level)
+      ])
+    } else if (wantsModel) {
       await client.setModel(model.provider, model.modelId)
-    }
-    if (!applied || applied.thinkingLevel !== level) {
+    } else if (wantsLevel) {
       await client.setThinkingLevel(level)
     }
     this.appliedPiSettings.set(sessionId, {
@@ -1948,12 +1991,13 @@ export class PiDriver extends PersistentCliDriver {
     // only when it matches the requested provider (or no provider was given).
     const providerWindows = providerId
       ? (persisted.get(providerId) ??
-         (sessionCache && (sessionCache.providerId === providerId || !sessionCache.providerId)
-           ? sessionCache.windows
-           : undefined))
+        (sessionCache && (sessionCache.providerId === providerId || !sessionCache.providerId)
+          ? sessionCache.windows
+          : undefined))
       : (sessionCache?.windows ?? [...persisted.values()].at(-1))
-    const windows = providerWindows ?? []
-    const credits = (providerId ? await fetchPiProviderCredits(providerId) : null) ?? undefined
+    const providerUsage = providerId ? await fetchPiProviderUsage(providerId) : null
+    const windows = providerWindows?.length ? providerWindows : (providerUsage?.rateLimits ?? [])
+    const credits = providerUsage?.credits
     if (!client) {
       return windows.length > 0 || credits ? { rateLimits: windows, credits } : null
     }
@@ -2120,15 +2164,9 @@ export class PiDriver extends PersistentCliDriver {
       void this.removeGatewayHandoff(sessionId)
     }
     this.gatewayHandoffPaths.clear()
-    this.gatewayExtensionPaths.clear()
     this.pendingGatewayEndpoints.clear()
-    const statusDirectory = this.statusExtensionDirectory
-    this.statusExtensionPath = null
-    this.statusExtensionDirectory = null
-    if (statusDirectory) {
-      void rm(statusDirectory, { recursive: true, force: true }).catch(() => undefined)
-    }
-    this.coreToolsExtensionPaths.clear()
+    this.cioCoreToolsExtensionPaths.clear()
+    this.cioCoreToolsFailed = false
     this.cioSystemPromptPaths.clear()
     super.dispose()
   }
@@ -2180,26 +2218,15 @@ export class PiDriver extends PersistentCliDriver {
         'Pi is not installed. Install the Pi CLI globally, then retry. (npm i -g @earendil-works/pi-coding-agent)'
       )
     }
-    // The app-owned status extension reports working/idle over the RPC stream
-    // so session status matches the other harness drivers. A materialization
-    // failure must never block the turn — pi then simply runs unmonitored.
-    const statusExtension = await this.materializeStatusExtension()
-    const extensionArgs = statusExtension ? ['--extension', statusExtension] : []
-    // The app-owned usage extension forwards provider rate-limit headers so
-    // usage bars match the other harness drivers. Same failure contract.
-    const usageExtension = await this.materializeUsageExtension()
-    if (usageExtension) extensionArgs.push('--extension', usageExtension)
-    // The app-owned gateway extension registers the interactive gateway tools
-    // from GATEWAY_TOOLS as first-class tools so the model gets structured affordances for the
-    // turn-scoped utility gateway (Pi has no native MCP host to transport it).
-    // The per-turn endpoint arrives later via publishUtilityGatewayEndpoint.
-    const gatewayExtension = await this.materializeGatewayExtension(sessionId)
-    if (gatewayExtension) extensionArgs.push('--extension', gatewayExtension)
-    // The app-owned core-tools extension registers the question, todo, and
-    // file-request tools plus the destructive-action permission gate (marker
-    // confirm dialogs upgraded to permission.asked in handleUiRequest).
-    const coreToolsExtension = await this.materializeCoreToolsExtension(sessionId)
-    if (coreToolsExtension) extensionArgs.push('--extension', coreToolsExtension)
+    // The single app-owned "cio-core-tools" extension composes status, usage,
+    // utility gateway, and core tools into ONE module loaded through ONE
+    // `--extension` flag, so pi's process boot pays a single extension load
+    // instead of four. A materialization failure must never block the turn —
+    // pi then simply runs without the app affordances.
+    const cioCoreToolsExtensionPath = await this.materializeCioCoreToolsExtension(sessionId)
+    const extensionArgs = cioCoreToolsExtensionPath
+      ? ['--extension', cioCoreToolsExtensionPath]
+      : []
     const invocation = await prepareHarnessInvocation(
       'pi',
       ['--mode', 'rpc', ...extensionArgs, ...args],
@@ -2689,7 +2716,10 @@ export class PiDriver extends PersistentCliDriver {
    * provider response's rate-limit headers. Mapped into display windows and
    * cached per session until the next provider response refreshes them.
    */
-  private async handleUsageStatus(record: Record<string, unknown>, sessionId: string): Promise<void> {
+  private async handleUsageStatus(
+    record: Record<string, unknown>,
+    sessionId: string
+  ): Promise<void> {
     const text = stringValue(record['statusText'])
     if (!text) return
     let payload: unknown
@@ -3012,32 +3042,42 @@ export class PiDriver extends PersistentCliDriver {
    * absolute handoff path, so both files are session-keyed — concurrent
    * sessions never overwrite each other's turn credentials.
    */
-  private async materializeGatewayExtension(sessionId: string): Promise<string | null> {
-    const existing = this.gatewayExtensionPaths.get(sessionId)
+  /**
+   * Materialize the single app-owned "cio-core-tools" extension for a session —
+   * status, usage, the utility gateway, and the core tools composed into one
+   * self-contained module (see pi-cio-core-tools-extension.ts) so pi's boot
+   * loads one extension instead of four. The gateway handoff file and the
+   * per-turn system-prompt handoff file live beside the module; their
+   * storage-relative paths feed the existing publish/remove flows unchanged.
+   * A failed materialization must never block the turn — pi then runs without
+   * the app affordances (same contract as the previous per-extension paths).
+   */
+  private async materializeCioCoreToolsExtension(sessionId: string): Promise<string | null> {
+    const existing = this.cioCoreToolsExtensionPaths.get(sessionId)
     if (existing) return existing
+    if (this.cioCoreToolsFailed) return null
     try {
-      const directory = join('runtime', 'pi-utility-gateway', sessionId)
-      const handoffRelative = join(directory, 'handoff.json')
-      const extensionRelative = join(directory, 'codeinoven-utility-gateway.ts')
-      // Empty endpoint values: the tools surface a clear gateway-inactive error
-      // until the first direct-gateway turn publishes the real { url, token }.
+      const directory = join('runtime', 'cio-core-tools', sessionId)
+      const handoffRelative = join(directory, 'gateway-handoff.json')
+      const systemPromptRelative = join(directory, 'system-prompt.txt')
+      const extensionRelative = join(directory, 'cio-core-tools.ts')
+      // Empty endpoint values: the gateway tools surface a clear gateway-inactive
+      // error until the first direct-gateway turn publishes the real { url, token }.
       await this.storage.writeRaw(handoffRelative, JSON.stringify({ url: '', token: '' }))
-      const handoffAbsolute = this.storage.resolve(handoffRelative)
+      await this.storage.writeRaw(systemPromptRelative, '')
       await this.storage.writeRaw(
         extensionRelative,
-        piUtilityGatewayExtension().replace(
-          '__HANDOFF_PATH__',
-          JSON.stringify(handoffAbsolute).slice(1, -1)
-        )
+        piCioCoreToolsExtension({
+          gatewayHandoffPath: this.storage.resolve(handoffRelative),
+          systemPromptPath: this.storage.resolve(systemPromptRelative)
+        })
       )
-      // Storage-relative: publishUtilityGatewayEndpoint and removeGatewayHandoff
-      // route through storage.writeRaw/removeRaw, which resolve paths themselves
-      // and reject an already-absolute one.
       this.gatewayHandoffPaths.set(sessionId, handoffRelative)
+      this.cioSystemPromptPaths.set(sessionId, systemPromptRelative)
       const extensionAbsolute = this.storage.resolve(extensionRelative)
-      this.gatewayExtensionPaths.set(sessionId, extensionAbsolute)
-      // Flush an endpoint that arrived before this materialization (first turn of
-      // a fresh session); the handoff file still holds the empty seed otherwise.
+      this.cioCoreToolsExtensionPaths.set(sessionId, extensionAbsolute)
+      // Flush an endpoint that arrived before this materialization (first turn
+      // of a fresh session); the handoff file still holds the empty seed otherwise.
       const pendingEndpoint = this.pendingGatewayEndpoints.get(sessionId)
       if (pendingEndpoint) {
         this.pendingGatewayEndpoints.delete(sessionId)
@@ -3045,37 +3085,8 @@ export class PiDriver extends PersistentCliDriver {
       }
       return extensionAbsolute
     } catch (error) {
-      // A failed materialization must never block the turn; the prose curl
-      // fallback stays fully functional without the extension.
-      Logger.dev('Pi utility gateway extension materialization failed:', error)
-      return null
-    }
-  }
-
-  private async materializeCoreToolsExtension(sessionId: string): Promise<string | null> {
-    const existing = this.coreToolsExtensionPaths.get(sessionId)
-    if (existing) return existing
-    if (this.coreToolsExtensionFailed) return null
-    try {
-      const directory = join('runtime', 'pi-core-tools', sessionId)
-      const systemPromptRelative = join(directory, 'system-prompt.txt')
-      const extensionRelative = join(directory, 'codeinoven-core-tools.ts')
-      await this.storage.writeRaw(systemPromptRelative, '')
-      const systemPromptAbsolute = this.storage.resolve(systemPromptRelative)
-      await this.storage.writeRaw(
-        extensionRelative,
-        piCoreToolsExtension().replace(
-          '__CIO_SYSTEM_PROMPT_PATH__',
-          JSON.stringify(systemPromptAbsolute).slice(1, -1)
-        )
-      )
-      this.cioSystemPromptPaths.set(sessionId, systemPromptRelative)
-      const extensionAbsolute = this.storage.resolve(extensionRelative)
-      this.coreToolsExtensionPaths.set(sessionId, extensionAbsolute)
-      return extensionAbsolute
-    } catch (error) {
-      this.coreToolsExtensionFailed = true
-      Logger.dev('Pi core-tools extension materialization failed:', error)
+      this.cioCoreToolsFailed = true
+      Logger.dev('Pi cio-core-tools extension materialization failed:', error)
       return null
     }
   }
@@ -3091,48 +3102,6 @@ export class PiDriver extends PersistentCliDriver {
       await this.storage.writeRaw(path, systemPrompt)
     } catch (error) {
       Logger.dev('Pi core-tools system-prompt handoff update failed:', error)
-    }
-  }
-
-  private async materializeStatusExtension(): Promise<string | null> {
-    if (this.statusExtensionPath) return this.statusExtensionPath
-    if (this.statusExtensionFailed) return null
-    try {
-      if (!this.statusExtensionDirectory) {
-        this.statusExtensionDirectory = await mkdtemp(join(tmpdir(), 'codeinoven-pi-status-'))
-      }
-      const path = join(this.statusExtensionDirectory, 'codeinoven-status.ts')
-      await writeFile(path, piStatusExtension(), 'utf8')
-      this.statusExtensionPath = path
-      return path
-    } catch (error) {
-      this.statusExtensionFailed = true
-      Logger.dev('Pi status extension materialization failed:', error)
-      return null
-    }
-  }
-
-  /**
-   * Write the app-owned usage extension to a shared temp file (once per
-   * driver). The cached path is reused across sessions; a failed write
-   * returns null and the session launches without usage bars instead of
-   * failing the turn.
-   */
-  private async materializeUsageExtension(): Promise<string | null> {
-    if (this.usageExtensionPath) return this.usageExtensionPath
-    if (this.usageExtensionFailed) return null
-    try {
-      if (!this.usageExtensionDirectory) {
-        this.usageExtensionDirectory = await mkdtemp(join(tmpdir(), 'codeinoven-pi-usage-'))
-      }
-      const path = join(this.usageExtensionDirectory, 'codeinoven-usage.ts')
-      await writeFile(path, piUsageExtension(), 'utf8')
-      this.usageExtensionPath = path
-      return path
-    } catch (error) {
-      this.usageExtensionFailed = true
-      Logger.dev('Pi usage extension materialization failed:', error)
-      return null
     }
   }
 
