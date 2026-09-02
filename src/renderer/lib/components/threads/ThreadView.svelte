@@ -2497,6 +2497,22 @@
     return dispose
   })
 
+  /** Turning the Independent Audit switch off undocks the coordinator AND
+   *  closes the sidebar shell that the switch opened. Tracked per thread so a
+   *  thread switch never closes another thread's coordinator tab. */
+  let independentCoordinatorThreadId = $state<string | null>(null)
+  $effect(() => {
+    const threadId = thread.id
+    if (independentAuditDisplayEnabled) {
+      independentCoordinatorThreadId = threadId
+      return
+    }
+    if (independentCoordinatorThreadId === threadId) {
+      independentCoordinatorThreadId = null
+      contextSidebarState.closeCoordinator(thread.projectId, threadId)
+    }
+  })
+
   type AssignmentAuditDisplayState = Thread['auditState'] | 'failed'
   let assignmentAuditState = $derived.by<AssignmentAuditDisplayState>(() => {
     if (auditBusy) return 'running'
