@@ -2,22 +2,25 @@
 #
 # deploy:nightly — promote the current `dev` branch into `nightly`.
 #
-# The `nightly` branch is fast-forwarded onto `dev` and pushed. Pushing to
-# `nightly` triggers `.github/workflows/nightly.yml`, which validates the
-# promotion, builds for mac/win/linux, and publishes a `v<version>-nightly.<N>`
-# prerelease with the GitHub tag created automatically by the workflow.
+# The `nightly` branch is protected by the "Protect nightly promotion" GitHub
+# ruleset (PR required, no bypass, non-fast-forward pushes rejected), so this
+# script opens a `dev` -> `nightly` pull request and enables auto-merge rather
+# than pushing directly. Once the required "Release promotion policy" status
+# check passes, GitHub merges it automatically, which triggers
+# `.github/workflows/nightly.yml`: validates the promotion, builds for
+# mac/win/linux, and publishes a `v<version>-nightly.<N>` prerelease with the
+# GitHub tag created automatically by the workflow.
 #
 # Safety net:
-#   - Requires a clean working tree (no uncommitted changes).
+#   - Requires a clean working tree (no uncommitted changes) and the `gh` CLI
+#     authenticated.
 #   - Pushes any local `dev` commits to `origin/dev` first (plain push, never
 #     force) so the promotion always reflects what's actually on origin —
 #     refuses instead if local dev and origin/dev have diverged.
-#   - Sets the machine-local `nightly` branch equal to `dev`; it never
-#     force-pushes and never rewrites history. If `nightly` has commit(s) not
-#     present on `dev` AND the content differs, the promotion is REFUSED —
-#     reconcile manually first. If `nightly` already contains `dev`'s content
-#     (e.g. a promotion landed via a reviewed PR merged directly into
-#     `nightly` instead of this script), it's treated as nothing-to-promote.
+#   - If `nightly` has commit(s) not present on `dev` AND the content differs,
+#     the promotion is REFUSED — reconcile manually first. If `nightly`
+#     already contains `dev`'s content (e.g. a promotion already merged),
+#     it's treated as nothing-to-promote.
 #   - Auto-bumps the `dev` version (patch +1) when it is not already higher
 #     than the current `nightly` version, mirroring `promotion-version.yml`.
 #   - Removes the stale `nightly` TAG (distinct from the branch) locally and on
@@ -56,6 +59,9 @@ pkg_version() {
 # --- 0. preconditions -------------------------------------------------------
 if [[ "$DRY_RUN" -eq 0 && -n "$(git status --porcelain)" ]]; then
   die "Working tree is not clean. Commit or stash your changes before promoting."
+fi
+if [[ "$DRY_RUN" -eq 0 && -z "$(command -v gh)" ]]; then
+  die "The 'gh' CLI is required to open the nightly-promotion pull request (run: brew install gh / gh auth login)."
 fi
 
 say "${C_BOLD}Resolving latest remote state...${C_RESET}"
@@ -185,24 +191,36 @@ ok "Version gate passed: dev ($DEV_VERSION) -> nightly ($NIGHTLY_VERSION)."
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
   say ""
-  read -r -p "Promote dev -> nightly and push? This triggers the nightly build/release. [y/N] " answer
+  read -r -p "Open a dev -> nightly pull request and auto-merge once checks pass? [y/N] " answer
   if [[ "${answer,,}" != "y" && "${answer,,}" != "yes" ]]; then
     die "Aborted by user."
   fi
 
-  say "Fast-forwarding nightly onto dev..."
-  git checkout nightly
-  git merge --ff-only dev
+  EXISTING_PR="$(gh pr list --base nightly --head dev --state open --json number --jq '.[0].number' 2>/dev/null || true)"
+  if [[ -n "$EXISTING_PR" ]]; then
+    PR_NUMBER="$EXISTING_PR"
+    ok "Reusing existing open PR #$PR_NUMBER (dev -> nightly)."
+  else
+    say "Opening PR: dev -> nightly..."
+    PR_URL="$(gh pr create --base nightly --head dev \
+      --title "Promote dev to nightly: $DEV_VERSION" \
+      --body "Automated nightly promotion via \`bun run deploy:nightly\`.")"
+    PR_NUMBER="$(basename "$PR_URL")"
+    ok "Opened $PR_URL"
+  fi
 
-  say "Pushing nightly..."
-  git push origin nightly
-  ok "Pushed nightly at $(git rev-parse --short nightly)."
+  say "Enabling auto-merge (merge commit) — GitHub will merge once 'Release promotion policy' passes..."
+  if ! gh pr merge "$PR_NUMBER" --merge --auto; then
+    warn "Could not enable auto-merge. Merge PR #$PR_NUMBER manually once checks pass: $(gh pr view "$PR_NUMBER" --json url --jq .url)"
+  else
+    ok "Auto-merge enabled for PR #$PR_NUMBER."
+  fi
 else
   say ""
-  say "(dry-run) git checkout nightly && git merge --ff-only dev"
-  say "(dry-run) git push origin nightly"
+  say "(dry-run) gh pr create --base nightly --head dev ..."
+  say "(dry-run) gh pr merge --merge --auto"
 fi
 
 say ""
-say "${C_BOLD}Done.${C_RESET} The nightly workflow is building; verify the prerelease "
-say "v${DEV_VERSION}-nightly-{N} appears on GitHub before promoting to main."
+say "${C_BOLD}Done.${C_RESET} Once the PR merges, the nightly workflow will build and publish "
+say "v${DEV_VERSION}-nightly-{N} — verify it on GitHub before promoting to main."
