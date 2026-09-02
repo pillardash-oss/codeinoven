@@ -110,7 +110,17 @@
    *  message cache, so paging here costs no IPC. */
   const TRACE_PAGE_SIZE = 15
   let traceWindow = $state(TRACE_PAGE_SIZE)
-  const pagedParts = $derived(visibleParts.slice(Math.max(0, visibleParts.length - traceWindow)))
+  /** A live turn streams UNBOUNDED: every entry renders the instant it lands
+   *  so wrong direction can be caught and steered early. The 15-entry page
+   *  applies to finished traces (history), which load older pages lazily on
+   *  inner scroll. When the turn folds on completion, pagination restarts. */
+  const pagedParts = $derived(
+    busy ? visibleParts : visibleParts.slice(Math.max(0, visibleParts.length - traceWindow))
+  )
+
+  $effect(() => {
+    if (!busy) traceWindow = TRACE_PAGE_SIZE
+  })
 
   /** Prepend one older page of trace entries, keeping the reader's viewport
    *  stable across the mount (same compensation the conversation list uses). */
@@ -130,7 +140,7 @@
   /** Load the next older page once the ante-penultimate rendered entry
    *  (third from the top of the current window) enters the scroller's view. */
   function maybeExpandOlderEntries(element: HTMLDivElement): void {
-    if (traceWindow >= visibleParts.length) return
+    if (busy || traceWindow >= visibleParts.length) return
     const third = element.children[2] as HTMLElement | undefined
     if (!third) return
     const scrollerRect = element.getBoundingClientRect()

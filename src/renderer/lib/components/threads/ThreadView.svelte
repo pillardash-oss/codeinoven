@@ -333,14 +333,19 @@
   let windowStartId = $state<string | null>(null)
   /** Absolute index of the first mounted message. If the anchored message
    *  left the store (truncated/deleted), fall back to the tail-relative
-   *  window without touching state — deriveds must stay pure. */
+   *  window without touching state — deriveds must stay pure. The newest
+   *  turn is always covered: [prompt][working trace][final output] may never
+   *  partially unmount, no matter how many trace entries it grows. */
   let mountedStartIndex = $derived.by(() => {
     if (hasController) return 0
     if (windowStartId) {
       const anchorIndex = messages.findIndex((message) => message.id === windowStartId)
       if (anchorIndex >= 0) return anchorIndex
     }
-    return Math.max(0, messages.length - mountedCount)
+    const countStart = Math.max(0, messages.length - mountedCount)
+    const turnStart = latestTurnInfo.startIndex
+    if (turnStart < 0) return countStart
+    return Math.min(countStart, turnStart)
   })
   /** The mounted window: everything from the reader's anchor (or the newest
    *  `mountedCount` messages) to the live tail. The message store may hold
