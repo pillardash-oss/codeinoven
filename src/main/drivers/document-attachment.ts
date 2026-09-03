@@ -4,6 +4,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { Logger } from '../system/logger'
 import type { PromptAttachment } from '../../lib/types'
+import type { Element as XmlElement, Node as XmlNode } from '@xmldom/xmldom'
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
@@ -157,11 +158,11 @@ async function readOpenDocumentBlocks(bytes: Buffer): Promise<OdtBlock[] | null>
   const xml = await entry.async('string')
   const parsed = new DOMParser().parseFromString(xml, 'text/xml')
 
-  function collectBlocks(container: Node, out: OdtBlock[]): void {
+  function collectBlocks(container: XmlNode, out: OdtBlock[]): void {
     for (let i = 0; i < container.childNodes.length; i += 1) {
       const node = container.childNodes.item(i)
-      if (node.nodeType !== node.ELEMENT_NODE) continue
-      const element = node as Element
+      if (!node || node.nodeType !== node.ELEMENT_NODE) continue
+      const element = node as XmlElement
       if (element.localName === 'h') {
         const level = Math.min(
           Math.max(Number(element.getAttributeNS(ODF_TEXT_NS, 'outline-level')) || 1, 1),
@@ -182,11 +183,11 @@ async function readOpenDocumentBlocks(bytes: Buffer): Promise<OdtBlock[] | null>
     }
   }
 
-  function collectListItems(list: Element, out: OdtBlock[]): void {
+  function collectListItems(list: XmlElement, out: OdtBlock[]): void {
     for (let i = 0; i < list.childNodes.length; i += 1) {
       const child = list.childNodes.item(i)
-      if (child.nodeType !== child.ELEMENT_NODE) continue
-      const element = child as Element
+      if (!child || child.nodeType !== child.ELEMENT_NODE) continue
+      const element = child as XmlElement
       if (element.localName !== 'list-item') continue
       const itemBlocks: OdtBlock[] = []
       collectBlocks(element, itemBlocks)
@@ -249,14 +250,14 @@ interface PptxShape {
   paragraphs: string[]
 }
 
-function parsePptxShape(shape: Element): PptxShape | null {
+function parsePptxShape(shape: XmlElement): PptxShape | null {
   const placeholder = shape.getElementsByTagName('p:ph').item(0)
   const placeholderType = placeholder?.getAttribute('type') ?? ''
   const title = placeholderType === 'title' || placeholderType === 'ctrTitle'
   const paragraphs: string[] = []
   const paragraphNodes = shape.getElementsByTagName('a:p')
   for (let i = 0; i < paragraphNodes.length; i += 1) {
-    const paragraph = paragraphNodes.item(i) as Element
+    const paragraph = paragraphNodes.item(i) as XmlElement
     const runNodes = paragraph.getElementsByTagName('a:t')
     const runs: string[] = []
     for (let j = 0; j < runNodes.length; j += 1) {
@@ -292,7 +293,7 @@ async function readPptxSlides(bytes: Buffer): Promise<PptxSlide[] | null> {
     const shapes: PptxShape[] = []
     const shapeNodes = parsed.getElementsByTagName('p:sp')
     for (let i = 0; i < shapeNodes.length; i += 1) {
-      const shape = parsePptxShape(shapeNodes.item(i) as Element)
+      const shape = parsePptxShape(shapeNodes.item(i) as XmlElement)
       if (shape) shapes.push(shape)
     }
     const titleShape = shapes.find((shape) => shape.title) ?? null

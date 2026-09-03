@@ -21,7 +21,7 @@
   "overrides": {
     "nanoid": "3.3.18",
     "uuid": "11.1.1",
-    "@xmldom/xmldom": "0.8.15",
+    "@xmldom/xmldom": "0.9.12",
     "qs": "6.16.0",
     "fast-uri": "3.1.7",
     "@codemirror/state": "^6.7.2",
@@ -68,7 +68,7 @@
     "@codemirror/view": "^6.43.10",
     "@lezer/highlight": "^1.2.3",
     "@replit/codemirror-lang-svelte": "^6.0.0",
-    "@xmldom/xmldom": "0.8.15",
+    "@xmldom/xmldom": "0.9.12",
     "better-sqlite3": "^13.0.3",
     "chokidar": "^5.0.0",
     "electron-updater": "^6.8.9",
