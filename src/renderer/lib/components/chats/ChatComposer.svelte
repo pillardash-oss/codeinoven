@@ -1770,11 +1770,14 @@
         return
       }
     }
+    // Global-on-thread toggle: works regardless of what has focus (composer,
+    // toolbox panel, or elsewhere on the thread) — like the voice shortcut.
+    // The toolbox panel handles Cmd/Ctrl+E itself while open and prevents
+    // default, so this won't immediately re-open it.
     if (
       (e.metaKey || e.ctrlKey) &&
       e.key.toLowerCase() === 'e' &&
       !e.defaultPrevented &&
-      isComposerFocused &&
       showEngineeringMode
     ) {
       e.preventDefault()
