@@ -1786,9 +1786,11 @@
   )
   /**
    * Panes: Conflicts (if any) shares the stack with Staged/Unstaged/Untracked.
-   * Each pane gets equal flex space when several exist; a lone pane fills it all.
+   * Each pane hugs its content so adjacent panes stay attached (no dead space
+   * between them), but never grows past 50% of the shared height — anything
+   * taller scrolls inside the pane.
    */
-  const paneClass = 'min-h-0 flex-1 overflow-y-auto'
+  const paneClass = 'min-h-0 max-h-[50%] overflow-y-auto'
 </script>
 
 {#snippet commitTreeNode(node: CommitTreeNode, depth: number)}
