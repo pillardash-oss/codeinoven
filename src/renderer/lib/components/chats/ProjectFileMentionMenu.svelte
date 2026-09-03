@@ -49,13 +49,13 @@
   aria-label="Composer references"
 >
   <div class="flex items-center justify-between gap-2 px-2 py-1">
-    <p class="min-w-0 truncate text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+    <p class="min-w-0 truncate text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
       {query ? `References matching “${query}”` : 'Built-in actions, files, and Assignment tasks'}
     </p>
     <Switch
       checked={cioSearchVisibility.includeCio}
       label="cio files"
-      class="text-[10px] font-semibold text-dimmed"
+      class="text-[0.625rem] font-semibold text-dimmed"
       title="Include .cio files in tag search"
       aria-label="Include .cio files in tag search"
       onmousedown={(event: MouseEvent) => event.preventDefault()}
@@ -97,15 +97,15 @@
         <span class="min-w-0 flex-1">
           {#if mention.type === 'utility'}
             <span class="block truncate">{mention.entry.name}</span>
-            <span class="block truncate text-[10px] text-dimmed"> Built-in utility setup </span>
+            <span class="block truncate text-[0.625rem] text-dimmed"> Built-in utility setup </span>
           {:else if mention.type === 'task'}
             <span class="block truncate">{mention.entry.title}</span>
-            <span class="block truncate text-[10px] capitalize text-dimmed">
+            <span class="block truncate text-[0.625rem] capitalize text-dimmed">
               Task · {mention.entry.status} · {taskWorker(mention.entry)}
             </span>
           {:else}
             <span class="block truncate">{mention.entry.name}</span>
-            <span class="block truncate text-[10px] text-dimmed">
+            <span class="block truncate text-[0.625rem] text-dimmed">
               {parentPath(mention.entry)}
             </span>
           {/if}

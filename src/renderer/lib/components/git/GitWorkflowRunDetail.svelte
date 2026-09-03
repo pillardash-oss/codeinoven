@@ -226,12 +226,12 @@
         <ArrowLeft size={13} />
       </button>
       <PackageCheck size={12} class="shrink-0 text-muted" />
-      <span class="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground">
+      <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
         {run.displayTitle}
       </span>
       <span
         class={[
-          'shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide',
+          'shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide',
           runTone()
         ]}
       >
@@ -259,7 +259,7 @@
         </button>
       {/if}
     </div>
-    <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[9px] text-dimmed">
+    <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[0.5625rem] text-dimmed">
       <span>{run.name} #{run.runNumber}</span>
       {#if run.event}
         <span>{run.event}</span>
@@ -282,7 +282,7 @@
       {#if failedJob}
         <button
           type="button"
-          class="ml-auto flex h-6 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[9px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+          class="ml-auto flex h-6 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
           title={`Review failed job ${failedJob.name} with an agent`}
           disabled={preparingAgent || loading}
           onclick={() => void reviewWithAgent(failedJob)}
@@ -299,17 +299,17 @@
   </div>
 
   {#if loading && !detail}
-    <div class="flex flex-1 items-center justify-center gap-2 text-[11px] text-dimmed">
+    <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
       <Loader2 size={13} class="animate-spin" />
       Loading workflow run details
     </div>
   {:else if error && !detail}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <CircleX size={20} class="text-danger" />
-      <p class="max-w-[42ch] text-[10px] leading-relaxed text-dimmed">{error}</p>
+      <p class="max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">{error}</p>
       <button
         type="button"
-        class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground hover:bg-elevated"
+        class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
         onclick={() => void loadDetail(true)}
       >
         Try again
@@ -321,11 +321,11 @@
       <section>
         <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
           <Terminal size={11} class="text-dimmed" />
-          <h3 class="text-[10px] font-semibold uppercase tracking-wide text-muted">Jobs</h3>
-          <span class="ml-auto text-[9px] tabular-nums text-dimmed">{detail.jobs.length}</span>
+          <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Jobs</h3>
+          <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">{detail.jobs.length}</span>
         </div>
         {#if detail.jobs.length === 0}
-          <p class="px-3 py-5 text-center text-[10px] text-dimmed">No job details are available.</p>
+          <p class="px-3 py-5 text-center text-[0.625rem] text-dimmed">No job details are available.</p>
         {:else}
           <div class="divide-y divide-border">
             {#each detail.jobs as job (job.id)}
@@ -336,17 +336,17 @@
                   onclick={() => toggleJobLog(job)}
                 >
                   <span
-                    class="shrink-0 text-[9px] font-bold leading-none {stepTone(job)}"
+                    class="shrink-0 text-[0.5625rem] font-bold leading-none {stepTone(job)}"
                     aria-hidden="true"
                   >
                     {job.status !== 'completed' ? '•' : job.conclusion === 'success' ? '✓' : '✕'}
                   </span>
-                  <span class="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground">
+                  <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
                     {job.name}
                   </span>
                   <span
                     class={[
-                      'shrink-0 rounded px-1.5 py-0.5 text-[8px] font-semibold uppercase',
+                      'shrink-0 rounded px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase',
                       jobTone(job)
                     ]}
                   >
@@ -354,7 +354,7 @@
                       ? job.status.replace('_', ' ')
                       : (job.conclusion ?? 'completed')}
                   </span>
-                  <span class="shrink-0 text-[9px] tabular-nums text-dimmed">
+                  <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
                     {jobSummary(job)}
                   </span>
                 </button>
@@ -362,9 +362,9 @@
                 {#if job.steps.length > 0}
                   <ul class="mt-1.5 space-y-0.5 border-l border-border pl-3">
                     {#each job.steps as step (step.number)}
-                      <li class="flex items-center gap-1.5 text-[9px]">
+                      <li class="flex items-center gap-1.5 text-[0.5625rem]">
                         <span
-                          class="w-2 shrink-0 text-center text-[8px] leading-none {stepTone(step)}"
+                          class="w-2 shrink-0 text-center text-[0.5rem] leading-none {stepTone(step)}"
                           aria-hidden="true"
                         >
                           {stepGlyph(step)}
@@ -384,13 +384,13 @@
                   <div class="mt-2">
                     {#if job.status !== 'completed'}
                       <div
-                        class="rounded-md bg-elevated px-2 py-2 text-[10px] leading-relaxed text-dimmed"
+                        class="rounded-md bg-elevated px-2 py-2 text-[0.625rem] leading-relaxed text-dimmed"
                       >
                         <p>Logs become available here after this job finishes.</p>
                         {#if job.url}
                           <button
                             type="button"
-                            class="mt-1.5 flex h-6 cursor-pointer items-center gap-1 text-[9px] font-medium text-foreground hover:text-primary"
+                            class="mt-1.5 flex h-6 cursor-pointer items-center gap-1 text-[0.5625rem] font-medium text-foreground hover:text-primary"
                             title="Follow this running job on GitHub"
                             onclick={() => void openInBrowser(job.url)}
                           >
@@ -400,22 +400,22 @@
                         {/if}
                       </div>
                     {:else if loadingLog[job.id]}
-                      <div class="flex items-center gap-2 py-2 text-[10px] text-dimmed">
+                      <div class="flex items-center gap-2 py-2 text-[0.625rem] text-dimmed">
                         <Loader2 size={11} class="animate-spin" />
                         Loading log…
                       </div>
                     {:else if logErrors[job.id]}
-                      <p class="rounded-md bg-danger/10 px-2 py-1.5 text-[10px] text-danger">
+                      <p class="rounded-md bg-danger/10 px-2 py-1.5 text-[0.625rem] text-danger">
                         {logErrors[job.id]}
                       </p>
                     {:else if logs[job.id]}
                       <div class="relative">
                         <pre
-                          class="max-h-64 overflow-auto rounded-md bg-black/5 p-2 font-mono text-[9px] leading-relaxed text-muted dark:bg-black/30">{logs[
+                          class="max-h-64 overflow-auto rounded-md bg-black/5 p-2 font-mono text-[0.5625rem] leading-relaxed text-muted dark:bg-black/30">{logs[
                             job.id
                           ].log}</pre>
                         {#if logs[job.id].truncated}
-                          <p class="mt-1 text-[9px] text-dimmed">
+                          <p class="mt-1 text-[0.5625rem] text-dimmed">
                             Log truncated — {job.name} may exceed the in-app limit.
                           </p>
                         {/if}

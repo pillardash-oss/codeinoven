@@ -585,7 +585,7 @@
             Inactive
             {#if inactiveCount > 0}
               <span
-                class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary"
+                class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-semibold tabular-nums text-primary"
               >
                 {inactiveCount}
               </span>
@@ -605,7 +605,7 @@
             Proposed
             {#if proposals.length > 0}
               <span
-                class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary"
+                class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-semibold tabular-nums text-primary"
               >
                 {proposals.length}
               </span>
@@ -680,7 +680,7 @@
                   <div class="min-w-0">
                     <p class="text-sm font-medium text-foreground">{row.proposal.label}</p>
                     <p class="mt-1 text-xs leading-relaxed text-muted">{row.proposal.content}</p>
-                    <p class="mt-1.5 text-[11px] capitalize text-dimmed">
+                    <p class="mt-1.5 text-[0.6875rem] capitalize text-dimmed">
                       {row.proposal.scope} · {categoryLabels[row.proposal.category]} · {row.proposal.priority}
                     </p>
                   </div>

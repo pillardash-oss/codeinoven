@@ -444,7 +444,7 @@
       >
         <ChevronLeft size={13} />
       </button>
-      <span class="text-[10px] font-medium tabular-nums text-muted">
+      <span class="text-[0.625rem] font-medium tabular-nums text-muted">
         Turn {controller.turns.length - controller.selectedIndex} of {controller.turns.length}
       </span>
       <button
@@ -469,7 +469,7 @@
       <button
         type="button"
         class={[
-          'flex h-6 items-center gap-1.5 rounded px-2.5 text-[10px] font-medium transition-colors',
+          'flex h-6 items-center gap-1.5 rounded px-2.5 text-[0.625rem] font-medium transition-colors',
           controller.mode === 'diffs' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
         ]}
         aria-pressed={controller.mode === 'diffs'}
@@ -481,7 +481,7 @@
       <button
         type="button"
         class={[
-          'flex h-6 items-center gap-1.5 rounded px-2.5 text-[10px] font-medium transition-colors',
+          'flex h-6 items-center gap-1.5 rounded px-2.5 text-[0.625rem] font-medium transition-colors',
           controller.mode === 'files' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
         ]}
         aria-pressed={controller.mode === 'files'}
@@ -513,14 +513,14 @@
       </div>
     {:else if controller.error}
       <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2">
-        <p class="text-[11px] leading-relaxed text-danger">{controller.error}</p>
+        <p class="text-[0.6875rem] leading-relaxed text-danger">{controller.error}</p>
       </div>
     {:else if controller.turns.length === 0}
       <div class="flex h-full items-center justify-center px-6 text-center">
         <div>
           <FileDiff size={22} class="mx-auto mb-2 text-dimmed" />
           <p class="text-xs font-medium text-muted">No recorded changes</p>
-          <p class="mt-1 text-[10px] text-dimmed">
+          <p class="mt-1 text-[0.625rem] text-dimmed">
             Changes appear here the moment a run edits a file.
           </p>
         </div>
@@ -531,13 +531,13 @@
         {#if controller.mode === 'diffs'}
           <div class="space-y-2">
             {#if checkpoint.status === 'active'}
-              <p class="px-1 pb-1 text-[10px] leading-relaxed text-dimmed">
+              <p class="px-1 pb-1 text-[0.625rem] leading-relaxed text-dimmed">
                 Live changes — this turn is still running.
               </p>
             {/if}
             {#if checkpoint.failure}
               <p
-                class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
+                class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
               >
                 {checkpoint.failure}
               </p>
@@ -548,7 +548,7 @@
                 Loading diffs
               </div>
             {:else if controller.fileDiffs.length === 0}
-              <p class="px-3 py-4 text-center text-[10px] text-dimmed">
+              <p class="px-3 py-4 text-center text-[0.625rem] text-dimmed">
                 {checkpoint.changes.length === 0
                   ? 'No file changes detected.'
                   : 'No file diffs are available.'}
@@ -580,16 +580,16 @@
                       onclick={() => controller.toggleDiff(fileDiff.path)}
                     >
                       <FileTypeIcon path={fileDiff.path} size={13} />
-                      <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
+                      <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">
                         {fileDiff.path}
                       </span>
                       {#if fileDiff.binary}
-                        <span class="shrink-0 text-[9px] text-dimmed">binary</span>
+                        <span class="shrink-0 text-[0.5625rem] text-dimmed">binary</span>
                       {:else if stats}
-                        <span class="shrink-0 font-mono text-[10px] tabular-nums text-success">
+                        <span class="shrink-0 font-mono text-[0.625rem] tabular-nums text-success">
                           +{stats.additions}
                         </span>
-                        <span class="shrink-0 font-mono text-[10px] tabular-nums text-danger">
+                        <span class="shrink-0 font-mono text-[0.625rem] tabular-nums text-danger">
                           −{stats.deletions}
                         </span>
                       {/if}
@@ -627,38 +627,38 @@
                 <FileDiff size={13} class="shrink-0 text-info" />
                 <span class="min-w-0 flex-1">
                   <span class="flex items-center gap-1.5">
-                    <span class="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground">
+                    <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
                       {checkpoint.label}
                     </span>
                     {#if checkpoint.status === 'active'}
                       <span
-                        class="shrink-0 rounded bg-info/10 px-1.5 py-0.5 text-[9px] font-semibold text-info"
+                        class="shrink-0 rounded bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-info"
                       >
                         In progress
                       </span>
                     {/if}
                   </span>
-                  <span class="block text-[9px] text-dimmed">
+                  <span class="block text-[0.5625rem] text-dimmed">
                     {formatDate(checkpoint.completedAt ?? checkpoint.createdAt)}
                   </span>
                 </span>
-                <span class="tabular-nums text-[10px] text-dimmed">
+                <span class="tabular-nums text-[0.625rem] text-dimmed">
                   {checkpoint.changes.length}
                 </span>
               </div>
               <div class="border-t border-border py-1">
                 {#if checkpoint.failure}
-                  <p class="px-3 py-1.5 text-[10px] leading-relaxed text-danger">
+                  <p class="px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger">
                     {checkpoint.failure}
                   </p>
                 {/if}
                 {#if checkpoint.status === 'active'}
-                  <p class="px-3 py-1.5 text-[10px] leading-relaxed text-dimmed">
+                  <p class="px-3 py-1.5 text-[0.625rem] leading-relaxed text-dimmed">
                     This turn is still running — files update here as the agent edits them.
                   </p>
                 {/if}
                 {#if checkpoint.changes.length === 0}
-                  <p class="px-3 py-2 text-[10px] text-dimmed">No file changes detected.</p>
+                  <p class="px-3 py-2 text-[0.625rem] text-dimmed">No file changes detected.</p>
                 {:else}
                   {#each checkpoint.changes as change (`${change.kind}:${change.path}`)}
                     <div
@@ -674,7 +674,7 @@
                       {/if}
                       <span
                         class={[
-                          'w-4 shrink-0 text-center font-mono text-[10px] font-semibold',
+                          'w-4 shrink-0 text-center font-mono text-[0.625rem] font-semibold',
                           change.kind === 'created'
                             ? 'text-success'
                             : change.kind === 'deleted'
@@ -686,13 +686,13 @@
                       </span>
                       <FileTypeIcon path={change.path} />
                       {#if checkpoint.status === 'active'}
-                        <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
+                        <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">
                           {change.path}
                         </span>
                       {:else}
                         <button
                           type="button"
-                          class="min-w-0 flex-1 truncate text-left font-mono text-[10px] text-muted hover:text-foreground"
+                          class="min-w-0 flex-1 truncate text-left font-mono text-[0.625rem] text-muted hover:text-foreground"
                           title={`Open ${change.path}`}
                           onclick={() => void controller.openChange(checkpoint.id, change.path)}
                         >
@@ -700,7 +700,7 @@
                         </button>
                       {/if}
                       {#if change.binary}
-                        <span class="text-[9px] text-dimmed">binary</span>
+                        <span class="text-[0.5625rem] text-dimmed">binary</span>
                       {/if}
                     </div>
                   {/each}
@@ -708,7 +708,7 @@
                     <div class="flex items-center gap-2 border-t border-border px-3 py-2">
                       <button
                         type="button"
-                        class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                        class="rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
                         disabled={controller.restoringId === checkpoint.id ||
                           (controller.selections[checkpoint.id] ?? []).length === 0}
                         onclick={() => void controller.restoreSelected(checkpoint.id)}
@@ -717,7 +717,7 @@
                       </button>
                       <button
                         type="button"
-                        class="rounded-md px-2 py-1 text-[10px] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
+                        class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
                         disabled={controller.restoringId === checkpoint.id}
                         onclick={() => void controller.restoreRun(checkpoint.id)}
                       >

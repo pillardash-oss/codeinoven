@@ -166,39 +166,39 @@
 
 {#snippet dirActions(node: TreeNode)}
   <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
     onSelect={() => onStagePaths(allPathsFor(node), false)}
   >
     <Check size={12} class="text-success" />
     Stage all
   </ContextMenu.Item>
   <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
     onSelect={() => onStagePaths(allPathsFor(node), true)}
   >
-    <span class="inline-block w-3 text-center text-[10px] text-danger">−</span>
+    <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span>
     Unstage all
   </ContextMenu.Item>
   <ContextMenu.Separator class="my-1 h-px bg-border" />
   <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
     onSelect={() => onStashPaths(allPathsFor(node))}
   >
-    <span class="inline-block w-3 text-center text-[10px]">↓</span>
+    <span class="inline-block w-3 text-center text-[0.625rem]">↓</span>
     Stash directory…
   </ContextMenu.Item>
   <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
     onSelect={() => onIgnorePaths([node.path])}
   >
-    <span class="inline-block w-3 text-center text-[10px]">⊘</span>
+    <span class="inline-block w-3 text-center text-[0.625rem]">⊘</span>
     Add directory to gitignore
   </ContextMenu.Item>
   <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated"
+    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
     onSelect={() => onDiscardPaths(allPathsFor(node))}
   >
-    <span class="inline-block w-3 text-center text-[10px]">⌫</span>
+    <span class="inline-block w-3 text-center text-[0.625rem]">⌫</span>
     Discard changes
   </ContextMenu.Item>
 {/snippet}
@@ -206,26 +206,26 @@
 {#snippet fileActions(change: GitFileChange)}
   {#if change.status === 'conflicted'}
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
       onSelect={() => onResolveConflict?.(change.path)}
     >
       <GitMerge size={12} class="text-warning" />
       Resolve conflict…
     </ContextMenu.Item>
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
       onSelect={() => onOpenInEditor(change.path)}
     >
-      <span class="inline-block w-3 text-center text-[10px]">✎</span>
+      <span class="inline-block w-3 text-center text-[0.625rem]">✎</span>
       Open in editor
     </ContextMenu.Item>
   {:else}
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
       onSelect={() => onToggleStage(change)}
     >
       {#if change.staged}
-        <span class="inline-block w-3 text-center text-[10px] text-danger">−</span>
+        <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span>
         Unstage file
       {:else}
         <Check size={12} class="text-success" />
@@ -234,32 +234,32 @@
     </ContextMenu.Item>
     <ContextMenu.Separator class="my-1 h-px bg-border" />
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
       onSelect={() => onStashPaths([change.path])}
     >
-      <span class="inline-block w-3 text-center text-[10px]">↓</span>
+      <span class="inline-block w-3 text-center text-[0.625rem]">↓</span>
       Stash file…
     </ContextMenu.Item>
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
       onSelect={() => onOpenInEditor(change.path)}
     >
-      <span class="inline-block w-3 text-center text-[10px]">✎</span>
+      <span class="inline-block w-3 text-center text-[0.625rem]">✎</span>
       Open
     </ContextMenu.Item>
     <ContextMenu.Separator class="my-1 h-px bg-border" />
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
       onSelect={() => onIgnorePaths([change.path])}
     >
-      <span class="inline-block w-3 text-center text-[10px]">⊘</span>
+      <span class="inline-block w-3 text-center text-[0.625rem]">⊘</span>
       Add to gitignore
     </ContextMenu.Item>
     <ContextMenu.Item
-      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated"
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
       onSelect={() => onDiscardPaths([change.path])}
     >
-      <span class="inline-block w-3 text-center text-[10px]">⌫</span>
+      <span class="inline-block w-3 text-center text-[0.625rem]">⌫</span>
       Discard changes
     </ContextMenu.Item>
   {/if}
@@ -325,26 +325,26 @@
         {/if}
         <span
           class={[
-            'w-4 shrink-0 text-center font-mono text-[10px] font-semibold',
+            'w-4 shrink-0 text-center font-mono text-[0.625rem] font-semibold',
             statusColor(change)
           ]}
         >
           {statusLetter(change)}
         </span>
         <FileTypeIcon path={change.path} size={13} class="shrink-0" />
-        <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
+        <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">
           {change.path.split('/').pop()}
         </span>
         {#if diffs[key] && !diffs[key].binary}
-          <span class="shrink-0 font-mono text-[9px] tabular-nums text-success">
+          <span class="shrink-0 font-mono text-[0.5625rem] tabular-nums text-success">
             +{diffs[key].additions}
           </span>
-          <span class="shrink-0 font-mono text-[9px] tabular-nums text-danger">
+          <span class="shrink-0 font-mono text-[0.5625rem] tabular-nums text-danger">
             −{diffs[key].deletions}
           </span>
         {/if}
         {#if loadingDiff[key]}
-          <span class="shrink-0 text-[9px] text-dimmed">…</span>
+          <span class="shrink-0 text-[0.5625rem] text-dimmed">…</span>
         {:else if expanded[key]}
           <ChevronDown size={12} class="shrink-0 text-dimmed" />
         {:else}
@@ -368,18 +368,18 @@
   {#if expanded[key]}
     <div class="border-t border-border bg-app/50 pl-7">
       {#if loadingDiff[key]}
-        <p class="px-3 py-4 text-[10px] text-dimmed">Loading diff…</p>
+        <p class="px-3 py-4 text-[0.625rem] text-dimmed">Loading diff…</p>
       {:else if diffErrors[key]}
-        <p class="px-3 py-4 text-[10px] text-danger" role="alert">{diffErrors[key]}</p>
+        <p class="px-3 py-4 text-[0.625rem] text-danger" role="alert">{diffErrors[key]}</p>
       {:else if viewDiff}
         <FileDiffView diff={viewDiff} maxHeight="18rem" />
         {#if viewDiff.truncated}
-          <p class="border-t border-border px-3 py-1 text-[9px] text-dimmed">
+          <p class="border-t border-border px-3 py-1 text-[0.5625rem] text-dimmed">
             Diff truncated to a bounded preview
           </p>
         {/if}
       {:else}
-        <p class="px-3 py-4 text-[10px] text-dimmed">No diff available.</p>
+        <p class="px-3 py-4 text-[0.625rem] text-dimmed">No diff available.</p>
       {/if}
     </div>
   {/if}
@@ -438,10 +438,10 @@
           <ChevronRight size={12} class="shrink-0 text-dimmed" />
           <Folder size={13} class="shrink-0 text-warning" />
         {/if}
-        <span class="min-w-0 flex-1 truncate text-[10px] font-medium text-foreground">
+        <span class="min-w-0 flex-1 truncate text-[0.625rem] font-medium text-foreground">
           {node.name}
         </span>
-        <span class="shrink-0 text-[9px] tabular-nums text-dimmed">
+        <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
           {filesFor(node).length}
         </span>
       </button>
@@ -499,10 +499,10 @@
           />
         </span>
       {/if}
-      <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
+      <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
         {section.title}
       </span>
-      <span class="text-[8px] tabular-nums text-dimmed">{section.files.length}</span>
+      <span class="text-[0.5rem] tabular-nums text-dimmed">{section.files.length}</span>
     </div>
 
     {#if tree.dirs.size > 0 || tree.files.length > 0}

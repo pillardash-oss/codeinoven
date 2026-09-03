@@ -39,7 +39,7 @@
 
 <div class="overflow-hidden rounded-lg border bg-elevated" data-long-text-block={text.length}>
   <div class="flex h-7 items-center justify-between border-b px-3">
-    <span class="font-mono text-[10px] uppercase tracking-wide text-dimmed">
+    <span class="font-mono text-[0.625rem] uppercase tracking-wide text-dimmed">
       long text · {text.length.toLocaleString()} chars
     </span>
     <div class="flex items-center gap-1">
@@ -78,7 +78,7 @@
     {#if hiddenCount > 0}
       <button
         type="button"
-        class="w-full border-t px-3 py-1.5 text-left text-[11px] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+        class="w-full border-t px-3 py-1.5 text-left text-[0.6875rem] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
         onclick={() => (expanded = true)}
       >
         Show {hiddenCount.toLocaleString()} more characters…

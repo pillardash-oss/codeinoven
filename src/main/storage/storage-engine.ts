@@ -40,6 +40,9 @@ import { DEFAULT_SPEECH_SETTINGS } from '../../lib/speech/types'
 
 const DEFAULT_CONFIG: AppConfig = {
   theme: 'system',
+  fontFamily: 'jetbrains-mono',
+  appFontSize: 15,
+  zoomLevel: 1,
   onboardingCompleted: false,
   threadLimit: 70,
   questionTimeoutMs: 300_000,

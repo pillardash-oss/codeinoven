@@ -642,11 +642,11 @@
   {#snippet sidebarExtra()}
     <div class="border-t p-3">
       <div class="flex items-center justify-between gap-2">
-        <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+        <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
           Assignment checks
         </p>
         <span
-          class="text-[10px] tabular-nums {validation.issues.length ? 'text-danger' : 'text-dimmed'}"
+          class="text-[0.625rem] tabular-nums {validation.issues.length ? 'text-danger' : 'text-dimmed'}"
         >
           {validation.issues.length}
         </span>
@@ -655,14 +655,14 @@
         {#each validation.issues as issue (`${issue.code}:${issue.path}`)}
           <div class="rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-2">
             <p class="text-xs leading-relaxed text-foreground">{issue.message}</p>
-            <p class="mt-0.5 truncate font-mono text-[9px] text-dimmed" title={issue.path}>
+            <p class="mt-0.5 truncate font-mono text-[0.5625rem] text-dimmed" title={issue.path}>
               {issue.path}
             </p>
           </div>
         {:else}
           <div class="flex items-center gap-2 rounded-lg border border-dashed px-2.5 py-3">
             <Check size={13} class="text-primary" />
-            <p class="text-[11px] text-dimmed">Ready to assign.</p>
+            <p class="text-[0.6875rem] text-dimmed">Ready to assign.</p>
           </div>
         {/each}
       </div>

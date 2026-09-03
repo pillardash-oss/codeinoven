@@ -314,7 +314,7 @@
           onclick={() => onOpenAnnotation?.(annotation)}
         >
           <span class="line-clamp-2 block text-xs leading-relaxed">{annotation.body}</span>
-          <span class="mt-1 block text-[10px] text-dimmed">{annotation.author}</span>
+          <span class="mt-1 block text-[0.625rem] text-dimmed">{annotation.author}</span>
         </button>
       {/each}
     </div>
@@ -512,12 +512,12 @@
                   ><MessageSquarePlus size={13} /></button
                 >
               {/if}
-              <span class="rounded bg-overlay px-1.5 py-0.5 text-[10px] text-muted">
+              <span class="rounded bg-overlay px-1.5 py-0.5 text-[0.625rem] text-muted">
                 {task.owner === 'senior' ? 'Sr. Engineer' : 'Worker'}
               </span>
               {#if displayedReworkCycle}
                 <span
-                  class="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold text-warning"
+                  class="rounded bg-warning/10 px-1.5 py-0.5 text-[0.625rem] font-semibold text-warning"
                 >
                   Rework {displayedReworkCycle} · Assignment v{task.workAssignmentVersion ??
                     assignmentVersion ??
@@ -534,7 +534,7 @@
               onChange={(value) => updateTaskText(task.id, 'description', value)}
             />
             <details class="rounded-md bg-elevated/60 px-2 py-1.5">
-              <summary class="cursor-pointer text-[10px] font-semibold uppercase text-dimmed">
+              <summary class="cursor-pointer text-[0.625rem] font-semibold uppercase text-dimmed">
                 Worker prompt
               </summary>
               <EditableMarkdown
@@ -547,7 +547,7 @@
               />
             </details>
             <div class="flex flex-wrap items-center justify-between gap-2 border-t pt-2">
-              <p class="text-[10px] text-dimmed">
+              <p class="text-[0.625rem] text-dimmed">
                 Waits for: {task.dependsOn.join(', ') || 'nothing'}
               </p>
               {#if canUpdateTaskModel(task)}

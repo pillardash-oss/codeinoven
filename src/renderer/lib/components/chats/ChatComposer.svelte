@@ -1946,7 +1946,7 @@
         </button>
       </div>
       {#if !gateVisionSelection}
-        <p class="mt-1.5 text-[11px] text-dimmed">
+        <p class="mt-1.5 text-[0.6875rem] text-dimmed">
           No vision model selected — Continue is disabled until you pick one.
         </p>
       {/if}
@@ -1997,11 +1997,11 @@
               project={projectContext}
               class="min-w-0 max-w-48"
               nameClass="text-xs font-medium text-foreground"
-              locationClass="text-[9px] text-dimmed"
+              locationClass="text-[0.5625rem] text-dimmed"
               showLocation={hasProjectNameCollision(projectContext, scopeState.projectRecords)}
             />
             <span
-              class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] text-muted"
+              class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
             >
               {#if projectContext.source === 'ssh'}
                 <Globe size={9} />
@@ -2012,7 +2012,7 @@
             </span>
             {#if projectContext.branch}
               <span
-                class="flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] text-muted"
+                class="flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
                 title={branchPillTitle}
               >
                 <GitBranch size={9} class="shrink-0" />
@@ -2025,7 +2025,7 @@
           <div class="flex flex-wrap items-center gap-1.5" aria-label="Active chat modes">
             {#if resolved.fileSystemMode}
               <span
-                class="flex shrink-0 items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[10px] text-info"
+                class="flex shrink-0 items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.625rem] text-info"
               >
                 <HardDrive size={9} class="shrink-0" />
                 <span>File System</span>
@@ -2051,7 +2051,7 @@
             onmouseleave={scheduleStartAfterPopoverClose}
           >
             <div
-              class="flex items-center rounded-lg border border-info/30 bg-info/10 text-[10px] font-medium text-info transition-colors hover:bg-info/15"
+              class="flex items-center rounded-lg border border-info/30 bg-info/10 text-[0.625rem] font-medium text-info transition-colors hover:bg-info/15"
             >
               <button
                 type="button"
@@ -2091,7 +2091,7 @@
                 onmouseleave={scheduleStartAfterPopoverClose}
               >
                 <div
-                  class="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                  class="px-2 pb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
                 >
                   Starts after thread{startAfterThreads.length === 1 ? '' : 's'}
                 </div>
@@ -2134,7 +2134,7 @@
           onmouseleave={scheduleSelectionPopoverClose}
         >
           <div
-            class="flex items-center rounded-lg border border-accent/30 bg-accent/10 text-[11px] font-medium text-foreground transition-colors hover:bg-accent/15"
+            class="flex items-center rounded-lg border border-accent/30 bg-accent/10 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-accent/15"
           >
             <button
               type="button"
@@ -2182,7 +2182,7 @@
           {#each attachments as file, i (file.url)}
             {@const previewKind = attachmentPreviewKind(file.mime, file.filename ?? '')}
             <div
-              class="flex items-stretch overflow-hidden rounded-lg border border-border bg-elevated text-[11px] text-muted transition-colors"
+              class="flex items-stretch overflow-hidden rounded-lg border border-border bg-elevated text-[0.6875rem] text-muted transition-colors"
             >
               {#if previewKind}
                 <button
@@ -2380,7 +2380,7 @@
                 {#if startAfterEnabled}
                   {#each startAfterThreads as startAfterThread (startAfterThread.id)}
                     <div class="flex items-center gap-1 px-1">
-                      <span class="min-w-0 flex-1 truncate px-1.5 py-0.5 text-[11px] text-info">
+                      <span class="min-w-0 flex-1 truncate px-1.5 py-0.5 text-[0.6875rem] text-info">
                         {startAfterThread.title}
                       </span>
                       <button
@@ -2396,7 +2396,7 @@
                   {/each}
                   <button
                     type="button"
-                    class="flex w-full items-center rounded-lg px-2.5 py-1 text-left text-[11px] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                    class="flex w-full items-center rounded-lg px-2.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                     role="menuitem"
                     title="Add another thread to Start after"
                     onclick={openStartAfterPicker}
@@ -2450,7 +2450,7 @@
     <!-- Permission level selector -->
     {#if readOnlyMode}
       <span
-        class="flex items-center gap-1 rounded-lg bg-raised px-2 py-1.5 text-[11px] text-muted"
+        class="flex items-center gap-1 rounded-lg bg-raised px-2 py-1.5 text-[0.6875rem] text-muted"
         title="Temporary chats can inspect context but cannot modify files or run commands"
       >
         <Shield size={12} />
@@ -2460,7 +2460,7 @@
       <div class="relative">
         <button
           type="button"
-          class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] transition-colors hover:bg-elevated {resolved.permissionLevel ===
+          class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[0.6875rem] transition-colors hover:bg-elevated {resolved.permissionLevel ===
           'full_access'
             ? 'font-bold text-warning'
             : 'text-muted hover:text-foreground'}"
@@ -2493,7 +2493,7 @@
             class="absolute bottom-9 left-0 z-40 w-36 rounded-xl border bg-surface p-1 shadow-lg"
           >
             {#if working}
-              <p class="px-2 pb-1 pt-1 text-[9px] text-dimmed">Applies to the next turn</p>
+              <p class="px-2 pb-1 pt-1 text-[0.5625rem] text-dimmed">Applies to the next turn</p>
             {/if}
             {#each Object.entries(permissionLabels) as [level, label] (level)}
               <button
@@ -2592,7 +2592,7 @@
               >
                 <span class="flex flex-col">
                   <span>Fast</span>
-                  <span class="text-[10px] text-muted">~{fastVariant.multiplier}× usage</span>
+                  <span class="text-[0.625rem] text-muted">~{fastVariant.multiplier}× usage</span>
                 </span>
               </button>
             </div>
@@ -2657,7 +2657,7 @@
         onclick={() => submit()}
       >
         {#if pendingStop}
-          <span class="pending-stop-label text-[9px] font-semibold">Stop?</span>
+          <span class="pending-stop-label text-[0.5625rem] font-semibold">Stop?</span>
           <span class="pending-stop-icon">
             <Square size={14} />
           </span>

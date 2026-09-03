@@ -60,7 +60,7 @@
   role="dialog"
   aria-label="Go to line"
 >
-  <label for="project-file-go-to-line" class="shrink-0 text-[11px] font-medium text-muted">
+  <label for="project-file-go-to-line" class="shrink-0 text-[0.6875rem] font-medium text-muted">
     Line
   </label>
   <input
@@ -76,10 +76,10 @@
     oninput={handleInput}
     onkeydown={handleKeydown}
   />
-  <span class="shrink-0 text-[10px] tabular-nums text-dimmed">/ {maxLine}</span>
+  <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">/ {maxLine}</span>
   <button
     type="button"
-    class="flex h-7 shrink-0 items-center justify-center rounded-lg bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+    class="flex h-7 shrink-0 items-center justify-center rounded-lg bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
     disabled={!value}
     onclick={submit}
   >

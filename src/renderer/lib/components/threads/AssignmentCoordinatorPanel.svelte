@@ -257,7 +257,7 @@
           <p class="text-2xl font-semibold tabular-nums text-foreground">
             {completed}/{assignment.content.tasks.length}
           </p>
-          <p class="text-[10px] uppercase tracking-wide text-dimmed">tasks complete</p>
+          <p class="text-[0.625rem] uppercase tracking-wide text-dimmed">tasks complete</p>
         </div>
         <p class="text-xs font-medium tabular-nums text-muted">{progress}%</p>
       </div>
@@ -270,23 +270,23 @@
       <div class="mt-3 grid grid-cols-5 gap-1 text-center">
         <div>
           <p class="text-sm font-semibold tabular-nums text-success">{completed}</p>
-          <p class="text-[9px] uppercase text-dimmed">Done</p>
+          <p class="text-[0.5625rem] uppercase text-dimmed">Done</p>
         </div>
         <div>
           <p class="text-sm font-semibold tabular-nums text-info">{running}</p>
-          <p class="text-[9px] uppercase text-dimmed">Active</p>
+          <p class="text-[0.5625rem] uppercase text-dimmed">Active</p>
         </div>
         <div>
           <p class="text-sm font-semibold tabular-nums text-warning">{blocked}</p>
-          <p class="text-[9px] uppercase text-dimmed">Blocked</p>
+          <p class="text-[0.5625rem] uppercase text-dimmed">Blocked</p>
         </div>
         <div>
           <p class="text-sm font-semibold tabular-nums text-muted">{pending}</p>
-          <p class="text-[9px] uppercase text-dimmed">Pending</p>
+          <p class="text-[0.5625rem] uppercase text-dimmed">Pending</p>
         </div>
         <div>
           <p class="text-sm font-semibold tabular-nums text-danger">{attention}</p>
-          <p class="text-[9px] uppercase text-dimmed">Attention</p>
+          <p class="text-[0.5625rem] uppercase text-dimmed">Attention</p>
         </div>
       </div>
     </section>
@@ -317,7 +317,7 @@
 
     {#if auditThread && !finalComplete}
       <section class="border-b border-border py-3" aria-label="Audit thread">
-        <h3 class="px-4 pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+        <h3 class="px-4 pb-2 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
           Audit
         </h3>
         <div class="px-2">
@@ -333,7 +333,7 @@
     {/if}
 
     <section class="p-4" aria-label="Assignment tasks">
-      <h3 class="pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">Tasks</h3>
+      <h3 class="pb-2 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Tasks</h3>
       <div class="space-y-1">
         {#each assignment.content.tasks as task, taskIndex (task.id)}
           {@const linkedWorker = linkedThread(task.threadId)}
@@ -359,7 +359,7 @@
                 >
                 {#if reworkCycle}
                   <span
-                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold text-warning"
+                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-warning"
                   >
                     Rework {reworkCycle}
                   </span>
@@ -367,16 +367,16 @@
               </span>
               <span class="mt-0.5 flex items-center gap-1.5">
                 <span
-                  class="shrink-0 text-[10px] font-medium tabular-nums text-dimmed"
+                  class="shrink-0 text-[0.625rem] font-medium tabular-nums text-dimmed"
                   aria-hidden="true">{taskNumber}.</span
                 >
-                <span class="min-w-0 truncate text-[10px] text-dimmed">
+                <span class="min-w-0 truncate text-[0.625rem] text-dimmed">
                   {workerLabel(task)}
                 </span>
               </span>
             </span>
             <span
-              class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium capitalize {statusClass(
+              class="shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium capitalize {statusClass(
                 task.status
               )}"
             >

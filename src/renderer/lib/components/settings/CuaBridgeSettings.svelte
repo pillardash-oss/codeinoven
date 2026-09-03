@@ -166,15 +166,15 @@
     {#if status}
       <div class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div class="rounded-xl bg-elevated px-3 py-2.5">
-          <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Installed</p>
+          <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Installed</p>
           <p class="mt-1 text-sm font-medium">{status.version ?? 'Not detected'}</p>
         </div>
         <div class="rounded-xl bg-elevated px-3 py-2.5">
-          <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Supported</p>
+          <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Supported</p>
           <p class="mt-1 text-sm font-medium">{status.supportedVersionRange}</p>
         </div>
         <div class="rounded-xl bg-elevated px-3 py-2.5">
-          <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Permissions</p>
+          <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Permissions</p>
           <p class="mt-1 text-sm font-medium">
             {status.permissionStatus === 'not_required'
               ? 'Platform managed'
@@ -186,7 +186,7 @@
           </p>
         </div>
         <div class="rounded-xl bg-elevated px-3 py-2.5">
-          <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Daemon</p>
+          <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Daemon</p>
           <p class="mt-1 text-sm font-medium">
             {status.daemonRunning
               ? 'Running'
@@ -258,7 +258,7 @@
           </p>
         </div>
         <span
-          class="rounded-md bg-elevated px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted"
+          class="rounded-md bg-elevated px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
         >
           Selected by CodeInOven
         </span>
@@ -268,7 +268,7 @@
         {selectedInstallation.path}
       </code>
       {#if selectedInstallation.path !== selectedInstallation.realPath}
-        <p class="mt-1.5 break-all text-[11px] text-dimmed">
+        <p class="mt-1.5 break-all text-[0.6875rem] text-dimmed">
           Resolves to {selectedInstallation.realPath}
         </p>
       {/if}
@@ -287,7 +287,7 @@
             <SquareTerminal size={15} class="mt-0.5 shrink-0 text-muted" />
             <div>
               <p class="text-xs font-semibold">Update the installed copy</p>
-              <p class="mt-1 text-[11px] leading-relaxed text-muted">
+              <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
                 Run this exact command in a terminal. It uses Cua's supported updater and updates
                 the app and CLI together.
               </p>
@@ -317,12 +317,12 @@
       {#if otherInstallations.length > 0}
         <div class="mt-4 border-t pt-4">
           <p class="text-xs font-semibold">Other copies found</p>
-          <p class="mt-1 text-[11px] text-muted">
+          <p class="mt-1 text-[0.6875rem] text-muted">
             CodeInOven prefers a compatible signed app, then the newest compatible executable.
           </p>
           <ul class="mt-2 space-y-2">
             {#each otherInstallations as installation (installation.realPath)}
-              <li class="text-[11px] text-muted">
+              <li class="text-[0.6875rem] text-muted">
                 <span class="font-medium text-foreground">
                   Cua {installation.version ?? 'version unknown'}
                 </span>
@@ -344,7 +344,7 @@
       {#each setupSteps as step, index (step)}
         <li class="flex items-start gap-2.5 text-xs leading-relaxed text-muted">
           <span
-            class="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-elevated text-[10px] font-semibold text-foreground"
+            class="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-elevated text-[0.625rem] font-semibold text-foreground"
             >{index + 1}</span
           >
           <span>{step}</span>
@@ -368,14 +368,14 @@
     <div class="mt-3 grid gap-3 sm:grid-cols-2">
       <div class="rounded-lg bg-elevated p-3">
         <p class="text-xs font-semibold">Auto Review</p>
-        <p class="mt-1 text-[11px] leading-relaxed text-muted">
+        <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
           Cua runs in standard mode. Routine desktop actions proceed; explicitly denied boundaries
           return to the thread for permission.
         </p>
       </div>
       <div class="rounded-lg bg-elevated p-3">
         <p class="text-xs font-semibold">Full Access</p>
-        <p class="mt-1 text-[11px] leading-relaxed text-muted">
+        <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
           Cua runs in unrestricted mode with its required acknowledgement. Platform invariants and
           managed policies still apply.
         </p>

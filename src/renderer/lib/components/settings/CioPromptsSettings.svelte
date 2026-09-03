@@ -154,7 +154,7 @@
       </p>
     </div>
     <div
-      class="shrink-0 rounded-lg border bg-elevated px-2.5 py-1.5 font-mono text-[11px] text-muted"
+      class="shrink-0 rounded-lg border bg-elevated px-2.5 py-1.5 font-mono text-[0.6875rem] text-muted"
     >
       prompts/*.md
     </div>
@@ -171,8 +171,8 @@
         <div class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
           {#each CIO_PROMPT_TEMPLATE_TAGS as item (item.tag)}
             <div class="rounded-lg bg-elevated px-3 py-2">
-              <code class="text-[11px] font-semibold text-primary">{item.tag}</code>
-              <p class="mt-0.5 text-[11px] leading-relaxed text-dimmed">{item.description}</p>
+              <code class="text-[0.6875rem] font-semibold text-primary">{item.tag}</code>
+              <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-dimmed">{item.description}</p>
             </div>
           {/each}
         </div>
@@ -243,7 +243,7 @@
             >
               {group}
             </h2>
-            <span class="text-[11px] tabular-nums text-dimmed">{promptsInGroup(group).length}</span>
+            <span class="text-[0.6875rem] tabular-nums text-dimmed">{promptsInGroup(group).length}</span>
           </div>
           <div class="divide-y rounded-xl border bg-surface">
             {#each promptsInGroup(group) as prompt (prompt.id)}
@@ -255,16 +255,16 @@
                       <h3 class="text-sm font-semibold text-foreground">{prompt.title}</h3>
                       {#if prompt.customized}
                         <span
-                          class="rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold text-accent"
+                          class="rounded-md bg-accent/15 px-1.5 py-0.5 text-[0.625rem] font-semibold text-accent"
                           >Customized</span
                         >
                       {/if}
                     </div>
                     <p class="mt-0.5 text-xs leading-relaxed text-muted">{prompt.description}</p>
                     <div class="mt-2 flex flex-wrap items-center gap-1.5">
-                      <code class="text-[10px] text-dimmed">prompts/{prompt.filename}</code>
+                      <code class="text-[0.625rem] text-dimmed">prompts/{prompt.filename}</code>
                       {#each prompt.modes as promptMode (promptMode)}
-                        <span class="rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted"
+                        <span class="rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted"
                           >{promptMode}</span
                         >
                       {/each}
@@ -347,7 +347,7 @@
                     </div>
                     {#if savedId === prompt.id}
                       <p
-                        class="mt-2 flex items-center gap-1 text-[11px] text-success"
+                        class="mt-2 flex items-center gap-1 text-[0.6875rem] text-success"
                         role="status"
                       >
                         <Check size={12} /> Saved

@@ -3887,6 +3887,12 @@ export interface MemoryImportPreview {
 
 export interface AppConfig {
   theme: ThemePreference
+  /** Font family id used across the app UI. */
+  fontFamily: string
+  /** Base font size in px for the app UI; scales all rem-based text. */
+  appFontSize: number
+  /** UI zoom level (Electron zoomFactor). 1 = 100%. */
+  zoomLevel: number
   /** True after the user finishes or dismisses the first-run setup guide. */
   onboardingCompleted: boolean
   threadLimit: number
@@ -3953,6 +3959,9 @@ export type AppConfigPatch = Partial<
   Pick<
     AppConfig,
     | 'theme'
+    | 'fontFamily'
+    | 'appFontSize'
+    | 'zoomLevel'
     | 'onboardingCompleted'
     | 'threadLimit'
     | 'questionTimeoutMs'

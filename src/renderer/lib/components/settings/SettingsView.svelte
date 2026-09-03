@@ -3,6 +3,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { isOverlayOpen } from '$lib/overlay-close.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
+  import { FONT_FAMILY_OPTIONS, ZOOM_LEVEL_OPTIONS } from '$lib/stores/app-config.svelte'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
@@ -439,7 +440,7 @@
         {@const Icon = tab.icon}
         {@const isActive = section === tab.id}
         <button
-          class="flex w-full items-center gap-2 border-l-2 px-2 py-1.5 text-left text-[13px] transition-colors {isActive
+          class="flex w-full items-center gap-2 border-l-2 px-2 py-1.5 text-left text-[0.8125rem] transition-colors {isActive
             ? 'border-foreground bg-elevated text-foreground'
             : 'border-transparent text-muted hover:border-border-strong hover:bg-elevated hover:text-foreground'}"
           aria-current={isActive ? 'page' : undefined}
@@ -516,6 +517,73 @@
                 {/each}
               </div>
             </div>
+            <div class="mt-3 flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Font</p>
+                <p class="text-xs text-dimmed">Typeface used across the app</p>
+              </div>
+              <select
+                class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                value={config.fontFamily}
+                disabled={!settingsReady}
+                aria-label="App font"
+                onchange={(event: SelectChangeEvent) =>
+                  void updateConfig({ fontFamily: event.currentTarget.value })}
+              >
+                {#each FONT_FAMILY_OPTIONS as option (option.id)}
+                  <option value={option.id}>{option.label}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="mt-3 flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Base font size</p>
+                <p class="text-xs text-dimmed">Scales all text in the app</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-dimmed">{config.appFontSize}px</span>
+                <input
+                  type="range"
+                  min="12"
+                  max="18"
+                  step="1"
+                  value={config.appFontSize}
+                  disabled={!settingsReady}
+                  aria-label="Base font size"
+                  title="Adjust the base font size"
+                  onchange={(event) => {
+                    const input = event.currentTarget
+                    if (!(input instanceof HTMLInputElement)) return
+                    const size = Number(input.value)
+                    if (Number.isInteger(size) && size >= 12 && size <= 18) {
+                      void updateConfig({ appFontSize: size })
+                    }
+                  }}
+                />
+              </div>
+            </div>
+            <div class="mt-3 flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Zoom</p>
+                <p class="text-xs text-dimmed">Magnify the whole interface</p>
+              </div>
+              <select
+                class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                value={config.zoomLevel}
+                disabled={!settingsReady}
+                aria-label="Interface zoom"
+                onchange={(event: SelectChangeEvent) => {
+                  const zoom = Number(event.currentTarget.value)
+                  if (Number.isFinite(zoom) && zoom >= 0.5 && zoom <= 2) {
+                    void updateConfig({ zoomLevel: zoom })
+                  }
+                }}
+              >
+                {#each ZOOM_LEVEL_OPTIONS as option (option.id)}
+                  <option value={option.id}>{option.label}</option>
+                {/each}
+              </select>
+            </div>
           </div>
 
           <!-- Notifications -->
@@ -529,7 +597,7 @@
                 <p class="text-xs text-dimmed">
                   Alert when an agent finishes, needs attention, or encounters an error
                 </p>
-                <p class="mt-1 text-[11px] text-dimmed">
+                <p class="mt-1 text-[0.6875rem] text-dimmed">
                   On macOS, the first test requests permission. Native delivery requires a signed
                   app.
                 </p>
@@ -548,7 +616,7 @@
                       <AlertTriangle size={14} class="mt-0.5 shrink-0 text-warning" />
                       <div>
                         <p class="text-xs font-medium text-warning">Notifications are blocked</p>
-                        <p class="mt-0.5 text-[11px] leading-relaxed text-muted">
+                        <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">
                           macOS is not showing {APP_NAME} notification cards because notifications are
                           disabled in System Settings. This is why you may hear the alert or see the badge
                           without a card.
@@ -908,7 +976,7 @@
                 Redacted logs and operational state; prompts and file contents are excluded.
               </p>
               {#if diagnosticsResult}
-                <p class="mt-1 max-w-md break-all text-[11px] text-muted">
+                <p class="mt-1 max-w-md break-all text-[0.6875rem] text-muted">
                   {diagnosticsResult}
                 </p>
               {/if}
@@ -1077,7 +1145,7 @@
           <p class="text-xs text-muted" title="Installed app version">
             {APP_NAME} v{displayVersion}
           </p>
-          <p class="text-[11px] text-dimmed">
+          <p class="text-[0.6875rem] text-dimmed">
             © 2026 Pillardash Solutions Limited. All rights reserved.
           </p>
         </div>

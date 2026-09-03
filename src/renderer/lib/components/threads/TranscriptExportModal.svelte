@@ -44,7 +44,7 @@
       />
       <span class="min-w-0">
         <span class="block text-xs font-medium text-foreground">Include the working trace</span>
-        <span class="block text-[11px] leading-snug text-dimmed">
+        <span class="block text-[0.6875rem] leading-snug text-dimmed">
           Tool calls, reasoning, and sub-agents become part of the transcript. Off by default so
           only the message and final output are included.
         </span>
@@ -52,7 +52,7 @@
     </div>
 
     <p
-      class="flex items-start gap-1.5 rounded-lg bg-elevated px-3 py-2 text-[11px] leading-snug text-muted"
+      class="flex items-start gap-1.5 rounded-lg bg-elevated px-3 py-2 text-[0.6875rem] leading-snug text-muted"
     >
       <Loader2 size={12} class="mt-0.5 shrink-0 animate-spin text-accent" />
       The transcript is exported in the background on a worker thread — the app stays fully responsive

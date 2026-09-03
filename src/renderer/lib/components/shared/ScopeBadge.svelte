@@ -17,7 +17,7 @@
 <code
   class="flex items-center gap-1 rounded-md bg-raised font-mono font-normal text-foreground {size ===
   'xs'
-    ? 'px-1.5 py-0.5 text-[10px]'
+    ? 'px-1.5 py-0.5 text-[0.625rem]'
     : 'px-2.5 py-1 text-xs'}"
   style:background-color={bucket.color
     ? `color-mix(in srgb, ${bucket.color} 16%, var(--color-raised))`

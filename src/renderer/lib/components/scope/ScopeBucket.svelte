@@ -216,14 +216,14 @@
       {/if}
       {#if bucket.root.kind === 'worktree'}
         <span
-          class="flex shrink-0 items-center gap-1 rounded border border-overlay bg-overlay px-1 py-0.5 font-mono text-[9px] leading-none text-muted"
+          class="flex shrink-0 items-center gap-1 rounded border border-overlay bg-overlay px-1 py-0.5 font-mono text-[0.5625rem] leading-none text-muted"
           title="Managed Git worktree scope on {bucket.root.branch}"
         >
           <FolderTree size={9} class="text-warning" />
           {bucket.root.branch}
         </span>
       {/if}
-      <span class="text-[10px] tabular-nums text-dimmed">{threadCount}</span>
+      <span class="text-[0.625rem] tabular-nums text-dimmed">{threadCount}</span>
     </button>
 
     {#if unhealthy}

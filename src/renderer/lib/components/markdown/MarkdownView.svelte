@@ -403,7 +403,7 @@
 
 {#if tooltip}
   <div
-    class="pointer-events-none fixed z-50 max-w-96 -translate-x-1/2 rounded-lg border border-border bg-overlay px-2.5 py-1.5 text-[11px] leading-snug break-all text-foreground shadow-lg"
+    class="pointer-events-none fixed z-50 max-w-96 -translate-x-1/2 rounded-lg border border-border bg-overlay px-2.5 py-1.5 text-[0.6875rem] leading-snug break-all text-foreground shadow-lg"
     style:left={`${tooltip.x}px`}
     style:top={`${tooltip.y}px`}
     role="tooltip"

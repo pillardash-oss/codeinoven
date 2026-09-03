@@ -118,7 +118,7 @@
                   project={group.project}
                   class="pl-3"
                   nameClass="text-xs font-medium text-foreground"
-                  locationClass="text-[10px] text-dimmed"
+                  locationClass="text-[0.625rem] text-dimmed"
                   showLocation
                 />
                 <ul class="space-y-0.5 border-l border-border pl-3">

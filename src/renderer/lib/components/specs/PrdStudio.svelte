@@ -359,7 +359,7 @@
                 onclick={() => void openAnnotation(annotation)}
               >
                 <span class="line-clamp-2 block text-xs leading-relaxed">{annotation.body}</span>
-                <span class="mt-1 block text-[10px] text-dimmed">
+                <span class="mt-1 block text-[0.625rem] text-dimmed">
                   {annotation.status === 'open' ? annotation.author : annotation.status}
                 </span>
               </button>

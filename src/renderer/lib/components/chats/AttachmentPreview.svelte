@@ -230,11 +230,11 @@
         {filename}
       </span>
       {#if saveError}
-        <span class="max-w-80 truncate text-[10px] text-danger" role="status">{saveError}</span>
+        <span class="max-w-80 truncate text-[0.625rem] text-danger" role="status">{saveError}</span>
       {/if}
       <button
         type="button"
-        class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+        class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
         disabled={!dirty || saving}
         title="Save attachment (Cmd/Ctrl+S)"
         onclick={() => void saveText()}
@@ -340,7 +340,7 @@
           >
             <ZoomOut size={14} />
           </button>
-          <span class="w-10 text-center font-mono text-[10px] text-dimmed">
+          <span class="w-10 text-center font-mono text-[0.625rem] text-dimmed">
             {Math.round(panZoom.zoom * 100)}%
           </span>
           <button

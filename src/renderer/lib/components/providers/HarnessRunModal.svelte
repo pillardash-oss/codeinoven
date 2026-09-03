@@ -89,7 +89,7 @@
   {#snippet dock()}
     <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
       <button
-        class="rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="rounded-lg px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Show all harness tasks"
         title="Show all harness tasks"
         onclick={() => store.expandAll()}
@@ -156,23 +156,23 @@
             <div class="flex min-w-0 items-center gap-2">
               <AgentIcon agentId={run.harnessId} label={run.harnessName} size={14} />
               <span class="truncate text-xs font-medium">{run.harnessName}</span>
-              <code class="truncate font-mono text-[10px] text-dimmed">
+              <code class="truncate font-mono text-[0.625rem] text-dimmed">
                 $ {run.handoff.command}
                 {run.handoff.args.join(' ')}
               </code>
             </div>
             {#if run.exitCode === undefined}
-              <span class="flex shrink-0 items-center gap-1 text-[10px] font-medium text-info">
+              <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-info">
                 <Loader2 size={11} class="animate-spin" />
                 {activeLabel(run.kind)}
               </span>
             {:else if run.exitCode === 0}
-              <span class="flex shrink-0 items-center gap-1 text-[10px] font-medium text-success">
+              <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-success">
                 <CheckCircle2 size={11} />
                 {finishedLabel(run.kind)}
               </span>
             {:else}
-              <span class="flex shrink-0 items-center gap-1 text-[10px] font-medium text-danger">
+              <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-danger">
                 <XCircle size={11} /> Exited with code {run.exitCode}
               </span>
             {/if}
@@ -187,7 +187,7 @@
           </div>
         </div>
       {/each}
-      <p class="text-[11px] text-dimmed">{footerNote()}</p>
+      <p class="text-[0.6875rem] text-dimmed">{footerNote()}</p>
     </div>
   {/if}
 </DockableModal>

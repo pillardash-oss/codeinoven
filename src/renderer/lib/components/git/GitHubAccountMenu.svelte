@@ -69,10 +69,10 @@
             </span>
           {/if}
           <div class="min-w-0 flex-1">
-            <p class="truncate text-[11px] font-medium text-foreground">
+            <p class="truncate text-[0.6875rem] font-medium text-foreground">
               {user.name ?? user.login}
             </p>
-            <p class="truncate text-[9px] text-dimmed">@{user.login}</p>
+            <p class="truncate text-[0.5625rem] text-dimmed">@{user.login}</p>
           </div>
           <VendorIcon name="GitHub" size={13} class="shrink-0 text-dimmed" />
         </div>
@@ -80,7 +80,7 @@
         <div class="py-1">
           {#if remoteWebUrl}
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
+              class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
               onSelect={() => void openUrl(remoteWebUrl)}
             >
               <ExternalLink size={12} class="shrink-0 text-dimmed" />
@@ -88,14 +88,14 @@
             </DropdownMenu.Item>
           {/if}
           <DropdownMenu.Item
-            class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
+            class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
             onSelect={() => void openUrl(`https://github.com/${user.login}`)}
           >
             <User size={12} class="shrink-0 text-dimmed" />
             View my GitHub profile
           </DropdownMenu.Item>
           <DropdownMenu.Item
-            class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
+            class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
             onSelect={() => void openUrl('https://github.com/pulls')}
           >
             <GitFork size={12} class="shrink-0 text-dimmed" />
@@ -103,7 +103,7 @@
           </DropdownMenu.Item>
           <DropdownMenu.Separator class="my-1 h-px bg-border" />
           <DropdownMenu.Item
-            class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-danger outline-none transition-colors data-highlighted:bg-danger/10"
+            class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-danger outline-none transition-colors data-highlighted:bg-danger/10"
             onSelect={() => {
               open = false
               onSignOut()

@@ -86,11 +86,11 @@
           {/if}
           <span class="flex min-w-0 flex-col">
             {#if dock.projectName}
-              <span class="max-w-36 truncate text-[9px] font-medium leading-tight text-muted">
+              <span class="max-w-36 truncate text-[0.5625rem] font-medium leading-tight text-muted">
                 {dock.projectName}
               </span>
             {/if}
-            <span class="max-w-36 truncate text-[10px] font-medium leading-tight text-foreground"
+            <span class="max-w-36 truncate text-[0.625rem] font-medium leading-tight text-foreground"
               >{dock.title}</span
             >
           </span>

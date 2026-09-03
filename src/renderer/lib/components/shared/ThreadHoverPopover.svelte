@@ -82,7 +82,7 @@
 </script>
 
 <p class="mb-2 break-words text-sm font-medium text-foreground">{thread.title}</p>
-<dl class="space-y-1.5 text-[11px]">
+<dl class="space-y-1.5 text-[0.6875rem]">
   {#if scopeBucket}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Scope</dt>

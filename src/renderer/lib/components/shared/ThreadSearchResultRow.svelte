@@ -208,20 +208,20 @@
         <span class="h-2 w-2 rounded-full border border-border-strong bg-transparent"></span>
       {/if}
     </span>
-    <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">{thread.title}</span>
+    <span class="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground">{thread.title}</span>
     {#if isRecording}
       <RecordingIndicator label="Listening" />
     {:else if isSpeaking}
       <RecordingIndicator label="Speaking" tone="speech" />
     {:else}
-      <span class="shrink-0 whitespace-nowrap text-[10px] text-dimmed">
+      <span class="shrink-0 whitespace-nowrap text-[0.625rem] text-dimmed">
         {relativeTime(thread.lastActivity)}
       </span>
     {/if}
   </span>
   {#if result.kind === 'message' && result.snippet}
-    <span class="line-clamp-2 pl-[22px] text-[11px] leading-snug text-dimmed">
-      <span class="text-[10px] uppercase tracking-wide text-dimmed/80">
+    <span class="line-clamp-2 pl-[22px] text-[0.6875rem] leading-snug text-dimmed">
+      <span class="text-[0.625rem] uppercase tracking-wide text-dimmed/80">
         {result.role === 'assistant' ? 'Agent' : 'You'}
       </span>
       <span aria-hidden="true"> · </span>

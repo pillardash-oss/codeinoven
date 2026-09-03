@@ -278,7 +278,7 @@
 
       <header class="border-b border-border px-4 py-3">
         <p class="text-sm font-semibold text-foreground">Switch thread</p>
-        <p class="mt-0.5 text-[11px] text-dimmed">Release Control to open the highlighted thread</p>
+        <p class="mt-0.5 text-[0.6875rem] text-dimmed">Release Control to open the highlighted thread</p>
       </header>
 
       <div
@@ -311,7 +311,7 @@
       </div>
 
       <footer
-        class="flex h-8 items-center justify-between border-t border-border bg-raised px-3 text-[10px] text-dimmed"
+        class="flex h-8 items-center justify-between border-t border-border bg-raised px-3 text-[0.625rem] text-dimmed"
       >
         <span class="tabular-nums">{threads.length} recent threads</span>
         <span>Ctrl+Tab next · Shift+Ctrl+Tab previous</span>

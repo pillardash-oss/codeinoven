@@ -709,7 +709,7 @@
         {/if}
       </span>
       <span
-        class="min-w-0 flex-1 truncate text-[13px] {threadState === 'approval'
+        class="min-w-0 flex-1 truncate text-[0.8125rem] {threadState === 'approval'
           ? 'font-medium text-warning'
           : threadState === 'unread'
             ? 'font-medium text-foreground'
@@ -731,7 +731,7 @@
             />
           </span>
         {:else}
-          <span class="whitespace-nowrap text-[10px] text-dimmed">
+          <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
             {relativeTime(thread.lastActivity)}
           </span>
         {/if}
@@ -757,7 +757,7 @@
               <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
             {/each}
             {#if harnessIds.length > 3}
-              <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+              <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
                 +{harnessIds.length - 3}
               </span>
             {/if}
@@ -766,7 +766,7 @@
 
         {#if scopeBucket}
           <span
-            class="relative flex min-w-0 items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            class="relative flex min-w-0 items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[0.5625rem] text-muted"
             title={scopeBucket.name}
             style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
           >
@@ -796,7 +796,7 @@
           {:else if isSpeaking}
             <RecordingIndicator label="Speaking" tone="speech" />
           {:else}
-            <span class="whitespace-nowrap text-[10px] text-dimmed">
+            <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
               {relativeTime(thread.lastActivity)}
             </span>
           {/if}
@@ -926,7 +926,7 @@
 
       <!-- Title -->
       <span
-        class="min-w-0 flex-1 truncate text-[13px] {threadState === 'approval'
+        class="min-w-0 flex-1 truncate text-[0.8125rem] {threadState === 'approval'
           ? 'font-medium text-warning'
           : threadState === 'unread'
             ? 'font-medium text-foreground'
@@ -958,7 +958,7 @@
           </span>
         {:else}
           <span
-            class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+            class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
               ? 'opacity-0'
               : 'opacity-100'}"
             aria-hidden={hovered}
@@ -1002,7 +1002,7 @@
               <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
             {/each}
             {#if visibleHarnessCount < harnessIds.length}
-              <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+              <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
                 +{harnessIds.length - visibleHarnessCount}
               </span>
             {/if}
@@ -1011,7 +1011,7 @@
 
         {#if scopeBucket && !hideScope}
           <span
-            class="relative col-start-2 flex min-w-0 max-w-[7rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            class="relative col-start-2 flex min-w-0 max-w-[7rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[0.5625rem] text-muted"
             title={scopeBucket.name}
             style="border-bottom-color: color-mix(in srgb, {scopeColor} 20%, var(--color-muted));"
           >
@@ -1042,7 +1042,7 @@
             <RecordingIndicator label="Speaking" tone="speech" />
           {:else}
             <span
-              class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+              class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
                 ? 'opacity-0'
                 : 'opacity-100'}"
               aria-hidden={hovered}

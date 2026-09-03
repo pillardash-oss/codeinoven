@@ -156,7 +156,7 @@
         <Lightbulb size={15} class="mt-0.5 shrink-0 text-accent" />
         <span class="min-w-0">
           <span class="block text-xs font-semibold text-foreground">Start brainstorm</span>
-          <span class="mt-0.5 block text-[11px] leading-relaxed text-muted">
+          <span class="mt-0.5 block text-[0.6875rem] leading-relaxed text-muted">
             Research the real context, answer focused questions, and align the direction before the
             spec.
           </span>
@@ -170,7 +170,7 @@
         <FileText size={15} class="mt-0.5 shrink-0 text-primary" />
         <span class="min-w-0">
           <span class="block text-xs font-semibold text-foreground">Jump into spec</span>
-          <span class="mt-0.5 block text-[11px] leading-relaxed text-muted">
+          <span class="mt-0.5 block text-[0.6875rem] leading-relaxed text-muted">
             Skip brainstorming and ask the Sr. Engineer to prepare the specification now.
           </span>
         </span>

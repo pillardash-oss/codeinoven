@@ -185,7 +185,7 @@
     {#snippet dock()}
       <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
         <button
-          class="rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="rounded-lg px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Show clone task"
           title="Show clone task"
           onclick={handleExpand}
@@ -216,18 +216,18 @@
           <div class="flex min-w-0 items-center gap-2">
             <GitBranch size={14} class="shrink-0 text-muted" />
             <span class="truncate text-xs font-medium">{handoff.repoName}</span>
-            <code class="truncate font-mono text-[10px] text-dimmed">
+            <code class="truncate font-mono text-[0.625rem] text-dimmed">
               $ {handoff.command} {handoff.args.join(' ')}
             </code>
           </div>
           {#if exitCode === undefined}
-            <span class="flex shrink-0 items-center gap-1 text-[10px] font-medium text-info">
+            <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-info">
               <Loader2 size={11} class="animate-spin" /> Cloning
             </span>
           {:else if exitCode === 0}
-            <span class="flex shrink-0 items-center gap-1 text-[10px] font-medium text-success">Done</span>
+            <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-success">Done</span>
           {:else}
-            <span class="flex shrink-0 items-center gap-1 text-[10px] font-medium text-danger">Exited {exitCode}</span>
+            <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-danger">Exited {exitCode}</span>
           {/if}
         </div>
         <div class="h-64 overflow-hidden">
@@ -242,7 +242,7 @@
       {#if error}
         <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>
       {/if}
-      <p class="text-[11px] text-dimmed">
+      <p class="text-[0.6875rem] text-dimmed">
         {exitCode === undefined
           ? 'Clone is running — you can minimize and keep working. Errors appear in the terminal.'
           : exitCode === 0

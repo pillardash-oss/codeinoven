@@ -102,7 +102,7 @@
       <ShieldCheck size={15} class="shrink-0" />
       <h2 class="text-xs font-semibold uppercase tracking-wide">Audit coordinator</h2>
     </div>
-    <p class="mt-3 text-[10px] font-semibold uppercase tracking-wide text-dimmed">Scope</p>
+    <p class="mt-3 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Scope</p>
     <h3 class="mt-1 text-sm font-semibold text-foreground">Independent audit</h3>
     <p class="mt-1 text-xs leading-relaxed text-muted">
       The auditor judges the work from this thread's requests and outputs, then verifies it
@@ -136,7 +136,7 @@
 
   <div class="min-h-0 flex-1 overflow-y-auto">
     <section class="border-b border-border p-4" aria-label="Independent audit progress">
-      <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Current state</p>
+      <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Current state</p>
       <div class="mt-2 flex items-start gap-2">
         <span
           class="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-current {progress.tone}"
@@ -159,7 +159,7 @@
           <p class="mt-1 truncate text-xs text-muted">
             {selectedAuditor.model?.name ?? auditorSettings.modelId}
           </p>
-          <p class="mt-0.5 truncate text-[10px] text-dimmed">
+          <p class="mt-0.5 truncate text-[0.625rem] text-dimmed">
             {selectedAuditor.provider?.name ?? auditorSettings.providerId}
           </p>
         </div>
@@ -186,14 +186,14 @@
         />
       </div>
       {#if running}
-        <p class="mt-2 text-[10px] leading-relaxed text-dimmed">
+        <p class="mt-2 text-[0.625rem] leading-relaxed text-dimmed">
           The auditor model can be changed before the next audit starts.
         </p>
       {/if}
     </section>
 
     <section class="py-3" aria-label="Independent audit thread">
-      <h3 class="px-4 pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+      <h3 class="px-4 pb-2 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
         Audit thread
       </h3>
       {#if auditThread}

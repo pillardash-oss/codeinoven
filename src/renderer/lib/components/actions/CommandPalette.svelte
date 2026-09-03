@@ -178,12 +178,12 @@
         <span class="flex items-center gap-1 border-l border-border pl-2">
           {#if shortcutLabel}
             <kbd
-              class="rounded-md border border-border-strong bg-raised px-1.5 py-0.5 font-sans text-[10px] font-medium text-dimmed"
+              class="rounded-md border border-border-strong bg-raised px-1.5 py-0.5 font-sans text-[0.625rem] font-medium text-dimmed"
             >
               {displayShortcutLabel(shortcutLabel)}
             </kbd>
           {/if}
-          <span class="text-[10px] font-medium text-dimmed">ESC</span>
+          <span class="text-[0.625rem] font-medium text-dimmed">ESC</span>
         </span>
       {/if}
     </header>
@@ -228,7 +228,7 @@
               {@const Icon = action.icon}
               <Icon size={13} strokeWidth={1.9} />
             {:else}
-              <span class="text-[9px] font-bold uppercase tracking-wide">
+              <span class="text-[0.5625rem] font-bold uppercase tracking-wide">
                 {categoryLabel(action).slice(0, 2)}
               </span>
             {/if}
@@ -238,14 +238,14 @@
             <span class="flex min-w-0 items-center gap-2">
               <span class="truncate text-sm font-medium">{action.title}</span>
               <span
-                class="shrink-0 rounded-md border border-border bg-raised px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-dimmed"
+                class="shrink-0 rounded-md border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
               >
                 {categoryLabel(action)}
               </span>
               {#if action.showSourceBadge !== false}
                 {#if action.source.color}
                   <span
-                    class="inline-flex min-w-0 shrink-0 items-center gap-1 truncate rounded-md border px-1.5 py-0.5 text-[9px] font-medium"
+                    class="inline-flex min-w-0 shrink-0 items-center gap-1 truncate rounded-md border px-1.5 py-0.5 text-[0.5625rem] font-medium"
                     style="color: {action.source.color}; border-color: color-mix(in srgb, {action
                       .source.color} 35%, transparent); background-color: color-mix(in srgb, {action
                       .source.color} 12%, transparent)"
@@ -258,7 +258,7 @@
                   </span>
                 {:else}
                   <span
-                    class="min-w-0 truncate rounded-md border border-border px-1.5 py-0.5 text-[9px] font-medium text-dimmed"
+                    class="min-w-0 truncate rounded-md border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-dimmed"
                   >
                     {action.source.label}
                   </span>
@@ -266,7 +266,7 @@
               {/if}
               {#if action.status}
                 <span
-                  class="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-raised px-1.5 py-0.5 text-[9px] font-medium text-dimmed"
+                  class="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-medium text-dimmed"
                 >
                   <StatusBadge
                     stage={action.status.stage}
@@ -282,13 +282,13 @@
               {/if}
             </span>
             {#if action.disabledReason}
-              <span class="mt-0.5 block truncate text-[11px] text-danger">
+              <span class="mt-0.5 block truncate text-[0.6875rem] text-danger">
                 {action.disabledReason}
               </span>
             {:else if action.description || action.threadMeta}
               <span class="mt-0.5 flex min-w-0 items-center gap-2">
                 {#if action.description}
-                  <span class="min-w-0 truncate text-[11px] text-dimmed">
+                  <span class="min-w-0 truncate text-[0.6875rem] text-dimmed">
                     {action.description}
                   </span>
                 {/if}
@@ -308,7 +308,7 @@
                           size={12}
                         />
                       {/if}
-                      <span class="truncate text-[11px] text-dimmed">{meta.modelId}</span>
+                      <span class="truncate text-[0.6875rem] text-dimmed">{meta.modelId}</span>
                     {:else if meta.harnessIds.length > 0 || meta.providerName}
                       {#each meta.harnessIds as harnessId (harnessId)}
                         <AgentIcon agentId={harnessId} label={harnessLabel(harnessId)} size={14} />
@@ -334,7 +334,7 @@
             >
               {#each action.shortcut as key (key)}
                 <kbd
-                  class="min-w-5 rounded-md border border-border-strong bg-raised px-1 py-0.5 text-center font-sans text-[10px] font-medium text-dimmed"
+                  class="min-w-5 rounded-md border border-border-strong bg-raised px-1 py-0.5 text-center font-sans text-[0.625rem] font-medium text-dimmed"
                 >
                   {displayShortcutKey(key)}
                 </kbd>
@@ -352,7 +352,7 @@
     </Command.List>
 
     <footer
-      class="flex h-8 items-center justify-between border-t border-border bg-raised px-3 text-[10px] text-dimmed"
+      class="flex h-8 items-center justify-between border-t border-border bg-raised px-3 text-[0.625rem] text-dimmed"
     >
       <span class="flex min-w-0 items-center gap-2">
         {#if onBack}

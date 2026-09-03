@@ -103,7 +103,7 @@
         {@render navigation()}
       </div>
 
-      <div class="flex items-center gap-2 text-[11px] text-muted max-md:flex-wrap md:justify-center">
+      <div class="flex items-center gap-2 text-[0.6875rem] text-muted max-md:flex-wrap md:justify-center">
         {@render center()}
       </div>
 
@@ -141,7 +141,7 @@
     >
       <StudioSidebarResizeHandle {sidebarLabel} />
       <div class="flex h-12 shrink-0 items-center justify-between border-b px-3 md:hidden">
-        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">
+        <p class="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-dimmed">
           {sidebarTitle}
         </p>
         <button
@@ -177,7 +177,7 @@
               <span class="flex items-center gap-1">
                 {#each section.badges ?? [] as badge (badge.label)}
                   <span
-                    class="rounded-full px-1.5 text-[10px] {badge.tone === 'danger'
+                    class="rounded-full px-1.5 text-[0.625rem] {badge.tone === 'danger'
                       ? 'bg-danger/10 text-danger'
                       : 'bg-info/10 text-info'}"
                     title={badge.label}
@@ -197,10 +197,10 @@
 
         <div class="flex min-h-0 flex-1 flex-col border-t p-3">
           <div class="flex shrink-0 items-center justify-between">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
               {annotationsTitle}
             </p>
-            <span class="text-[10px] tabular-nums text-dimmed">{openAnnotationCount}</span>
+            <span class="text-[0.625rem] tabular-nums text-dimmed">{openAnnotationCount}</span>
           </div>
           <div class="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
             {#each sectionAnnotations(selectedSection) as annotation (annotation.id)}
@@ -210,7 +210,7 @@
                 onclick={() => onOpenAnnotation(annotation)}
               >
                 {#if annotation.quote}
-                  <span class="block truncate text-[10px] text-dimmed">“{annotation.quote}”</span>
+                  <span class="block truncate text-[0.625rem] text-dimmed">“{annotation.quote}”</span>
                 {/if}
                 <span class="mt-0.5 line-clamp-4 block text-xs leading-relaxed"
                   >{annotation.body}</span
@@ -218,7 +218,7 @@
               </button>
             {:else}
               <p
-                class="rounded-lg border border-dashed px-2.5 py-3 text-center text-[11px] text-dimmed"
+                class="rounded-lg border border-dashed px-2.5 py-3 text-center text-[0.6875rem] text-dimmed"
               >
                 {annotationsEmptyLabel}
               </p>

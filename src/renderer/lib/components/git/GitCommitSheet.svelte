@@ -23,19 +23,19 @@
 
 <Modal open title="Commit changes" {onClose}>
   <div class="space-y-3">
-    <p class="text-[11px] leading-relaxed text-muted">
+    <p class="text-[0.6875rem] leading-relaxed text-muted">
       Commit {stagedCount} staged {stagedCount === 1 ? 'file' : 'files'} on the current branch.
     </p>
     <div>
       <label
-        class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+        class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
         for="commit-message"
       >
         Commit message
       </label>
       <textarea
         id="commit-message"
-        class="min-h-24 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+        class="min-h-24 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
         placeholder="Summarize the change…"
         bind:value={message}
         onkeydown={(event: KeyboardEvent) => {
@@ -47,7 +47,7 @@
     </div>
     {#if gitState.error}
       <p
-        class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
+        class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
       >
         {gitState.error}
       </p>
@@ -57,14 +57,14 @@
     <div class="flex items-center justify-end gap-2">
       <button
         type="button"
-        class="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+        class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
         onclick={onClose}
       >
         Cancel
       </button>
       <button
         type="button"
-        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
         disabled={!message.trim() || committing || stagedCount === 0}
         onclick={() => void commit()}
       >

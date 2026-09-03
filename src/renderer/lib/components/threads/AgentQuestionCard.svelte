@@ -345,7 +345,7 @@
         {question.header ?? 'Question'}
       </p>
       {#if total > 1}
-        <p class="mt-0.5 text-[11px] tabular-nums text-dimmed">
+        <p class="mt-0.5 text-[0.6875rem] tabular-nums text-dimmed">
           Question {currentIndex + 1} of {total}
         </p>
       {/if}
@@ -353,7 +353,7 @@
 
     <div class="flex shrink-0 items-center gap-1">
       <span
-        class="mr-1 flex items-center gap-1 text-[11px] tabular-nums text-muted"
+        class="mr-1 flex items-center gap-1 text-[0.6875rem] tabular-nums text-muted"
         aria-label={`Time remaining: ${remainingLabel}`}
         title="The recommended answer is selected automatically when time expires"
       >
@@ -429,7 +429,7 @@
           >
             <span
               class={[
-                'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border text-[9px]',
+                'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border text-[0.5625rem]',
                 question.multiple ? 'rounded' : 'rounded-full',
                 selected ? 'border-on-primary bg-on-primary text-primary' : 'border-muted'
               ]}
@@ -439,14 +439,14 @@
             <span class="min-w-0 flex-1">
               <span class="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
                 {#if question.fileRequest}
-                  <span class="break-all font-mono text-[11px] font-medium">{option.label}</span>
+                  <span class="break-all font-mono text-[0.6875rem] font-medium">{option.label}</span>
                 {:else}
                   {option.label}
                 {/if}
                 {#if option.recommended}
                   <span
                     class={[
-                      'rounded px-1.5 py-0.5 text-[10px] font-semibold',
+                      'rounded px-1.5 py-0.5 text-[0.625rem] font-semibold',
                       selected ? 'bg-on-primary/15 text-on-primary' : 'bg-primary/10 text-primary'
                     ]}
                   >
@@ -457,7 +457,7 @@
               {#if option.description}
                 <span
                   class={[
-                    'mt-0.5 block text-[11px] leading-relaxed',
+                    'mt-0.5 block text-[0.6875rem] leading-relaxed',
                     selected ? 'text-on-primary/80' : 'text-muted'
                   ]}
                 >
@@ -500,7 +500,7 @@
                 role="listitem"
               >
                 <Paperclip size={11} class="shrink-0 text-muted" aria-hidden="true" />
-                <span class="truncate font-mono text-[11px] text-foreground">{attachedPath}</span>
+                <span class="truncate font-mono text-[0.6875rem] text-foreground">{attachedPath}</span>
                 <button
                   type="button"
                   class="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-danger/10 hover:text-danger"
@@ -591,7 +591,7 @@
           {#if onExplain}
             <button
               type="button"
-              class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
               disabled={working}
               onclick={() => openQuestionChat(onExplain)}
               title="Explain this question to help you decide"
@@ -604,7 +604,7 @@
           {#if onQuickChat}
             <button
               type="button"
-              class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
               disabled={working}
               onclick={() => openQuestionChat(onQuickChat)}
               title="Start a temporary read-only quick chat about this question"
@@ -616,7 +616,7 @@
           {/if}
         </div>
       {:else}
-        <p class="min-w-0 text-[11px] text-muted">
+        <p class="min-w-0 text-[0.6875rem] text-muted">
           {#if !currentAnswers.length}
             Answer this question to continue
           {:else if !allAnswered}

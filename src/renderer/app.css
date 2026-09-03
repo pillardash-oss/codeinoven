@@ -80,9 +80,11 @@
 
   /* Font — the whole app renders in JetBrains Mono (bundled, Ghostty's
      default family) for a uniform dev-workspace feel with unambiguous
-     code glyphs like backticks. */
-  --font-sans: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font', ui-monospace,
+     code glyphs like backticks. --font-app is overridden at runtime by
+     the Appearance settings (app-config store). */
+  --font-app: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font', ui-monospace,
     'SFMono-Regular', Menlo, monospace;
+  --font-sans: var(--font-app);
   --font-mono: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace,
     'SFMono-Regular', Menlo, Monaco, 'Cascadia Code', monospace;
 }
@@ -126,7 +128,7 @@ html {
 }
 
 body {
-  font-family: var(--font-sans);
+  font-family: var(--font-app);
   background-color: var(--color-app);
   color: var(--color-foreground);
   -webkit-font-smoothing: antialiased;
@@ -251,9 +253,9 @@ body {
   line-height: 1.65;
   overflow-wrap: anywhere;
   white-space: normal;
-  /* Dev workspace: chat prose renders in JetBrains Mono so code characters
-     like backticks are unambiguous instead of Satoshi's near-invisible glyph. */
-  font-family: var(--font-mono);
+  /* Dev workspace: chat prose follows the app font so code characters
+     like backticks are unambiguous. */
+  font-family: var(--font-app);
 }
 
 .markdown-body > * {
@@ -608,14 +610,19 @@ body {
   color: inherit;
 }
 
+html body [data-sonner-toaster] {
+  /* svelte-sonner hard-codes its own system font stack inline; keep toasts
+     on the app font for uniformity (needs !important to beat the inline style). */
+  font-family: var(--font-app) !important;
+}
+
 /* ─── Rich markdown editor: GitHub-style links and footnotes ────────────── */
 /* Links render for recognition (GitHub reference-style + inline) but clicks
    are intercepted in the editor so composing never navigates. Footnote
    references render as superscript numbers like GitHub. */
 .rich-markdown-editor {
-  /* The composer mirrors chat prose: JetBrains Mono keeps typed code
-     characters (backticks especially) clearly visible while typing. */
-  font-family: var(--font-mono);
+  /* The composer mirrors chat prose and follows the Appearance font. */
+  font-family: var(--font-app);
 }
 
 .rich-markdown-editor a[data-editor-link] {

@@ -213,7 +213,7 @@
             <div class="flex flex-wrap items-center gap-2">
               <h2 class="text-base font-semibold">{gateway.adapterName}</h2>
               <span
-                class="rounded-lg px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {lifecycleClass(
+                class="rounded-lg px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide {lifecycleClass(
                   gateway.lifecycle
                 )}"
               >
@@ -240,17 +240,17 @@
 
         <div class="mt-4 grid gap-3 sm:grid-cols-3">
           <div class="rounded-xl bg-elevated px-3 py-2.5">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Port</p>
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Port</p>
             <p class="mt-1 text-sm font-medium tabular-nums">
               {gateway.port ?? '—'}
             </p>
           </div>
           <div class="rounded-xl bg-elevated px-3 py-2.5">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Models</p>
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Models</p>
             <p class="mt-1 text-sm font-medium tabular-nums">{gateway.modelCount}</p>
           </div>
           <div class="rounded-xl bg-elevated px-3 py-2.5">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Version</p>
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Version</p>
             <p class="mt-1 text-sm font-medium">
               {gateway.installedVersion ?? gateway.availableVersion}
             </p>
@@ -369,7 +369,7 @@
         </div>
 
         {#if gateway.dashboardUrl}
-          <p class="mt-3 break-all font-mono text-[11px] text-dimmed">{gateway.dashboardUrl}</p>
+          <p class="mt-3 break-all font-mono text-[0.6875rem] text-dimmed">{gateway.dashboardUrl}</p>
         {/if}
       </section>
     {/each}

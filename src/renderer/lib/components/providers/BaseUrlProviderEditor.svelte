@@ -599,7 +599,7 @@
   <form id="base-url-provider-form" class="space-y-4" onsubmit={save}>
     <fieldset class="space-y-1.5 text-xs font-medium">
       <legend>Harnesses</legend>
-      <p class="text-[11px] font-normal text-dimmed">
+      <p class="text-[0.6875rem] font-normal text-dimmed">
         Select every harness that should offer this provider. Saving applies your changes to all of
         them.
       </p>
@@ -610,7 +610,7 @@
         onToggle={toggleHarness}
       />
       {#if addingHarnessWithoutKey}
-        <p class="text-[11px] text-warning">
+        <p class="text-[0.6875rem] text-warning">
           Newly-added harnesses won't get the stored API key — re-enter it below to apply it there
           too.
         </p>
@@ -699,7 +699,7 @@
     </label>
     {#if draft.id && apiKeyConfigured}
       <div class="space-y-2 rounded-lg bg-raised px-3 py-2">
-        <p id="stored-api-key-status" class="text-[11px] text-muted">
+        <p id="stored-api-key-status" class="text-[0.6875rem] text-muted">
           An API key is stored securely. Leave the field blank to keep it.
         </p>
         <Switch
@@ -711,13 +711,13 @@
             if (checked) draft.apiKey = ''
           }}
         >
-          <span class="text-[11px] font-medium {draft.removeApiKey ? 'text-danger' : ''}">
+          <span class="text-[0.6875rem] font-medium {draft.removeApiKey ? 'text-danger' : ''}">
             Remove API key when saving
           </span>
         </Switch>
       </div>
     {:else if draft.id}
-      <p class="text-[11px] text-dimmed">No API key is stored. Enter one to add it.</p>
+      <p class="text-[0.6875rem] text-dimmed">No API key is stored. Enter one to add it.</p>
     {/if}
 
     <label class="block space-y-1 text-xs font-medium">
@@ -740,7 +740,7 @@
         spellcheck="false"
         bind:value={draft.usagePath}
       />
-      <span class="block text-[11px] font-normal text-dimmed">
+      <span class="block text-[0.6875rem] font-normal text-dimmed">
         Path (relative to the base URL) or full URL that reports this account's usage/limit. Used to
         show quota bars; leave empty if the provider has none.
       </span>
@@ -751,7 +751,7 @@
         <span class="text-xs font-medium">Models</span>
         <div class="flex items-center gap-1.5">
           <button
-            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay disabled:opacity-50"
+            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
             type="button"
             title="Fetch available models from {draft.baseURL || 'the base URL'}/models"
             disabled={!draft.baseURL.trim() || discoveringModels}
@@ -765,7 +765,7 @@
             Refresh models
           </button>
           <button
-            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay"
+            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
             type="button"
             title="Paste a copied model from the clipboard"
             onclick={() => void pasteModelFromClipboard()}
@@ -773,7 +773,7 @@
             <ClipboardPaste size={11} /> Paste model
           </button>
           <button
-            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay"
+            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
             type="button"
             onclick={addModel}
           >
@@ -782,26 +782,26 @@
         </div>
       </div>
       {#if draft.models.length === 0}
-        <p class="rounded-lg border border-dashed p-3 text-[11px] text-dimmed">
+        <p class="rounded-lg border border-dashed p-3 text-[0.6875rem] text-dimmed">
           No models added. On save, we will fetch the model list from the /models route and add
           every model found.
         </p>
         {#if discoverError}
-          <p class="text-[11px] text-danger">{discoverError}</p>
+          <p class="text-[0.6875rem] text-danger">{discoverError}</p>
         {:else if discoveringModels}
-          <p class="flex items-center gap-1.5 text-[11px] text-dimmed">
+          <p class="flex items-center gap-1.5 text-[0.6875rem] text-dimmed">
             <Loader2 size={11} class="animate-spin" /> Searching {draft.baseURL}/models…
           </p>
         {:else if discoveredModels.length > 0}
           <div class="space-y-1">
-            <p class="text-[11px] font-medium text-dimmed">
+            <p class="text-[0.6875rem] font-medium text-dimmed">
               Found {discoveredModels.length} model{discoveredModels.length === 1 ? '' : 's'} — click
               to add
             </p>
             <div class="flex flex-wrap gap-1.5">
               {#each discoveredModels as model (model.id)}
                 <button
-                  class="rounded-full border bg-elevated px-2.5 py-1 text-[11px] font-mono hover:bg-overlay disabled:opacity-40"
+                  class="rounded-full border bg-elevated px-2.5 py-1 text-[0.6875rem] font-mono hover:bg-overlay disabled:opacity-40"
                   type="button"
                   disabled={draft.models.some((m) => m.id === model.id)}
                   onclick={() => addDiscoveredModel(model)}
@@ -816,7 +816,7 @@
       {#each draft.models as model, index (index)}
         <div class="rounded-lg border bg-elevated/50 p-3">
           <div class="flex items-center justify-between">
-            <span class="text-[11px] font-medium text-dimmed">Model {index + 1}</span>
+            <span class="text-[0.6875rem] font-medium text-dimmed">Model {index + 1}</span>
             <div class="flex items-center gap-1">
               <button
                 class="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-overlay hover:text-foreground"
@@ -839,7 +839,7 @@
             </div>
           </div>
           <div class="mt-2 grid grid-cols-2 gap-2">
-            <label class="space-y-1 text-[11px] font-medium">
+            <label class="space-y-1 text-[0.6875rem] font-medium">
               <span>Model ID</span>
               <input
                 class="h-8 w-full rounded border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
@@ -847,7 +847,7 @@
                 bind:value={model.id}
               />
             </label>
-            <label class="space-y-1 text-[11px] font-medium">
+            <label class="space-y-1 text-[0.6875rem] font-medium">
               <span>Display name</span>
               <input
                 class="h-8 w-full rounded border bg-elevated px-2 text-xs outline-none focus:border-primary"
@@ -855,7 +855,7 @@
                 bind:value={model.name}
               />
             </label>
-            <label class="space-y-1 text-[11px] font-medium">
+            <label class="space-y-1 text-[0.6875rem] font-medium">
               <span>Context window</span>
               <input
                 class="h-8 w-full rounded border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
@@ -864,7 +864,7 @@
                 bind:value={model.contextWindow}
               />
             </label>
-            <label class="space-y-1 text-[11px] font-medium">
+            <label class="space-y-1 text-[0.6875rem] font-medium">
               <span>Max output tokens</span>
               <input
                 class="h-8 w-full rounded border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
@@ -876,15 +876,15 @@
           </div>
           <div class="mt-2 flex items-center gap-4">
             <Switch bind:checked={model.vision}>
-              <span class="text-[11px] font-medium">Can see images</span>
+              <span class="text-[0.6875rem] font-medium">Can see images</span>
             </Switch>
             <Switch bind:checked={model.reasoning}>
-              <span class="text-[11px] font-medium">Supports reasoning</span>
+              <span class="text-[0.6875rem] font-medium">Supports reasoning</span>
             </Switch>
-            <label class="flex items-center gap-1.5 text-[11px] font-medium">
+            <label class="flex items-center gap-1.5 text-[0.6875rem] font-medium">
               <span>Default thinking</span>
               <select
-                class="h-7 rounded border bg-elevated px-1.5 text-[11px] outline-none focus:border-primary"
+                class="h-7 rounded border bg-elevated px-1.5 text-[0.6875rem] outline-none focus:border-primary"
                 bind:value={model.defaultThinkingLevel}
               >
                 <option value="">None</option>

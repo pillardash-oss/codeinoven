@@ -27,7 +27,7 @@
   }: Props = $props()
 
   const itemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
+    'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
 </script>
 
 {#if isCurrent}
@@ -52,7 +52,7 @@
 {#if canDelete && !isCurrent}
   <DropdownMenu.Separator class="my-1 h-px bg-border" />
   <DropdownMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
     onSelect={onDelete}
     disabled={busy}
   >

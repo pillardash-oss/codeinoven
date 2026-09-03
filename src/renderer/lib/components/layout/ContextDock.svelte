@@ -95,7 +95,7 @@
             aria-hidden="true"
           ></span>
           {#if item.countLabel !== undefined}
-            <span class="text-[11px] font-semibold tabular-nums">{item.countLabel}</span>
+            <span class="text-[0.6875rem] font-semibold tabular-nums">{item.countLabel}</span>
           {:else if Icon}
             <Icon size={16} strokeWidth={1.8} />
           {/if}
@@ -106,7 +106,7 @@
           {/if}
           {#if item.countBadge !== undefined}
             <span
-              class="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-1 text-[9px] font-semibold leading-none tabular-nums ring-1 {item.countBadgeTone ===
+              class="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-1 text-[0.5625rem] font-semibold leading-none tabular-nums ring-1 {item.countBadgeTone ===
               'working'
                 ? 'bg-thread-working text-on-primary ring-thread-working'
                 : 'bg-raised text-muted ring-border'}"

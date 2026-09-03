@@ -235,7 +235,7 @@
           </p>
           <p class="truncate text-xs text-muted">{accountProfile.email}</p>
         </div>
-        <span class="flex shrink-0 items-center gap-1 text-[11px] font-medium text-success">
+        <span class="flex shrink-0 items-center gap-1 text-[0.6875rem] font-medium text-success">
           <CheckCircle2 size={13} /> Signed in
         </span>
       </div>
@@ -290,12 +290,12 @@
           <div class="mt-3 grid gap-4 sm:grid-cols-2">
             <div>
               <p class="text-xs font-semibold text-foreground">1. Open the mobile app</p>
-              <p class="mt-1 text-[11px] text-muted">Scan and sign in on your phone.</p>
+              <p class="mt-1 text-[0.6875rem] text-muted">Scan and sign in on your phone.</p>
               <div class="mt-3"><EnrollmentQr value={mobileAppUrl} /></div>
               <div class="mt-2 flex flex-wrap gap-2">
                 <button
                   type="button"
-                  class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
+                  class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
                   title="Copy mobile website link"
                   aria-label="Copy mobile website link"
                   disabled={interactionsLocked}
@@ -306,7 +306,7 @@
                 </button>
                 <button
                   type="button"
-                  class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
+                  class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
                   title="Open mobile website in browser"
                   aria-label="Open mobile website in browser"
                   disabled={interactionsLocked}
@@ -319,7 +319,7 @@
 
             <div>
               <p class="text-xs font-semibold text-foreground">2. Pair this desktop</p>
-              <p class="mt-1 text-[11px] text-muted">Scan to submit the one-time code.</p>
+              <p class="mt-1 text-[0.6875rem] text-muted">Scan to submit the one-time code.</p>
               <div class="relative mt-3 w-fit">
                 <EnrollmentQr value={enrollmentLink} />
                 {#if pairingFinishing}
@@ -342,7 +342,7 @@
 
         <div class="mt-4 flex items-center gap-2">
           <div class="min-w-0 flex-1 rounded-lg bg-raised px-3 py-2">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Code</p>
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Code</p>
             <p
               class="mt-0.5 select-all font-mono text-sm font-semibold tracking-wider text-foreground"
             >

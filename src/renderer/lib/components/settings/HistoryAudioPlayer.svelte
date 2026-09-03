@@ -131,11 +131,11 @@
       onended={handleEnded}
     ></audio>
     <div class="mt-1.5 flex items-center justify-between gap-2">
-      <span class="text-[10px] text-dimmed">{isPlaying ? 'Playing' : 'Paused'} · seek and volume on player · download below</span>
+      <span class="text-[0.625rem] text-dimmed">{isPlaying ? 'Playing' : 'Paused'} · seek and volume on player · download below</span>
       <a
         href={url}
         download={downloadName}
-        class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[11px] font-medium text-muted hover:text-foreground"
+        class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[0.6875rem] font-medium text-muted hover:text-foreground"
         title="Download recording"
         aria-label="Download recording {attemptId}"
       >
@@ -143,7 +143,7 @@
       </a>
     </div>
     {#if error}
-      <p class="mt-1 text-[11px] text-danger" role="alert">{error}</p>
+      <p class="mt-1 text-[0.6875rem] text-danger" role="alert">{error}</p>
     {/if}
   {:else}
     <div class="flex items-center gap-2">
@@ -163,10 +163,10 @@
           Play
         {/if}
       </button>
-      <span class="text-[10px] text-dimmed">Regular player with seek · download after load</span>
+      <span class="text-[0.625rem] text-dimmed">Regular player with seek · download after load</span>
     </div>
     {#if error}
-      <p class="mt-1.5 text-[11px] text-danger" role="alert">{error}</p>
+      <p class="mt-1.5 text-[0.6875rem] text-danger" role="alert">{error}</p>
     {/if}
     <!-- Keep audio element mounted even before url so handleLoadAndPlay can play immediately -->
     <audio

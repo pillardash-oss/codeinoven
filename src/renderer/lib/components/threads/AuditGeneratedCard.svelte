@@ -142,13 +142,13 @@
                 : 'Review the rendered report, switch versions, and add annotations in Audit Studio.'}
       </p>
       {#if failed && elapsed}
-        <p class="mt-2 text-[11px] tabular-nums text-dimmed">Auditor runtime: {elapsed}</p>
+        <p class="mt-2 text-[0.6875rem] tabular-nums text-dimmed">Auditor runtime: {elapsed}</p>
       {/if}
       {#if invalidShapeRecovery && error}
         <details class="mt-3 text-xs text-muted">
           <summary class="cursor-pointer font-medium text-foreground">Validation details</summary>
           <pre
-            class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-raised p-3 font-mono text-[11px] leading-relaxed text-muted">{error}</pre>
+            class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-raised p-3 font-mono text-[0.6875rem] leading-relaxed text-muted">{error}</pre>
         </details>
       {/if}
     </div>

@@ -462,7 +462,7 @@
     >
       <div class="flex h-10 shrink-0 items-center gap-1 border-b border-border px-2">
         <div
-          class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto text-[10px] text-muted"
+          class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto text-[0.625rem] text-muted"
           aria-label={activeTab ? `Path ${activeTab.path}` : 'No file selected'}
         >
           <button
@@ -582,18 +582,18 @@
             <Code2 size={12} />
           </button>
           {#if deletedAtCheckpoint}
-            <span class="ml-1 text-[9px] font-medium text-danger">Deleted · read-only</span>
+            <span class="ml-1 text-[0.5625rem] font-medium text-danger">Deleted · read-only</span>
           {/if}
           {#if diffStats}
             <span
-              class="ml-1 font-mono text-[10px] tabular-nums text-success"
+              class="ml-1 font-mono text-[0.625rem] tabular-nums text-success"
               aria-label="Added lines">+{diffStats.additions}</span
             >
-            <span class="font-mono text-[10px] tabular-nums text-danger" aria-label="Deleted lines"
+            <span class="font-mono text-[0.625rem] tabular-nums text-danger" aria-label="Deleted lines"
               >−{diffStats.deletions}</span
             >
             {#if checkpointDiff?.truncated}
-              <span class="text-[9px] text-warning" title="Preview truncated at 64 KiB"
+              <span class="text-[0.5625rem] text-warning" title="Preview truncated at 64 KiB"
                 >Truncated</span
               >
             {/if}
@@ -619,7 +619,7 @@
           {#if activeTab.view !== 'diff'}
             <button
               type="button"
-              class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+              class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
               disabled={deletedAtCheckpoint ||
                 (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
                 (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
@@ -641,7 +641,7 @@
 
       {#if activeSession?.error}
         <div
-          class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-2 text-[10px] leading-relaxed text-danger"
+          class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-2 text-[0.625rem] leading-relaxed text-danger"
         >
           {activeSession.error}
         </div>
@@ -675,11 +675,11 @@
           <div class="text-center">
             <FolderOpen size={24} class="mx-auto mb-2 text-dimmed" />
             <p class="text-xs font-medium text-foreground">Open file</p>
-            <p class="mt-1 text-[10px] text-dimmed">Select a file from the workspace tree.</p>
+            <p class="mt-1 text-[0.625rem] text-dimmed">Select a file from the workspace tree.</p>
             {#if !projectState.explorerVisible}
               <button
                 type="button"
-                class="mt-3 rounded border border-border bg-elevated px-3 py-1.5 text-[10px] font-medium text-foreground hover:bg-overlay"
+                class="mt-3 rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-foreground hover:bg-overlay"
                 onclick={() => projectFilesWorkspace.toggleExplorer(projectId)}
               >
                 Show explorer
@@ -691,12 +691,12 @@
         <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6">
           <div class="max-w-sm text-center">
             <p class="text-xs font-medium text-danger">The diff could not be loaded</p>
-            <p class="mt-1 text-[10px] leading-4 text-dimmed">{activeTab.error}</p>
+            <p class="mt-1 text-[0.625rem] leading-4 text-dimmed">{activeTab.error}</p>
           </div>
           {#if activeTab.checkpointId}
             <button
               type="button"
-              class="rounded border border-border bg-elevated px-3 py-1.5 text-[10px] font-medium text-muted hover:bg-overlay hover:text-foreground"
+              class="rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
               onclick={() =>
                 activeTab?.checkpointId &&
                 void projectFilesWorkspace.openCheckpointFile(
@@ -711,7 +711,7 @@
           {/if}
         </div>
       {:else if activeTab.loadingDiff && !checkpointDiff}
-        <div class="flex flex-1 items-center justify-center gap-2 text-[11px] text-dimmed">
+        <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
           <Loader2 size={13} class="animate-spin" />
           Loading diff
         </div>
@@ -736,7 +736,7 @@
       {:else if activeTab.view === 'preview' && (video || audio)}
         <FileMediaPreview src={previewUrl} alt={activeTab.path} kind={video ? 'video' : 'audio'} />
       {:else if projectState.loadingPaths[activeTab.path] && !activeSession && !deletedAtCheckpoint}
-        <div class="flex flex-1 items-center justify-center gap-2 text-[11px] text-dimmed">
+        <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
           <Loader2 size={13} class="animate-spin" />
           Loading file
         </div>
@@ -757,11 +757,11 @@
           <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6">
             <div class="text-center">
               <p class="text-xs font-medium text-dimmed">This file cannot be viewed here</p>
-              <p class="mt-1 text-[10px] text-dimmed">You can open it with your editor.</p>
+              <p class="mt-1 text-[0.625rem] text-dimmed">You can open it with your editor.</p>
             </div>
             <button
               type="button"
-              class="rounded border border-border bg-elevated px-3 py-1.5 text-[10px] font-medium text-muted hover:text-foreground"
+              class="rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted hover:text-foreground"
               onclick={openSelectedInEditor}
             >
               Open in editor
@@ -843,7 +843,7 @@
         {#if activeTab?.view !== 'diff'}
           <button
             type="button"
-            class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+            class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
             disabled={deletedAtCheckpoint ||
               (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
               (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
@@ -950,18 +950,18 @@
             <Code2 size={12} />
           </button>
           {#if deletedAtCheckpoint}
-            <span class="ml-1 text-[9px] font-medium text-danger">Deleted · read-only</span>
+            <span class="ml-1 text-[0.5625rem] font-medium text-danger">Deleted · read-only</span>
           {/if}
           {#if diffStats}
             <span
-              class="ml-1 font-mono text-[10px] tabular-nums text-success"
+              class="ml-1 font-mono text-[0.625rem] tabular-nums text-success"
               aria-label="Added lines">+{diffStats.additions}</span
             >
-            <span class="font-mono text-[10px] tabular-nums text-danger" aria-label="Deleted lines"
+            <span class="font-mono text-[0.625rem] tabular-nums text-danger" aria-label="Deleted lines"
               >−{diffStats.deletions}</span
             >
             {#if checkpointDiff?.truncated}
-              <span class="text-[9px] text-warning" title="Preview truncated at 64 KiB"
+              <span class="text-[0.5625rem] text-warning" title="Preview truncated at 64 KiB"
                 >Truncated</span
               >
             {/if}

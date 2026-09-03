@@ -44,7 +44,7 @@
   aria-label="Message history"
 >
   <header class="flex items-center justify-between border-b px-3 py-2">
-    <p class="text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed">
+    <p class="text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed">
       Your messages
       {#if messages.length > 0}
         <span class="ml-1 tabular-nums tracking-normal normal-case">({messages.length})</span>

@@ -27,7 +27,7 @@
       <Bug size={14} class="text-muted" />
       <h2 class="text-xs font-semibold text-foreground">Debug</h2>
       {#if agentDebug.exchangeCount > 0}
-        <span class="rounded bg-elevated px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-muted">
+        <span class="rounded bg-elevated px-1.5 py-0.5 font-mono text-[0.625rem] tabular-nums text-muted">
           {agentDebug.exchangeCount}
         </span>
       {/if}
@@ -74,18 +74,18 @@
   <!-- Status bar -->
   <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
     {#if agentDebug.enabled}
-      <span class="flex items-center gap-1 text-[10px] text-success">
+      <span class="flex items-center gap-1 text-[0.625rem] text-success">
         <span class="h-1.5 w-1.5 rounded-full bg-success"></span>
         Recording
       </span>
     {:else}
-      <span class="flex items-center gap-1 text-[10px] text-dimmed">
+      <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
         <span class="h-1.5 w-1.5 rounded-full bg-dimmed"></span>
         Paused
       </span>
     {/if}
     {#if agentDebug.exchangeCount > 0}
-      <span class="text-[10px] text-dimmed">
+      <span class="text-[0.625rem] text-dimmed">
         {agentDebug.exchanges.length} shown
         {#if agentDebug.exchanges.length < agentDebug.exchangeCount}
           of {agentDebug.exchangeCount}
@@ -97,9 +97,9 @@
   <!-- Current thread ID -->
   {#if workspaceState.selectedThread}
     <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
-      <span class="shrink-0 text-[10px] font-medium text-muted">Thread ID:</span>
+      <span class="shrink-0 text-[0.625rem] font-medium text-muted">Thread ID:</span>
       <span
-        class="min-w-0 flex-1 select-all break-all rounded bg-elevated px-1.5 py-0.5 font-mono text-[10px] leading-relaxed text-foreground"
+        class="min-w-0 flex-1 select-all break-all rounded bg-elevated px-1.5 py-0.5 font-mono text-[0.625rem] leading-relaxed text-foreground"
         title={workspaceState.selectedThread.id}
       >
         {workspaceState.selectedThread.id}

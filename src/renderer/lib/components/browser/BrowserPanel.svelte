@@ -315,7 +315,7 @@
       type="button"
       class={[
         'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
-        fullscreen ? 'gap-1.5 px-2 text-[11px] font-medium' : 'w-7',
+        fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
         activeSurface === 'console'
           ? 'bg-elevated text-foreground'
           : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -329,7 +329,7 @@
       {#if fullscreen}
         <span>Console</span>
         {#if errorCount > 0}
-          <span class="rounded-full bg-danger/15 px-1.5 text-[9px] font-semibold text-danger">
+          <span class="rounded-full bg-danger/15 px-1.5 text-[0.5625rem] font-semibold text-danger">
             {errorCount}
           </span>
         {/if}
@@ -341,7 +341,7 @@
   </form>
   {#if addressError}
     <p
-      class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-1 text-[11px] text-danger"
+      class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-1 text-[0.6875rem] text-danger"
       role="alert"
     >
       {addressError}
@@ -357,7 +357,7 @@
   <div
     {@attach attachConsoleElement}
     class={[
-      'min-h-0 flex-1 overflow-auto bg-app font-mono text-[11px]',
+      'min-h-0 flex-1 overflow-auto bg-app font-mono text-[0.6875rem]',
       activeSurface !== 'console' && 'hidden'
     ]}
     role="region"
@@ -371,7 +371,7 @@
         <div class="min-w-0">
           <p class="whitespace-pre-wrap break-words">{entry.message}</p>
           {#if sourceLabel(entry)}
-            <p class="mt-0.5 truncate text-[10px] opacity-55" title={sourceLabel(entry)}>
+            <p class="mt-0.5 truncate text-[0.625rem] opacity-55" title={sourceLabel(entry)}>
               {sourceLabel(entry)}
             </p>
           {/if}

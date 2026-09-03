@@ -86,7 +86,7 @@
     <div class="mb-2 flex items-center justify-between">
       <div>
         <h3 class="text-sm font-semibold">Provider accounts</h3>
-        <p class="text-[11px] text-dimmed">Create once, reuse across any project.</p>
+        <p class="text-[0.6875rem] text-dimmed">Create once, reuse across any project.</p>
       </div>
       <button
         class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
@@ -125,18 +125,18 @@
                 />
                 <p class="truncate text-xs font-semibold">{account.label}</p>
                 <span
-                  class="rounded-full px-1.5 py-0.5 text-[10px] font-medium {account.enabled
+                  class="rounded-full px-1.5 py-0.5 text-[0.625rem] font-medium {account.enabled
                     ? 'bg-success/10 text-success'
                     : 'bg-raised text-dimmed'}"
                 >
                   {account.enabled ? 'Enabled' : 'Disabled'}
                 </span>
               </div>
-              <p class="mt-0.5 truncate text-[10px] text-dimmed">
+              <p class="mt-0.5 truncate text-[0.625rem] text-dimmed">
                 {PROVIDER_DISPLAY_NAMES[account.providerKind]}
               </p>
             </div>
-            <p class="truncate font-mono text-[10px] text-dimmed" title={account.baseUrl}>
+            <p class="truncate font-mono text-[0.625rem] text-dimmed" title={account.baseUrl}>
               {account.baseUrl ?? 'No base URL'}
             </p>
             <div class="flex items-center gap-1">

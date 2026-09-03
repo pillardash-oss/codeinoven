@@ -142,7 +142,7 @@
   <div class="flex shrink-0 items-center gap-0.5 border-b border-border px-2 py-1.5">
     {#each filters as f (f.key)}
       <button
-        class="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium transition-colors {notificationPanelState.filter ===
+        class="flex items-center gap-1.5 px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {notificationPanelState.filter ===
         f.key
           ? 'bg-foreground text-app'
           : 'text-muted hover:bg-elevated hover:text-foreground'}"
@@ -212,14 +212,14 @@
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
                   <span
-                    class="shrink-0 text-[10px] font-semibold uppercase tracking-wide {e.kind ===
+                    class="shrink-0 text-[0.625rem] font-semibold uppercase tracking-wide {e.kind ===
                     'error'
                       ? 'text-danger'
                       : 'text-warning'}"
                   >
                     {appErrorLabel(e.kind)}
                   </span>
-                  <span class="shrink-0 text-[10px] text-dimmed">
+                  <span class="shrink-0 text-[0.625rem] text-dimmed">
                     {formatTime(e.timestamp)}
                     {#if e.count > 1}
                       <span class="text-dimmed">· ×{e.count}</span>
@@ -227,7 +227,7 @@
                   </span>
                 </div>
                 <p
-                  class="mt-0.5 select-text break-all font-mono text-[11px] leading-relaxed text-muted"
+                  class="mt-0.5 select-text break-all font-mono text-[0.6875rem] leading-relaxed text-muted"
                 >
                   {e.message}
                 </p>
@@ -294,10 +294,10 @@
             </div>
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2">
-                <span class="truncate text-[11px] font-medium text-foreground">{n.title}</span>
-                <span class="shrink-0 text-[10px] text-dimmed">{formatTime(n.timestamp)}</span>
+                <span class="truncate text-[0.6875rem] font-medium text-foreground">{n.title}</span>
+                <span class="shrink-0 text-[0.625rem] text-dimmed">{formatTime(n.timestamp)}</span>
               </div>
-              <div class="mt-1 flex items-center gap-1 text-[10px] text-dimmed">
+              <div class="mt-1 flex items-center gap-1 text-[0.625rem] text-dimmed">
                 {#if n.source === 'chat'}
                   <MessageSquare size={10} class="shrink-0" />
                   <span>Chat</span>
@@ -322,7 +322,7 @@
                 {/if}
               </div>
               {#if n.body}
-                <p class="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-muted">
+                <p class="mt-0.5 line-clamp-2 text-[0.6875rem] leading-relaxed text-muted">
                   {n.body}
                 </p>
               {/if}

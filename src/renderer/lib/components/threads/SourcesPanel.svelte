@@ -465,7 +465,7 @@
     <div class="flex items-baseline justify-between gap-3">
       <div>
         <h2 class="text-sm font-semibold text-foreground">Sources</h2>
-        <p class="mt-0.5 text-[11px] text-dimmed">
+        <p class="mt-0.5 text-[0.6875rem] text-dimmed">
           {#if section === 'sources'}
             Attachments, researched websites, and generated images.
           {:else if section === 'artifacts'}
@@ -530,7 +530,7 @@
         onclick={() => (section = 'processes')}
       >
         Processes
-        {#if processes.length > 0}<span class="text-[10px] tabular-nums">{processes.length}</span
+        {#if processes.length > 0}<span class="text-[0.625rem] tabular-nums">{processes.length}</span
           >{/if}
       </button>
       <button
@@ -546,7 +546,7 @@
       >
         <ImageIcon size={12} />
         Artifacts
-        {#if artifactCount > 0}<span class="text-[10px] tabular-nums">{artifactCount}</span>{/if}
+        {#if artifactCount > 0}<span class="text-[0.625rem] tabular-nums">{artifactCount}</span>{/if}
       </button>
       <button
         type="button"
@@ -565,7 +565,7 @@
         <Brain size={12} />
         Contexts
         {#if contextSection === 'memory' && memoryCount > 0}
-          <span class="text-[10px] tabular-nums">{memoryCount}</span>
+          <span class="text-[0.625rem] tabular-nums">{memoryCount}</span>
         {/if}
       </button>
     </div>
@@ -578,7 +578,7 @@
       >
         <button
           type="button"
-          class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors {contextSection ===
+          class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {contextSection ===
           'mcps'
             ? 'bg-surface text-foreground shadow-sm'
             : 'text-muted hover:text-foreground'}"
@@ -591,7 +591,7 @@
         </button>
         <button
           type="button"
-          class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors {contextSection ===
+          class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {contextSection ===
           'skills'
             ? 'bg-surface text-foreground shadow-sm'
             : 'text-muted hover:text-foreground'}"
@@ -604,7 +604,7 @@
         </button>
         <button
           type="button"
-          class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors {contextSection ===
+          class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {contextSection ===
           'memory'
             ? 'bg-surface text-foreground shadow-sm'
             : 'text-muted hover:text-foreground'}"
@@ -617,7 +617,7 @@
           }}
         >
           Memory
-          {#if memoryCount > 0}<span class="text-[10px] tabular-nums">{memoryCount}</span>{/if}
+          {#if memoryCount > 0}<span class="text-[0.625rem] tabular-nums">{memoryCount}</span>{/if}
         </button>
       </div>
     {/if}
@@ -630,7 +630,7 @@
       >
         <button
           type="button"
-          class="rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors {originFilter ===
+          class="rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {originFilter ===
           'all'
             ? 'bg-surface text-foreground shadow-sm'
             : 'text-muted hover:text-foreground'}"
@@ -642,7 +642,7 @@
         </button>
         <button
           type="button"
-          class="rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors {originFilter ===
+          class="rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {originFilter ===
           'application'
             ? 'bg-surface text-foreground shadow-sm'
             : 'text-muted hover:text-foreground'}"
@@ -654,7 +654,7 @@
         </button>
         <button
           type="button"
-          class="rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors {originFilter ===
+          class="rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {originFilter ===
           'global'
             ? 'bg-surface text-foreground shadow-sm'
             : 'text-muted hover:text-foreground'}"
@@ -666,7 +666,7 @@
         </button>
         <button
           type="button"
-          class="rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors {originFilter ===
+          class="rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {originFilter ===
           'harness'
             ? 'bg-surface text-foreground shadow-sm'
             : 'text-muted hover:text-foreground'}"
@@ -696,7 +696,7 @@
       <div class="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Filter sources by kind">
         <button
           type="button"
-          class="rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors {sourceFilter ===
+          class="rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium tabular-nums transition-colors {sourceFilter ===
           'all'
             ? 'bg-primary/15 text-primary'
             : 'bg-raised text-muted hover:text-foreground'}"
@@ -708,7 +708,7 @@
         </button>
         <button
           type="button"
-          class="rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors {sourceFilter ===
+          class="rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium tabular-nums transition-colors {sourceFilter ===
           'attachment'
             ? 'bg-primary/15 text-primary'
             : 'bg-raised text-muted hover:text-foreground'}"
@@ -720,7 +720,7 @@
         </button>
         <button
           type="button"
-          class="rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors {sourceFilter ===
+          class="rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium tabular-nums transition-colors {sourceFilter ===
           'web'
             ? 'bg-primary/15 text-primary'
             : 'bg-raised text-muted hover:text-foreground'}"
@@ -732,7 +732,7 @@
         </button>
         <button
           type="button"
-          class="rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors {sourceFilter ===
+          class="rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium tabular-nums transition-colors {sourceFilter ===
           'generated-image'
             ? 'bg-primary/15 text-primary'
             : 'bg-raised text-muted hover:text-foreground'}"
@@ -745,7 +745,7 @@
         {#if citationCount > 0}
           <button
             type="button"
-            class="rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors {sourceFilter ===
+            class="rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium tabular-nums transition-colors {sourceFilter ===
             'file-citation'
               ? 'bg-primary/15 text-primary'
               : 'bg-raised text-muted hover:text-foreground'}"
@@ -759,7 +759,7 @@
         {#if sectionCount > 0}
           <button
             type="button"
-            class="rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors {sourceFilter ===
+            class="rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium tabular-nums transition-colors {sourceFilter ===
             'section'
               ? 'bg-primary/15 text-primary'
               : 'bg-raised text-muted hover:text-foreground'}"
@@ -908,7 +908,7 @@
               {/if}
 
               <div class="min-w-0 flex-1">
-                <p class="text-[10px] font-semibold uppercase tracking-[0.12em] text-dimmed">
+                <p class="text-[0.625rem] font-semibold uppercase tracking-[0.12em] text-dimmed">
                   {sourceLabel(source)}
                 </p>
                 {#if source.kind === 'web' && source.url}
@@ -921,7 +921,7 @@
                   >
                     <span class="truncate">{source.title}</span>
                   </button>
-                  <p class="mt-1 truncate text-[10px] text-dimmed" title={url}>
+                  <p class="mt-1 truncate text-[0.625rem] text-dimmed" title={url}>
                     {url}
                   </p>
                 {:else if source.kind === 'web'}
@@ -935,7 +935,7 @@
                   >
                     <span class="break-all">{citationDisplayText(source)}</span>
                     {#if source.line}
-                      <span class="ml-1 text-[10px] text-dimmed tabular-nums">:{source.line}</span>
+                      <span class="ml-1 text-[0.625rem] text-dimmed tabular-nums">:{source.line}</span>
                     {/if}
                   </button>
                 {:else if source.kind === 'section'}
@@ -960,7 +960,7 @@
                   </button>
                 {/if}
                 {#if source.kind === 'web' && source.detail}
-                  <p class="mt-1 line-clamp-2 text-[10px] leading-relaxed text-dimmed">
+                  <p class="mt-1 line-clamp-2 text-[0.625rem] leading-relaxed text-dimmed">
                     {source.detail}
                   </p>
                 {/if}
@@ -1025,22 +1025,22 @@
                   >
                     {entry.name}
                   </button>
-                  <span class="rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted">
+                  <span class="rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted">
                     {originLabel(entry)}
                   </span>
                   {#if !entry.enabled}
-                    <span class="rounded-md bg-danger/10 px-1.5 py-0.5 text-[10px] text-danger">
+                    <span class="rounded-md bg-danger/10 px-1.5 py-0.5 text-[0.625rem] text-danger">
                       Disabled
                     </span>
                   {/if}
                 </div>
                 {#if entry.description}
-                  <p class="mt-1 line-clamp-2 text-[10px] leading-relaxed text-dimmed">
+                  <p class="mt-1 line-clamp-2 text-[0.625rem] leading-relaxed text-dimmed">
                     {entry.description}
                   </p>
                 {/if}
                 {#if entry.detail}
-                  <p class="mt-1 truncate font-mono text-[10px] text-dimmed" title={entry.detail}>
+                  <p class="mt-1 truncate font-mono text-[0.625rem] text-dimmed" title={entry.detail}>
                     {entry.detail}
                   </p>
                 {/if}
@@ -1121,22 +1121,22 @@
                   >
                     {entry.name}
                   </button>
-                  <span class="rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted">
+                  <span class="rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted">
                     {originLabel(entry)}
                   </span>
                   {#if !entry.enabled}
-                    <span class="rounded-md bg-danger/10 px-1.5 py-0.5 text-[10px] text-danger">
+                    <span class="rounded-md bg-danger/10 px-1.5 py-0.5 text-[0.625rem] text-danger">
                       Disabled
                     </span>
                   {/if}
                 </div>
                 {#if entry.description}
-                  <p class="mt-1 line-clamp-2 text-[10px] leading-relaxed text-dimmed">
+                  <p class="mt-1 line-clamp-2 text-[0.625rem] leading-relaxed text-dimmed">
                     {entry.description}
                   </p>
                 {/if}
                 {#if entry.detail}
-                  <p class="mt-1 truncate font-mono text-[10px] text-dimmed" title={entry.detail}>
+                  <p class="mt-1 truncate font-mono text-[0.625rem] text-dimmed" title={entry.detail}>
                     {entry.detail}
                   </p>
                 {/if}
@@ -1219,13 +1219,13 @@
                     )}
                 />
                 <span
-                  class="absolute inset-0 flex items-center justify-center bg-black/0 text-[10px] font-medium text-white opacity-0 transition-all group-hover:bg-black/30 group-hover:opacity-100"
+                  class="absolute inset-0 flex items-center justify-center bg-black/0 text-[0.625rem] font-medium text-white opacity-0 transition-all group-hover:bg-black/30 group-hover:opacity-100"
                 >
                   Preview
                 </span>
               </button>
               <div class="min-w-0 flex-1">
-                <p class="text-[10px] font-semibold uppercase tracking-[0.12em] text-dimmed">
+                <p class="text-[0.625rem] font-semibold uppercase tracking-[0.12em] text-dimmed">
                   Generated image
                 </p>
                 <p
@@ -1235,7 +1235,7 @@
                   {artifact.filename}
                 </p>
                 <p
-                  class="mt-1 break-all text-[10px] leading-relaxed text-dimmed"
+                  class="mt-1 break-all text-[0.625rem] leading-relaxed text-dimmed"
                   title={artifact.path}
                 >
                   {artifact.relativePath ?? artifact.path}
@@ -1313,11 +1313,11 @@
               >
                 {entry.label}
               </p>
-              <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted">
+              <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted">
                 {memoryScopeLabel(entry)}
               </span>
             </div>
-            <p class="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-muted">
+            <p class="mt-2 whitespace-pre-wrap text-[0.6875rem] leading-relaxed text-muted">
               {entry.content}
             </p>
           </article>
@@ -1367,23 +1367,23 @@
                   <p class="truncate text-xs font-semibold text-foreground">
                     {processName(runningProcess.command)}
                   </p>
-                  <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted">
+                  <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted">
                     Running
                   </span>
                 </div>
                 <p
-                  class="mt-1 line-clamp-2 font-mono text-[10px] leading-relaxed text-dimmed"
+                  class="mt-1 line-clamp-2 font-mono text-[0.625rem] leading-relaxed text-dimmed"
                   title={runningProcess.command}
                 >
                   {runningProcess.command}
                 </p>
-                <p class="mt-1 text-[10px] text-dimmed tabular-nums">
+                <p class="mt-1 text-[0.625rem] text-dimmed tabular-nums">
                   PID {runningProcess.pid} · Started {processStartedAt(runningProcess.startedAt)}
                 </p>
               </div>
               <button
                 type="button"
-                class="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2 text-[11px] font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
+                class="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2 text-[0.6875rem] font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
                 disabled={stoppingPids.has(runningProcess.pid)}
                 aria-label={`Stop ${processName(runningProcess.command)} process ${runningProcess.pid}`}
                 title={`Stop process ${runningProcess.pid}`}
@@ -1402,9 +1402,9 @@
           <div class="border-b border-border bg-elevated/60 px-4 py-3">
             <div class="flex items-center gap-2">
               <Globe2 size={13} class="shrink-0 text-dimmed" />
-              <p class="text-[11px] font-semibold text-foreground">App-wide processes</p>
+              <p class="text-[0.6875rem] font-semibold text-foreground">App-wide processes</p>
             </div>
-            <p class="mt-1 text-[10px] leading-relaxed text-dimmed">
+            <p class="mt-1 text-[0.625rem] leading-relaxed text-dimmed">
               These processes run under a shared server used by every thread, so they are not tied
               to this conversation. Stopping one affects all threads using the app.
             </p>
@@ -1426,29 +1426,29 @@
                       {processName(runningProcess.command)}
                     </p>
                     <span
-                      class="shrink-0 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-500"
+                      class="shrink-0 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-amber-500"
                     >
                       App
                     </span>
                     <span
-                      class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted"
+                      class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted"
                     >
                       Running
                     </span>
                   </div>
                   <p
-                    class="mt-1 line-clamp-2 font-mono text-[10px] leading-relaxed text-dimmed"
+                    class="mt-1 line-clamp-2 font-mono text-[0.625rem] leading-relaxed text-dimmed"
                     title={runningProcess.command}
                   >
                     {runningProcess.command}
                   </p>
-                  <p class="mt-1 text-[10px] text-dimmed tabular-nums">
+                  <p class="mt-1 text-[0.625rem] text-dimmed tabular-nums">
                     PID {runningProcess.pid} · Started {processStartedAt(runningProcess.startedAt)}
                   </p>
                 </div>
                 <button
                   type="button"
-                  class="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2 text-[11px] font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
+                  class="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2 text-[0.6875rem] font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
                   disabled={stoppingPids.has(runningProcess.pid)}
                   aria-label={`Stop ${processName(runningProcess.command)} process ${runningProcess.pid}`}
                   title={`Stop app-wide process ${runningProcess.pid}. This affects every thread using the app.`}

@@ -45,7 +45,7 @@
 </script>
 
 <div class="rounded-lg border bg-surface px-3 py-2.5">
-  <div class="flex items-center justify-between gap-2 text-[11px]">
+  <div class="flex items-center justify-between gap-2 text-[0.6875rem]">
     <span class="inline-flex items-center gap-1.5 font-medium {tone === 'verifying' ? 'text-amber-600' : 'text-foreground'}">
       {#if !indeterminate}
         <LoaderCircle size={11} class="animate-spin shrink-0" aria-hidden="true" />
@@ -81,6 +81,6 @@
     {/if}
   </div>
   {#if hint}
-    <p class="mt-1.5 text-[10px] leading-none text-dimmed">{hint}</p>
+    <p class="mt-1.5 text-[0.625rem] leading-none text-dimmed">{hint}</p>
   {/if}
 </div>

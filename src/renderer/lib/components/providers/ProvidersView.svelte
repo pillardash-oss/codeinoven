@@ -579,7 +579,7 @@
     >
       Base URL providers
       {#if baseUrlProviderStore.providers.length > 0}
-        <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[10px] text-dimmed">
+        <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed">
           {baseUrlProviderStore.providers.length}
         </span>
       {/if}
@@ -617,7 +617,7 @@
             </button>
           {:else}
             <kbd
-              class="rounded-md border border-border-strong bg-raised px-1.5 py-0.5 font-sans text-[10px] font-medium text-dimmed"
+              class="rounded-md border border-border-strong bg-raised px-1.5 py-0.5 font-sans text-[0.625rem] font-medium text-dimmed"
             >
               {displayShortcutLabel('Ctrl K')}
             </kbd>
@@ -642,7 +642,7 @@
           onclick={() => (statusFilter = 'all')}
         >
           All
-          <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[10px] text-dimmed"
+          <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
             >{allCount}</span
           >
         </button>
@@ -661,7 +661,7 @@
             <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" aria-hidden="true"></span>
           {/if}
           Updates
-          <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[10px] text-dimmed"
+          <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
             >{updatesCount}</span
           >
         </button>
@@ -680,7 +680,7 @@
             <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true"></span>
           {/if}
           Issues
-          <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[10px] text-dimmed"
+          <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
             >{issuesCount}</span
           >
         </button>
@@ -714,7 +714,7 @@
               <div class="min-w-0">
                 <p class="truncate text-sm font-medium">{provider.name}</p>
                 {#if provider.version}
-                  <p class="truncate font-mono text-[10px] text-dimmed">{provider.version}</p>
+                  <p class="truncate font-mono text-[0.625rem] text-dimmed">{provider.version}</p>
                 {/if}
               </div>
             </div>
@@ -722,7 +722,7 @@
             <div class="min-w-0">
               {#key provider.status}
                 <span
-                  class="inline-flex max-w-full items-center gap-1.5 truncate rounded-lg border px-2.5 py-1 text-[11px] font-medium {badge.classes}"
+                  class="inline-flex max-w-full items-center gap-1.5 truncate rounded-lg border px-2.5 py-1 text-[0.6875rem] font-medium {badge.classes}"
                   in:fade={{ duration: 150 }}
                   title={badge.label}
                 >
@@ -733,7 +733,7 @@
             </div>
 
             <div class="min-w-0">
-              <p class="text-[10px] font-medium uppercase tracking-wide text-dimmed">
+              <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
                 {provider.executionTarget?.kind === 'wsl'
                   ? `WSL path · ${provider.executionTarget.distribution}`
                   : provider.executionTarget?.kind === 'bundled'
@@ -772,12 +772,12 @@
 
             <div class="min-w-0">
               {#if provider.status === 'error'}
-                <p class="text-[10px] font-medium uppercase tracking-wide text-dimmed">Issue</p>
+                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">Issue</p>
                 <p class="mt-0.5 truncate text-xs text-danger" title={provider.detail}>
                   {provider.detail ?? 'Needs attention'}
                 </p>
               {:else if provider.status === 'available'}
-                <p class="text-[10px] font-medium uppercase tracking-wide text-dimmed">Providers</p>
+                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">Providers</p>
                 <p class="mt-0.5 truncate text-xs text-muted">
                   {totalProviderCount(provider)} provider{totalProviderCount(provider) === 1
                     ? ''
@@ -786,7 +786,7 @@
                   {/if}
                 </p>
               {:else}
-                <p class="text-[10px] font-medium uppercase tracking-wide text-dimmed">Providers</p>
+                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">Providers</p>
                 <p class="mt-0.5 text-xs text-dimmed">—</p>
               {/if}
             </div>
@@ -894,7 +894,7 @@
               {#if provider.status === 'error'}
                 <p class="text-xs font-semibold text-foreground">Details</p>
                 <pre
-                  class="overflow-auto rounded-lg border border-border bg-raised p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted"><code
+                  class="overflow-auto rounded-lg border border-border bg-raised p-2.5 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted"><code
                     >{provider.detail ?? 'No additional detail available.'}</code
                   ></pre>
               {:else}
@@ -907,7 +907,7 @@
                         Harness loads AGENTS.md natively
                       </p>
                       <p
-                        class="mt-0.5 truncate text-[10px] text-dimmed"
+                        class="mt-0.5 truncate text-[0.625rem] text-dimmed"
                         title="When on, {provider.name} reads the project's AGENTS.md itself. {APP_NAME} uses its application Agent behavior prompt for Engineering work."
                       >
                         Harness capability · {manifestSourceLabel(entry)}
@@ -917,7 +917,7 @@
                       {#if entry.confirmed}
                         <button
                           type="button"
-                          class="rounded-md px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                          class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
                           title="Clear the confirmed value and fall back to the declared manifest"
                           disabled={manifestSaving[provider.id]}
                           onclick={() => void resetManifestBehavior(provider.id, 'loadsAgentsMd')}
@@ -943,7 +943,7 @@
                       Update automatically on launch
                     </p>
                     <p
-                      class="mt-0.5 truncate text-[10px] text-dimmed"
+                      class="mt-0.5 truncate text-[0.625rem] text-dimmed"
                       title="When on, {provider.name} is updated in the background whenever you open {APP_NAME}."
                     >
                       Updates in the background when {APP_NAME} opens
@@ -983,7 +983,7 @@
     </div>
 
     <div
-      class="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-[11px]"
+      class="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-[0.6875rem]"
     >
       <div class="flex flex-wrap items-center gap-4">
         <span class="flex items-center gap-1.5 text-success">

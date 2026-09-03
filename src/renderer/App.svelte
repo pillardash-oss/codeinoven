@@ -108,6 +108,9 @@
 
   const defaultConfig: AppConfig = {
     theme: 'system',
+    fontFamily: 'jetbrains-mono',
+    appFontSize: 15,
+    zoomLevel: 1,
     onboardingCompleted: false,
     threadLimit: 70,
     questionTimeoutMs: 300_000,

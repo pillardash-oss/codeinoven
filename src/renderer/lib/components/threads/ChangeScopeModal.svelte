@@ -170,7 +170,7 @@
                 {/if}
                 <span class="flex-1 truncate">{bucket.name}</span>
                 {#if bucket.id === currentBucketId}
-                  <span class="flex shrink-0 items-center gap-1 text-[10px] text-dimmed">
+                  <span class="flex shrink-0 items-center gap-1 text-[0.625rem] text-dimmed">
                     <Check size={10} />
                     Current
                   </span>

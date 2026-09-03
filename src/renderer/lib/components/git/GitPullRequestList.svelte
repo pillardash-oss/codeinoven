@@ -113,19 +113,19 @@
   {#if !githubConnected}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <VendorIcon name="GitHub" size={22} class="text-dimmed" />
-      <p class="text-[11px] leading-relaxed text-muted">
+      <p class="text-[0.6875rem] leading-relaxed text-muted">
         Sign in to GitHub to review, comment on, and merge pull requests from here.
       </p>
       <button
         type="button"
-        class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+        class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
         onclick={onSignIn}
       >
         Sign in to GitHub
       </button>
     </div>
   {:else if !identity}
-    <p class="px-4 py-6 text-center text-[11px] leading-relaxed text-dimmed">
+    <p class="px-4 py-6 text-center text-[0.6875rem] leading-relaxed text-dimmed">
       This project's origin remote isn't a GitHub repository, so there are no pull requests to show.
     </p>
   {:else}
@@ -133,7 +133,7 @@
       {#each states as option (option.id)}
         <button
           type="button"
-          class="h-6 cursor-pointer rounded-md px-2 text-[10px] font-medium transition-colors {prState ===
+          class="h-6 cursor-pointer rounded-md px-2 text-[0.625rem] font-medium transition-colors {prState ===
           option.id
             ? 'bg-elevated text-foreground'
             : 'text-muted hover:text-foreground'}"
@@ -166,17 +166,17 @@
 
     <div class="min-h-0 flex-1 overflow-y-auto">
       {#if loading && items.length === 0}
-        <div class="flex items-center justify-center gap-2 py-10 text-[11px] text-dimmed">
+        <div class="flex items-center justify-center gap-2 py-10 text-[0.6875rem] text-dimmed">
           <Loader2 size={13} class="animate-spin" />
           Loading pull requests…
         </div>
       {:else if accessError}
         <div class="flex flex-col items-center gap-3 px-5 py-8 text-center">
           <GitPullRequestClosed size={18} class="text-danger" />
-          <p class="text-[10px] leading-relaxed text-dimmed">{accessError}</p>
+          <p class="text-[0.625rem] leading-relaxed text-dimmed">{accessError}</p>
           <button
             type="button"
-            class="h-8 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+            class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
             onclick={() =>
               void openInBrowser('https://github.com/apps/codeinoven/installations/new')}
           >
@@ -186,7 +186,7 @@
       {:else if items.length === 0}
         <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
           <GitPullRequest size={18} class="text-dimmed" />
-          <p class="text-[11px] leading-relaxed text-dimmed">
+          <p class="text-[0.6875rem] leading-relaxed text-dimmed">
             No {prState === 'all' ? '' : prState} pull requests.
           </p>
         </div>
@@ -203,24 +203,24 @@
           >
             <Icon size={13} class="mt-0.5 shrink-0 {stateClass(pr)}" />
             <div class="min-w-0 flex-1">
-              <p class="truncate text-[11px] font-medium text-foreground">{pr.title}</p>
-              <p class="mt-0.5 truncate text-[9px] text-dimmed">
+              <p class="truncate text-[0.6875rem] font-medium text-foreground">{pr.title}</p>
+              <p class="mt-0.5 truncate text-[0.5625rem] text-dimmed">
                 #{pr.number} by {pr.authorLogin} · {relativeTime(pr.updatedAt)}
               </p>
-              <p class="mt-0.5 truncate font-mono text-[9px] text-dimmed">
+              <p class="mt-0.5 truncate font-mono text-[0.5625rem] text-dimmed">
                 {pr.headRef} → {pr.baseRef}
               </p>
             </div>
             {#if hasIssue}
               <span
-                class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/10 px-1.5 py-0.5 text-[9px] font-semibold text-danger"
+                class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-danger"
                 title="This pull request has merge conflicts and needs resolution"
               >
                 <TriangleAlert size={9} />
                 Conflicts
               </span>
             {:else if pr.comments > 0}
-              <span class="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums text-dimmed">
+              <span class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums text-dimmed">
                 <MessageSquare size={10} />
                 {pr.comments}
               </span>
@@ -234,17 +234,17 @@
       <div class="flex shrink-0 items-center justify-between border-t border-border px-3 py-1.5">
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
           disabled={page === 1 || loading}
           onclick={() => (page -= 1)}
         >
           <ChevronLeft size={12} />
           Previous
         </button>
-        <span class="text-[9px] tabular-nums text-dimmed">Page {page}</span>
+        <span class="text-[0.5625rem] tabular-nums text-dimmed">Page {page}</span>
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
           disabled={!hasMore || loading}
           onclick={() => (page += 1)}
         >

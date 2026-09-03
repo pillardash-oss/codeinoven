@@ -677,7 +677,7 @@
             onclick={() => void onPrimaryNavClick('scope')}
           >
             <Kanban size={14} strokeWidth={1.8} class={anyProjectWorking ? 'animate-pulse' : ''} />
-            <span class="header-control-label text-[11px] font-medium">Scope</span>
+            <span class="header-control-label text-[0.6875rem] font-medium">Scope</span>
           </button>
         {:else if projectViewMode === 'threads'}
           <button
@@ -698,7 +698,7 @@
               strokeWidth={1.8}
               class={anyProjectWorking ? 'animate-pulse' : ''}
             />
-            <span class="header-control-label text-[11px] font-medium">Threads</span>
+            <span class="header-control-label text-[0.6875rem] font-medium">Threads</span>
           </button>
         {:else}
           <button
@@ -719,7 +719,7 @@
               strokeWidth={1.8}
               class={anyProjectWorking ? 'animate-pulse' : ''}
             />
-            <span class="header-control-label text-[11px] font-medium">Projects</span>
+            <span class="header-control-label text-[0.6875rem] font-medium">Projects</span>
           </button>
           <div class="mx-0.5 h-4 w-px bg-border/40" aria-hidden="true"></div>
           <button
@@ -801,7 +801,7 @@
       onclick={() => void onPrimaryNavClick('chats')}
     >
       <MessageSquare size={14} strokeWidth={1.8} class={anyChatWorking ? 'animate-pulse' : ''} />
-      <span class="header-control-label text-[11px] font-medium">Chats</span>
+      <span class="header-control-label text-[0.6875rem] font-medium">Chats</span>
     </button>
   </nav>
 
@@ -849,7 +849,7 @@
                 {project}
                 class="max-w-36 text-left"
                 nameClass="text-xs font-medium"
-                locationClass="text-[9px] text-dimmed"
+                locationClass="text-[0.5625rem] text-dimmed"
                 showLocation={hasProjectNameCollision(project, scopeState.projects)}
               />
             </button>
@@ -878,7 +878,7 @@
     <div class="flex min-w-0 flex-1 items-center justify-center px-2">
       {#if onSettings}
         <div class="pointer-events-none">
-          <h1 class="text-[11px] font-semibold uppercase tracking-[0.16em] text-dimmed">
+          <h1 class="text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-dimmed">
             {settingsTitle}
           </h1>
         </div>
@@ -925,7 +925,7 @@
           {/if}
           <div class="flex min-w-0 items-center gap-1.5 overflow-hidden">
             <h1
-              class="max-w-52 truncate text-[13px] font-medium tracking-tight text-foreground"
+              class="max-w-52 truncate text-[0.8125rem] font-medium tracking-tight text-foreground"
               title={headerThreadTitle}
             >
               {headerThreadTitle}
@@ -973,7 +973,7 @@
             />
             {#if isWorking}
               <span
-                class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] {isRetryPaused
+                class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.625rem] {isRetryPaused
                   ? 'bg-warning/10 text-warning'
                   : 'bg-info/10 text-info'}"
               >
@@ -1021,7 +1021,7 @@
         </div>
       {:else}
         <div class="pointer-events-none">
-          <h1 class="text-[11px] font-semibold uppercase tracking-[0.16em] text-dimmed">
+          <h1 class="text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-dimmed">
             {viewLabels[activeView]}
           </h1>
         </div>
@@ -1196,7 +1196,7 @@
             aria-label="Select default editor"
           >
             <p
-              class="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+              class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
             >
               Open projects in
             </p>
@@ -1254,7 +1254,7 @@
         {:else}
           <FileText size={15} />
         {/if}
-        <span class="header-control-label text-[11px] font-medium">
+        <span class="header-control-label text-[0.6875rem] font-medium">
           {workspaceState.specStudioBusy
             ? workspaceState.specStudioFormulating
               ? 'Formulating…'
@@ -1292,13 +1292,13 @@
           <GitBranch size={13} class="shrink-0" />
         {/if}
         {#if gitState.branch}
-          <span class="min-w-0 flex-1 truncate font-mono text-[10px] font-medium">
+          <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] font-medium">
             {gitState.branch}
           </span>
         {/if}
         {#if gitState.conflicted.length > 0}
           <span
-            class="shrink-0 rounded-full bg-warning px-1.5 text-[9px] font-semibold tabular-nums text-on-primary"
+            class="shrink-0 rounded-full bg-warning px-1.5 text-[0.5625rem] font-semibold tabular-nums text-on-primary"
           >
             {gitState.conflicted.length}
           </span>
@@ -1307,7 +1307,7 @@
         {/if}
         {#if gitState.activePrConflictCount > 0}
           <span
-            class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/15 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-danger"
+            class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-danger"
             title={`${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution`}
           >
             <GitPullRequest size={9} class="shrink-0" />
@@ -1316,7 +1316,7 @@
         {/if}
         {#if gitState.stashes.length > 0}
           <span
-            class="absolute -bottom-1.5 left-2 flex items-center gap-0.5 rounded-full bg-info/15 px-1.5 py-0.5 text-[8px] font-semibold tabular-nums text-info ring-1 ring-info/30"
+            class="absolute -bottom-1.5 left-2 flex items-center gap-0.5 rounded-full bg-info/15 px-1.5 py-0.5 text-[0.5rem] font-semibold tabular-nums text-info ring-1 ring-info/30"
             title={`${gitState.stashes.length} stashed change${gitState.stashes.length === 1 ? '' : 's'}`}
           >
             <Archive size={8} class="shrink-0" />

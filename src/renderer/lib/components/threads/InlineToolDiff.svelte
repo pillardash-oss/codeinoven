@@ -19,16 +19,16 @@
     <section class="overflow-hidden rounded-md border border-border bg-app">
       <div class="flex h-8 items-center gap-2 border-b border-border px-2.5">
         <FileTypeIcon path={diff.path} size={13} />
-        <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">{diff.path}</span>
-        <span class="font-mono text-[10px] tabular-nums text-success">+{additions}</span>
-        <span class="font-mono text-[10px] tabular-nums text-danger">−{deletions}</span>
+        <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">{diff.path}</span>
+        <span class="font-mono text-[0.625rem] tabular-nums text-success">+{additions}</span>
+        <span class="font-mono text-[0.625rem] tabular-nums text-danger">−{deletions}</span>
         <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
       </div>
-      <div class="max-h-72 overflow-x-hidden overflow-y-auto py-1 font-mono text-[11px] leading-5">
+      <div class="max-h-72 overflow-x-hidden overflow-y-auto py-1 font-mono text-[0.6875rem] leading-5">
         <DiffRows lines={diff.lines} paneLabels />
       </div>
       {#if diff.truncated}
-        <p class="border-t border-border px-2.5 py-1.5 text-[9px] text-warning">
+        <p class="border-t border-border px-2.5 py-1.5 text-[0.5625rem] text-warning">
           Diff preview limited to 120 lines
         </p>
       {/if}

@@ -119,13 +119,13 @@
           </p>
         </div>
         <span
-          class="rounded-lg border bg-elevated px-2.5 py-1.5 text-[11px] font-medium text-muted"
+          class="rounded-lg border bg-elevated px-2.5 py-1.5 text-[0.6875rem] font-medium text-muted"
         >
           Top 100
         </span>
       </div>
 
-      <p class="mt-3 rounded-lg bg-raised px-3 py-2 text-[10px] leading-relaxed text-muted">
+      <p class="mt-3 rounded-lg bg-raised px-3 py-2 text-[0.625rem] leading-relaxed text-muted">
         Marketplace skills are third-party instructions and code. Review the repository and security
         signals before installing. CodeInOven disables anonymous Skills CLI telemetry.
       </p>
@@ -171,7 +171,7 @@
             >
               <Icon size={13} />
               {view.label}
-              {#if view.id === 'trending'}<span class="text-[10px] text-dimmed">24h</span>{/if}
+              {#if view.id === 'trending'}<span class="text-[0.625rem] text-dimmed">24h</span>{/if}
             </button>
           {/each}
         </div>
@@ -218,7 +218,7 @@
                   <span class="truncate font-mono text-sm font-semibold">{entry.name}</span>
                   {#if entry.isOfficial}
                     <span
-                      class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-primary"
+                      class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
                     >
                       Official
                     </span>
@@ -230,7 +230,7 @@
                 <span class="block font-mono text-xs font-semibold tabular-nums">
                   {entry.installs.toLocaleString()}
                 </span>
-                <span class="block text-[10px] text-dimmed">
+                <span class="block text-[0.625rem] text-dimmed">
                   {activeView === 'hot' && entry.change !== undefined
                     ? `+${entry.change} now`
                     : 'installs'}

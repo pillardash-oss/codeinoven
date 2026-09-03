@@ -53,7 +53,7 @@
   {@const rows = splitRows(lines)}
   {#if paneLabels}
     <div
-      class="sticky top-0 z-20 grid grid-cols-2 divide-x divide-border border-b border-border bg-elevated text-[9px] tracking-wide text-dimmed uppercase"
+      class="sticky top-0 z-20 grid grid-cols-2 divide-x divide-border border-b border-border bg-elevated text-[0.5625rem] tracking-wide text-dimmed uppercase"
     >
       <span class="px-3 py-0.5">Before</span>
       <span class="px-3 py-0.5">After</span>

@@ -62,7 +62,7 @@
               <button
                 type="button"
                 data-active={tab.id === activeTabId ? 'true' : undefined}
-                class="group flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium transition-colors {tab.id ===
+                class="group flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[0.6875rem] font-medium transition-colors {tab.id ===
                 activeTabId
                   ? 'bg-elevated text-foreground'
                   : 'text-dimmed hover:bg-elevated hover:text-foreground'}"

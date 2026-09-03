@@ -26,7 +26,7 @@
   }: Props = $props()
 
   const itemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
+    'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
 </script>
 
 <DropdownMenu.Item class={itemClass} onSelect={onCopyHash} disabled={resetBusy || deleteBusy}>
@@ -50,19 +50,19 @@
     sideOffset={4}
   >
     <DropdownMenu.Item class={itemClass} onSelect={() => onReset('soft')} disabled={resetBusy}>
-      <span class="w-3 text-center text-[10px] text-success">±</span>
+      <span class="w-3 text-center text-[0.625rem] text-success">±</span>
       Soft
-      <span class="ml-auto pl-3 text-[9px] text-dimmed">keep index + worktree</span>
+      <span class="ml-auto pl-3 text-[0.5625rem] text-dimmed">keep index + worktree</span>
     </DropdownMenu.Item>
     <DropdownMenu.Item class={itemClass} onSelect={() => onReset('mixed')} disabled={resetBusy}>
-      <span class="w-3 text-center text-[10px] text-warning">±</span>
+      <span class="w-3 text-center text-[0.625rem] text-warning">±</span>
       Mixed
-      <span class="ml-auto pl-3 text-[9px] text-dimmed">keep worktree</span>
+      <span class="ml-auto pl-3 text-[0.5625rem] text-dimmed">keep worktree</span>
     </DropdownMenu.Item>
     <DropdownMenu.Item class={itemClass} onSelect={() => onReset('hard')} disabled={resetBusy}>
-      <span class="w-3 text-center text-[10px] text-danger">×</span>
+      <span class="w-3 text-center text-[0.625rem] text-danger">×</span>
       Hard
-      <span class="ml-auto pl-3 text-[9px] text-dimmed">discard all</span>
+      <span class="ml-auto pl-3 text-[0.5625rem] text-dimmed">discard all</span>
     </DropdownMenu.Item>
   </DropdownMenu.SubContent>
 </DropdownMenu.Sub>
@@ -77,7 +77,7 @@
 <DropdownMenu.Separator class="my-1 h-px bg-border" />
 
 <DropdownMenu.Item
-  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
   onSelect={onDelete}
   disabled={deleteBusy || resetBusy}
 >
