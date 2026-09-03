@@ -44,11 +44,11 @@
 
 <div
   bind:this={listboxElement}
-  class="absolute bottom-full left-3 right-3 z-40 mb-1 max-h-56 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+  class="absolute bottom-full left-3 right-3 z-40 mb-1 flex max-h-56 flex-col rounded-lg border border-border bg-surface p-1 shadow-lg"
   role="listbox"
   aria-label="Composer references"
 >
-  <div class="sticky top-0 z-10 flex items-center justify-between gap-2 rounded-t-lg bg-surface px-2 py-1">
+  <div class="flex shrink-0 items-center justify-between gap-2 px-2 py-1">
     <p class="min-w-0 truncate text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
       {query ? `References matching “${query}”` : 'Built-in actions, files, and Assignment tasks'}
     </p>
@@ -65,6 +65,7 @@
       }}
     />
   </div>
+  <div class="min-h-0 flex-1 overflow-y-auto">
   {#if entries.length === 0}
     <p class="px-2 py-2 text-xs text-dimmed">No matching references</p>
   {:else}
@@ -116,4 +117,5 @@
       </button>
     {/each}
   {/if}
+  </div>
 </div>
