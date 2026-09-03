@@ -2400,6 +2400,8 @@ export interface AgentQuestion {
   multiple?: boolean
   /** Allow the user to type a custom answer (default: true). */
   custom?: boolean
+  /** The question asks the user to share files; offer composer-style file attachment. */
+  fileRequest?: boolean
   /** The user's submitted answer text. */
   answer?: string
   /** Raw tool input payload, preserved for debugging schema drift. */

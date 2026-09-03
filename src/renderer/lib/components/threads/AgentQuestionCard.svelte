@@ -6,11 +6,13 @@
     Clock,
     HelpCircle,
     MessageSquareDashed,
+    Paperclip,
     Send,
     X
   } from '@lucide/svelte'
   import { onDestroy } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
+  import { invoke } from '$lib/ipc.svelte'
   import { blockHtml, lexMarkdown } from '../markdown/markdown'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import QuestionSpeechControls from '../speech/QuestionSpeechControls.svelte'
@@ -239,6 +241,40 @@
     persistProgress(answeredIndex, updated, nextIndex)
   }
 
+  /** Answers the user picked outside the predefined options (attached files). */
+  let attachedAnswers = $derived(
+    question.fileRequest
+      ? currentAnswers.filter(
+          (answer) =>
+            !(question.options?.includes(answer) ?? false) &&
+            !(question.richOptions?.some((option) => option.label === answer) ?? false)
+        )
+      : []
+  )
+
+  async function attachFiles(): Promise<void> {
+    if (working) return
+    try {
+      const paths = await invoke('dialog:pickFiles')
+      if (!paths.length) return
+      const merged = [...currentAnswers]
+      for (const path of paths) if (!merged.includes(path)) merged.push(path)
+      markInteracted(currentIndex)
+      setAnswer(currentIndex, merged)
+      persistProgress(currentIndex, merged)
+    } catch (error) {
+      actionError = error instanceof Error ? error.message : 'The file could not be attached.'
+    }
+  }
+
+  function removeAttachedAnswer(path: string): void {
+    if (working) return
+    const updated = currentAnswers.filter((answer) => answer !== path)
+    markInteracted(currentIndex)
+    setAnswer(currentIndex, updated)
+    persistProgress(currentIndex, updated)
+  }
+
   function handleCustomInput(value: string): void {
     setCustomAnswer(value)
     const index = currentIndex
@@ -402,7 +438,11 @@
             </span>
             <span class="min-w-0 flex-1">
               <span class="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
-                {option.label}
+                {#if question.fileRequest}
+                  <span class="break-all font-mono text-[11px] font-medium">{option.label}</span>
+                {:else}
+                  {option.label}
+                {/if}
                 {#if option.recommended}
                   <span
                     class={[
@@ -450,6 +490,45 @@
       </div>
     {/if}
 
+    {#if question.fileRequest}
+      <div class="space-y-2">
+        {#if attachedAnswers.length > 0}
+          <div class="flex flex-wrap gap-1.5" role="list" aria-label="Attached files">
+            {#each attachedAnswers as attachedPath (attachedPath)}
+              <span
+                class="flex max-w-full min-w-0 items-center gap-1 rounded-lg border border-border bg-elevated px-2 py-1"
+                role="listitem"
+              >
+                <Paperclip size={11} class="shrink-0 text-muted" aria-hidden="true" />
+                <span class="truncate font-mono text-[11px] text-foreground">{attachedPath}</span>
+                <button
+                  type="button"
+                  class="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-danger/10 hover:text-danger"
+                  disabled={working}
+                  onclick={() => removeAttachedAnswer(attachedPath)}
+                  title="Remove this attached file"
+                  aria-label={`Remove attached file ${attachedPath}`}
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            {/each}
+          </div>
+        {/if}
+        <button
+          type="button"
+          class="flex min-h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          disabled={working}
+          onclick={() => void attachFiles()}
+          title="Attach files from your computer to share with the agent"
+          aria-label="Attach files to share with the agent"
+        >
+          <Paperclip size={13} />
+          Attach files…
+        </button>
+      </div>
+    {/if}
+
     {#if question.custom !== false}
       <div>
         <label
@@ -457,7 +536,9 @@
           for={`custom-answer-${request.requestId}-${currentIndex}`}
         >
           {question.options?.length || question.richOptions?.length
-            ? 'Or write your own response'
+            ? question.fileRequest
+              ? 'Or type a file path'
+              : 'Or write your own response'
             : 'Your response'}
         </label>
         <div class="flex items-stretch gap-2">
