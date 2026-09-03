@@ -23,8 +23,9 @@
 #     it's treated as nothing-to-promote.
 #   - Auto-bumps the `dev` version (patch +1) when it is not already higher
 #     than the current `nightly` version, mirroring `promotion-version.yml`.
-#   - Removes the stale `nightly` TAG (distinct from the branch) locally and on
-#     origin, which otherwise makes `git` treat `nightly` as ambiguous.
+#   - Runs non-interactively once the version gate passes: opens (or reuses)
+#     the promotion PR and enables auto-merge without prompting, since running
+#     the script at all is the confirmation.
 #
 # Usage: bun run deploy:nightly
 
@@ -67,27 +68,7 @@ fi
 say "${C_BOLD}Resolving latest remote state...${C_RESET}"
 git fetch origin
 
-# --- 1. clear the stale `nightly` tag (distinct from the branch) ------------
-if git rev-parse refs/tags/nightly >/dev/null 2>&1; then
-  warn "Stale 'nightly' TAG found (it collides with the nightly branch). Deleting it..."
-  if [[ "$DRY_RUN" -eq 0 ]]; then
-    if ! git push origin :refs/tags/nightly 2>&1; then
-      warn "Could not delete remote 'nightly' tag (likely protected by a repository rule). Continuing — git will use the branch ref explicitly."
-    fi
-    git tag -d nightly 2>/dev/null || true
-  else
-    say "(dry-run) git push origin :refs/tags/nightly && git tag -d nightly"
-  fi
-  ok "Stale 'nightly' tag handled."
-fi
-# Also handle remote-only tag (local tag already deleted but remote still exists)
-if ! git rev-parse refs/tags/nightly >/dev/null 2>&1; then
-  if git ls-remote --tags origin | grep -q "refs/tags/nightly$"; then
-    warn "Remote 'nightly' tag still exists (protected). Will continue with explicit branch refs."
-  fi
-fi
-
-# --- 2. ensure we're on a clean, up-to-date dev ------------------------------
+# --- 1. ensure we're on a clean, up-to-date dev ------------------------------
 if [[ "$(git branch --show-current)" != "dev" || "$DRY_RUN" -eq 1 ]]; then
   if [[ "$DRY_RUN" -eq 0 ]]; then
     say "Checking out dev..."
@@ -100,7 +81,7 @@ else
   say "(dry-run) git pull --ff-only origin dev"
 fi
 
-# --- 2b. push local dev ahead of origin/dev before comparing against nightly -
+# --- 1b. push local dev ahead of origin/dev before comparing against nightly -
 # The promotion is computed against origin/dev; any commits sitting locally
 # and unpushed are invisible to origin/nightly's ancestry check and to anyone
 # else, so push them up first (never force — refuses on any real divergence).
@@ -125,8 +106,8 @@ if [[ "$DEV_SHA" == "$NIGHTLY_BRANCH_SHA" ]]; then
   exit 0
 fi
 
-# --- 3. reconcile nightly vs dev ancestry ------------------------------------
-# nightly is promoted via a dev -> nightly PR (see step 5), which creates a
+# --- 2. reconcile nightly vs dev ancestry ------------------------------------
+# nightly is promoted via a dev -> nightly PR (below), which creates a
 # merge commit on nightly that is never replayed onto dev. If dev then gets a
 # new commit before the next promotion, neither branch is an ancestor of the
 # other, even though nightly introduced zero unique file content. Handle all
@@ -159,7 +140,7 @@ else
   fi
 fi
 
-# --- 4. version gate: dev must be next patch after stable (semver-correct nightly) -----
+# --- 3. version gate: dev must be next patch after stable (semver-correct nightly) -----
 NIGHTLY_VERSION="$(pkg_version origin/nightly)"
 DEV_VERSION="$(pkg_version dev)"
 
@@ -205,10 +186,7 @@ ok "Version gate passed: dev ($DEV_VERSION) -> nightly ($NIGHTLY_VERSION)."
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
   say ""
-  read -r -p "Open a dev -> nightly pull request and auto-merge once checks pass? [y/N] " answer
-  if [[ "${answer,,}" != "y" && "${answer,,}" != "yes" ]]; then
-    die "Aborted by user."
-  fi
+  say "Opening the dev -> nightly promotion PR and enabling auto-merge..."
 
   EXISTING_PR="$(gh pr list --base nightly --head dev --state open --json number --jq '.[0].number' 2>/dev/null || true)"
   if [[ -n "$EXISTING_PR" ]]; then

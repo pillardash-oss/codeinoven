@@ -3265,8 +3265,20 @@
       }
       // Move the anchor back three pages — or to the thread's very beginning
       // when fewer complete pages exist — then keep the reader's viewport
-      // stable across the mount.
+      // stable across the mount. The restore is anchored to the first on-screen
+      // message element, not a height delta: a height-delta write drifts
+      // whenever the newly mounted pages' real laid-out height differs from
+      // the height measured at tick time, and the taller the loaded pages the
+      // further that drift throws the reader (all the way to the bottom).
       const el = scrollEl
+      const firstVisibleId = visibleMessages[0]?.id
+      const firstVisibleEl = firstVisibleId
+        ? document.getElementById(`msg-${firstVisibleId}`)
+        : undefined
+      const viewportOffset =
+        el && firstVisibleEl
+          ? firstVisibleEl.getBoundingClientRect().top - el.getBoundingClientRect().top
+          : undefined
       const previousHeight = el?.scrollHeight ?? 0
       const previousTop = el?.scrollTop ?? 0
       const walked = promptPagesBefore(mountedStartIndex, 3)
@@ -3279,7 +3291,23 @@
         await tick()
         const after = scrollEl
         if (after) {
-          after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
+          const afterEl = firstVisibleId
+            ? document.getElementById(`msg-${firstVisibleId}`)
+            : undefined
+          if (afterEl && viewportOffset !== undefined) {
+            // Position of the anchor message within the scroll content, then
+            // place it back at the exact viewport offset it had before the
+            // prepended pages mounted above it.
+            const contentOffset =
+              afterEl.getBoundingClientRect().top -
+              after.getBoundingClientRect().top +
+              after.scrollTop
+            after.scrollTop = Math.max(0, contentOffset - viewportOffset)
+          } else {
+            // Element anchor unavailable — fall back to the height-delta
+            // compensation rather than leaving the viewport unmoved.
+            after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
+          }
           threadScrollPositions.set(thread.id, {
             top: after.scrollTop,
             awayFromBottom: userScrolledAway
@@ -4929,7 +4957,6 @@
       // screen while the new turn runs — the same rule the thread path follows
       // by clearing cached error state at send time.
       controller.clearError()
-      userScrolledAway = false
       idleAttentionHandled = false
       // Snapshot the selection this turn starts with before anything else can
       // change it — identical to the thread path, so mid-turn composer edits
@@ -5100,8 +5127,10 @@
 
     recordModelUse()
 
-    // Snap scroll to bottom — the user just sent something, they want to see it
-    userScrolledAway = false
+    // Follow the new message only when the reader is already at the tail. A
+    // reader scrolled up into history keeps their position: the optimistic
+    // message lands at the tail off-screen, and on-screen messages must never
+    // unmount — releasing the tail lock here would re-window and hide them.
     idleAttentionHandled = false
 
     // Persist settings as last-used. On the Chats tab this seeds the chat's own
@@ -5142,9 +5171,11 @@
         presentation,
         taskReferences
       )
-      // Wait for the DOM to reflect the optimistic message, then scroll to it.
+      // Wait for the DOM to reflect the optimistic message, then scroll to it
+      // — but only when the reader stayed at the tail. A detached reader is
+      // never yanked; their on-screen messages must stay mounted.
       await tick()
-      if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
+      if (scrollEl && !userScrolledAway) scrollEl.scrollTop = scrollEl.scrollHeight
       await sendPromise
       if (engineeringOn) {
         await reconcileReadySpec()
@@ -5408,7 +5439,6 @@
     if (controller) {
       clearQueuedState()
       showQueueMenu = false
-      userScrolledAway = false
       errorMessage = ''
       const payload: SendPayload = {
         text: msg,
@@ -5429,8 +5459,10 @@
     // turn the steer is interrupting, and a steered continuation keeps the
     // old turn's stream anchor, so it must never feed the new trace.
     clearStreamParts()
-    // Snap to bottom — the steer message just appeared
-    userScrolledAway = false
+    // The steered message lands at the tail. A reader scrolled up into the
+    // running turn keeps their position and their mounted messages — releasing
+    // the tail lock here would re-window the conversation and hide on-screen
+    // history mid-read. Tail-follow stays engaged only when already at the tail.
     errorMessage = ''
 
     const { projectId, id } = thread
@@ -5451,7 +5483,7 @@
         taskReferences
       )
       await tick()
-      if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
+      if (scrollEl && !userScrolledAway) scrollEl.scrollTop = scrollEl.scrollHeight
       await sendPromise
     } catch (error) {
       if (!queuedMessage && !queuedHasContent) {
@@ -9013,12 +9045,18 @@
       // Deletion drops the chosen span and the harness session. The next send
       // rebinds a fresh session via prepareSessionForSend, which replays the
       // remaining mirrored transcript as context.
-      await threadMessages.remove(thread.projectId, thread.id, pending.id, pending.mode)
-      // The persisted user-message history changed — force a reload so the
-      // history panel never shows deleted messages.
-      userMessageHistoryLoaded = false
-      fullUserMessageHistory = []
-      void refreshUserMessageHistory()
+      if (controller?.removeAround) {
+        // Controller-driven conversations (temporary chats) own their backend
+        // deletion — the thread mirror must never be touched for them.
+        await controller.removeAround(pending.id, pending.mode)
+      } else {
+        await threadMessages.remove(thread.projectId, thread.id, pending.id, pending.mode)
+        // The persisted user-message history changed — force a reload so the
+        // history panel never shows deleted messages.
+        userMessageHistoryLoaded = false
+        fullUserMessageHistory = []
+        void refreshUserMessageHistory()
+      }
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The message could not be deleted.'
     } finally {
@@ -9035,10 +9073,16 @@
     if (!text || busy) return
     errorMessage = ''
     try {
-      await threadMessages.truncate(thread.projectId, thread.id, msg.id)
-      // Truncation discarded the harness session — bind to the fresh one so
-      // the resend's streamed events are not filtered out.
-      await prepareSessionForSend()
+      if (controller?.truncateBefore) {
+        // Controller-driven conversations (temporary chats) truncate against
+        // their own backend; the thread mirror does not know them.
+        await controller.truncateBefore(msg.id)
+      } else {
+        await threadMessages.truncate(thread.projectId, thread.id, msg.id)
+        // Truncation discarded the harness session — bind to the fresh one so
+        // the resend's streamed events are not filtered out.
+        await prepareSessionForSend()
+      }
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The message could not be edited.'
       return

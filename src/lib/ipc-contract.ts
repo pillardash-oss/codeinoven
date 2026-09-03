@@ -1048,6 +1048,19 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, messageId: string, mode: 'down' | 'single' | 'up'],
     AgentMessage[]
   >
+  /** Delete history around a message inside a temporary side chat. Same mode
+   *  semantics as `agent:deleteMessages`; the isolated harness session is
+   *  replaced so the removed span can never reappear. */
+  'agent:deleteTemporaryMessages': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      temporaryChatId: string,
+      messageId: string,
+      mode: 'down' | 'single' | 'up'
+    ],
+    AgentMessage[]
+  >
   'agent:discardSteer': Contract<[projectId: string, threadId: string, messageId: string], void>
   'checklist:generate': Contract<
     [projectId: string, threadId: string, planContent: string],

@@ -21,6 +21,7 @@ import type {
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
 import { CIO_SPAWN_AGENT_TOOL_NAME, CIO_SUBAGENT_DONE_MESSAGE_TYPE } from '../../lib/core-tools'
+import { RETRIEVE_MCP_HOST_TOOL_NAME } from '../../lib/gateway-tools'
 import { buildProcessEnvironment } from './cli-environment'
 import { piNativeProviderIds } from '../agents/native-provider-config-service'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
@@ -1247,9 +1248,18 @@ function prefillTranscriptEntries(
   let parentId: string | null = null
   let wroteMessage = false
   for (const message of messages) {
+    // Presentation-mode user prompts carry their visible content in a
+    // `user-presentation` part (action + body) instead of a text part. Skip
+    // them here and the seeded native transcript loses every user message,
+    // leaving only assistant output and tool trace for the resumed model.
     const text = message.parts
-      .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
-      .map((part) => part.text)
+      .flatMap((part) => {
+        if (part.type === 'text') return [part.text]
+        if (part.type === 'user-presentation') {
+          return [[part.presentation.action, part.presentation.body].filter(Boolean).join('\n')]
+        }
+        return []
+      })
       .join('\n')
       .trim()
     if (!text) continue
@@ -3078,7 +3088,14 @@ export class PiDriver extends PersistentCliDriver {
         piCioCoreToolsExtension({
           gatewayHandoffPath: this.storage.resolve(handoffRelative),
           systemPromptPath: this.storage.resolve(systemPromptRelative),
-          allowedToolsPath: this.storage.resolve(allowedToolsRelative)
+          allowedToolsPath: this.storage.resolve(allowedToolsRelative),
+          sessionId,
+          // Same durable resolver the orchestration service publishes for the
+          // prose recovery path; the gateway tools use it for host-level
+          // self-healing when the loopback port moved across an app restart.
+          retrieveScriptPath: this.storage.resolve(
+            join('runtime', 'utility-gateway', `${RETRIEVE_MCP_HOST_TOOL_NAME}.mjs`)
+          )
         })
       )
       this.gatewayHandoffPaths.set(sessionId, handoffRelative)

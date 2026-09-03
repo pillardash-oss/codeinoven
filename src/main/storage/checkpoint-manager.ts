@@ -693,6 +693,27 @@ export class CheckpointManager {
       : null
   }
 
+  /** The thread's most recently completed checkpoint, if any. Internal
+   *  continuation prompts (search nudges, mermaid repairs, incomplete-turn
+   *  retries) start a new turn after the previous one completed; they inherit
+   *  this checkpoint's attribution so the resulting file-changes card reports
+   *  against the user's original message instead of the hidden prompt text. */
+  async getLatestCompleted(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
+    assertId(projectId)
+    assertId(threadId)
+    const rows = await this.queryRows(
+      `SELECT data FROM turn_checkpoints
+       WHERE project_id = ? AND thread_id = ? AND json_extract(data, '$.status') != 'active'
+       ORDER BY json_extract(data, '$.createdAt') DESC`,
+      [projectId, threadId],
+      1
+    )
+    const row = rows[0]
+    return row
+      ? this.recoverUnfilteredChanges(projectId, JSON.parse(String(row['data'])) as TurnCheckpoint)
+      : null
+  }
+
   /** The thread's in-flight checkpoint, if a turn is currently running. */
   async getActive(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
     assertId(projectId)

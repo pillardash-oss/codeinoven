@@ -393,6 +393,33 @@ export class UtilityOrchestrationService {
     this.turnIdsByToken.set(token, id)
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
+    // Prose contract for harnesses WITHOUT the app gateway extension (codex,
+    // cline, opencode): the endpoint and bearer token must be spelled out
+    // because the model reaches the gateway through the shell. Pi is the
+    // opposite: its app extension registers cio_util_find/init/use (plus
+    // manage/diagnose on setup turns) as first-class tools that hold the
+    // turn-scoped credentials internally, so the prompt must NOT advertise a
+    // URL or token — a credential printed into a persistent session's system
+    // prompt survives the turn that issued it and poisons every later turn
+    // with a stale token.
+    const piToolInstructions = [
+      `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally — never call the gateway through the shell, and never print or persist tokens.`,
+      ...(hasOnDemand
+        ? [
+            'A search result reports an explicit `notFound` boolean and may return project-aware candidates (`matchType: "candidates"`) to evaluate semantically. Before concluding that any capability (MCP, skill, tool, utility) is unavailable or does not exist, call ' +
+              UTILITY_SEARCH_TOOL_NAME +
+              ' first; only conclude unavailability when the result reports notFound:true. Never treat "the tools are not exposed in this session" as proof of absence. If you already know an eligible utility id, activate it directly without searching first.',
+            'Describe images: search for the image descriptor utility, activate its id, then invoke it with operation "describe" and input {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}.',
+            'When a tool reports the gateway is not active for this turn (queued or steer turn after cleanup), continue without app utilities; the next regular user turn re-arms them.'
+          ]
+        : []),
+      ...(request.allowManagement
+        ? [
+            `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values; the user adds those through Utilities.`,
+            `App diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (read-only: lookup_thread, search_threads, read_messages, read_log).`
+          ]
+        : [])
+    ].join('\n')
     const recoveryInstruction = `The gateway host, port, and bearer token above are scoped to this turn only and rotate on every new turn. Never reuse a host, port, or token you remember from earlier in this conversation or a prior turn — always use the values given for the current turn. The always-active ${RETRIEVE_MCP_HOST_TOOL_NAME} utility is independent of MCP. If the advertised app gateway is unreachable, or you are starting a new turn without a freshly given gateway, run the script at ${shellQuote(retrieverPath)} with args ${shellQuote(request.sessionId)} ${shellQuote(id)} (it is plain Node ESM — use whatever JS runtime is on your PATH). It discovers the CodeInOven instance that owns this exact utility turn and returns the current \`mcpHost\`. Retry the original route against that host with the current turn's authorization header. Never print or persist the bearer token.`
     await this.audit(state, 'turn.started', {
       eligibleUtilityIds: eligible.map(({ utility }) => utility.id),
@@ -410,7 +437,10 @@ export class UtilityOrchestrationService {
       instructions: hasOnDemand
         ? `A minimal app gateway is available. When you need a skill, MCP, utility, or other capability that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to discover it. Before concluding that any capability (MCP, skill, tool, utility) is unavailable or does not exist, you must first call ${UTILITY_SEARCH_TOOL_NAME}; only conclude unavailability when the search result reports notFound:true. If you already know an eligible utility, activate it directly with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. When you search, the result reports an explicit \`notFound\` boolean: only when it is true may you conclude that the capability does not exist in this session. Activated utilities exist only for this turn. ${recoveryInstruction}`
         : '',
-      directInstructions: [
+      directInstructions:
+        request.harnessId === 'pi'
+          ? piToolInstructions
+          : [
         'App-managed utilities are available through a turn-scoped loopback gateway. Use the shell to POST JSON with curl, setting Content-Type: application/json and the authorization header below; never print or persist the bearer token.',
         `Gateway: ${bridgeUrl}`,
         `Authorization header: Bearer ${token}`,
@@ -568,8 +598,15 @@ export class UtilityOrchestrationService {
       if (request.method === 'POST' && request.url === RETRIEVE_MCP_HOST_ROUTE) {
         const input = await readJsonBody(request)
         const sessionId = requiredString(input['session_id'], 'session_id', 128)
-        const turnId = requiredString(input['turn_id'], 'turn_id', 128)
-        const turn = this.turns.get(turnId)
+        // turn_id pins the lookup to one utility turn; when omitted (the
+        // extension's self-healing path only knows the session id), any live
+        // utility turn for that session proves instance ownership.
+        const turnId = typeof input['turn_id'] === 'string' ? input['turn_id'] : ''
+        const turn = turnId
+          ? this.turns.get(turnId)
+          : [...this.turns.values()]
+              .filter((entry) => entry.state.request.sessionId === sessionId)
+              .at(-1)
         if (turn?.state.request.sessionId !== sessionId || !this.gatewayBaseUrl) {
           this.respond(response, 404, { error: 'Utility turn is not owned by this instance' })
           return
@@ -1553,9 +1590,9 @@ const instanceDirectory = ${JSON.stringify(instanceDirectory)}
 const sessionId = process.argv[2]?.trim()
 const turnId = process.argv[3]?.trim()
 
-if (!sessionId || sessionId.length > 128 || !turnId || turnId.length > 128) {
+if (!sessionId || sessionId.length > 128 || (turnId !== undefined && turnId.length > 128)) {
   process.stderr.write(
-    '${RETRIEVE_MCP_HOST_TOOL_NAME} requires the current utility session and turn ids.\n'
+    '${RETRIEVE_MCP_HOST_TOOL_NAME} requires the utility session id (and optionally the turn id).\n'
   )
   process.exit(1)
 }
@@ -1608,7 +1645,7 @@ async function resolveHost(host) {
     const response = await fetch(host + ${JSON.stringify(RETRIEVE_MCP_HOST_ROUTE)}, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, turn_id: turnId }),
+      body: JSON.stringify(turnId ? { session_id: sessionId, turn_id: turnId } : { session_id: sessionId }),
       signal: AbortSignal.timeout(1500)
     })
     if (!response.ok) return null

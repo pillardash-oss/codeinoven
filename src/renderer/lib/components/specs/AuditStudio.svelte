@@ -1,17 +1,12 @@
 <script lang="ts">
   import {
-    AppWindow,
     Check,
-    FileText,
     MessageSquare,
     MessageSquarePlus,
-    Pencil,
     Plus,
-    Save,
     X
   } from '@lucide/svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
-  import { draggablePopover } from '$lib/draggable-popover.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import type {
     AuditAnnotation,
@@ -23,12 +18,14 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
-  import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
-  import StudioSelectionActions from './StudioSelectionActions.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
-  import StudioHistoryControls from './StudioHistoryControls.svelte'
-  import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
+  import StudioShell from './StudioShell.svelte'
+  import type { StudioShellSection } from './StudioShell.svelte'
+  import StudioSidebarFileActions from './StudioSidebarFileActions.svelte'
+  import StudioVersionBar from './StudioVersionBar.svelte'
+  import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
+  import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import { onDestroy, onMount, tick } from 'svelte'
 
@@ -116,16 +113,13 @@
   // svelte-ignore state_referenced_locally
   let dirty = $state(history.dirty)
   let reviewOpen = $state(false)
+  let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   let reviewNotes = $state('')
   let reviewSubmitting = $state(false)
-  let preferredIcon = $derived(editorPreference.preferredInfo?.iconDataUrl)
-  let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   let annotationBody = $state('')
   let pendingAnnotation = $state<PendingAnnotation | null>(null)
   let editingAnnotation = $state<AuditAnnotation | null>(null)
   let editingAnnotationBody = $state('')
-  let annotationEditor = $state<RichMarkdownEditor>()
-  let editingAnnotationEditor = $state<RichMarkdownEditor>()
   let reviewNotesEditor = $state<RichMarkdownEditor>()
   const pendingSpeechTargetId = `audit-annotation-${crypto.randomUUID()}`
   const reviewSpeechTargetId = `audit-review-${crypto.randomUUID()}`
@@ -134,19 +128,6 @@
     projectId: report.projectId,
     threadId: report.threadId
   } as const)
-
-  function pendingSpeechTarget() {
-    return annotationEditor?.speechEditorTarget(pendingSpeechTargetId) ?? null
-  }
-
-  function editingSpeechTarget() {
-    if (!editingAnnotation) return null
-    return (
-      editingAnnotationEditor?.speechEditorTarget(
-        `audit-annotation-edit-${editingAnnotation.id}`
-      ) ?? null
-    )
-  }
 
   function reviewSpeechTarget() {
     return reviewNotesEditor?.speechEditorTarget(reviewSpeechTargetId) ?? null
@@ -185,6 +166,29 @@
   const reviewStarted = $derived(draft.annotations.length > 0 || reviewOpen)
   const workflowActionsVisible = $derived(actionsAvailable && isLatestVersion)
   const AUDIT_ANNOTATION_HIGHLIGHT = 'audit-annotation-anchor'
+
+  // Sidebar headings are a projection of the fixed audit sections with open annotation counts.
+  const shellSections = $derived<StudioShellSection<AuditSectionId>[]>(
+    auditSections.map((section) => {
+      const badges: StudioShellSection<AuditSectionId>['badges'] = []
+      const commentCount = annotations(section.id).length
+      if (commentCount) badges.push({ count: commentCount, tone: 'info', label: 'annotations' })
+      if (section.id === 'findings' && draft.content.findings.length) {
+        badges.push({ count: draft.content.findings.length, tone: 'danger', label: 'findings' })
+      }
+      return { id: section.id, title: section.label, badges }
+    })
+  )
+  const statusLabel = $derived(
+    draft.outcome === 'passed'
+      ? 'Passed'
+      : draft.outcome === 'rework_required'
+        ? 'Rework required'
+        : undefined
+  )
+  const statusClass = $derived(
+    draft.outcome === 'passed' ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
+  )
 
   async function submitReview(): Promise<void> {
     if (reviewSubmitting || busy || !workflowActionsVisible) return
@@ -286,20 +290,6 @@
       evidence: 'Add concrete evidence.'
     })
     changed()
-  }
-
-  async function selectAndScroll(section: AuditSectionId): Promise<void> {
-    sectionsOpen = false
-    selectedSection = section
-    await tick()
-    const target = document.getElementById(`audit-section-${section}`)
-    if (!target || !documentScroller) return
-    const scrollerTop = documentScroller.getBoundingClientRect().top
-    const targetTop = target.getBoundingClientRect().top
-    documentScroller.scrollTo({
-      top: documentScroller.scrollTop + targetTop - scrollerTop - 20,
-      behavior: 'smooth'
-    })
   }
 
   async function scrollToFinding(findingId: string): Promise<void> {
@@ -692,101 +682,93 @@
     if (severity === 'low') return 'text-info'
     return 'text-muted'
   }
-
-  function formatDate(timestamp: number): string {
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    }).format(timestamp)
-  }
 </script>
+<StudioShell
+  ariaLabel="Audit studio"
+  scrollerLabel="Audit report"
+  sidebarTitle="Audit report"
+  sidebarLabel="Audit sections"
+  sectionAnchorPrefix="audit-section"
+  sections={shellSections}
+  bind:selectedSection
+  bind:sectionsOpen
+  bind:scroller={documentScroller}
+  openAnnotationCount={draft.annotations.filter((annotation) => annotation.status === 'open').length}
+  annotationsTitle="Section annotations"
+  annotationsEmptyLabel="Select text or click a section heading to annotate."
+  sectionAnnotations={annotations}
+  onOpenAnnotation={(annotation) => void openAnnotation(annotation)}
+  {error}
+  onScrollerMouseUp={captureDocumentSelection}
+>
+  {#snippet navigation()}
+    <StudioDocumentNavigation
+      active="audit"
+      {brainstormAvailable}
+      {prdAvailable}
+      {assignmentAvailable}
+      auditAvailable
+      {agentMessagesOpen}
+      {onBack}
+      {onToggleAgentMessages}
+      {sectionsOpen}
+      sectionsLabel="audit sections"
+      onToggleSections={() => (sectionsOpen = !sectionsOpen)}
+      {onOpenBrainstorm}
+      {onOpenPrd}
+      {onOpenSpec}
+      {onOpenAssignment}
+    />
+  {/snippet}
 
-<section class="flex h-full min-h-0 flex-col bg-app" aria-label="Audit studio">
-  <header class="shrink-0 border-b bg-surface">
-    <div
-      class="flex flex-col gap-2 px-2 py-2 md:grid md:min-h-12 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center md:gap-3 md:px-3 md:py-0"
-    >
-      <div class="flex min-w-0 items-center gap-2">
-        <StudioDocumentNavigation
-          active="audit"
-          {brainstormAvailable}
-          {prdAvailable}
-          {assignmentAvailable}
-          auditAvailable
-          {agentMessagesOpen}
-          {onBack}
-          {onToggleAgentMessages}
-          {sectionsOpen}
-          sectionsLabel="audit sections"
-          onToggleSections={() => (sectionsOpen = !sectionsOpen)}
-          {onOpenBrainstorm}
-          {onOpenPrd}
-          {onOpenSpec}
-          {onOpenAssignment}
-        />
-      </div>
-      <div class="flex items-center gap-2 max-md:flex-wrap">
-        <label class="sr-only" for="audit-version">Audit report version</label>
-        <select
-          id="audit-version"
-          class="rounded-md border bg-elevated px-2 py-1 text-xs"
-          value={draft.version}
-          onchange={(event: Event & { currentTarget: HTMLSelectElement }) =>
-            void onSelectVersion(Number((event.currentTarget as HTMLSelectElement).value))}
+  {#snippet center()}
+    <StudioVersionBar
+      versions={[...versions]
+        .sort((left, right) => right.version - left.version)
+        .map((version) => ({ version: version.version }))}
+      currentVersion={draft.version}
+      updatedAt={draft.updatedAt}
+      statusLabel={statusLabel}
+      statusClass={statusClass}
+      {dirty}
+      canUndo={history.canUndo}
+      canRedo={history.canRedo}
+      canSave={workflowActionsVisible}
+      {busy}
+      savePending={false}
+      versionMenuTitle="Choose an audit report version"
+      versionItemTitle={(version) => `Open audit report version ${version}`}
+      onSelectVersion={(version) => void onSelectVersion(version)}
+      onUndo={undoEdit}
+      onRedo={redoEdit}
+      onSave={() => void save()}
+    />
+  {/snippet}
+
+  {#snippet actions()}
+    {#if workflowActionsVisible}
+      <button
+        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-overlay"
+        disabled={busy || reviewSubmitting}
+        title="Send review notes to the primary agent"
+        onclick={() => (reviewOpen = true)}
+      >
+        Review
+      </button>
+      {#if !reviewStarted}
+        <button
+          class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
+          disabled={busy}
+          title="Complete this audit without review notes"
+          onclick={onComplete}
         >
-          {#each [...versions].sort((a, b) => b.version - a.version) as version (version.version)}
-            <option value={version.version}>Version {version.version}</option>
-          {/each}
-        </select>
-        {#if draft.outcome}
-          <span
-            class="rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-wide {draft.outcome ===
-            'passed'
-              ? 'bg-success/10 text-success'
-              : 'bg-warning/10 text-warning'}"
-          >
-            {draft.outcome === 'passed' ? 'Passed' : 'Rework required'}
-          </span>
-        {/if}
-        <StudioHistoryControls
-          canUndo={history.canUndo}
-          canRedo={history.canRedo}
-          onUndo={undoEdit}
-          onRedo={redoEdit}
-        />
-        {#if dirty && workflowActionsVisible}
-          <button
-            class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-xs"
-            disabled={busy}
-            onclick={() => void save()}
-          >
-            <Save size={12} /> Save
-          </button>
-        {/if}
-      </div>
-      <div class="flex items-center gap-2 max-md:*:h-10 max-md:*:flex-1 md:justify-end">
-        {#if workflowActionsVisible}
-          <button
-            class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold hover:bg-overlay"
-            disabled={busy || reviewSubmitting}
-            onclick={() => (reviewOpen = true)}
-          >
-            Review
-          </button>
-          {#if !reviewStarted}
-            <button
-              class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
-              disabled={busy}
-              onclick={onComplete}
-            >
-              Complete <Check size={13} />
-            </button>
-          {/if}
-        {/if}
-      </div>
-    </div>
+          Complete <Check size={13} />
+        </button>
+      {/if}
+    {/if}
+  {/snippet}
+
+  {#snippet headerExtra()}
     {#if reviewOpen && workflowActionsVisible}
       <div class="flex flex-col gap-2 border-t px-3 py-2.5 md:flex-row md:items-end md:px-4">
         <label class="min-w-0 flex-1 text-[11px] font-medium text-muted">
@@ -802,6 +784,7 @@
         <button
           class="rounded-lg px-3 py-2 text-xs text-muted"
           disabled={reviewSubmitting}
+          title="Discard review notes"
           onclick={() => (reviewOpen = false)}
         >
           Cancel
@@ -815,176 +798,72 @@
         <button
           class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
           disabled={busy || reviewSubmitting}
+          title="Send review notes to the primary agent"
           onclick={() => void submitReview()}
         >
           {reviewSubmitting ? 'Submitting…' : 'Review'}
         </button>
       </div>
     {/if}
-    {#if error}<p class="border-t bg-danger/10 px-4 py-2 text-xs text-danger">{error}</p>{/if}
-  </header>
+  {/snippet}
 
-  <div
-    class="flex min-h-0 flex-1 flex-col overflow-hidden md:grid md:grid-cols-[13rem_minmax(0,1fr)]"
-  >
-    {#if sectionsOpen}
-      <div
-        class="fixed inset-0 z-40 bg-black/50 md:hidden"
-        role="presentation"
-        onclick={() => (sectionsOpen = false)}
-      ></div>
-    {/if}
-    <aside
-      class="relative flex min-h-0 flex-col border-r bg-surface max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-50 max-md:max-h-[80dvh] max-md:rounded-t-2xl max-md:border-r-0 max-md:border-t max-md:pb-[env(safe-area-inset-bottom)] max-md:shadow-2xl {sectionsOpen
-        ? ''
-        : 'max-md:hidden'}"
-      aria-label="Audit sections"
-    >
-      <StudioSidebarResizeHandle sidebarLabel="Audit sections" />
-      <div class="flex h-12 shrink-0 items-center justify-between border-b px-3 md:hidden">
-        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">
-          Audit report
-        </p>
-        <button
-          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted"
-          aria-label="Close sections"
-          title="Close sections"
-          onclick={() => (sectionsOpen = false)}
-        >
-          <X size={16} />
-        </button>
-      </div>
-      <div class="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain p-2">
-        {#each auditSections as section (section.id)}
-          {@const annotationCount = annotations(section.id).length}
-          <button
-            class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors max-md:py-3 {selectedSection ===
-            section.id
-              ? 'bg-elevated font-semibold text-foreground'
-              : 'text-muted hover:bg-elevated/60 hover:text-foreground'}"
-            title={`Scroll to ${section.label}`}
-            onclick={() => void selectAndScroll(section.id)}
-          >
-            <span>{section.label}</span>
-            <span class="flex items-center gap-1">
-              {#if annotationCount}
-                <span class="rounded-full bg-info/10 px-1.5 text-[10px] text-info">
-                  {annotationCount}
-                </span>
-              {/if}
-              {#if section.id === 'findings'}
-                <span class="text-[10px] tabular-nums text-dimmed">
-                  {draft.content.findings.length}
-                </span>
-              {/if}
-            </span>
-          </button>
-          {#if section.id === 'findings'}
-            <div class="ml-3 border-l pl-2">
-              {#each findingSeverities as severity (severity)}
-                {@const severityFindings = draft.content.findings.filter(
-                  (finding) => finding.severity === severity
-                )}
-                {#if severityFindings.length}
-                  <div class="py-0.5">
-                    <div
-                      class="flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold capitalize"
-                    >
-                      <span class="h-1.5 w-1.5 rounded-full {severityDotClass(severity)}"></span>
-                      <span class={severityTextClass(severity)}>{severity}</span>
-                      <span class="ml-auto text-dimmed">{severityFindings.length}</span>
-                    </div>
-                    {#each severityFindings as finding (finding.id)}
-                      <button
-                        class="flex w-full items-baseline gap-1.5 rounded-md px-2 py-1 text-left text-[10px] text-muted hover:bg-elevated hover:text-foreground"
-                        title={finding.title}
-                        onclick={() => void scrollToFinding(finding.id)}
-                      >
-                        <span class="shrink-0 tabular-nums text-dimmed">
-                          {findingNumber(finding.id)}.
-                        </span>
-                        <span class="min-w-0 truncate">{finding.title}</span>
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              {/each}
+  {#snippet sidebarExtra()}
+    <div class="border-t p-2">
+      {#each findingSeverities as severity (severity)}
+        {@const severityFindings = draft.content.findings.filter(
+          (finding) => finding.severity === severity
+        )}
+        {#if severityFindings.length}
+          <div class="py-0.5">
+            <div class="flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold capitalize">
+              <span class="h-1.5 w-1.5 rounded-full {severityDotClass(severity)}"></span>
+              <span class={severityTextClass(severity)}>{severity}</span>
+              <span class="ml-auto text-dimmed">{severityFindings.length}</span>
             </div>
-          {/if}
-        {/each}
-
-        <div class="mt-3 border-t pt-3">
-          <div class="flex items-center justify-between px-2">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Section annotations
-            </p>
-            <span class="text-[10px] tabular-nums text-dimmed">
-              {annotations(selectedSection).length}
-            </span>
-          </div>
-          <div class="mt-2 space-y-1.5 px-1">
-            {#each annotations(selectedSection) as annotation (annotation.id)}
+            {#each severityFindings as finding (finding.id)}
               <button
-                class="block w-full rounded-lg border bg-elevated px-2.5 py-2 text-left hover:bg-overlay"
-                title="Open and edit annotation"
-                onclick={() => openAnnotation(annotation)}
+                class="flex w-full items-baseline gap-1.5 rounded-md px-2 py-1 text-left text-[10px] text-muted hover:bg-elevated hover:text-foreground"
+                title={finding.title}
+                onclick={() => void scrollToFinding(finding.id)}
               >
-                {#if annotation.quote}
-                  <span class="block truncate text-[10px] text-dimmed">“{annotation.quote}”</span>
-                {/if}
-                <span class="mt-0.5 line-clamp-2 block text-xs leading-relaxed">
-                  {annotation.body}
-                </span>
+                <span class="shrink-0 tabular-nums text-dimmed">{findingNumber(finding.id)}.</span>
+                <span class="min-w-0 truncate">{finding.title}</span>
               </button>
-            {:else}
-              <p
-                class="rounded-lg border border-dashed px-2.5 py-3 text-center text-[11px] text-dimmed"
-              >
-                Select text or click a section heading to annotate.
-              </p>
             {/each}
           </div>
-        </div>
-      </div>
+        {/if}
+      {/each}
+    </div>
+  {/snippet}
 
-      {#if onRevealInAppFile || onOpenInEditor}
-        <div class="flex shrink-0 items-center gap-1 border-t p-2">
-          {#if onRevealInAppFile}
-            <button
-              class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
-              disabled={busy}
-              title="Reveal this audit report as Markdown in the file tree"
-              onclick={() => void onRevealInAppFile?.(draft)}
-            >
-              <FileText size={13} />
-              View
-            </button>
-          {/if}
-          {#if onOpenInEditor}
-            <button
-              class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
-              disabled={busy}
-              title={`Open this audit report as Markdown in ${preferredName}`}
-              onclick={() => void onOpenInEditor?.(draft)}
-            >
-              {#if preferredIcon}
-                <img src={preferredIcon} alt="" class="h-3.5 w-3.5 shrink-0" />
-              {:else}
-                <AppWindow size={14} class="shrink-0" />
-              {/if}
-              Open
-            </button>
-          {/if}
-        </div>
-      {/if}
-    </aside>
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <main
-      bind:this={documentScroller}
-      class="relative min-h-0 overflow-y-auto scroll-smooth"
-      aria-label="Audit report"
-      onmouseup={captureDocumentSelection}
-    >
+  {#snippet sidebarFooter()}
+    <StudioSidebarFileActions
+      viewTitle="Reveal this audit report as Markdown in the file tree"
+      openTitle={`Open this audit report as Markdown in ${preferredName}`}
+      {busy}
+      onReveal={onRevealInAppFile ? () => onRevealInAppFile(draft) : undefined}
+      onOpen={onOpenInEditor ? () => onOpenInEditor(draft) : undefined}
+    />
+  {/snippet}
+
+  {#snippet markers()}
+    {#each annotationMarkers as marker (marker.annotation.id)}
+      <button
+        data-audit-annotation-marker={marker.annotation.id}
+        class="absolute z-10 grid h-7 w-7 place-items-center rounded-full border bg-surface text-info shadow-sm hover:bg-elevated"
+        style:left={compactViewport.matches
+          ? undefined
+          : `${Math.min(marker.x, (documentScroller?.scrollWidth ?? marker.x + 32) - 32)}px`}
+        style:top={`${marker.y}px`}
+        title={`Open annotation: ${marker.annotation.body}`}
+        aria-label={`Open annotation: ${marker.annotation.body}`}
+        onclick={() => void openAnnotation(marker.annotation)}
+      >
+        <MessageSquare size={13} />
+      </button>
+    {/each}
+  {/snippet}
+
       <article class="mx-auto max-w-4xl space-y-12 px-4 py-6 text-sm leading-7 md:px-8 md:py-8">
         {@render textSection('executive_summary', 'Executive summary', 'executiveSummary')}
 
@@ -1206,190 +1085,57 @@
         )}
         {@render textSection('conclusion', 'Conclusion', 'conclusion')}
       </article>
-      {#each annotationMarkers as marker (marker.annotation.id)}
-        <button
-          data-audit-annotation-marker={marker.annotation.id}
-          class="absolute z-10 grid h-7 w-7 place-items-center rounded-full border bg-surface text-info shadow-sm hover:bg-elevated"
-          style:left={compactViewport.matches
-            ? undefined
-            : `${Math.min(marker.x, (documentScroller?.scrollWidth ?? marker.x + 32) - 32)}px`}
-          style:top={`${marker.y}px`}
-          title={`Open annotation: ${marker.annotation.body}`}
-          aria-label={`Open annotation: ${marker.annotation.body}`}
-          onclick={() => void openAnnotation(marker.annotation)}
-        >
-          <MessageSquare size={13} />
-        </button>
-      {/each}
-    </main>
-  </div>
-</section>
+</StudioShell>
 
 {#if pendingAnnotation}
-  <div
-    class="fixed z-50 w-96 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
-    role="dialog"
-    aria-label={pendingAnnotation.sectionLevel
+  <StudioPendingAnnotationPopover
+    position={{ x: pendingAnnotation.x, y: pendingAnnotation.y }}
+    quote={pendingAnnotation.quote}
+    canAnnotate={workflowActionsVisible}
+    showSelectionActions={!pendingAnnotation.sectionLevel}
+    {busy}
+    speechTargetId={pendingSpeechTargetId}
+    dialogLabel={pendingAnnotation.sectionLevel
       ? 'Annotate section'
       : workflowActionsVisible
         ? 'Comment on selection'
         : 'Actions for selection'}
-    {@attach draggablePopover({
-      x: pendingAnnotation.x,
-      y: pendingAnnotation.y,
-      disabled: compactViewport.matches
-    })}
-  >
-    <div class="flex items-center gap-1">
-      {#if !compactViewport.matches}
-        <PopoverDragHandle title="Move selection comment" />
-      {/if}
-      <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-        {pendingAnnotation.sectionLevel
-          ? 'Annotate section'
-          : workflowActionsVisible
-            ? 'Comment on selection'
-            : 'Selection'}
-      </p>
-    </div>
-    <blockquote
-      class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
-    >
-      “{pendingAnnotation.quote}”
-    </blockquote>
-    {#if workflowActionsVisible}
-      <RichMarkdownEditor
-        bind:this={annotationEditor}
-        class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
-        bind:value={annotationBody}
-        placeholder="Leave your review note…"
-        ariaLabel="Audit annotation"
-        onSubmit={() => void submitAnnotation()}
-      />
-    {/if}
-    <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
-      {#if !pendingAnnotation.sectionLevel && onExplainSelection && onQuickChatSelection}
-        <StudioSelectionActions
-          onExplain={() => openSelectionChat('explain')}
-          onQuickChat={() => openSelectionChat('quick')}
-        />
-      {/if}
-      <div class="ml-auto flex items-center gap-1.5">
-        <button
-          class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
-          title="Cancel annotation"
-          onclick={closePendingAnnotation}>Cancel</button
-        >
-        {#if workflowActionsVisible}
-          <VoiceInputButton
-            targetId={pendingSpeechTargetId}
-            getTarget={pendingSpeechTarget}
-            scope={speechScope}
-            disabled={busy}
-          />
-          <button
-            class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
-            disabled={busy || !annotationBody.trim()}
-            title="Add annotation"
-            onclick={() => void submitAnnotation()}>Comment</button
-          >
-        {/if}
-      </div>
-    </div>
-  </div>
+    headerLabel={pendingAnnotation.sectionLevel
+      ? 'Annotate section'
+      : workflowActionsVisible
+        ? 'Comment on selection'
+        : 'Selection'}
+    editorLabel="Audit annotation"
+    bind:body={annotationBody}
+    scope={speechScope}
+    onSubmit={() => void submitAnnotation()}
+    onCancel={closePendingAnnotation}
+    onExplain={onExplainSelection ? () => openSelectionChat('explain') : undefined}
+    onQuickChat={onQuickChatSelection ? () => openSelectionChat('quick') : undefined}
+  />
 {/if}
 
 {#if editingAnnotation && editingAnnotationPosition}
-  <div
-    class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(1rem+env(safe-area-inset-bottom))]"
-    role="dialog"
-    aria-label="Audit annotation"
-    {@attach draggablePopover({
-      x: editingAnnotationPosition.x,
-      y: editingAnnotationPosition.y,
-      disabled: compactViewport.matches
-    })}
-  >
-    <div class="flex items-center justify-between gap-2">
-      <span class="flex min-w-0 items-center gap-1">
-        {#if !compactViewport.matches}
-          <PopoverDragHandle title="Move annotation" />
-        {/if}
-        <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-          {annotationEditMode ? 'Edit annotation' : 'Annotation'}
-        </span>
-      </span>
-      <button
-        class="rounded-md p-1 text-muted hover:bg-overlay hover:text-foreground"
-        title="Close annotation"
-        aria-label="Close annotation"
-        onclick={closeAnnotation}
-      >
-        <X size={13} />
-      </button>
-    </div>
-    {#if editingAnnotation.quote}
-      <blockquote
-        class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
-      >
-        “{editingAnnotation.quote}”
-      </blockquote>
-    {/if}
-    {#if annotationEditMode}
-      <RichMarkdownEditor
-        bind:this={editingAnnotationEditor}
-        class="mt-3 min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs outline-none focus:border-primary"
-        bind:value={editingAnnotationBody}
-        ariaLabel="Audit annotation body"
-        onSubmit={() => void saveAnnotationEdit()}
-      />
-    {:else}
-      <p class="mt-3 text-xs leading-relaxed text-foreground">{editingAnnotation.body}</p>
-    {/if}
-    <p class="mt-1 text-[10px] text-dimmed">
-      {editingAnnotation.author} · {formatDate(editingAnnotation.createdAt)}
-    </p>
-    <div class="mt-3 flex items-center justify-between">
-      {#if workflowActionsVisible}
-        <button
-          class="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-success hover:bg-success/10"
-          title="Resolve annotation"
-          onclick={() => void resolveAnnotation(editingAnnotation!.id)}
-        >
-          <Check size={12} /> Resolve
-        </button>
-        {#if annotationEditMode}
-          <div class="flex gap-1.5">
-            <button
-              class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
-              title="Cancel editing"
-              onclick={() => (annotationEditMode = false)}>Cancel</button
-            >
-            <VoiceInputButton
-              targetId={`audit-annotation-edit-${editingAnnotation.id}`}
-              getTarget={editingSpeechTarget}
-              scope={speechScope}
-            />
-            <button
-              class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
-              disabled={!editingAnnotationBody.trim()}
-              title="Save annotation"
-              onclick={() => void saveAnnotationEdit()}>Save</button
-            >
-          </div>
-        {:else}
-          <button
-            class="flex items-center gap-1 rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-semibold hover:bg-overlay"
-            title="Edit annotation"
-            onclick={() => (annotationEditMode = true)}
-          >
-            <Pencil size={12} /> Edit
-          </button>
-        {/if}
-      {/if}
-    </div>
-  </div>
+  <StudioAnnotationDetailPopover
+    position={editingAnnotationPosition}
+    annotation={editingAnnotation}
+    canEdit={workflowActionsVisible}
+    editorMode={annotationEditMode}
+    headerLabel={annotationEditMode ? 'Edit annotation' : 'Annotation'}
+    dialogLabel="Audit annotation"
+    speechTargetId={`audit-annotation-edit-${editingAnnotation.id}`}
+    scope={speechScope}
+    bind:body={editingAnnotationBody}
+    onResolve={() => {
+      if (editingAnnotation) void resolveAnnotation(editingAnnotation.id)
+    }}
+    onSave={saveAnnotationEdit}
+    onCancelEdit={() => (annotationEditMode = false)}
+    onEditClick={() => (annotationEditMode = true)}
+    onClose={closeAnnotation}
+  />
 {/if}
+
 
 {#snippet sectionHeading(section: AuditSectionId, title: string)}
   {#if workflowActionsVisible}

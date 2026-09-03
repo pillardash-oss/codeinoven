@@ -911,6 +911,23 @@
     })
   }
 
+  /** Focus the composer editor and place the caret at the start of the first
+   *  line — the fallback when no caret position was ever captured. */
+  export function focusComposerAtStart(): void {
+    void tick().then(() => {
+      const editor = document.getElementById(composerEditorId)
+      if (!(editor instanceof HTMLDivElement)) return
+      editor.focus()
+      const range = document.createRange()
+      range.setStart(editor, 0)
+      range.collapse(true)
+      const selection = window.getSelection()
+      if (!selection) return
+      selection.removeAllRanges()
+      selection.addRange(range)
+    })
+  }
+
   /** Focus the composer editor and restore the caret to the position the user
    *  last had inside it — published continuously by the rich editor via its
    *  selection tracking. Falls back to the end when no position is known.
@@ -1770,7 +1787,16 @@
         return
       }
     }
-    if (e.key === 'Tab' && e.shiftKey && isComposerFocused && showEngineeringMode) {
+    // Global-on-thread toggle: works regardless of what has focus (composer,
+    // toolbox panel, or elsewhere on the thread) — like the voice shortcut.
+    // The toolbox panel handles Cmd/Ctrl+E itself while open and prevents
+    // default, so this won't immediately re-open it.
+    if (
+      (e.metaKey || e.ctrlKey) &&
+      e.key.toLowerCase() === 'e' &&
+      !e.defaultPrevented &&
+      showEngineeringMode
+    ) {
       e.preventDefault()
       void engineeringToolbox?.openAndFocus()
       return
@@ -2414,6 +2440,10 @@
         active={engineeringActive === true}
         disabled={readOnlyMode}
         onselect={onEngineeringLifecycleSelect}
+        onclose={() => {
+          if (richEditor?.caretBookmark()) focusComposerAtSavedCaret()
+          else focusComposerAtStart()
+        }}
       />
     {/if}
 

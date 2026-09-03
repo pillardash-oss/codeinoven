@@ -496,6 +496,35 @@
     onValueChange?.(markdown)
   }
 
+  const BLOCK_BOUNDARY_SELECTOR =
+    'p, div, li, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, pre, table, tr'
+
+  /**
+   * Flattens editor content up to the caret, inserting '\n' at block
+   * boundaries and `<br>`s. `Range.toString()` only concatenates text nodes,
+   * so without this the first line gets glued to the second and the
+   * `(^|\s)`-anchored slash/mention patterns stop matching off the first line.
+   */
+  function flattenWithNewlines(node: Node): string {
+    if (node instanceof Text) return node.data
+    if (node instanceof Element && node.tagName === 'BR') return '\n'
+    let text = ''
+    for (const child of node.childNodes) {
+      const childText = flattenWithNewlines(child)
+      if (
+        childText !== '' &&
+        text !== '' &&
+        !text.endsWith('\n') &&
+        child instanceof Element &&
+        child.matches(BLOCK_BOUNDARY_SELECTOR)
+      ) {
+        text += '\n'
+      }
+      text += childText
+    }
+    return text
+  }
+
   function publishCaretText(): void {
     if (!editor || !onCaretTextChange) return
     const selection = window.getSelection()
@@ -517,7 +546,7 @@
     const range = document.createRange()
     range.selectNodeContents(editor)
     range.setEnd(selection.anchorNode, selection.anchorOffset)
-    onCaretTextChange(range.toString(), supportsCommands)
+    onCaretTextChange(flattenWithNewlines(range.cloneContents()), supportsCommands)
   }
 
   export function replaceTextBeforeCaret(

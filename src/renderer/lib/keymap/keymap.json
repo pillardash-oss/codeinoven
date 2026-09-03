@@ -146,9 +146,9 @@
         },
         {
           "id": "chat-engineering-mode",
-          "keys": ["shift", "tab"],
-          "label": "Open Engineering Toolbox",
-          "description": "Opens the Engineering lifecycle stage switches.",
+          "keys": ["mod", "e"],
+          "label": "Toggle Engineering Toolbox",
+          "description": "Toggles the Engineering lifecycle stage switches. ArrowUp and ArrowDown move the outline between rows; Enter toggles the outlined row.",
           "scenario": "Composer focused with engineering mode available."
         },
         {

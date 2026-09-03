@@ -19,6 +19,7 @@
     type PrDockStatus
   } from '$lib/stores/pr-lifecycle.svelte'
   import { getProjectIcon } from '$lib/project-icons'
+  import { logRendererError } from '$lib/system/renderer-logger'
   import { DEFAULT_SCOPE_BUCKET_ID, isOrchestrationChildThread } from '$shared/types'
   import { DEFAULT_THINKING_LEVEL, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
@@ -433,27 +434,22 @@
     createErrorIsNoCommits = false
     submitting = true
     try {
-      // Decided up front: after the commit below, the refreshed status clears
-      // staged changes, which would make hasUnpushedHeadCommits flip to false.
-      const commitMade = willCreateCommit
-      const shouldPush =
-        pushLocalCommits && headInfo?.kind === 'local' && (commitMade || hasUnpushedHeadCommits)
-      // 1. Commit the current index plus untracked files, leaving unstaged edits alone.
+      // 1. Commit the current index plus untracked files, leaving unstaged edits
+      //    alone. Best-effort by design: a failed stage or commit never blocks
+      //    the push or the pull request itself — the user opted into the commit,
+      //    and the working tree stays exactly as it was for a manual retry.
+      let commitMade = willCreateCommit
       if (commitMade) {
         const untrackedPaths = pendingCommitChanges
           .filter((change) => change.status === 'untracked')
           .map((change) => change.path)
-        if (untrackedPaths.length > 0) {
-          await gitState.stage(projectId, [...new Set(untrackedPaths)])
-          if (gitState.error) {
-            createError = gitState.error
-            return
-          }
+        if (untrackedPaths.length > 0) await gitState.stage(projectId, [...new Set(untrackedPaths)])
+        if (!gitState.error) {
+          await gitState.commit(projectId, uncategorizedCommitMessage(new Date()))
         }
-        await gitState.commit(projectId, uncategorizedCommitMessage(new Date()))
         if (gitState.error) {
-          createError = gitState.error
-          return
+          logRendererError('Pre-PR commit failed; continuing without it', gitState.error)
+          commitMade = false
         }
       }
       // 2. Push local commits only when the head actually has something the
@@ -461,6 +457,8 @@
       //    local copy is behind it, e.g. a remote-to-remote PR), there is
       //    nothing to push and GitHub builds the PR from the remote refs, so
       //    skipping the push avoids a spurious non-fast-forward rejection.
+      const shouldPush =
+        pushLocalCommits && headInfo?.kind === 'local' && (commitMade || hasUnpushedHeadCommits)
       if (shouldPush) {
         const hasUpstream = headInfo?.kind === 'local' && headInfo.remote === 'origin'
         const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
@@ -1278,13 +1276,12 @@
                 ? headIsCurrent
                   ? 'Create an uncategorized commit dated at submission time.'
                   : `Check out ${head} before committing files to it.`
-                : 'No staged or untracked files to commit right now.'}
+                : 'No staged or untracked files right now — nothing would be committed.'}
             </p>
           </div>
           <Switch
             checked={commitPendingFiles}
             onchange={(value) => (commitPendingFiles = value)}
-            disabled={!hasPendingCommitChanges || !headIsCurrent}
             aria-label="Commit staged and untracked files"
           />
         </div>

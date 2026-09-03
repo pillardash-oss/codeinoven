@@ -91,4 +91,11 @@ export interface ConversationController {
   clearReferences?(): void
   /** Attach an additional response selection to the composer (temporary chats). */
   addSelection?(text: string): void
+
+  /** Drop a message and everything after it (message editing). Temporary
+   *  chats implement this against their own backend; threads use the
+   *  `threadMessages` store directly. */
+  truncateBefore?(messageId: string): Promise<AgentMessage[]>
+  /** Delete history around a message (`down` / `single` / `up`). */
+  removeAround?(messageId: string, mode: 'down' | 'single' | 'up'): Promise<AgentMessage[]>
 }

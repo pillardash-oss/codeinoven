@@ -1,18 +1,14 @@
 <script lang="ts">
   import {
     AlertCircle,
-    AppWindow,
     ArrowRight,
     Check,
-    ChevronDown,
     FileText,
-    History,
     MessageSquare,
     MessageSquarePlus,
     MessageSquareText,
     Paperclip,
     Plus,
-    Save,
     Search,
     ShieldCheck,
     Upload,
@@ -28,10 +24,13 @@
   import { speechController } from '../../speech/speech-controller.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
-  import StudioSelectionActions from './StudioSelectionActions.svelte'
-  import StudioHistoryControls from './StudioHistoryControls.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
-  import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
+  import StudioShell from './StudioShell.svelte'
+  import type { StudioShellSection } from './StudioShell.svelte'
+  import StudioSidebarFileActions from './StudioSidebarFileActions.svelte'
+  import StudioVersionBar from './StudioVersionBar.svelte'
+  import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
+  import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import {
     offsetsForQuote,
     offsetsForRange,
@@ -40,9 +39,7 @@
   } from './studio-annotation-anchors'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
-  import { draggablePopover } from '$lib/draggable-popover.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
-  import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import type {
     CapturableSpecContextType,
     EngineeringSpec,
@@ -238,7 +235,6 @@
     onSubmit
   }: Props = $props()
 
-  let preferredIcon = $derived(editorPreference.preferredInfo?.iconDataUrl)
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
 
   function chooseAuditModel(providerId: string, modelId: string, harnessId?: string): void {
@@ -255,7 +251,6 @@
   }
 
   let selectedSection = $state<SpecSectionId>('problem')
-  /** Phone only: the section rail is a bottom drawer instead of a column. */
   let sectionsOpen = $state(false)
   // The effect below reconciles later prop versions; these are intentional local edit buffers.
   // svelte-ignore state_referenced_locally
@@ -277,8 +272,6 @@
   let pendingAnnotation = $state<PendingAnnotation | null>(null)
   let editingAnnotation = $state<SpecAnnotation | null>(null)
   let editingAnnotationBody = $state('')
-  let annotationEditor = $state<RichMarkdownEditor>()
-  let editingAnnotationEditor = $state<RichMarkdownEditor>()
   let decisionNotesEditor = $state<RichMarkdownEditor>()
   const pendingSpeechTargetId = `spec-annotation-${crypto.randomUUID()}`
   const decisionSpeechTargetId = `spec-decision-${crypto.randomUUID()}`
@@ -288,24 +281,13 @@
     threadId: spec.threadId
   } as const)
 
-  function pendingSpeechTarget() {
-    return annotationEditor?.speechEditorTarget(pendingSpeechTargetId) ?? null
-  }
-
-  function editingSpeechTarget() {
-    if (!editingAnnotation) return null
-    return (
-      editingAnnotationEditor?.speechEditorTarget(`spec-annotation-edit-${editingAnnotation.id}`) ??
-      null
-    )
-  }
-
   function decisionSpeechTarget() {
     return decisionNotesEditor?.speechEditorTarget(decisionSpeechTargetId) ?? null
   }
   let editingAnnotationPosition = $state<{ x: number; y: number } | null>(null)
   let annotationMarkers = $state<Array<{ annotation: SpecAnnotation; x: number; y: number }>>([])
   let documentScroller = $state<HTMLElement | null>(null)
+  let shellElement = $state<HTMLElement | null>(null)
   let contextPickerType = $state<Exclude<CapturableSpecContextType, 'attachment'> | null>(null)
   let contextQuery = $state('')
   let contextResults = $state<ProjectFileEntry[]>([])
@@ -314,15 +296,7 @@
   let contextSearchRequest = 0
   let contextSearchTimer: ReturnType<typeof setTimeout> | undefined
   let contextDropActive = $state(false)
-  let studioElement = $state<HTMLElement | null>(null)
   const SPEC_ANNOTATION_HIGHLIGHT = 'spec-annotation-anchor'
-
-  function attachStudio(node: HTMLElement): () => void {
-    studioElement = node
-    return () => {
-      if (studioElement === node) studioElement = null
-    }
-  }
 
   const sortedVersions = $derived(
     [...versions]
@@ -348,6 +322,33 @@
         .filter((path): path is string => typeof path === 'string')
     )
   )
+
+  const shellSections = $derived.by<StudioShellSection<SpecSectionId>[]>(() => {
+    return sections.map((section) => {
+      const annotationCount = annotationsFor(section.id).length
+      const issueCount = currentValidation.issues.filter(
+        (issue) => issue.section === section.id
+      ).length
+      return {
+        id: section.id,
+        title: section.label,
+        badges: [
+          ...(annotationCount
+            ? [{ count: annotationCount, tone: 'info' as const, label: 'annotations' }]
+            : []),
+          ...(issueCount
+            ? [
+                {
+                  count: issueCount,
+                  tone: 'danger' as const,
+                  label: `${issueCount} validation ${issueCount === 1 ? 'issue' : 'issues'}`
+                }
+              ]
+            : [])
+        ]
+      }
+    })
+  })
 
   $effect(() => {
     const nextKey = `${spec.id}:${spec.version}:${spec.updatedAt}`
@@ -588,6 +589,10 @@
   }
 
   async function selectAndScroll(sectionId: SpecSectionId): Promise<void> {
+    await shellScrollToSection(sectionId)
+  }
+
+  async function shellScrollToSection(sectionId: SpecSectionId): Promise<void> {
     selectedSection = sectionId
     sectionsOpen = false
     await tick()
@@ -905,12 +910,17 @@
     }
   }
 
+  function closeAnnotation(): void {
+    CSS.highlights?.delete(SPEC_ANNOTATION_HIGHLIGHT)
+    editingAnnotation = null
+    editingAnnotationBody = ''
+    editingAnnotationPosition = null
+  }
+
   async function resolveAnnotation(annotationId: string): Promise<void> {
     const updated = await onResolveAnnotation(annotationId)
     if (updated) applySpec(updated)
-    CSS.highlights?.delete(SPEC_ANNOTATION_HIGHLIGHT)
-    editingAnnotation = null
-    editingAnnotationPosition = null
+    closeAnnotation()
   }
 
   async function submitAction(action: SpecDecisionAction, notes: string): Promise<void> {
@@ -971,7 +981,7 @@
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
       closePendingAnnotation()
-      editingAnnotation = null
+      closeAnnotation()
       pendingAction = null
       return
     }
@@ -984,9 +994,9 @@
     const activeElement = document.activeElement
     event.preventDefault()
     if (
-      studioElement &&
+      shellElement &&
       activeElement instanceof HTMLElement &&
-      studioElement.contains(activeElement) &&
+      shellElement.contains(activeElement) &&
       activeElement.isContentEditable
     ) {
       activeElement.blur()
@@ -1015,200 +1025,169 @@
   </div>
 {/if}
 
-<section
-  {@attach attachStudio}
-  class="flex h-full min-h-0 flex-col bg-app"
-  aria-label="Specification studio"
+<StudioShell
+  ariaLabel="Specification studio"
+  scrollerLabel="Rendered specification"
+  sidebarTitle="Specification"
+  sidebarLabel="Specification sections"
+  sectionAnchorPrefix="spec-section"
+  sections={shellSections}
+  bind:selectedSection
+  bind:sectionsOpen
+  bind:scroller={documentScroller}
+  bind:shellElement
+  {openAnnotationCount}
+  annotationsTitle="Section annotations"
+  annotationsEmptyLabel="Select text or click a section heading to annotate."
+  sectionAnnotations={annotationsFor}
+  onOpenAnnotation={(annotation) => void openAnnotation(annotation)}
+  {error}
+  onScrollerMouseUp={captureDocumentSelection}
+  onSectionKeydown={navigateSections}
 >
-  <header class="shrink-0 border-b bg-surface">
-    <div
-      class="flex flex-col gap-2 px-2 py-2 md:grid md:min-h-12 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center md:gap-3 md:px-3 md:py-0"
-    >
-      <div class="flex min-w-0 items-center gap-2">
-        <StudioDocumentNavigation
-          active="spec"
-          {brainstormAvailable}
-          {prdAvailable}
-          {assignmentAvailable}
-          {auditAvailable}
-          {agentMessagesOpen}
-          {onBack}
-          {onToggleAgentMessages}
-          {sectionsOpen}
-          sectionsLabel="spec sections"
-          onToggleSections={() => (sectionsOpen = !sectionsOpen)}
-          {onOpenBrainstorm}
-          {onOpenPrd}
-          {onOpenAssignment}
-          {onOpenAudit}
-        />
-      </div>
+  {#snippet navigation()}
+    <StudioDocumentNavigation
+      active="spec"
+      {brainstormAvailable}
+      {prdAvailable}
+      {assignmentAvailable}
+      {auditAvailable}
+      {agentMessagesOpen}
+      {onBack}
+      {onToggleAgentMessages}
+      {sectionsOpen}
+      sectionsLabel="spec sections"
+      onToggleSections={() => (sectionsOpen = !sectionsOpen)}
+      {onOpenBrainstorm}
+      {onOpenPrd}
+      {onOpenAssignment}
+      {onOpenAudit}
+    />
+  {/snippet}
 
-      <div
-        class="flex items-center gap-2 text-[11px] text-muted max-md:flex-wrap md:justify-center"
-      >
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger
-            class="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-elevated hover:text-foreground"
-            title="Choose a specification version"
-          >
-            <History size={12} />
-            Version {draft.version}
-            <ChevronDown size={11} />
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="bottom"
-              align="start"
-              sideOffset={4}
-              collisionPadding={8}
-              strategy="fixed"
-              class="z-50 max-h-52 min-w-44 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
-            >
-              {#each sortedVersions as version (version.version)}
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs outline-none data-[highlighted]:bg-elevated"
-                  textValue={`Version ${version.version}`}
-                  title={`Open version ${version.version}`}
-                  onSelect={() => void onSelectVersion(version.version)}
-                >
-                  <span>Version {version.version}</span>
-                  <span class="flex items-center gap-1.5 capitalize text-dimmed">
-                    {statusLabel(version.status)}
-                    {#if version.version === draft.version}
-                      <Check size={11} class="text-primary" />
-                    {/if}
-                  </span>
-                </DropdownMenu.Item>
-              {/each}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
-        <StudioHistoryControls
-          canUndo={history.canUndo}
-          canRedo={history.canRedo}
-          onUndo={undoEdit}
-          onRedo={redoEdit}
+  {#snippet center()}
+    <StudioVersionBar
+      versions={sortedVersions.map((version) => ({
+        version: version.version,
+        status: statusLabel(version.status)
+      }))}
+      currentVersion={draft.version}
+      updatedAt={draft.updatedAt}
+      statusLabel={statusLabel(draft.status)}
+      statusClass={statusClass(draft.status)}
+      {dirty}
+      canSave={true}
+      canUndo={history.canUndo}
+      canRedo={history.canRedo}
+      {busy}
+      {savePending}
+      versionMenuTitle="Choose a specification version"
+      versionItemTitle={(version) => `Open version ${version}`}
+      onSelectVersion={onSelectVersion}
+      onUndo={undoEdit}
+      onRedo={redoEdit}
+      onSave={() => void saveDraft()}
+    />
+  {/snippet}
+
+  {#snippet actions()}
+    {#if implementationAuditAvailable}
+      {#if !implementationAuditReady && !implementationAuditRunning}
+        <ModelPicker
+          {providers}
+          {projectId}
+          harnessId={auditSettings.harnessId}
+          providerId={auditSettings.providerId}
+          modelId={auditSettings.modelId}
+          {favoriteModels}
+          {recentModels}
+          {onRemoveRecent}
+          side="top"
+          variant="action"
+          onSelect={chooseAuditModel}
+          thinkingLevel={auditSettings.thinkingLevel}
+          onSelectThinking={chooseAuditThinking}
+          {onToggleFavorite}
+          {onReorderFavorite}
         />
-        <span>Updated {formatDate(draft.updatedAt)}</span>
-        <span
-          class="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {statusClass(
-            draft.status
-          )}"
+      {/if}
+      {#if !implementationAuditRunning}
+        <button
+          class="flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
+          disabled={busy}
+          title="Mark this implementation complete without an audit"
+          onclick={() => void onMarkImplementationComplete?.()}
         >
-          {statusLabel(draft.status)}
-        </span>
-        {#if dirty}
-          <button
-            class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[11px] font-medium hover:bg-overlay disabled:opacity-50"
-            disabled={busy || savePending}
-            title="Save changes (Cmd/Ctrl+S)"
-            onclick={() => void saveDraft()}
-          >
-            <Save size={11} />
-            Save
-          </button>
-        {/if}
-      </div>
+          Mark complete
+        </button>
+      {/if}
+      <button
+        class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
+        disabled={busy}
+        title={implementationAuditReady
+          ? 'Open the implementation audit'
+          : implementationAuditRunning
+            ? 'Open the live auditor trace'
+            : 'Audit the completed implementation'}
+        onclick={() => void onRunImplementationAudit?.()}
+      >
+        <ShieldCheck size={13} />
+        {implementationAuditReady
+          ? 'View audit'
+          : implementationAuditRunning
+            ? 'View trace'
+            : 'Audit'}
+      </button>
+    {:else if canDecide}
+      <button
+        class="flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
+        disabled={busy}
+        title="Review this specification with the agent"
+        onclick={() => {
+          pendingAction = 'review'
+          additionalNotes = ''
+        }}
+        ondblclick={(event: MouseEvent) => {
+          event.preventDefault()
+          void submitAction('review', '')
+        }}
+      >
+        Review
+      </button>
+    {/if}
+    {#if isLatestVersion && assignmentMode}
+      <button
+        class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
+        disabled={busy || (!assignmentAvailable && !currentValidation.valid)}
+        title={assignmentAvailable
+          ? 'Open the Assignment'
+          : 'Generate an Assignment from this specification'}
+        onclick={() => (assignmentAvailable ? onOpenAssignment?.() : void generateAssignment())}
+      >
+        {assignmentAvailable ? 'View Assignment' : 'Generate Assignment'}
+        <ArrowRight size={13} />
+      </button>
+    {:else if canDecide}
+      <button
+        class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
+        disabled={busy || !currentValidation.valid}
+        title="Sign off and implement this specification"
+        onclick={() => {
+          pendingAction = 'implement'
+          additionalNotes = ''
+        }}
+        ondblclick={(event: MouseEvent) => {
+          event.preventDefault()
+          if (currentValidation.valid) void submitAction('implement', '')
+        }}
+      >
+        Implement
+        <ArrowRight size={13} />
+      </button>
+    {/if}
+  {/snippet}
 
-      <div class="flex items-center gap-1.5 md:justify-end">
-        {#if implementationAuditAvailable}
-          {#if !implementationAuditReady && !implementationAuditRunning}
-            <ModelPicker
-              {providers}
-              {projectId}
-              harnessId={auditSettings.harnessId}
-              providerId={auditSettings.providerId}
-              modelId={auditSettings.modelId}
-              {favoriteModels}
-              {recentModels}
-              {onRemoveRecent}
-              side="top"
-              variant="action"
-              onSelect={chooseAuditModel}
-              thinkingLevel={auditSettings.thinkingLevel}
-              onSelectThinking={chooseAuditThinking}
-              {onToggleFavorite}
-              {onReorderFavorite}
-            />
-          {/if}
-          {#if !implementationAuditRunning}
-            <button
-              class="flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
-              disabled={busy}
-              title="Mark this implementation complete without an audit"
-              onclick={() => void onMarkImplementationComplete?.()}
-            >
-              Mark complete
-            </button>
-          {/if}
-          <button
-            class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
-            disabled={busy}
-            title={implementationAuditReady
-              ? 'Open the implementation audit'
-              : implementationAuditRunning
-                ? 'Open the live auditor trace'
-                : 'Audit the completed implementation'}
-            onclick={() => void onRunImplementationAudit?.()}
-          >
-            <ShieldCheck size={13} />
-            {implementationAuditReady
-              ? 'View audit'
-              : implementationAuditRunning
-                ? 'View trace'
-                : 'Audit'}
-          </button>
-        {:else if canDecide}
-          <button
-            class="flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
-            disabled={busy}
-            title="Review this specification with the agent"
-            onclick={() => {
-              pendingAction = 'review'
-              additionalNotes = ''
-            }}
-            ondblclick={(event: MouseEvent) => {
-              event.preventDefault()
-              void submitAction('review', '')
-            }}
-          >
-            Review
-          </button>
-        {/if}
-        {#if isLatestVersion && assignmentMode}
-          <button
-            class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
-            disabled={busy || (!assignmentAvailable && !currentValidation.valid)}
-            title={assignmentAvailable
-              ? 'Open the Assignment'
-              : 'Generate an Assignment from this specification'}
-            onclick={() => (assignmentAvailable ? onOpenAssignment?.() : void generateAssignment())}
-          >
-            {assignmentAvailable ? 'View Assignment' : 'Generate Assignment'}
-            <ArrowRight size={13} />
-          </button>
-        {:else if canDecide}
-          <button
-            class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
-            disabled={busy || !currentValidation.valid}
-            title="Sign off and implement this specification"
-            onclick={() => {
-              pendingAction = 'implement'
-              additionalNotes = ''
-            }}
-            ondblclick={(event: MouseEvent) => {
-              event.preventDefault()
-              if (currentValidation.valid) void submitAction('implement', '')
-            }}
-          >
-            Implement
-            <ArrowRight size={13} />
-          </button>
-        {/if}
-      </div>
-    </div>
-
+  {#snippet headerExtra()}
     {#if pendingAction && canDecide && (!assignmentMode || pendingAction === 'review')}
       <div class="flex flex-col gap-2 border-t px-3 py-2.5 md:flex-row md:items-end md:px-4">
         <label class="min-w-0 flex-1 text-[11px] font-medium text-muted">
@@ -1247,927 +1226,689 @@
         </div>
       </div>
     {/if}
+  {/snippet}
 
-    {#if error}
-      <p
-        class="flex items-start gap-1.5 border-t bg-danger/10 px-4 py-2 text-xs text-danger"
-        role="alert"
-      >
-        <AlertCircle size={14} class="mt-0.5 shrink-0" />
-        {error}
-      </p>
-    {/if}
-  </header>
-
-  <div
-    class="flex min-h-0 flex-1 flex-col overflow-hidden md:grid md:grid-cols-[13rem_minmax(0,1fr)]"
-  >
-    {#if sectionsOpen}
-      <div
-        class="fixed inset-0 z-40 bg-black/50 md:hidden"
-        role="presentation"
-        onclick={() => (sectionsOpen = false)}
-      ></div>
-    {/if}
-    <aside
-      class="relative flex min-h-0 flex-col border-r bg-surface max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-50 max-md:max-h-[80dvh] max-md:rounded-t-2xl max-md:border-r-0 max-md:border-t max-md:pb-[env(safe-area-inset-bottom)] max-md:shadow-2xl {sectionsOpen
-        ? ''
-        : 'max-md:hidden'}"
-      aria-label="Specification sections"
-    >
-      <StudioSidebarResizeHandle sidebarLabel="Specification sections" />
-      <div class="flex h-12 shrink-0 items-center justify-between border-b px-3 md:hidden">
-        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">
-          Specification
+  {#snippet sidebarExtra()}
+    <div class="shrink-0 border-t p-3">
+      <div class="flex items-center justify-between gap-2">
+        <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+          Validation gaps
         </p>
-        <button
-          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted"
-          aria-label="Close sections"
-          title="Close sections"
-          onclick={() => (sectionsOpen = false)}
+        <span
+          class="text-[10px] tabular-nums {selectedSectionIssues.length
+            ? 'text-danger'
+            : 'text-dimmed'}"
         >
-          <X size={16} />
-        </button>
+          {selectedSectionIssues.length}
+        </span>
       </div>
-      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        <div
-          class="space-y-0.5 p-2"
-          role="tablist"
-          tabindex="0"
-          aria-orientation="vertical"
-          onkeydown={navigateSections}
-        >
-          {#each sections as section (section.id)}
-            {@const issueCount = currentValidation.issues.filter(
-              (issue) => issue.section === section.id
-            ).length}
-            {@const annotationCount = annotationsFor(section.id).length}
-            <button
-              class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors max-md:py-3 {selectedSection ===
-              section.id
-                ? 'bg-elevated font-semibold text-foreground'
-                : 'text-muted hover:bg-elevated/60 hover:text-foreground'}"
-              role="tab"
-              aria-selected={selectedSection === section.id}
-              tabindex={selectedSection === section.id ? 0 : -1}
-              title={`Scroll to ${section.label}`}
-              onclick={() => void selectAndScroll(section.id)}
-            >
-              <span>{section.label}</span>
-              <span class="flex items-center gap-1">
-                {#if annotationCount}
-                  <span class="rounded-full bg-info/10 px-1.5 text-[10px] text-info"
-                    >{annotationCount}</span
-                  >
-                {/if}
-                {#if issueCount}
-                  <span
-                    class="rounded-full bg-danger/10 px-1.5 text-[10px] text-danger"
-                    aria-label={`${issueCount} validation ${issueCount === 1 ? 'issue' : 'issues'}`}
-                    title={`${issueCount} validation ${issueCount === 1 ? 'issue' : 'issues'}`}
-                    >{issueCount}</span
-                  >
-                {/if}
-              </span>
-            </button>
-          {/each}
-        </div>
-
-        <div class="border-t p-3">
-          <div class="flex items-center justify-between gap-2">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Validation gaps
-            </p>
-            <span
-              class="text-[10px] tabular-nums {selectedSectionIssues.length
-                ? 'text-danger'
-                : 'text-dimmed'}"
-            >
-              {selectedSectionIssues.length}
-            </span>
-          </div>
-          <div class="mt-2 max-h-56 space-y-1.5 overflow-y-auto pr-1">
-            {#each selectedSectionIssues as issue (`${issue.code}:${issue.path}`)}
-              <div class="rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-2">
-                <div class="flex items-start gap-2">
-                  <AlertCircle size={13} class="mt-0.5 shrink-0 text-danger" />
-                  <div class="min-w-0 flex-1">
-                    <p class="text-xs leading-relaxed text-foreground">{issue.message}</p>
-                    <p class="mt-0.5 truncate font-mono text-[9px] text-dimmed" title={issue.path}>
-                      {issue.path}
-                    </p>
-                    <button
-                      class="mt-1.5 text-[10px] font-semibold text-danger hover:underline"
-                      title="Create an annotation asking the agent to address this validation gap"
-                      onclick={(event: MouseEvent) => openValidationAnnotation(issue, event)}
-                    >
-                      Ask agent to address
-                    </button>
-                  </div>
-                  <button
-                    class="shrink-0 rounded-md p-1 text-dimmed hover:bg-surface hover:text-foreground disabled:opacity-50"
-                    disabled={busy || savePending}
-                    title="Dismiss this validation issue as a false positive"
-                    aria-label={`Dismiss validation issue: ${issue.message}`}
-                    onclick={() => void dismissValidationIssue(issue)}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              </div>
-            {:else}
-              <p
-                class="rounded-lg border border-dashed px-2.5 py-3 text-center text-[11px] text-dimmed"
-              >
-                This section has no validation gaps.
-              </p>
-            {/each}
-          </div>
-        </div>
-
-        <div class="border-t p-3">
-          <div class="flex items-center justify-between">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Section annotations
-            </p>
-            <span class="text-[10px] tabular-nums text-dimmed">{openAnnotationCount}</span>
-          </div>
-          <div class="mt-2 max-h-56 space-y-1.5 overflow-y-auto pr-1">
-            {#each annotationsFor(selectedSection) as annotation (annotation.id)}
-              <button
-                class="block w-full rounded-lg border bg-elevated px-2.5 py-2 text-left hover:bg-overlay"
-                title="Open and edit annotation"
-                onclick={() => openAnnotation(annotation)}
-              >
-                {#if annotation.quote}
-                  <span class="block truncate text-[10px] text-dimmed">“{annotation.quote}”</span>
-                {/if}
-                <span class="mt-0.5 line-clamp-2 block text-xs leading-relaxed"
-                  >{annotation.body}</span
+      <div class="mt-2 max-h-56 space-y-1.5 overflow-y-auto pr-1">
+        {#each selectedSectionIssues as issue (`${issue.code}:${issue.path}`)}
+          <div class="rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-2">
+            <div class="flex items-start gap-2">
+              <AlertCircle size={13} class="mt-0.5 shrink-0 text-danger" />
+              <div class="min-w-0 flex-1">
+                <p class="text-xs leading-relaxed text-foreground">{issue.message}</p>
+                <p class="mt-0.5 truncate font-mono text-[9px] text-dimmed" title={issue.path}>
+                  {issue.path}
+                </p>
+                <button
+                  class="mt-1.5 text-[10px] font-semibold text-danger hover:underline"
+                  title="Create an annotation asking the agent to address this validation gap"
+                  onclick={(event: MouseEvent) => openValidationAnnotation(issue, event)}
                 >
-              </button>
-            {:else}
-              <p
-                class="rounded-lg border border-dashed px-2.5 py-3 text-center text-[11px] text-dimmed"
-              >
-                Select text or click a section heading to annotate.
-              </p>
-            {/each}
-          </div>
-        </div>
-      </div>
-
-      <div class="flex shrink-0 items-center gap-1 border-t p-2">
-        <button
-          class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
-          disabled={busy}
-          title="Reveal this specification as Markdown in the file tree"
-          onclick={() => void onRevealInAppFile($state.snapshot(draft))}
-        >
-          <FileText size={13} />
-          View
-        </button>
-        <button
-          class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
-          disabled={busy}
-          title="Open this specification as Markdown in {preferredName}"
-          onclick={() => void onOpenInEditor($state.snapshot(draft))}
-        >
-          {#if preferredIcon}
-            <img src={preferredIcon} alt="" class="h-3.5 w-3.5 shrink-0" />
-          {:else}
-            <AppWindow size={14} class="shrink-0" />
-          {/if}
-          Open
-        </button>
-      </div>
-    </aside>
-
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <main
-      bind:this={documentScroller}
-      class="relative min-h-0 overflow-y-auto scroll-smooth bg-app"
-      aria-label="Rendered specification"
-      onmouseup={captureDocumentSelection}
-    >
-      {#each annotationMarkers as marker (marker.annotation.id)}
-        <button
-          class="absolute z-20 flex h-7 w-7 items-center justify-center rounded-full border border-primary/30 bg-surface text-primary shadow-md max-md:right-2 hover:bg-elevated"
-          style:left={compactViewport.matches ? undefined : `${marker.x}px`}
-          style:top={`${marker.y}px`}
-          data-spec-annotation-marker={marker.annotation.id}
-          title="Open anchored comment"
-          aria-label="Open anchored comment"
-          onclick={() => void openAnnotation(marker.annotation)}
-        >
-          <MessageSquare size={13} />
-        </button>
-      {/each}
-      <div class="mx-auto max-w-4xl px-4 py-6 md:px-8 md:py-8">
-        <article class="space-y-12 text-sm leading-7">
-          <section id="spec-section-tldr" class="scroll-mt-5">
-            <h2 class="text-xl font-semibold tracking-tight">TL;DR</h2>
-            <EditableMarkdown
-              class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
-              text={draft.content.resolutionSummary}
-              ariaLabel="Specification TL;DR"
-              onChange={(value) => setString('resolutionSummary', value)}
-            />
-          </section>
-
-          <section id="spec-section-problem" data-spec-section="problem" class="scroll-mt-5">
-            <button
-              class="group flex items-center gap-2 text-left"
-              title="Annotate the Problem section"
-              onclick={(event: MouseEvent) => openSectionAnnotation('problem', event)}
-            >
-              <span class="text-xl font-semibold tracking-tight">Problem</span>
-              <MessageSquarePlus
-                size={14}
-                class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-              />
-            </button>
-            <EditableMarkdown
-              class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
-              text={draft.content.problem}
-              ariaLabel="Problem statement"
-              onChange={(value) => setString('problem', value)}
-            />
-            {@render AnnotationBubbles({
-              annotations: annotationsFor('problem'),
-              onOpen: openAnnotation
-            })}
-          </section>
-
-          <section id="spec-section-resolution" data-spec-section="resolution" class="scroll-mt-5">
-            <div class="flex items-center justify-between gap-3">
+                  Ask agent to address
+                </button>
+              </div>
               <button
-                class="group flex items-center gap-2 text-left"
-                title="Annotate the Resolution section"
-                onclick={(event: MouseEvent) => openSectionAnnotation('resolution', event)}
+                class="shrink-0 rounded-md p-1 text-dimmed hover:bg-surface hover:text-foreground disabled:opacity-50"
+                disabled={busy || savePending}
+                title="Dismiss this validation issue as a false positive"
+                aria-label={`Dismiss validation issue: ${issue.message}`}
+                onclick={() => void dismissValidationIssue(issue)}
               >
-                <span class="text-xl font-semibold tracking-tight">Resolution & phases</span>
-                <MessageSquarePlus
-                  size={14}
-                  class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-                />
-              </button>
-              <button
-                class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[11px] text-muted hover:bg-overlay hover:text-foreground"
-                title="Add phase"
-                onclick={addPhase}
-              >
-                <Plus size={11} />
-                Phase
+                <X size={12} />
               </button>
             </div>
-            <ol class="mt-5 space-y-4">
-              {#each draft.content.phases as phase, phaseIndex (phase.id)}
-                <li class="rounded-xl border bg-surface p-4">
-                  <div class="flex items-start gap-3">
-                    <span
-                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-on-primary"
-                    >
-                      {phaseIndex + 1}
-                    </span>
-                    <div class="min-w-0 flex-1">
-                      <EditableMarkdown
-                        class="font-semibold outline-none focus:bg-elevated"
-                        text={phase.title}
-                        fallback="Untitled phase"
-                        ariaLabel={`Phase ${phaseIndex + 1} title`}
-                        onChange={(value) => {
-                          phase.title = value
-                          markDirty()
-                        }}
-                      />
-                      <EditableMarkdown
-                        class="mt-1 text-muted outline-none focus:bg-elevated"
-                        text={phase.objective}
-                        fallback="No objective."
-                        ariaLabel={`Phase ${phaseIndex + 1} objective`}
-                        onChange={(value) => {
-                          phase.objective = value
-                          markDirty()
-                        }}
-                      />
-                    </div>
-                    <button
-                      class="rounded-md p-1 text-dimmed hover:bg-danger/10 hover:text-danger"
-                      aria-label={`Remove phase ${phaseIndex + 1}`}
-                      title={`Remove phase ${phaseIndex + 1}`}
-                      onclick={() => {
-                        draft.content.phases = draft.content.phases.filter(
-                          (candidate) => candidate.id !== phase.id
-                        )
-                        markDirty()
-                      }}
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
-                  <div class="mt-3 grid gap-3 lg:grid-cols-2">
-                    <div>
-                      <div class="flex items-center justify-between">
-                        <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-                          Checkpoints
-                        </p>
-                        <button
-                          class="text-[11px] text-accent hover:underline"
-                          title="Add checkpoint"
-                          onclick={() => addCheckpoint(phase.id)}>Add</button
-                        >
-                      </div>
-                      <div class="mt-1.5 space-y-1.5">
-                        {#each phase.checkpoints as checkpoint, checkpointIndex (checkpoint.id)}
-                          <div class="rounded-lg bg-elevated p-2 text-xs">
-                            <EditableMarkdown
-                              class="font-medium outline-none focus:bg-surface"
-                              text={checkpoint.description}
-                              ariaLabel={`Checkpoint ${checkpointIndex + 1}`}
-                              onChange={(value) => {
-                                checkpoint.description = value
-                                markDirty()
-                              }}
-                            />
-                            <EditableMarkdown
-                              class="mt-0.5 text-muted outline-none focus:bg-surface"
-                              text={checkpoint.evidence}
-                              ariaLabel={`Checkpoint ${checkpointIndex + 1} evidence`}
-                              onChange={(value) => {
-                                checkpoint.evidence = value
-                                markDirty()
-                              }}
-                            />
-                          </div>
-                        {:else}
-                          <p class="text-[11px] text-dimmed">No checkpoints.</p>
-                        {/each}
-                      </div>
-                    </div>
-                    <div>
-                      <div class="flex items-center justify-between">
-                        <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-                          File operations
-                        </p>
-                        <button
-                          class="text-[11px] text-accent hover:underline"
-                          title="Add file operation"
-                          onclick={() => addFileOperation(phase.id)}>Add</button
-                        >
-                      </div>
-                      <div class="mt-1.5 space-y-1.5">
-                        {#each phase.fileOperations as operation, operationIndex (`${phase.id}:${operationIndex}`)}
-                          <div class="rounded-lg bg-elevated p-2 text-xs">
-                            <div class="flex items-center gap-2">
-                              <select
-                                class="rounded border bg-surface px-1.5 py-1 text-[11px]"
-                                bind:value={operation.operation}
-                                onchange={markDirty}
-                                aria-label={`File operation ${operationIndex + 1} type`}
-                              >
-                                <option value="create">Create</option>
-                                <option value="edit">Edit</option>
-                                <option value="delete">Delete</option>
-                              </select>
-                              <EditableMarkdown
-                                class="min-w-0 flex-1 font-mono outline-none focus:bg-surface"
-                                text={operation.path}
-                                ariaLabel={`File operation ${operationIndex + 1} path`}
-                                onChange={(value) => {
-                                  operation.path = value
-                                  markDirty()
-                                }}
-                              />
-                            </div>
-                            <EditableMarkdown
-                              class="mt-1 text-muted outline-none focus:bg-surface"
-                              text={operation.reason}
-                              ariaLabel={`File operation ${operationIndex + 1} reason`}
-                              onChange={(value) => {
-                                operation.reason = value
-                                markDirty()
-                              }}
-                            />
-                          </div>
-                        {:else}
-                          <p class="text-[11px] text-dimmed">No file operations.</p>
-                        {/each}
-                      </div>
-                    </div>
-                  </div>
+          </div>
+        {:else}
+          <p
+            class="rounded-lg border border-dashed px-2.5 py-3 text-center text-[11px] text-dimmed"
+          >
+            This section has no validation gaps.
+          </p>
+        {/each}
+      </div>
+    </div>
+  {/snippet}
+
+  {#snippet sidebarFooter()}
+    <StudioSidebarFileActions
+      viewTitle="Reveal this specification as Markdown in the file tree"
+      openTitle={`Open this specification as Markdown in ${preferredName}`}
+      {busy}
+      onReveal={() => onRevealInAppFile($state.snapshot(draft))}
+      onOpen={() => onOpenInEditor($state.snapshot(draft))}
+    />
+  {/snippet}
+
+  {#snippet markers()}
+    {#each annotationMarkers as marker (marker.annotation.id)}
+      <button
+        class="absolute z-20 flex h-7 w-7 items-center justify-center rounded-full border border-primary/30 bg-surface text-primary shadow-md max-md:right-2 hover:bg-elevated"
+        style:left={compactViewport.matches ? undefined : `${marker.x}px`}
+        style:top={`${marker.y}px`}
+        data-spec-annotation-marker={marker.annotation.id}
+        title="Open anchored comment"
+        aria-label="Open anchored comment"
+        onclick={() => void openAnnotation(marker.annotation)}
+      >
+        <MessageSquare size={13} />
+      </button>
+    {/each}
+  {/snippet}
+
+  <div class="mx-auto max-w-4xl px-4 py-6 md:px-8 md:py-8">
+    <article class="space-y-12 text-sm leading-7">
+      <section id="spec-section-tldr" class="scroll-mt-5">
+        <h2 class="text-xl font-semibold tracking-tight">TL;DR</h2>
+        <EditableMarkdown
+          class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+          text={draft.content.resolutionSummary}
+          ariaLabel="Specification TL;DR"
+          onChange={(value) => setString('resolutionSummary', value)}
+        />
+      </section>
+
+      <section id="spec-section-problem" data-spec-section="problem" class="scroll-mt-5">
+        <button
+          class="group flex items-center gap-2 text-left"
+          title="Annotate the Problem section"
+          onclick={(event: MouseEvent) => openSectionAnnotation('problem', event)}
+        >
+          <span class="text-xl font-semibold tracking-tight">Problem</span>
+          <MessageSquarePlus
+            size={14}
+            class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
+          />
+        </button>
+        <EditableMarkdown
+          class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+          text={draft.content.problem}
+          ariaLabel="Problem statement"
+          onChange={(value) => setString('problem', value)}
+        />
+        {@render AnnotationBubbles({
+          annotations: annotationsFor('problem'),
+          onOpen: openAnnotation
+        })}
+      </section>
+
+      <section id="spec-section-resolution" data-spec-section="resolution" class="scroll-mt-5">
+        <div class="flex items-center justify-between gap-3">
+          <button
+            class="group flex items-center gap-2 text-left"
+            title="Annotate the Resolution section"
+            onclick={(event: MouseEvent) => openSectionAnnotation('resolution', event)}
+          >
+            <span class="text-xl font-semibold tracking-tight">Resolution & phases</span>
+            <MessageSquarePlus
+              size={14}
+              class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
+            />
+          </button>
+          <button
+            class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[11px] text-muted hover:bg-overlay hover:text-foreground"
+            title="Add phase"
+            onclick={addPhase}
+          >
+            <Plus size={11} />
+            Phase
+          </button>
+        </div>
+        <ol class="mt-5 space-y-4">
+          {#each draft.content.phases as phase, phaseIndex (phase.id)}
+            <li class="rounded-xl border bg-surface p-4">
+              <div class="flex items-start gap-3">
+                <span
+                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-on-primary"
+                >
+                  {phaseIndex + 1}
+                </span>
+                <div class="min-w-0 flex-1">
                   <EditableMarkdown
-                    class="mt-3 block rounded-md bg-elevated px-2 py-1 font-mono text-xs outline-none"
-                    text={phase.commit}
-                    fallback="No commit specified."
-                    ariaLabel={`Phase ${phaseIndex + 1} commit`}
+                    class="font-semibold outline-none focus:bg-elevated"
+                    text={phase.title}
+                    fallback="Untitled phase"
+                    ariaLabel={`Phase ${phaseIndex + 1} title`}
                     onChange={(value) => {
-                      phase.commit = value
+                      phase.title = value
                       markDirty()
                     }}
                   />
-                </li>
-              {/each}
-            </ol>
-            {@render AnnotationBubbles({
-              annotations: annotationsFor('resolution'),
-              onOpen: openAnnotation
-            })}
-          </section>
-
-          {@render EditableListSection({
-            id: 'success_criteria',
-            title: 'Success criteria',
-            items: draft.content.successCriteria,
-            annotations: annotationsFor('success_criteria'),
-            onHeading: openSectionAnnotation,
-            onEdit: (index, value) => setArrayItem('successCriteria', index, value),
-            onAdd: () => addArrayItem('successCriteria'),
-            onRemove: (index) => removeArrayItem('successCriteria', index),
-            onOpenAnnotation: openAnnotation
-          })}
-
-          <section
-            id="spec-section-test_strategy"
-            data-spec-section="test_strategy"
-            class="scroll-mt-5"
-          >
-            <button
-              class="group flex items-center gap-2 text-left"
-              title="Annotate Test strategy"
-              onclick={(event: MouseEvent) => openSectionAnnotation('test_strategy', event)}
-            >
-              <span class="text-xl font-semibold tracking-tight">Test strategy</span>
-              <MessageSquarePlus
-                size={14}
-                class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-              />
-            </button>
-            <EditableMarkdown
-              class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
-              text={draft.content.testStrategy}
-              ariaLabel="Test strategy"
-              onChange={(value) => setString('testStrategy', value)}
-            />
-            {@render AnnotationBubbles({
-              annotations: annotationsFor('test_strategy'),
-              onOpen: openAnnotation
-            })}
-          </section>
-
-          {@render EditableListSection({
-            id: 'documentation',
-            title: 'Documentation',
-            items: draft.content.documentationRequirements,
-            annotations: annotationsFor('documentation'),
-            onHeading: openSectionAnnotation,
-            onEdit: (index, value) => setArrayItem('documentationRequirements', index, value),
-            onAdd: () => addArrayItem('documentationRequirements'),
-            onRemove: (index) => removeArrayItem('documentationRequirements', index),
-            onOpenAnnotation: openAnnotation
-          })}
-
-          {#if draft.content.additionalInfo !== undefined}
-            <section
-              id="spec-section-additional_info"
-              data-spec-section="additional_info"
-              class="scroll-mt-5"
-            >
-              <button
-                class="group flex items-center gap-2 text-left"
-                title="Annotate Additional info"
-                onclick={(event: MouseEvent) => openSectionAnnotation('additional_info', event)}
-              >
-                <span class="text-xl font-semibold tracking-tight">Additional info</span>
-                <MessageSquarePlus
-                  size={14}
-                  class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-                />
-              </button>
-              <EditableMarkdown
-                class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
-                text={draft.content.additionalInfo}
-                ariaLabel="Additional info"
-                onChange={(value) => setString('additionalInfo', value)}
-                onAnnotateMermaid={(code, event) =>
-                  openDiagramAnnotation('additional_info', code, event)}
-              />
-              {@render AnnotationBubbles({
-                annotations: annotationsFor('additional_info'),
-                onOpen: openAnnotation
-              })}
-            </section>
-          {/if}
-
-          <section
-            id="spec-section-commit_pattern"
-            data-spec-section="commit_pattern"
-            class="scroll-mt-5"
-          >
-            <button
-              class="group flex items-center gap-2 text-left"
-              title="Annotate Commit pattern"
-              onclick={(event: MouseEvent) => openSectionAnnotation('commit_pattern', event)}
-            >
-              <span class="text-xl font-semibold tracking-tight">Commit pattern</span>
-              <MessageSquarePlus
-                size={14}
-                class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-              />
-            </button>
-            <EditableMarkdown
-              class="mt-3 block rounded-lg bg-surface px-3 py-2 font-mono text-xs outline-none"
-              text={draft.content.commitPattern}
-              ariaLabel="Commit pattern"
-              onChange={(value) => setString('commitPattern', value)}
-            />
-            {@render AnnotationBubbles({
-              annotations: annotationsFor('commit_pattern'),
-              onOpen: openAnnotation
-            })}
-          </section>
-
-          <section
-            id="spec-section-constraints_risks"
-            data-spec-section="constraints_risks"
-            class="scroll-mt-5"
-          >
-            <button
-              class="group flex items-center gap-2 text-left"
-              title="Annotate Constraints and risks"
-              onclick={(event: MouseEvent) => openSectionAnnotation('constraints_risks', event)}
-            >
-              <span class="text-xl font-semibold tracking-tight">Constraints & risks</span>
-              <MessageSquarePlus
-                size={14}
-                class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-              />
-            </button>
-            <div class="mt-4 grid gap-5 sm:grid-cols-2">
-              {@render EditableMiniList({
-                title: 'Constraints',
-                items: draft.content.constraints,
-                onEdit: (index, value) => setArrayItem('constraints', index, value),
-                onAdd: () => addArrayItem('constraints'),
-                onRemove: (index) => removeArrayItem('constraints', index)
-              })}
-              {@render EditableMiniList({
-                title: 'Risks',
-                items: draft.content.risks,
-                onEdit: (index, value) => setArrayItem('risks', index, value),
-                onAdd: () => addArrayItem('risks'),
-                onRemove: (index) => removeArrayItem('risks', index)
-              })}
-            </div>
-            {@render AnnotationBubbles({
-              annotations: annotationsFor('constraints_risks'),
-              onOpen: openAnnotation
-            })}
-          </section>
-        </article>
-
-        <section class="mt-12 border-t pt-6" aria-label="Specification context">
-          <div class="flex items-center justify-between">
-            <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Context</h2>
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger
-                class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[11px] hover:bg-overlay"
-                title="Add context to this specification"
-              >
-                <Plus size={11} />
-                Add context
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content
-                  side="bottom"
-                  align="end"
-                  sideOffset={4}
-                  collisionPadding={8}
-                  strategy="fixed"
-                  class="z-50 w-64 rounded-lg border border-border bg-surface p-1 shadow-lg"
-                >
-                  {#each contextTypes as item (item.type)}
-                    <DropdownMenu.Item
-                      class="flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-left outline-none data-[highlighted]:bg-elevated"
-                      textValue={item.label}
-                      title={item.description}
-                      onSelect={() => {
-                        if (item.type === 'attachment') {
-                          void onAddContext(item.type)
-                        } else {
-                          void openContextPicker(item.type)
-                        }
-                      }}
-                    >
-                      {#if item.type === 'project_file'}
-                        <Search size={13} class="mt-0.5 shrink-0 text-muted" />
-                      {:else if item.type === 'project_rule'}
-                        <ShieldCheck size={13} class="mt-0.5 shrink-0 text-muted" />
-                      {:else}
-                        <Paperclip size={13} class="mt-0.5 shrink-0 text-muted" />
-                      {/if}
-                      <span class="min-w-0">
-                        <span class="block text-xs font-medium">{item.label}</span>
-                        <span class="mt-0.5 block text-[10px] leading-tight text-dimmed">
-                          {item.description}
-                        </span>
-                      </span>
-                    </DropdownMenu.Item>
-                  {/each}
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-          </div>
-          {#if contextPickerType}
-            {@const activeContextPickerType = contextPickerType}
-            <div class="mt-3 rounded-lg border bg-surface p-3">
-              <div class="flex items-center justify-between gap-3">
-                <div>
-                  <h3 class="text-xs font-semibold">
-                    {contextPickerType === 'project_rule'
-                      ? 'Add a rule or skill'
-                      : 'Tag a project file'}
-                  </h3>
-                  <p class="mt-0.5 text-[10px] text-dimmed">
-                    The project-relative path will be included in review and implementation.
-                  </p>
+                  <EditableMarkdown
+                    class="mt-1 text-muted outline-none focus:bg-elevated"
+                    text={phase.objective}
+                    fallback="No objective."
+                    ariaLabel={`Phase ${phaseIndex + 1} objective`}
+                    onChange={(value) => {
+                      phase.objective = value
+                      markDirty()
+                    }}
+                  />
                 </div>
                 <button
-                  type="button"
-                  class="rounded-md p-1 text-dimmed hover:bg-elevated hover:text-foreground"
-                  title="Close context search"
-                  aria-label="Close context search"
-                  onclick={closeContextPicker}
+                  class="rounded-md p-1 text-dimmed hover:bg-danger/10 hover:text-danger"
+                  aria-label={`Remove phase ${phaseIndex + 1}`}
+                  title={`Remove phase ${phaseIndex + 1}`}
+                  onclick={() => {
+                    draft.content.phases = draft.content.phases.filter(
+                      (candidate) => candidate.id !== phase.id
+                    )
+                    markDirty()
+                  }}
                 >
                   <X size={13} />
                 </button>
               </div>
-              <label class="relative mt-3 block">
-                <span class="sr-only">Search project files</span>
-                <Search
-                  size={13}
-                  class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
-                />
-                <input
-                  {@attach focusContextSearch}
-                  value={contextQuery}
-                  class="h-8 w-full rounded-md border bg-app pl-8 pr-3 text-xs outline-none"
-                  placeholder={contextPickerType === 'project_rule'
-                    ? 'Search AGENTS.md, SKILL.md, rules…'
-                    : 'Search files by name or path…'}
-                  oninput={updateContextQuery}
-                />
-              </label>
-              <div class="mt-2 max-h-52 overflow-y-auto">
-                {#if contextSearchBusy && contextResults.length === 0}
-                  <p class="px-2 py-3 text-center text-xs text-dimmed">Searching project…</p>
-                {:else if contextSearchError}
-                  <p class="px-2 py-3 text-center text-xs text-danger">{contextSearchError}</p>
-                {:else if contextResults.length === 0}
-                  <p class="px-2 py-3 text-center text-xs text-dimmed">
-                    {contextPickerType === 'project_rule'
-                      ? 'No project rules or skills match this search.'
-                      : 'No project files match this search.'}
-                  </p>
-                {:else}
-                  {#each contextResults as entry (entry.path)}
-                    {@const selected = selectedContextPaths.has(entry.path)}
+              <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                <div>
+                  <div class="flex items-center justify-between">
+                    <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+                      Checkpoints
+                    </p>
                     <button
-                      type="button"
-                      class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-elevated disabled:cursor-pointer disabled:opacity-60"
-                      title={selected
-                        ? `${entry.path} is already included`
-                        : `Include ${entry.path}`}
-                      disabled={selected || busy}
-                      onclick={() => void selectContextPath(activeContextPickerType, entry.path)}
+                      class="text-[11px] text-accent hover:underline"
+                      title="Add checkpoint"
+                      onclick={() => addCheckpoint(phase.id)}>Add</button
                     >
-                      <FileText size={12} class="shrink-0 text-muted" />
-                      <span class="min-w-0 flex-1 truncate">{entry.path}</span>
-                      {#if selected}
-                        <Check size={12} class="shrink-0 text-success" />
-                      {/if}
-                    </button>
-                  {/each}
-                {/if}
-              </div>
-            </div>
-          {/if}
-          <div class="mt-3 grid gap-2 sm:grid-cols-2">
-            {#each draft.context as reference (reference.id)}
-              <div class="flex items-center gap-2 rounded-lg border bg-surface px-3 py-2">
-                <span class="min-w-0 flex-1">
-                  <span class="block truncate text-xs font-medium">{reference.label}</span>
-                  <span class="block truncate text-[10px] text-dimmed"
-                    >{reference.type.replace('_', ' ')}{reference.path
-                      ? ` · ${reference.path}`
-                      : ''}</span
-                  >
-                </span>
-                <button
-                  class="rounded-md p-1 text-dimmed hover:bg-danger/10 hover:text-danger"
-                  aria-label={`Remove context ${reference.label}`}
-                  title={`Remove ${reference.label}`}
-                  onclick={() => void onRemoveContext(reference.id)}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            {:else}
-              <p
-                class="col-span-full rounded-lg border border-dashed p-4 text-center text-xs text-dimmed"
-              >
-                Tag project files, add rules or skills, attach external files, or drop files
-                anywhere in the Studio.
-              </p>
-            {/each}
-          </div>
-          <div class="mt-6 border-t pt-4">
-            <div class="flex items-center gap-1.5">
-              <MessageSquareText size={13} class="text-muted" />
-              <h3 class="text-xs font-semibold">Previous comments</h3>
-            </div>
-            {#if decisionComments.length > 0}
-              <div class="mt-3 space-y-3">
-                {#each decisionComments as comment (comment.id)}
-                  <div class="border-l-2 border-border pl-3">
-                    <div class="mb-1 flex items-center gap-2 text-[10px] text-dimmed">
-                      <span class="font-semibold uppercase tracking-wide text-muted">
-                        {comment.action === 'review' ? 'Review' : 'Implement'}
-                      </span>
-                      <span>·</span>
-                      <span>{formatDate(comment.createdAt)}</span>
-                    </div>
-                    <div class="text-xs text-foreground">
-                      <MarkdownView text={comment.body} />
-                    </div>
                   </div>
-                {/each}
+                  <div class="mt-1.5 space-y-1.5">
+                    {#each phase.checkpoints as checkpoint, checkpointIndex (checkpoint.id)}
+                      <div class="rounded-lg bg-elevated p-2 text-xs">
+                        <EditableMarkdown
+                          class="font-medium outline-none focus:bg-surface"
+                          text={checkpoint.description}
+                          ariaLabel={`Checkpoint ${checkpointIndex + 1}`}
+                          onChange={(value) => {
+                            checkpoint.description = value
+                            markDirty()
+                          }}
+                        />
+                        <EditableMarkdown
+                          class="mt-0.5 text-muted outline-none focus:bg-surface"
+                          text={checkpoint.evidence}
+                          ariaLabel={`Checkpoint ${checkpointIndex + 1} evidence`}
+                          onChange={(value) => {
+                            checkpoint.evidence = value
+                            markDirty()
+                          }}
+                        />
+                      </div>
+                    {:else}
+                      <p class="text-[11px] text-dimmed">No checkpoints.</p>
+                    {/each}
+                  </div>
+                </div>
+                <div>
+                  <div class="flex items-center justify-between">
+                    <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+                      File operations
+                    </p>
+                    <button
+                      class="text-[11px] text-accent hover:underline"
+                      title="Add file operation"
+                      onclick={() => addFileOperation(phase.id)}>Add</button
+                    >
+                  </div>
+                  <div class="mt-1.5 space-y-1.5">
+                    {#each phase.fileOperations as operation, operationIndex (`${phase.id}:${operationIndex}`)}
+                      <div class="rounded-lg bg-elevated p-2 text-xs">
+                        <div class="flex items-center gap-2">
+                          <select
+                            class="rounded border bg-surface px-1.5 py-1 text-[11px]"
+                            bind:value={operation.operation}
+                            onchange={markDirty}
+                            aria-label={`File operation ${operationIndex + 1} type`}
+                          >
+                            <option value="create">Create</option>
+                            <option value="edit">Edit</option>
+                            <option value="delete">Delete</option>
+                          </select>
+                          <EditableMarkdown
+                            class="min-w-0 flex-1 font-mono outline-none focus:bg-surface"
+                            text={operation.path}
+                            ariaLabel={`File operation ${operationIndex + 1} path`}
+                            onChange={(value) => {
+                              operation.path = value
+                              markDirty()
+                            }}
+                          />
+                        </div>
+                        <EditableMarkdown
+                          class="mt-1 text-muted outline-none focus:bg-surface"
+                          text={operation.reason}
+                          ariaLabel={`File operation ${operationIndex + 1} reason`}
+                          onChange={(value) => {
+                            operation.reason = value
+                            markDirty()
+                          }}
+                        />
+                      </div>
+                    {:else}
+                      <p class="text-[11px] text-dimmed">No file operations.</p>
+                    {/each}
+                  </div>
+                </div>
               </div>
-            {:else}
-              <p class="mt-2 text-xs text-dimmed">
-                No Review or Implement comments were submitted for this version.
+              <EditableMarkdown
+                class="mt-3 block rounded-md bg-elevated px-2 py-1 font-mono text-xs outline-none"
+                text={phase.commit}
+                fallback="No commit specified."
+                ariaLabel={`Phase ${phaseIndex + 1} commit`}
+                onChange={(value) => {
+                  phase.commit = value
+                  markDirty()
+                }}
+              />
+            </li>
+          {/each}
+        </ol>
+        {@render AnnotationBubbles({
+          annotations: annotationsFor('resolution'),
+          onOpen: openAnnotation
+        })}
+      </section>
+
+      {@render EditableListSection({
+        id: 'success_criteria',
+        title: 'Success criteria',
+        items: draft.content.successCriteria,
+        annotations: annotationsFor('success_criteria'),
+        onHeading: openSectionAnnotation,
+        onEdit: (index, value) => setArrayItem('successCriteria', index, value),
+        onAdd: () => addArrayItem('successCriteria'),
+        onRemove: (index) => removeArrayItem('successCriteria', index),
+        onOpenAnnotation: openAnnotation
+      })}
+
+      <section
+        id="spec-section-test_strategy"
+        data-spec-section="test_strategy"
+        class="scroll-mt-5"
+      >
+        <button
+          class="group flex items-center gap-2 text-left"
+          title="Annotate Test strategy"
+          onclick={(event: MouseEvent) => openSectionAnnotation('test_strategy', event)}
+        >
+          <span class="text-xl font-semibold tracking-tight">Test strategy</span>
+          <MessageSquarePlus
+            size={14}
+            class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
+          />
+        </button>
+        <EditableMarkdown
+          class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+          text={draft.content.testStrategy}
+          ariaLabel="Test strategy"
+          onChange={(value) => setString('testStrategy', value)}
+        />
+        {@render AnnotationBubbles({
+          annotations: annotationsFor('test_strategy'),
+          onOpen: openAnnotation
+        })}
+      </section>
+
+      {@render EditableListSection({
+        id: 'documentation',
+        title: 'Documentation',
+        items: draft.content.documentationRequirements,
+        annotations: annotationsFor('documentation'),
+        onHeading: openSectionAnnotation,
+        onEdit: (index, value) => setArrayItem('documentationRequirements', index, value),
+        onAdd: () => addArrayItem('documentationRequirements'),
+        onRemove: (index) => removeArrayItem('documentationRequirements', index),
+        onOpenAnnotation: openAnnotation
+      })}
+
+      {#if draft.content.additionalInfo !== undefined}
+        <section
+          id="spec-section-additional_info"
+          data-spec-section="additional_info"
+          class="scroll-mt-5"
+        >
+          <button
+            class="group flex items-center gap-2 text-left"
+            title="Annotate Additional info"
+            onclick={(event: MouseEvent) => openSectionAnnotation('additional_info', event)}
+          >
+            <span class="text-xl font-semibold tracking-tight">Additional info</span>
+            <MessageSquarePlus
+              size={14}
+              class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
+            />
+          </button>
+          <EditableMarkdown
+            class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+            text={draft.content.additionalInfo}
+            ariaLabel="Additional info"
+            onChange={(value) => setString('additionalInfo', value)}
+            onAnnotateMermaid={(code, event) =>
+              openDiagramAnnotation('additional_info', code, event)}
+          />
+          {@render AnnotationBubbles({
+            annotations: annotationsFor('additional_info'),
+            onOpen: openAnnotation
+          })}
+        </section>
+      {/if}
+
+      <section
+        id="spec-section-commit_pattern"
+        data-spec-section="commit_pattern"
+        class="scroll-mt-5"
+      >
+        <button
+          class="group flex items-center gap-2 text-left"
+          title="Annotate Commit pattern"
+          onclick={(event: MouseEvent) => openSectionAnnotation('commit_pattern', event)}
+        >
+          <span class="text-xl font-semibold tracking-tight">Commit pattern</span>
+          <MessageSquarePlus
+            size={14}
+            class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
+          />
+        </button>
+        <EditableMarkdown
+          class="mt-3 block rounded-lg bg-surface px-3 py-2 font-mono text-xs outline-none"
+          text={draft.content.commitPattern}
+          ariaLabel="Commit pattern"
+          onChange={(value) => setString('commitPattern', value)}
+        />
+        {@render AnnotationBubbles({
+          annotations: annotationsFor('commit_pattern'),
+          onOpen: openAnnotation
+        })}
+      </section>
+
+      <section
+        id="spec-section-constraints_risks"
+        data-spec-section="constraints_risks"
+        class="scroll-mt-5"
+      >
+        <button
+          class="group flex items-center gap-2 text-left"
+          title="Annotate Constraints and risks"
+          onclick={(event: MouseEvent) => openSectionAnnotation('constraints_risks', event)}
+        >
+          <span class="text-xl font-semibold tracking-tight">Constraints & risks</span>
+          <MessageSquarePlus
+            size={14}
+            class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
+          />
+        </button>
+        <div class="mt-4 grid gap-5 sm:grid-cols-2">
+          {@render EditableMiniList({
+            title: 'Constraints',
+            items: draft.content.constraints,
+            onEdit: (index, value) => setArrayItem('constraints', index, value),
+            onAdd: () => addArrayItem('constraints'),
+            onRemove: (index) => removeArrayItem('constraints', index)
+          })}
+          {@render EditableMiniList({
+            title: 'Risks',
+            items: draft.content.risks,
+            onEdit: (index, value) => setArrayItem('risks', index, value),
+            onAdd: () => addArrayItem('risks'),
+            onRemove: (index) => removeArrayItem('risks', index)
+          })}
+        </div>
+        {@render AnnotationBubbles({
+          annotations: annotationsFor('constraints_risks'),
+          onOpen: openAnnotation
+        })}
+      </section>
+    </article>
+
+    <section class="mt-12 border-t pt-6" aria-label="Specification context">
+      <div class="flex items-center justify-between">
+        <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Context</h2>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[11px] hover:bg-overlay"
+            title="Add context to this specification"
+          >
+            <Plus size={11} />
+            Add context
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="end"
+              sideOffset={4}
+              collisionPadding={8}
+              strategy="fixed"
+              class="z-50 w-64 rounded-lg border border-border bg-surface p-1 shadow-lg"
+            >
+              {#each contextTypes as item (item.type)}
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-left outline-none data-[highlighted]:bg-elevated"
+                  textValue={item.label}
+                  title={item.description}
+                  onSelect={() => {
+                    if (item.type === 'attachment') {
+                      void onAddContext(item.type)
+                    } else {
+                      void openContextPicker(item.type)
+                    }
+                  }}
+                >
+                  {#if item.type === 'project_file'}
+                    <Search size={13} class="mt-0.5 shrink-0 text-muted" />
+                  {:else if item.type === 'project_rule'}
+                    <ShieldCheck size={13} class="mt-0.5 shrink-0 text-muted" />
+                  {:else}
+                    <Paperclip size={13} class="mt-0.5 shrink-0 text-muted" />
+                  {/if}
+                  <span class="min-w-0">
+                    <span class="block text-xs font-medium">{item.label}</span>
+                    <span class="mt-0.5 block text-[10px] leading-tight text-dimmed">
+                      {item.description}
+                    </span>
+                  </span>
+                </DropdownMenu.Item>
+              {/each}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      </div>
+      {#if contextPickerType}
+        {@const activeContextPickerType = contextPickerType}
+        <div class="mt-3 rounded-lg border bg-surface p-3">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h3 class="text-xs font-semibold">
+                {contextPickerType === 'project_rule'
+                  ? 'Add a rule or skill'
+                  : 'Tag a project file'}
+              </h3>
+              <p class="mt-0.5 text-[10px] text-dimmed">
+                The project-relative path will be included in review and implementation.
               </p>
+            </div>
+            <button
+              type="button"
+              class="rounded-md p-1 text-dimmed hover:bg-elevated hover:text-foreground"
+              title="Close context search"
+              aria-label="Close context search"
+              onclick={closeContextPicker}
+            >
+              <X size={13} />
+            </button>
+          </div>
+          <label class="relative mt-3 block">
+            <span class="sr-only">Search project files</span>
+            <Search
+              size={13}
+              class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
+            />
+            <input
+              {@attach focusContextSearch}
+              value={contextQuery}
+              class="h-8 w-full rounded-md border bg-app pl-8 pr-3 text-xs outline-none"
+              placeholder={contextPickerType === 'project_rule'
+                ? 'Search AGENTS.md, SKILL.md, rules…'
+                : 'Search files by name or path…'}
+              oninput={updateContextQuery}
+            />
+          </label>
+          <div class="mt-2 max-h-52 overflow-y-auto">
+            {#if contextSearchBusy && contextResults.length === 0}
+              <p class="px-2 py-3 text-center text-xs text-dimmed">Searching project…</p>
+            {:else if contextSearchError}
+              <p class="px-2 py-3 text-center text-xs text-danger">{contextSearchError}</p>
+            {:else if contextResults.length === 0}
+              <p class="px-2 py-3 text-center text-xs text-dimmed">
+                {contextPickerType === 'project_rule'
+                  ? 'No project rules or skills match this search.'
+                  : 'No project files match this search.'}
+              </p>
+            {:else}
+              {#each contextResults as entry (entry.path)}
+                {@const selected = selectedContextPaths.has(entry.path)}
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-elevated disabled:cursor-pointer disabled:opacity-60"
+                  title={selected
+                    ? `${entry.path} is already included`
+                    : `Include ${entry.path}`}
+                  disabled={selected || busy}
+                  onclick={() => void selectContextPath(activeContextPickerType, entry.path)}
+                >
+                  <FileText size={12} class="shrink-0 text-muted" />
+                  <span class="min-w-0 flex-1 truncate">{entry.path}</span>
+                  {#if selected}
+                    <Check size={12} class="shrink-0 text-success" />
+                  {/if}
+                </button>
+              {/each}
             {/if}
           </div>
-        </section>
+        </div>
+      {/if}
+      <div class="mt-3 grid gap-2 sm:grid-cols-2">
+        {#each draft.context as reference (reference.id)}
+          <div class="flex items-center gap-2 rounded-lg border bg-surface px-3 py-2">
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-xs font-medium">{reference.label}</span>
+              <span class="block truncate text-[10px] text-dimmed"
+                >{reference.type.replace('_', ' ')}{reference.path
+                  ? ` · ${reference.path}`
+                  : ''}</span
+              >
+            </span>
+            <button
+              class="rounded-md p-1 text-dimmed hover:bg-danger/10 hover:text-danger"
+              aria-label={`Remove context ${reference.label}`}
+              title={`Remove ${reference.label}`}
+              onclick={() => void onRemoveContext(reference.id)}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        {:else}
+          <p
+            class="col-span-full rounded-lg border border-dashed p-4 text-center text-xs text-dimmed"
+          >
+            Tag project files, add rules or skills, attach external files, or drop files
+            anywhere in the Studio.
+          </p>
+        {/each}
       </div>
-    </main>
+      <div class="mt-6 border-t pt-4">
+        <div class="flex items-center gap-1.5">
+          <MessageSquareText size={13} class="text-muted" />
+          <h3 class="text-xs font-semibold">Previous comments</h3>
+        </div>
+        {#if decisionComments.length > 0}
+          <div class="mt-3 space-y-3">
+            {#each decisionComments as comment (comment.id)}
+              <div class="border-l-2 border-border pl-3">
+                <div class="mb-1 flex items-center gap-2 text-[10px] text-dimmed">
+                  <span class="font-semibold uppercase tracking-wide text-muted">
+                    {comment.action === 'review' ? 'Review' : 'Implement'}
+                  </span>
+                  <span>·</span>
+                  <span>{formatDate(comment.createdAt)}</span>
+                </div>
+                <div class="text-xs text-foreground">
+                  <MarkdownView text={comment.body} />
+                </div>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="mt-2 text-xs text-dimmed">
+            No Review or Implement comments were submitted for this version.
+          </p>
+        {/if}
+      </div>
+    </section>
   </div>
-</section>
+</StudioShell>
 
 {#if pendingAnnotation}
-  <div
-    class="fixed z-50 w-96 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
-    role="dialog"
-    aria-label={pendingAnnotation.sectionLevel
+  <StudioPendingAnnotationPopover
+    position={{ x: pendingAnnotation.x, y: pendingAnnotation.y }}
+    quote={pendingAnnotation.quote}
+    canAnnotate={canDecide}
+    showSelectionActions={pendingAnnotation.selectionActions}
+    {busy}
+    speechTargetId={pendingSpeechTargetId}
+    dialogLabel={pendingAnnotation.sectionLevel
       ? 'Annotate section'
       : canDecide
         ? 'Comment on selection'
         : 'Actions for selection'}
-    {@attach draggablePopover({
-      x: pendingAnnotation.x,
-      y: pendingAnnotation.y,
-      disabled: compactViewport.matches
-    })}
-  >
-    <div class="flex items-center gap-1">
-      {#if !compactViewport.matches}
-        <PopoverDragHandle title="Move selection comment" />
-      {/if}
-      <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-        {pendingAnnotation.sectionLevel
-          ? 'Annotate section'
-          : canDecide
-            ? 'Comment on selection'
-            : 'Selection'}
-      </p>
-    </div>
-    <blockquote
-      class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
-    >
-      “{pendingAnnotation.quote}”
-    </blockquote>
-    {#if canDecide}
-      <RichMarkdownEditor
-        bind:this={annotationEditor}
-        class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
-        bind:value={annotationBody}
-        placeholder="Leave your review note…"
-        ariaLabel="Annotation"
-        onSubmit={() => void submitAnnotation()}
-      />
-    {/if}
-    <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
-      {#if pendingAnnotation.selectionActions && onExplainSelection && onQuickChatSelection}
-        <StudioSelectionActions
-          onExplain={() => openSelectionChat('explain')}
-          onQuickChat={() => openSelectionChat('quick')}
-        />
-      {/if}
-      <div class="ml-auto flex items-center gap-1.5">
-        <button
-          class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
-          title="Cancel annotation"
-          onclick={closePendingAnnotation}>Cancel</button
-        >
-        {#if canDecide}
-          <VoiceInputButton
-            targetId={pendingSpeechTargetId}
-            getTarget={pendingSpeechTarget}
-            scope={speechScope}
-            disabled={busy}
-          />
-          <button
-            class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
-            disabled={busy || !annotationBody.trim()}
-            title="Add annotation"
-            onclick={() => void submitAnnotation()}>Comment</button
-          >
-        {/if}
-      </div>
-    </div>
-  </div>
+    headerLabel={pendingAnnotation.sectionLevel
+      ? 'Annotate section'
+      : canDecide
+        ? 'Comment on selection'
+        : 'Selection'}
+    editorLabel="Annotation"
+    bind:body={annotationBody}
+    scope={speechScope}
+    onSubmit={() => void submitAnnotation()}
+    onCancel={closePendingAnnotation}
+    onExplain={() => openSelectionChat('explain')}
+    onQuickChat={() => openSelectionChat('quick')}
+  />
 {/if}
 
 {#if editingAnnotation && editingAnnotationPosition}
-  <div
-    class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(1rem+env(safe-area-inset-bottom))]"
-    role="dialog"
-    aria-label="Anchored annotation"
-    {@attach draggablePopover({
-      x: editingAnnotationPosition.x,
-      y: editingAnnotationPosition.y,
-      disabled: compactViewport.matches
-    })}
+  <StudioAnnotationDetailPopover
+    position={editingAnnotationPosition}
+    annotation={editingAnnotation}
+    canEdit={canDecide}
+    editorMode={canDecide}
+    headerLabel="Anchored comment"
+    dialogLabel="Anchored annotation"
+    speechTargetId={`spec-annotation-edit-${editingAnnotation.id}`}
+    scope={speechScope}
+    bind:body={editingAnnotationBody}
+    onResolve={() => {
+      if (editingAnnotation) void resolveAnnotation(editingAnnotation.id)
+    }}
+    onSave={saveAnnotationEdit}
+    onClose={closeAnnotation}
   >
-    <div class="flex items-center gap-1">
-      {#if !compactViewport.matches}
-        <PopoverDragHandle title="Move anchored comment" />
-      {/if}
-      <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Anchored comment</p>
-    </div>
-    {#if editingAnnotation.quote}
-      <blockquote
-        class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
-      >
-        “{editingAnnotation.quote}”
-      </blockquote>
-    {/if}
-    {#if canDecide}
-      <RichMarkdownEditor
-        bind:this={editingAnnotationEditor}
-        class="mt-3 min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs outline-none focus:border-primary"
-        bind:value={editingAnnotationBody}
-        ariaLabel="Annotation body"
-        onSubmit={() => void saveAnnotationEdit()}
-      />
-    {:else}
+    {#snippet bodyView(annotation: { body: string })}
       <div class="mt-3 text-xs leading-relaxed text-foreground">
-        <MarkdownView text={editingAnnotation.body} />
+        <MarkdownView text={annotation.body} />
       </div>
-    {/if}
-    <p class="mt-1 text-[10px] text-dimmed">
-      {editingAnnotation.author} · {formatDate(editingAnnotation.createdAt)}
-    </p>
-    <div class="mt-3 flex items-center justify-between">
-      {#if canDecide}
-        <button
-          class="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-success hover:bg-success/10"
-          title="Resolve annotation"
-          onclick={() => void resolveAnnotation(editingAnnotation!.id)}
-        >
-          <Check size={12} />
-          Resolve
-        </button>
-      {:else}
-        <span></span>
-      {/if}
-      <div class="flex gap-1.5">
-        <button
-          class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
-          title="Close annotation"
-          onclick={() => {
-            CSS.highlights?.delete(SPEC_ANNOTATION_HIGHLIGHT)
-            editingAnnotation = null
-            editingAnnotationPosition = null
-          }}>Close</button
-        >
-        {#if canDecide}
-          <VoiceInputButton
-            targetId={`spec-annotation-edit-${editingAnnotation.id}`}
-            getTarget={editingSpeechTarget}
-            scope={speechScope}
-          />
-          <button
-            class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
-            disabled={!editingAnnotationBody.trim()}
-            title="Save annotation"
-            onclick={() => void saveAnnotationEdit()}>Save</button
-          >
-        {/if}
-      </div>
-    </div>
-  </div>
+    {/snippet}
+  </StudioAnnotationDetailPopover>
 {/if}
 
 {#snippet AnnotationBubbles(props: {

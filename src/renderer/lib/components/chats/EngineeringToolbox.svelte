@@ -13,11 +13,16 @@
     active?: boolean
     disabled?: boolean
     onselect: (input: EngineeringLifecycleSelectionInput) => void | Promise<void>
+    /** Called when the toolbox closes via keyboard (shortcut or Escape) so the
+     *  host can return focus to the composer at the saved caret position. */
+    onclose?: () => void
   }
 
-  let { lifecycleState, active = false, disabled = false, onselect }: Props = $props()
+  let { lifecycleState, active = false, disabled = false, onselect, onclose }: Props = $props()
   let open = $state(false)
   let panel: HTMLDivElement | undefined = $state(undefined)
+  /** Position within [rows, autopilot] reached by arrow-key navigation. */
+  let navIndex = $state(0)
 
   const rows: ReadonlyArray<{
     stage: EngineeringLifecycleStage
@@ -48,6 +53,23 @@
   ]
 
   const autopilot = $derived(lifecycleState?.autopilot === true)
+
+  /** Total navigable rows: the lifecycle stages plus the trailing Auto Pilot row. */
+  const rowCount = rows.length + 1
+
+  /** Focus the row button at `index` — its own focus ring is the visual
+   *  highlight; no separate outline is needed on the dropdown itself. */
+  async function focusRow(index: number): Promise<void> {
+    await tick()
+    const rowButtons = panel?.querySelectorAll<HTMLButtonElement>(
+      'button[role="switch"]:not(:disabled)'
+    )
+    if (rowButtons && rowButtons.length > 0) {
+      rowButtons[Math.min(index, rowButtons.length - 1)]?.focus()
+      return
+    }
+    panel?.focus()
+  }
   const filled = $derived(
     active ||
       (lifecycleState?.selection ?? 'none') !== 'none' ||
@@ -66,26 +88,61 @@
     await onselect({ stages: nextSet, autopilot: enabled })
   }
 
-  async function focusFirstSwitch(): Promise<void> {
+  async function focusPanel(): Promise<void> {
     await tick()
-    panel?.querySelector<HTMLButtonElement>('button[role="switch"]:not(:disabled)')?.focus()
+    panel?.focus()
   }
 
+  /** Shortcut entry point — toggles visibility. Opening hands focus to the
+   *  first row so arrow keys navigate immediately. */
   export async function openAndFocus(): Promise<void> {
     if (disabled) return
-    open = true
-    await focusFirstSwitch()
+    open = !open
+    if (!open) {
+      onclose?.()
+      return
+    }
+    navIndex = 0
+    await focusRow(0)
   }
 
   async function toggle(): Promise<void> {
     open = !open
-    if (open) await focusFirstSwitch()
+    if (open) await focusPanel()
+  }
+
+  function closeViaKeyboard(): void {
+    open = false
+    onclose?.()
+  }
+
+  function moveHighlight(direction: 1 | -1): void {
+    navIndex = (navIndex + direction + rowCount) % rowCount
+    void focusRow(navIndex)
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Escape') return
-    event.preventDefault()
-    open = false
+    // Cmd/Ctrl+E is the toolbox toggle — the panel owns focus while open, so
+    // the composer shortcut can't fire; handle closing here instead.
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'e') {
+      event.preventDefault()
+      closeViaKeyboard()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeViaKeyboard()
+      return
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveHighlight(1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveHighlight(-1)
+    }
   }
 </script>
 

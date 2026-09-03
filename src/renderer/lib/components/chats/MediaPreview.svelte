@@ -1,6 +1,7 @@
 <script lang="ts">
   import { X, Download } from '@lucide/svelte'
   import { isVideoMime, isAudioMime } from '$lib/mime'
+  import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 
   interface Props {
@@ -14,9 +15,16 @@
 
   let { src, filename, mime, onClose, onLoadError }: Props = $props()
 
+  // Register with the overlay-close coordination store so window-level Escape
+  // listeners (e.g. the voice recorder's Escape-stops-recording) stay inert
+  // while this preview is open: the topmost overlay owns Escape.
   $effect(() => {
+    const unregisterOverlay = registerOverlayClose(onClose)
     contextSidebarState.setFullscreenSurfaceActive('media-preview', true)
-    return () => contextSidebarState.setFullscreenSurfaceActive('media-preview', false)
+    return () => {
+      unregisterOverlay()
+      contextSidebarState.setFullscreenSurfaceActive('media-preview', false)
+    }
   })
 
   const kind = $derived(isVideoMime(mime) ? 'video' : isAudioMime(mime) ? 'audio' : 'image')
