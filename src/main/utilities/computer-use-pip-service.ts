@@ -99,7 +99,20 @@ export class ComputerUsePipService {
     const pid = this.targetPid
     if (pid === null || !this.active) return
     const client = await this.ensureClient()
-    await client.callTool('bring_to_front', { pid })
+    // The driver refuses pid-only activation when the app owns multiple
+    // windows (ambiguous_window_target) — always front the exact tracked
+    // window, falling back to the latest frontmost one.
+    const windowId = this.windowId
+    try {
+      await client.callTool('bring_to_front', {
+        pid,
+        ...(windowId !== null ? { window_id: windowId } : {})
+      })
+    } catch {
+      // windowId can be stale (window closed) — retry with pid-only app-level
+      // activation so the click still pulls the app forward.
+      await client.callTool('bring_to_front', { pid })
+    }
   }
 
   /** Stop tracking and hide the PiP (user-requested close). */
