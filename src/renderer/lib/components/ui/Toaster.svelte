@@ -228,8 +228,11 @@
     content: '';
     position: absolute;
     left: 5px;
-    top: 14px;
-    bottom: 14px;
+    top: 50%;
+    bottom: auto;
+    transform: translateY(-50%);
+    height: calc(100% - 28px);
+    max-height: 3rem;
     width: 4px;
     border-radius: 999px;
     background: var(--status);

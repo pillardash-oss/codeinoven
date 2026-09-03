@@ -1180,7 +1180,13 @@
               title="Show a sample success toast"
               onclick={() =>
                 toast.success('Changes saved', {
-                  description: 'Your workspace preferences were updated.'
+                  description: 'Your workspace preferences were updated.',
+                  action: {
+                    label: 'View changes',
+                    onClick: () => {
+                      /* demo only */
+                    }
+                  }
                 })}
             >
               <CheckCircle2 size={13} class="text-success" />
@@ -1191,7 +1197,19 @@
               title="Show a sample warning toast"
               onclick={() =>
                 toast.warning('Unsaved changes', {
-                  description: 'Close the editor to discard or save them first.'
+                  description: 'Close the editor to discard or save them first.',
+                  action: {
+                    label: 'Review',
+                    onClick: () => {
+                      /* demo only */
+                    }
+                  },
+                  cancel: {
+                    label: 'Dismiss',
+                    onClick: () => {
+                      /* demo only */
+                    }
+                  }
                 })}
             >
               <AlertTriangle size={13} class="text-warning" />
