@@ -108,7 +108,11 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { isUsageResetWaitIssue, rateLimitWindowFromProviderIssue } from '$shared/provider-issue'
+  import {
+    classifyProviderIssue,
+    isUsageResetWaitIssue,
+    rateLimitWindowFromProviderIssue
+  } from '$shared/provider-issue'
   import { copyText } from '$lib/copy-text'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
@@ -888,7 +892,7 @@
       return {
         state: 'error',
         issue: {
-          kind: 'unknown',
+          kind: classifyProviderIssue(controller.error),
           message: controller.error,
           harnessId: settings.harnessId,
           retryable: true
@@ -902,7 +906,7 @@
     return {
       state: 'error',
       issue: {
-        kind: 'unknown',
+        kind: classifyProviderIssue(errorMessage),
         message: errorMessage,
         harnessId: settings.harnessId,
         retryable: true

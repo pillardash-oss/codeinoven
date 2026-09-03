@@ -23,7 +23,11 @@ import type {
 } from '../../lib/types'
 import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-interactions'
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
-import { classifyProviderIssue } from '../../lib/provider-issue'
+import {
+  classifyProviderIssue,
+  extractProviderErrorEnvelope,
+  parseUsageResetAt
+} from '../../lib/provider-issue'
 import type { StorageEngine } from '../storage/storage-engine'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { CLAUDE_CREDENTIAL_LOCK_NAME, CrossProcessMutex } from '../system/cross-process-mutex'
@@ -576,6 +580,30 @@ function claudeSessionLimitIssue(
   return {
     kind: 'quota',
     message: error,
+    rawError: error,
+    harnessId: 'claude-code',
+    retryable: retryAt !== undefined,
+    ...(retryAt === undefined ? {} : { retryAt })
+  }
+}
+
+/**
+ * `result`-type turn failures that aren't a session-limit notice (e.g. "Fable
+ * 5 requires usage credits. Run /usage-credits to continue or switch models
+ * with /model.") otherwise reach the UI as a bare string with no `issue`,
+ * which renders as a generic "Agent output error" instead of the billing
+ * card that lets the user switch models. Classify them the same way every
+ * other driver does.
+ */
+function claudeResultIssue(error: string | undefined): AgentProviderIssue | undefined {
+  if (!error) return undefined
+  const kind = classifyProviderIssue(error)
+  if (kind === 'unknown') return undefined
+  const message = extractProviderErrorEnvelope(error).message
+  const retryAt = kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
+  return {
+    kind,
+    message,
     rawError: error,
     harnessId: 'claude-code',
     retryable: retryAt !== undefined,
@@ -1309,7 +1337,7 @@ export function mapClaudeCodeRecord(
       ? latestClaudeRateLimits(context)
       : []
     const rateLimits = reportedRateLimits.length > 0 ? reportedRateLimits : inheritedRateLimits
-    const issue = claudeSessionLimitIssue(error, rateLimits)
+    const issue = claudeSessionLimitIssue(error, rateLimits) ?? claudeResultIssue(error)
     const completedAt = Date.now()
     const terminalSubagentEvents: SessionAgentEvent[] = activeClaudeSubagentParts(
       context,
