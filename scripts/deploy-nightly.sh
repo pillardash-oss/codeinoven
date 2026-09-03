@@ -126,23 +126,37 @@ if [[ "$DEV_SHA" == "$NIGHTLY_BRANCH_SHA" ]]; then
 fi
 
 # --- 3. reconcile nightly vs dev ancestry ------------------------------------
-# Normally this script is the only path from dev -> nightly, so nightly is
-# always a pure ancestor of dev. But promotions can also land via a reviewed
-# GitHub PR merged directly into nightly, which creates a merge commit that is
-# never replayed onto dev. That leaves dev as an ancestor of nightly instead
-# (the reverse relationship) even though file content is identical. Detect
-# that case and treat it as "nothing to promote" rather than refusing.
+# nightly is promoted via a dev -> nightly PR (see step 5), which creates a
+# merge commit on nightly that is never replayed onto dev. If dev then gets a
+# new commit before the next promotion, neither branch is an ancestor of the
+# other, even though nightly introduced zero unique file content. Handle all
+# three shapes this can take instead of refusing outright.
 if git merge-base --is-ancestor origin/nightly dev; then
-  : # normal case: dev has new commits ahead of nightly, fast-forward below.
+  : # normal case: dev has new commits ahead of nightly, PR below.
 elif git merge-base --is-ancestor dev origin/nightly; then
   if git diff --quiet origin/dev origin/nightly; then
-    ok "nightly already contains dev's content at $(git rev-parse --short origin/nightly) (promoted via PR instead of this script). Nothing to promote."
+    ok "nightly already contains dev's content at $(git rev-parse --short origin/nightly) (promoted via PR). Nothing to promote."
     exit 0
   else
     die "nightly is ahead of dev but has different file content (likely a PR merged extra changes into nightly). Reconcile manually before promoting."
   fi
 else
-  die "dev and nightly have diverged with no common fast-forward path. Reconcile manually before promoting."
+  MERGE_BASE="$(git merge-base dev origin/nightly)"
+  if git diff --quiet "$MERGE_BASE" origin/nightly; then
+    # nightly's commits since the merge base are pure promotion-PR merge
+    # commits with no unique file content — safe to fold back into dev so
+    # ancestry realigns for this and future promotions.
+    say "nightly has promotion-merge commits not yet on dev (no content changes) — reconciling dev automatically..."
+    if [[ "$DRY_RUN" -eq 0 ]]; then
+      git merge origin/nightly -m "Merge nightly (promotion merge commits) into dev to reconcile ancestry"
+      git push origin dev
+      ok "Reconciled dev with nightly's promotion history at $(git rev-parse --short dev) and pushed."
+    else
+      say "(dry-run) git merge origin/nightly -m 'Merge nightly ...' && git push origin dev"
+    fi
+  else
+    die "dev and nightly have diverged with different file content and no common fast-forward path. Reconcile manually before promoting."
+  fi
 fi
 
 # --- 4. version gate: dev must be next patch after stable (semver-correct nightly) -----
