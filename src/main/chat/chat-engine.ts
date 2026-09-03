@@ -3187,6 +3187,60 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * Re-arm the turn-scoped utility gateway for a steered turn. Steers skip
+   * prepareTurnUtilities (no prompt recomposition happens), but pi's gateway
+   * tools are registered at process spawn and work from the handoff file
+   * alone — so a steer that lands after the previous turn's cleanup only
+   * needs a fresh utility turn + endpoint publish to keep the tools alive.
+   * Shell-gateway harnesses gain nothing here: their credentials live in
+   * per-turn prompt prose a steer never recomposes.
+   */
+  private async rearmSteerUtilities(
+    driver: HarnessDriver,
+    projectId: string,
+    threadId: string,
+    sessionId: string,
+    projectPath: string,
+    settings: ThreadSettings
+  ): Promise<void> {
+    if (driver.id !== 'pi') return
+    if (this.utilityTurns.has(sessionId)) return
+    const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
+    if (!publishUtilityEndpoint) return
+    const nativeCapabilities = Object.entries(driver.capabilities ?? {})
+      .filter(([, supported]) => supported === true)
+      .map(([name]) => name)
+    nativeCapabilities.push(...(driver.capabilities?.nativeUtilities ?? []))
+    const budgetContext: UtilityTurnBudgetContext = {
+      selectedModelInputTokens: 0,
+      composedTurnTokens: 0,
+      parentTurnId: sessionId
+    }
+    try {
+      const gateway = await this.utilityOrchestration.startTurn({
+        harnessId: driver.id,
+        projectId,
+        threadId,
+        sessionId,
+        projectPath,
+        nativeCapabilities,
+        permissionLevel: settings.permissionLevel,
+        allowManagement: false,
+        budgetContext,
+        attributeReinjectedResult: (attribution) =>
+          this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
+      })
+      if (gateway.directEndpoint) {
+        await publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
+      }
+      this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
+    } catch (error) {
+      // Steer delivery must never fail because utilities could not re-arm.
+      Logger.error('Steer utility re-arm failed:', error)
+    }
+  }
+
   // ─── Public API (IPC surface) ─────────────────────────────────────────────
 
   /**
@@ -6036,6 +6090,14 @@ export class ChatEngine {
       settings: steerSettings,
       references: validatedPromptReferences
     })
+    await this.rearmSteerUtilities(
+      driver,
+      projectId,
+      threadId,
+      activeSessionId,
+      projectPath,
+      steerSettings
+    )
     const steerOptions = {
       sessionId: activeSessionId,
       text: driverText,

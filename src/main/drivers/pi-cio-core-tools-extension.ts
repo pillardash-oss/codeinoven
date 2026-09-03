@@ -52,6 +52,14 @@ export interface CioCoreToolsExtensionOptions {
   /** Absolute path of the per-session allowed-tools handoff file. Empty array
    *  (the seed) means every pi built-in tool is available. */
   allowedToolsPath: string
+  /** CodeInOven driver session id the extension is materialized for. Embedded
+   *  so the utility gateway tools can self-heal across an app restart by
+   *  discovering the live instance that owns this session. */
+  sessionId: string
+  /** Absolute path of the shell-callable mcpHost resolver. Empty when the
+   *  resolver has not been materialized yet; the gateway tools then skip
+   *  host-level recovery. */
+  retrieveScriptPath: string
 }
 
 /** Split a generated extension module into its import statements and body. */
@@ -152,13 +160,20 @@ export function piCioCoreToolsExtension(options: CioCoreToolsExtensionOptions): 
 
 ${factories}
 export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void {
-  __cioStatusExtension(pi)
-  __cioUsageExtension(pi)
-  __cioGatewayExtension(pi)
-  __cioCoreToolsExtension(pi)
+  // Each factory is zero-argument and RETURNS the extension function; invoke
+  // it with the shared ExtensionAPI here. Calling the factory with pi instead
+  // discards the returned function — pi then boots with no app tools and no
+  // before_agent_start hook (the regression the single-module merge
+  // introduced and this invocation fixed).
+  __cioStatusExtension()(pi)
+  __cioUsageExtension()(pi)
+  __cioGatewayExtension()(pi)
+  __cioCoreToolsExtension()(pi)
 }
 `
     .replace('__HANDOFF_PATH__', JSON.stringify(options.gatewayHandoffPath).slice(1, -1))
     .replace('__CIO_SYSTEM_PROMPT_PATH__', JSON.stringify(options.systemPromptPath).slice(1, -1))
     .replace('__CIO_ALLOWED_TOOLS_PATH__', JSON.stringify(options.allowedToolsPath).slice(1, -1))
+    .replace('__CIO_SESSION_ID__', JSON.stringify(options.sessionId).slice(1, -1))
+    .replace('__CIO_RETRIEVE_SCRIPT__', JSON.stringify(options.retrieveScriptPath).slice(1, -1))
 }
