@@ -1220,7 +1220,15 @@
               title="Show a sample error toast"
               onclick={() =>
                 toast.error('Deployment failed', {
-                  description: 'The gateway rejected the build artifact. Check the logs.'
+                  description: 'The gateway rejected the build artifact. Check the logs.',
+                  action: {
+                    label: 'Copy details',
+                    onClick: () => {
+                      void navigator.clipboard.writeText(
+                        'Deployment failed: the gateway rejected the build artifact.'
+                      )
+                    }
+                  }
                 })}
             >
               <AlertCircle size={13} class="text-danger" />

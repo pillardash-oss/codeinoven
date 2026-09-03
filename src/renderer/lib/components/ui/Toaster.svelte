@@ -124,8 +124,8 @@
   }
 
   :global([data-sonner-toast] [data-button]) {
-    flex: 1 1 100%;
-    width: 100%;
+    flex: 1 1 0;
+    min-width: 0;
     margin-top: 10px;
     justify-content: center;
   }
@@ -186,6 +186,9 @@
       ),
       var(--color-surface) !important;
     border: 1px solid color-mix(in srgb, var(--status) 55%, var(--color-border)) !important;
+    /* Real border instead of a ::before bar — it can never detach or escape
+       the toast during drag, dismissal or scale transitions. */
+    border-left: 3px solid var(--status) !important;
     box-shadow:
       0 4px 16px -4px color-mix(in srgb, var(--status) 25%, transparent),
       0 2px 8px -2px rgba(0, 0, 0, 0.12) !important;
@@ -216,26 +219,6 @@
     height: 1.25rem !important;
     display: grid !important;
     place-items: center !important;
-  }
-
-  /* Slim accent bar on the left edge */
-  :global(
-    [data-sonner-toast][data-type='success']::before,
-    [data-sonner-toast][data-type='error']::before,
-    [data-sonner-toast][data-type='warning']::before,
-    [data-sonner-toast][data-type='info']::before
-  ) {
-    content: '';
-    position: absolute;
-    left: 5px;
-    top: 50%;
-    bottom: auto;
-    transform: translateY(-50%);
-    height: calc(100% - 28px);
-    max-height: 3rem;
-    width: 4px;
-    border-radius: 999px;
-    background: var(--status);
   }
 
   /* Icon chip: tinted circle behind the status icon */
