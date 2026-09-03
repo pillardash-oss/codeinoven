@@ -2024,7 +2024,7 @@
           const targets = scopeState.activeProjectId
             ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
             : [INBOX_PROJECT_ID]
-          void providerCatalog.init(targets, { refresh: false })
+          void providerCatalog.init(targets, { refresh: true })
           void providerStore.init()
         })
       })

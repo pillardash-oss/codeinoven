@@ -1113,10 +1113,10 @@
           const targets = scopeState.activeProjectId
             ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
             : [INBOX_PROJECT_ID]
-          // Seed model pickers from local snapshots without triggering harness probes.
-          // Live discovery is deferred until the model picker opens or the user
-          // explicitly refreshes, so startup can focus on first paint.
-          void providerCatalog.init(targets, { refresh: false })
+          // Seed model pickers from local snapshots, then kick off a background
+          // harness probe automatically (after first paint) so the picker always
+          // has live data ready instead of fetching lazily on open.
+          void providerCatalog.init(targets, { refresh: true })
           // Canonical-ordered harness list (registry order) — the model picker's
           // harness filter sorts against this so its chip order never depends on
           // catalog insertion order.
