@@ -952,6 +952,8 @@
           <RecordingIndicator label="Listening" />
         {:else if isSpeaking}
           <RecordingIndicator label="Speaking" tone="speech" />
+        {:else if isTranscribing}
+          <RecordingIndicator label="Transcribing" tone="speech" />
         {:else if isBusyIndicator && currentModelProviderName}
           <span
             class="flex shrink-0 items-center transition-opacity duration-150 {hovered
