@@ -264,14 +264,22 @@ export function lexMarkdown(text: string, allowHtml = false): Token[] {
 }
 
 /** Bounded memo cache for lexed message markdown. Completed message text is
- *  immutable, so remounts (thread switches) hit the cache instead of re-lexing
- *  every block. Entries hold the exact source string as key; callers treat
- *  the returned tokens as read-only (blockHtml already memoizes its output). */
+ *  immutable, but the lex OUTPUT also depends on the reactive citation-path
+ *  state (file citations become links only once their existence is confirmed),
+ *  so the cache key folds in the store's revision. Without it, a cache hit
+ *  after a resolution bump would return stale, un-linkified tokens forever —
+ *  the reason linkify appeared dead until a thread was left and re-opened.
+ *  Entries hold the exact source string as key; callers treat the returned
+ *  tokens as read-only (blockHtml already memoizes its output). */
 const LEX_CACHE_LIMIT = 24
 const lexCache = new Map<string, Token[]>()
 
 export function lexMarkdownCached(text: string, allowHtml = false): Token[] {
-  const key = allowHtml ? `\u0000html\u0000${text}` : text
+  // Read the revision in the caller's reactive context so a resolution bump
+  // re-evaluates this expression, and use it as part of the key so the bumped
+  // evaluation cannot hit a stale pre-resolution entry.
+  const revision = citationPathsState.revision
+  const key = `\u0000rev${revision}\u0000${allowHtml ? '\u0000html\u0000' : ''}${text}`
   const cached = lexCache.get(key)
   if (cached) {
     // Refresh for LRU ordering — most recently used survives eviction.
