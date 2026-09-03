@@ -15,6 +15,7 @@
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { relativeTime } from '$lib/format/relative-time'
+  import { pathToFileUrl } from '$lib/mime'
   import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
@@ -31,7 +32,8 @@
   import {
     type CloudDeploymentConfig,
     type CloudDeploymentContainer,
-    type CloudDeploymentProviderKind
+    type CloudDeploymentProviderKind,
+    type PromptAttachment
   } from '$shared/types'
 
   interface Props {
@@ -49,6 +51,9 @@
     dokploy: 'Dokploy',
     custom: 'Custom'
   }
+
+  /** Log tail kept inline in the diagnosis prompt; the full log rides along as a pasted-text attachment. */
+  const INLINE_LOG_EXCERPT_CHARS = 24_000
 
   /** When set, the in-app detail view replaces the container list. */
   let selectedContainer = $state<CloudDeploymentContainer | null>(null)
@@ -372,19 +377,54 @@
     }).catch(() => null)
     if (!thread) return
 
-    rendererRecovery.setDraft(projectId, thread.id, remediationPrompt(container, logText), [], [])
+    const [prompt, attachments] = await remediationPrompt(container, logText, thread.id)
+    rendererRecovery.setDraft(projectId, thread.id, prompt, attachments, [])
     workspaceState.openThread(thread, project)
   }
 
-  /** Read-only diagnosis prompt given to the agent, explicitly no auto-fix. */
-  function remediationPrompt(container: CloudDeploymentContainer, log: string): string {
+  /**
+   * Read-only diagnosis prompt given to the agent, explicitly no auto-fix.
+   *
+   * The full log is attached as a pasted-text file instead of being inlined:
+   * deployment logs can far exceed the 200k prompt limit, and an oversized
+   * inlined log makes `agent:sendPrompt` throw. A short tail excerpt stays
+   * inline so the thread opens with immediate context.
+   */
+  async function remediationPrompt(
+    container: CloudDeploymentContainer,
+    log: string,
+    threadId: string
+  ): Promise<[string, PromptAttachment[]]> {
     const provider = PROVIDER_LABELS[container.providerKind] ?? container.providerKind
-    return [
-      `This project failed to deploy on ${provider}, and below is the deployment log.`,
+    const trimmed = log.trim()
+    const attachments: PromptAttachment[] = []
+    if (trimmed) {
+      const path = await invoke(
+        'attachment:saveText',
+        { kind: 'chat', projectId, threadId },
+        trimmed
+      )
+      attachments.push({
+        mime: 'text/plain',
+        url: pathToFileUrl(path),
+        filename: 'Pasted text.txt'
+      })
+    }
+    const fence = '```'
+    const inlineExcerpt = trimmed
+      ? `Recent log tail (the full log is attached as "Pasted text.txt"):
+
+${fence}text
+${trimmed.slice(-INLINE_LOG_EXCERPT_CHARS)}${trimmed.length > INLINE_LOG_EXCERPT_CHARS ? '\n[earlier output omitted]' : ''}
+${fence}`
+      : '(no deployment log text was available)'
+    const prompt = [
+      `This project failed to deploy on ${provider}.`,
       'Help me diagnose and fix it. When you are done, give me a summary report of what happened.',
       '',
-      log.trim() || '(no deployment log text was available)'
+      inlineExcerpt
     ].join('\n')
+    return [prompt, attachments]
   }
 </script>
 

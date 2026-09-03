@@ -2,11 +2,12 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { pathToFileUrl } from '$lib/mime'
   import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
-  import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
+  import { DEFAULT_SCOPE_BUCKET_ID, type PromptAttachment } from '$shared/types'
   import type {
     GitBranchInfo,
     GitCommitInfo,
@@ -450,8 +451,8 @@
     activeTab = 'deployments'
   }
 
-  /** Open a new agent thread with bounded deployment evidence prefilled. */
-  async function createDeploymentDiagnosisThread(title: string, prompt: string): Promise<void> {
+  /** Open a new agent thread and return it, or null when unavailable. */
+  async function createDeploymentDiagnosisThread(title: string) {
     const project = await invoke('project:get', projectId).catch(() => null)
     if (!project) return
     const thread = await invoke('thread:create', {
@@ -462,8 +463,7 @@
       settings: { ...threadSettings.lastUsed }
     }).catch(() => null)
     if (!thread) return
-    rendererRecovery.setDraft(projectId, thread.id, prompt, [], [])
-    workspaceState.openThread(thread, project)
+    return thread
   }
 
   /** Keep one failed job's evidence useful without overfilling the composer. */
@@ -494,10 +494,29 @@
         'Job log: unavailable; diagnose from the supplied metadata and local files.'
       ]
     }
-    const maxChars = 24_000
+    const maxChars = 4_000
     const excerpt =
       log.log.length > maxChars ? `[earlier output omitted]\n${log.log.slice(-maxChars)}` : log.log
-    return [...lines, '', 'Failed job log excerpt:', '```text', excerpt, '```']
+    return [
+      ...lines,
+      '',
+      'Failed job log excerpt (the full log is attached as "Pasted text.txt"):',
+      '```text',
+      excerpt,
+      '```'
+    ]
+  }
+
+  /**
+   * Save the full job log as a composer pasted-text attachment so large logs
+   * never flow through the prompt itself (which caps at 200k characters).
+   */
+  async function jobLogAttachment(
+    log: GitHubDeploymentJobLog,
+    threadId: string
+  ): Promise<PromptAttachment[]> {
+    const path = await invoke('attachment:saveText', { kind: 'chat', projectId, threadId }, log.log)
+    return [{ mime: 'text/plain', url: pathToFileUrl(path), filename: 'Pasted text.txt' }]
   }
 
   function startWorkflowDiagnosis(
@@ -523,7 +542,15 @@
       'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials.',
       'Do not push, rerun workflows, or deploy.'
     ].join('\n')
-    void createDeploymentDiagnosisThread(`Review failed job: ${job.name}`, prompt)
+    void (async () => {
+      const project = await invoke('project:get', projectId).catch(() => null)
+      if (!project) return
+      const thread = await createDeploymentDiagnosisThread(`Review failed job: ${job.name}`)
+      if (!thread) return
+      const attachments = log ? await jobLogAttachment(log, thread.id) : []
+      rendererRecovery.setDraft(projectId, thread.id, prompt, attachments, [])
+      workspaceState.openThread(thread, project)
+    })()
   }
 
   function startDeploymentDiagnosis(
@@ -551,7 +578,15 @@
       'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials.',
       'Do not push, rerun workflows, or deploy.'
     ].join('\n')
-    void createDeploymentDiagnosisThread(`Review failed job: ${job.name}`, prompt)
+    void (async () => {
+      const project = await invoke('project:get', projectId).catch(() => null)
+      if (!project) return
+      const thread = await createDeploymentDiagnosisThread(`Review failed job: ${job.name}`)
+      if (!thread) return
+      const attachments = log ? await jobLogAttachment(log, thread.id) : []
+      rendererRecovery.setDraft(projectId, thread.id, prompt, attachments, [])
+      workspaceState.openThread(thread, project)
+    })()
   }
 
   /**
