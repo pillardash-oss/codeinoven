@@ -18,6 +18,9 @@
   let { lifecycleState, active = false, disabled = false, onselect }: Props = $props()
   let open = $state(false)
   let panel: HTMLDivElement | undefined = $state(undefined)
+  /** Index into [rows, autopilot] currently outlined by arrow-key navigation —
+   *  -1 when the toolbox was opened via pointer (mouse-driven highlighting). */
+  let highlightIndex = $state(-1)
 
   const rows: ReadonlyArray<{
     stage: EngineeringLifecycleStage
@@ -48,6 +51,9 @@
   ]
 
   const autopilot = $derived(lifecycleState?.autopilot === true)
+
+  /** Total navigable rows: the lifecycle stages plus the trailing Auto Pilot row. */
+  const rowCount = rows.length + 1
   const filled = $derived(
     active ||
       (lifecycleState?.selection ?? 'none') !== 'none' ||
@@ -66,26 +72,59 @@
     await onselect({ stages: nextSet, autopilot: enabled })
   }
 
-  async function focusFirstSwitch(): Promise<void> {
+  async function focusPanel(): Promise<void> {
     await tick()
-    panel?.querySelector<HTMLButtonElement>('button[role="switch"]:not(:disabled)')?.focus()
+    panel?.focus()
   }
 
+  /** Shortcut entry point — toggles visibility and starts arrow-key navigation. */
   export async function openAndFocus(): Promise<void> {
     if (disabled) return
-    open = true
-    await focusFirstSwitch()
+    open = !open
+    if (!open) {
+      highlightIndex = -1
+      return
+    }
+    highlightIndex = 0
+    await focusPanel()
   }
 
   async function toggle(): Promise<void> {
     open = !open
-    if (open) await focusFirstSwitch()
+    highlightIndex = -1
+  }
+
+  function moveHighlight(direction: 1 | -1): void {
+    highlightIndex =
+      (highlightIndex < 0 ? 0 : highlightIndex + direction + rowCount) % rowCount
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Escape') return
-    event.preventDefault()
-    open = false
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      open = false
+      highlightIndex = -1
+      return
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveHighlight(1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveHighlight(-1)
+      return
+    }
+    if (event.key === 'Enter' && highlightIndex >= 0) {
+      event.preventDefault()
+      if (highlightIndex < rows.length) {
+        const row = rows[highlightIndex]
+        void choose(row.stage, !hasSelectedStage(lifecycleState, row.stage))
+      } else {
+        void chooseAutopilot(!autopilot)
+      }
+    }
   }
 </script>
 
@@ -131,14 +170,17 @@
           Select the stages to run. Assignment and Achievement run after an approved Spec.
         </p>
       </div>
-      {#each rows as row (row.stage)}
+      {#each rows as row, i (row.stage)}
         <Switch
           checked={hasSelectedStage(lifecycleState, row.stage)}
           disabled={disabled || autopilot}
           onchange={(enabled) => void choose(row.stage, enabled)}
           title={`${hasSelectedStage(lifecycleState, row.stage) ? 'Turn off' : 'Turn on'} ${row.label}`}
           aria-label={`${hasSelectedStage(lifecycleState, row.stage) ? 'Turn off' : 'Turn on'} ${row.label}`}
-          class="w-full items-start justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
+          class="w-full items-start justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated {highlightIndex ===
+          i
+            ? 'outline-2 outline-primary'
+            : ''}"
           activeClass="bg-thread-spec"
         >
           <span class="min-w-0 flex-1 pr-3">
@@ -154,7 +196,10 @@
         onchange={(enabled) => void chooseAutopilot(enabled)}
         title={autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot'}
         aria-label={autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot'}
-        class="w-full items-start justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
+        class="w-full items-start justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated {highlightIndex ===
+        rows.length
+          ? 'outline-2 outline-primary'
+          : ''}"
         activeClass="bg-thread-spec"
       >
         <span class="min-w-0 flex-1 pr-3">

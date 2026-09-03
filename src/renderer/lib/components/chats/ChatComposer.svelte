@@ -1770,7 +1770,13 @@
         return
       }
     }
-    if (e.key === 'Tab' && e.shiftKey && isComposerFocused && showEngineeringMode) {
+    if (
+      (e.metaKey || e.ctrlKey) &&
+      e.key.toLowerCase() === 'e' &&
+      !e.defaultPrevented &&
+      isComposerFocused &&
+      showEngineeringMode
+    ) {
       e.preventDefault()
       void engineeringToolbox?.openAndFocus()
       return
