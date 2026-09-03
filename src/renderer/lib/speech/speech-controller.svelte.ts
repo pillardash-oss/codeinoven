@@ -369,11 +369,17 @@ class SpeechController {
   }
 
   /** Whether a background transcription is still running inside this thread —
-   *  the mic has closed but the transcript has not landed yet. */
+   *  the mic has closed but the transcript has not landed yet. This spans the
+   *  whole post-recording pipeline: the `stopping` phase (finalize/upload/ASR
+   *  selection happens there, before the detached job is registered) and the
+   *  detached transcription job itself. */
   isTranscribingThread(threadId: string): boolean {
-    return this.transcribingScopes.some(
-      (scope) => scope.kind !== 'global' && scope.threadId === threadId
-    )
+    const matches = (scope: SpeechScope | null): boolean =>
+      scope !== null && scope.kind !== 'global' && scope.threadId === threadId
+    if (this.transcribingScopes.some(matches)) return true
+    // The mic has closed but the capture is still finishing — the transcript
+    // job has not been registered yet, so the capture scope is the only signal.
+    return this.state.state === 'stopping' && matches(this.capturingScope)
   }
 
   /** Scope of the thread whose response is currently being spoken aloud. */
