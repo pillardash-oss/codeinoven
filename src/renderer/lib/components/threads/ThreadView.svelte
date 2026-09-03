@@ -836,6 +836,10 @@
   }
 
   let commands = $state<ScopedHarnessCommand[]>([])
+  /** Native "switch to API usage credits" command, when the active harness's
+   *  driver exposes one (Claude Code today) — drives the composer's dedicated
+   *  flame-icon shortcut instead of only being reachable via the slash menu. */
+  let usageCreditsCommand = $derived(commands.find((command) => command.name === 'usage-credits'))
   /** Skills visible to the thread's active harness: harness-native, global-layer,
    *  and CodeInOven-registered (Utilities) skills. Rendered as slash actions. */
   let capabilitySkills = $state<AgentCapabilityEntry[]>([])
@@ -5306,6 +5310,8 @@
       await invoke('agent:runCommand', projectId, id, command.id, args)
       if (command.name === 'config' || command.name === 'settings') {
         toast.success(`${providerName} settings updated`)
+      } else if (command.name === 'usage-credits') {
+        toast.success('Requested API usage credits for this session')
       }
     } catch (error) {
       errorMessage =
@@ -11478,6 +11484,7 @@
                     actions={activeActions}
                     onActionSelect={handleActionSelection}
                     onSlashCommand={executeHarnessCommand}
+                    usageCreditsCommandId={usageCreditsCommand?.id}
                     contextUsage={contextUsageDisplay}
                     efficiencyKpis={storedEfficiencyKpis}
                     onRevealUsage={revealContextUsage}

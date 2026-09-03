@@ -19,6 +19,7 @@
     MessageSquare,
     HardDrive,
     Zap,
+    Flame,
     ShieldAlert,
     Eye,
     Image as ImageIcon,
@@ -134,6 +135,10 @@
     onActionSelect?: (selection: ActionSelection) => void | Promise<void>
     /** Executes an active-harness slash command with explicit arguments. */
     onSlashCommand?: (commandId: string, args: string) => void | Promise<void>
+    /** Id of the harness's native "switch to API usage credits" command, when
+     *  it exposes one. Present only when the harness driver reports it — this
+     *  is what shows the flame icon shortcut in the toolbar. */
+    usageCreditsCommandId?: string
     /** Available providers + models from the harness. */
     providers?: ProviderCatalog[]
     /** Id of the agent harness serving the models (shown on each model row). */
@@ -267,6 +272,7 @@
     actions = [],
     onActionSelect,
     onSlashCommand,
+    usageCreditsCommandId,
     providers = [],
     harnessId = DEFAULT_HARNESS,
     projectContext,
@@ -1298,6 +1304,11 @@
     }
     if (onSettingsChange) onSettingsChange(updated)
     else threadSettingsStore.commit(updated)
+  }
+
+  function runUsageCredits(): void {
+    if (!usageCreditsCommandId || !onSlashCommand) return
+    void onSlashCommand(usageCreditsCommandId, '')
   }
 
   /** Loads the preview payload for one attachment: blob URLs for binary media,
@@ -2599,6 +2610,20 @@
           </div>
         {/if}
       </div>
+    {/if}
+
+    <!-- API usage credits — native harness command to bill this session's
+         turns against pay-as-you-go API credits instead of a subscription. -->
+    {#if usageCreditsCommandId}
+      <button
+        type="button"
+        class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Switch to API usage credits"
+        title="Switch this session to pay-as-you-go API usage credits"
+        onclick={runUsageCredits}
+      >
+        <Flame size={13} />
+      </button>
     {/if}
 
     <span class="flex-1"></span>

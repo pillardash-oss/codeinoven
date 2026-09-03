@@ -131,7 +131,11 @@ const ONE_SHOT_SPAWN_LIMIT = 4
 const CLAUDE_NON_INTERACTIVE_COMMANDS: readonly HarnessCommand[] = [
   { name: 'compact', description: 'Summarize older history to free context' },
   { name: 'config', description: 'Set Claude Code preferences with key=value arguments' },
-  { name: 'settings', description: 'Set Claude Code preferences with key=value arguments' }
+  { name: 'settings', description: 'Set Claude Code preferences with key=value arguments' },
+  {
+    name: 'usage-credits',
+    description: 'Switch this session to pay-as-you-go API usage credits'
+  }
 ]
 
 const CLAUDE_COMMANDS_REQUIRING_ARGUMENTS = new Set(['config', 'settings'])
