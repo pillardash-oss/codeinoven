@@ -507,6 +507,9 @@
     ]
   }
 
+  /** Cap for the attached log file (matches `attachment:saveText`'s 16 MB limit). */
+  const MAX_LOG_ATTACHMENT_CHARS = 6_000_000
+
   /**
    * Save the full job log as a composer pasted-text attachment so large logs
    * never flow through the prompt itself (which caps at 200k characters).
@@ -515,7 +518,11 @@
     log: GitHubDeploymentJobLog,
     threadId: string
   ): Promise<PromptAttachment[]> {
-    const path = await invoke('attachment:saveText', { kind: 'chat', projectId, threadId }, log.log)
+    const text =
+      log.log.length > MAX_LOG_ATTACHMENT_CHARS
+        ? `[log truncated: showing the last ${MAX_LOG_ATTACHMENT_CHARS} characters of ${log.log.length}]\n${log.log.slice(-MAX_LOG_ATTACHMENT_CHARS)}`
+        : log.log
+    const path = await invoke('attachment:saveText', { kind: 'chat', projectId, threadId }, text)
     return [{ mime: 'text/plain', url: pathToFileUrl(path), filename: 'Pasted text.txt' }]
   }
 

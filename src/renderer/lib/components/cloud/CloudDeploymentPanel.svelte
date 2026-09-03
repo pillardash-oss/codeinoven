@@ -55,6 +55,12 @@
   /** Log tail kept inline in the diagnosis prompt; the full log rides along as a pasted-text attachment. */
   const INLINE_LOG_EXCERPT_CHARS = 24_000
 
+  /**
+   * Cap for the attached log file. `attachment:saveText` rejects text over
+   * 16 MB, so oversized logs are trimmed to their tail before saving.
+   */
+  const MAX_LOG_ATTACHMENT_CHARS = 6_000_000
+
   /** When set, the in-app detail view replaces the container list. */
   let selectedContainer = $state<CloudDeploymentContainer | null>(null)
 
@@ -399,10 +405,14 @@
     const trimmed = log.trim()
     const attachments: PromptAttachment[] = []
     if (trimmed) {
+      const cappedLog =
+        trimmed.length > MAX_LOG_ATTACHMENT_CHARS
+          ? `[log truncated: showing the last ${MAX_LOG_ATTACHMENT_CHARS} characters of ${trimmed.length}]\n${trimmed.slice(-MAX_LOG_ATTACHMENT_CHARS)}`
+          : trimmed
       const path = await invoke(
         'attachment:saveText',
         { kind: 'chat', projectId, threadId },
-        trimmed
+        cappedLog
       )
       attachments.push({
         mime: 'text/plain',
