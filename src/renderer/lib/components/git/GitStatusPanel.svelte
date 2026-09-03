@@ -249,6 +249,10 @@
   async function refreshStatus(): Promise<void> {
     gitState.ensureProjectEvents(projectId)
     await gitState.refresh(projectId)
+    // The refresh button must bring the whole panel up to date, including the
+    // History tab — its pages are cached client-side and would otherwise keep
+    // showing stale commits until a mutation happens to reload them.
+    if (activeTab === 'history' || commitHistory.length > 0) await reloadHistory()
   }
 
   async function loadRepoState(): Promise<void> {
@@ -715,11 +719,15 @@
     if (commitHistory.length > 0) return
     loadingHistory = true
     const request = ++historyRequestId
-    const page = await gitState.getLog(projectId, HISTORY_PAGE_SIZE)
-    if (request !== historyRequestId) return
-    commitHistory = page
-    historyHasMore = page.length === HISTORY_PAGE_SIZE
-    loadingHistory = false
+    try {
+      const page = await gitState.getLog(projectId, HISTORY_PAGE_SIZE)
+      if (request !== historyRequestId) return
+      commitHistory = page
+      historyHasMore = page.length === HISTORY_PAGE_SIZE
+    } finally {
+      // A superseded or failed request must never leave the spinner stuck.
+      if (request === historyRequestId) loadingHistory = false
+    }
   }
 
   /** Pages in older commits as the history list scrolls toward its end. */
@@ -727,14 +735,14 @@
     if (loadingHistory || loadingMoreHistory || !historyHasMore) return
     loadingMoreHistory = true
     const request = ++historyRequestId
-    const page = await gitState.getLog(projectId, HISTORY_PAGE_SIZE, commitHistory.length)
-    if (request !== historyRequestId) {
-      loadingMoreHistory = false
-      return
+    try {
+      const page = await gitState.getLog(projectId, HISTORY_PAGE_SIZE, commitHistory.length)
+      if (request !== historyRequestId) return
+      commitHistory = [...commitHistory, ...page]
+      historyHasMore = page.length === HISTORY_PAGE_SIZE
+    } finally {
+      if (request === historyRequestId) loadingMoreHistory = false
     }
-    commitHistory = [...commitHistory, ...page]
-    historyHasMore = page.length === HISTORY_PAGE_SIZE
-    loadingMoreHistory = false
   }
 
   /** Infinite scroll for the History tab — the panel's tabs share one scroll container. */

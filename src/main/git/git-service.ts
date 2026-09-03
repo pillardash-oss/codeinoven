@@ -40,6 +40,10 @@ import type {
 import { Logger } from '../system/logger'
 import { parseWorktreePorcelain } from './scope-worktree-service'
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolveTimeout) => setTimeout(resolveTimeout, ms))
+}
+
 /** Upper bound on a single diff payload so the IPC contract never floods. */
 const MAX_DIFF_BYTES = 500 * 1024
 
@@ -154,13 +158,75 @@ export class GitService {
     })
   }
 
+  /**
+   * Backoff schedule for retries after an `index.lock` contention failure. The
+   * agent's own git CLI and this service are separate processes with no shared
+   * queue, so concurrent `git add`/`commit`/`status` writes race the same lock;
+   * the loser fails immediately with "index.lock: File exists". A short retry
+   * almost always wins once the other side finishes its write.
+   */
+  private static readonly INDEX_LOCK_RETRY_DELAYS_MS = [100, 250, 500, 1000] as const
+  /** A lock file older than this is debris from a crashed or killed git process. */
+  private static readonly STALE_INDEX_LOCK_AGE_MS = 10_000
+
+  private static isIndexLockError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false
+    const causeMessage =
+      error.cause instanceof Error ? error.cause.message : String(error.cause ?? '')
+    return `${error.message}\n${causeMessage}`.includes('index.lock')
+  }
+
+  /**
+   * Remove an abandoned `.git/index.lock` so a crashed git process cannot wedge
+   * every later command forever. Only locks older than the staleness window are
+   * removed — a fresh lock belongs to a live concurrent git write.
+   * `rev-parse --git-path` resolves the correct location even inside worktrees.
+   */
+  private async breakStaleIndexLock(directory: string): Promise<void> {
+    try {
+      const lockPath = (
+        await this.client(directory).raw(['rev-parse', '--git-path', 'index.lock'])
+      ).trim()
+      if (!lockPath) return
+      const absolute = resolve(directory, lockPath)
+      const metadata = await stat(absolute).catch(() => null)
+      if (!metadata || metadata.isDirectory()) return
+      if (Date.now() - metadata.mtimeMs <= GitService.STALE_INDEX_LOCK_AGE_MS) return
+      await rm(absolute, { force: true })
+      Logger.dev(`Removed stale git index lock: ${absolute}`)
+    } catch {
+      // Best effort — the retry loop re-reports the underlying git failure.
+    }
+  }
+
+  /**
+   * Run a git task, retrying with backoff when it loses an `index.lock` race.
+   * A stale lock (left by a crashed git process) is broken before each retry.
+   */
+  private async withIndexLockRetry<T>(directory: string, task: () => Promise<T>): Promise<T> {
+    let attempt = 0
+    for (;;) {
+      try {
+        return await task()
+      } catch (error) {
+        if (
+          attempt >= GitService.INDEX_LOCK_RETRY_DELAYS_MS.length ||
+          !GitService.isIndexLockError(error)
+        )
+          throw error
+        await this.breakStaleIndexLock(directory)
+        await sleep(GitService.INDEX_LOCK_RETRY_DELAYS_MS[attempt++])
+      }
+    }
+  }
+
   private async wrapError<T>(
     projectId: string,
     kind: CommandKind,
     task: () => Promise<T>
   ): Promise<T> {
     try {
-      return await task()
+      return await this.withIndexLockRetry(projectId, task)
     } catch (failure) {
       const error = failure as GitCommandError
       const message = error.gitError ?? error.message ?? 'Unknown git error'
