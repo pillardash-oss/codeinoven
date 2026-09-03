@@ -1155,6 +1155,7 @@
 </Modal>
 
 <ThreadDeleteConfirm
+  open={showDeleteModal}
   threadTitle={thread.title}
   onClose={() => (showDeleteModal = false)}
   onConfirm={confirmDelete}

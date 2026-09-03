@@ -1076,6 +1076,7 @@
   <!-- Thread Delete Confirmation -->
   {#if showThreadDeleteConfirm && workspaceState.selectedThread}
     <ThreadDeleteConfirm
+      open
       threadTitle={workspaceState.selectedThread.title}
       onClose={() => (showThreadDeleteConfirm = false)}
       onConfirm={confirmThreadDelete}

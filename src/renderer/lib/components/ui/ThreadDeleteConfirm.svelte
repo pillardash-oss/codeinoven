@@ -2,6 +2,8 @@
   import Modal from './Modal.svelte'
 
   interface Props {
+    /** Whether the confirmation dialog is visible. */
+    open: boolean
     /** Title of the thread about to be deleted, shown in the warning copy. */
     threadTitle: string
     onClose: () => void
@@ -9,7 +11,7 @@
     onConfirm: () => Promise<void>
   }
 
-  let { threadTitle, onClose, onConfirm }: Props = $props()
+  let { open, threadTitle, onClose, onConfirm }: Props = $props()
 
   let deleting = $state(false)
 
@@ -24,7 +26,7 @@
   }
 </script>
 
-<Modal open title="Delete Thread" onClose={onClose}>
+<Modal {open} title="Delete Thread" onClose={onClose}>
   <p class="text-sm leading-relaxed text-muted">
     This will permanently delete
     <span class="font-medium text-foreground">{threadTitle}</span>
