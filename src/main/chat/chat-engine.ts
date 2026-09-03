@@ -3082,6 +3082,7 @@ export class ChatEngine {
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
+        executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
         allowManagement,
         budgetContext,
         attributeReinjectedResult: (attribution) =>
@@ -3228,6 +3229,7 @@ export class ChatEngine {
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
+        executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
         allowManagement: false,
         budgetContext,
         attributeReinjectedResult: (attribution) =>
@@ -8314,6 +8316,23 @@ export class ChatEngine {
     request: ImageDescriptorExecutorRequest
   ): Promise<ImageDescriptorResult[]> {
     const thread = await this.threadManager.getThread(request.projectId, request.threadId)
+    // A model the user reported as vision-capable must never have a dedicated
+    // vision model describe images for it — the report exists precisely so the
+    // descriptor is skipped, even when the model itself asks for the tool.
+    if (thread?.settings && (await this.storage.hasVisionModel(thread.settings.modelId))) {
+      Logger.info('Image descriptor skipped: executing model is recorded as vision-capable', {
+        modelId: thread.settings.modelId,
+        threadId: request.threadId
+      })
+      return request.images.map((entry) => ({
+        id: entry.id,
+        source: entry.source,
+        type: entry.type,
+        description: '',
+        error:
+          'You can see images yourself, so the image descriptor was not run. Inspect the image directly instead of requesting a description.'
+      }))
+    }
     const config = await this.storage.getConfig()
     let selection =
       request.pinnedSelection ??
