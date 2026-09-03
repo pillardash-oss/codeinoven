@@ -293,15 +293,28 @@
     return () => clearTimeout(timer)
   })
 
+  /** Re-scroll the currently active file into view after a filter toggle.
+   *  The reveal effect only fires on focus-request/path/entry changes, so
+   *  toggling "Last turn" or "Conflicts" would otherwise leave the viewport
+   *  wherever it was, even though the active row stayed selected. */
+  async function revealActivePathAfterFilterChange(): Promise<void> {
+    const path = revealedSearchPath ?? selectedPath ?? projectState.revealedPath
+    if (!path) return
+    await tick()
+    if (treeRowIndexByPath.has(path)) scrollTreePathIntoView(path)
+  }
+
   function toggleLastTurnFilter(): void {
     lastTurnOnly = !lastTurnOnly
     autoFiltered = false
     clearCollapsedOverrides()
+    void revealActivePathAfterFilterChange()
   }
 
   function toggleConflictsFilter(): void {
     onToggleConflicts?.()
     clearCollapsedOverrides()
+    void revealActivePathAfterFilterChange()
   }
 
   function clearSearchExpansions(): void {
@@ -1543,8 +1556,7 @@
   >
     <div
       {@attach attachTreeScroll}
-      class="min-h-0 flex-1 overflow-auto py-1 [&::-webkit-scrollbar]:hidden"
-      style:scrollbar-width="none"
+      class="min-h-0 flex-1 overflow-auto py-1"
       role="tree"
       tabindex="0"
       onclick={handleTreeContainerClick}
