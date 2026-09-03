@@ -596,6 +596,33 @@
       else redo()
       return
     }
+    // macOS smart substitution rewrites what the user typed before it reaches
+    // the editable surface ("..." becomes "…"). A dev workspace needs the
+    // literal characters, so intercept the substituted insertion and insert
+    // the raw three-dot sequence instead.
+    if (
+      inputEvent.inputType === 'insertText' &&
+      inputEvent.data !== null &&
+      inputEvent.data.includes('…')
+    ) {
+      inputEvent.preventDefault()
+      const text = inputEvent.data.replaceAll('…', '...')
+      const historyEntry = captureHistoryEntry()
+      const selection = window.getSelection()
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0)
+        range.deleteContents()
+        const node = document.createTextNode(text)
+        range.insertNode(node)
+        range.setStartAfter(node)
+        range.collapse(true)
+        selection.removeAllRanges()
+        selection.addRange(range)
+      }
+      emitEditorValue()
+      commitHistory(historyEntry, 'insertText')
+      return
+    }
     pendingHistory = captureHistoryEntry()
   }
 
