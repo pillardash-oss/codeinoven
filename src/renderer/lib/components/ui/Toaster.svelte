@@ -113,27 +113,32 @@
     pointer-events: none;
   }
 
-  /* ─── Single-column layout: icon, title, description and buttons stack
-     top to bottom — nothing sits side by side ─────────────────────────── */
+  /* ─── Layout: icon + title share the header row, description gets its own
+     full-width row underneath, action buttons share the bottom row ────── */
   :global([data-sonner-toast]) {
-    flex-direction: column;
+    flex-wrap: wrap;
     align-items: flex-start;
     gap: 6px;
   }
 
-  :global([data-sonner-toast] [data-icon]) {
-    margin-top: 0;
+  /* Dissolve the content wrapper so title and description become direct
+     flex items and can sit on separate rows */
+  :global([data-sonner-toast] [data-content]) {
+    display: contents;
   }
 
-  :global([data-sonner-toast] [data-content]) {
-    flex: 1 1 auto;
-    width: 100%;
+  :global([data-sonner-toast] [data-title]) {
+    flex: 1 1 0;
     min-width: 0;
   }
 
-  :global([data-sonner-toast] [data-button]) {
+  :global([data-sonner-toast] [data-description]) {
     flex: 1 1 100%;
-    width: 100%;
+  }
+
+  :global([data-sonner-toast] [data-button]) {
+    flex: 1 1 0;
+    min-width: 0;
     margin-top: 4px;
     justify-content: center;
   }
