@@ -553,7 +553,8 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
         outline: 'none'
       },
       '.cm-scroller': {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        fontFamily:
+          "'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
         lineHeight: '20px',
         overscrollBehavior: 'contain'
       },
