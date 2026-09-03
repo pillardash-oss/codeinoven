@@ -1289,9 +1289,9 @@
           <X size={16} />
         </button>
       </div>
-      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <div class="flex min-h-0 flex-1 flex-col overscroll-contain">
         <div
-          class="space-y-0.5 p-2"
+          class="shrink-0 space-y-0.5 p-2"
           role="tablist"
           tabindex="0"
           aria-orientation="vertical"
@@ -1333,7 +1333,7 @@
           {/each}
         </div>
 
-        <div class="border-t p-3">
+        <div class="shrink-0 border-t p-3">
           <div class="flex items-center justify-between gap-2">
             <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
               Validation gaps
@@ -1385,14 +1385,14 @@
           </div>
         </div>
 
-        <div class="border-t p-3">
-          <div class="flex items-center justify-between">
+        <div class="flex min-h-0 flex-1 flex-col border-t p-3">
+          <div class="flex shrink-0 items-center justify-between">
             <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
               Section annotations
             </p>
             <span class="text-[10px] tabular-nums text-dimmed">{openAnnotationCount}</span>
           </div>
-          <div class="mt-2 max-h-56 space-y-1.5 overflow-y-auto pr-1">
+          <div class="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
             {#each annotationsFor(selectedSection) as annotation (annotation.id)}
               <button
                 class="block w-full rounded-lg border bg-elevated px-2.5 py-2 text-left hover:bg-overlay"
