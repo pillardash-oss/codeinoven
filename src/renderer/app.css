@@ -248,6 +248,9 @@ body {
   line-height: 1.65;
   overflow-wrap: anywhere;
   white-space: normal;
+  /* Dev workspace: chat prose renders in JetBrains Mono so code characters
+     like backticks are unambiguous instead of Satoshi's near-invisible glyph. */
+  font-family: var(--font-mono);
 }
 
 .markdown-body > * {
@@ -606,6 +609,12 @@ body {
 /* Links render for recognition (GitHub reference-style + inline) but clicks
    are intercepted in the editor so composing never navigates. Footnote
    references render as superscript numbers like GitHub. */
+.rich-markdown-editor {
+  /* The composer mirrors chat prose: JetBrains Mono keeps typed code
+     characters (backticks especially) clearly visible while typing. */
+  font-family: var(--font-mono);
+}
+
 .rich-markdown-editor a[data-editor-link] {
   color: var(--color-info);
   text-decoration: underline;
