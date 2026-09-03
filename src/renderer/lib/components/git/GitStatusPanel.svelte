@@ -3,6 +3,7 @@
   import { copyText } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
   import { pathToFileUrl } from '$lib/mime'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -507,23 +508,22 @@
     ]
   }
 
-  /** Cap for the attached log file (matches `attachment:saveText`'s 16 MB limit). */
-  const MAX_LOG_ATTACHMENT_CHARS = 6_000_000
-
   /**
-   * Save the full job log as a composer pasted-text attachment so large logs
-   * never flow through the prompt itself (which caps at 200k characters).
+   * Copy the full job log into the project's `.cio/tmp/<threadId>/pasted-text.txt`
+   * scratch file and return it as a composer pasted-text attachment, so large
+   * logs never flow through the prompt itself (which caps at 200k characters).
    */
   async function jobLogAttachment(
     log: GitHubDeploymentJobLog,
     threadId: string
   ): Promise<PromptAttachment[]> {
-    const text =
-      log.log.length > MAX_LOG_ATTACHMENT_CHARS
-        ? `[log truncated: showing the last ${MAX_LOG_ATTACHMENT_CHARS} characters of ${log.log.length}]\n${log.log.slice(-MAX_LOG_ATTACHMENT_CHARS)}`
-        : log.log
-    const path = await invoke('attachment:saveText', { kind: 'chat', projectId, threadId }, text)
-    return [{ mime: 'text/plain', url: pathToFileUrl(path), filename: 'Pasted text.txt' }]
+    try {
+      const path = await invoke('scratch:saveText', projectId, threadId, log.log)
+      return [{ mime: 'text/plain', url: pathToFileUrl(path), filename: 'Pasted text.txt' }]
+    } catch (error) {
+      reportError(error, 'Could not attach the full job log.')
+      return []
+    }
   }
 
   function startWorkflowDiagnosis(

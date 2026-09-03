@@ -18,6 +18,7 @@
   import { pathToFileUrl } from '$lib/mime'
   import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import CloudProviderIcon from './icons/CloudProviderIcon.svelte'
@@ -54,12 +55,6 @@
 
   /** Log tail kept inline in the diagnosis prompt; the full log rides along as a pasted-text attachment. */
   const INLINE_LOG_EXCERPT_CHARS = 24_000
-
-  /**
-   * Cap for the attached log file. `attachment:saveText` rejects text over
-   * 16 MB, so oversized logs are trimmed to their tail before saving.
-   */
-  const MAX_LOG_ATTACHMENT_CHARS = 6_000_000
 
   /** When set, the in-app detail view replaces the container list. */
   let selectedContainer = $state<CloudDeploymentContainer | null>(null)
@@ -391,9 +386,10 @@
   /**
    * Read-only diagnosis prompt given to the agent, explicitly no auto-fix.
    *
-   * The full log is attached as a pasted-text file instead of being inlined:
-   * deployment logs can far exceed the 200k prompt limit, and an oversized
-   * inlined log makes `agent:sendPrompt` throw. A short tail excerpt stays
+   * The full log is copied to `.cio/tmp/<threadId>/pasted-text.txt` and
+   * attached as a pasted-text file instead of being inlined: deployment logs
+   * can far exceed the 200k prompt limit, and an oversized inlined log makes
+   * `agent:sendPrompt` throw. A short tail excerpt stays
    * inline so the thread opens with immediate context.
    */
   async function remediationPrompt(
@@ -405,20 +401,16 @@
     const trimmed = log.trim()
     const attachments: PromptAttachment[] = []
     if (trimmed) {
-      const cappedLog =
-        trimmed.length > MAX_LOG_ATTACHMENT_CHARS
-          ? `[log truncated: showing the last ${MAX_LOG_ATTACHMENT_CHARS} characters of ${trimmed.length}]\n${trimmed.slice(-MAX_LOG_ATTACHMENT_CHARS)}`
-          : trimmed
-      const path = await invoke(
-        'attachment:saveText',
-        { kind: 'chat', projectId, threadId },
-        cappedLog
-      )
-      attachments.push({
-        mime: 'text/plain',
-        url: pathToFileUrl(path),
-        filename: 'Pasted text.txt'
-      })
+      try {
+        const path = await invoke('scratch:saveText', projectId, threadId, trimmed)
+        attachments.push({
+          mime: 'text/plain',
+          url: pathToFileUrl(path),
+          filename: 'Pasted text.txt'
+        })
+      } catch (error) {
+        reportError(error, 'Could not attach the full deployment log.')
+      }
     }
     const fence = '```'
     const inlineExcerpt = trimmed

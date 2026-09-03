@@ -5253,6 +5253,21 @@ export function registerIpcHandlers(
     if (!project?.path) throw new Error(`Project not found: ${projectId}`)
     return project.path
   }
+  ipcMain.handle(
+    'scratch:saveText',
+    async (_, projectId: unknown, threadId: unknown, text: unknown) => {
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      if (typeof text !== 'string' || text.length === 0) {
+        throw new TypeError('Scratch text must be a non-empty string')
+      }
+      const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
+      const directory = join(projectPath, '.cio', 'tmp', safeThreadId)
+      await mkdir(directory, { recursive: true })
+      const targetPath = join(directory, 'pasted-text.txt')
+      await writeFile(targetPath, text, 'utf-8')
+      return targetPath
+    }
+  )
   ipcMain.handle('git:status', async (_, projectId: unknown, scopeBucketId?: unknown) =>
     gitService.getStatus(
       await resolveProjectPath(
