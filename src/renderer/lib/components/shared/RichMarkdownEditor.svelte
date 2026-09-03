@@ -588,6 +588,18 @@
     publishCaretText()
   }
 
+  /** Rewrites macOS smart-punctuation substitutions back to the literal
+   *  ASCII characters the user typed. A dev workspace needs real characters,
+   *  not typographic ones. */
+  function demoteSmartPunctuation(text: string): string {
+    return text
+      .replaceAll('…', '...')
+      .replaceAll(/[\u2018\u2019\u201b]/gu, "'")
+      .replaceAll(/[\u201c\u201d\u201f]/gu, '"')
+      .replaceAll('\u2013', '-')
+      .replaceAll('\u2014', '--')
+  }
+
   function handleBeforeInput(event: Event): void {
     const inputEvent = event as InputEvent
     if (inputEvent.inputType === 'historyUndo' || inputEvent.inputType === 'historyRedo') {
@@ -597,33 +609,43 @@
       return
     }
     // macOS smart substitution rewrites what the user typed before it reaches
-    // the editable surface ("..." becomes "…"). A dev workspace needs the
-    // literal characters, so intercept the substituted insertion and insert
-    // the raw three-dot sequence instead.
-    if (
-      inputEvent.inputType === 'insertText' &&
-      inputEvent.data !== null &&
-      inputEvent.data.includes('…')
-    ) {
-      inputEvent.preventDefault()
-      const text = inputEvent.data.replaceAll('…', '...')
-      const historyEntry = captureHistoryEntry()
-      const selection = window.getSelection()
-      if (selection && selection.rangeCount > 0) {
-        const range = selection.getRangeAt(0)
-        range.deleteContents()
-        const node = document.createTextNode(text)
-        range.insertNode(node)
-        range.setStartAfter(node)
-        range.collapse(true)
-        selection.removeAllRanges()
-        selection.addRange(range)
+    // the editable surface. Plain typing arrives as `insertText` with `data`,
+    // but OS-level text replacements arrive as `insertReplacementText` where
+    // `data` is null and the substituted text rides in `dataTransfer`. Catch
+    // both and insert the raw literal sequence instead.
+    const incomingText =
+      inputEvent.inputType === 'insertText'
+        ? inputEvent.data
+        : inputEvent.inputType === 'insertReplacementText'
+          ? (inputEvent.dataTransfer?.getData('text/plain') ?? null)
+          : null
+    if (incomingText !== null) {
+      const text = demoteSmartPunctuation(incomingText)
+      if (text !== incomingText) {
+        insertRawAtSelection(text)
+        return
       }
-      emitEditorValue()
-      commitHistory(historyEntry, 'insertText')
-      return
     }
     pendingHistory = captureHistoryEntry()
+  }
+
+  /** Inserts `text` verbatim at the caret (replacing any selection), recording
+   *  it in undo history. Used to override smart substitution. */
+  function insertRawAtSelection(text: string): void {
+    const historyEntry = captureHistoryEntry()
+    const selection = window.getSelection()
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0)
+      range.deleteContents()
+      const node = document.createTextNode(text)
+      range.insertNode(node)
+      range.setStartAfter(node)
+      range.collapse(true)
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
+    emitEditorValue()
+    commitHistory(historyEntry, 'insertText')
   }
 
   const INLINE_BOUNDARY_TAGS = new Set(['CODE', 'STRONG', 'B', 'EM', 'I', 'DEL', 'S', 'STRIKE'])
