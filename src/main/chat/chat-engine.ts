@@ -3041,6 +3041,7 @@ export class ChatEngine {
     projectPath: string,
     settings: ThreadSettings,
     budgetContext: UtilityTurnBudgetContext,
+    threadTitle: string,
     skipRuntime = false,
     directGateway = false,
     allowManagement = false
@@ -3079,6 +3080,7 @@ export class ChatEngine {
         projectId,
         threadId,
         sessionId,
+        threadTitle,
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
@@ -3226,6 +3228,7 @@ export class ChatEngine {
         projectId,
         threadId,
         sessionId,
+        threadTitle: (await this.threadManager.getThread(projectId, threadId))?.title,
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
@@ -6922,6 +6925,7 @@ export class ChatEngine {
       projectPath,
       settings,
       utilityBudgetContext,
+      targetThread?.title ?? '',
       isChatThread &&
         !chatFileSystemEnabled &&
         !utilitySetupRequested &&
@@ -7623,6 +7627,7 @@ export class ChatEngine {
               composedTurnTokens: 0,
               parentTurnId: turnId
             },
+            title,
             false,
             true,
             true
@@ -14895,6 +14900,7 @@ export class ChatEngine {
             projectPath,
             auditorSettings,
             auditUtilityBudgetContext,
+            auditorThread.title,
             false,
             driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
           )

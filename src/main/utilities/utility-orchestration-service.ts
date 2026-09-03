@@ -94,6 +94,8 @@ export interface UtilityTurnRequest {
   harnessId: string
   projectId: string
   threadId: string
+  /** Human-readable thread title, used to label Cua agent cursors. */
+  threadTitle?: string
   projectPath: string
   /** Main thread session that owns this turn, for scoped user-decision events. */
   sessionId: string
@@ -948,7 +950,7 @@ export class UtilityOrchestrationService {
     utilityId: string,
     client: McpClient
   ): Promise<void> {
-    const sessionId = `codeinoven-${state.id}`
+    const sessionId = buildCuaSessionId(state.request.threadTitle, state.id)
     try {
       await client.callTool('start_session', { session: sessionId })
     } catch (error) {
@@ -1702,4 +1704,21 @@ if (!resolved) {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`
+}
+
+const MAX_CUA_SESSION_TITLE_CHARS = 24
+
+/**
+ * Build the Cua session id shown as the on-screen agent cursor label. The
+ * turn id is always kept so session identity stays stable; the thread title
+ * is prepended as a human-readable label (e.g. `cio-fix-pip-focus-a1b2c3`).
+ */
+function buildCuaSessionId(threadTitle: string | undefined, turnId: string): string {
+  const label = (threadTitle ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, MAX_CUA_SESSION_TITLE_CHARS)
+    .replace(/-+$/gu, '')
+  return label ? `cio-${label}-${turnId}` : `codeinoven-${turnId}`
 }
