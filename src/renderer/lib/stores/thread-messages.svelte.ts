@@ -971,6 +971,12 @@ class ThreadMessagesStore {
     return kept
   }
 
+  /** Replace the cached messages of a conversation with the kept set returned
+   *  by a temporary-chat history deletion. */
+  applyKept(projectId: string, threadId: string, kept: AgentMessage[]): void {
+    this.#applyRemoval(projectId, threadId, kept)
+  }
+
   /**
    * Delete history around a message: `down` keeps the prefix before it,
    * `single` removes the message and its turn's work trace and splices the

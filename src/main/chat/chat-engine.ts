@@ -444,10 +444,7 @@ const INDEPENDENT_AUDIT_SYSTEM_PROMPT = [
   AUDIT_REPORT_JSON_CONTRACT,
   ...ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT_LINES.map((line) =>
     line
-      .replace(
-        'An Assignment audit is an evidence run',
-        'An independent audit is an evidence run'
-      )
+      .replace('An Assignment audit is an evidence run', 'An independent audit is an evidence run')
       .replace('from the Assignment, task reports and commits,', 'from the transcript and commits,')
   ),
   'Return only the requested structured audit report.'
@@ -1251,6 +1248,9 @@ interface TemporaryChatDisplayRecord {
  *  later turns never erase the presentation-safe view of earlier ones. */
 interface TemporaryChatDisplayHistory {
   records: TemporaryChatDisplayRecord[]
+  /** Recap of the kept conversation after a history deletion — consumed as
+   *  the hidden context of the first send into the replacement session. */
+  pendingContext?: string
 }
 
 interface ActiveBrainstormSession {
@@ -2184,6 +2184,17 @@ export class ChatEngine {
       'agent:deleteMessages',
       (_, projectId: string, threadId: string, messageId: string, mode: 'down' | 'single' | 'up') =>
         this.deleteMessages(projectId, threadId, messageId, mode)
+    )
+    ipcMain.handle(
+      'agent:deleteTemporaryMessages',
+      (
+        _,
+        projectId: string,
+        threadId: string,
+        temporaryChatId: string,
+        messageId: string,
+        mode: 'down' | 'single' | 'up'
+      ) => this.deleteTemporaryMessages(projectId, threadId, temporaryChatId, messageId, mode)
     )
     ipcMain.handle(
       'agent:discardSteer',
@@ -5708,6 +5719,74 @@ export class ChatEngine {
     return presentableMessages(kept)
   }
 
+  /**
+   * Delete history around a message inside a temporary side chat. The isolated
+   * harness session still holds the removed span in its native transcript, so
+   * it is destroyed and a replacement session is created lazily by the next
+   * send — which replays the kept conversation as its hidden context. The kept
+   * messages are promoted into the display overlay so a reload can never
+   * resurrect the deleted span.
+   */
+  async deleteTemporaryMessages(
+    projectId: string,
+    threadId: string,
+    temporaryChatId: string,
+    messageId: string,
+    mode: 'down' | 'single' | 'up'
+  ): Promise<AgentMessage[]> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    temporaryChatId = validateEntityId(temporaryChatId, 'Temporary chat ID', 256)
+    messageId = validateEntityId(messageId, 'Message ID', 256)
+    const temporary = this.temporaryChats.get(temporaryChatId)
+    if (!temporary) throw new Error(`Temporary chat not found: ${temporaryChatId}`)
+    if (temporary.projectId !== projectId || temporary.threadId !== threadId) {
+      throw new Error('Temporary chat does not belong to this thread')
+    }
+    if (this.completionWaiters.has(temporary.sessionId)) {
+      throw new Error('The agent is still working — wait for the turn to finish before editing.')
+    }
+    const conversation = await this.loadTemporaryConversation(temporaryChatId)
+    const cutoff = conversation.findIndex((m) => m.id === messageId)
+    // An id missing from the conversation was never mirrored (optimistic local
+    // message) — nothing after it exists, so the conversation is kept whole.
+    let kept: AgentMessage[]
+    if (cutoff === -1) {
+      kept = conversation
+    } else if (mode === 'down') {
+      kept = conversation.slice(0, cutoff)
+    } else {
+      // Same turn semantics as the thread mirror: a turn spans from its user
+      // message to just before the next user message.
+      let turnEnd = cutoff + 1
+      while (turnEnd < conversation.length && conversation[turnEnd].role !== 'user') turnEnd++
+      kept =
+        mode === 'single'
+          ? [...conversation.slice(0, cutoff), ...conversation.slice(turnEnd)]
+          : conversation.slice(turnEnd)
+    }
+    // Working traces belong to the turn they were produced under — drop any
+    // orphaned trace that would outlive its prompt.
+    const removedSpanStart =
+      cutoff !== -1 ? conversation[cutoff].createdAt : Number.POSITIVE_INFINITY
+    kept = kept.filter(
+      (message) =>
+        !(message.visibility === 'working_trace' && message.createdAt >= removedSpanStart)
+    )
+    const pendingContext = kept.length > 0 ? formatHistoryRecap(kept) : ''
+    await this.destroyTemporaryChat(temporaryChatId)
+    // destroyTemporaryChat wiped the display history — rebuild it from the
+    // kept conversation so the deleted span can never reappear on reload.
+    this.temporaryChatDisplayMessages.set(temporaryChatId, {
+      records: kept.map((message) => ({
+        message,
+        references: message.references ?? []
+      })),
+      ...(pendingContext ? { pendingContext } : {})
+    })
+    return presentableMessages(kept)
+  }
+
   /** Whether the session's active turn has a tool call that has not ended yet
    *  (tracked via the same lifecycle the streaming event feed already stamps). */
   private hasInFlightTool(sessionId: string): boolean {
@@ -7211,7 +7290,19 @@ export class ChatEngine {
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread) throw new Error(`Thread not found: ${threadId}`)
       if (!context) {
-        context = formatHistoryRecap(await this.loadMessages(projectId, threadId))
+        // A history deletion destroyed the previous session — its kept
+        // conversation is the context for the replacement session, not the
+        // parent thread's mirror. Consumed once, then back to the default.
+        const pendingRecap = this.temporaryChatDisplayMessages.get(temporaryChatId)?.pendingContext
+        if (pendingRecap) {
+          context = pendingRecap
+          const history = this.temporaryChatDisplayMessages.get(temporaryChatId)
+          this.temporaryChatDisplayMessages.set(temporaryChatId, {
+            records: history?.records ?? []
+          })
+        } else {
+          context = formatHistoryRecap(await this.loadMessages(projectId, threadId))
+        }
       }
       const driverId = settings.harnessId || DEFAULT_HARNESS
       const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
@@ -13396,7 +13487,10 @@ export class ChatEngine {
         [],
         [],
         attemptIndex === 0
-          ? { action: 'Independent audit', body: 'Auditing the current thread work against its transcript and the repository.' }
+          ? {
+              action: 'Independent audit',
+              body: 'Auditing the current thread work against its transcript and the repository.'
+            }
           : undefined,
         'internal'
       )
@@ -19960,18 +20054,19 @@ export class ChatEngine {
             row.id,
             row.claim_token ?? '',
             () => {
-            this.rankingRepo.increment({
-              harnessId: row.harness_id,
-              providerId: row.provider_id,
-              modelId: row.model_id,
-              thinkingLevel: row.thinking_level,
-              shotCategory: row.shot_category,
-              score,
-              durationMs,
-              costUsd: row.cost_usd,
-              rubricVersion: RANKING_RUBRIC_VERSION
-            })
-          })
+              this.rankingRepo.increment({
+                harnessId: row.harness_id,
+                providerId: row.provider_id,
+                modelId: row.model_id,
+                thinkingLevel: row.thinking_level,
+                shotCategory: row.shot_category,
+                score,
+                durationMs,
+                costUsd: row.cost_usd,
+                rubricVersion: RANKING_RUBRIC_VERSION
+              })
+            }
+          )
           // The snapshot vanished mid-drain or was re-claimed by a later
           // generation (stale judge result); never defer or double-count it.
           if (applied) processed += 1
@@ -19988,9 +20083,7 @@ export class ChatEngine {
       }
     } finally {
       this.gradeDrainRunning = false
-      this.scheduleRankingDrain(
-        processed >= ChatEngine.RANKING_DRAIN_BATCH_SIZE ? 100 : undefined
-      )
+      this.scheduleRankingDrain(processed >= ChatEngine.RANKING_DRAIN_BATCH_SIZE ? 100 : undefined)
     }
   }
 
@@ -22046,10 +22139,7 @@ export function formatHistoryRecap(
   // Character-bound callers (temporary chats) still get a generous token
   // budget — 50k keeps most of a long coding thread intact instead of the
   // tail-only slice that starved temporary chats of anchor context.
-  const budgetedTranscript = truncateToTokenBudget(
-    transcript,
-    options.maxInputTokens ?? 50_000
-  )
+  const budgetedTranscript = truncateToTokenBudget(transcript, options.maxInputTokens ?? 50_000)
   return [
     'This thread continues an earlier conversation. Transcript restored from history:',
     budgetedTranscript,

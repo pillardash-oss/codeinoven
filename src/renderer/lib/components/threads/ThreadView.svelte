@@ -9041,12 +9041,18 @@
       // Deletion drops the chosen span and the harness session. The next send
       // rebinds a fresh session via prepareSessionForSend, which replays the
       // remaining mirrored transcript as context.
-      await threadMessages.remove(thread.projectId, thread.id, pending.id, pending.mode)
-      // The persisted user-message history changed — force a reload so the
-      // history panel never shows deleted messages.
-      userMessageHistoryLoaded = false
-      fullUserMessageHistory = []
-      void refreshUserMessageHistory()
+      if (controller?.removeAround) {
+        // Controller-driven conversations (temporary chats) own their backend
+        // deletion — the thread mirror must never be touched for them.
+        await controller.removeAround(pending.id, pending.mode)
+      } else {
+        await threadMessages.remove(thread.projectId, thread.id, pending.id, pending.mode)
+        // The persisted user-message history changed — force a reload so the
+        // history panel never shows deleted messages.
+        userMessageHistoryLoaded = false
+        fullUserMessageHistory = []
+        void refreshUserMessageHistory()
+      }
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The message could not be deleted.'
     } finally {
@@ -9063,10 +9069,16 @@
     if (!text || busy) return
     errorMessage = ''
     try {
-      await threadMessages.truncate(thread.projectId, thread.id, msg.id)
-      // Truncation discarded the harness session — bind to the fresh one so
-      // the resend's streamed events are not filtered out.
-      await prepareSessionForSend()
+      if (controller?.truncateBefore) {
+        // Controller-driven conversations (temporary chats) truncate against
+        // their own backend; the thread mirror does not know them.
+        await controller.truncateBefore(msg.id)
+      } else {
+        await threadMessages.truncate(thread.projectId, thread.id, msg.id)
+        // Truncation discarded the harness session — bind to the fresh one so
+        // the resend's streamed events are not filtered out.
+        await prepareSessionForSend()
+      }
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The message could not be edited.'
       return
