@@ -1166,6 +1166,62 @@
           </div>
         </div>
 
+        <!-- Notifications (toast style preview) -->
+        <div id="settings-block-about-notifications" class="mt-4 rounded-xl border bg-surface p-4">
+          <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
+            Notifications
+          </h3>
+          <p class="mb-3 text-xs leading-relaxed text-dimmed">
+            Preview the toast notification styles. They appear in the top-right corner.
+          </p>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
+              title="Show a sample success toast"
+              onclick={() =>
+                toast.success('Changes saved', {
+                  description: 'Your workspace preferences were updated.'
+                })}
+            >
+              <CheckCircle2 size={13} class="text-success" />
+              Success
+            </button>
+            <button
+              class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
+              title="Show a sample warning toast"
+              onclick={() =>
+                toast.warning('Unsaved changes', {
+                  description: 'Close the editor to discard or save them first.'
+                })}
+            >
+              <AlertTriangle size={13} class="text-warning" />
+              Warning
+            </button>
+            <button
+              class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
+              title="Show a sample error toast"
+              onclick={() =>
+                toast.error('Deployment failed', {
+                  description: 'The gateway rejected the build artifact. Check the logs.'
+                })}
+            >
+              <AlertCircle size={13} class="text-danger" />
+              Error
+            </button>
+            <button
+              class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
+              title="Show a sample info toast"
+              onclick={() =>
+                toast.info('Sync started', {
+                  description: 'Projects are being synced in the background.'
+                })}
+            >
+              <Bell size={13} class="text-info" />
+              Info
+            </button>
+          </div>
+        </div>
+
         <!-- Version & copyright -->
         <div class="mt-6 flex flex-col items-center gap-1 text-center">
           <p class="text-xs text-muted" title="Installed app version">
