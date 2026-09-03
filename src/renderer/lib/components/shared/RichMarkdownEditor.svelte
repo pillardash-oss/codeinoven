@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import {
     applyCodeFenceOnEnter,
+    applyEmptyPairCodeRule,
     applyMarkdownInputRule,
     formatRichSelection,
     insertMarkdownLineBreak,
@@ -695,6 +696,27 @@
       return
     }
 
+    // A backtick typed at the end of an inline code span closes it: the caret
+    // moves after the span instead of the backtick nesting inside the code.
+    // Only for a collapsed caret sitting at the span's very end — mid-span and
+    // multi-selection typing stays literal.
+    if (event.key === '`') {
+      const selection = window.getSelection()
+      const codeEl = selection?.anchorNode?.parentElement?.closest?.('code')
+      if (
+        selection?.isCollapsed &&
+        codeEl &&
+        codeEl.parentElement?.tagName !== 'PRE' &&
+        editor.contains(codeEl) &&
+        isCursorAtBoundary(codeEl, false)
+      ) {
+        event.preventDefault()
+        moveCaretOutOfInlineElement(false, codeEl)
+        publishCaretText()
+        return
+      }
+    }
+
     if (modifier && (key === 'b' || key === 'i' || key === 'e')) {
       const tag = key === 'b' ? 'strong' : key === 'i' ? 'em' : 'code'
       const historyEntry = captureHistoryEntry()
@@ -983,6 +1005,9 @@
     const pasteEndsAtEditorEnd = isCursorAtBoundary(editor, false)
     event.preventDefault()
     insertPlainText(editor, text)
+    // Pasting content right after a fresh `` pair opens an inline code span,
+    // exactly like typing the first character there would.
+    applyEmptyPairCodeRule(editor)
     const insideCodeBlock = Boolean(
       window.getSelection()?.anchorNode?.parentElement?.closest?.('[data-editor-codeblock]')
     )

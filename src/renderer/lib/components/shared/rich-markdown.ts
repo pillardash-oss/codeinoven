@@ -699,6 +699,33 @@ function insertInlineCode(root: HTMLElement, content: string, caretInsideCode: b
   selection.addRange(range)
 }
 
+/**
+ * A non-backtick character landing right after a fresh double backtick (``x)
+ * turns ``x into an inline code span with the caret inside — so typing or
+ * pasting content between the backticks "opens" the span, while the bare pair
+ * `` and the triple ``` (a fence) stay literal.
+ */
+export function applyEmptyPairCodeRule(root: HTMLElement): boolean {
+  const selection = selectionInside(root)
+  if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
+  if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return false
+
+  const textNode = selection.anchorNode
+  const endOffset = selection.anchorOffset
+  const pairContent = textNode.data.slice(0, endOffset).match(/``([^`\n]+)$/)
+  if (!pairContent) return false
+
+  const range = document.createRange()
+  range.setStart(textNode, endOffset - pairContent[0].length)
+  range.setEnd(textNode, endOffset)
+  if (window.getSelection()) {
+    window.getSelection()?.removeAllRanges()
+    window.getSelection()?.addRange(range)
+  }
+  insertInlineCode(root, pairContent[1] ?? '', true)
+  return true
+}
+
 function applyInlineRule(root: HTMLElement): boolean {
   const selection = selectionInside(root)
   if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
@@ -722,23 +749,12 @@ function applyInlineRule(root: HTMLElement): boolean {
     return false
   }
 
-  // Two backticks typed back-to-back are an empty `` `` `` pair: turn them into
-  // an empty inline code span with the caret inside so content can be typed
-  // between the delimiters instead of the pair staying dead literal backticks.
-  // Skipped while a fence is being typed: three backticks (or a trailing triple
-  // after the caret) mean the user is building a code block, not an empty span.
-  if (prefix.endsWith('``') && !prefix.endsWith('```') && !suffix.includes('```')) {
-    const range = document.createRange()
-    range.setStart(textNode, endOffset - 2)
-    range.setEnd(textNode, endOffset)
-    const selection = window.getSelection()
-    if (selection) {
-      selection.removeAllRanges()
-      selection.addRange(range)
-    }
-    insertInlineCode(root, '', true)
-    return true
-  }
+  // A non-backtick character typed (or pasted) right after a fresh double
+  // backtick starts an inline code span with the caret inside. The bare pair
+  // `` stays literal, and a third backtick never triggers — that is a code
+  // fence. Skipped while a fence is being built: a trailing triple after the
+  // caret means the closing ``` of the tag-end-then-open flow, not content.
+  if (!suffix.includes('```') && applyEmptyPairCodeRule(root)) return true
 
   // Opening-backtick-last flow: the user tagged the end of a run with a backtick
   // first, moved the caret before the run, and now types the opening backtick.
