@@ -8784,7 +8784,7 @@
       reference.kind === 'directory'
         ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z"/></svg>'
         : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
-    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.6875rem] leading-none align-baseline" title="${safeTitle}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
+    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
   }
 
   function inlineFileTagsForMessage(msg: AgentMessage): Array<{ token: string; html: string }> {
@@ -10170,7 +10170,7 @@
                         <div class="mb-2 flex flex-wrap gap-1.5">
                           {#each leftoverReferences as reference (reference.id)}
                             <span
-                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-elevated px-2 py-1 text-[0.6875rem]"
+                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-elevated px-2 py-1 text-[0.75rem]"
                               title="Tagged {reference.kind}: {reference.name}"
                             >
                               {#if reference.kind === 'directory'}
@@ -10189,7 +10189,7 @@
                         <div class="mb-2 flex flex-wrap gap-1.5">
                           {#each msg.references as reference (reference.id)}
                             <span
-                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.6875rem]"
+                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
                               title={reference.comment
                                 ? `${reference.comment}\n\n${reference.text}`
                                 : reference.text}
@@ -10281,7 +10281,7 @@
                                 >
                                   <button
                                     type="button"
-                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
                                     title="Preview {part.filename ?? mediaKind}"
                                     aria-label="Preview {part.filename ?? mediaKind}"
                                     onclick={() =>
@@ -10308,7 +10308,7 @@
                                 >
                                   <button
                                     type="button"
-                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
                                     title={`Open ${part.filename ?? part.url.split('/').pop() ?? 'file'}`}
                                     onclick={() => openFilePart(part.url)}
                                   >
@@ -10522,7 +10522,7 @@
                           speechController.readingOverlayActive}
                         <div
                           id={`msg-${msg.id}`}
-                          class="message-block min-w-0 w-full text-[0.6875rem] text-foreground"
+                          class="message-block min-w-0 w-full text-[0.75rem] text-foreground"
                           data-assistant-response
                           data-conversation-searchable
                           data-message-id={msg.id}
@@ -10773,7 +10773,7 @@
                     ? delegatedActivityLabel
                     : activityLabel}
               </span>
-              <span class="text-[0.6875rem]">…</span>
+              <span class="text-[0.75rem]">…</span>
             </div>
           {/if}
         {/if}
@@ -10940,7 +10940,7 @@
                       <Plus size={13} />
                     </button>
                     <button
-                      class="rounded-md px-2 py-0.5 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated"
+                      class="rounded-md px-2 py-0.5 text-[0.75rem] font-medium text-foreground transition-colors hover:bg-elevated"
                       title={`Steer — ${steerModifierLabel}Enter — send this message to the agent now`}
                       onclick={() => void steerQueuedMessage()}
                     >
@@ -11007,7 +11007,7 @@
                   <div class="flex flex-wrap gap-1.5 px-3 pb-2">
                     {#each queuedPromptReferences as reference (reference.id)}
                       <span
-                        class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.6875rem]"
+                        class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
                         title={reference.comment
                           ? `${reference.comment}\n\n${reference.text}`
                           : reference.text}
@@ -11035,7 +11035,7 @@
                         <Clock size={12} class="shrink-0 text-info" />
                         <button
                           type="button"
-                          class="min-w-0 flex-1 truncate text-left text-[0.6875rem] text-info"
+                          class="min-w-0 flex-1 truncate text-left text-[0.75rem] text-info"
                           title={`Open ${dependency.title}`}
                           aria-label={`Open ${dependency.title}`}
                           onclick={() => void openStartAfterThread(dependency.id)}
@@ -11066,7 +11066,7 @@
                 {/if}
                 {#if queuedPresentation}
                   <div class="px-3 pb-2.5">
-                    <p class="text-[0.6875rem] italic text-dimmed">{queuedPresentation.action}</p>
+                    <p class="text-[0.75rem] italic text-dimmed">{queuedPresentation.action}</p>
                     {#if queuedPresentation.body}
                       <p class="mt-1 text-[0.75rem] text-muted line-clamp-3">
                         {queuedPresentation.body}

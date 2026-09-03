@@ -709,7 +709,7 @@
         {/if}
       </span>
       <span
-        class="min-w-0 flex-1 truncate text-[0.8125rem] {threadState === 'approval'
+        class="min-w-0 flex-1 truncate text-[0.75rem] {threadState === 'approval'
           ? 'font-medium text-warning'
           : threadState === 'unread'
             ? 'font-medium text-foreground'
@@ -926,7 +926,7 @@
 
       <!-- Title -->
       <span
-        class="min-w-0 flex-1 truncate text-[0.8125rem] {threadState === 'approval'
+        class="min-w-0 flex-1 truncate text-[0.75rem] {threadState === 'approval'
           ? 'font-medium text-warning'
           : threadState === 'unread'
             ? 'font-medium text-foreground'
