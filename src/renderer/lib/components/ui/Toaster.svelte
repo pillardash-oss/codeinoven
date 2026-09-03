@@ -113,6 +113,23 @@
     pointer-events: none;
   }
 
+  /* ─── Action buttons: full-width row below the content ──────────────────── */
+  :global([data-sonner-toast]) {
+    flex-wrap: wrap;
+  }
+
+  :global([data-sonner-toast] [data-content]) {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  :global([data-sonner-toast] [data-button]) {
+    flex: 1 1 100%;
+    width: 100%;
+    margin-top: 10px;
+    justify-content: center;
+  }
+
   /* ─── Normal toasts ─────────────────────────────────────────────────────── */
   :global([data-sonner-toaster][data-sonner-theme='light']) {
     --normal-bg: var(--color-surface) !important;
@@ -210,7 +227,7 @@
   ) {
     content: '';
     position: absolute;
-    left: 10px;
+    left: 5px;
     top: 14px;
     bottom: 14px;
     width: 4px;
