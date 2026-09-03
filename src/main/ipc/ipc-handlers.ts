@@ -4240,9 +4240,9 @@ export function registerIpcHandlers(
     'attachment:saveText',
     async (_event, rawScope: unknown, rawText: unknown, rawExistingPath: unknown) => {
       const scope = validateAttachmentStorageScope(rawScope)
-      const text = validateBoundedString(rawText, 'Text attachment', 1, 16 * 1024 * 1024)
-      if (Buffer.byteLength(text, 'utf8') > 16 * 1024 * 1024) {
-        throw new TypeError('Text attachment must be at most 16 MB')
+      const text = validateBoundedString(rawText, 'Text attachment', 1, 256 * 1024 * 1024)
+      if (Buffer.byteLength(text, 'utf8') > 256 * 1024 * 1024) {
+        throw new TypeError('Text attachment must be at most 256 MB')
       }
 
       const directory = await attachmentStorageDirectory(scope)
