@@ -100,6 +100,14 @@
   }
 
   function handleKeydown(event: KeyboardEvent): void {
+    // Cmd/Ctrl+E is the toolbox toggle — the panel owns focus while open, so
+    // the composer shortcut can't fire; handle closing here instead.
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'e') {
+      event.preventDefault()
+      open = false
+      highlightIndex = -1
+      return
+    }
     if (event.key === 'Escape') {
       event.preventDefault()
       open = false
