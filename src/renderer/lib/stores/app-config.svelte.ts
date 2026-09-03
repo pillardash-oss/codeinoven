@@ -10,7 +10,7 @@ const DEFAULT_ZOOM_LEVEL = 1
  *  sync with FONT_FAMILIES in src/main/ipc/ipc-handlers.ts. */
 const FONT_STACKS: Record<string, string> = {
   'jetbrains-mono':
-    "'JetBrains Mono Variable', 'JetBrainsMono Nerd Font', ui-monospace, 'SFMono-Regular', Menlo, monospace",
+    "'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace",
   satoshi: "'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
   system: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
   'sf-mono': "'SF Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace",

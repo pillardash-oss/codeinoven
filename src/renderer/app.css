@@ -82,7 +82,7 @@
      default family) for a uniform dev-workspace feel with unambiguous
      code glyphs like backticks. --font-app is overridden at runtime by
      the Appearance settings (app-config store). */
-  --font-app: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font', ui-monospace,
+  --font-app: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace,
     'SFMono-Regular', Menlo, monospace;
   --font-sans: var(--font-app);
   --font-mono: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace,
