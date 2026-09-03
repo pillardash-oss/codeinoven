@@ -1404,7 +1404,7 @@
   function isEditablePastedTextAttachment(file: PromptAttachment): boolean {
     if (file.mime !== 'text/plain') return false
     const path = fileUrlToPath(file.url)
-    return /^pasted-[0-9a-zA-Z-]+\.txt$/u.test(path.split(/[/\\]/u).pop() ?? '')
+    return /^pasted-[0-9a-f-]+\.txt$/u.test(path.split(/[/\\]/u).pop() ?? '')
   }
 
   async function addPastedTextAttachment(text: string): Promise<void> {

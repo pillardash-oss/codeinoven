@@ -188,7 +188,6 @@ const INVOKE_CHANNELS = [
   'git:defaultClonePath',
   'git:cloneHandoff',
   'attachment:saveText',
-  'scratch:saveText',
   'attachment:beginRemoteUpload',
   'attachment:appendRemoteUpload',
   'attachment:finishRemoteUpload',

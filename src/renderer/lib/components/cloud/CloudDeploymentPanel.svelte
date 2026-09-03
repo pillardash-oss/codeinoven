@@ -386,10 +386,10 @@
   /**
    * Read-only diagnosis prompt given to the agent, explicitly no auto-fix.
    *
-   * The full log is copied to `.cio/tmp/<threadId>/pasted-text.txt` and
-   * attached as a pasted-text file instead of being inlined: deployment logs
-   * can far exceed the 200k prompt limit, and an oversized inlined log makes
-   * `agent:sendPrompt` throw. A short tail excerpt stays
+   * The full log is attached through the same pasted-text pipeline the
+   * composer uses for long clipboard pastes, instead of being inlined:
+   * deployment logs can far exceed the 200k prompt limit, and an oversized
+   * inlined log makes `agent:sendPrompt` throw. A short tail excerpt stays
    * inline so the thread opens with immediate context.
    */
   async function remediationPrompt(
@@ -402,14 +402,18 @@
     const attachments: PromptAttachment[] = []
     if (trimmed) {
       try {
-        const path = await invoke('scratch:saveText', projectId, threadId, trimmed)
+        const path = await invoke(
+          'attachment:saveText',
+          { kind: 'chat', projectId, threadId },
+          trimmed
+        )
         attachments.push({
           mime: 'text/plain',
           url: pathToFileUrl(path),
           filename: 'Pasted text.txt'
         })
       } catch (error) {
-        reportError(error, 'Could not attach the full deployment log.')
+        reportError(error, 'Could not attach the deployment log.')
       }
     }
     const fence = '```'

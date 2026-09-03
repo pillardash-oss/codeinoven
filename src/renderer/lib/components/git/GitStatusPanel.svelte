@@ -509,19 +509,23 @@
   }
 
   /**
-   * Copy the full job log into the project's `.cio/tmp/<threadId>/pasted-text.txt`
-   * scratch file and return it as a composer pasted-text attachment, so large
-   * logs never flow through the prompt itself (which caps at 200k characters).
+   * Save the full job log through the composer's existing pasted-text
+   * pipeline (the same one used for long clipboard pastes), so large logs
+   * never flow through the prompt itself (which caps at 200k characters).
    */
   async function jobLogAttachment(
     log: GitHubDeploymentJobLog,
     threadId: string
   ): Promise<PromptAttachment[]> {
     try {
-      const path = await invoke('scratch:saveText', projectId, threadId, log.log)
+      const path = await invoke(
+        'attachment:saveText',
+        { kind: 'chat', projectId, threadId },
+        log.log
+      )
       return [{ mime: 'text/plain', url: pathToFileUrl(path), filename: 'Pasted text.txt' }]
     } catch (error) {
-      reportError(error, 'Could not attach the full job log.')
+      reportError(error, 'Could not attach the job log.')
       return []
     }
   }

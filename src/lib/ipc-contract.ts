@@ -1123,8 +1123,6 @@ export interface IpcInvokeContract {
     [scope: AttachmentStorageScope, text: string, existingPath?: string],
     string
   >
-  /** Write full text into the project's `.cio/tmp/<threadId>/pasted-text.txt` scratch file. */
-  'scratch:saveText': Contract<[projectId: string, threadId: string, text: string], string>
   'attachment:beginRemoteUpload': Contract<
     [scope: AttachmentStorageScope, filename: string, size: number],
     string
