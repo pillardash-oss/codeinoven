@@ -113,34 +113,36 @@
     pointer-events: none;
   }
 
-  /* ─── Layout: icon + title share the header row, description gets its own
-     full-width row underneath, action buttons share the bottom row ────── */
+  /* ─── Layout: [icon] [title] header row, [description] full-width row,
+     [buttons] sharing the bottom row. Selectors match svelte-sonner's
+     internal [data-styled='true'] specificity and use !important because
+     the library's own stylesheet competes in the cascade. ─────────────── */
   :global([data-sonner-toast]) {
-    flex-wrap: wrap;
-    align-items: flex-start;
-    gap: 6px;
+    flex-wrap: wrap !important;
+    align-items: flex-start !important;
+    gap: 6px !important;
   }
 
   /* Dissolve the content wrapper so title and description become direct
      flex items and can sit on separate rows */
-  :global([data-sonner-toast] [data-content]) {
-    display: contents;
+  :global([data-sonner-toast][data-styled='true'] [data-content]) {
+    display: contents !important;
   }
 
-  :global([data-sonner-toast] [data-title]) {
-    flex: 1 1 0;
-    min-width: 0;
+  :global([data-sonner-toast][data-styled='true'] [data-title]) {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
   }
 
-  :global([data-sonner-toast] [data-description]) {
-    flex: 1 1 100%;
+  :global([data-sonner-toast][data-styled='true'] [data-description]) {
+    flex: 1 1 100% !important;
   }
 
-  :global([data-sonner-toast] [data-button]) {
-    flex: 1 1 0;
-    min-width: 0;
-    margin-top: 4px;
-    justify-content: center;
+  :global([data-sonner-toast][data-styled='true'] [data-button]) {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    margin-top: 4px !important;
+    justify-content: center !important;
   }
 
   /* ─── Normal toasts ─────────────────────────────────────────────────────── */
