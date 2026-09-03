@@ -8,7 +8,7 @@
   }, 0)
 </script>
 
-<div class="mx-auto max-w-3xl p-6 pb-24">
+<div class="p-6 pb-24">
   <div class="mb-6">
     <h1 class="flex items-center gap-2 text-xl font-bold tracking-tight">
       <Keyboard size={18} class="text-muted" />

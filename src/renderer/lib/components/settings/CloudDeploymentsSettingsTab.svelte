@@ -57,7 +57,7 @@
   })
 </script>
 
-<div class="mx-auto max-w-2xl p-6 pb-24">
+<div class="p-6 pb-24">
   <div class="mb-6 flex items-start justify-between">
     <div>
       <h1 class="text-xl font-bold tracking-tight">Cloud Deployments</h1>

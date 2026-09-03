@@ -539,7 +539,7 @@
   })
 </script>
 
-<div class="mx-auto max-w-5xl p-6 pb-24">
+<div class="p-6 pb-24">
   <div class="mb-4 flex items-start justify-between">
     <div>
       <h1 class="text-xl font-bold tracking-tight">Harnesses</h1>

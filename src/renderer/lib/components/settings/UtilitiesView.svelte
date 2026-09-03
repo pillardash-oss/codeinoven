@@ -481,52 +481,51 @@
   {/if}
 {/snippet}
 
-<div class="mx-auto max-w-5xl p-6 pb-24">
-  <!-- Header: title, per-tab blurb, and primary actions on the same visual row. -->
-  <div class="flex flex-wrap items-center justify-between gap-4">
-    <div class="min-w-0 flex-1">
-      <div class="flex flex-wrap items-center gap-3">
-        <h1 class="text-xl font-bold tracking-tight">Utilities</h1>
-        <!-- Action buttons — share the title row so they never drift out of alignment. -->
+<div class="p-6 pb-24">
+  <!-- Header: title and description, matching the flow of every other page. -->
+  <div class="min-w-0">
+    <h1 class="text-xl font-bold tracking-tight">Utilities</h1>
+    <p class="mt-1 text-sm text-muted">{TAB_BLURB[activeTab]}</p>
+  </div>
+
+  <!-- Actions and tabs share one row: buttons first, then the section tabs. -->
+  <div class="mt-4 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex flex-wrap items-center gap-3">
+      <button
+        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
+        title="Add a skill, MCP server, or other utility"
+        onclick={openCreate}
+      >
+        <Plus size={13} /> Add utility
+      </button>
+      <button
+        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+        disabled={activeTab === 'tools'
+          ? agentToolsStore.loading || agentToolsStore.refreshing
+          : loading}
+        title="Refresh utilities"
+        onclick={refreshActiveTab}
+      >
+        <RefreshCw
+          size={13}
+          class={(
+            activeTab === 'tools' ? agentToolsStore.loading || agentToolsStore.refreshing : loading
+          )
+            ? 'animate-spin'
+            : ''}
+        /> Refresh
+      </button>
+      {#if activeTab === 'all' || activeTab === 'skills'}
         <button
-          class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
-          title="Add a skill, MCP server, or other utility"
-          onclick={openCreate}
+          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+          title="Open the skills marketplace"
+          onclick={onOpenMarketplace}
         >
-          <Plus size={13} /> Add utility
+          <Search size={13} /> Skills marketplace
         </button>
-        <button
-          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-          disabled={activeTab === 'tools'
-            ? agentToolsStore.loading || agentToolsStore.refreshing
-            : loading}
-          title="Refresh utilities"
-          onclick={refreshActiveTab}
-        >
-          <RefreshCw
-            size={13}
-            class={(
-              activeTab === 'tools' ? agentToolsStore.loading || agentToolsStore.refreshing : loading
-            )
-              ? 'animate-spin'
-              : ''}
-          /> Refresh
-        </button>
-        {#if activeTab === 'all' || activeTab === 'skills'}
-          <button
-            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
-            title="Open the skills marketplace"
-            onclick={onOpenMarketplace}
-          >
-            <Search size={13} /> Skills marketplace
-          </button>
-        {/if}
-      </div>
-      <!-- Per-tab description — stays on the same block as the title, not floating alone. -->
-      <p class="mt-1 text-sm text-muted">{TAB_BLURB[activeTab]}</p>
+      {/if}
     </div>
 
-    <!-- Tabs anchored to the right of the same row. -->
     <div
       class="flex flex-wrap items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
       role="tablist"
@@ -735,7 +734,9 @@
                   <p class="mt-1 text-xs leading-relaxed text-muted">{row.description}</p>
                 {/if}
                 {#if row.src === 'native' && row.entry.detail}
-                  <p class="mt-1 truncate font-mono text-[0.625rem] text-dimmed">{row.entry.detail}</p>
+                  <p class="mt-1 truncate font-mono text-[0.625rem] text-dimmed">
+                    {row.entry.detail}
+                  </p>
                 {/if}
                 <div class="mt-2 flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-dimmed">
                   {#each row.tags as tag (tag)}

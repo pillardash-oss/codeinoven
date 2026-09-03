@@ -340,7 +340,7 @@
   }
 </script>
 
-<div class="mx-auto max-w-3xl p-6">
+<div class="p-6">
   <div class="mb-6 flex items-start justify-between gap-4">
     <div>
       <h1 class="text-xl font-bold tracking-tight">Sound</h1>

@@ -181,7 +181,7 @@
   })
 </script>
 
-<div class="mx-auto max-w-2xl space-y-5 p-6 pb-24">
+<div class="space-y-5 p-6 pb-24">
   <div>
     <h1 class="text-xl font-bold tracking-tight">Gateways</h1>
     <p class="mt-0.5 text-sm text-muted">

@@ -144,7 +144,7 @@
   }
 </script>
 
-<div class="mx-auto max-w-4xl p-6 pb-24">
+<div class="p-6 pb-24">
   <div class="mb-6 flex items-start justify-between gap-6">
     <div>
       <h1 class="text-xl font-bold tracking-tight">CIO Prompts</h1>

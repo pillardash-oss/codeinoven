@@ -105,7 +105,7 @@
 </script>
 
 <div class="h-full min-h-0 overflow-hidden">
-  <div class="mx-auto flex h-full min-h-0 max-w-5xl flex-col px-6 pt-6">
+  <div class="flex h-full min-h-0 flex-col px-6 pt-6">
     <div class="shrink-0 bg-app pb-3">
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div>

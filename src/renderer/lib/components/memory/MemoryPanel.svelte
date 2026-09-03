@@ -474,7 +474,7 @@
 
 <div
   class="memory-panel flex h-full min-h-0 flex-col {variant === 'settings'
-    ? 'mx-auto w-full max-w-3xl p-6'
+    ? 'w-full p-6'
     : 'p-5'}"
 >
   <!-- Fixed header: title, Projects/Chats tabs, enable toggle, section tabs -->

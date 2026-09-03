@@ -230,7 +230,7 @@
   }
 </script>
 
-<div class="mx-auto max-w-2xl p-6 pb-24">
+<div class="p-6 pb-24">
   <div class="mb-6">
     <h1 class="text-xl font-bold tracking-tight">Agents</h1>
     <p class="mt-0.5 text-sm text-muted">

@@ -478,7 +478,7 @@
     {#if section === 'profile'}
       <ProfileSettingsTab />
     {:else if section === 'general'}
-      <div class="mx-auto max-w-2xl p-6 pb-24">
+      <div class="p-6 pb-24">
         <div class="mb-6">
           <h1 class="text-xl font-bold tracking-tight">General</h1>
           <p class="mt-0.5 text-sm text-muted">
@@ -957,7 +957,7 @@
     {:else if section === 'cloud-deployments'}
       <CloudDeploymentsSettingsTab />
     {:else if section === 'about'}
-      <div class="mx-auto max-w-2xl p-6 pb-24">
+      <div class="p-6 pb-24">
         <div class="mb-6">
           <h1 class="text-xl font-bold tracking-tight">About</h1>
           <p class="mt-0.5 text-sm text-muted">

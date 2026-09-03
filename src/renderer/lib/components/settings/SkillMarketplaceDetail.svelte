@@ -239,8 +239,8 @@
   })
 </script>
 
-<div class="mx-auto max-w-5xl p-6 pb-24">
-  <header class="max-w-3xl">
+<div class="p-6 pb-24">
+  <header>
     <p class="font-mono text-xs text-muted">{entry.source}</p>
     <h1 class="mt-1 break-words text-xl font-bold tracking-tight">{entry.name}</h1>
     <p class="mt-3 text-sm leading-relaxed text-muted">
