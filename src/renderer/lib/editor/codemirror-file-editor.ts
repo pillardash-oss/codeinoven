@@ -545,7 +545,7 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
     {
       '&': {
         height: '100%',
-        fontSize: '12px',
+        fontSize: '0.75rem',
         backgroundColor: 'var(--color-app)',
         color: 'var(--color-foreground)'
       },
@@ -555,7 +555,7 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
       '.cm-scroller': {
         fontFamily:
           "'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-        lineHeight: '20px',
+        lineHeight: 1.667,
         overscrollBehavior: 'contain'
       },
       '.cm-content': {
