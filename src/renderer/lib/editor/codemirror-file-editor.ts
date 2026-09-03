@@ -573,7 +573,13 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
       },
       '.cm-lineNumbers .cm-gutterElement': {
         padding: '0 8px 0 12px',
-        minWidth: '3ch'
+        minWidth: '3ch',
+        // Match the scroller's line box so numbers align with their code line
+        // (default `normal` line-height centers text differently inside the
+        // 20px row CodeMirror assigns each gutter element).
+        fontFamily:
+          "'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+        lineHeight: '20px'
       },
       '.cm-activeLineGutter': {
         backgroundColor: 'var(--color-selected)',
