@@ -4,11 +4,12 @@
   import StudioHistoryControls from './StudioHistoryControls.svelte'
 
   interface Props {
-    versions: Array<{ version: number; status: string }>
+    /** Status text is optional for studios without a per-version status (e.g. audit reports). */
+    versions: Array<{ version: number; status?: string }>
     currentVersion: number
     updatedAt: number
-    statusLabel: string
-    statusClass: string
+    statusLabel?: string
+    statusClass?: string
     dirty: boolean
     canUndo: boolean
     canRedo: boolean
@@ -17,7 +18,8 @@
     savePending: boolean
     versionMenuTitle: string
     versionItemTitle: (version: number) => string
-    onSelectVersion: (version: number) => void | Promise<void>
+    /** When absent (or a single version), the version dropdown is hidden. */
+    onSelectVersion?: (version: number) => void | Promise<void>
     onUndo: () => void
     onRedo: () => void
     onSave: () => void
@@ -53,6 +55,7 @@
   }
 </script>
 
+{#if versions.length > 1 && onSelectVersion}
 <DropdownMenu.Root>
   <DropdownMenu.Trigger
     class="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-elevated hover:text-foreground"
@@ -80,7 +83,7 @@
         >
           <span>Version {version.version}</span>
           <span class="flex items-center gap-1.5 capitalize text-dimmed">
-            {version.status}
+            {#if version.status}{version.status}{/if}
             {#if version.version === currentVersion}<Check size={11} class="text-primary" />{/if}
           </span>
         </DropdownMenu.Item>
@@ -88,12 +91,15 @@
     </DropdownMenu.Content>
   </DropdownMenu.Portal>
 </DropdownMenu.Root>
+{/if}
 <StudioHistoryControls {canUndo} {canRedo} onUndo={onUndo} onRedo={onRedo} />
 <span>Updated {formatDate(updatedAt)}</span>
-<span
-  class="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {statusClass}"
-  >{statusLabel}</span
->
+{#if statusLabel}
+  <span
+    class="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {statusClass ??
+      'bg-raised text-dimmed'}">{statusLabel}</span
+  >
+{/if}
 {#if dirty && canSave}
   <button
     class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[11px] font-medium hover:bg-overlay disabled:opacity-50"
