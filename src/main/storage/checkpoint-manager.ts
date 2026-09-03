@@ -70,6 +70,12 @@ export interface TurnCompletionOptions {
 /** Cap on foreign-thread checkpoints scanned while reconciling concurrent edits. */
 const FOREIGN_CHECKPOINT_SCAN_LIMIT = 500
 
+/** How recent a completed checkpoint must be for a late file-tool claim to
+ *  reopen it. Bounds the risk of resurrecting an old turn for an unrelated
+ *  straggler claim; a genuinely still-running model emits its late edits
+ *  within seconds of the premature settle. */
+export const LATE_CLAIM_REOPEN_WINDOW_MS = 15 * 60_000
+
 /** Upper bounds for one line-stats repair pass so startup is never blocked. */
 const REPAIR_MAX_CHECKPOINTS = 200
 const REPAIR_MAX_FILES = 500
@@ -549,6 +555,117 @@ export class CheckpointManager {
       }
     }
     return repaired
+  }
+
+  /** One-time repair pass for checkpoints created before internal-turn
+   *  attribution existed: their label and sourceMessageId point at the hidden
+   *  internal prompt (a search nudge, mermaid repair, incomplete-turn
+   *  continuation) instead of the user's message, so the changes sidebar and
+   *  file-changes cards showed the internal text as if the user asked for it.
+   *  Repairs re-point them at the latest conversation-visible user message of
+   *  the thread before the checkpoint started. Idempotent: repaired
+   *  checkpoints no longer match the candidate query. Only terminal
+   *  checkpoints are touched — active/interrupted rows can still be finalized
+   *  by `completeTurn` and must never be rewritten from a read path. */
+  async repairMisattributedInternalCheckpoints(): Promise<number> {
+    let rows: Record<string, unknown>[]
+    try {
+      rows = await this.queryRows(
+        `SELECT tc.turn_id AS turn_id, tc.project_id AS project_id, tc.thread_id AS thread_id
+         FROM turn_checkpoints tc, agent_messages am
+         WHERE json_extract(tc.data, '$.sourceMessageId') = am.id
+           AND am.role = 'user' AND am.visibility = 'hidden'
+           AND json_extract(tc.data, '$.status') NOT IN ('active', 'interrupted')
+         LIMIT ?`,
+        [REPAIR_MAX_CHECKPOINTS],
+        REPAIR_MAX_CHECKPOINTS
+      )
+    } catch (error) {
+      Logger.error('Internal-attribution repair could not list candidates (non-fatal):', error)
+      return 0
+    }
+    let repaired = 0
+    for (const row of rows) {
+      const turnId = row['turn_id']
+      const projectId = row['project_id']
+      const threadId = row['thread_id']
+      if (
+        typeof turnId !== 'string' ||
+        typeof projectId !== 'string' ||
+        typeof threadId !== 'string'
+      ) {
+        continue
+      }
+      try {
+        const checkpoint = await this.get(projectId, threadId, turnId)
+        if (!checkpoint || checkpoint.status === 'active' || checkpoint.status === 'interrupted') {
+          continue
+        }
+        const userRows = await this.queryRows(
+          `SELECT id, substr(json_extract(parts, '$[0].text'), 1, 80) AS label
+           FROM agent_messages
+           WHERE thread_id = ? AND role = 'user' AND visibility = 'conversation'
+             AND created_at <= ?
+           ORDER BY created_at DESC`,
+          [threadId, checkpoint.createdAt],
+          1
+        )
+        const userRow = userRows[0]
+        const sourceMessageId = typeof userRow?.['id'] === 'string' ? userRow['id'] : undefined
+        if (!sourceMessageId || sourceMessageId === checkpoint.sourceMessageId) continue
+        const label =
+          typeof userRow?.['label'] === 'string' && userRow['label'].trim()
+            ? userRow['label']
+            : checkpoint.label
+        await this.save({ ...checkpoint, sourceMessageId, label })
+        repaired += 1
+        // Yield between checkpoints so a large first-run repair never
+        // monopolizes the main process.
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      } catch (error) {
+        Logger.error('Internal-attribution repair skipped a checkpoint (non-fatal):', error)
+      }
+    }
+    return repaired
+  }
+
+  /** Re-open a recently completed checkpoint so late tool claims — edits that
+   *  landed after the engine settled the turn (e.g. a harness reported a
+   *  usage-reset settle while the model was still working) — are captured in
+   *  the same turn's card instead of falling outside every checkpoint. The
+   *  reopened turn resumes with its recorded changes and is re-completed by
+   *  the next idle finalization. Returns null when no terminal checkpoint is
+   *  recent enough to be safely reopened. */
+  async reopenTurn(
+    projectId: string,
+    threadId: string,
+    maxAgeMs: number
+  ): Promise<TurnCheckpoint | null> {
+    assertId(projectId)
+    assertId(threadId)
+    return this.withBlobLock(projectId, async () => {
+      const rows = await this.queryRows(
+        `SELECT turn_id, data FROM turn_checkpoints
+         WHERE project_id = ? AND thread_id = ?
+           AND json_extract(data, '$.status') IN ('completed', 'failed')
+           AND json_extract(data, '$.completedAt') >= ?
+         ORDER BY json_extract(data, '$.completedAt') DESC`,
+        [projectId, threadId, Date.now() - maxAgeMs],
+        1
+      )
+      const row = rows[0]
+      if (!row) return null
+      const turnId = String(row['turn_id'])
+      const checkpoint = JSON.parse(String(row['data'])) as TurnCheckpoint
+      const reopened: TurnCheckpoint = { ...checkpoint, status: 'active' }
+      delete reopened.completedAt
+      await this.save(reopened)
+      await this.writeRow(
+        'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id) VALUES(?, ?, ?)',
+        [projectId, threadId, turnId]
+      )
+      return reopened
+    })
   }
 
   /** Remove project checkpoint blobs that no remaining thread references. */

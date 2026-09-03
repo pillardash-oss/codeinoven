@@ -177,7 +177,8 @@ export class SpeechService {
     storage?: SpeechStorage,
     private readonly remoteCleanup?: SpeechRemoteCleanupExecutor,
     private readonly transcribeAudio?: SpeechAudioTranscribeExecutor,
-    private readonly remoteLearning?: SpeechRemoteLearningExecutor
+    private readonly remoteLearning?: SpeechRemoteLearningExecutor,
+    private readonly trackProcess?: (pid: number, command: string, cwd: string) => void
   ) {
     this.nativeCapture = new NativeSpeechCapture(paths.nativeCaptureWorkerPath)
     this.storage = storage ?? new SpeechStorage()
@@ -193,7 +194,8 @@ export class SpeechService {
         'gguf',
         new LlamaServerSpeechBackend(
           (pid, command, cwd) => this.llamaRuntime.registerServerProcess(pid, command, cwd),
-          (pid) => this.llamaRuntime.unregisterServerProcess(pid)
+          (pid) => this.llamaRuntime.unregisterServerProcess(pid),
+          (pid, command, cwd) => this.trackProcess?.(pid, command, cwd)
         )
       ]
     ])

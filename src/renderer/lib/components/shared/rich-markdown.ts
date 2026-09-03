@@ -145,7 +145,9 @@ function renderInline(
     return `\uE004${index - 1}\uE005`
   }
 
-  let prepared = source.replace(/`([^`\n]+)`/g, stashCode)
+  // The empty pair `` `` `` is a valid inline code span: the input rule creates one
+  // whenever the user types two backticks intending to type content between them.
+  let prepared = source.replace(/`([^`\n]*)`/g, stashCode)
   for (const badge of [...inlineBadges].sort(
     (left, right) => right.value.length - left.value.length
   )) {
@@ -661,6 +663,42 @@ function replaceInlineMatch(
   selection.addRange(range)
 }
 
+/** Create an inline code element (optionally empty) and place the caret where
+ *  `caretInsideCode` says: inside the element for a fresh empty span the user is
+ *  about to type into, otherwise after it (with a zero-width anchor). */
+function insertInlineCode(root: HTMLElement, content: string, caretInsideCode: boolean): void {
+  const code = document.createElement('code')
+  code.className = INLINE_CODE_CLASS
+  if (content) code.textContent = content
+  else code.append(document.createTextNode('\u200b'))
+
+  const selection = window.getSelection()
+  if (!selection || !selection.rangeCount) return
+  const range = selection.getRangeAt(0)
+  range.deleteContents()
+  range.insertNode(code)
+
+  // A zero-width anchor before the element keeps the caret from getting trapped
+  // when it becomes the first content of its block — without one, browsers refuse
+  // to move the caret left out of the element.
+  const block = currentBlock(root, code)
+  if (block && isFirstContentInBlock(block, code)) {
+    code.before(document.createTextNode('\u200b'))
+  }
+
+  const caretAnchor = document.createTextNode('\u200b')
+  code.after(caretAnchor)
+
+  if (caretInsideCode) {
+    range.setStart(code, code.firstChild ? 1 : 0)
+  } else {
+    range.setStart(caretAnchor, 1)
+  }
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
 function applyInlineRule(root: HTMLElement): boolean {
   const selection = selectionInside(root)
   if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
@@ -671,6 +709,60 @@ function applyInlineRule(root: HTMLElement): boolean {
   const textNode = selection.anchorNode
   const endOffset = selection.anchorOffset
   const prefix = textNode.data.slice(0, endOffset)
+  const suffix = textNode.data.slice(endOffset)
+
+  // A block whose text is a ``` fence candidate (```lang, or ```…``` /
+  // ```lang\n…``` for the tag-end-then-open flow) belongs to the Enter-triggered
+  // fence rule — inline rules must never eat its backticks while it is typed.
+  const fenceBlock = currentBlock(root, selection.anchorNode)
+  if (
+    fenceBlock &&
+    parseFenceBlockText(blockTextWithBreaks(fenceBlock).replace(/[\u200b\u00a0\s]+$/g, ''))
+  ) {
+    return false
+  }
+
+  // Two backticks typed back-to-back are an empty `` `` `` pair: turn them into
+  // an empty inline code span with the caret inside so content can be typed
+  // between the delimiters instead of the pair staying dead literal backticks.
+  // Skipped while a fence is being typed: three backticks (or a trailing triple
+  // after the caret) mean the user is building a code block, not an empty span.
+  if (prefix.endsWith('``') && !prefix.endsWith('```') && !suffix.includes('```')) {
+    const range = document.createRange()
+    range.setStart(textNode, endOffset - 2)
+    range.setEnd(textNode, endOffset)
+    const selection = window.getSelection()
+    if (selection) {
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
+    insertInlineCode(root, '', true)
+    return true
+  }
+
+  // Opening-backtick-last flow: the user tagged the end of a run with a backtick
+  // first, moved the caret before the run, and now types the opening backtick.
+  // The typed backtick plus the trailing one after the caret wrap the text
+  // between them into an inline code span. The run must start at a word
+  // boundary so literal backticks in mid-word prose never trigger it.
+  const closesAfter = suffix.match(/^([^`\n]+)`/)
+  const boundaryChar = endOffset >= 2 ? prefix[endOffset - 2] : undefined
+  if (
+    closesAfter &&
+    (boundaryChar === undefined || /[\s\u00a0\u200b]/.test(boundaryChar))
+  ) {
+    const range = document.createRange()
+    range.setStart(textNode, endOffset - 1)
+    range.setEnd(textNode, endOffset + closesAfter[0].length)
+    const selection = window.getSelection()
+    if (selection) {
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
+    insertInlineCode(root, closesAfter[1] ?? '', false)
+    return true
+  }
+
   const rules: Array<[RegExp, 'strong' | 'em' | 'del' | 'code']> = [
     [/\*\*([^*\n]+)\*\*$/, 'strong'],
     [/(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__$/, 'strong'],
@@ -741,112 +833,89 @@ function createCodeBlockElement(language: string): HTMLElement {
   return wrapper
 }
 
-function childIndexOf(parent: Node, child: Node): number {
-  const children = parent.childNodes
-  for (let index = 0; index < children.length; index += 1) {
-    if (children[index] === child) return index
-  }
-  return -1
-}
-
-/** True when a node contributes real content to its block. Soft breaks (`<br>`)
- *  are treated as whitespace so a caret sitting before a trailing break or after
- *  a leading one still resolves to a block boundary. */
-function hasVisibleContent(node: Node): boolean {
-  if (node.nodeType === Node.TEXT_NODE) {
-    return (node.textContent ?? '').replace(/[\u200b\u00a0]/g, '').length > 0
-  }
-  if (node instanceof HTMLBRElement) return false
-  if (node instanceof HTMLElement) {
-    return Array.from(node.childNodes).some(hasVisibleContent)
-  }
-  return false
-}
-
-/** Whether there is visible content before (`before`) or after (`after`) a
- *  position inside `block`. The scan is scoped to the block so a caret at a
- *  block boundary never counts siblings in neighbouring blocks. */
-function hasContentAt(
-  block: HTMLElement,
-  container: Node,
-  offset: number,
-  before: boolean
-): boolean {
-  if (container.nodeType === Node.TEXT_NODE) {
-    const text = container.textContent ?? ''
-    const slice = before ? text.slice(0, offset) : text.slice(offset)
-    if (slice.replace(/[\u200b\u00a0]/g, '').length > 0) return true
-    const parent = container.parentNode
-    if (!parent) return false
-    return hasContentAt(block, parent, childIndexOf(parent, container) + (before ? 0 : 1), before)
-  }
-  const children = Array.from(container.childNodes)
-  if (before) {
-    for (let index = offset - 1; index >= 0; index -= 1) {
-      if (hasVisibleContent(children[index] ?? block)) return true
-    }
-  } else {
-    for (let index = offset; index < children.length; index += 1) {
-      if (hasVisibleContent(children[index] ?? block)) return true
+/** Plain text of a block with soft breaks (`<br>`) as newlines and zero-width
+ *  caret anchors stripped — the text the user sees for the whole block. */
+function blockTextWithBreaks(block: HTMLElement): string {
+  let text = ''
+  const visit = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += (node.textContent ?? '').replace(/\u200b/g, '')
+    } else if (node instanceof HTMLBRElement) {
+      text += '\n'
+    } else if (node instanceof HTMLElement) {
+      for (const child of Array.from(node.childNodes)) visit(child)
     }
   }
-  if (container === block) return false
-  const parent = container.parentNode
-  if (!parent) return false
-  return hasContentAt(block, parent, childIndexOf(parent, container) + (before ? 0 : 1), before)
+  for (const child of Array.from(block.childNodes)) visit(child)
+  return text
 }
 
-function applyCodeFenceRule(root: HTMLElement): boolean {
+/** Parse a block's text as ```lang [content] ``` per the Enter-triggered fence
+ *  flow. Returns null when the text is not a fence candidate. */
+function parseFenceBlockText(text: string): { language: string; content: string } | null {
+  if (!text.startsWith('```')) return null
+  const inner = text.slice(3)
+  if (!inner.endsWith('```')) {
+    // Opening fence only: ``` or ```lang (a bare language token, no spaces).
+    if (!/^[\w+#.-]*$/.test(inner)) return null
+    return { language: inner, content: '' }
+  }
+  const body = inner.slice(0, -3)
+  if (body.includes('```')) return null
+  const newline = body.indexOf('\n')
+  if (newline > -1) {
+    const firstLine = body.slice(0, newline)
+    if (/^[\w+#.-]+$/.test(firstLine)) {
+      return { language: firstLine, content: body.slice(newline + 1) }
+    }
+    return { language: '', content: body }
+  }
+  // Single line between the fences: it is content, not a language.
+  return { language: '', content: body }
+}
+
+/**
+ * Enter-triggered code fence. Instead of converting as soon as ```lang is
+ * typed, the fence only materializes when Enter is pressed in a block whose
+ * text is ```lang, or ```content``` / ```lang\ncontent``` — the latter covers
+ * the "tag the end of the paragraph first, then open it" flow. Never fires
+ * inside a blockquote line or an existing code block.
+ */
+export function applyCodeFenceOnEnter(root: HTMLElement): boolean {
   const selection = selectionInside(root)
   if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
+  if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return false
 
-  const textNode = selection.anchorNode
-  const caretOffset = selection.anchorOffset
-  const rawBefore = textNode.data.slice(0, caretOffset)
-  // Soft breaks leave a zero-width caret anchor after the line content; ignore it.
-  const cleanBefore = rawBefore.replace(/[\u200b\u00a0]+$/g, '')
-  const fence = cleanBefore.match(/```(\S*)$/)
-  if (!fence) return false
-
-  const block = currentBlock(root, textNode)
+  const block = currentBlock(root, selection.anchorNode)
   if (!block || block === root || (block.tagName !== 'P' && block.tagName !== 'DIV')) {
     return false
   }
 
-  const fenceStart = cleanBefore.length - fence[0].length
-  textNode.deleteData(fenceStart, caretOffset - fenceStart)
-  // Deleting the fence shifts any text after it left; the caret boundary now sits
-  // at `fenceStart` inside the node.
-  const boundaryOffset = fenceStart
+  const text = blockTextWithBreaks(block).replace(/[\u200b\u00a0\s]+$/g, '')
+  // Markdown quote lines never grow code blocks.
+  if (text.split('\n').some((line) => /^\s*>/.test(line))) return false
 
-  const wrapper = createCodeBlockElement(fence[1] ?? '')
+  const parsed = parseFenceBlockText(text)
+  if (!parsed) return false
+
+  const wrapper = createCodeBlockElement(parsed.language)
   const code = wrapper.querySelector('code')
-  const hasBefore = hasContentAt(block, textNode, boundaryOffset, true)
-  const hasAfter = hasContentAt(block, textNode, boundaryOffset, false)
-
-  if (hasBefore && hasAfter && textNode.parentElement === block) {
-    // The caret is mid-paragraph (e.g. across a soft break). Split the block:
-    // keep the text before the caret, insert the code block exactly there, and
-    // move the text after the caret into its own paragraph.
-    const range = document.createRange()
-    range.setStart(textNode, boundaryOffset)
-    range.setEnd(block, block.childNodes.length)
-    const fragment = range.extractContents()
-    if (fragment.firstChild instanceof HTMLBRElement) fragment.firstChild.remove()
-    if (block.lastChild instanceof HTMLBRElement) block.lastChild.remove()
-    block.after(wrapper)
-    const paragraph = document.createElement('p')
-    paragraph.append(fragment)
-    wrapper.after(paragraph)
-  } else if (hasBefore) {
-    block.after(wrapper)
-  } else if (hasAfter) {
-    block.before(wrapper)
-  } else {
+  if (code) {
+    if (parsed.content) {
+      const lines = parsed.content.split('\n')
+      code.replaceChildren(
+        ...lines.flatMap((line, index) => {
+          const parts: Node[] = []
+          if (index > 0) parts.push(document.createElement('br'))
+          if (line) parts.push(document.createTextNode(line))
+          return parts
+        })
+      )
+      if (code.childNodes.length === 0) code.append(document.createElement('br'))
+    }
     block.replaceWith(wrapper)
+    placeCaretAtEnd(code)
   }
-
-  if (code) placeCaretInside(code)
   return true
 }
 
@@ -877,7 +946,9 @@ function applyBlockRule(root: HTMLElement): boolean {
 }
 
 export function applyMarkdownInputRule(root: HTMLElement): void {
-  if (applyCodeFenceRule(root)) return
+  // The code fence is deliberately NOT an input rule: it only materializes on
+  // Enter (see `applyCodeFenceOnEnter`), so typing ```lang never yanks the
+  // paragraph away mid-sentence.
   if (applyBlockRule(root)) return
   applyInlineRule(root)
 }

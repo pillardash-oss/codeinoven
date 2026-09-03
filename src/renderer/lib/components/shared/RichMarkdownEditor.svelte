@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import {
+    applyCodeFenceOnEnter,
     applyMarkdownInputRule,
     formatRichSelection,
     insertMarkdownLineBreak,
@@ -831,6 +832,19 @@
         event.preventDefault()
         onSubmit(event.shiftKey)
         return
+      }
+
+      // ``` fences materialize on Enter, not while typing: a block whose text is
+      // ```lang, ```content``` or ```lang\ncontent``` becomes a code block here.
+      if (!event.shiftKey) {
+        const historyEntry = captureHistoryEntry()
+        if (applyCodeFenceOnEnter(editor)) {
+          event.preventDefault()
+          emitEditorValue(true)
+          commitHistory(historyEntry)
+          publishCaretText()
+          return
+        }
       }
 
       const blockTag = selectedBlockTag(editor)

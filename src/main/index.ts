@@ -639,7 +639,9 @@ async function bootPostPaintServices(): Promise<void> {
     undefined,
     (input) => chatEngine!.cleanupSpeechTranscript(input),
     (input) => chatEngine!.transcribeSpeechAudio(input),
-    (input) => chatEngine!.learnSpeechLessons(input)
+    (input) => chatEngine!.learnSpeechLessons(input),
+    (pid, command, cwd) =>
+      chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
   )
   await speechService.initialize()
   // Initialize auto-evict timers from persisted sound settings
@@ -1001,6 +1003,19 @@ async function bootPostPaintServices(): Promise<void> {
       }
     } catch (error) {
       Logger.error('Line-stats repair failed (non-fatal):', error)
+    }
+
+    // One-time repair of file-change cards misattributed to hidden internal
+    // prompts (search nudges, mermaid repairs, incomplete-turn continuations)
+    // by turns that ran before internal attribution existed. Bounded,
+    // idempotent, and batched; a no-op once every candidate is repaired.
+    try {
+      const repaired = await new CheckpointManager(database).repairMisattributedInternalCheckpoints()
+      if (repaired > 0) {
+        Logger.info(`Reattributed ${repaired} internal-turn file-change checkpoints`)
+      }
+    } catch (error) {
+      Logger.error('Internal-attribution repair failed (non-fatal):', error)
     }
 
     // Restore remote mode after paint so users can see app UI while the LAN

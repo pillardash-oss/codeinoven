@@ -11,6 +11,8 @@ Website: [codeinoven.com](https://codeinoven.com) · [Support](SECURITY.md) · [
 
 ---
 
+![CodeInOven app interface](docs/media/app-screenshot.png)
+
 ## What CodeInOven is for
 
 CodeInOven helps teams run AI engineering work like a product workflow instead of a long chat:

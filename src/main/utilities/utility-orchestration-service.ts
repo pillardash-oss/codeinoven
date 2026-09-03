@@ -547,7 +547,9 @@ export class UtilityOrchestrationService {
     input: Record<string, unknown>
   ): Promise<unknown> {
     if (state.request.allowManagement !== true) {
-      throw new Error('App diagnostics are not enabled for this turn')
+      throw new Error(
+        'App diagnostics require an explicit @cio-utility turn — tell the user to re-send their request starting with @cio-utility.'
+      )
     }
     state.diagnostics ??= new CioDiagnosticsService(requiredDatabase(this.database), () =>
       this.projectNames()
