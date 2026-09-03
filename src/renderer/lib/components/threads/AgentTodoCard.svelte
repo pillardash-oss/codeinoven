@@ -17,8 +17,6 @@
   let open = $state(false)
   let userPinnedOpen = $state(false)
   let lastSignature = $state('')
-  /** Non-reactive timer handle; never rendered. */
-  let collapseTimer: number | undefined
 
   let completedCount = $derived(items.filter((item) => item.status === 'completed').length)
   let currentItem = $derived(
@@ -28,32 +26,19 @@
   let activeIndex = $derived(activeAgentTodoIndex(items, busy))
   let progressLabel = $derived(agentTodoProgressLabel(items.length, completedCount, activeIndex))
 
-  /** Every checklist change pops the card open so fresh task states are
-   *  always visible. The collapse countdown only runs while the agent is
-   *  idle, so a working turn never hides the live statuses; `busy` is read
-   *  before the signature guard so ending a turn re-arms the collapse. */
   $effect(() => {
-    const isBusy = busy
     const currentSignature = signature
-    if (currentSignature !== lastSignature) {
-      lastSignature = currentSignature
+    if (currentSignature === lastSignature) return
+    lastSignature = currentSignature
+    if (userPinnedOpen) {
       open = true
+      return
     }
-    if (collapseTimer !== undefined) {
-      window.clearTimeout(collapseTimer)
-      collapseTimer = undefined
-    }
-    if (isBusy) return
-    collapseTimer = window.setTimeout(() => {
-      collapseTimer = undefined
+    open = true
+    const timer = window.setTimeout(() => {
       if (!userPinnedOpen) open = false
     }, 4_000)
-    return () => {
-      if (collapseTimer !== undefined) {
-        window.clearTimeout(collapseTimer)
-        collapseTimer = undefined
-      }
-    }
+    return () => window.clearTimeout(timer)
   })
 
   function toggleOpen(): void {
