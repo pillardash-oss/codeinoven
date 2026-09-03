@@ -6876,7 +6876,7 @@ export class ChatEngine {
               projectPath,
               origin === 'internal' && previous
                 ? previous.label
-                : (text.slice(0, 80) || 'Agent turn'),
+                : text.slice(0, 80) || 'Agent turn',
               project.changeTrackingMode === 'git',
               origin === 'internal' && previous?.sourceMessageId
                 ? previous.sourceMessageId
@@ -16813,7 +16813,16 @@ export class ChatEngine {
     driver: HarnessDriver,
     projectPath: string
   ): Promise<HarnessCommand[]> {
-    const commands = await driver.listCommands(projectPath)
+    const rawCommands = await driver.listCommands(projectPath)
+    // A driver can report skills it loaded from the shared layer even when the
+    // skill is actually owned by another harness's exclusive directory. Drop
+    // those so the slash menu only offers skills the selected harness owns.
+    const claims = await this.capabilityDiscovery.harnessSkillClaims(projectPath)
+    const commands = rawCommands.filter((command) => {
+      if (command.source !== 'skill') return true
+      const claimants = claims.get(command.name.toLowerCase())
+      return !claimants || claimants.has(driver.id)
+    })
     const discovered = [...commands]
     if (driver.id === 'claude-code') {
       const capabilities = await this.capabilityDiscovery.discover(projectPath, driver.id)
