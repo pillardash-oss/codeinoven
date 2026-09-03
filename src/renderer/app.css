@@ -131,7 +131,7 @@ body {
   font-family: var(--font-app);
   /* Explicit, user-settable base weight (Appearance settings); 300 keeps
      JetBrains Mono prose light next to semibold chrome. */
-  font-weight: var(--font-weight-base, 300);
+  font-weight: var(--font-weight-base, 200);
   background-color: var(--color-app);
   color: var(--color-foreground);
   -webkit-font-smoothing: antialiased;

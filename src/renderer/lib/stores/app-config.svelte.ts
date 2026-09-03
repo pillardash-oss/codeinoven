@@ -24,7 +24,7 @@ let openLocalhostInCioBrowser = $state(true)
 let defaultPullStrategy = $state<GitPullPreference>('ask')
 let fontFamily = $state(DEFAULT_FONT_FAMILY)
 let appFontSize = $state(DEFAULT_APP_FONT_SIZE)
-let fontWeight = $state(300)
+let fontWeight = $state(200)
 let zoomLevel = $state(DEFAULT_ZOOM_LEVEL)
 
 /** Push the persisted appearance preferences onto the document: the app font
@@ -91,7 +91,8 @@ export const FONT_FAMILY_OPTIONS: Array<{ id: string; label: string }> = [
 
 /** Font weights offered in Appearance settings. */
 export const FONT_WEIGHT_OPTIONS: Array<{ id: number; label: string }> = [
-  { id: 300, label: 'Light (default)' },
+  { id: 200, label: 'Extra light (default)' },
+  { id: 300, label: 'Light' },
   { id: 400, label: 'Regular' },
   { id: 500, label: 'Medium' }
 ]
