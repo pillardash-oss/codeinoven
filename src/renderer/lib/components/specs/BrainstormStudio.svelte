@@ -1,31 +1,21 @@
 <script lang="ts">
-  import {
-    AppWindow,
-    Check,
-    ChevronDown,
-    FileText,
-    History,
-    MessageSquare,
-    MessageSquarePlus,
-    Pencil,
-    Save,
-    X
-  } from '@lucide/svelte'
+  import { ChevronDown, MessageSquare, MessageSquarePlus } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import { onDestroy, onMount, tick } from 'svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
-  import { draggablePopover } from '$lib/draggable-popover.svelte'
+  import { copyText } from '$lib/copy-text'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
-  import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
-  import StudioSelectionActions from './StudioSelectionActions.svelte'
-  import StudioHistoryControls from './StudioHistoryControls.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
-  import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
-  import { copyText } from '$lib/copy-text'
+  import StudioShell from './StudioShell.svelte'
+  import type { StudioShellSection } from './StudioShell.svelte'
+  import StudioSidebarFileActions from './StudioSidebarFileActions.svelte'
+  import StudioVersionBar from './StudioVersionBar.svelte'
+  import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
+  import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import {
     offsetsForQuote,
     offsetsForRange,
@@ -144,14 +134,12 @@
   // Older stored reports fall back to the content present when the studio is first opened.
   // svelte-ignore state_referenced_locally
   const reviewBaseline = $state.snapshot(brainstorm.generatedContent ?? brainstorm.content)
-  let preferredIcon = $derived(editorPreference.preferredInfo?.iconDataUrl)
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   // svelte-ignore state_referenced_locally
   let loadedKey = $state(`${brainstorm.id}:${brainstorm.version}:${brainstorm.updatedAt}`)
   type BrainstormNavigationSectionId = BrainstormSectionId | 'prototypes'
 
   let selectedSection = $state<BrainstormNavigationSectionId>('context')
-  /** Phone only: the section rail is a bottom drawer instead of a column. */
   let sectionsOpen = $state(false)
   // svelte-ignore state_referenced_locally
   let dirty = $state(history.dirty)
@@ -162,8 +150,6 @@
   let annotationBody = $state('')
   let editingAnnotation = $state<BrainstormAnnotation | null>(null)
   let editingAnnotationBody = $state('')
-  let annotationEditor = $state<RichMarkdownEditor>()
-  let editingAnnotationEditor = $state<RichMarkdownEditor>()
   let decisionNotesEditor = $state<RichMarkdownEditor>()
   const pendingSpeechTargetId = `brainstorm-annotation-${crypto.randomUUID()}`
   const decisionSpeechTargetId = `brainstorm-decision-${crypto.randomUUID()}`
@@ -172,19 +158,6 @@
     projectId: brainstorm.projectId,
     threadId: brainstorm.threadId
   } as const)
-
-  function pendingSpeechTarget() {
-    return annotationEditor?.speechEditorTarget(pendingSpeechTargetId) ?? null
-  }
-
-  function editingSpeechTarget() {
-    if (!editingAnnotation) return null
-    return (
-      editingAnnotationEditor?.speechEditorTarget(
-        `brainstorm-annotation-edit-${editingAnnotation.id}`
-      ) ?? null
-    )
-  }
 
   function decisionSpeechTarget() {
     return decisionNotesEditor?.speechEditorTarget(decisionSpeechTargetId) ?? null
@@ -221,6 +194,19 @@
       items.push({ id: 'prototypes', title: 'Prototypes' })
     }
     return items
+  })
+
+  const shellSections = $derived.by<StudioShellSection<BrainstormNavigationSectionId>[]>(() => {
+    return navigationSections.map((section) => {
+      const annotationCount = annotationsFor(section.id).length
+      return {
+        id: section.id,
+        title: section.title,
+        badges: annotationCount
+          ? [{ count: annotationCount, tone: 'info', label: 'annotations' }]
+          : undefined
+      }
+    })
   })
 
   const openAnnotationCount = $derived(
@@ -295,15 +281,6 @@
     markDirty()
   }
 
-  function formatDate(timestamp: number): string {
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    }).format(timestamp)
-  }
-
   function statusLabel(): string {
     return draft.status === 'draft'
       ? 'Draft'
@@ -346,20 +323,6 @@
     const anchorStart = quoteStart < 0 ? Math.max(sectionStart, 0) : quoteStart
     const startLine = markdown.slice(0, anchorStart).split('\n').length
     return { startLine, endLine: startLine + quote.split('\n').length - 1 }
-  }
-
-  async function selectAndScroll(sectionId: BrainstormNavigationSectionId): Promise<void> {
-    sectionsOpen = false
-    selectedSection = sectionId
-    await tick()
-    const target = document.getElementById(`brainstorm-section-${sectionId}`)
-    if (!target || !documentScroller) return
-    const scrollerTop = documentScroller.getBoundingClientRect().top
-    const targetTop = target.getBoundingClientRect().top
-    documentScroller.scrollTo({
-      top: documentScroller.scrollTop + targetTop - scrollerTop - 20,
-      behavior: 'smooth'
-    })
   }
 
   function captureDocumentSelection(): void {
@@ -724,163 +687,141 @@
 
 <svelte:window onkeydown={handleWindowKeydown} onresize={() => void refreshAnnotationMarkers()} />
 
-<section class="flex h-full min-h-0 flex-col bg-app" aria-label="Brainstorm studio">
-  <header class="shrink-0 border-b bg-surface">
-    <div
-      class="flex flex-col gap-2 px-2 py-2 md:grid md:min-h-12 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center md:gap-3 md:px-3 md:py-0"
-    >
-      <div class="flex min-w-0 items-center gap-2">
-        <StudioDocumentNavigation
-          active="brainstorm"
-          brainstormAvailable
-          {prdAvailable}
-          {specAvailable}
-          {assignmentAvailable}
-          {auditAvailable}
-          {agentMessagesOpen}
-          {onBack}
-          {onToggleAgentMessages}
-          {sectionsOpen}
-          sectionsLabel="brainstorm sections"
-          onToggleSections={() => (sectionsOpen = !sectionsOpen)}
-          onOpenBrainstorm={() => undefined}
-          {onOpenPrd}
-          onOpenSpec={specAvailable ? onOpenSpec : undefined}
-          {onOpenAssignment}
-          {onOpenAudit}
-        />
-      </div>
+<StudioShell
+  ariaLabel="Brainstorm studio"
+  scrollerLabel="Rendered brainstorm"
+  sidebarTitle="Brainstorm"
+  sidebarLabel="Brainstorm sections"
+  sectionAnchorPrefix="brainstorm-section"
+  sections={shellSections}
+  bind:selectedSection
+  bind:sectionsOpen
+  bind:scroller={documentScroller}
+  {openAnnotationCount}
+  annotationsTitle="Annotations"
+  annotationsEmptyLabel={canEdit
+    ? 'Select text or click a section heading to annotate.'
+    : 'No open annotations.'}
+  sectionAnnotations={annotationsFor}
+  onOpenAnnotation={(annotation) => void openAnnotation(annotation)}
+  {error}
+  onScrollerMouseUp={captureDocumentSelection}
+>
+  {#snippet navigation()}
+    <StudioDocumentNavigation
+      active="brainstorm"
+      brainstormAvailable
+      {prdAvailable}
+      {specAvailable}
+      {assignmentAvailable}
+      {auditAvailable}
+      {agentMessagesOpen}
+      {onBack}
+      {onToggleAgentMessages}
+      {sectionsOpen}
+      sectionsLabel="brainstorm sections"
+      onToggleSections={() => (sectionsOpen = !sectionsOpen)}
+      onOpenBrainstorm={() => undefined}
+      {onOpenPrd}
+      onOpenSpec={specAvailable ? onOpenSpec : undefined}
+      {onOpenAssignment}
+      {onOpenAudit}
+    />
+  {/snippet}
 
-      <div
-        class="flex items-center gap-2 text-[11px] text-muted max-md:flex-wrap md:justify-center"
+  {#snippet center()}
+    <StudioVersionBar
+      versions={sortedVersions.map((version) => ({
+        version: version.version,
+        status: version.status
+      }))}
+      currentVersion={draft.version}
+      updatedAt={draft.updatedAt}
+      statusLabel={statusLabel()}
+      statusClass={statusClass()}
+      {dirty}
+      canSave={canEdit}
+      canUndo={history.canUndo}
+      canRedo={history.canRedo}
+      {busy}
+      {savePending}
+      versionMenuTitle="Choose a brainstorm version"
+      versionItemTitle={(version) => `Open brainstorm version ${version}`}
+      onSelectVersion={onSelectVersion}
+      onUndo={undoEdit}
+      onRedo={redoEdit}
+      onSave={() => void saveDraft()}
+    />
+  {/snippet}
+
+  {#snippet actions()}
+    {#if canEdit}
+      <button
+        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold hover:bg-overlay disabled:opacity-50"
+        disabled={busy}
+        title="Discuss changes to this session report with the Sr. Engineer"
+        onclick={() => {
+          pendingAction = 'review'
+          additionalNotes = ''
+        }}>Discuss changes</button
       >
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger
-            class="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-elevated hover:text-foreground"
-            title="Choose a brainstorm version"
-          >
-            <History size={12} />
-            Version {draft.version}
-            <ChevronDown size={11} />
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="bottom"
-              align="start"
-              sideOffset={4}
-              collisionPadding={8}
-              strategy="fixed"
-              class="z-50 max-h-52 min-w-44 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
-            >
-              {#each sortedVersions as version (version.version)}
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
-                  textValue={`Version ${version.version}`}
-                  title={`Open brainstorm version ${version.version}`}
-                  onSelect={() => void onSelectVersion(version.version)}
-                >
-                  <span>Version {version.version}</span>
-                  <span class="flex items-center gap-1.5 capitalize text-dimmed">
-                    {version.status}
-                    {#if version.version === draft.version}<Check
-                        size={11}
-                        class="text-primary"
-                      />{/if}
-                  </span>
-                </DropdownMenu.Item>
-              {/each}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
-        <StudioHistoryControls
-          canUndo={history.canUndo}
-          canRedo={history.canRedo}
-          onUndo={undoEdit}
-          onRedo={redoEdit}
-        />
-        <span>Updated {formatDate(draft.updatedAt)}</span>
-        <span
-          class="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {statusClass()}"
-          >{statusLabel()}</span
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger
+          class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={busy || nextStepBusy || !onNextStep}
+          title="Choose what to build next from this Brainstorm"
         >
-        {#if dirty && canEdit}
-          <button
-            class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[11px] font-medium hover:bg-overlay disabled:opacity-50"
-            disabled={busy || savePending}
-            title="Save changes (Cmd/Ctrl+S)"
-            onclick={() => void saveDraft()}><Save size={11} /> Save</button
+          {nextStepBusy ? 'Working…' : 'Next step'}
+          <ChevronDown size={13} />
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            side="bottom"
+            align="end"
+            sideOffset={4}
+            collisionPadding={8}
+            strategy="fixed"
+            class="z-50 w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
           >
-        {/if}
-      </div>
-
-      <div class="flex items-center gap-1.5 max-md:*:h-10 max-md:*:flex-1 md:justify-end">
-        {#if canEdit}
-          <button
-            class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold hover:bg-overlay disabled:opacity-50"
-            disabled={busy}
-            title="Discuss changes to this session report with the Sr. Engineer"
-            onclick={() => {
-              pendingAction = 'review'
-              additionalNotes = ''
-            }}>Discuss changes</button
-          >
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger
-              class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={busy || nextStepBusy || !onNextStep}
-              title="Choose what to build next from this Brainstorm"
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+              title="Prototype a low-fidelity Lo-Fi wireframe direction"
+              disabled={nextStepBusy}
+              onSelect={() => void runNextStep('lofi')}
             >
-              {nextStepBusy ? 'Working…' : 'Next step'}
-              <ChevronDown size={13} />
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                side="bottom"
-                align="end"
-                sideOffset={4}
-                collisionPadding={8}
-                strategy="fixed"
-                class="z-50 w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
-              >
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
-                  title="Prototype a low-fidelity Lo-Fi wireframe direction"
-                  disabled={nextStepBusy}
-                  onSelect={() => void runNextStep('lofi')}
-                >
-                  <span>Prototype Lo-Fi</span>
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
-                  title="Prototype a single high-fidelity Hi-Fi direction"
-                  disabled={nextStepBusy}
-                  onSelect={() => void runNextStep('hifi')}
-                >
-                  <span>Prototype Hi-Fi</span>
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
-                  title="Generate the product requirements document from this Brainstorm"
-                  disabled={nextStepBusy}
-                  onSelect={() => void runNextStep('prd')}
-                >
-                  <span>Generate PRD</span>
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
-                  title="Finalize this Brainstorm and generate an implementation-ready Spec"
-                  disabled={nextStepBusy}
-                  onSelect={() => void runNextStep('spec')}
-                >
-                  <span>Generate Spec</span>
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
-        {/if}
-      </div>
-    </div>
+              <span>Prototype Lo-Fi</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+              title="Prototype a single high-fidelity Hi-Fi direction"
+              disabled={nextStepBusy}
+              onSelect={() => void runNextStep('hifi')}
+            >
+              <span>Prototype Hi-Fi</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+              title="Generate the product requirements document from this Brainstorm"
+              disabled={nextStepBusy}
+              onSelect={() => void runNextStep('prd')}
+            >
+              <span>Generate PRD</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+              title="Finalize this Brainstorm and generate an implementation-ready Spec"
+              disabled={nextStepBusy}
+              onSelect={() => void runNextStep('spec')}
+            >
+              <span>Generate Spec</span>
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    {/if}
+  {/snippet}
 
+  {#snippet headerExtra()}
     {#if pendingAction && canEdit}
       <div class="flex flex-col gap-2 border-t px-3 py-2.5 md:flex-row md:items-end md:px-4">
         <label class="min-w-0 flex-1 text-[11px] font-medium text-muted">
@@ -916,449 +857,219 @@
         >
       </div>
     {/if}
+  {/snippet}
 
-    {#if error}
-      <p class="border-t bg-danger/10 px-4 py-2 text-xs text-danger" role="alert">{error}</p>
-    {/if}
-  </header>
+  {#snippet sidebarFooter()}
+    <StudioSidebarFileActions
+      viewTitle="Reveal this brainstorm as Markdown in the file tree"
+      openTitle={`Open this brainstorm as Markdown in ${preferredName}`}
+      {busy}
+      onReveal={onRevealInAppFile ? () => onRevealInAppFile(draft) : undefined}
+      onOpen={onOpenInEditor ? () => onOpenInEditor(draft) : undefined}
+    />
+  {/snippet}
 
-  <div
-    class="flex min-h-0 flex-1 flex-col overflow-hidden md:grid md:grid-cols-[13rem_minmax(0,1fr)]"
-  >
-    {#if sectionsOpen}
-      <div
-        class="fixed inset-0 z-40 bg-black/50 md:hidden"
-        role="presentation"
-        onclick={() => (sectionsOpen = false)}
-      ></div>
-    {/if}
-    <aside
-      class="relative flex min-h-0 flex-col border-r bg-surface max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-50 max-md:max-h-[80dvh] max-md:rounded-t-2xl max-md:border-r-0 max-md:border-t max-md:pb-[env(safe-area-inset-bottom)] max-md:shadow-2xl {sectionsOpen
-        ? ''
-        : 'max-md:hidden'}"
-      aria-label="Brainstorm sections"
-    >
-      <StudioSidebarResizeHandle sidebarLabel="Brainstorm sections" />
-      <div class="flex h-12 shrink-0 items-center justify-between border-b px-3 md:hidden">
-        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">Brainstorm</p>
-        <button
-          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted"
-          aria-label="Close sections"
-          title="Close sections"
-          onclick={() => (sectionsOpen = false)}
+  {#snippet markers()}
+    {#each annotationMarkers as marker (marker.annotation.id)}
+      <button
+        data-brainstorm-annotation-marker={marker.annotation.id}
+        class="absolute z-10 grid h-7 w-7 place-items-center rounded-full border bg-surface text-info shadow-sm hover:bg-elevated"
+        style:left={compactViewport.matches
+          ? undefined
+          : `${Math.min(marker.x, (documentScroller?.scrollWidth ?? marker.x + 32) - 32)}px`}
+        style:top={`${marker.y}px`}
+        title={`Open annotation: ${marker.annotation.body}`}
+        aria-label={`Open annotation: ${marker.annotation.body}`}
+        onclick={() => void openAnnotation(marker.annotation)}><MessageSquare size={13} /></button
+      >
+    {/each}
+  {/snippet}
+
+  <article class="mx-auto max-w-4xl space-y-12 px-4 py-6 text-sm leading-7 md:px-8 md:py-8">
+    <header class="space-y-3 border-b pb-8">
+      <EditableMarkdown
+        text={draft.content.title}
+        readOnly={!canEdit}
+        class="text-2xl font-semibold tracking-tight text-foreground outline-none focus:bg-surface"
+        ariaLabel="Brainstorm title"
+        onChange={(value) => {
+          draft.content.title = value
+          markDirty()
+        }}
+      />
+      <section id="brainstorm-section-tldr" class="space-y-2 scroll-mt-5">
+        <h2 class="text-xl font-semibold tracking-tight">Session Snapshot</h2>
+        <EditableMarkdown
+          text={draft.content.summary}
+          readOnly={!canEdit}
+          class="brainstorm-markdown max-w-3xl whitespace-pre-wrap rounded-lg px-2 py-1 text-base text-muted outline-none focus:bg-surface focus:text-foreground"
+          ariaLabel="Brainstorm session snapshot"
+          onChange={(value) => {
+            draft.content.summary = value
+            markDirty()
+          }}
+        />
+      </section>
+    </header>
+
+    {#each draft.content.sections as sectionDefinition (sectionDefinition.id)}
+      {@const section = sectionFor(sectionDefinition.id)}
+      {#if section}
+        <section
+          id={`brainstorm-section-${section.id}`}
+          data-brainstorm-section={section.id}
+          class="scroll-mt-5"
         >
-          <X size={16} />
-        </button>
-      </div>
-      <div class="flex min-h-0 flex-1 flex-col overscroll-contain">
-        <div class="shrink-0 space-y-0.5 p-2" role="tablist" aria-orientation="vertical">
-          {#each navigationSections as section (section.id)}
-            {@const annotationCount = annotationsFor(section.id).length}
+          {#if canEdit}
             <button
-              class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors max-md:py-3 {selectedSection ===
-              section.id
-                ? 'bg-elevated font-semibold text-foreground'
-                : 'text-muted hover:bg-elevated/60 hover:text-foreground'}"
-              role="tab"
-              aria-selected={selectedSection === section.id}
-              title={`Scroll to ${section.title}`}
-              onclick={() => void selectAndScroll(section.id)}
+              class="group flex items-center gap-2 text-left"
+              title={`Annotate ${section.title}`}
+              onclick={(event: MouseEvent) => openSectionAnnotation(section.id, section.title, event)}
             >
-              <span>{section.title}</span>
-              {#if annotationCount}
-                <span class="rounded-full bg-info/10 px-1.5 text-[10px] text-info"
-                  >{annotationCount}</span
-                >
-              {/if}
-            </button>
-          {/each}
-        </div>
-
-        <div class="flex min-h-0 flex-1 flex-col border-t p-3">
-          <div class="flex shrink-0 items-center justify-between">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Annotations</p>
-            <span class="text-[10px] tabular-nums text-dimmed">{openAnnotationCount}</span>
-          </div>
-          <div class="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
-            {#each annotationsFor(selectedSection) as annotation (annotation.id)}
-              <button
-                class="block w-full rounded-lg border bg-elevated px-2.5 py-2 text-left hover:bg-overlay"
-                title="Open annotation"
-                onclick={() => void openAnnotation(annotation)}
-              >
-                {#if annotation.quote}
-                  <span class="block truncate text-[10px] text-dimmed">“{annotation.quote}”</span>
-                {/if}
-                <span class="mt-0.5 line-clamp-4 block text-xs leading-relaxed"
-                  >{annotation.body}</span
-                >
-              </button>
-            {:else}
-              <p
-                class="rounded-lg border border-dashed px-2.5 py-3 text-center text-[11px] text-dimmed"
-              >
-                {canEdit
-                  ? 'Select text or click a section heading to annotate.'
-                  : 'No open annotations.'}
-              </p>
-            {/each}
-          </div>
-        </div>
-      </div>
-
-      {#if onRevealInAppFile || onOpenInEditor}
-        <div class="flex shrink-0 items-center gap-1 border-t p-2">
-          {#if onRevealInAppFile}
-            <button
-              class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
-              disabled={busy}
-              title="Reveal this brainstorm as Markdown in the file tree"
-              onclick={() => void onRevealInAppFile?.(draft)}
-            >
-              <FileText size={13} />
-              View
-            </button>
-          {/if}
-          {#if onOpenInEditor}
-            <button
-              class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
-              disabled={busy}
-              title={`Open this brainstorm as Markdown in ${preferredName}`}
-              onclick={() => void onOpenInEditor?.(draft)}
-            >
-              {#if preferredIcon}
-                <img src={preferredIcon} alt="" class="h-3.5 w-3.5 shrink-0" />
-              {:else}
-                <AppWindow size={14} class="shrink-0" />
-              {/if}
-              Open
-            </button>
-          {/if}
-        </div>
-      {/if}
-    </aside>
-
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <main
-      bind:this={documentScroller}
-      class="relative min-h-0 overflow-y-auto scroll-smooth bg-app"
-      aria-label="Rendered brainstorm"
-      onmouseup={captureDocumentSelection}
-    >
-      <article class="mx-auto max-w-4xl space-y-12 px-4 py-6 text-sm leading-7 md:px-8 md:py-8">
-        <header class="space-y-3 border-b pb-8">
-          <EditableMarkdown
-            text={draft.content.title}
-            readOnly={!canEdit}
-            class="text-2xl font-semibold tracking-tight text-foreground outline-none focus:bg-surface"
-            ariaLabel="Brainstorm title"
-            onChange={(value) => {
-              draft.content.title = value
-              markDirty()
-            }}
-          />
-          <section id="brainstorm-section-tldr" class="space-y-2 scroll-mt-5">
-            <h2 class="text-xl font-semibold tracking-tight">Session Snapshot</h2>
-            <EditableMarkdown
-              text={draft.content.summary}
-              readOnly={!canEdit}
-              class="brainstorm-markdown max-w-3xl whitespace-pre-wrap rounded-lg px-2 py-1 text-base text-muted outline-none focus:bg-surface focus:text-foreground"
-              ariaLabel="Brainstorm session snapshot"
-              onChange={(value) => {
-                draft.content.summary = value
-                markDirty()
-              }}
-            />
-          </section>
-        </header>
-
-        {#each draft.content.sections as sectionDefinition (sectionDefinition.id)}
-          {@const section = sectionFor(sectionDefinition.id)}
-          {#if section}
-            <section
-              id={`brainstorm-section-${section.id}`}
-              data-brainstorm-section={section.id}
-              class="scroll-mt-5"
-            >
-              {#if canEdit}
-                <button
-                  class="group flex items-center gap-2 text-left"
-                  title={`Annotate ${section.title}`}
-                  onclick={(event: MouseEvent) =>
-                    openSectionAnnotation(section.id, section.title, event)}
-                >
-                  <span class="text-xl font-semibold tracking-tight">{section.title}</span>
-                  <MessageSquarePlus
-                    size={14}
-                    class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-                  />
-                </button>
-              {:else}
-                <h2 class="text-xl font-semibold tracking-tight">{section.title}</h2>
-              {/if}
-              <EditableMarkdown
-                text={section.markdown}
-                readOnly={!canEdit}
-                class="brainstorm-markdown mt-3 w-full whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
-                ariaLabel={section.title}
-                onChange={(value) => setSectionMarkdown(section.id, value)}
+              <span class="text-xl font-semibold tracking-tight">{section.title}</span>
+              <MessageSquarePlus
+                size={14}
+                class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
               />
-              {#if annotationsFor(section.id).length}
-                <div
-                  class="mt-4 flex gap-2 overflow-x-auto pb-1"
-                  aria-label={`${section.title} annotations`}
-                >
-                  {#each annotationsFor(section.id) as annotation (annotation.id)}
-                    <button
-                      class="max-w-64 shrink-0 rounded-xl border bg-surface px-3 py-2 text-left hover:bg-elevated"
-                      title="Open annotation"
-                      onclick={() => void openAnnotation(annotation)}
-                    >
-                      <span class="line-clamp-2 block text-xs leading-relaxed"
-                        >{annotation.body}</span
-                      >
-                      <span class="mt-1 block text-[10px] text-dimmed">{annotation.author}</span>
-                    </button>
-                  {/each}
-                </div>
-              {/if}
-            </section>
+            </button>
+          {:else}
+            <h2 class="text-xl font-semibold tracking-tight">{section.title}</h2>
           {/if}
-        {/each}
-
-        {#if draft.content.prototypes?.length}
-          <section id="brainstorm-section-prototypes" class="scroll-mt-5">
-            <h2 class="text-xl font-semibold tracking-tight">Prototypes</h2>
-            <div class="mt-4 grid gap-3 sm:grid-cols-2">
-              {#each draft.content.prototypes as prototype (prototype.id)}
-                <article class="rounded-xl border bg-surface p-4 shadow-sm">
-                  <div class="flex items-start justify-between gap-3">
-                    <div>
-                      <p class="text-xs font-semibold text-thread-spec">{prototype.id}</p>
-                      <h3 class="mt-1 text-sm font-semibold text-foreground">{prototype.title}</h3>
-                    </div>
-                    <span class="rounded-full bg-raised px-2 py-1 text-[10px] text-muted">
-                      {prototype.fidelity === 'lofi' ? 'LoFi' : 'HiFi'}
-                    </span>
-                  </div>
-                  {#if prototype.parentPrototypeId}
-                    <p class="mt-2 text-[11px] text-muted">
-                      Based on {prototype.parentPrototypeId}
-                    </p>
-                  {/if}
-                  <p class="mt-3 truncate font-mono text-[10px] text-dimmed">
-                    {prototype.previewPath}
-                  </p>
-                  <div class="mt-3 flex gap-2">
-                    {#if prototype.fidelity === 'lofi' && draft.status === 'draft' && onGenerateHifi}
-                      <button
-                        type="button"
-                        class="rounded-lg bg-thread-spec px-2.5 py-1.5 text-xs font-medium text-foreground"
-                        onclick={() => void onGenerateHifi?.(prototype.id)}
-                      >
-                        HiFi from this
-                      </button>
-                    {/if}
-                    {#if onOpenPrototype}
-                      <button
-                        type="button"
-                        class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                        onclick={() => void onOpenPrototype?.(prototype.previewPath)}
-                      >
-                        View prototype
-                      </button>
-                    {/if}
-                    <button
-                      type="button"
-                      class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-elevated hover:text-foreground"
-                      onclick={() => void copyText(prototype.previewPath)}
-                    >
-                      Copy path
-                    </button>
-                  </div>
-                </article>
+          <EditableMarkdown
+            text={section.markdown}
+            readOnly={!canEdit}
+            class="brainstorm-markdown mt-3 w-full whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+            ariaLabel={section.title}
+            onChange={(value) => setSectionMarkdown(section.id, value)}
+          />
+          {#if annotationsFor(section.id).length}
+            <div
+              class="mt-4 flex gap-2 overflow-x-auto pb-1"
+              aria-label={`${section.title} annotations`}
+            >
+              {#each annotationsFor(section.id) as annotation (annotation.id)}
+                <button
+                  class="max-w-64 shrink-0 rounded-xl border bg-surface px-3 py-2 text-left hover:bg-elevated"
+                  title="Open annotation"
+                  onclick={() => void openAnnotation(annotation)}
+                >
+                  <span class="line-clamp-2 block text-xs leading-relaxed"
+                    >{annotation.body}</span
+                  >
+                  <span class="mt-1 block text-[10px] text-dimmed">{annotation.author}</span>
+                </button>
               {/each}
             </div>
-          </section>
-        {/if}
-      </article>
+          {/if}
+        </section>
+      {/if}
+    {/each}
 
-      {#each annotationMarkers as marker (marker.annotation.id)}
-        <button
-          data-brainstorm-annotation-marker={marker.annotation.id}
-          class="absolute z-10 grid h-7 w-7 place-items-center rounded-full border bg-surface text-info shadow-sm hover:bg-elevated"
-          style:left={compactViewport.matches
-            ? undefined
-            : `${Math.min(marker.x, (documentScroller?.scrollWidth ?? marker.x + 32) - 32)}px`}
-          style:top={`${marker.y}px`}
-          title={`Open annotation: ${marker.annotation.body}`}
-          aria-label={`Open annotation: ${marker.annotation.body}`}
-          onclick={() => void openAnnotation(marker.annotation)}><MessageSquare size={13} /></button
-        >
-      {/each}
-    </main>
-  </div>
-</section>
+    {#if draft.content.prototypes?.length}
+      <section id="brainstorm-section-prototypes" class="scroll-mt-5">
+        <h2 class="text-xl font-semibold tracking-tight">Prototypes</h2>
+        <div class="mt-4 grid gap-3 sm:grid-cols-2">
+          {#each draft.content.prototypes as prototype (prototype.id)}
+            <article class="rounded-xl border bg-surface p-4 shadow-sm">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <p class="text-xs font-semibold text-thread-spec">{prototype.id}</p>
+                  <h3 class="mt-1 text-sm font-semibold text-foreground">{prototype.title}</h3>
+                </div>
+                <span class="rounded-full bg-raised px-2 py-1 text-[10px] text-muted">
+                  {prototype.fidelity === 'lofi' ? 'LoFi' : 'HiFi'}
+                </span>
+              </div>
+              {#if prototype.parentPrototypeId}
+                <p class="mt-2 text-[11px] text-muted">
+                  Based on {prototype.parentPrototypeId}
+                </p>
+              {/if}
+              <p class="mt-3 truncate font-mono text-[10px] text-dimmed">
+                {prototype.previewPath}
+              </p>
+              <div class="mt-3 flex gap-2">
+                {#if prototype.fidelity === 'lofi' && draft.status === 'draft' && onGenerateHifi}
+                  <button
+                    type="button"
+                    class="rounded-lg bg-thread-spec px-2.5 py-1.5 text-xs font-medium text-foreground"
+                    onclick={() => void onGenerateHifi?.(prototype.id)}
+                  >
+                    HiFi from this
+                  </button>
+                {/if}
+                {#if onOpenPrototype}
+                  <button
+                    type="button"
+                    class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                    onclick={() => void onOpenPrototype?.(prototype.previewPath)}
+                  >
+                    View prototype
+                  </button>
+                {/if}
+                <button
+                  type="button"
+                  class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-elevated hover:text-foreground"
+                  onclick={() => void copyText(prototype.previewPath)}
+                >
+                  Copy path
+                </button>
+              </div>
+            </article>
+          {/each}
+        </div>
+      </section>
+    {/if}
+  </article>
+</StudioShell>
 
 {#if pendingAnnotation}
-  <div
-    class="fixed z-50 w-96 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
-    role="dialog"
-    aria-label={pendingAnnotation.sectionLevel
+  <StudioPendingAnnotationPopover
+    position={{ x: pendingAnnotation.x, y: pendingAnnotation.y }}
+    quote={pendingAnnotation.quote}
+    canAnnotate={canEdit}
+    showSelectionActions={!pendingAnnotation.sectionLevel}
+    {busy}
+    speechTargetId={pendingSpeechTargetId}
+    dialogLabel={pendingAnnotation.sectionLevel
       ? 'Annotate section'
       : canEdit
         ? 'Comment on selection'
         : 'Actions for selection'}
-    {@attach draggablePopover({
-      x: pendingAnnotation.x,
-      y: pendingAnnotation.y,
-      disabled: compactViewport.matches
-    })}
-  >
-    <div class="flex items-center gap-1">
-      {#if !compactViewport.matches}
-        <PopoverDragHandle title="Move selection comment" />
-      {/if}
-      <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-        {pendingAnnotation.sectionLevel
-          ? 'Annotate section'
-          : canEdit
-            ? 'Comment on selection'
-            : 'Selection'}
-      </p>
-    </div>
-    <blockquote
-      class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
-    >
-      “{pendingAnnotation.quote}”
-    </blockquote>
-    {#if canEdit}
-      <RichMarkdownEditor
-        bind:this={annotationEditor}
-        class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
-        bind:value={annotationBody}
-        placeholder="Leave your review note…"
-        ariaLabel="Brainstorm annotation"
-        onSubmit={() => void submitAnnotation()}
-      />
-    {/if}
-    <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
-      {#if !pendingAnnotation.sectionLevel && onExplainSelection && onQuickChatSelection}
-        <StudioSelectionActions
-          onExplain={() => openSelectionChat('explain')}
-          onQuickChat={() => openSelectionChat('quick')}
-        />
-      {/if}
-      <div class="ml-auto flex items-center gap-1.5">
-        <button
-          class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
-          title="Cancel annotation"
-          onclick={closePendingAnnotation}>Cancel</button
-        >
-        {#if canEdit}
-          <VoiceInputButton
-            targetId={pendingSpeechTargetId}
-            getTarget={pendingSpeechTarget}
-            scope={speechScope}
-            disabled={busy}
-          />
-          <button
-            class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
-            disabled={busy || !annotationBody.trim()}
-            title="Add annotation"
-            onclick={() => void submitAnnotation()}>Comment</button
-          >
-        {/if}
-      </div>
-    </div>
-  </div>
+    headerLabel={pendingAnnotation.sectionLevel
+      ? 'Annotate section'
+      : canEdit
+        ? 'Comment on selection'
+        : 'Selection'}
+    editorLabel="Brainstorm annotation"
+    bind:body={annotationBody}
+    scope={speechScope}
+    onSubmit={() => void submitAnnotation()}
+    onCancel={closePendingAnnotation}
+    onExplain={() => openSelectionChat('explain')}
+    onQuickChat={() => openSelectionChat('quick')}
+  />
 {/if}
 
 {#if editingAnnotation && editingAnnotationPosition}
-  <div
-    class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(1rem+env(safe-area-inset-bottom))]"
-    role="dialog"
-    aria-label="Brainstorm annotation"
-    {@attach draggablePopover({
-      x: editingAnnotationPosition.x,
-      y: editingAnnotationPosition.y,
-      disabled: compactViewport.matches
-    })}
-  >
-    <div class="flex items-center justify-between gap-2">
-      <span class="flex min-w-0 items-center gap-1">
-        {#if !compactViewport.matches}
-          <PopoverDragHandle title="Move annotation" />
-        {/if}
-        <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-          {annotationEditMode ? 'Edit annotation' : 'Annotation'}
-        </span>
-      </span>
-      <button
-        class="rounded-md p-1 text-muted hover:bg-overlay hover:text-foreground"
-        title="Close annotation"
-        aria-label="Close annotation"
-        onclick={closeAnnotation}><X size={13} /></button
-      >
-    </div>
-    {#if editingAnnotation.quote}
-      <blockquote
-        class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
-      >
-        “{editingAnnotation.quote}”
-      </blockquote>
-    {/if}
-    {#if annotationEditMode}
-      <RichMarkdownEditor
-        bind:this={editingAnnotationEditor}
-        class="mt-3 min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs outline-none focus:border-primary"
-        bind:value={editingAnnotationBody}
-        ariaLabel="Brainstorm annotation body"
-        onSubmit={() => void saveAnnotationEdit()}
-      />
-    {:else}
-      <p class="mt-3 text-xs leading-relaxed text-foreground">{editingAnnotation.body}</p>
-    {/if}
-    <p class="mt-1 text-[10px] text-dimmed">
-      {editingAnnotation.author} · {formatDate(editingAnnotation.createdAt)}
-    </p>
-    {#if canEdit}
-      <div class="mt-3 flex items-center justify-between">
-        <button
-          class="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-success hover:bg-success/10"
-          title="Resolve annotation"
-          onclick={() => void resolveAnnotation(editingAnnotation!.id)}
-          ><Check size={12} /> Resolve</button
-        >
-        {#if annotationEditMode}
-          <div class="flex gap-1.5">
-            <button
-              class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
-              title="Cancel editing"
-              onclick={() => (annotationEditMode = false)}>Cancel</button
-            >
-            <VoiceInputButton
-              targetId={`brainstorm-annotation-edit-${editingAnnotation.id}`}
-              getTarget={editingSpeechTarget}
-              scope={speechScope}
-            />
-            <button
-              class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
-              disabled={!editingAnnotationBody.trim()}
-              title="Save annotation"
-              onclick={() => void saveAnnotationEdit()}>Save</button
-            >
-          </div>
-        {:else}
-          <button
-            class="flex items-center gap-1 rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-semibold hover:bg-overlay"
-            title="Edit annotation"
-            onclick={() => (annotationEditMode = true)}><Pencil size={12} /> Edit</button
-          >
-        {/if}
-      </div>
-    {/if}
-  </div>
+  <StudioAnnotationDetailPopover
+    position={editingAnnotationPosition}
+    annotation={editingAnnotation}
+    canEdit={canEdit}
+    editorMode={annotationEditMode}
+    headerLabel={annotationEditMode ? 'Edit annotation' : 'Annotation'}
+    dialogLabel="Brainstorm annotation"
+    speechTargetId={`brainstorm-annotation-edit-${editingAnnotation.id}`}
+    scope={speechScope}
+    bind:body={editingAnnotationBody}
+    onResolve={() => {
+      if (editingAnnotation) void resolveAnnotation(editingAnnotation.id)
+    }}
+    onSave={saveAnnotationEdit}
+    onCancelEdit={() => (annotationEditMode = false)}
+    onEditClick={() => (annotationEditMode = true)}
+    onClose={closeAnnotation}
+  />
 {/if}
 
 <style>
