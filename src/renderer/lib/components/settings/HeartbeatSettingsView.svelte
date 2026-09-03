@@ -356,6 +356,15 @@
           draftHarnessId = harnessId
           draftProviderId = providerId
           draftModelId = modelId
+          // Not every model supports thinking — drop a stale level the new
+          // model doesn't offer so saving never carries an invalid value.
+          const catalog = providers.find(
+            (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
+          )
+          const presets = catalog?.models.find((model) => model.id === modelId)?.thinkingPresets
+          if (!presets?.some((preset) => preset.id === draftThinkingLevel)) {
+            draftThinkingLevel = undefined
+          }
           rendererRecovery.addRecentModel(modelKey(harnessId, providerId, modelId))
         }}
         thinkingLevel={draftThinkingLevel}

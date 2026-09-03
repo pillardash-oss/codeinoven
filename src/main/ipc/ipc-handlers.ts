@@ -2189,10 +2189,16 @@ function validateHeartbeatTimes(value: unknown): string[] {
   return [...new Set(times)]
 }
 
+/**
+ * Heartbeat thinking levels are optional — not every model supports thinking.
+ * Absent, null, or unrecognized levels (including driver-specific preset ids
+ * outside the standard set) simply omit the level instead of failing the save;
+ * the driver then applies its own default for the selected model.
+ */
 function validateHeartbeatThinkingLevel(value: unknown): ThinkingLevel | undefined {
-  if (value === undefined) return undefined
+  if (value === undefined || value === null) return undefined
   if (typeof value !== 'string' || !THINKING_LEVEL_ORDER.includes(value as ThinkingLevel)) {
-    throw new TypeError('Heartbeat thinking level is invalid')
+    return undefined
   }
   return value as ThinkingLevel
 }
