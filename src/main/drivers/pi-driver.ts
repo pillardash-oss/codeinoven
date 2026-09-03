@@ -1247,9 +1247,18 @@ function prefillTranscriptEntries(
   let parentId: string | null = null
   let wroteMessage = false
   for (const message of messages) {
+    // Presentation-mode user prompts carry their visible content in a
+    // `user-presentation` part (action + body) instead of a text part. Skip
+    // them here and the seeded native transcript loses every user message,
+    // leaving only assistant output and tool trace for the resumed model.
     const text = message.parts
-      .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
-      .map((part) => part.text)
+      .flatMap((part) => {
+        if (part.type === 'text') return [part.text]
+        if (part.type === 'user-presentation') {
+          return [[part.presentation.action, part.presentation.body].filter(Boolean).join('\n')]
+        }
+        return []
+      })
       .join('\n')
       .trim()
     if (!text) continue

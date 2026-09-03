@@ -3265,8 +3265,20 @@
       }
       // Move the anchor back three pages — or to the thread's very beginning
       // when fewer complete pages exist — then keep the reader's viewport
-      // stable across the mount.
+      // stable across the mount. The restore is anchored to the first on-screen
+      // message element, not a height delta: a height-delta write drifts
+      // whenever the newly mounted pages' real laid-out height differs from
+      // the height measured at tick time, and the taller the loaded pages the
+      // further that drift throws the reader (all the way to the bottom).
       const el = scrollEl
+      const firstVisibleId = visibleMessages[0]?.id
+      const firstVisibleEl = firstVisibleId
+        ? document.getElementById(`msg-${firstVisibleId}`)
+        : undefined
+      const viewportOffset =
+        el && firstVisibleEl
+          ? firstVisibleEl.getBoundingClientRect().top - el.getBoundingClientRect().top
+          : undefined
       const previousHeight = el?.scrollHeight ?? 0
       const previousTop = el?.scrollTop ?? 0
       const walked = promptPagesBefore(mountedStartIndex, 3)
@@ -3279,7 +3291,23 @@
         await tick()
         const after = scrollEl
         if (after) {
-          after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
+          const afterEl = firstVisibleId
+            ? document.getElementById(`msg-${firstVisibleId}`)
+            : undefined
+          if (afterEl && viewportOffset !== undefined) {
+            // Position of the anchor message within the scroll content, then
+            // place it back at the exact viewport offset it had before the
+            // prepended pages mounted above it.
+            const contentOffset =
+              afterEl.getBoundingClientRect().top -
+              after.getBoundingClientRect().top +
+              after.scrollTop
+            after.scrollTop = Math.max(0, contentOffset - viewportOffset)
+          } else {
+            // Element anchor unavailable — fall back to the height-delta
+            // compensation rather than leaving the viewport unmoved.
+            after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
+          }
           threadScrollPositions.set(thread.id, {
             top: after.scrollTop,
             awayFromBottom: userScrolledAway

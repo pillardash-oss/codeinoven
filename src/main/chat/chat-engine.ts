@@ -21929,6 +21929,13 @@ function formatConversationTranscript(
             return [`[Compacted conversation summary]\n${part.summary}`]
           }
           if (part.type === 'tool') return [describeToolPart(part)]
+          // Presentation-mode user prompts carry no `text` part — the visible
+          // content lives in the presentation (action + body). Without this
+          // branch the recap silently drops every user message written in
+          // engineering mode, leaving only assistant output and trace.
+          if (part.type === 'user-presentation') {
+            return [[part.presentation.action, part.presentation.body].filter(Boolean).join('\n')]
+          }
           if (part.type !== 'question') return []
           const answer = part.question.answer?.trim()
           return [`Question: ${part.question.prompt}${answer ? `\nAnswer: ${answer}` : ''}`]
