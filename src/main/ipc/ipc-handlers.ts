@@ -4203,7 +4203,13 @@ export function registerIpcHandlers(
   ipcMain.handle('clipboard:saveImage', async (_event, rawScope: unknown) => {
     try {
       const scope = validateAttachmentStorageScope(rawScope)
-      const image = clipboard.readImage()
+      const items = await clipboard.read()
+      const imageItem = items.find((item) => item.types.some((type) => type.startsWith('image/')))
+      const imageType = imageItem?.types.find((type) => type.startsWith('image/'))
+      if (!imageItem || !imageType) return null
+      const blob = await imageItem.getType(imageType)
+      if (!(blob instanceof Blob)) return null
+      const image = nativeImage.createFromBuffer(Buffer.from(await blob.arrayBuffer()))
       if (image.isEmpty()) return null
       const tempDir = await attachmentStorageDirectory(scope)
       await mkdir(tempDir, { recursive: true })
