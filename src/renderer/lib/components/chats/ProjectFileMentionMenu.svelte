@@ -48,7 +48,7 @@
   role="listbox"
   aria-label="Composer references"
 >
-  <div class="flex items-center justify-between gap-2 px-2 py-1">
+  <div class="sticky top-0 z-10 flex items-center justify-between gap-2 rounded-t-lg bg-surface px-2 py-1">
     <p class="min-w-0 truncate text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
       {query ? `References matching “${query}”` : 'Built-in actions, files, and Assignment tasks'}
     </p>
