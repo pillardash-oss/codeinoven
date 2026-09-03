@@ -1038,8 +1038,8 @@ const BRAINSTORM_DISCUSSION_SYSTEM_PROMPT = [
 const asEditableTemplate = (prompt: string): string =>
   prompt
     .replaceAll(APP_NAME, '{{APP_NAME}}')
-    .replaceAll(ENGINEERING_SPEC_TOOL_NAME, '{{ENGINEERING_SPEC_TOOL_NAME}}')
-    .replaceAll(BRAINSTORM_DOCUMENT_TOOL_NAME, '{{BRAINSTORM_DOCUMENT_TOOL_NAME}}')
+    .replaceAll(ENGINEERING_SPEC_TOOL_NAME, '{{CIO_SPEC_TOOL}}')
+    .replaceAll(BRAINSTORM_DOCUMENT_TOOL_NAME, '{{CIO_BRAINSTORM_DOC_TOOL}}')
 
 registerCioPromptDefault(
   'work-ethics',

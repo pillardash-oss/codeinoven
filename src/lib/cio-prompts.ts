@@ -55,17 +55,17 @@ export interface CioPromptSetting extends CioPromptDefinition {
 export const CIO_PROMPT_TEMPLATE_TAGS = [
   { tag: '{{APP_NAME}}', description: 'The current application brand name.', value: APP_NAME },
   {
-    tag: '{{ENGINEERING_SPEC_TOOL_NAME}}',
+    tag: '{{CIO_SPEC_TOOL}}',
     description: 'The stable engineering specification tool name.',
     value: 'engineering_spec'
   },
   {
-    tag: '{{BRAINSTORM_DOCUMENT_TOOL_NAME}}',
+    tag: '{{CIO_BRAINSTORM_DOC_TOOL}}',
     description: 'The stable Brainstorm document tool name.',
     value: 'cio_brainstorm_doc'
   },
   {
-    tag: '{{PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME}}',
+    tag: '{{CIO_PRD_TOOL}}',
     description: 'The stable product requirements document tool name.',
     value: 'cio_prd'
   }
@@ -135,7 +135,7 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     description: 'Evidence-driven research and generation of the durable Brainstorm document.',
     group: 'Engineering',
     modes: ['brainstorm'],
-    defaultTemplate: `Conduct evidence-driven research and create a reviewable Brainstorm document through {{BRAINSTORM_DOCUMENT_TOOL_NAME}}. Inspect actual project state with read-only tools and research current external facts when material. Label facts Verified, Inferred, or Unknown. Present viable options, tradeoffs, risks, and one justified recommendation without converting it into a user decision. Treat every answer in an Authoritative interview decisions block, including custom free-form text, as an explicit user decision. Carry it into the relevant report section and never return its question to Open Questions unless later user input explicitly reopens or contradicts it. Return Context, Goals, Decisions, Open Questions, Constraints, and Proposed Direction. When the dispatch supplies an exact session-report revision path under .cio/specs, write the report Markdown to exactly that path and nowhere else; never modify any other file. Do not implement. ${CITATIONS} ${MERMAID}`
+    defaultTemplate: `Conduct evidence-driven research and create a reviewable Brainstorm document through {{CIO_BRAINSTORM_DOC_TOOL}}. Inspect actual project state with read-only tools and research current external facts when material. Label facts Verified, Inferred, or Unknown. Present viable options, tradeoffs, risks, and one justified recommendation without converting it into a user decision. Treat every answer in an Authoritative interview decisions block, including custom free-form text, as an explicit user decision. Carry it into the relevant report section and never return its question to Open Questions unless later user input explicitly reopens or contradicts it. Return Context, Goals, Decisions, Open Questions, Constraints, and Proposed Direction. When the dispatch supplies an exact session-report revision path under .cio/specs, write the report Markdown to exactly that path and nowhere else; never modify any other file. Do not implement. ${CITATIONS} ${MERMAID}`
   },
   {
     id: 'prd-discussion',
@@ -153,7 +153,7 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     description: 'Generates the canonical, versioned product requirements document.',
     group: 'Engineering',
     modes: ['prd'],
-    defaultTemplate: `Create a reviewable PRD through {{PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME}}. Include title, summary, Problem, Goals, Non-goals, Users and Use Cases, Product Requirements, Experience Flow, Acceptance Criteria, Dependencies, Risks, and Open Questions. Open Questions may be empty, but every section must be present. Use finalized Brainstorm material when available. Do not generate an engineering specification or implement. ${CITATIONS} ${MERMAID}`
+    defaultTemplate: `Create a reviewable PRD through {{CIO_PRD_TOOL}}. Include title, summary, Problem, Goals, Non-goals, Users and Use Cases, Product Requirements, Experience Flow, Acceptance Criteria, Dependencies, Risks, and Open Questions. Open Questions may be empty, but every section must be present. Use finalized Brainstorm material when available. Do not generate an engineering specification or implement. ${CITATIONS} ${MERMAID}`
   },
   {
     id: 'engineering-spec',
@@ -162,7 +162,7 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     description: 'Turns approved discovery into a structured, implementation-ready specification.',
     group: 'Engineering',
     modes: ['engineer', 'assignment', 'achievement'],
-    defaultTemplate: `Create an implementation-ready engineering specification. Do not call mutating tools or edit files. Submit the complete specification through {{ENGINEERING_SPEC_TOOL_NAME}} when available; otherwise return one JSON object shaped as ${SPEC_SHAPE}. Use concrete strings and project-relative paths. Include phases, checkpoints with evidence, success criteria, test strategy, documentation requirements, and a commit pattern. Write readable Markdown. ${MERMAID}`
+    defaultTemplate: `Create an implementation-ready engineering specification. Do not call mutating tools or edit files. Submit the complete specification through {{CIO_SPEC_TOOL}} when available; otherwise return one JSON object shaped as ${SPEC_SHAPE}. Use concrete strings and project-relative paths. Include phases, checkpoints with evidence, success criteria, test strategy, documentation requirements, and a commit pattern. Write readable Markdown. ${MERMAID}`
   },
   {
     id: 'engineering-implementation',
@@ -257,8 +257,18 @@ export function registerCioPromptDefault(id: CioPromptId, template: string): voi
   REGISTERED_DEFAULTS.set(id, template)
 }
 
+/** Legacy tag spellings kept so persisted customized templates keep rendering. */
+const CIO_PROMPT_TEMPLATE_TAG_ALIASES: Readonly<Record<string, string>> = {
+  '{{ENGINEERING_SPEC_TOOL_NAME}}': '{{CIO_SPEC_TOOL}}',
+  '{{BRAINSTORM_DOCUMENT_TOOL_NAME}}': '{{CIO_BRAINSTORM_DOC_TOOL}}',
+  '{{PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME}}': '{{CIO_PRD_TOOL}}'
+}
+
 export function renderCioPromptTemplate(template: string): string {
   let rendered = template
+  for (const [legacyTag, tag] of Object.entries(CIO_PROMPT_TEMPLATE_TAG_ALIASES)) {
+    rendered = rendered.replaceAll(legacyTag, tag)
+  }
   for (const replacement of CIO_PROMPT_TEMPLATE_TAGS) {
     rendered = rendered.replaceAll(replacement.tag, replacement.value)
   }
