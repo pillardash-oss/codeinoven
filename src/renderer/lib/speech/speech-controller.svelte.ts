@@ -240,6 +240,9 @@ class SpeechController {
   private readonly transcriptions = new Map<string, Promise<void>>()
   /** Target ids with a background transcription job still in flight. */
   private transcribingTargets = $state<string[]>([])
+  /** Scopes of the in-flight background transcription jobs, parallel to the
+   *  target ids above, so consumers can attribute the work to a thread. */
+  private transcribingScopes = $state<SpeechScope[]>([])
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
   private activePlayback: ActivePlayback | null = null
   // Reactive mirror consumed by the per-line TTS highlight rendering. Kept
@@ -363,6 +366,14 @@ class SpeechController {
    *  editor target — the transcript will land in the field when it settles. */
   isTranscribingTarget(targetId: string): boolean {
     return this.transcribingTargets.includes(targetId)
+  }
+
+  /** Whether a background transcription is still running inside this thread —
+   *  the mic has closed but the transcript has not landed yet. */
+  isTranscribingThread(threadId: string): boolean {
+    return this.transcribingScopes.some(
+      (scope) => scope.kind !== 'global' && scope.threadId === threadId
+    )
   }
 
   /** Scope of the thread whose response is currently being spoken aloud. */
@@ -621,7 +632,9 @@ class SpeechController {
     active: ActiveCapture,
     insertionSnapshot: SpeechEditorSnapshot
   ): Promise<void> {
+    const transcribingScope = structuredClone(active.scope)
     this.transcribingTargets = [...this.transcribingTargets, active.target.id]
+    this.transcribingScopes = [...this.transcribingScopes, transcribingScope]
     try {
       const transcript = await this.transcribeActive(active)
       await invoke('clipboard:writeText', transcript)
@@ -664,6 +677,9 @@ class SpeechController {
     } finally {
       this.transcribingTargets = this.transcribingTargets.filter(
         (id) => id !== active.target.id
+      )
+      this.transcribingScopes = this.transcribingScopes.filter(
+        (scope) => scope !== transcribingScope
       )
     }
   }

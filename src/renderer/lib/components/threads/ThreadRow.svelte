@@ -400,6 +400,11 @@
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
   /** TTS playing on this thread — shares the recorder's indicator slot. */
   let isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(thread.id))
+  /** The mic has closed but the transcript has not landed yet — same indicator
+   *  slot, distinct label, shown only when neither recording nor speaking. */
+  let isTranscribing = $derived(
+    !isRecording && !isSpeaking && speechController.isTranscribingThread(thread.id)
+  )
 
   /**
    * Sending clears the draft, which would otherwise flash the badge back to the
@@ -722,6 +727,8 @@
           <RecordingIndicator label="Listening" />
         {:else if isSpeaking}
           <RecordingIndicator label="Speaking" tone="speech" />
+        {:else if isTranscribing}
+          <RecordingIndicator label="Transcribing" tone="speech" />
         {:else if isBusyIndicator && currentModelProviderName}
           <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
             <VendorIcon
@@ -795,6 +802,8 @@
             <RecordingIndicator label="Listening" />
           {:else if isSpeaking}
             <RecordingIndicator label="Speaking" tone="speech" />
+          {:else if isTranscribing}
+            <RecordingIndicator label="Transcribing" tone="speech" />
           {:else}
             <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
               {relativeTime(thread.lastActivity)}
@@ -1040,6 +1049,8 @@
             <RecordingIndicator label="Listening" />
           {:else if isSpeaking}
             <RecordingIndicator label="Speaking" tone="speech" />
+          {:else if isTranscribing}
+            <RecordingIndicator label="Transcribing" tone="speech" />
           {:else}
             <span
               class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
