@@ -556,10 +556,14 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
         fontFamily:
           "'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
         lineHeight: 1.667,
+        // Top spacing lives here, NOT on .cm-content padding-top: a content
+        // top padding desyncs CodeMirror's gutter spacer/height-map from the
+        // rendered lines, shifting every line number off its code line.
+        paddingTop: '12px',
         overscrollBehavior: 'contain'
       },
       '.cm-content': {
-        padding: '12px 0',
+        padding: '0 0 12px 0',
         caretColor: 'var(--color-foreground)'
       },
       '.cm-line': {
@@ -568,8 +572,9 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
       '.cm-gutters': {
         backgroundColor: 'var(--color-surface)',
         color: 'var(--color-dimmed)',
-        borderRight: '1px solid var(--color-border)',
-        padding: '12px 0'
+        borderRight: '1px solid var(--color-border)'
+        // No vertical padding here: the scroller's padding-top supplies the
+        // shared top gap, keeping gutters and content in lockstep.
       },
       '.cm-lineNumbers .cm-gutterElement': {
         // CodeMirror assigns each gutter element the measured height of its
