@@ -145,7 +145,9 @@ function renderInline(
     return `\uE004${index - 1}\uE005`
   }
 
-  let prepared = source.replace(/`([^`\n]+)`/g, stashCode)
+  // The empty pair `` `` `` is a valid inline code span: the input rule creates one
+  // whenever the user types two backticks intending to type content between them.
+  let prepared = source.replace(/`([^`\n]*)`/g, stashCode)
   for (const badge of [...inlineBadges].sort(
     (left, right) => right.value.length - left.value.length
   )) {
@@ -661,6 +663,42 @@ function replaceInlineMatch(
   selection.addRange(range)
 }
 
+/** Create an inline code element (optionally empty) and place the caret where
+ *  `caretInsideCode` says: inside the element for a fresh empty span the user is
+ *  about to type into, otherwise after it (with a zero-width anchor). */
+function insertInlineCode(root: HTMLElement, content: string, caretInsideCode: boolean): void {
+  const code = document.createElement('code')
+  code.className = INLINE_CODE_CLASS
+  if (content) code.textContent = content
+  else code.append(document.createTextNode('\u200b'))
+
+  const selection = window.getSelection()
+  if (!selection || !selection.rangeCount) return
+  const range = selection.getRangeAt(0)
+  range.deleteContents()
+  range.insertNode(code)
+
+  // A zero-width anchor before the element keeps the caret from getting trapped
+  // when it becomes the first content of its block — without one, browsers refuse
+  // to move the caret left out of the element.
+  const block = currentBlock(root, code)
+  if (block && isFirstContentInBlock(block, code)) {
+    code.before(document.createTextNode('\u200b'))
+  }
+
+  const caretAnchor = document.createTextNode('\u200b')
+  code.after(caretAnchor)
+
+  if (caretInsideCode) {
+    range.setStart(code, code.firstChild ? 1 : 0)
+  } else {
+    range.setStart(caretAnchor, 1)
+  }
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
 function applyInlineRule(root: HTMLElement): boolean {
   const selection = selectionInside(root)
   if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
@@ -671,6 +709,47 @@ function applyInlineRule(root: HTMLElement): boolean {
   const textNode = selection.anchorNode
   const endOffset = selection.anchorOffset
   const prefix = textNode.data.slice(0, endOffset)
+
+  // Two backticks typed back-to-back are an empty `` `` `` pair: turn them into
+  // an empty inline code span with the caret inside so content can be typed
+  // between the delimiters instead of the pair staying dead literal backticks.
+  if (prefix.endsWith('``')) {
+    const range = document.createRange()
+    range.setStart(textNode, endOffset - 2)
+    range.setEnd(textNode, endOffset)
+    const selection = window.getSelection()
+    if (selection) {
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
+    insertInlineCode(root, '', true)
+    return true
+  }
+
+  // Opening-backtick-last flow: the user tagged the end of a run with a backtick
+  // first, moved the caret before the run, and now types the opening backtick.
+  // The typed backtick plus the trailing one after the caret wrap the text
+  // between them into an inline code span. The run must start at a word
+  // boundary so literal backticks in mid-word prose never trigger it.
+  const suffix = textNode.data.slice(endOffset)
+  const closesAfter = suffix.match(/^([^`\n]+)`/)
+  const boundaryChar = endOffset >= 2 ? prefix[endOffset - 2] : undefined
+  if (
+    closesAfter &&
+    (boundaryChar === undefined || /[\s\u00a0\u200b]/.test(boundaryChar))
+  ) {
+    const range = document.createRange()
+    range.setStart(textNode, endOffset - 1)
+    range.setEnd(textNode, endOffset + closesAfter[0].length)
+    const selection = window.getSelection()
+    if (selection) {
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
+    insertInlineCode(root, closesAfter[1] ?? '', false)
+    return true
+  }
+
   const rules: Array<[RegExp, 'strong' | 'em' | 'del' | 'code']> = [
     [/\*\*([^*\n]+)\*\*$/, 'strong'],
     [/(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__$/, 'strong'],
