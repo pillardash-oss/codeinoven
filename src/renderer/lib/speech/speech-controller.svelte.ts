@@ -1463,16 +1463,20 @@ class SpeechController {
       const gain = context.createGain()
       const frequency = kind === 'started' ? 520 : kind === 'stopped' ? 360 : 700
       oscillator.frequency.setValueAtTime(frequency, context.currentTime)
+      // Loud enough to stay audible over a low system volume: the peak rides
+      // close to full scale (0.5 × user volume) instead of the near-inaudible
+      // 0.06 it used to be, and the slightly longer envelope keeps the blip
+      // from reading as a click at high pitch.
       gain.gain.setValueAtTime(0.0001, context.currentTime)
       gain.gain.exponentialRampToValueAtTime(
-        Math.max(0.0001, 0.06 * this.sound.cues.volume),
-        context.currentTime + 0.01
+        Math.max(0.0001, 0.5 * this.sound.cues.volume),
+        context.currentTime + 0.012
       )
-      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.09)
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.12)
       oscillator.connect(gain)
       gain.connect(context.destination)
       oscillator.start()
-      oscillator.stop(context.currentTime + 0.1)
+      oscillator.stop(context.currentTime + 0.13)
       oscillator.addEventListener('ended', () => void context.close(), { once: true })
     } catch (cause) {
       logRendererError(`Voice recording ${kind} cue failed: ${errorMessage(cause)}`, cause)
