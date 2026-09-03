@@ -1365,6 +1365,41 @@ async function localAttachmentPath(attachment: PromptAttachment): Promise<string
   return path
 }
 
+interface ComposedPiAttachments {
+  inlineSvg: string
+  images: PiImageContent[]
+  references: string[]
+}
+
+/**
+ * Materialize attachments for a pi turn. Images are sent both as inline base64
+ * blocks (for vision-capable models) and as a path text reference — when a
+ * provider or text-only model registration drops the image block, the model
+ * still knows where the file lives and can read it with its file tools.
+ */
+async function composePiAttachments(
+  attachments: SendPromptOptions['attachments']
+): Promise<ComposedPiAttachments> {
+  const inlineSvg = await inlineSvgAttachments(attachments)
+  const images: PiImageContent[] = []
+  const references: string[] = []
+  for (const attachment of attachments) {
+    if (isSvgAttachment(attachment)) continue
+    const path = await localAttachmentPath(attachment)
+    if (attachment.mime.toLowerCase().startsWith('image/')) {
+      images.push({
+        type: 'image',
+        data: (await readFile(path)).toString('base64'),
+        mimeType: attachment.mime
+      })
+      references.push(`Attached image file: ${path}`)
+    } else {
+      references.push(`Attached file: ${path}`)
+    }
+  }
+  return { inlineSvg, images, references }
+}
+
 /** Materialized provider-only extension overlay used for model discovery. */
 interface ProviderOverlay {
   args: string[]
@@ -1815,22 +1850,7 @@ export class PiDriver extends PersistentCliDriver {
     this.silentContinues.delete(session.id)
     this.activeTurns.add(session.id)
 
-    const inlineSvg = await inlineSvgAttachments(options.attachments)
-    const images: PiImageContent[] = []
-    const references: string[] = []
-    for (const attachment of options.attachments) {
-      if (isSvgAttachment(attachment)) continue
-      const path = await localAttachmentPath(attachment)
-      if (attachment.mime.toLowerCase().startsWith('image/')) {
-        images.push({
-          type: 'image',
-          data: (await readFile(path)).toString('base64'),
-          mimeType: attachment.mime
-        })
-      } else {
-        references.push(`Attached file: ${path}`)
-      }
-    }
+    const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
     if (options.systemPrompt) {
       await this.publishCioSystemPrompt(session.id, options.systemPrompt)
     }
@@ -1926,22 +1946,7 @@ export class PiDriver extends PersistentCliDriver {
     if (!client) {
       throw new Error(`No active Pi turn is available to steer for session ${sessionId}`)
     }
-    const inlineSvg = await inlineSvgAttachments(attachments)
-    const images: PiImageContent[] = []
-    const references: string[] = []
-    for (const attachment of attachments) {
-      if (isSvgAttachment(attachment)) continue
-      const path = await localAttachmentPath(attachment)
-      if (attachment.mime.toLowerCase().startsWith('image/')) {
-        images.push({
-          type: 'image',
-          data: (await readFile(path)).toString('base64'),
-          mimeType: attachment.mime
-        })
-      } else {
-        references.push(`Attached file: ${path}`)
-      }
-    }
+    const { inlineSvg, images, references } = await composePiAttachments(attachments)
     const message = [inlineSvg, ...references, text].filter(Boolean).join('\n\n')
     await client.steer(message, images)
   }
