@@ -4957,7 +4957,6 @@
       // screen while the new turn runs — the same rule the thread path follows
       // by clearing cached error state at send time.
       controller.clearError()
-      userScrolledAway = false
       idleAttentionHandled = false
       // Snapshot the selection this turn starts with before anything else can
       // change it — identical to the thread path, so mid-turn composer edits
@@ -5128,8 +5127,10 @@
 
     recordModelUse()
 
-    // Snap scroll to bottom — the user just sent something, they want to see it
-    userScrolledAway = false
+    // Follow the new message only when the reader is already at the tail. A
+    // reader scrolled up into history keeps their position: the optimistic
+    // message lands at the tail off-screen, and on-screen messages must never
+    // unmount — releasing the tail lock here would re-window and hide them.
     idleAttentionHandled = false
 
     // Persist settings as last-used. On the Chats tab this seeds the chat's own
@@ -5170,9 +5171,11 @@
         presentation,
         taskReferences
       )
-      // Wait for the DOM to reflect the optimistic message, then scroll to it.
+      // Wait for the DOM to reflect the optimistic message, then scroll to it
+      // — but only when the reader stayed at the tail. A detached reader is
+      // never yanked; their on-screen messages must stay mounted.
       await tick()
-      if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
+      if (scrollEl && !userScrolledAway) scrollEl.scrollTop = scrollEl.scrollHeight
       await sendPromise
       if (engineeringOn) {
         await reconcileReadySpec()
@@ -5436,7 +5439,6 @@
     if (controller) {
       clearQueuedState()
       showQueueMenu = false
-      userScrolledAway = false
       errorMessage = ''
       const payload: SendPayload = {
         text: msg,
@@ -5457,8 +5459,10 @@
     // turn the steer is interrupting, and a steered continuation keeps the
     // old turn's stream anchor, so it must never feed the new trace.
     clearStreamParts()
-    // Snap to bottom — the steer message just appeared
-    userScrolledAway = false
+    // The steered message lands at the tail. A reader scrolled up into the
+    // running turn keeps their position and their mounted messages — releasing
+    // the tail lock here would re-window the conversation and hide on-screen
+    // history mid-read. Tail-follow stays engaged only when already at the tail.
     errorMessage = ''
 
     const { projectId, id } = thread
@@ -5479,7 +5483,7 @@
         taskReferences
       )
       await tick()
-      if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
+      if (scrollEl && !userScrolledAway) scrollEl.scrollTop = scrollEl.scrollHeight
       await sendPromise
     } catch (error) {
       if (!queuedMessage && !queuedHasContent) {
