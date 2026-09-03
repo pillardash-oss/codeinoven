@@ -2308,7 +2308,7 @@
             onclick={() => (plusMenuOpen = false)}
           ></button>
           <div
-            class="absolute bottom-9 left-0 z-40 w-52 rounded-xl border bg-surface p-1 shadow-lg"
+            class="absolute bottom-9 left-0 z-40 w-60 rounded-xl border bg-surface p-1 shadow-lg"
             role="menu"
           >
             {#if showChatModes || showEngineeringMode || independentAuditAvailable}
