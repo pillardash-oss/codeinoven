@@ -1003,6 +1003,19 @@ async function bootPostPaintServices(): Promise<void> {
       Logger.error('Line-stats repair failed (non-fatal):', error)
     }
 
+    // One-time repair of file-change cards misattributed to hidden internal
+    // prompts (search nudges, mermaid repairs, incomplete-turn continuations)
+    // by turns that ran before internal attribution existed. Bounded,
+    // idempotent, and batched; a no-op once every candidate is repaired.
+    try {
+      const repaired = await new CheckpointManager(database).repairMisattributedInternalCheckpoints()
+      if (repaired > 0) {
+        Logger.info(`Reattributed ${repaired} internal-turn file-change checkpoints`)
+      }
+    } catch (error) {
+      Logger.error('Internal-attribution repair failed (non-fatal):', error)
+    }
+
     // Restore remote mode after paint so users can see app UI while the LAN
     // stack spins up in the background.
     reconcileRemoteTransportOwnership(true)
