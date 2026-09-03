@@ -160,9 +160,45 @@
     [data-sonner-toast][data-type='warning'],
     [data-sonner-toast][data-type='info']
   ) {
-    background: color-mix(in srgb, var(--status) 5%, var(--color-surface)) !important;
-    border: 1px solid color-mix(in srgb, var(--status) 28%, var(--color-border)) !important;
+    background:
+      linear-gradient(
+        to right,
+        color-mix(in srgb, var(--status) 16%, transparent),
+        color-mix(in srgb, var(--status) 7%, transparent) 60%,
+        color-mix(in srgb, var(--status) 4%, transparent)
+      ),
+      var(--color-surface) !important;
+    border: 1px solid color-mix(in srgb, var(--status) 55%, var(--color-border)) !important;
+    box-shadow:
+      0 4px 16px -4px color-mix(in srgb, var(--status) 25%, transparent),
+      0 2px 8px -2px rgba(0, 0, 0, 0.12) !important;
     color: var(--color-foreground) !important;
+  }
+
+  /* Status-colored title — the colour reads before the words do */
+  :global(
+    [data-sonner-toast][data-type='success'] [data-title],
+    [data-sonner-toast][data-type='error'] [data-title],
+    [data-sonner-toast][data-type='warning'] [data-title],
+    [data-sonner-toast][data-type='info'] [data-title]
+  ) {
+    color: color-mix(in srgb, var(--status) 78%, var(--color-foreground)) !important;
+  }
+
+  /* Status-colored close button for instant recognition */
+  :global(
+    [data-sonner-toast][data-type='success'] [data-close-button],
+    [data-sonner-toast][data-type='error'] [data-close-button],
+    [data-sonner-toast][data-type='warning'] [data-close-button],
+    [data-sonner-toast][data-type='info'] [data-close-button]
+  ) {
+    color: color-mix(in srgb, var(--status) 70%, var(--color-dimmed)) !important;
+    background: color-mix(in srgb, var(--status) 10%, transparent) !important;
+    border-radius: 999px !important;
+    width: 1.25rem !important;
+    height: 1.25rem !important;
+    display: grid !important;
+    place-items: center !important;
   }
 
   /* Slim accent bar on the left edge */
@@ -177,14 +213,14 @@
     left: 10px;
     top: 14px;
     bottom: 14px;
-    width: 3px;
+    width: 4px;
     border-radius: 999px;
     background: var(--status);
   }
 
   /* Icon chip: tinted circle behind the status icon */
   :global([data-sonner-toast] [data-icon]) {
-    background: color-mix(in srgb, var(--status) 14%, transparent);
+    background: color-mix(in srgb, var(--status) 22%, transparent);
     color: var(--status);
     border-radius: 999px;
     width: 1.75rem;
@@ -197,12 +233,4 @@
   }
 
   /* Close button inherits the status colour subtly */
-  :global(
-    [data-sonner-toast][data-type='success'] [data-close-button],
-    [data-sonner-toast][data-type='error'] [data-close-button],
-    [data-sonner-toast][data-type='warning'] [data-close-button],
-    [data-sonner-toast][data-type='info'] [data-close-button]
-  ) {
-    color: color-mix(in srgb, var(--status) 60%, var(--color-dimmed)) !important;
-  }
 </style>
