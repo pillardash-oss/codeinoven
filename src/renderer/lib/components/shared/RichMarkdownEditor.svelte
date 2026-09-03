@@ -1169,6 +1169,7 @@
     aria-disabled={disabled}
     tabindex={disabled ? -1 : 0}
     spellcheck="true"
+    autocorrect="false"
     onbeforeinput={handleBeforeInput}
     oninput={handleInput}
     onkeydown={handleKeydown}

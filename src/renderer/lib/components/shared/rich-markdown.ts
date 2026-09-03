@@ -834,6 +834,9 @@ function createCodeBlockElement(language: string): HTMLElement {
   langSpan.contentEditable = 'true'
   langSpan.role = 'textbox'
   langSpan.ariaLabel = 'Language'
+  // Chromium's macOS autocorrect mangles punctuation in editable fields
+  // (".." -> ellipsis, "??" -> U+2047) — language names must stay literal.
+  langSpan.setAttribute('autocorrect', 'false')
   langSpan.textContent = language || 'text'
 
   header.append(langSpan)
