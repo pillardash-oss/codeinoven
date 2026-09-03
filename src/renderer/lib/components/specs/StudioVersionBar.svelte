@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { Check, ChevronDown, History, Save } from '@lucide/svelte'
+  import { Archive, Bell, Check, ChevronDown, CircleDot, History, Pencil, Save, TriangleAlert } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import StudioHistoryControls from './StudioHistoryControls.svelte'
+  import type { Component } from 'svelte'
 
   interface Props {
     /** Status text is optional for studios without a per-version status (e.g. audit reports). */
@@ -53,6 +54,20 @@
       minute: '2-digit'
     }).format(timestamp)
   }
+
+  /** Equivalent single-glyph stand-in for the status badge in compact headers. */
+  function statusIcon(statusLabel: string | undefined): Component | null {
+    if (!statusLabel) return null
+    const label = statusLabel.toLowerCase()
+    if (/approv|final|passed|complete|sign/.test(label)) return Check
+    if (/rework|required|fail|stop/.test(label)) return TriangleAlert
+    if (/supersed|archiv/.test(label)) return Archive
+    if (/draft|pending|review/.test(label)) return Pencil
+    if (/progress|running|active|implement/.test(label)) return CircleDot
+    return null
+  }
+
+  const compactStatusIcon = $derived(statusIcon(statusLabel))
 </script>
 
 {#if versions.length > 1 && onSelectVersion}
@@ -62,7 +77,8 @@
     title={versionMenuTitle}
   >
     <History size={12} />
-    Version {currentVersion}
+    <span class="version-word">Version</span>
+    {currentVersion}
     <ChevronDown size={11} />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
@@ -93,13 +109,57 @@
 </DropdownMenu.Root>
 {/if}
 <StudioHistoryControls {canUndo} {canRedo} onUndo={onUndo} onRedo={onRedo} />
-<span>Updated {formatDate(updatedAt)}</span>
+<span class="updated-text">Updated {formatDate(updatedAt)}</span>
+<span
+  class="updated-icon text-muted"
+  title={`Updated ${formatDate(updatedAt)}`}
+  aria-label={`Updated ${formatDate(updatedAt)}`}>
+  <Bell size={12} />
+</span>
 {#if statusLabel}
+  {#if compactStatusIcon}
+    {@const CompactStatusIcon = compactStatusIcon}
+    <span
+      class="status-icon rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {statusClass ??
+        'bg-raised text-dimmed'}"
+      title={statusLabel}
+      aria-label={statusLabel}>
+      <CompactStatusIcon size={11} />
+    </span>
+  {/if}
   <span
-    class="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {statusClass ??
+    class="status-text rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {statusClass ??
       'bg-raised text-dimmed'}">{statusLabel}</span
   >
 {/if}
+
+<style>
+  .status-icon,
+  .updated-icon {
+    display: none;
+  }
+
+  /* When the coordinator panel squeezes the studio header, collapse the
+     version bar to icons: history glyph + version number, a bell for the
+     update stamp, and a single status glyph. */
+  @container studio-header (max-width: 1100px) {
+    .version-word,
+    .updated-text,
+    .status-text {
+      display: none;
+    }
+
+    .updated-icon {
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .status-icon {
+      display: inline-flex;
+      align-items: center;
+    }
+  }
+</style>
 {#if dirty && canSave}
   <button
     class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[11px] font-medium hover:bg-overlay disabled:opacity-50"

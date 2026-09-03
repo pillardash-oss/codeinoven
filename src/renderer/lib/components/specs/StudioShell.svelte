@@ -95,7 +95,7 @@
 </script>
 
 <section bind:this={shellElement} class="flex h-full min-h-0 flex-col bg-app" aria-label={ariaLabel}>
-  <header class="shrink-0 border-b bg-surface">
+  <header class="studio-header-container shrink-0 border-b bg-surface">
     <div
       class="flex flex-col gap-2 px-2 py-2 md:grid md:min-h-12 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center md:gap-3 md:px-3 md:py-0"
     >
@@ -248,3 +248,12 @@
     </main>
   </div>
 </section>
+
+<style>
+  /* Size container so header children (nav, version bar, actions) can compact
+     via container queries when the right-hand coordinator panel squeezes the
+     studio — the same mechanism AppHeader uses for its toolbar. */
+  .studio-header-container {
+    container: studio-header / inline-size;
+  }
+</style>
