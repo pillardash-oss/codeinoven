@@ -46,7 +46,6 @@
   const projectsById = new SvelteMap<string, Project>()
   const projectIconUrls = new SvelteMap<string, string>()
 
-  const activeProjectId = $derived(workspaceState.activeProject?.id ?? null)
   const selectedProcesses = $derived(processes.filter((process) => selected.has(process.pid)))
 
   async function load(): Promise<void> {
@@ -218,21 +217,12 @@
    * Resolve the project/thread to open a browser or terminal in for a process.
    * Uses the process's owning thread when present and valid; otherwise falls
    * back to the first non-archived thread of the owning project, then to a new
-   * thread. App-scoped processes (no owning project) fall back to the active
-   * project or the first local project.
+   * thread. App-scoped processes (no owning project) are not navigable.
    */
   async function resolveTarget(
     process: TaskManagerProcess
   ): Promise<{ projectId: string; threadId: string } | null> {
-    let projectId = process.projectId
-    if (!projectId) {
-      projectId = activeProjectId
-    }
-    if (!projectId) {
-      const projects = await invoke('project:list')
-      projectId =
-        projects.find((project) => project.source === 'local')?.id ?? projects[0]?.id ?? null
-    }
+    const projectId = process.projectId
     if (!projectId) return null
 
     if (process.threadId) {
@@ -504,8 +494,14 @@
                 <button
                   type="button"
                   class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={process.ports.length === 0}
-                  title={process.ports.length > 0 ? 'Open in in-app browser' : 'No port detected'}
+                  disabled={process.ports.length === 0 || !process.projectId}
+                  title={
+                    process.ports.length === 0
+                      ? 'No port detected'
+                      : process.projectId
+                        ? 'Open in in-app browser'
+                        : 'No project associated with this process'
+                  }
                   aria-label={`Open ${processName(process.command)} in the in-app browser`}
                   onclick={() => void openInBrowser(process)}
                 >
@@ -513,8 +509,11 @@
                 </button>
                 <button
                   type="button"
-                  class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                  title="Open path in in-app terminal"
+                  class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={!process.projectId}
+                  title={process.projectId
+                    ? 'Open path in in-app terminal'
+                    : 'No project associated with this process'}
                   aria-label={`Open ${processName(process.command)} path in the in-app terminal`}
                   onclick={() => void openInTerminal(process)}
                 >

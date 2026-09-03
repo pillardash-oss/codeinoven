@@ -639,7 +639,9 @@ async function bootPostPaintServices(): Promise<void> {
     undefined,
     (input) => chatEngine!.cleanupSpeechTranscript(input),
     (input) => chatEngine!.transcribeSpeechAudio(input),
-    (input) => chatEngine!.learnSpeechLessons(input)
+    (input) => chatEngine!.learnSpeechLessons(input),
+    (pid, command, cwd) =>
+      chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
   )
   await speechService.initialize()
   // Initialize auto-evict timers from persisted sound settings

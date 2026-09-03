@@ -2271,6 +2271,9 @@ export class PiDriver extends PersistentCliDriver {
     })
     this.rpcClients.set(sessionId, client)
     this.sessionProjects.set(sessionId, projectPath)
+    // Register the long-lived RPC harness root with the app's process tracker
+    // so it appears in the task manager and is covered by orphan reaping.
+    this.observeHarnessProcess(sessionId, client.process, invocation.command, projectPath)
     try {
       await client.newSession()
       // Resume the persisted native transcript BEFORE syncing the native

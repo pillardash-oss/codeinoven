@@ -95,6 +95,12 @@ export class PiRpcClient {
     return !this.disposed && !this.child.killed
   }
 
+  /** The spawned `pi --mode rpc` child, exposed so drivers can register it
+   * with the app's process tracker (task manager, orphan reaping). */
+  get process(): ChildProcess {
+    return this.child
+  }
+
   /** Send an RPC command and resolve with its `data` once the matching response arrives. */
   send(command: Record<string, unknown>): Promise<unknown> {
     if (this.disposed || !this.child.stdin || this.child.killed) {
