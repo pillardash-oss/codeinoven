@@ -1309,7 +1309,7 @@
   {/snippet}
 
   <div class="mx-auto max-w-4xl px-4 py-6 md:px-8 md:py-8">
-    <article class="space-y-12 text-sm leading-7">
+    <article class="space-y-12 text-[0.8125rem] leading-8">
       <section id="spec-section-tldr" class="scroll-mt-5">
         <h2 class="text-xl font-semibold tracking-tight">TL;DR</h2>
         <EditableMarkdown

@@ -10522,7 +10522,7 @@
                           speechController.readingOverlayActive}
                         <div
                           id={`msg-${msg.id}`}
-                          class="message-block min-w-0 w-full text-[0.75rem] text-foreground"
+                          class="message-block min-w-0 w-full text-[0.8125rem] text-foreground"
                           data-assistant-response
                           data-conversation-searchable
                           data-message-id={msg.id}

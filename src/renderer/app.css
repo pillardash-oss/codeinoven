@@ -250,9 +250,10 @@ body {
 .markdown-body {
   min-width: 0;
   max-width: 100%;
-  /* Chat prose matches the side panels' density (0.6875rem). */
-  font-size: 0.6875rem;
-  line-height: 1.65;
+  /* Conversation gets the comfortable reading treatment: a step larger than
+     panel chrome and a generous line-height for long prose. */
+  font-size: 0.8125rem;
+  line-height: 1.8;
   overflow-wrap: anywhere;
   white-space: normal;
   /* Dev workspace: chat prose follows the app font so code characters
@@ -623,8 +624,9 @@ html body [data-sonner-toaster] {
    are intercepted in the editor so composing never navigates. Footnote
    references render as superscript numbers like GitHub. */
 .rich-markdown-editor {
-  /* The composer mirrors chat prose: same size as rendered messages. */
-  font-size: 0.6875rem;
+  /* The composer mirrors chat prose: same comfortable reading size. */
+  font-size: 0.8125rem;
+  line-height: 1.8;
   font-family: var(--font-app);
 }
 
