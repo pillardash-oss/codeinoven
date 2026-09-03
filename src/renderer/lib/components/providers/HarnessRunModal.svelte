@@ -63,6 +63,17 @@
     return 'Harness tasks'
   }
 
+  /** Max pictograms shown in the dock before the rest collapse into a +N badge. */
+  const MAX_DOCK_ICONS = 3
+
+  const visibleRuns = $derived(store.runs.slice(0, MAX_DOCK_ICONS))
+  const overflowCount = $derived(Math.max(0, store.runs.length - MAX_DOCK_ICONS))
+
+  function overflowTitle(count: number): string {
+    const noun = count === 1 ? 'task' : 'tasks'
+    return `${count} more harness ${noun}`
+  }
+
   function dockLabel(): string {
     const kinds = new Set(store.runs.map((run) => run.kind))
     if (kinds.size === 1 && kinds.has('uninstall')) return 'Uninstalls'
@@ -97,7 +108,7 @@
         {dockLabel()}
       </button>
       <span class="h-5 w-px bg-border"></span>
-      {#each store.runs as run (run.terminalId)}
+      {#each visibleRuns as run (run.terminalId)}
         <button
           class="relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-elevated"
           title={dockTitle(run)}
@@ -125,6 +136,15 @@
           {/if}
         </button>
       {/each}
+      {#if overflowCount > 0}
+        <span
+          class="flex h-6 min-w-6 items-center justify-center rounded-full bg-elevated px-1.5 font-mono text-[0.625rem] font-semibold text-muted"
+          title={overflowTitle(overflowCount)}
+          aria-label={overflowTitle(overflowCount)}
+        >
+          +{overflowCount}
+        </span>
+      {/if}
       {#if store.hasFinished}
         <span class="h-5 w-px bg-border"></span>
         <button
