@@ -239,6 +239,7 @@
     representativeLifecycleSelection
   } from '$shared/engines/engineering-lifecycle-engine'
   import { APP_NAME } from '$shared/brand'
+  import { getVendorIconDataUri } from '$lib/vendor-icons/registry'
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
@@ -8793,15 +8794,29 @@
     return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
   }
 
+  function inlineUtilityChipHtml(): string {
+    const icon = getVendorIconDataUri(APP_NAME)
+    const safeTitle = escapeHtmlForChip(`${APP_NAME} utility`)
+    const iconHtml = icon
+      ? `<img src="${icon}" width="12" height="12" class="shrink-0" alt="" />`
+      : ''
+    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-utility-chip="cio-utility">${iconHtml}<span class="max-w-48 truncate font-medium">utility</span></span>`
+  }
+
   function inlineFileTagsForMessage(msg: AgentMessage): Array<{ token: string; html: string }> {
-    if (!msg.projectReferences?.length) return []
     const text = messageText(msg)
+    const tags: Array<{ token: string; html: string }> = []
+    // The `@cio-utility` tag renders as a badge on the conversation screen too,
+    // mirroring the composer badge for the same token.
+    if (text.includes('@cio-utility')) {
+      tags.push({ token: '@cio-utility', html: inlineUtilityChipHtml() })
+    }
+    if (!msg.projectReferences?.length) return tags
     // Only inline references that actually appear as `@path` in the stored text;
     // remaining references will still render as the legacy top pills so no tag
     // is lost. Longest paths first prevents a parent directory token from
     // swallowing the prefix of a longer child path.
     const ordered = [...msg.projectReferences].sort((a, b) => b.path.length - a.path.length)
-    const tags: Array<{ token: string; html: string }> = []
     for (const reference of ordered) {
       const token = `@${reference.path}`
       if (!token || !text.includes(token)) continue
