@@ -1402,7 +1402,7 @@
                 {#if annotation.quote}
                   <span class="block truncate text-[10px] text-dimmed">“{annotation.quote}”</span>
                 {/if}
-                <span class="mt-0.5 line-clamp-2 block text-xs leading-relaxed"
+                <span class="mt-0.5 line-clamp-4 block text-xs leading-relaxed"
                   >{annotation.body}</span
                 >
               </button>
