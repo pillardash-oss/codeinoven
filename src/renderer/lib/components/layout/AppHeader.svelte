@@ -52,6 +52,7 @@
     X
   } from '@lucide/svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
+  import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import ProjectInfoDropdown from '$lib/components/shared/ProjectInfoDropdown.svelte'
@@ -72,7 +73,7 @@
     type ScopeBucket
   } from '$shared/types'
   import { SvelteSet } from 'svelte/reactivity'
-  import { tick, type Component } from 'svelte'
+  import { type Component } from 'svelte'
 
   type View = MainView
 
@@ -497,24 +498,13 @@
   let threadRenameValue = $state('')
 
   let showThreadDeleteConfirm = $state(false)
-  /** Delete button inside the confirm modal — focused on open so Enter deletes. */
-  let deleteConfirmButton = $state<HTMLButtonElement>()
-
-  $effect(() => {
-    if (!showThreadDeleteConfirm) return
-    void tick().then(() => deleteConfirmButton?.focus())
-  })
 
   /** Cmd/Ctrl+D deletes the actively opened thread through the normal confirm
-   *  flow; Escape cancels the confirm while it is open. Cmd/Ctrl+0-4 switch
+   *  flow (Escape cancels inside the shared ThreadDeleteConfirm dialog).
+   *  Cmd/Ctrl+0-4 switch
    *  primary views: 0 chats, 1 projects, 2 threads, 3 projects with scope state,
    *  4 scope. */
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape' && showThreadDeleteConfirm) {
-      event.preventDefault()
-      showThreadDeleteConfirm = false
-      return
-    }
     if (event.repeat || event.isComposing) return
     const modifier = event.metaKey || event.ctrlKey
     if (!modifier || event.altKey || event.shiftKey) return
@@ -1084,52 +1074,12 @@
   {/if}
 
   <!-- Thread Delete Confirmation -->
-  {#if showThreadDeleteConfirm}
-    {@const thread = workspaceState.selectedThread}
-    <div class="fixed inset-0 z-50 flex items-center justify-center">
-      <button
-        class="absolute inset-0 bg-black/13"
-        aria-label="Close"
-        onclick={() => (showThreadDeleteConfirm = false)}
-      ></button>
-      <div class="relative w-full max-w-md border bg-surface p-6 shadow-xl">
-        <div class="mb-4 flex items-center justify-between">
-          <h2 class="text-base font-semibold">Delete Thread</h2>
-          <button
-            class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label="Close"
-            title="Close"
-            onclick={() => (showThreadDeleteConfirm = false)}
-          >
-            <X size={16} />
-          </button>
-        </div>
-        <p class="text-sm leading-relaxed text-muted">
-          This will permanently delete
-          <span class="font-medium text-foreground">{thread?.title}</span>
-          and all of its history. This action cannot be undone.
-        </p>
-        <div class="flex justify-end gap-2 pt-4">
-          <button
-            type="button"
-            class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-            title="Cancel"
-            onclick={() => (showThreadDeleteConfirm = false)}
-          >
-            Cancel
-          </button>
-          <button
-            bind:this={deleteConfirmButton}
-            type="button"
-            class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90"
-            title="Permanently delete this thread"
-            onclick={() => void confirmThreadDelete()}
-          >
-            Delete
-          </button>
-        </div>
-      </div>
-    </div>
+  {#if showThreadDeleteConfirm && workspaceState.selectedThread}
+    <ThreadDeleteConfirm
+      threadTitle={workspaceState.selectedThread.title}
+      onClose={() => (showThreadDeleteConfirm = false)}
+      onConfirm={confirmThreadDelete}
+    />
   {/if}
 
   <!-- Change Scope Modal -->

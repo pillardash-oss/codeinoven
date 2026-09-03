@@ -17,6 +17,7 @@
   import { Portal } from 'bits-ui'
   import { toast } from 'svelte-sonner'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
@@ -1153,30 +1154,11 @@
   {/snippet}
 </Modal>
 
-<Modal open={showDeleteModal} title="Delete Thread" onClose={() => (showDeleteModal = false)}>
-  <p class="text-sm leading-relaxed text-muted">
-    This will permanently delete
-    <span class="font-medium text-foreground">{thread.title}</span>
-    and all of its history. This action cannot be undone.
-  </p>
-
-  {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      onclick={() => (showDeleteModal = false)}
-    >
-      Cancel
-    </button>
-    <button
-      type="button"
-      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90"
-      onclick={() => void confirmDelete()}
-    >
-      Delete
-    </button>
-  {/snippet}
-</Modal>
+<ThreadDeleteConfirm
+  threadTitle={thread.title}
+  onClose={() => (showDeleteModal = false)}
+  onConfirm={confirmDelete}
+/>
 
 {#if showChangeScopeModal && !picker}
   <ChangeScopeModal
