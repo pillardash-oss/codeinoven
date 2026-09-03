@@ -572,12 +572,16 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
         padding: '12px 0'
       },
       '.cm-lineNumbers .cm-gutterElement': {
+        // CodeMirror assigns each gutter element the measured height of its
+        // code line inline. Flex-centering the number inside that row makes
+        // the alignment structural — independent of line-height ratios, font
+        // metrics and fractional zoom rounding — so digits track their code
+        // line exactly at any user font size or zoom.
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
         padding: '0 8px 0 12px',
         minWidth: '3ch'
-        // No font/line-height here: gutter elements inherit the scroller's
-        // font stack and unitless line-height, so numbers stay aligned with
-        // their code line at any user font size. A pinned pixel line-height
-        // here is what caused the 1px gutter drift.
       },
       '.cm-activeLineGutter': {
         backgroundColor: 'var(--color-selected)',
