@@ -148,7 +148,7 @@
   <div class="mb-6 flex items-start justify-between gap-6">
     <div>
       <h1 class="text-xl font-bold tracking-tight">CIO Prompts</h1>
-      <p class="mt-0.5 max-w-2xl text-sm leading-relaxed text-muted">
+      <p class="mt-0.5 max-w-2xl text-[0.6875rem] leading-relaxed text-muted">
         Inspect and customize the instructions sent by the application. Defaults track every app
         update; only customized sections create files in the config directory.
       </p>

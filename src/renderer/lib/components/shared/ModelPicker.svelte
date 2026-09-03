@@ -306,7 +306,7 @@
   )
   let modelButtonClasses = $derived(
     variant === 'field'
-      ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-sm text-muted transition-colors hover:text-foreground'
+      ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-[0.6875rem] text-muted transition-colors hover:text-foreground'
       : variant === 'action'
         ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-xs font-semibold text-muted transition-colors hover:text-foreground'
         : 'flex min-w-0 flex-1 items-center gap-1 px-2 py-1.5 text-[0.6875rem] text-muted transition-colors hover:text-foreground'

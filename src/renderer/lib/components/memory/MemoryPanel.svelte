@@ -482,7 +482,7 @@
     <div class="mb-4 flex items-start justify-between gap-4">
       <div>
         <h1 class="text-xl font-bold tracking-tight">Memory</h1>
-        <p class="mt-0.5 text-sm text-muted">{headerDescription}</p>
+        <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">{headerDescription}</p>
       </div>
 
       {#if variant === 'settings'}
@@ -750,7 +750,7 @@
           <select
             class="{variant === 'sidebar'
               ? 'w-full'
-              : 'w-36'} rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+              : 'w-36'} rounded-lg border bg-elevated px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none focus:border-primary"
             bind:value={filterCategory}
           >
             <option value="">All categories</option>
@@ -761,7 +761,7 @@
           <select
             class="{variant === 'sidebar'
               ? 'w-full'
-              : 'w-36'} rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+              : 'w-36'} rounded-lg border bg-elevated px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none focus:border-primary"
             bind:value={filterPriority}
           >
             <option value="">All priorities</option>
