@@ -13,14 +13,16 @@
     active?: boolean
     disabled?: boolean
     onselect: (input: EngineeringLifecycleSelectionInput) => void | Promise<void>
+    /** Called when the toolbox closes via keyboard (shortcut or Escape) so the
+     *  host can return focus to the composer at the saved caret position. */
+    onclose?: () => void
   }
 
-  let { lifecycleState, active = false, disabled = false, onselect }: Props = $props()
+  let { lifecycleState, active = false, disabled = false, onselect, onclose }: Props = $props()
   let open = $state(false)
   let panel: HTMLDivElement | undefined = $state(undefined)
-  /** Index into [rows, autopilot] currently outlined by arrow-key navigation —
-   *  -1 when the toolbox was opened via pointer (mouse-driven highlighting). */
-  let highlightIndex = $state(-1)
+  /** Position within [rows, autopilot] reached by arrow-key navigation. */
+  let navIndex = $state(0)
 
   const rows: ReadonlyArray<{
     stage: EngineeringLifecycleStage
@@ -54,6 +56,20 @@
 
   /** Total navigable rows: the lifecycle stages plus the trailing Auto Pilot row. */
   const rowCount = rows.length + 1
+
+  /** Focus the row button at `index` — its own focus ring is the visual
+   *  highlight; no separate outline is needed on the dropdown itself. */
+  async function focusRow(index: number): Promise<void> {
+    await tick()
+    const rowButtons = panel?.querySelectorAll<HTMLButtonElement>(
+      'button[role="switch"]:not(:disabled)'
+    )
+    if (rowButtons && rowButtons.length > 0) {
+      rowButtons[Math.min(index, rowButtons.length - 1)]?.focus()
+      return
+    }
+    panel?.focus()
+  }
   const filled = $derived(
     active ||
       (lifecycleState?.selection ?? 'none') !== 'none' ||
@@ -77,26 +93,32 @@
     panel?.focus()
   }
 
-  /** Shortcut entry point — toggles visibility and starts arrow-key navigation. */
+  /** Shortcut entry point — toggles visibility. Opening hands focus to the
+   *  first row so arrow keys navigate immediately. */
   export async function openAndFocus(): Promise<void> {
     if (disabled) return
     open = !open
     if (!open) {
-      highlightIndex = -1
+      onclose?.()
       return
     }
-    highlightIndex = 0
-    await focusPanel()
+    navIndex = 0
+    await focusRow(0)
   }
 
   async function toggle(): Promise<void> {
     open = !open
-    highlightIndex = -1
+    if (open) await focusPanel()
+  }
+
+  function closeViaKeyboard(): void {
+    open = false
+    onclose?.()
   }
 
   function moveHighlight(direction: 1 | -1): void {
-    highlightIndex =
-      (highlightIndex < 0 ? 0 : highlightIndex + direction + rowCount) % rowCount
+    navIndex = (navIndex + direction + rowCount) % rowCount
+    void focusRow(navIndex)
   }
 
   function handleKeydown(event: KeyboardEvent): void {
@@ -104,14 +126,12 @@
     // the composer shortcut can't fire; handle closing here instead.
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'e') {
       event.preventDefault()
-      open = false
-      highlightIndex = -1
+      closeViaKeyboard()
       return
     }
     if (event.key === 'Escape') {
       event.preventDefault()
-      open = false
-      highlightIndex = -1
+      closeViaKeyboard()
       return
     }
     if (event.key === 'ArrowDown') {
@@ -122,16 +142,6 @@
     if (event.key === 'ArrowUp') {
       event.preventDefault()
       moveHighlight(-1)
-      return
-    }
-    if (event.key === 'Enter' && highlightIndex >= 0) {
-      event.preventDefault()
-      if (highlightIndex < rows.length) {
-        const row = rows[highlightIndex]
-        void choose(row.stage, !hasSelectedStage(lifecycleState, row.stage))
-      } else {
-        void chooseAutopilot(!autopilot)
-      }
     }
   }
 </script>
@@ -178,17 +188,14 @@
           Select the stages to run. Assignment and Achievement run after an approved Spec.
         </p>
       </div>
-      {#each rows as row, i (row.stage)}
+      {#each rows as row (row.stage)}
         <Switch
           checked={hasSelectedStage(lifecycleState, row.stage)}
           disabled={disabled || autopilot}
           onchange={(enabled) => void choose(row.stage, enabled)}
           title={`${hasSelectedStage(lifecycleState, row.stage) ? 'Turn off' : 'Turn on'} ${row.label}`}
           aria-label={`${hasSelectedStage(lifecycleState, row.stage) ? 'Turn off' : 'Turn on'} ${row.label}`}
-          class="w-full items-start justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated {highlightIndex ===
-          i
-            ? 'outline-2 outline-primary'
-            : ''}"
+          class="w-full items-start justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
           activeClass="bg-thread-spec"
         >
           <span class="min-w-0 flex-1 pr-3">
@@ -204,10 +211,7 @@
         onchange={(enabled) => void chooseAutopilot(enabled)}
         title={autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot'}
         aria-label={autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot'}
-        class="w-full items-start justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated {highlightIndex ===
-        rows.length
-          ? 'outline-2 outline-primary'
-          : ''}"
+        class="w-full items-start justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
         activeClass="bg-thread-spec"
       >
         <span class="min-w-0 flex-1 pr-3">
