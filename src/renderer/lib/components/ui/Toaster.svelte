@@ -113,20 +113,28 @@
     pointer-events: none;
   }
 
-  /* ─── Action buttons: full-width row below the content ──────────────────── */
+  /* ─── Single-column layout: icon, title, description and buttons stack
+     top to bottom — nothing sits side by side ─────────────────────────── */
   :global([data-sonner-toast]) {
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  :global([data-sonner-toast] [data-icon]) {
+    margin-top: 0;
   }
 
   :global([data-sonner-toast] [data-content]) {
-    flex: 1 1 0;
+    flex: 1 1 auto;
+    width: 100%;
     min-width: 0;
   }
 
   :global([data-sonner-toast] [data-button]) {
-    flex: 1 1 0;
-    min-width: 0;
-    margin-top: 10px;
+    flex: 1 1 100%;
+    width: 100%;
+    margin-top: 4px;
     justify-content: center;
   }
 
