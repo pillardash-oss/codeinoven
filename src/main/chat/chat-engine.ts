@@ -6792,16 +6792,32 @@ export class ChatEngine {
       this.markSessionWorking(sessionId)
       return publicUserMessage
     }
+    // Internal continuation prompts (search nudges, mermaid repairs,
+    // incomplete-turn retries) start a new turn after the user's turn already
+    // completed. Attribute the new checkpoint to that user message — label and
+    // source id inherited from the thread's latest checkpoint — so the file
+    // changes card reports the user's prompt, never the hidden internal text.
     const checkpointPromise: Promise<string | undefined> = planningSpecTurn
       ? Promise.resolve(undefined)
       : this.checkpointManager
-          .beginTurn(
-            projectId,
-            threadId,
-            projectPath,
-            text.slice(0, 80) || 'Agent turn',
-            project.changeTrackingMode === 'git',
-            messageId
+          .getLatestCompleted(projectId, threadId)
+          .catch((error: unknown) => {
+            Logger.dev('Checkpoint attribution lookup failed:', error)
+            return null
+          })
+          .then((previous) =>
+            this.checkpointManager.beginTurn(
+              projectId,
+              threadId,
+              projectPath,
+              origin === 'internal' && previous
+                ? previous.label
+                : (text.slice(0, 80) || 'Agent turn'),
+              project.changeTrackingMode === 'git',
+              origin === 'internal' && previous?.sourceMessageId
+                ? previous.sourceMessageId
+                : messageId
+            )
           )
           .then((checkpoint) => checkpoint.id)
           .catch((error: unknown) => {
