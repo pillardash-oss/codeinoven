@@ -864,7 +864,7 @@
     {/each}
   {/snippet}
 
-      <article class="mx-auto max-w-4xl space-y-12 px-4 py-6 text-sm leading-7 md:px-8 md:py-8">
+      <article class="space-y-12 px-4 py-6 text-sm leading-7 md:px-8 md:py-8">
         {@render textSection('executive_summary', 'Executive summary', 'executiveSummary')}
 
         <section id="audit-section-findings" data-audit-section="findings" class="scroll-mt-5">

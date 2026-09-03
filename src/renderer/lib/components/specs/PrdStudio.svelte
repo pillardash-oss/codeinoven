@@ -314,7 +314,7 @@
     />
   {/snippet}
 
-  <article class="mx-auto max-w-3xl rounded-2xl border bg-surface p-6 shadow-sm">
+  <article class="rounded-2xl border bg-surface p-6 shadow-sm">
     <section id="prd-section-summary" data-prd-section="summary" class="scroll-mt-5">
       <input
         class="w-full bg-transparent text-2xl font-semibold text-foreground outline-none"

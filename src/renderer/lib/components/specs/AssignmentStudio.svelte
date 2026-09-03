@@ -695,7 +695,7 @@
     {/each}
   {/snippet}
 
-      <div bind:this={documentContent} class="mx-auto max-w-4xl px-4 py-6 md:px-8 md:py-8">
+      <div bind:this={documentContent} class="px-4 py-6 md:px-8 md:py-8">
         <div class="mb-6 flex items-center gap-2">
           <Network size={18} class="text-primary" />
           <p class="text-sm font-semibold text-foreground">Sr. Engineer execution plan</p>

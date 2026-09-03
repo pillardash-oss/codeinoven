@@ -885,7 +885,7 @@
     {/each}
   {/snippet}
 
-  <article class="mx-auto max-w-4xl space-y-12 px-4 py-6 text-sm leading-7 md:px-8 md:py-8">
+  <article class="space-y-12 px-4 py-6 text-sm leading-7 md:px-8 md:py-8">
     <header class="space-y-3 border-b pb-8">
       <EditableMarkdown
         text={draft.content.title}
@@ -902,7 +902,7 @@
         <EditableMarkdown
           text={draft.content.summary}
           readOnly={!canEdit}
-          class="brainstorm-markdown max-w-3xl whitespace-pre-wrap rounded-lg px-2 py-1 text-base text-muted outline-none focus:bg-surface focus:text-foreground"
+          class="brainstorm-markdown w-full whitespace-pre-wrap rounded-lg px-2 py-1 text-base text-muted outline-none focus:bg-surface focus:text-foreground"
           ariaLabel="Brainstorm session snapshot"
           onChange={(value) => {
             draft.content.summary = value
