@@ -24,6 +24,7 @@ let openLocalhostInCioBrowser = $state(true)
 let defaultPullStrategy = $state<GitPullPreference>('ask')
 let fontFamily = $state(DEFAULT_FONT_FAMILY)
 let appFontSize = $state(DEFAULT_APP_FONT_SIZE)
+let fontWeight = $state(300)
 let zoomLevel = $state(DEFAULT_ZOOM_LEVEL)
 
 /** Push the persisted appearance preferences onto the document: the app font
@@ -34,6 +35,7 @@ function applyAppearance(): void {
   const root = document.documentElement
   root.style.setProperty('--font-app', FONT_STACKS[fontFamily] ?? FONT_STACKS['jetbrains-mono'])
   root.style.fontSize = `${appFontSize}px`
+  root.style.setProperty('--font-weight-base', String(fontWeight))
   void zoomLevel // zoom is applied by the main process via setZoomFactor
 }
 
@@ -58,6 +60,9 @@ export const appConfigState = {
   get appFontSize(): number {
     return appFontSize
   },
+  get fontWeight(): number {
+    return fontWeight
+  },
   get zoomLevel(): number {
     return zoomLevel
   },
@@ -67,6 +72,7 @@ export const appConfigState = {
     defaultPullStrategy = config.defaultPullStrategy
     fontFamily = config.fontFamily
     appFontSize = config.appFontSize
+    fontWeight = config.fontWeight
     zoomLevel = config.zoomLevel
     applyAppearance()
   }
@@ -81,6 +87,13 @@ export const FONT_FAMILY_OPTIONS: Array<{ id: string; label: string }> = [
   { id: 'menlo', label: 'Menlo' },
   { id: 'monaco', label: 'Monaco' },
   { id: 'fira-code', label: 'Fira Code' }
+]
+
+/** Font weights offered in Appearance settings. */
+export const FONT_WEIGHT_OPTIONS: Array<{ id: number; label: string }> = [
+  { id: 300, label: 'Light (default)' },
+  { id: 400, label: 'Regular' },
+  { id: 500, label: 'Medium' }
 ]
 
 /** Zoom levels offered in Appearance settings, as percentages. */

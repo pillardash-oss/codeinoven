@@ -3891,6 +3891,8 @@ export interface AppConfig {
   fontFamily: string
   /** Base font size in px for the app UI; scales all rem-based text. */
   appFontSize: number
+  /** Base font weight for app text (Light 300 / Regular 400 / Medium 500). */
+  fontWeight: number
   /** UI zoom level (Electron zoomFactor). 1 = 100%. */
   zoomLevel: number
   /** True after the user finishes or dismisses the first-run setup guide. */
@@ -3961,6 +3963,7 @@ export type AppConfigPatch = Partial<
     | 'theme'
     | 'fontFamily'
     | 'appFontSize'
+    | 'fontWeight'
     | 'zoomLevel'
     | 'onboardingCompleted'
     | 'threadLimit'

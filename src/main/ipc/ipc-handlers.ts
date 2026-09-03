@@ -848,6 +848,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'theme',
   'fontFamily',
   'appFontSize',
+  'fontWeight',
   'zoomLevel',
   'onboardingCompleted',
   'threadLimit',
@@ -1651,6 +1652,19 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('App font size must be an integer between 12 and 18')
     }
     patch.appFontSize = value.appFontSize
+  }
+
+  if ('fontWeight' in value) {
+    if (
+      typeof value.fontWeight !== 'number' ||
+      !Number.isInteger(value.fontWeight) ||
+      value.fontWeight < 100 ||
+      value.fontWeight > 800 ||
+      value.fontWeight % 100 !== 0
+    ) {
+      throw new TypeError('Font weight must be a multiple of 100 between 100 and 800')
+    }
+    patch.fontWeight = value.fontWeight
   }
 
   if ('zoomLevel' in value) {

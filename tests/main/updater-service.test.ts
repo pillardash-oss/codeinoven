@@ -55,6 +55,7 @@ function defaultConfig(): AppConfig {
     theme: 'system',
     fontFamily: 'jetbrains-mono',
     appFontSize: 15,
+  fontWeight: 300,
     zoomLevel: 1,
     onboardingCompleted: false,
     threadLimit: 70,

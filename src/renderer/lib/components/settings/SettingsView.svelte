@@ -3,7 +3,11 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { isOverlayOpen } from '$lib/overlay-close.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
-  import { FONT_FAMILY_OPTIONS, ZOOM_LEVEL_OPTIONS } from '$lib/stores/app-config.svelte'
+  import {
+    FONT_FAMILY_OPTIONS,
+    FONT_WEIGHT_OPTIONS,
+    ZOOM_LEVEL_OPTIONS
+  } from '$lib/stores/app-config.svelte'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
@@ -496,7 +500,7 @@
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm font-medium">Theme</p>
-                <p class="text-xs text-dimmed">Follow the system or pick a mode</p>
+                <p class="text-xs leading-relaxed text-dimmed">Follow the system or pick a mode</p>
               </div>
               <div class="flex items-center gap-0.5 rounded-lg border bg-elevated p-0.5">
                 {#each themeOptions as option (option.id)}
@@ -520,7 +524,7 @@
             <div class="mt-3 flex items-center justify-between gap-4">
               <div>
                 <p class="text-sm font-medium">Font</p>
-                <p class="text-xs text-dimmed">Typeface used across the app</p>
+                <p class="text-xs leading-relaxed text-dimmed">Typeface used across the app</p>
               </div>
               <select
                 class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
@@ -538,10 +542,10 @@
             <div class="mt-3 flex items-center justify-between gap-4">
               <div>
                 <p class="text-sm font-medium">Base font size</p>
-                <p class="text-xs text-dimmed">Scales all text in the app</p>
+                <p class="text-xs leading-relaxed text-dimmed">Scales all text in the app</p>
               </div>
               <div class="flex items-center gap-2">
-                <span class="text-xs text-dimmed">{config.appFontSize}px</span>
+                <span class="text-xs leading-relaxed text-dimmed">{config.appFontSize}px</span>
                 <input
                   type="range"
                   min="12"
@@ -564,8 +568,30 @@
             </div>
             <div class="mt-3 flex items-center justify-between gap-4">
               <div>
+                <p class="text-sm font-medium">Font weight</p>
+                <p class="text-xs leading-relaxed text-dimmed">Lightness of the app text</p>
+              </div>
+              <select
+                class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                value={config.fontWeight}
+                disabled={!settingsReady}
+                aria-label="Font weight"
+                onchange={(event: SelectChangeEvent) => {
+                  const weight = Number(event.currentTarget.value)
+                  if (Number.isInteger(weight) && weight >= 100 && weight <= 800) {
+                    void updateConfig({ fontWeight: weight })
+                  }
+                }}
+              >
+                {#each FONT_WEIGHT_OPTIONS as option (option.id)}
+                  <option value={option.id}>{option.label}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="mt-3 flex items-center justify-between gap-4">
+              <div>
                 <p class="text-sm font-medium">Zoom</p>
-                <p class="text-xs text-dimmed">Magnify the whole interface</p>
+                <p class="text-xs leading-relaxed text-dimmed">Magnify the whole interface</p>
               </div>
               <select
                 class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
@@ -594,7 +620,7 @@
             <div class="flex items-center justify-between gap-4">
               <div>
                 <p class="text-sm font-medium">System notifications</p>
-                <p class="text-xs text-dimmed">
+                <p class="text-xs leading-relaxed text-dimmed">
                   Alert when an agent finishes, needs attention, or encounters an error
                 </p>
                 <p class="mt-1 text-[0.6875rem] text-dimmed">
@@ -666,7 +692,7 @@
             <div class="flex items-center justify-between gap-4">
               <div>
                 <p class="text-sm font-medium">Open localhost on CIO's browser</p>
-                <p class="text-xs text-dimmed">
+                <p class="text-xs leading-relaxed text-dimmed">
                   Keep local development links inside the workspace for testing
                 </p>
               </div>
@@ -688,7 +714,7 @@
             <div class="flex items-center justify-between gap-4">
               <div>
                 <p class="text-sm font-medium">Keep device on while work is in progress</p>
-                <p class="text-xs text-dimmed">
+                <p class="text-xs leading-relaxed text-dimmed">
                   Prevent sleep while an agent is actively working; spec-ready threads stay idle
                 </p>
               </div>
@@ -709,7 +735,7 @@
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-sm font-medium">Resume work on restart</p>
-                  <p class="text-xs text-dimmed">
+                  <p class="text-xs leading-relaxed text-dimmed">
                     Threads will be resumed if they were interrupted due to an app closure or
                     unknown issues
                   </p>
@@ -725,7 +751,7 @@
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-sm font-medium">Auto-resume after usage resets</p>
-                  <p class="text-xs text-dimmed">
+                  <p class="text-xs leading-relaxed text-dimmed">
                     Automatically continue threads whose agent hit a usage or rate limit once its
                     reset time passes
                   </p>
@@ -748,7 +774,7 @@
               <div class="flex items-center justify-between">
                 <div>
                   <p class="text-sm font-medium">Default merge method</p>
-                  <p class="text-xs text-dimmed">
+                  <p class="text-xs leading-relaxed text-dimmed">
                     Pre-selected when merging a pull request from the Git panel
                   </p>
                 </div>
@@ -770,7 +796,7 @@
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-sm font-medium">Default pull strategy</p>
-                  <p class="text-xs text-dimmed">
+                  <p class="text-xs leading-relaxed text-dimmed">
                     Ask when pulling, or always use one reconciliation strategy
                   </p>
                 </div>
@@ -792,7 +818,7 @@
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-sm font-medium">Maximum diff lines</p>
-                  <p class="text-xs text-dimmed">
+                  <p class="text-xs leading-relaxed text-dimmed">
                     Hunks larger than this are collapsed with a notice so huge diffs stay responsive
                   </p>
                 </div>
@@ -821,7 +847,7 @@
               <div class="flex items-center justify-between">
                 <div>
                   <p class="text-sm font-medium">Max threads per project</p>
-                  <p class="text-xs text-dimmed">
+                  <p class="text-xs leading-relaxed text-dimmed">
                     Oldest unpinned threads are evicted when exceeded
                   </p>
                 </div>
@@ -840,7 +866,7 @@
               <div class="flex items-center justify-between">
                 <div>
                   <p class="text-sm font-medium">Slash command behavior</p>
-                  <p class="text-xs text-dimmed">
+                  <p class="text-xs leading-relaxed text-dimmed">
                     {slashCommandOptions.find((option) => option.id === config.slashCommandMode)
                       ?.description}
                   </p>
@@ -863,7 +889,7 @@
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-sm font-medium">Question timeout</p>
-                  <p class="text-xs text-dimmed">Pick the recommended answer after this wait</p>
+                  <p class="text-xs leading-relaxed text-dimmed">Pick the recommended answer after this wait</p>
                 </div>
                 <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
                   <input
@@ -947,7 +973,7 @@
           >
             <div>
               <p class="text-sm font-medium">Data directory</p>
-              <p class="text-xs text-dimmed">All projects, threads, and history stored here</p>
+              <p class="text-xs leading-relaxed text-dimmed">All projects, threads, and history stored here</p>
             </div>
             <div class="flex flex-wrap items-center gap-2 sm:justify-end">
               <span class="rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted">
@@ -972,7 +998,7 @@
           <div class="flex items-center justify-between gap-4">
             <div>
               <p class="text-sm font-medium">Export failure report</p>
-              <p class="text-xs text-dimmed">
+              <p class="text-xs leading-relaxed text-dimmed">
                 Redacted logs and operational state; prompts and file contents are excluded.
               </p>
               {#if diagnosticsResult}
@@ -1057,7 +1083,7 @@
             <div class="flex items-center justify-between gap-4">
               <div>
                 <p class="text-sm font-medium">Nightly builds</p>
-                <p class="text-xs text-dimmed">
+                <p class="text-xs leading-relaxed text-dimmed">
                   Receive over-the-air updates from the nightly channel
                 </p>
               </div>
@@ -1074,7 +1100,7 @@
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm font-medium">Auto-download</p>
-                <p class="text-xs text-dimmed">Automatically download updates when available</p>
+                <p class="text-xs leading-relaxed text-dimmed">Automatically download updates when available</p>
               </div>
               <Switch
                 checked={config.autoDownloadUpdates}
@@ -1089,7 +1115,7 @@
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm font-medium">Auto-install</p>
-                <p class="text-xs text-dimmed">Automatically restart and install after download</p>
+                <p class="text-xs leading-relaxed text-dimmed">Automatically restart and install after download</p>
               </div>
               <Switch
                 checked={config.autoInstallUpdates}
@@ -1192,7 +1218,7 @@
         <li>Downgrading to stable later is supported by the updater.</li>
         <li>Opt out any time from this same setting.</li>
       </ul>
-      <p class="text-xs text-dimmed">
+      <p class="text-xs leading-relaxed text-dimmed">
         Enabling this switches your over-the-air update feed to the nightly channel and checks for
         updates immediately.
       </p>

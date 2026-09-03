@@ -129,10 +129,9 @@ html {
 
 body {
   font-family: var(--font-app);
-  /* JetBrains Mono reads visually heavy at 400 next to its own bold; drop the
-     base weight so <strong>/semibold chrome has obvious contrast. Explicit
-     font-medium/semibold classes elsewhere are unaffected. */
-  font-weight: 300;
+  /* Explicit, user-settable base weight (Appearance settings); 300 keeps
+     JetBrains Mono prose light next to semibold chrome. */
+  font-weight: var(--font-weight-base, 300);
   background-color: var(--color-app);
   color: var(--color-foreground);
   -webkit-font-smoothing: antialiased;
