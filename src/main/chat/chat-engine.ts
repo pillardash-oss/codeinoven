@@ -3177,19 +3177,26 @@ export class ChatEngine {
   private async cleanupTurnUtilities(sessionId: string): Promise<void> {
     const turn = this.utilityTurns.get(sessionId)
     if (!turn) return
-    this.utilityTurns.delete(sessionId)
     this.computerUsePip?.notifyTurnEnded(turn.threadId)
-    try {
-      if (turn.driver.publishUtilityGatewayEndpoint) {
-        await turn.driver.publishUtilityGatewayEndpoint(turn.projectPath, sessionId, null)
+    // Supersession guard: if a newer utility turn re-armed for this session
+    // while this cleanup was in flight (e.g. a held steer was delivered as the
+    // next turn), the shared per-session artifacts now belong to the new turn.
+    // Clearing them here would wipe the new turn's live credentials — only the
+    // replaced turn's own gateway is torn down; the new turn cleans itself up
+    // when it ends.
+    if (this.utilityTurns.get(sessionId) === turn) {
+      this.utilityTurns.delete(sessionId)
+      try {
+        if (turn.driver.publishUtilityGatewayEndpoint) {
+          await turn.driver.publishUtilityGatewayEndpoint(turn.projectPath, sessionId, null)
+        }
+        await turn.driver.applyPreparedUtilityRuntime?.(turn.projectPath, null, sessionId)
+      } catch (error) {
+        await turn.runtime?.cleanup()
+        Logger.error('Harness utility runtime cleanup failed:', error)
       }
-      await turn.driver.applyPreparedUtilityRuntime?.(turn.projectPath, null, sessionId)
-    } catch (error) {
-      await turn.runtime?.cleanup()
-      Logger.error('Harness utility runtime cleanup failed:', error)
-    } finally {
-      await turn.gateway.cleanup()
     }
+    await turn.gateway.cleanup()
   }
 
   /**
@@ -18247,15 +18254,25 @@ export class ChatEngine {
     this.handledIdleSessions.add(sessionId)
     // The turn ended while a steer was still held (no tool window opened, or
     // the idle arrived between the tool end and the async flush). Deliver it
-    // as the next turn's regular send.
-    if (this.heldSteers.has(sessionId)) {
-      void this.flushHeldSteers(sessionId, 'after-turn')
-    }
-    const finalization = this.onSessionIdle(sessionId).finally(() => {
-      if (this.sessionIdleFinalizations.get(sessionId) === finalization) {
-        this.sessionIdleFinalizations.delete(sessionId)
-      }
-    })
+    // as the next turn's regular send — but only AFTER the idle finalization
+    // completes. The finalization tears down the finished turn's utility
+    // gateway (handoff clear + gateway.cleanup); the steer's deliverAfterTurn
+    // path runs a full sendPrompt that re-arms a fresh gateway turn, and if
+    // the two raced the stale cleanup would wipe the new turn's credentials
+    // mid-turn, leaving the harness with dead cio_util_* tools and a
+    // retrieve_mcp_host fallback that finds no live turn for the session.
+    const finalization = this.onSessionIdle(sessionId)
+      .catch((error) => Logger.error('Session idle finalization failed:', error))
+      .then(() => {
+        if (this.heldSteers.has(sessionId)) {
+          return this.flushHeldSteers(sessionId, 'after-turn')
+        }
+      })
+      .finally(() => {
+        if (this.sessionIdleFinalizations.get(sessionId) === finalization) {
+          this.sessionIdleFinalizations.delete(sessionId)
+        }
+      })
     this.sessionIdleFinalizations.set(sessionId, finalization)
     void finalization.then(
       () => this.settleSessionIdleFinalizationWaiters(sessionId),
