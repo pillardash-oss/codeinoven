@@ -885,7 +885,7 @@
     {/each}
   {/snippet}
 
-  <article class="space-y-12 px-4 py-6 text-sm leading-7 md:px-8 md:py-8">
+  <article class="space-y-12 px-6 py-6 text-sm leading-7 md:px-14 md:py-8">
     <header class="space-y-3 border-b pb-8">
       <EditableMarkdown
         text={draft.content.title}
