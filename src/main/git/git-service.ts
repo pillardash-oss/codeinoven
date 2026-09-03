@@ -731,8 +731,15 @@ export class GitService {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
         const git = this.client(directory)
-        await this.removeWorktreesForBranch(git, name)
-        await git.deleteLocalBranch(name, force)
+        // Tolerate git's ambiguous short spelling: when a tag shares the branch
+        // name, `refname:short` renders `heads/<name>` and `git branch -d` on
+        // that spelling fails with "branch not found".
+        const resolves = await git
+          .raw(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])
+          .then(() => true, () => false)
+        const branchName = resolves || !name.startsWith('heads/') ? name : name.slice('heads/'.length)
+        await this.removeWorktreesForBranch(git, branchName)
+        await git.deleteLocalBranch(branchName, force)
       })
       return this.readStatus(directory)
     })
@@ -1856,32 +1863,40 @@ export class GitService {
     remoteNames: string[],
     worktreePaths: ReadonlyMap<string, string>
   ): GitBranchInfo[] {
+    // `refname:short` disambiguates when a tag shares the branch's name (e.g. a
+    // `nightly` tag and `nightly` branch render as `heads/nightly`), so the
+    // operational branch `name` must be derived from the full ref instead —
+    // `git branch -d heads/nightly` fails with "branch not found".
+    const localRefPrefix = 'refs/heads/'
+    const remoteRefPrefix = 'refs/remotes/'
     const namesBySpecificity = [...remoteNames].sort((left, right) => right.length - left.length)
     const branches: GitBranchInfo[] = []
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue
       const [fullRef, ref, head, upstream, remoteName, drift, symbolicTarget] = line.split('\t')
       if (!fullRef || !ref) continue
-      if (fullRef.startsWith('refs/heads/')) {
+      if (fullRef.startsWith(localRefPrefix)) {
         const ahead = /ahead (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
         const behind = /behind (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
+        const name = fullRef.slice(localRefPrefix.length)
         branches.push({
           kind: 'local',
-          name: ref,
+          name,
           ref,
           current: head?.trim() === '*',
           remote: remoteName || null,
           upstream: upstream || null,
           ahead: Number.parseInt(ahead, 10) || 0,
           behind: Number.parseInt(behind, 10) || 0,
-          worktreePath: worktreePaths.get(ref) ?? null
+          worktreePath: worktreePaths.get(name) ?? null
         })
         continue
       }
-      if (!fullRef.startsWith('refs/remotes/') || symbolicTarget) continue
-      const remote = namesBySpecificity.find((name) => ref.startsWith(`${name}/`))
+      if (!fullRef.startsWith(remoteRefPrefix) || symbolicTarget) continue
+      const relativeRef = fullRef.slice(remoteRefPrefix.length)
+      const remote = namesBySpecificity.find((name) => relativeRef.startsWith(`${name}/`))
       if (!remote) continue
-      const name = ref.slice(remote.length + 1)
+      const name = relativeRef.slice(remote.length + 1)
       if (!name || name === 'HEAD') continue
       branches.push({
         kind: 'remote',
