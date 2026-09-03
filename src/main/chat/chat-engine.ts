@@ -25,7 +25,7 @@ import { ClineDriver } from '../drivers/cline-driver'
 import { AntigravityDriver } from '../drivers/antigravity-driver'
 import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
-import { CheckpointManager } from '../storage/checkpoint-manager'
+import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
 import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
@@ -1188,6 +1188,8 @@ interface SessionInfo {
   preciseChangedPaths?: Map<string, number>
   /** Shell-like tool part ids currently in flight for the active turn. */
   openUnboundedTools?: Set<string>
+  /** In-flight reopen of a just-settled turn whose edits kept arriving. */
+  pendingReopen?: Promise<void>
   /** Filesystem fingerprint taken when the first of those tools started. */
   unboundedWindowStart?: Promise<ProjectFingerprint | null>
   /** Window-close scans that must settle before the turn checkpoint is completed. */
@@ -17652,6 +17654,18 @@ export class ChatEngine {
                   candidate.threadId === childOwner.threadId
               )
             : undefined)
+        if (session && !session.activeTurnId) {
+          // A harness can settle a turn while the model is still working (e.g.
+          // pi reported a usage-reset settle that proved premature), which
+          // finalizes the checkpoint before the last edits landed. A later
+          // file-mutating tool claim then arrives with no active turn —
+          // re-open the just-completed checkpoint so the late work is captured
+          // in the same turn's card instead of vanishing.
+          const latePaths = changedPathsFromTool(session.projectPath, part)
+          if (latePaths.length > 0 || UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
+            void this.reopenSettledTurnForLateClaim(session, latePaths)
+          }
+        }
         if (session?.activeTurnId) {
           if (UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
             this.trackUnboundedToolWindow(session, part.id, part.state.status)
@@ -17894,6 +17908,46 @@ export class ChatEngine {
       undefined,
       'internal'
     )
+  }
+
+  /** Late tool claims (see the reopen call site) attach to the just-settled
+   *  turn: re-open its recently completed checkpoint and seed the session's
+   *  change tracking with the recorded paths plus the new claims, so the next
+   *  idle finalization re-completes the same checkpoint with the full diff.
+   *  Serialized per session via `pendingReopen` so interleaved late claims
+   *  cannot race two reopens of the same row. */
+  private reopenSettledTurnForLateClaim(
+    session: SessionInfo,
+    claimedPaths: readonly string[]
+  ): Promise<void> {
+    const run = async (): Promise<void> => {
+      if (session.activeTurnId) return
+      const checkpoint = await this.checkpointManager
+        .reopenTurn(session.projectId, session.threadId, LATE_CLAIM_REOPEN_WINDOW_MS)
+        .catch((error: unknown) => {
+          Logger.dev('late-claim checkpoint reopen failed:', error)
+          return null
+        })
+      if (!checkpoint || session.activeTurnId) return
+      session.activeTurnId = checkpoint.id
+      session.activeTurnUserMessageId = checkpoint.sourceMessageId
+      session.changedPaths = new Set(checkpoint.changes.map((change) => change.path))
+      session.preciseChangedPaths = new Map()
+      session.openUnboundedTools = undefined
+      session.unboundedWindowStart = undefined
+      session.pendingWindowScans = undefined
+      for (const path of claimedPaths) session.changedPaths.add(path)
+    }
+    const pending = (session.pendingReopen ?? Promise.resolve())
+      .then(run)
+      .catch((error: unknown) => {
+        Logger.dev('late-claim turn reopen failed:', error)
+      })
+    session.pendingReopen = pending
+    void pending.finally(() => {
+      if (session.pendingReopen === pending) session.pendingReopen = undefined
+    })
+    return pending
   }
 
   /** Expose isolated Brainstorm research activity without leaking its final JSON response. */

@@ -70,6 +70,12 @@ export interface TurnCompletionOptions {
 /** Cap on foreign-thread checkpoints scanned while reconciling concurrent edits. */
 const FOREIGN_CHECKPOINT_SCAN_LIMIT = 500
 
+/** How recent a completed checkpoint must be for a late file-tool claim to
+ *  reopen it. Bounds the risk of resurrecting an old turn for an unrelated
+ *  straggler claim; a genuinely still-running model emits its late edits
+ *  within seconds of the premature settle. */
+export const LATE_CLAIM_REOPEN_WINDOW_MS = 15 * 60_000
+
 /** Upper bounds for one line-stats repair pass so startup is never blocked. */
 const REPAIR_MAX_CHECKPOINTS = 200
 const REPAIR_MAX_FILES = 500
@@ -621,6 +627,45 @@ export class CheckpointManager {
       }
     }
     return repaired
+  }
+
+  /** Re-open a recently completed checkpoint so late tool claims — edits that
+   *  landed after the engine settled the turn (e.g. a harness reported a
+   *  usage-reset settle while the model was still working) — are captured in
+   *  the same turn's card instead of falling outside every checkpoint. The
+   *  reopened turn resumes with its recorded changes and is re-completed by
+   *  the next idle finalization. Returns null when no terminal checkpoint is
+   *  recent enough to be safely reopened. */
+  async reopenTurn(
+    projectId: string,
+    threadId: string,
+    maxAgeMs: number
+  ): Promise<TurnCheckpoint | null> {
+    assertId(projectId)
+    assertId(threadId)
+    return this.withBlobLock(projectId, async () => {
+      const rows = await this.queryRows(
+        `SELECT turn_id, data FROM turn_checkpoints
+         WHERE project_id = ? AND thread_id = ?
+           AND json_extract(data, '$.status') IN ('completed', 'failed')
+           AND json_extract(data, '$.completedAt') >= ?
+         ORDER BY json_extract(data, '$.completedAt') DESC`,
+        [projectId, threadId, Date.now() - maxAgeMs],
+        1
+      )
+      const row = rows[0]
+      if (!row) return null
+      const turnId = String(row['turn_id'])
+      const checkpoint = JSON.parse(String(row['data'])) as TurnCheckpoint
+      const reopened: TurnCheckpoint = { ...checkpoint, status: 'active' }
+      delete reopened.completedAt
+      await this.save(reopened)
+      await this.writeRow(
+        'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id) VALUES(?, ?, ?)',
+        [projectId, threadId, turnId]
+      )
+      return reopened
+    })
   }
 
   /** Remove project checkpoint blobs that no remaining thread references. */
