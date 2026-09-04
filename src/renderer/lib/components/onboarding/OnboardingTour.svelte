@@ -20,6 +20,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { APP_NAME } from '$shared/brand'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
 
   interface Props {
     step: number
@@ -193,17 +194,17 @@
 />
 
 {#if step === 0}
-  <Modal open title={`Welcome to ${APP_NAME}`} onClose={onFinish} size="lg" closeOnBackdrop={false}>
+  <Modal open title={`Welcome to ${APP_NAME}`} onClose={onFinish} size="xl" closeOnBackdrop={false}>
     <div class="space-y-6">
       <div class="flex items-start gap-4">
         <div
           class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-on-primary"
         >
-          <Sparkles size={20} />
+          <VendorIcon size={20} name="CodeInOven" id="cio" />
         </div>
         <div>
           <h3 class="text-lg font-semibold tracking-tight">Let's get you ready to work</h3>
-          <p class="mt-1 max-w-xl text-sm leading-relaxed text-muted">
+          <p class="mt-1 text-sm leading-relaxed text-muted">
             This short tour shows where projects, conversations, tools, and notifications live. Then
             you can add a folder and connect your first coding agent.
           </p>
