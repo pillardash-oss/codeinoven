@@ -57,7 +57,7 @@
   import Switch from '../ui/Switch.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
-  import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
+  import { isEntryHiddenByVisibility } from '$lib/stores/cio-search-visibility.svelte'
   import {
     composerMentionQuery,
     normalizeComposerMessage,
@@ -1108,7 +1108,9 @@
               'all',
               workspaceState.activeScopeBucketIdFor(fileTagProjectId)
             )
-          ).filter((entry) => cioSearchVisibility.includeCio || !isCioScratchPath(entry.path))
+          ).filter(
+            (entry) => !isEntryHiddenByVisibility(entry.path, entry.ignored)
+          )
         : []
       const entries: ComposerMentionEntry[] = [
         ...utilityEntries,
@@ -2273,7 +2275,7 @@
         activeIndex={mentionIndex}
         query={mentionQuery}
         onSelect={selectMention}
-        onCioFilterChange={() => {
+        onFilterChange={() => {
           if (lastCaretText !== null) void updateFileMention(lastCaretText)
         }}
       />

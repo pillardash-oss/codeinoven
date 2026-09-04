@@ -340,6 +340,9 @@ export interface ProjectFileEntry {
   kind: 'directory' | 'file'
   size?: number
   modifiedAt?: number
+  /** Whether the entry is git-ignored. Set by the search index only; a
+   *  directory is ignored when every file below it is ignored. */
+  ignored?: boolean
 }
 
 export interface ProjectFileInfo extends ProjectFileEntry {
