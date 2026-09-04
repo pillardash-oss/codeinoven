@@ -44,6 +44,7 @@
     StickyNote
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
+  import WelcomeStart from './WelcomeStart.svelte'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
   import ProjectIdentity from '../shared/ProjectIdentity.svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
@@ -3979,12 +3980,14 @@
             </div>
           </div>
         {:else}
-          <div class="flex h-full items-center justify-center">
-            <div class="text-center">
-              <MessageSquare size={28} class="mx-auto mb-2 text-dimmed" />
-              <p class="text-sm text-dimmed">Select a thread or create one to get started</p>
-            </div>
-          </div>
+          <WelcomeStart
+            onNewChat={() => navigate('chats')}
+            onAddProject={() => {
+              navigate('projects')
+              workspaceState.requestAddProject()
+            }}
+            onOpenSettings={() => navigate('settings')}
+          />
         {/if}
       </div>
 
