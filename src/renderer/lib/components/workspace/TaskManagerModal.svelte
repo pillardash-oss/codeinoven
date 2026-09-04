@@ -48,6 +48,13 @@
 
   const selectedProcesses = $derived(processes.filter((process) => selected.has(process.pid)))
 
+  const totalRamBytes = $derived(
+    processes.reduce((sum, process) => sum + (process.memoryBytes ?? 0), 0)
+  )
+  const totalCpuPercent = $derived(
+    processes.reduce((sum, process) => sum + (process.cpuPercent ?? 0), 0)
+  )
+
   async function load(): Promise<void> {
     if (checking) return
     checking = true
@@ -561,6 +568,22 @@
             {processes.length} running
           {/if}
         </p>
+        <span
+          class="inline-flex shrink-0 items-center gap-1 text-xs text-dimmed tabular-nums"
+          title="Total memory used by listed processes"
+          aria-label="Total memory used by listed processes"
+        >
+          <MemoryStick size={13} aria-hidden="true" />
+          {formatMemory(totalRamBytes)}
+        </span>
+        <span
+          class="inline-flex shrink-0 items-center gap-1 text-xs text-dimmed tabular-nums"
+          title="Total CPU usage of listed processes"
+          aria-label="Total CPU usage of listed processes"
+        >
+          <Cpu size={13} aria-hidden="true" />
+          {formatCpu(totalCpuPercent)}
+        </span>
       </div>
       <div class="flex shrink-0 items-center gap-1.5">
         <button
