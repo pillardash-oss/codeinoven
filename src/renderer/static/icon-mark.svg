@@ -1,4 +1,14 @@
-<svg width="1em" height="1em" viewBox="0 0 1254 1254" xmlns="http://www.w3.org/2000/svg"><title>CodeInOven</title>
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CodeInOven vendor mark — the bare transparent oven+code artwork.
+  Used everywhere CodeInOven appears as a vendor (model picker, custom
+  providers, about-screen links) via src/renderer/lib/vendor-icons.
+  Strokes use `currentColor`, so the mark follows the surrounding text
+  color: white on dark surfaces, black on light. The flame wisps and oven
+  handle keep the fixed brand orange. The platform app icon (squircle
+  tile) lives in icon.svg; this mark is deliberately tile-free.
+-->
+<svg viewBox="0 0 1254 1254" xmlns="http://www.w3.org/2000/svg">
     <g id="cio-mark" transform="matrix(1.63564,0,0,1.63564,-397.875,-206.644)">
         <g id="smoke-wisps">
             <g transform="matrix(0.95633,0,0,0.856636,25.3218,30.868)">

@@ -143,15 +143,18 @@ writeFileSync(
 )
 Logger.dev(`[generate-brand-icons] Wrote vendored opencode mark to ${vendorOutDir}.`)
 
-// CodeInOven is a citizen of its own bundle — its mark is vendored by hand
-// from the master app icon (`icon.svg`), which already carries the full
-// squircle-tile artwork, so the vendor registry serves the real brand icon
-// wherever a vendor icon is rendered (e.g. `<VendorIcon name="CodeInOven">`).
-let cioMark = readFileSync(join(root, 'src/renderer/static/icon.svg'), 'utf8')
+// CodeInOven is a citizen of its own bundle — its vendor mark is the bare
+// transparent oven+code artwork (`icon-mark.svg`), whose strokes use
+// `currentColor` so the mark follows the surrounding text color (white on
+// dark surfaces, black on light) exactly like the other mono vendor marks.
+// The squircle-tile app icon (`icon.svg`) is platform artwork only and is
+// NOT used here. Serves the model picker, custom `cio-` providers, and the
+// about-screen identity/link rows.
+let cioMark = readFileSync(join(root, 'src/renderer/static/icon-mark.svg'), 'utf8')
 cioMark = cioMark
   .replace(/^<\?[\s\S]*?\?>\s*/i, '')
   .replace(/^<!--[\s\S]*?-->\s*/, '')
-  .replace('width="1024" height="1024"', 'width="1em" height="1em"')
+  .replace('<svg ', '<svg width="1em" height="1em" ')
   .replace(/(<svg[^>]*>)/, '$1<title>CodeInOven</title>')
 writeFileSync(join(vendorOutDir, 'cio.svg'), cioMark)
 Logger.dev(`[generate-brand-icons] Wrote vendored CodeInOven mark to ${vendorOutDir}.`)
