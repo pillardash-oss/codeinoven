@@ -1785,10 +1785,10 @@ export class PiDriver extends PersistentCliDriver {
   ): Promise<void> {
     void _settings
     await this.requireSession(projectPath, sessionId)
-    const client = this.rpcClients.get(sessionId)
-    if (!client) {
-      throw new Error(`No active Pi session is available to compact for ${sessionId}`)
-    }
+    // An idle thread has no live RPC process (app restart, idle dispose, crash
+    // cleanup all evict clients). Boot one on demand — ensureRpcClient resumes
+    // the persisted native transcript so compaction sees the full history.
+    const client = await this.ensureRpcClient(projectPath, sessionId)
     // pi's `compact` RPC aborts any active run and then compacts, so it works
     // both mid-turn and on an idle session. Awaiting here keeps the handoff
     // deterministic from the caller's view; compaction_start/compaction_end
