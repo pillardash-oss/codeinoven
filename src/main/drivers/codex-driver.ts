@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess } from 'child_process'
+import { randomUUID } from 'crypto'
 import { promises as fs } from 'fs'
 import { basename } from 'path'
 import { fileURLToPath } from 'url'
 import type {
+  AgentBankedResets,
   AgentEvent,
   AgentQuestion,
   AgentProviderIssue,
@@ -1712,9 +1714,11 @@ export class CodexDriver extends PersistentCliDriver {
    * Fetch current quota telemetry through the resident app-server, including
    * for old threads whose turns predate quota capture.
    */
-  async readAccountUsage(
-    projectPath: string
-  ): Promise<{ rateLimits: AgentRateLimitWindow[]; credits?: AgentUsageCredits } | null> {
+  async readAccountUsage(projectPath: string): Promise<{
+    rateLimits: AgentRateLimitWindow[]
+    credits?: AgentUsageCredits
+    bankedResets?: AgentBankedResets
+  } | null> {
     let temporaryHost: CodexAppServerHost | null = null
     try {
       const host =
@@ -1724,7 +1728,9 @@ export class CodexDriver extends PersistentCliDriver {
       const telemetry = mapCodexRateLimits(
         await this.appServerRequest(host, 'account/rateLimits/read')
       )
-      if (telemetry.rateLimits.length === 0 && !telemetry.credits) return null
+      if (telemetry.rateLimits.length === 0 && !telemetry.credits && !telemetry.bankedResets) {
+        return null
+      }
       return telemetry
     } catch (error) {
       Logger.dev('Codex on-demand account usage refresh unavailable:', error)
@@ -1732,6 +1738,34 @@ export class CodexDriver extends PersistentCliDriver {
     } finally {
       if (temporaryHost) {
         this.stopAppServerHost(temporaryHost, 'Codex account usage probe completed')
+      }
+    }
+  }
+
+  /**
+   * Redeem one banked rate-limit reset credit. Destructive and irreversible:
+   * it immediately resets the account's active 5-hour and weekly usage
+   * windows and consumes one banked credit. The caller is responsible for
+   * confirming with the user before invoking this.
+   */
+  async activateBankedReset(projectPath: string): Promise<{
+    rateLimits: AgentRateLimitWindow[]
+    credits?: AgentUsageCredits
+    bankedResets?: AgentBankedResets
+  } | null> {
+    let temporaryHost: CodexAppServerHost | null = null
+    try {
+      const host =
+        this.hostsByProjectPath.has(projectPath) || this.hostsStartingByProjectPath.has(projectPath)
+          ? await this.ensureAppServerHost(projectPath)
+          : (temporaryHost = await this.createAppServerHost(projectPath))
+      await this.appServerRequest(host, 'account/rateLimitResetCredit/consume', {
+        idempotencyKey: randomUUID()
+      })
+      return mapCodexRateLimits(await this.appServerRequest(host, 'account/rateLimits/read'))
+    } finally {
+      if (temporaryHost) {
+        this.stopAppServerHost(temporaryHost, 'Codex banked reset activation completed')
       }
     }
   }
@@ -2739,6 +2773,7 @@ function mapCodexRateLimitSnapshot(
 export function mapCodexRateLimits(value: unknown): {
   rateLimits: AgentRateLimitWindow[]
   credits?: AgentUsageCredits
+  bankedResets?: AgentBankedResets
 } {
   const result = recordValue(value)
   if (!result) return { rateLimits: [] }
@@ -2767,7 +2802,19 @@ export function mapCodexRateLimits(value: unknown): {
     const planType = stringValue(limits?.['planType']) ?? stringValue(result['planType'])
     if (planType) credits = { ...credits, planType }
   }
-  return { rateLimits: mapped, ...(credits ? { credits } : {}) }
+
+  // Codex's app-server only reports the aggregate count of banked resets, not
+  // each credit's individual grant/expiry date.
+  const resetCredits = recordValue(result['rateLimitResetCredits'])
+  const availableCount = numberValue(resetCredits?.['availableCount'])
+  const bankedResets: AgentBankedResets | undefined =
+    availableCount !== undefined ? { availableCount } : undefined
+
+  return {
+    rateLimits: mapped,
+    ...(credits ? { credits } : {}),
+    ...(bankedResets ? { bankedResets } : {})
+  }
 }
 
 /**

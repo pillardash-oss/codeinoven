@@ -1991,6 +1991,14 @@ export interface AgentRateLimitWindow {
   isUsingOverage?: boolean
 }
 
+/** Banked rate-limit resets a user has accumulated and can redeem on demand
+ *  (currently Codex-only). Codex's app-server only reports the count, not
+ *  each credit's individual grant/expiry date. */
+export interface AgentBankedResets {
+  /** Number of banked resets available to redeem. */
+  availableCount: number
+}
+
 /** Prepaid-credit balance reported alongside quota windows (e.g. Codex credits). */
 export interface AgentUsageCredits {
   /** Remaining balance in the provider's credit currency, when metered. */
@@ -2017,6 +2025,8 @@ export interface AgentContextUsage {
   rateLimits: AgentRateLimitWindow[]
   /** Prepaid-credit balance reported alongside quota windows. */
   credits?: AgentUsageCredits
+  /** Banked rate-limit resets available to redeem (currently Codex-only). */
+  bankedResets?: AgentBankedResets
 }
 
 /** Per-harness quota telemetry for threads that used more than one harness. */
@@ -2030,6 +2040,8 @@ export interface AgentHarnessUsage {
   rateLimits: AgentRateLimitWindow[]
   /** Prepaid-credit balance reported by this harness on the thread. */
   credits?: AgentUsageCredits
+  /** Banked rate-limit resets available to redeem (currently Codex-only). */
+  bankedResets?: AgentBankedResets
   /** Cumulative token accounting from the harness_usage table, when available. */
   tokens?: AgentTokenUsage
   /** Assistant messages attributed to this harness on the thread. */
@@ -2046,6 +2058,8 @@ export interface AgentAccountUsage {
   providerId: string
   rateLimits: AgentRateLimitWindow[]
   credits?: AgentUsageCredits
+  /** Banked rate-limit resets available to redeem (currently Codex-only). */
+  bankedResets?: AgentBankedResets
   /** Effective model context window (tokens) for the active session, when known. */
   contextWindow?: number
   /** Tokens currently occupying the model context, when known. */

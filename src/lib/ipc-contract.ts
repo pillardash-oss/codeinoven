@@ -884,6 +884,12 @@ export interface IpcInvokeContract {
   'agent:listProviderSnapshot': Contract<[projectId: string], ProviderCatalog[]>
   'agent:refreshProviderCatalog': Contract<[projectId: string, force?: boolean], ProviderCatalog[]>
   'agent:refreshAccountUsage': Contract<[projectId: string, threadId: string], AgentAccountUsage[]>
+  /** Redeem one banked Codex rate-limit reset credit. Destructive: resets the
+   *  account's active usage windows and consumes one banked credit. */
+  'agent:activateBankedReset': Contract<
+    [projectId: string, threadId: string],
+    AgentAccountUsage | null
+  >
   'agent:getHarnessAuthStatus': Contract<[projectId: string, harnessId: string], boolean | null>
   'agent:listTools': Contract<
     [

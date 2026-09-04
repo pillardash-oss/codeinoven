@@ -243,6 +243,8 @@
     canCompact?: boolean
     compacting?: boolean
     onCompact?: () => void
+    /** Opens the destructive confirmation dialog for redeeming a banked Codex reset. */
+    onActivateBankedReset?: () => void
     /** Previous user messages for terminal-like up-arrow history recall. */
     historyMessages?: string[]
     /** Global default vision model used to describe images for text-only models. */
@@ -325,6 +327,7 @@
     canCompact = false,
     compacting = false,
     onCompact,
+    onActivateBankedReset,
     historyMessages = [],
     imageDescriptorDefault,
     imageDescriptorAskAgain = false,
@@ -2636,6 +2639,7 @@
         {canCompact}
         {compacting}
         {onCompact}
+        {onActivateBankedReset}
         onReveal={onRevealUsage}
         onHide={onHideUsage}
         refreshing={usageRefreshing}

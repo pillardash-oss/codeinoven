@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { Archive, BatteryMedium, Brain, ChevronDown, ChevronRight, Loader2 } from '@lucide/svelte'
+  import {
+    Archive,
+    BatteryMedium,
+    Brain,
+    ChevronDown,
+    ChevronRight,
+    Loader2,
+    RotateCcw
+  } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
@@ -21,6 +29,8 @@
     canCompact?: boolean
     compacting?: boolean
     onCompact?: () => void
+    /** Opens the destructive confirmation dialog for redeeming a banked reset. */
+    onActivateBankedReset?: () => void
     /** Called when the user hovers the indicator to flush the latest usage. */
     onReveal?: () => void
     /** Called when the user stops hovering the indicator. */
@@ -42,6 +52,7 @@
     canCompact = false,
     compacting = false,
     onCompact,
+    onActivateBankedReset,
     onReveal,
     onHide,
     refreshing = false,
@@ -206,6 +217,27 @@
   {/each}
 {/snippet}
 
+{#snippet bankedResetRow(availableCount: number)}
+  <div class="flex items-center justify-between gap-3 rounded-md border border-border bg-app/40 p-2">
+    <div class="min-w-0">
+      <p class="text-[0.625rem] font-medium text-muted">Banked resets</p>
+      <p class="mt-0.5 text-[0.5625rem] text-dimmed">
+        {availableCount} available to redeem
+      </p>
+    </div>
+    <button
+      type="button"
+      class="flex h-6 shrink-0 items-center gap-1 rounded-md border border-border px-2 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
+      title="Redeem one banked reset — this immediately resets your usage windows"
+      disabled={!onActivateBankedReset}
+      onclick={onActivateBankedReset}
+    >
+      <RotateCcw size={10} />
+      Activate
+    </button>
+  </div>
+{/snippet}
+
 {#snippet modelRows(models: HarnessModelUsage[])}
   <div class="rounded-md border border-border bg-app/40 p-2">
     <p class="mb-1.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">Models used</p>
@@ -287,6 +319,9 @@
         {#if creditsLine(entry)}
           <p class="text-[0.5625rem] text-dimmed">Credits: {creditsLine(entry)}</p>
         {/if}
+        {#if entry.bankedResets?.availableCount}
+          {@render bankedResetRow(entry.bankedResets.availableCount)}
+        {/if}
       </div>
     {/if}
   </div>
@@ -335,6 +370,12 @@
         {@render modelRows(harnessUsage[0].models)}
       {/if}
       {@render limitRows(harnessUsage[0].rateLimits)}
+    </div>
+  {/if}
+
+  {#if !multiHarness && usage?.bankedResets?.availableCount}
+    <div class="mt-3 border-t border-border pt-3">
+      {@render bankedResetRow(usage.bankedResets.availableCount)}
     </div>
   {/if}
 

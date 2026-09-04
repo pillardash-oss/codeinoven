@@ -2043,6 +2043,9 @@ export class ChatEngine {
     ipcMain.handle('agent:refreshAccountUsage', (_, projectId: string, threadId: string) =>
       this.refreshAccountUsage(projectId, threadId)
     )
+    ipcMain.handle('agent:activateBankedReset', (_, projectId: string, threadId: string) =>
+      this.activateBankedReset(projectId, threadId)
+    )
     ipcMain.handle('agent:getHarnessAuthStatus', (_, projectId: string, harnessId: string) =>
       this.getHarnessAuthStatus(projectId, harnessId)
     )
@@ -3436,6 +3439,9 @@ export class ChatEngine {
                       : customUsage?.credits
                         ? { credits: customUsage.credits }
                         : {}),
+                  ...(nativeTelemetry?.bankedResets
+                    ? { bankedResets: nativeTelemetry.bankedResets }
+                    : {}),
                   ...(nativeTelemetry?.contextWindow === undefined
                     ? {}
                     : { contextWindow: nativeTelemetry.contextWindow }),
@@ -3460,6 +3466,27 @@ export class ChatEngine {
       })
     )
     return results.filter((entry): entry is AgentAccountUsage => entry !== null)
+  }
+
+  /**
+   * Redeem one banked rate-limit reset credit for the thread's harness.
+   * Destructive and irreversible — it immediately resets the account's usage
+   * windows and consumes one banked credit. Only Codex currently supports
+   * this; other harnesses return null.
+   */
+  async activateBankedReset(projectId: string, threadId: string): Promise<AgentAccountUsage | null> {
+    const projectIdSafe = validateEntityId(projectId, 'Project ID')
+    await this.threadCreation?.awaitReady(threadId)
+    const thread = await this.threadManager.getThread(projectIdSafe, threadId)
+    if (!thread) return null
+    const harnessId = thread.settings?.harnessId
+    if (!harnessId) return null
+    const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
+    if (!driver.activateBankedReset) return null
+    const telemetry = await driver.activateBankedReset(projectPath)
+    if (!telemetry) return null
+    const providerId = thread.settings?.providerId ?? harnessId
+    return { harnessId, providerId, ...telemetry }
   }
 
   /**

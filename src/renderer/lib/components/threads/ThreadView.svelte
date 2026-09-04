@@ -62,6 +62,7 @@
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
   import TranscriptExportModal from './TranscriptExportModal.svelte'
   import Modal from '../ui/Modal.svelte'
+  import CodexBankedResetConfirm from '../ui/CodexBankedResetConfirm.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import AgentTodoCard from './AgentTodoCard.svelte'
@@ -1614,6 +1615,11 @@
         ? { credits: incoming.credits }
         : previous.credits
           ? { credits: previous.credits }
+          : {}),
+      ...(incoming.bankedResets
+        ? { bankedResets: incoming.bankedResets }
+        : previous.bankedResets
+          ? { bankedResets: previous.bankedResets }
           : {})
     }
   }
@@ -5264,6 +5270,29 @@
       void refreshCheckpoints()
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The request could not be stopped.'
+    }
+  }
+
+  let showBankedResetConfirm = $state(false)
+
+  async function activateBankedReset(): Promise<void> {
+    const { projectId, id } = thread
+    const result = await invoke('agent:activateBankedReset', projectId, id)
+    if (!result) return
+    liveAccountUsage = liveAccountUsage.map((usage) =>
+      usage.harnessId === result.harnessId && usage.providerId === result.providerId
+        ? result
+        : usage
+    )
+    if (result.harnessId === settings.harnessId && result.providerId === settings.providerId) {
+      commitContextUsage(
+        mergeContextUsage(contextUsageDisplay, {
+          ...(contextUsageDisplay ?? { costUsd: 0, rateLimits: [] }),
+          rateLimits: result.rateLimits,
+          credits: result.credits,
+          bankedResets: result.bankedResets
+        })
+      )
     }
   }
 
@@ -11525,6 +11554,9 @@
                     ) && !busy}
                     {compacting}
                     onCompact={() => void compactWork()}
+                    onActivateBankedReset={() => {
+                      showBankedResetConfirm = true
+                    }}
                     projectContext={composerProject}
                     projectId={thread.projectId}
                     threadId={thread.id}
@@ -11791,6 +11823,19 @@
   {chatMode}
   onClose={() => (transcriptExportOpen = false)}
   onExport={(includeTrace) => exportTranscript(includeTrace)}
+/>
+
+<CodexBankedResetConfirm
+  open={showBankedResetConfirm}
+  usedPercent={contextUsageDisplay?.rateLimits
+    .map((window) => window.usedPercent)
+    .filter((percent): percent is number => percent !== undefined)
+    .reduce((max, percent) => Math.max(max, percent), 0)}
+  onClose={() => (showBankedResetConfirm = false)}
+  onConfirm={async () => {
+    await activateBankedReset()
+    showBankedResetConfirm = false
+  }}
 />
 
 <StartAfterThreadPicker

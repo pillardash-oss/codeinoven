@@ -113,6 +113,7 @@ const INVOKE_CHANNELS = [
   'agent:listProviderSnapshot',
   'agent:refreshProviderCatalog',
   'agent:refreshAccountUsage',
+  'agent:activateBankedReset',
   'agent:getHarnessAuthStatus',
   'agent:listTools',
   'agent:listContextCapabilities',
