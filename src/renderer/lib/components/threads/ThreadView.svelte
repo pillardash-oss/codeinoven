@@ -375,6 +375,23 @@
    *  moment they land — never staged, never evicted from below the reader. */
   let visibleMessages = $derived(hasController ? messages : messages.slice(mountedStartIndex))
 
+  /** True when the thread has no conversation yet — the composer is centered
+   *  with suggested prompts instead of docked at the bottom. */
+  let emptyConversation = $derived(
+    loaded &&
+      visibleMessages.length === 0 &&
+      !busy &&
+      !failureRetryVisible &&
+      pendingPermissions.length === 0 &&
+      pendingQuestionRequests.length === 0
+  )
+
+  const suggestedPrompts = [
+    'Summarize this project: architecture, key modules, and entry points',
+    'Review the codebase and list the top improvement opportunities',
+    'Find and fix a bug — explain the root cause as you go'
+  ]
+
   /** Auto-fill the mounted window up to HISTORY_WINDOW_SIZE after the first
    *  paint, one batch per frame. Batches mount above the viewport only, so
    *  content-visibility keeps them layout-free and a reader at the bottom
@@ -10138,7 +10155,9 @@
     <!-- Scrollable conversation area -->
     <div
       bind:this={scrollEl}
-      class="conversation-scroll conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20"
+      class="conversation-scroll conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20 {emptyConversation
+        ? 'hidden'
+        : ''}"
       onscroll={onScroll}
       onwheel={onWheel}
       onpointerup={captureResponseSelection}
@@ -10210,7 +10229,9 @@
                     {@const previousTurnAudit = getPreviousTurnAudit(absIndex)}
                     {@const explicitPresentation = explicitMessagePresentation(msg)}
                     {#if previousTurnAudit}
-                      <div class="mb-1 flex items-center gap-1.5 self-end text-[0.625rem] text-dimmed">
+                      <div
+                        class="mb-1 flex items-center gap-1.5 self-end text-[0.625rem] text-dimmed"
+                      >
                         <span>Previous turn completed</span>
                         <span>·</span>
                         <span class="tabular-nums"
@@ -11158,8 +11179,20 @@
 
         <!-- Composer — always anchored at the bottom. Blocking permission and question
        tools replace it until the user responds. -->
-        <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
-          <div class="mx-auto w-full max-w-3xl">
+        <div
+          class="conversation-gutter composer-gutter relative px-6 pt-2 {emptyConversation
+            ? 'flex min-h-0 flex-1 flex-col justify-center pb-5'
+            : 'shrink-0 pb-5'}"
+        >
+          <div class="mx-auto w-full {emptyConversation ? 'max-w-4xl' : 'max-w-3xl'}">
+            {#if emptyConversation}
+              <div class="mb-5 text-center">
+                <h1 class="text-[1.375rem] font-semibold tracking-tight text-foreground">
+                  {project?.name ?? 'New thread'}
+                </h1>
+                <p class="mt-1 text-[0.875rem] text-muted">What should the agent work on?</p>
+              </div>
+            {/if}
             {#if pendingImageDescriptorError && !achievementAutonomous}
               {#key pendingImageDescriptorError.id}
                 <ImageDescriptorErrorCard
@@ -11687,6 +11720,19 @@
                     onImageDescriptorDefaultChange={setImageDescriptorDefault}
                     onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
                   />
+                  {#if emptyConversation}
+                    <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
+                      {#each suggestedPrompts as prompt (prompt)}
+                        <button
+                          type="button"
+                          class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                          onclick={() => sendComposerMessage(prompt, [])}
+                        >
+                          {prompt}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
                 {/key}
               {/if}
             {/if}
