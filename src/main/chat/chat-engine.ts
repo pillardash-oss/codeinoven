@@ -2045,8 +2045,7 @@ export class ChatEngine {
     )
     ipcMain.handle(
       'agent:refreshAccountUsage',
-      (_, projectId: string, threadId: string, overrides?: AgentAccountUsageOverrides) =>
-        this.refreshAccountUsage(projectId, threadId, overrides)
+      (_, overrides?: AgentAccountUsageOverrides) => this.refreshAccountUsage(overrides)
     )
     ipcMain.handle('agent:activateBankedReset', (_, projectId: string, threadId: string) =>
       this.activateBankedReset(projectId, threadId)
@@ -3381,93 +3380,35 @@ export class ChatEngine {
   }
 
   /**
-   * Fetch the current account quota for the thread's harness on demand. Used by
-   * the battery popover so threads whose turns predate quota capture (or where a
-   * turn-time refresh silently failed) still show live rate-limit windows and
-   * credits. Returns null when the harness cannot report quota without a turn.
-   */
-  /**
-   * Fetch the current account quota for every harness used on the thread, on
-   * demand. Used by the battery popover so old threads (whose turns predate
-   * quota capture, or where a turn-time refresh silently failed) still show live
-   * rate-limit windows and credits for each harness. The harness set comes from
-   * the dedicated `harness_usage` table, augmented with the thread's current
-   * settings harness.
+   * Fetch the current account quota on demand. Account usage is
+   * PROVIDER-level account state — it has nothing to do with any thread or
+   * conversation context — so one channel answers for every surface (project
+   * threads, inbox chats, temporary chats, the new-chat composer) and every
+   * surface reads the same cache. The caller names the harness/provider the
+   * UI is currently showing; the shared telemetry chain does the rest.
    */
   async refreshAccountUsage(
-    projectId: string,
-    threadId: string,
     overrides?: AgentAccountUsageOverrides
   ): Promise<AgentAccountUsage[]> {
-    const projectIdSafe = validateEntityId(projectId, 'Project ID')
-    await this.threadCreation?.awaitReady(threadId)
-    const thread = await this.threadManager.getThread(projectIdSafe, threadId)
-    // The same telemetry chain answers for every conversation kind: a real
-    // thread row, an active temporary chat session, or — before a temporary
-    // session / new inbox chat has ever run a turn — the harness/provider the
-    // composer is currently pointed at. No branch diverges from the others.
-    const targets: {
-      harnessId: string
-      providerId: string
-      driver: HarnessDriver
-      projectPath: string
-    }[] = []
-    if (thread) {
-      const usageRows = this.threadManager.harnessUsageFor(projectIdSafe, threadId)
-      const providerByHarness = new Map<string, string>()
-      for (const row of usageRows) {
-        providerByHarness.set(row.harnessId, row.providerId)
-      }
-      const harnessIds = new Set<string>(usageRows.map((row) => row.harnessId))
-      const current = thread.settings?.harnessId
-      if (current) harnessIds.add(current)
-      for (const harnessId of harnessIds) {
-        try {
-          const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
-          targets.push({
-            harnessId,
-            providerId: providerByHarness.get(harnessId) ?? thread.settings?.providerId ?? harnessId,
-            driver,
-            projectPath
-          })
-        } catch (error) {
-          Logger.dev('On-demand account usage refresh unavailable:', error)
-        }
-      }
-    } else {
-      const temporary = this.temporaryChats.get(threadId)
-      if (temporary) {
-        const driver = this.drivers.get(temporary.driverId)
-        if (driver) {
-          targets.push({
-            harnessId: temporary.driverId,
-            providerId: temporary.providerId ?? overrides?.providerId ?? temporary.driverId,
-            driver,
-            projectPath: temporary.projectPath
-          })
-        }
-      } else if (overrides?.harnessId) {
-        // No thread row and no live temporary session (e.g. the inbox
-        // "Start a new chat" composer) — read the provider-level quota cache
-        // against the conversation working directory.
-        try {
-          const projectPath = await this.resolveProjectPath(projectIdSafe)
-          const driver = this.drivers.get(overrides.harnessId)
-          if (driver) {
-            targets.push({
-              harnessId: overrides.harnessId,
-              providerId: overrides.providerId ?? overrides.harnessId,
-              driver,
-              projectPath
-            })
-          }
-        } catch (error) {
-          Logger.dev('On-demand account usage refresh unavailable:', error)
-        }
-      }
+    const harnessId = overrides?.harnessId
+    if (!harnessId) return []
+    const driver = this.drivers.get(harnessId)
+    if (!driver) {
+      Logger.dev(`On-demand account usage refresh: unknown harness "${harnessId}"`)
+      return []
     }
-    const results = await Promise.all(targets.map((target) => this.readHarnessAccountUsage(target)))
-    return results.filter((entry): entry is AgentAccountUsage => entry !== null)
+    const providerId = overrides?.providerId ?? harnessId
+    // Quota reads never depend on where a conversation lives. Read against the
+    // shared chats working directory so every surface gets the same answer.
+    let projectPath: string
+    try {
+      projectPath = await this.resolveProjectPath(INBOX_PROJECT_ID)
+    } catch {
+      await this.storage.ensureDirectory(CHATS_CWD_DIR)
+      projectPath = this.storage.resolve(CHATS_CWD_DIR)
+    }
+    const entry = await this.readHarnessAccountUsage({ harnessId, providerId, driver, projectPath })
+    return entry ? [entry] : []
   }
 
   /** One harness's on-demand account quota — the single telemetry chain

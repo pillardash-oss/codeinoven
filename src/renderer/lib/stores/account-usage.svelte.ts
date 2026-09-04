@@ -10,21 +10,14 @@ export const ACCOUNT_USAGE_CACHE_MS = 5000
  *  the same visible feedback the slower harness CLIs produce naturally. */
 export const ACCOUNT_USAGE_MIN_LOADING_MS = 800
 
-export interface AccountUsageRequest {
-  projectId: string
-  /** Thread id, temporary chat id, or a stable pseudo id (e.g. `new-chat`). */
-  threadId: string
-  /** Harness/provider to answer for when no thread row or live temporary
-   *  session exists yet — the same telemetry chain runs regardless. */
-  overrides?: AgentAccountUsageOverrides
-}
-
 /**
  * Shared hover-revealed account-quota cache — the single pipeline behind the
  * usage battery in every conversation surface (project threads, inbox chats,
- * temporary chats, and the new-chat composer). One cache instance per host
- * component; the fetch, TTL, refresh-guard, and loading feedback are identical
- * everywhere by construction.
+ * temporary chats, and the new-chat composer). Account usage is provider-level
+ * account state, independent of any thread or conversation context, so every
+ * host asks the same channel for the harness/provider it is showing and gets
+ * the same answer. One cache instance per host component; the fetch, TTL,
+ * refresh-guard, and loading feedback are identical everywhere by construction.
  */
 export function createAccountUsageCache() {
   let usage = $state<AgentAccountUsage[]>([])
@@ -54,18 +47,13 @@ export function createAccountUsageCache() {
    * out-of-order resolve after the user switched harness or conversation.
    */
   async function refresh(
-    request: AccountUsageRequest,
+    overrides: AgentAccountUsageOverrides,
     isStaleRequest?: () => boolean
   ): Promise<AgentAccountUsage[]> {
     if (refreshing) return []
     refreshing = true
     try {
-      const usageList = await invoke(
-        'agent:refreshAccountUsage',
-        request.projectId,
-        request.threadId,
-        request.overrides
-      )
+      const usageList = await invoke('agent:refreshAccountUsage', overrides)
       // Guard against a stale/partial main process resolving the call with a
       // non-array; an undefined `usage` crashes any derived reading it.
       if (!Array.isArray(usageList)) return []

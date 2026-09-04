@@ -1704,12 +1704,8 @@
     const refreshKey = `${settings.harnessId}:${settings.providerId}`
     const usageList = await accountUsageCache.refresh(
       {
-        projectId: thread.projectId,
-        threadId: thread.id,
-        overrides: {
-          harnessId: settings.harnessId,
-          providerId: settings.providerId
-        }
+        harnessId: settings.harnessId,
+        providerId: settings.providerId
       },
       () => refreshKey !== `${settings.harnessId}:${settings.providerId}`
     )

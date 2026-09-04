@@ -419,18 +419,13 @@
   let chatComposerSettings = $derived(chatEffectiveSettings())
 
   /** Live account quota for the not-yet-created "Start a new chat" composer —
-   *  the exact same hover-fetch cache the thread battery uses, keyed by the
-   *  inbox conversation root instead of a thread row. */
+   *  the exact same provider-level hover-fetch cache the thread battery uses. */
   const newChatUsage = createAccountUsageCache()
   function revealNewChatUsage(): void {
     if (newChatUsage.isStale()) {
       void newChatUsage.refresh({
-        projectId: INBOX_PROJECT_ID,
-        threadId: 'new-chat',
-        overrides: {
-          harnessId: chatComposerSettings.harnessId,
-          providerId: chatComposerSettings.providerId
-        }
+        harnessId: chatComposerSettings.harnessId,
+        providerId: chatComposerSettings.providerId
       })
     }
   }
