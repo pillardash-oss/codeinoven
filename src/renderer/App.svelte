@@ -1521,16 +1521,21 @@
       findNavState.focusFileTreeFilter++
       return
     }
-    if (
-      active?.closest('[data-region="git-panel"]') ||
-      (active?.closest('[data-region="context-sidebar"]') &&
-        document.querySelector('[data-region="git-panel"]'))
-    ) {
-      findNavState.openGitFind()
-      return
-    }
     if (active?.closest('[data-region="editor"]')) {
       findNavState.openEditorFind()
+      return
+    }
+    // The sidebar keeps GitStatusPanel mounted but display:none for every
+    // context tab, so only treat the git panel as the target when it is
+    // actually visible (offsetParent is null while hidden).
+    const visibleGitPanel = Array.from(
+      document.querySelectorAll('[data-region="git-panel"]')
+    ).some((el) => (el instanceof HTMLElement ? el.offsetParent : null) !== null)
+    if (
+      active?.closest('[data-region="git-panel"]') ||
+      (active?.closest('[data-region="context-sidebar"]') && visibleGitPanel)
+    ) {
+      findNavState.openGitFind()
       return
     }
     if (active?.closest('[data-region="spec-studio"]')) {
