@@ -281,6 +281,10 @@
      *  the scrollable message list. Used by surfaces such as temporary chats to
      *  expose their own header actions without duplicating ThreadView internals. */
     headerSnippet?: Snippet
+    /** Whether the centered composer head start may show on an empty
+     *  conversation. Workspace gates this: always true in chat mode, and in
+     *  project mode only for a project's sole, untouched thread. */
+    allowCenteredComposer?: boolean
   }
 
   let {
@@ -293,7 +297,8 @@
     onProjectCreated,
     onContinueInThread,
     controller,
-    headerSnippet
+    headerSnippet,
+    allowCenteredComposer = true
   }: Props = $props()
 
   // Workspace clears its selected-thread state before this keyed view's
@@ -386,11 +391,23 @@
       pendingQuestionRequests.length === 0
   )
 
-  const suggestedPrompts = [
+  /** Centered composer head start: empty conversation AND the workspace
+   *  allows it (sole untouched thread in project mode, always in chat mode). */
+  let centeredComposer = $derived(emptyConversation && allowCenteredComposer)
+
+  const projectSuggestedPrompts = [
     'Summarize this project: architecture, key modules, and entry points',
     'Review the codebase and list the top improvement opportunities',
     'Find and fix a bug — explain the root cause as you go'
   ]
+
+  const chatSuggestedPrompts = [
+    'Research a question using my device',
+    'Run a task for me on this computer',
+    'Brainstorm ideas with me'
+  ]
+
+  const suggestedPrompts = $derived(chatMode ? chatSuggestedPrompts : projectSuggestedPrompts)
 
   /** Auto-fill the mounted window up to HISTORY_WINDOW_SIZE after the first
    *  paint, one batch per frame. Batches mount above the viewport only, so
@@ -1480,6 +1497,7 @@
         entry.costUsd += message.cost ?? stepCost
         if (message.rateLimits?.length) entry.rateLimits = message.rateLimits
         if (message.credits) entry.credits = message.credits
+        if (message.bankedResets) entry.bankedResets = message.bankedResets
         if (message.modelId) entry.modelId = message.modelId
         continue
       }
@@ -1489,7 +1507,8 @@
         ...(message.modelId ? { modelId: message.modelId } : {}),
         costUsd: message.cost ?? stepCost,
         rateLimits: message.rateLimits ?? [],
-        ...(message.credits ? { credits: message.credits } : {})
+        ...(message.credits ? { credits: message.credits } : {}),
+        ...(message.bankedResets ? { bankedResets: message.bankedResets } : {})
       }
     }
     // Merge the whole-thread cumulative analytics from the harness_usage table
@@ -2136,6 +2155,9 @@
     const promptContext = [responseReferenceContext(), taskContext].filter(Boolean).join('\n\n')
     const promptReferences = [...responseReferences]
     clearResponseReferences()
+    // The centered head start must never return for this thread once a real
+    // message was sent — even if the messages are deleted right after.
+    if (!chatMode) workspaceState.markThreadHeadStartUsed(thread.id)
     void (async () => {
       const staged = pendingLifecycleSelection
       if (staged) {
@@ -10155,7 +10177,7 @@
     <!-- Scrollable conversation area -->
     <div
       bind:this={scrollEl}
-      class="conversation-scroll conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20 {emptyConversation
+      class="conversation-scroll conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20 {centeredComposer
         ? 'hidden'
         : ''}"
       onscroll={onScroll}
@@ -10869,7 +10891,7 @@
          the top of the whole stack: straddling an error card when one is shown
          and dropping back to its normal spot above the composer otherwise. -->
     <div
-      class="bottom-chrome relative {emptyConversation
+      class="bottom-chrome relative {centeredComposer
         ? 'flex min-h-0 flex-1 flex-col justify-center'
         : 'shrink-0'}"
     >
@@ -11184,8 +11206,8 @@
         <!-- Composer — always anchored at the bottom. Blocking permission and question
        tools replace it until the user responds. -->
         <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
-          <div class="mx-auto w-full {emptyConversation ? 'max-w-4xl' : 'max-w-3xl'}">
-            {#if emptyConversation}
+          <div class="mx-auto w-full {centeredComposer ? 'max-w-4xl' : 'max-w-3xl'}">
+            {#if centeredComposer}
               <div class="mb-5 text-center">
                 <h1 class="text-[1.375rem] font-semibold tracking-tight text-foreground">
                   {project?.name ?? 'New thread'}
@@ -11720,13 +11742,13 @@
                     onImageDescriptorDefaultChange={setImageDescriptorDefault}
                     onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
                   />
-                  {#if emptyConversation}
+                  {#if centeredComposer}
                     <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
                       {#each suggestedPrompts as prompt (prompt)}
                         <button
                           type="button"
                           class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                          onclick={() => sendComposerMessage(prompt, [])}
+                          onclick={() => composer?.setComposerText(prompt)}
                         >
                           {prompt}
                         </button>

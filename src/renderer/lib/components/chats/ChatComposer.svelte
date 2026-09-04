@@ -920,6 +920,17 @@
     })
   }
 
+  /** Replace the composer draft with the given text and focus the caret at
+   *  the end — used by external surfaces such as suggested prompts that
+   *  should seed a draft instead of sending it. */
+  export function setComposerText(text: string): void {
+    value = text
+    handleComposerValueChange(text)
+    void tick().then(() => {
+      focusComposerAtEnd()
+    })
+  }
+
   /** Focus the composer editor and place the caret at the start of the first
    *  line — the fallback when no caret position was ever captured. */
   export function focusComposerAtStart(): void {
@@ -2394,7 +2405,9 @@
                 {#if startAfterEnabled}
                   {#each startAfterThreads as startAfterThread (startAfterThread.id)}
                     <div class="flex items-center gap-1 px-1">
-                      <span class="min-w-0 flex-1 truncate px-1.5 py-0.5 text-[0.6875rem] text-info">
+                      <span
+                        class="min-w-0 flex-1 truncate px-1.5 py-0.5 text-[0.6875rem] text-info"
+                      >
                         {startAfterThread.title}
                       </span>
                       <button
