@@ -60,7 +60,6 @@
     "deploy:main": "bash scripts/deploy-main.sh"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.259",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/language": "^6.12.4",
     "@codemirror/language-data": "^6.5.2",
@@ -83,6 +82,7 @@
     "word-extractor": "^1.0.4"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.259",
     "@baybreezy/file-extension-icon": "^0.0.5",
     "@earendil-works/pi-coding-agent": "0.85.0",
     "@electron-toolkit/utils": "^4.0.0",
