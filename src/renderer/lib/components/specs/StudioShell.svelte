@@ -12,7 +12,10 @@
   }
 </script>
 
-<script lang="ts" generics="SectionId extends string, Annotation extends { id: string; quote?: string; body: string }">
+<script
+  lang="ts"
+  generics="SectionId extends string, Annotation extends { id: string; quote?: string; body: string }"
+>
   import { tick } from 'svelte'
   import { X } from '@lucide/svelte'
   import type { Snippet } from 'svelte'
@@ -94,7 +97,11 @@
   export { scrollToSection }
 </script>
 
-<section bind:this={shellElement} class="flex h-full min-h-0 flex-col bg-app" aria-label={ariaLabel}>
+<section
+  bind:this={shellElement}
+  class="flex h-full min-h-0 flex-col bg-app"
+  aria-label={ariaLabel}
+>
   <header class="studio-header-container shrink-0 border-b bg-surface">
     <div
       class="flex flex-col gap-2 px-2 py-2 md:grid md:min-h-12 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center md:gap-3 md:px-3 md:py-0"
@@ -103,7 +110,9 @@
         {@render navigation()}
       </div>
 
-      <div class="flex items-center gap-2 text-[0.6875rem] text-muted max-md:flex-wrap md:justify-center">
+      <div
+        class="flex items-center gap-2 text-[0.6875rem] text-muted max-md:flex-wrap md:justify-center"
+      >
         {@render center()}
       </div>
 
@@ -210,11 +219,13 @@
                 onclick={() => onOpenAnnotation(annotation)}
               >
                 {#if annotation.quote}
-                  <span class="block truncate text-[0.625rem] text-dimmed">“{annotation.quote}”</span>
+                  <span class="block truncate text-[0.625rem] text-dimmed"
+                    >“{annotation.quote}”</span
+                  >
                 {/if}
-                <span class="mt-0.5 line-clamp-4 text-xs leading-relaxed"
-                  >{annotation.body}</span
-                >
+                <div class="mt-0.5 line-clamp-5 text-xs leading-relaxed">
+                  {annotation.body}
+                </div>
               </button>
             {:else}
               <p

@@ -184,9 +184,6 @@
     >
       <div class="px-2.5 pb-2 pt-1">
         <p class="text-xs font-semibold text-foreground">Engineering Toolbox</p>
-        <p class="mt-0.5 text-[0.6875rem] leading-4 text-muted">
-          Select the stages to run. Assignment and Achievement run after an approved Spec.
-        </p>
       </div>
       {#each rows as row (row.stage)}
         <Switch
