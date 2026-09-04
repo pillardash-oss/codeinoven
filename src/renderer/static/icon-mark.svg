@@ -11,8 +11,9 @@
 <svg viewBox="0 0 1254 1254" xmlns="http://www.w3.org/2000/svg">
   <style>
     /* Flat, sharp ink for small-scale vendor rendering: pure black on light
-       surfaces, pure white on dark. The app toggles `.dark` on <html> and
-       vendor SVGs are inlined into the DOM, so this selector applies. */
+       surfaces, pure white on dark. The app toggles the `dark` class on the
+       root document element and vendor SVGs are inlined into the DOM, so this
+       selector applies. */
     #cio-mark .ink { fill: #000000; }
     .dark #cio-mark .ink { fill: #ffffff; }
   </style>
