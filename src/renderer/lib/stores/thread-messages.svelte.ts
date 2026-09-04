@@ -57,6 +57,27 @@ const LOAD_REVEAL_INTERVAL_MS = 16
  * transcript loads where spreading the work across frames is worthwhile. */
 const LOAD_REVEAL_THRESHOLD = 80
 
+/** Extra older pages a bounded load may fetch to reach the newest turn's
+ *  prompt. A long working trace spans many rows, so the raw tail window can
+ *  start mid-trace — the user's message must never be cut off by the cache. */
+const MAX_TURN_ALIGNMENT_PAGES = 4
+
+/** Whether the newest turn's user prompt is inside this page. Activity-only
+ *  envelopes (compaction notices, sub-agent reports) ride the user role
+ *  mid-turn and do not count as the turn's prompt. */
+function containsNewestTurnPrompt(messages: AgentMessage[]): boolean {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (!message) return false
+    if (message.role !== 'user') continue
+    const activityOnly =
+      message.parts.length > 0 &&
+      message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
+    if (!activityOnly) return true
+  }
+  return false
+}
+
 function threadKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
 }
@@ -337,6 +358,36 @@ class ThreadMessagesStore {
         // must use load() without a limit.
         serverMessages = page.messages
         entry.hasOlder = page.hasOlder
+        // Turn-aligned tail: a bounded tail window that starts mid-turn cuts
+        // the user's message out of the cached page — the view would begin at
+        // the working trace with the prompt missing until "Load earlier
+        // messages" was clicked. Extend the fetch just far enough to include
+        // the newest turn's prompt, bounded so a pathological mega-turn cannot
+        // turn navigation into an unbounded read.
+        let alignmentPages = 0
+        while (
+          serverMessages.length > 0 &&
+          entry.hasOlder &&
+          !containsNewestTurnPrompt(serverMessages) &&
+          alignmentPages < MAX_TURN_ALIGNMENT_PAGES
+        ) {
+          const oldest = serverMessages[0]
+          if (!oldest) break
+          const older = await invoke(
+            'thread:loadMessages',
+            projectId,
+            threadId,
+            { createdAt: oldest.createdAt, id: oldest.id },
+            recentLimit
+          )
+          if (older.messages.length === 0) {
+            entry.hasOlder = false
+            break
+          }
+          serverMessages = [...older.messages, ...serverMessages]
+          entry.hasOlder = older.hasOlder
+          alignmentPages++
+        }
       }
       this.reconcile(projectId, threadId, serverMessages)
       entry.loaded = true

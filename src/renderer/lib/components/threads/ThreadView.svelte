@@ -3276,12 +3276,12 @@
     // fetch loop needs no scroll compensation at all.
     windowStartId ??= messages[Math.max(0, messages.length - mountedCount)]?.id ?? null
     try {
-      // One click loads THREE pages: the store usually already holds some of
-      // them, so fetch only while it does not — each fetch is a bounded
-      // 40-message page and turns that span more than one page keep it
-      // fetching until all three page starts exist in the store.
+      // One click loads THREE turn-aligned pages: the store usually already
+      // holds some of them, so fetch only while it does not — each fetch is a
+      // bounded 40-message page and turns that span more than one page keep
+      // it fetching until three deduped turn starts exist before the anchor.
       for (let attempt = 0; attempt < 30; attempt++) {
-        if (promptPagesBefore(mountedStartIndex, 3) !== -1) break
+        if (turnStartPromptsBefore(mountedStartIndex, 3).length === 3) break
         const el = scrollEl
         if (!el || !olderMessagesAvailable) break
         const oldest = messages[0]
@@ -3289,6 +3289,34 @@
           olderMessagesAvailable = false
           break
         }
+        const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
+        const page = await invoke(
+          'thread:loadMessages',
+          thread.projectId,
+          thread.id,
+          before,
+          HISTORY_WINDOW_SIZE
+        )
+        if (!alive) return
+        olderMessagesAvailable = page.hasOlder
+        if (page.messages.length === 0) {
+          olderMessagesAvailable = false
+          break
+        }
+        threadMessages.mergePage(thread.projectId, thread.id, page.messages)
+        mountedCount += page.messages.length
+        await tick()
+      }
+      // Turn-align the store's oldest boundary: a raw 40-row page can end
+      // mid-turn, cutting that turn's prompt out of the cache entirely — the
+      // loaded page would then begin at a working trace with its prompt
+      // missing above it. Extend the fetch until the oldest row is a turn's
+      // prompt (or the thread truly has nothing older).
+      for (let align = 0; align < 4; align++) {
+        const oldest = messages[0]
+        if (!oldest) break
+        if (oldest.role === 'user' && !isActivityOnlyUserMessage(oldest)) break
+        if (!olderMessagesAvailable) break
         const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
         const page = await invoke(
           'thread:loadMessages',
@@ -3325,8 +3353,16 @@
           : undefined
       const previousHeight = el?.scrollHeight ?? 0
       const previousTop = el?.scrollTop ?? 0
-      const walked = promptPagesBefore(mountedStartIndex, 3)
-      const target = walked === -1 ? 0 : walked
+      // The anchor must be the start of a turn — a user prompt — never a
+      // trace row. Landing on a trace presented the loaded page cut off at
+      // its beginning, with the turn's prompt missing above it.
+      const starts = turnStartPromptsBefore(mountedStartIndex, 3)
+      let target = starts.length === 3 ? starts[starts.length - 1] : 0
+      const isRealPrompt = (index: number): boolean => {
+        const message = messages[index]
+        return !!message && message.role === 'user' && !isActivityOnlyUserMessage(message)
+      }
+      while (target < mountedStartIndex && !isRealPrompt(target)) target += 1
       if (target < mountedStartIndex) {
         windowStartId = messages[target]?.id ?? null
         // Keep the tail-relative count in sync so releasing the anchor at
@@ -9469,6 +9505,23 @@
       message.parts.length > 0 &&
       message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
     )
+  }
+
+  /** Deduped turn-start prompt indices before `fromIndex`, newest-first.
+   *  Every persisted turn carries the prompt twice (the display row and the
+   *  harness echo under its own id); counting both corrupts the "three pages"
+   *  anchor math, so adjacent prompt copies count as one turn start. */
+  function turnStartPromptsBefore(fromIndex: number, count: number): number[] {
+    const starts: number[] = []
+    for (let index = fromIndex - 1; index >= 0 && starts.length < count; index--) {
+      const message = messages[index]
+      if (!message) break
+      if (message.role !== 'user' || isActivityOnlyUserMessage(message)) continue
+      const previous = messages[index - 1]
+      if (previous?.role === 'user' && !isActivityOnlyUserMessage(previous)) continue
+      starts.push(index)
+    }
+    return starts
   }
 
   /** Activity-only user messages (compaction notices, sub-agent envelopes) ride
