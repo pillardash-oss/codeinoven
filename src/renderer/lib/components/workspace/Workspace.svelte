@@ -426,6 +426,8 @@
   })
 
   let projectCreateTrigger = $state(0)
+  /** Which add-project flow the next trigger should start. */
+  let projectCreateTriggerKind = $state<'local' | 'git-clone'>('local')
   let prevCreateThreadCount = 0
   let prevAddProjectCount = 0
   let prevNewChatCount = 0
@@ -3063,6 +3065,7 @@
               onProjectCreated={handleProjectCreated}
               onExisting={handleExistingProject}
               triggerAddProject={projectCreateTrigger}
+              triggerKind={projectCreateTriggerKind}
             />
           </div>
         {/if}
@@ -3984,6 +3987,12 @@
             onNewChat={() => navigate('chats')}
             onAddProject={() => {
               navigate('projects')
+              projectCreateTriggerKind = 'local'
+              workspaceState.requestAddProject()
+            }}
+            onCloneRepo={() => {
+              navigate('projects')
+              projectCreateTriggerKind = 'git-clone'
               workspaceState.requestAddProject()
             }}
             onOpenSettings={() => navigate('settings')}

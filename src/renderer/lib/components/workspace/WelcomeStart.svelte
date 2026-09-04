@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FolderPlus, MessageSquarePlus, Settings2 } from '@lucide/svelte'
+  import { FolderPlus, FolderGit2, MessageSquarePlus, Settings2 } from '@lucide/svelte'
   import { publicAssetUrl } from '$lib/static-assets'
 
   interface Props {
@@ -7,11 +7,13 @@
     onNewChat: () => void
     /** Open the add-project flow. */
     onAddProject: () => void
+    /** Open the clone-from-git flow. */
+    onCloneRepo: () => void
     /** Open the settings view. */
     onOpenSettings: () => void
   }
 
-  let { onNewChat, onAddProject, onOpenSettings }: Props = $props()
+  let { onNewChat, onAddProject, onCloneRepo, onOpenSettings }: Props = $props()
 
   const logoUrl = publicAssetUrl('icon-mono.svg')
 
@@ -27,6 +29,12 @@
       title: 'Add project',
       description: 'Create one from a local folder',
       run: () => onAddProject()
+    },
+    {
+      icon: FolderGit2,
+      title: 'Clone repository',
+      description: 'Add a project from a git URL',
+      run: () => onCloneRepo()
     },
     {
       icon: Settings2,
