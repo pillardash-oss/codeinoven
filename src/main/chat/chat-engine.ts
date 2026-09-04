@@ -9430,6 +9430,17 @@ export class ChatEngine {
       ? mirrored.slice(0, -1)
       : mirrored
     if (mirror.length === 0) return ''
+    // `mirror` is non-empty real prior history at this point. If the format
+    // step still can't render it into text, that content would otherwise be
+    // silently lost from the conversation — rescue it into a fresh thread
+    // rather than let the turn proceed with no memory of it.
+    const emitRecap = (): string => {
+      const recap = formatHistoryRecap(mirror, { maxInputTokens: budget })
+      if (!recap) {
+        void this.rescueUnreplayableHistory(projectId, threadId, driverId).catch(() => {})
+      }
+      return recap
+    }
     if (thread?.sessionId && sameHarness) {
       // `ensureSession` already confirmed whether the harness natively holds
       // the conversation — skip the redundant provider history load entirely
@@ -9437,18 +9448,48 @@ export class ChatEngine {
       const nativeHistory = this.sessionNativeHistory.get(thread.sessionId)
       if (nativeHistory === true) return ''
       if (nativeHistory === false) {
-        return formatHistoryRecap(mirror, { maxInputTokens: budget })
+        return emitRecap()
       }
       try {
         const { driver } = await this.resolve(projectId, driverId, threadId)
         if (driver.capabilities?.nativeResume === false) {
-          return formatHistoryRecap(mirror, { maxInputTokens: budget })
+          return emitRecap()
         }
       } catch {
         // The durable mirror remains the safe fallback when the driver is unavailable.
       }
     }
-    return formatHistoryRecap(mirror, { maxInputTokens: budget })
+    return emitRecap()
+  }
+
+  /**
+   * Safety net for history that could not be carried forward as a recap
+   * (e.g. a harness switch where the durable mirror still failed to render).
+   * Forks the thread's full transcript into a new thread so the conversation
+   * is never silently lost, and notifies the user where to find it.
+   */
+  private async rescueUnreplayableHistory(
+    projectId: string,
+    threadId: string,
+    driverId: string
+  ): Promise<void> {
+    try {
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      if (!thread) return
+      const rescueTitle = `${thread.title || 'Untitled'} (recovered)`
+      const forked = await this.threadManager.forkThread(projectId, threadId, rescueTitle)
+      broadcastThreadUpdate(forked)
+      this.broadcastToast(
+        `Prior context on "${thread.title || 'this thread'}" couldn't carry over to ${driverId}. Saved the full conversation to a new thread: "${rescueTitle}".`,
+        'info'
+      )
+    } catch (error) {
+      Logger.error('History rescue fork failed', {
+        projectId,
+        threadId,
+        error: rawErrorMessage(error)
+      })
+    }
   }
 
   /**
