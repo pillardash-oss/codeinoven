@@ -810,6 +810,20 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     }
   }
 
+  /**
+   * Cheap liveness probe for the session watchdog: true while this session's
+   * child process is still running. Persistent-CLI drivers (claude-code among
+   * them) never emit an explicit error when their process dies mid-turn — the
+   * stream just goes silent — so without this the watchdog can never tell a
+   * dead process from a long-running one and extends the "working" state
+   * forever, leaving the turn stuck until the user ends it manually.
+   */
+  async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
+    await this.requireSession(projectPath, sessionId)
+    const child = this.activeProcesses.get(sessionId)
+    return !!child && !this.hasProcessExited(child)
+  }
+
   private hasProcessExited(child: ChildProcess): boolean {
     return (
       (child.exitCode !== null && child.exitCode !== undefined) ||
