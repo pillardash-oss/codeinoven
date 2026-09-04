@@ -382,6 +382,22 @@
 
   /** True when the thread has no conversation yet — the composer is centered
    *  with suggested prompts instead of docked at the bottom. */
+  /** Resolved icon for the centered head-start header — same pipeline as the
+   *  project sidebar: stored image, SVG icon type, then initials fallback. */
+  const centeredProjectIconUrl = $derived(
+    project && !chatMode ? getProjectIcon(project, projectIconUrl ?? undefined) : null
+  )
+  /** Display name of the thread's selected model, or null when none is set. */
+  const centeredModelName = $derived.by(() => {
+    if (!settings.modelId) return null
+    const model =
+      allModels.find(
+        (m) =>
+          m.id === settings.modelId &&
+          (!settings.providerId || m.providerId === settings.providerId)
+      ) ?? allModels.find((m) => m.id === settings.modelId)
+    return model?.name ?? settings.modelId
+  })
   let emptyConversation = $derived(
     loaded &&
       visibleMessages.length === 0 &&
@@ -11237,10 +11253,24 @@
           <div class="mx-auto w-full {centeredComposer ? 'max-w-4xl' : 'max-w-3xl'}">
             {#if centeredComposer}
               <div class="mb-5 text-center">
-                <h1 class="text-[1.375rem] font-semibold tracking-tight text-foreground">
+                <h1
+                  class="flex items-center justify-center gap-2.5 text-[1.375rem] font-semibold tracking-tight text-foreground"
+                >
+                  {#if centeredProjectIconUrl}
+                    <img
+                      src={centeredProjectIconUrl}
+                      alt=""
+                      aria-hidden="true"
+                      class="size-7 rounded-[0.375rem] object-cover"
+                    />
+                  {/if}
                   {project?.name ?? 'New thread'}
                 </h1>
-                <p class="mt-1 text-[0.875rem] text-muted">What should the agent work on?</p>
+                <p class="mt-1 text-[0.875rem] text-muted">
+                  {centeredModelName
+                    ? `What should ${centeredModelName} work on?`
+                    : 'How can CIO serve you today?'}
+                </p>
               </div>
             {/if}
             {#if pendingImageDescriptorError && !achievementAutonomous}
