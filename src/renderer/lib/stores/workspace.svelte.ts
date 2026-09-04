@@ -124,8 +124,7 @@ class WorkspaceState {
    * chat notifications switch to the chats view.  Registered by App.svelte.
    */
   openThreadFromNotification:
-    | ((thread: Thread, project: Project, temporaryChatId?: string) => Promise<void>)
-    | null = null
+    ((thread: Thread, project: Project, temporaryChatId?: string) => Promise<void>) | null = null
 
   // ─── Sources (fed by ThreadView) ───────────────────────────────────────
   sources: AgentSource[] = $state([])
@@ -322,6 +321,20 @@ class WorkspaceState {
   consumeAddProjectRequest(): boolean {
     if (this.consumedAddProjectRequestCount === this.requestAddProjectCount) return false
     this.consumedAddProjectRequestCount = this.requestAddProjectCount
+    return true
+  }
+
+  /** Incremented to signal the app shell to open the getting-started tour. */
+  requestOnboardingCount = $state(0)
+  private consumedOnboardingRequestCount = 0
+
+  requestOnboarding(): void {
+    this.requestOnboardingCount++
+  }
+
+  consumeOnboardingRequest(): boolean {
+    if (this.consumedOnboardingRequestCount === this.requestOnboardingCount) return false
+    this.consumedOnboardingRequestCount = this.requestOnboardingCount
     return true
   }
 

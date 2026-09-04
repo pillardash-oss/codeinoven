@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { FolderPlus, FolderGit2, MessageSquarePlus, Settings2 } from '@lucide/svelte'
+  import {
+    FolderGit2,
+    FolderPlus,
+    GraduationCap,
+    MessageSquarePlus,
+    Settings2
+  } from '@lucide/svelte'
   import { publicAssetUrl } from '$lib/static-assets'
 
   interface Props {
@@ -11,9 +17,11 @@
     onCloneRepo: () => void
     /** Open the settings view. */
     onOpenSettings: () => void
+    /** Open the getting-started tour. */
+    onShowTour: () => void
   }
 
-  let { onNewChat, onAddProject, onCloneRepo, onOpenSettings }: Props = $props()
+  let { onNewChat, onAddProject, onCloneRepo, onOpenSettings, onShowTour }: Props = $props()
 
   const logoUrl = publicAssetUrl('icon-mono.svg')
 
@@ -41,6 +49,12 @@
       title: 'Open settings',
       description: 'Configure agents, models, and preferences',
       run: () => onOpenSettings()
+    },
+    {
+      icon: GraduationCap,
+      title: 'Learn what CodeInOven can do',
+      description: 'Get a tour of its capabilities',
+      run: () => onShowTour()
     }
   ]
 </script>

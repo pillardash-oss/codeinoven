@@ -3996,6 +3996,7 @@
               workspaceState.requestAddProject()
             }}
             onOpenSettings={() => navigate('settings')}
+            onShowTour={() => workspaceState.requestOnboarding()}
           />
         {/if}
       </div>

@@ -110,7 +110,7 @@
     theme: 'system',
     fontFamily: 'jetbrains-mono',
     appFontSize: 15,
-  fontWeight: 200,
+    fontWeight: 200,
     zoomLevel: 1,
     onboardingCompleted: false,
     threadLimit: 70,
@@ -469,6 +469,14 @@
   function applyTheme(): void {
     document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
   }
+
+  /** Welcome screen (and other surfaces) can request the getting-started tour. */
+  $effect(() => {
+    if (workspaceState.consumeOnboardingRequest()) {
+      onboardingStep = 0
+      onboardingOpen = true
+    }
+  })
 
   async function loadConfig(): Promise<void> {
     try {
@@ -1528,9 +1536,9 @@
     // The sidebar keeps GitStatusPanel mounted but display:none for every
     // context tab, so only treat the git panel as the target when it is
     // actually visible (offsetParent is null while hidden).
-    const visibleGitPanel = Array.from(
-      document.querySelectorAll('[data-region="git-panel"]')
-    ).some((el) => (el instanceof HTMLElement ? el.offsetParent : null) !== null)
+    const visibleGitPanel = Array.from(document.querySelectorAll('[data-region="git-panel"]')).some(
+      (el) => (el instanceof HTMLElement ? el.offsetParent : null) !== null
+    )
     if (
       active?.closest('[data-region="git-panel"]') ||
       (active?.closest('[data-region="context-sidebar"]') && visibleGitPanel)
