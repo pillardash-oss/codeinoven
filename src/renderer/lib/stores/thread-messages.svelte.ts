@@ -732,6 +732,13 @@ class ThreadMessagesStore {
       projectReferences,
       presentation
     )
+    // Point the busy run at the steered message immediately. Without this the
+    // run keeps the original turn's user message id until the first post-steer
+    // part event arrives, so the steered message dangles under a still-live
+    // working trace instead of opening its own fresh trace shell right away.
+    // This mirrors the regular send path, where the harness 'started' update
+    // rebinds the run to the new user message as soon as the turn opens.
+    agentRuns.setBusy(projectId, threadId, true, messageId)
     try {
       const confirmed = await invoke(
         'agent:steerPrompt',
