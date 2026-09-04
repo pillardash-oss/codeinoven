@@ -98,7 +98,7 @@
       onclick={() => navigate('settings-profile')}
     >
       <span
-        class="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-[10px] font-bold text-on-primary ring-1 ring-border"
+        class="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-[0.625rem] font-bold text-on-primary ring-1 ring-border"
       >
         {#if profile.image}
           <img class="h-full w-full object-cover" src={profile.image} alt="" />
@@ -106,7 +106,7 @@
           <span aria-hidden="true">{initials}</span>
         {/if}
       </span>
-      <span class="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-foreground">
+      <span class="min-w-0 flex-1 truncate text-left text-[0.8125rem] font-medium text-foreground">
         {profile.displayName || profile.email}
       </span>
     </button>
@@ -134,7 +134,7 @@
   {:else}
     <button
       type="button"
-      class="flex h-8 flex-1 items-center gap-2 rounded-lg px-2 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-8 flex-1 items-center gap-2 rounded-lg px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
       title="Open settings (⌘,)"
       onmouseenter={preloadSettingsChunk}
       onclick={() => navigate('settings')}
@@ -200,7 +200,7 @@
     {:else if updaterState.status.state === 'downloading'}
       <button
         type="button"
-        class="flex h-8 items-center gap-1 rounded-lg px-1.5 text-[11px] text-muted"
+        class="flex h-8 items-center gap-1 rounded-lg px-1.5 text-[0.6875rem] text-muted"
         disabled
         title="Downloading update — {updaterState.status.downloadProgress}%"
         aria-label="Downloading update — {updaterState.status.downloadProgress}%"

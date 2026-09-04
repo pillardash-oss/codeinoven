@@ -198,7 +198,7 @@
       />
     </label>
     {#if account && account.configured}
-      <p class="text-[11px] text-dimmed">
+      <p class="text-[0.6875rem] text-dimmed">
         A token is stored securely. Leave the field blank to keep it.
       </p>
     {/if}

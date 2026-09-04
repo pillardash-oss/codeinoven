@@ -966,7 +966,7 @@ ${instructions}`
             <p class="text-sm font-semibold">Installed</p>
             <div class="mt-2 flex flex-wrap gap-1.5">
               {#each agentReport.installed as utility (utility.id)}
-                <span class="rounded-md bg-raised px-2 py-1 text-[11px] font-medium">
+                <span class="rounded-md bg-raised px-2 py-1 text-[0.6875rem] font-medium">
                   {utility.name} · {utility.kind}
                 </span>
               {/each}
@@ -1045,14 +1045,14 @@ ${instructions}`
         {/if}
 
         {#if isNative && nativeEntry?.kind === 'skill'}
-          <p class="rounded-lg bg-raised px-3 py-2 text-[11px] text-muted">
+          <p class="rounded-lg bg-raised px-3 py-2 text-[0.6875rem] text-muted">
             Editing the skill file at <span class="font-mono"
               >{nativeEntry.source.kind === 'skill' ? nativeEntry.source.path : ''}</span
             >.
           </p>
         {/if}
         {#if isNative && nativeEntry?.kind === 'mcp'}
-          <p class="rounded-lg bg-raised px-3 py-2 text-[11px] text-muted">
+          <p class="rounded-lg bg-raised px-3 py-2 text-[0.6875rem] text-muted">
             Editing the MCP server in
             <span class="font-mono">
               {nativeEntry.source.kind === 'mcp' ? nativeEntry.source.configPath : ''}
@@ -1061,7 +1061,7 @@ ${instructions}`
         {/if}
         {#if isAppOwned}
           <p
-            class="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-[11px] text-primary"
+            class="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-[0.6875rem] text-primary"
           >
             This is a built-in utility: only the vision model can be changed. Everything else is
             managed by the app.
@@ -1233,7 +1233,7 @@ ${instructions}`
               containerClass="rounded-xl border bg-elevated focus-within:border-primary focus-within:ring-1 focus-within:ring-primary"
               class="min-h-72 max-h-96 w-full resize-y overflow-y-auto px-4 py-3 text-sm leading-6 text-foreground outline-none"
             />
-            <p class="text-[11px] text-dimmed">
+            <p class="text-[0.6875rem] text-dimmed">
               Write the complete skill file, including frontmatter and instruction sections. The
               frontmatter name and description identify the installed skill.
             </p>
@@ -1297,7 +1297,7 @@ ${instructions}`
                 />
               </label>
             </div>
-            <p class="text-[11px] text-dimmed">
+            <p class="text-[0.6875rem] text-dimmed">
               A model from the harness catalog that can see images. Text-only models call this
               utility to describe attached images. Leave the fields empty to let the app pick a
               vision model automatically.
@@ -1342,7 +1342,7 @@ ${instructions}`
                 <div class="flex items-center justify-between rounded-lg bg-elevated px-2 py-1.5">
                   <div class="min-w-0">
                     <p class="truncate text-xs font-medium">{credential.label}</p>
-                    <p class="truncate text-[10px] text-dimmed">
+                    <p class="truncate text-[0.625rem] text-dimmed">
                       Stored securely · {credential.environmentVariable ?? credential.id}
                     </p>
                   </div>
@@ -1379,7 +1379,7 @@ ${instructions}`
                 />
               </label>
             </div>
-            <p class="text-[11px] text-dimmed">
+            <p class="text-[0.6875rem] text-dimmed">
               Saved to encrypted device storage and injected only while this capability is active.
             </p>
           </fieldset>
@@ -1511,7 +1511,7 @@ ${instructions}`
 {#snippet harnessSelector()}
   <fieldset class="space-y-3 rounded-xl border p-3">
     <legend class="px-1 text-xs font-semibold">Available to</legend>
-    <p class="text-[11px] text-dimmed">
+    <p class="text-[0.6875rem] text-dimmed">
       All is selected by default and automatically includes harnesses added later. Choose individual
       harnesses only when this utility should have limited availability.
     </p>

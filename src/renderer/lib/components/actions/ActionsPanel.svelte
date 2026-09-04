@@ -215,7 +215,7 @@
                 <p class="truncate text-xs font-semibold text-foreground">
                   {action.name || action.script}
                 </p>
-                {#if action.name}<p class="truncate font-mono text-[10px] text-muted">
+                {#if action.name}<p class="truncate font-mono text-[0.625rem] text-muted">
                     {action.script}
                   </p>{/if}
               </div>
@@ -327,11 +327,11 @@
         <span class="truncate text-xs font-semibold text-foreground"
           >{name || 'Action preview'}</span
         >
-        <span class="ml-auto shrink-0 font-mono text-[10px] text-muted">
+        <span class="ml-auto shrink-0 font-mono text-[0.625rem] text-muted">
           {color ?? 'no colour'}
         </span>
       </div>
-      <p class="mt-1.5 text-[11px] text-muted">
+      <p class="mt-1.5 text-[0.6875rem] text-muted">
         The colour shows as the entry's left border — group similar scripts together.
       </p>
     </div>
@@ -339,7 +339,7 @@
       <div class="flex items-center justify-between">
         <div>
           <p class="text-xs font-semibold">Variables</p>
-          <p class="text-[11px] text-muted">Values are exposed as environment variables.</p>
+          <p class="text-[0.6875rem] text-muted">Values are exposed as environment variables.</p>
         </div>
         <button
           type="button"
@@ -351,21 +351,21 @@
         {#each variables as variable, index (index)}<div
             class="grid grid-cols-[1fr_1fr_auto_auto] items-end gap-2 rounded-lg bg-elevated p-2"
           >
-            <label class="text-[10px] font-semibold text-muted"
+            <label class="text-[0.625rem] font-semibold text-muted"
               >Name<input
                 class="mt-1 h-8 w-full rounded-md border border-border bg-surface px-2 font-mono text-xs"
                 value={variable.name}
                 oninput={(event) => updateVariable(index, { name: event.currentTarget.value })}
                 placeholder="m"
               /></label
-            ><label class="text-[10px] font-semibold text-muted"
+            ><label class="text-[0.625rem] font-semibold text-muted"
               >Prompt label<input
                 class="mt-1 h-8 w-full rounded-md border border-border bg-surface px-2 text-xs"
                 value={variable.label}
                 oninput={(event) => updateVariable(index, { label: event.currentTarget.value })}
                 placeholder="Commit message"
               /></label
-            ><label class="flex h-8 items-center gap-2 text-[10px] font-semibold text-muted"
+            ><label class="flex h-8 items-center gap-2 text-[0.625rem] font-semibold text-muted"
               ><Switch
                 checked={variable.required}
                 onchange={(required) => updateVariable(index, { required })}

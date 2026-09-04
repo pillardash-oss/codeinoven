@@ -132,14 +132,30 @@ function messageFrom(error: unknown, fallback: string): string {
   return fallback
 }
 
+/** Full clipboard text for an error: message plus any details/stack. */
+function errorText(message: string, details?: string): string {
+  return details ? `${message}\n\n${details}` : message
+}
+
+/** Copy action shown alongside the primary action on error toasts. */
+function copyErrorAction(text: string): { label: string; onClick: () => void } {
+  return {
+    label: 'Copy',
+    onClick: () => {
+      void navigator.clipboard.writeText(text)
+    }
+  }
+}
+
 /** Surface an error toast carrying the full error payload (stack, cause chain). */
 export function reportError(error: unknown, fallback: string, thread?: AppErrorThreadRef): void {
   const message = messageFrom(error, fallback)
+  const details = error instanceof Error ? serializeError(error) : undefined
   appErrorState.capture('error', message, {
-    details: error instanceof Error ? serializeError(error) : undefined,
+    details,
     thread: thread ?? currentThreadRef()
   })
-  originalError(message, { closeButton: true })
+  originalError(message, { closeButton: true, action: copyErrorAction(errorText(message, details)) })
 }
 
 /** Surface a preformatted error message (e.g. from the main process) with optional details. */
@@ -148,5 +164,8 @@ export function reportErrorWithDetails(
   options?: { details?: string; thread?: AppErrorThreadRef }
 ): void {
   appErrorState.capture('error', message, options)
-  originalError(message, { closeButton: true })
+  originalError(message, {
+    closeButton: true,
+    action: copyErrorAction(errorText(message, options?.details))
+  })
 }

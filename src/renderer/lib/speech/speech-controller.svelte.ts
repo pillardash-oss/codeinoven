@@ -240,6 +240,12 @@ class SpeechController {
   private readonly transcriptions = new Map<string, Promise<void>>()
   /** Target ids with a background transcription job still in flight. */
   private transcribingTargets = $state<string[]>([])
+  /** Scopes of the in-flight background transcription jobs, keyed by attempt
+   *  id, so consumers can attribute the work to a thread. Entries are removed
+   *  by attempt id — never by object identity, which is unreliable here: Svelte
+   *  5 deep-proxies $state array elements, so a raw scope object never matches
+   *  its proxied copy and an identity filter would keep the entry forever. */
+  private transcribingScopes = $state<{ attemptId: string; scope: SpeechScope }[]>([])
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
   private activePlayback: ActivePlayback | null = null
   // Reactive mirror consumed by the per-line TTS highlight rendering. Kept
@@ -363,6 +369,20 @@ class SpeechController {
    *  editor target — the transcript will land in the field when it settles. */
   isTranscribingTarget(targetId: string): boolean {
     return this.transcribingTargets.includes(targetId)
+  }
+
+  /** Whether a background transcription is still running inside this thread —
+   *  the mic has closed but the transcript has not landed yet. This spans the
+   *  whole post-recording pipeline: the `stopping` phase (finalize/upload/ASR
+   *  selection happens there, before the detached job is registered) and the
+   *  detached transcription job itself. */
+  isTranscribingThread(threadId: string): boolean {
+    const matches = (scope: SpeechScope | null): boolean =>
+      scope !== null && scope.kind !== 'global' && scope.threadId === threadId
+    if (this.transcribingScopes.some((entry) => matches(entry.scope))) return true
+    // The mic has closed but the capture is still finishing — the transcript
+    // job has not been registered yet, so the capture scope is the only signal.
+    return this.state.state === 'stopping' && matches(this.capturingScope)
   }
 
   /** Scope of the thread whose response is currently being spoken aloud. */
@@ -621,7 +641,9 @@ class SpeechController {
     active: ActiveCapture,
     insertionSnapshot: SpeechEditorSnapshot
   ): Promise<void> {
+    const transcribingScope = structuredClone(active.scope)
     this.transcribingTargets = [...this.transcribingTargets, active.target.id]
+    this.transcribingScopes = [...this.transcribingScopes, { attemptId: active.attemptId, scope: transcribingScope }]
     try {
       const transcript = await this.transcribeActive(active)
       await invoke('clipboard:writeText', transcript)
@@ -664,6 +686,9 @@ class SpeechController {
     } finally {
       this.transcribingTargets = this.transcribingTargets.filter(
         (id) => id !== active.target.id
+      )
+      this.transcribingScopes = this.transcribingScopes.filter(
+        (entry) => entry.attemptId !== active.attemptId
       )
     }
   }
@@ -1441,16 +1466,20 @@ class SpeechController {
       const gain = context.createGain()
       const frequency = kind === 'started' ? 520 : kind === 'stopped' ? 360 : 700
       oscillator.frequency.setValueAtTime(frequency, context.currentTime)
+      // Loud enough to stay audible over a low system volume: the peak rides
+      // close to full scale (0.5 × user volume) instead of the near-inaudible
+      // 0.06 it used to be, and the slightly longer envelope keeps the blip
+      // from reading as a click at high pitch.
       gain.gain.setValueAtTime(0.0001, context.currentTime)
       gain.gain.exponentialRampToValueAtTime(
-        Math.max(0.0001, 0.06 * this.sound.cues.volume),
-        context.currentTime + 0.01
+        Math.max(0.0001, 0.5 * this.sound.cues.volume),
+        context.currentTime + 0.012
       )
-      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.09)
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.12)
       oscillator.connect(gain)
       gain.connect(context.destination)
       oscillator.start()
-      oscillator.stop(context.currentTime + 0.1)
+      oscillator.stop(context.currentTime + 0.13)
       oscillator.addEventListener('ended', () => void context.close(), { once: true })
     } catch (cause) {
       logRendererError(`Voice recording ${kind} cue failed: ${errorMessage(cause)}`, cause)

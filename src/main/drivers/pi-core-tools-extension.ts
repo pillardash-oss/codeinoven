@@ -471,21 +471,45 @@ export default function codeInOvenCoreToolsExtension(pi) {
       )
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const detail = params.message ? params.message : 'Type the file paths to share.'
-      const hint = Array.isArray(params.suggested_paths) && params.suggested_paths.length > 0
-        ? ' For example: ' + params.suggested_paths.join(', ')
-        : ''
-      const value = await ctx.ui.input(
-        'Share files with the agent',
-        detail + ' Separate multiple paths with commas.' + hint
+      const detail = params.message ? params.message : 'Share the files the agent needs.'
+      const suggested = Array.isArray(params.suggested_paths)
+        ? params.suggested_paths.filter((path) => typeof path === 'string' && path.trim())
+        : []
+      // Structured question envelope so the app renders a real file-share
+      // card: the agent's message as the prompt, suggested paths as
+      // selectable options, plus custom text and file attachment entry points.
+      const question = {
+        question: detail,
+        header: 'Share files',
+        fileRequest: true,
+        multiple: true,
+        options: suggested.map((suggestedPath) => ({
+          label: suggestedPath,
+          description: 'Suggested file'
+        }))
+      }
+      const value = await ctx.ui.select(
+        questionDialogTitle([question]),
+        question.options.map((option) => option.label)
       )
-      if (value === undefined) {
+      let requested = []
+      if (typeof value === 'string' && value.trim()) {
+        let parsed
+        try {
+          parsed = JSON.parse(value)
+        } catch {
+          parsed = null
+        }
+        if (Array.isArray(parsed)) {
+          requested = parsed
+            .flat()
+            .map((entry) => String(entry).trim())
+            .filter(Boolean)
+        }
+      }
+      if (requested.length === 0) {
         return textResult({ requested: false, message: 'The user dismissed the file request.' })
       }
-      const requested = value
-        .split(/[,\\n]/u)
-        .map((part) => part.trim())
-        .filter(Boolean)
       const files = requested.map((path) => {
         const absolutePath = isAbsolute(path) ? resolve(path) : resolve(ctx.cwd, path)
         return {

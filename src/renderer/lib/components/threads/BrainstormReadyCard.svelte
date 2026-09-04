@@ -84,7 +84,7 @@
             onclick={() => onOpenPrototype?.(prototype.previewPath)}
           >
             <span
-              class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide {'hifi' ===
+              class="shrink-0 rounded px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide {'hifi' ===
               prototype.fidelity
                 ? 'bg-thread-spec/10 text-thread-spec'
                 : 'bg-overlay text-muted'}">{fidelityLabel(prototype.fidelity)}</span

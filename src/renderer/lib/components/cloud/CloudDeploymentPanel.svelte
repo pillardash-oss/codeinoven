@@ -15,8 +15,10 @@
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { relativeTime } from '$lib/format/relative-time'
+  import { pathToFileUrl } from '$lib/mime'
   import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import CloudProviderIcon from './icons/CloudProviderIcon.svelte'
@@ -31,7 +33,8 @@
   import {
     type CloudDeploymentConfig,
     type CloudDeploymentContainer,
-    type CloudDeploymentProviderKind
+    type CloudDeploymentProviderKind,
+    type PromptAttachment
   } from '$shared/types'
 
   interface Props {
@@ -49,6 +52,9 @@
     dokploy: 'Dokploy',
     custom: 'Custom'
   }
+
+  /** Log tail kept inline in the diagnosis prompt; the full log rides along as a pasted-text attachment. */
+  const INLINE_LOG_EXCERPT_CHARS = 24_000
 
   /** When set, the in-app detail view replaces the container list. */
   let selectedContainer = $state<CloudDeploymentContainer | null>(null)
@@ -372,19 +378,59 @@
     }).catch(() => null)
     if (!thread) return
 
-    rendererRecovery.setDraft(projectId, thread.id, remediationPrompt(container, logText), [], [])
+    const [prompt, attachments] = await remediationPrompt(container, logText, thread.id)
+    rendererRecovery.setDraft(projectId, thread.id, prompt, attachments, [])
     workspaceState.openThread(thread, project)
   }
 
-  /** Read-only diagnosis prompt given to the agent, explicitly no auto-fix. */
-  function remediationPrompt(container: CloudDeploymentContainer, log: string): string {
+  /**
+   * Read-only diagnosis prompt given to the agent, explicitly no auto-fix.
+   *
+   * The full log is attached through the same pasted-text pipeline the
+   * composer uses for long clipboard pastes, instead of being inlined:
+   * deployment logs can far exceed the 200k prompt limit, and an oversized
+   * inlined log makes `agent:sendPrompt` throw. A short tail excerpt stays
+   * inline so the thread opens with immediate context.
+   */
+  async function remediationPrompt(
+    container: CloudDeploymentContainer,
+    log: string,
+    threadId: string
+  ): Promise<[string, PromptAttachment[]]> {
     const provider = PROVIDER_LABELS[container.providerKind] ?? container.providerKind
-    return [
-      `This project failed to deploy on ${provider}, and below is the deployment log.`,
+    const trimmed = log.trim()
+    const attachments: PromptAttachment[] = []
+    if (trimmed) {
+      try {
+        const path = await invoke(
+          'attachment:saveText',
+          { kind: 'chat', projectId, threadId },
+          trimmed
+        )
+        attachments.push({
+          mime: 'text/plain',
+          url: pathToFileUrl(path),
+          filename: 'Pasted text.txt'
+        })
+      } catch (error) {
+        reportError(error, 'Could not attach the deployment log.')
+      }
+    }
+    const fence = '```'
+    const inlineExcerpt = trimmed
+      ? `Recent log tail (the full log is attached as "Pasted text.txt"):
+
+${fence}text
+${trimmed.slice(-INLINE_LOG_EXCERPT_CHARS)}${trimmed.length > INLINE_LOG_EXCERPT_CHARS ? '\n[earlier output omitted]' : ''}
+${fence}`
+      : '(no deployment log text was available)'
+    const prompt = [
+      `This project failed to deploy on ${provider}.`,
       'Help me diagnose and fix it. When you are done, give me a summary report of what happened.',
       '',
-      log.trim() || '(no deployment log text was available)'
+      inlineExcerpt
     ].join('\n')
+    return [prompt, attachments]
   }
 </script>
 
@@ -406,7 +452,7 @@
         {#each statusChips as chip (chip.value)}
           <button
             type="button"
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[10px] font-medium transition-colors {statusFilter ===
+            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[0.625rem] font-medium transition-colors {statusFilter ===
             chip.value
               ? 'bg-raised text-foreground'
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
@@ -446,7 +492,7 @@
           >
             <button
               type="button"
-              class="flex h-6 cursor-pointer items-center gap-1 rounded-l-md pl-1.5 pr-1 text-[10px] font-medium hover:text-foreground"
+              class="flex h-6 cursor-pointer items-center gap-1 rounded-l-md pl-1.5 pr-1 text-[0.625rem] font-medium hover:text-foreground"
               title="Show only {chip.label} containers"
               aria-label="Show only {chip.label} containers"
               aria-pressed={providerFilter === chip.kind}
@@ -489,7 +535,7 @@
         {#snippet action()}
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
             onclick={() => openConfigSheet('provider')}
           >
             Add provider
@@ -512,7 +558,7 @@
         {#snippet action()}
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
             onclick={() => openConfigSheet('container')}
           >
             Add container
@@ -521,10 +567,10 @@
       </EmptyState>{:else if !hasFilteredResults}
       <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
         <Search size={16} class="text-dimmed" />
-        <p class="text-[11px] font-medium text-foreground">No matching containers</p>
+        <p class="text-[0.6875rem] font-medium text-foreground">No matching containers</p>
         <button
           type="button"
-          class="h-7 cursor-pointer rounded-md border border-border px-2.5 text-[10px] font-medium text-foreground hover:bg-elevated"
+          class="h-7 cursor-pointer rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
           onclick={clearFilters}
         >
           Clear filters
@@ -541,16 +587,16 @@
                 class="shrink-0 text-dimmed"
                 title={PROVIDER_LABELS[kind as CloudDeploymentProviderKind]}
               />
-              <h3 class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
                 {PROVIDER_LABELS[kind as CloudDeploymentProviderKind]}
               </h3>
-              <span class="ml-auto text-[9px] tabular-nums text-dimmed"
+              <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed"
                 >{projectGroups.reduce((n, g) => n + g.containers.length, 0)}</span
               >
             </div>
             {#if accessErrors[kind]}
               <p
-                class="border-t border-border bg-danger/10 px-3 py-1.5 text-[9px] leading-relaxed text-danger"
+                class="border-t border-border bg-danger/10 px-3 py-1.5 text-[0.5625rem] leading-relaxed text-danger"
               >
                 {accessErrors[kind]}
               </p>
@@ -559,10 +605,10 @@
               <div class="border-t border-border">
                 <div class="flex items-center gap-1.5 bg-surface/50 px-3 py-1">
                   <Server size={9} class="shrink-0 text-dimmed" />
-                  <span class="truncate text-[9px] font-medium text-muted">
+                  <span class="truncate text-[0.5625rem] font-medium text-muted">
                     {projectGroup.project}
                   </span>
-                  <span class="ml-auto text-[9px] tabular-nums text-dimmed">
+                  <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">
                     {projectGroup.containers.length}
                   </span>
                 </div>
@@ -589,7 +635,7 @@
                         {/if}
                         <div class="min-w-0 flex-1">
                           <div class="flex items-center gap-1.5">
-                            <p class="truncate text-[11px] font-medium text-foreground">
+                            <p class="truncate text-[0.6875rem] font-medium text-foreground">
                               {container.label}
                             </p>
                             <StatusPill
@@ -600,7 +646,7 @@
                               {statusLabel(container.status)}
                             </StatusPill>
                           </div>
-                          <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                          <div class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
                             <span class="truncate font-mono">{container.id}</span>
                             {#if container.updatedAt}
                               <span class="shrink-0">· {relativeTime(container.updatedAt)}</span>
@@ -659,7 +705,7 @@
           autofocus
           placeholder="Search by name, id or project…"
           aria-label="Search containers"
-          class="h-6 w-full rounded-md border border-border bg-elevated pl-6 pr-2 text-[10px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="h-6 w-full rounded-md border border-border bg-elevated pl-6 pr-2 text-[0.625rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           bind:value={searchQuery}
         />
       </div>
@@ -667,7 +713,7 @@
 
     <!-- Status bar: inventory on the left, the panel's actions on the right. -->
     <div class="flex h-9 shrink-0 items-center gap-1 border-t border-border px-2">
-      <span class="truncate text-[11px] text-muted">
+      <span class="truncate text-[0.6875rem] text-muted">
         {#if configured}
           {containers.length} container{containers.length === 1 ? '' : 's'} · {providers.length} provider{providers.length ===
           1
@@ -679,7 +725,7 @@
       </span>
       <button
         type="button"
-        class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
         aria-label={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
         onclick={() => openConfigSheet(configured ? 'container' : 'provider')}

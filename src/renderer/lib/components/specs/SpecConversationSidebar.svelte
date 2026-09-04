@@ -15,11 +15,11 @@
   {#each workspaceState.specAgentResponses as response (response.id)}
     <article class="rounded-lg border bg-elevated px-3 py-2.5">
       <div class="mb-2 flex items-center justify-between gap-2">
-        <span class="flex min-w-0 items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+        <span class="flex min-w-0 items-center gap-1.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
           <MessageSquareText size={12} class="shrink-0 text-accent" />
           Agent
         </span>
-        <time class="shrink-0 text-[10px] tabular-nums text-dimmed">
+        <time class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
           {formatTime(response.createdAt)}
         </time>
       </div>
@@ -29,7 +29,7 @@
     <div class="flex flex-1 flex-col items-center justify-center gap-2 px-3 py-10 text-center">
       <MessageSquareText size={20} class="text-dimmed" />
       <p class="text-xs font-medium text-muted">No agent response yet</p>
-      <p class="text-[11px] leading-relaxed text-dimmed">
+      <p class="text-[0.6875rem] leading-relaxed text-dimmed">
         The planning conversation will appear here as the spec develops.
       </p>
     </div>

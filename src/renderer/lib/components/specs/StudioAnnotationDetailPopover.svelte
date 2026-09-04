@@ -82,7 +82,7 @@
       {#if !compactViewport.matches}
         <PopoverDragHandle title="Move annotation" />
       {/if}
-      <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+      <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
         {headerLabel}
       </span>
     </span>
@@ -95,7 +95,7 @@
   </div>
   {#if annotation.quote}
     <blockquote
-      class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
+      class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[0.6875rem] leading-relaxed text-muted"
     >
       “{annotation.quote}”
     </blockquote>
@@ -113,7 +113,7 @@
   {:else}
     <p class="mt-3 text-xs leading-relaxed text-foreground">{annotation.body}</p>
   {/if}
-  <p class="mt-1 text-[10px] text-dimmed">
+  <p class="mt-1 text-[0.625rem] text-dimmed">
     {annotation.author} · {formatDate(annotation.createdAt)}
   </p>
   <div class="mt-3 flex items-center justify-between">

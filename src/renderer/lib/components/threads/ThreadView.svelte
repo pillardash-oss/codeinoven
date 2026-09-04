@@ -108,7 +108,11 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { isUsageResetWaitIssue, rateLimitWindowFromProviderIssue } from '$shared/provider-issue'
+  import {
+    classifyProviderIssue,
+    isUsageResetWaitIssue,
+    rateLimitWindowFromProviderIssue
+  } from '$shared/provider-issue'
   import { copyText } from '$lib/copy-text'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
@@ -235,6 +239,7 @@
     representativeLifecycleSelection
   } from '$shared/engines/engineering-lifecycle-engine'
   import { APP_NAME } from '$shared/brand'
+  import { getVendorIconDataUri } from '$lib/vendor-icons/registry'
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
@@ -832,6 +837,10 @@
   }
 
   let commands = $state<ScopedHarnessCommand[]>([])
+  /** Native "switch to API usage credits" command, when the active harness's
+   *  driver exposes one (Claude Code today) — drives the composer's dedicated
+   *  flame-icon shortcut instead of only being reachable via the slash menu. */
+  let usageCreditsCommand = $derived(commands.find((command) => command.name === 'usage-credits'))
   /** Skills visible to the thread's active harness: harness-native, global-layer,
    *  and CodeInOven-registered (Utilities) skills. Rendered as slash actions. */
   let capabilitySkills = $state<AgentCapabilityEntry[]>([])
@@ -888,7 +897,7 @@
       return {
         state: 'error',
         issue: {
-          kind: 'unknown',
+          kind: classifyProviderIssue(controller.error),
           message: controller.error,
           harnessId: settings.harnessId,
           retryable: true
@@ -902,7 +911,7 @@
     return {
       state: 'error',
       issue: {
-        kind: 'unknown',
+        kind: classifyProviderIssue(errorMessage),
         message: errorMessage,
         harnessId: settings.harnessId,
         retryable: true
@@ -1287,6 +1296,19 @@
       // unknown provenance are intentionally excluded from the live meter.
       if (message.harnessId !== settings.harnessId || message.providerId !== settings.providerId)
         continue
+      // A compaction summary rewrites the harness's context: occupancy and
+      // token totals reported by earlier messages no longer describe the
+      // session. Drop them here so the meter never shows a stale
+      // pre-compaction reading (e.g. a stuck "≈100%") — the next reported
+      // or estimated turn re-seeds the signal from the compacted context.
+      if (
+        message.origin === 'compaction' ||
+        message.parts.some((part) => part.type === 'compaction-summary')
+      ) {
+        latestContextUsed = undefined
+        latestContextEstimated = false
+        latestTokens = undefined
+      }
       latestMessage = message
       const stepCost = message.parts.reduce(
         (total, part) => total + (part.type === 'step-finish' ? (part.cost ?? 0) : 0),
@@ -5302,6 +5324,8 @@
       await invoke('agent:runCommand', projectId, id, command.id, args)
       if (command.name === 'config' || command.name === 'settings') {
         toast.success(`${providerName} settings updated`)
+      } else if (command.name === 'usage-credits') {
+        toast.success('Requested API usage credits for this session')
       }
     } catch (error) {
       errorMessage =
@@ -8780,18 +8804,32 @@
       reference.kind === 'directory'
         ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z"/></svg>'
         : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
-    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[11px] leading-none align-baseline" title="${safeTitle}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
+    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
+  }
+
+  function inlineUtilityChipHtml(): string {
+    const icon = getVendorIconDataUri(APP_NAME)
+    const safeTitle = escapeHtmlForChip(`${APP_NAME} utility`)
+    const iconHtml = icon
+      ? `<img src="${icon}" width="12" height="12" class="shrink-0" alt="" />`
+      : ''
+    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-utility-chip="cio-utility">${iconHtml}<span class="max-w-48 truncate font-medium">utility</span></span>`
   }
 
   function inlineFileTagsForMessage(msg: AgentMessage): Array<{ token: string; html: string }> {
-    if (!msg.projectReferences?.length) return []
     const text = messageText(msg)
+    const tags: Array<{ token: string; html: string }> = []
+    // The `@cio-utility` tag renders as a badge on the conversation screen too,
+    // mirroring the composer badge for the same token.
+    if (text.includes('@cio-utility')) {
+      tags.push({ token: '@cio-utility', html: inlineUtilityChipHtml() })
+    }
+    if (!msg.projectReferences?.length) return tags
     // Only inline references that actually appear as `@path` in the stored text;
     // remaining references will still render as the legacy top pills so no tag
     // is lost. Longest paths first prevents a parent directory token from
     // swallowing the prefix of a longer child path.
     const ordered = [...msg.projectReferences].sort((a, b) => b.path.length - a.path.length)
-    const tags: Array<{ token: string; html: string }> = []
     for (const reference of ordered) {
       const token = `@${reference.path}`
       if (!token || !text.includes(token)) continue
@@ -10143,7 +10181,7 @@
                     {@const previousTurnAudit = getPreviousTurnAudit(absIndex)}
                     {@const explicitPresentation = explicitMessagePresentation(msg)}
                     {#if previousTurnAudit}
-                      <div class="mb-1 flex items-center gap-1.5 self-end text-[10px] text-dimmed">
+                      <div class="mb-1 flex items-center gap-1.5 self-end text-[0.625rem] text-dimmed">
                         <span>Previous turn completed</span>
                         <span>·</span>
                         <span class="tabular-nums"
@@ -10166,7 +10204,7 @@
                         <div class="mb-2 flex flex-wrap gap-1.5">
                           {#each leftoverReferences as reference (reference.id)}
                             <span
-                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-elevated px-2 py-1 text-[11px]"
+                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-elevated px-2 py-1 text-[0.75rem]"
                               title="Tagged {reference.kind}: {reference.name}"
                             >
                               {#if reference.kind === 'directory'}
@@ -10185,7 +10223,7 @@
                         <div class="mb-2 flex flex-wrap gap-1.5">
                           {#each msg.references as reference (reference.id)}
                             <span
-                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[11px]"
+                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
                               title={reference.comment
                                 ? `${reference.comment}\n\n${reference.text}`
                                 : reference.text}
@@ -10263,7 +10301,7 @@
                                       class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30"
                                     >
                                       <span
-                                        class="text-[10px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100"
+                                        class="text-[0.625rem] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100"
                                       >
                                         Preview
                                       </span>
@@ -10277,7 +10315,7 @@
                                 >
                                   <button
                                     type="button"
-                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
                                     title="Preview {part.filename ?? mediaKind}"
                                     aria-label="Preview {part.filename ?? mediaKind}"
                                     onclick={() =>
@@ -10304,7 +10342,7 @@
                                 >
                                   <button
                                     type="button"
-                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
                                     title={`Open ${part.filename ?? part.url.split('/').pop() ?? 'file'}`}
                                     onclick={() => openFilePart(part.url)}
                                   >
@@ -10370,8 +10408,8 @@
                           </button>
                         {/if}
                       </div>
-                      <span class="text-[10px] text-dimmed">·</span>
-                      <span class="text-[10px] text-dimmed">{formatTime(msg.createdAt)}</span>
+                      <span class="text-[0.625rem] text-dimmed">·</span>
+                      <span class="text-[0.625rem] text-dimmed">{formatTime(msg.createdAt)}</span>
                     </div>
                   {/if}
                 </div>
@@ -10518,7 +10556,7 @@
                           speechController.readingOverlayActive}
                         <div
                           id={`msg-${msg.id}`}
-                          class="message-block min-w-0 w-full text-sm text-foreground"
+                          class="message-block min-w-0 w-full text-[0.8125rem] text-foreground"
                           data-assistant-response
                           data-conversation-searchable
                           data-message-id={msg.id}
@@ -10653,13 +10691,13 @@
                             <div
                               class="pointer-events-none flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                             >
-                              <span class="flex items-center gap-1 text-[10px] text-dimmed">
+                              <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
                                 <AgentIcon agentId={messageHarnessId(msg)} size={14} />
                                 {messageHarnessName(msg)}
                               </span>
                               {#if modelLabel}
-                                <span class="text-[10px] text-dimmed">·</span>
-                                <span class="flex items-center gap-1 text-[10px] text-dimmed">
+                                <span class="text-[0.625rem] text-dimmed">·</span>
+                                <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
                                   <VendorIcon
                                     name={provider?.name ?? modelLabel}
                                     id={provider?.id}
@@ -10678,7 +10716,7 @@
                                 </span>
                                 {#if msgThinking}
                                   <span
-                                    class="flex items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                                    class="flex items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] capitalize text-muted"
                                     title={`Thinking level: ${msgThinking}`}
                                     aria-label={`Thinking level: ${msgThinking}`}
                                   >
@@ -10687,15 +10725,15 @@
                                   </span>
                                 {/if}
                               {/if}
-                              <span class="text-[10px] text-dimmed"
+                              <span class="text-[0.625rem] text-dimmed"
                                 >· {formatTime(msg.completedAt ?? msg.createdAt)}</span
                               >
                               {#if turnDuration !== null}
-                                <span class="text-[10px] text-dimmed tabular-nums"
+                                <span class="text-[0.625rem] text-dimmed tabular-nums"
                                   >· {formatDuration(turnDuration)}</span
                                 >
                               {:else if msg.completedAt && msg.createdAt}
-                                <span class="text-[10px] text-dimmed tabular-nums"
+                                <span class="text-[0.625rem] text-dimmed tabular-nums"
                                   >· {formatDuration(msg.completedAt - msg.createdAt)}</span
                                 >
                               {/if}
@@ -10769,7 +10807,7 @@
                     ? delegatedActivityLabel
                     : activityLabel}
               </span>
-              <span class="text-[11px]">…</span>
+              <span class="text-[0.75rem]">…</span>
             </div>
           {/if}
         {/if}
@@ -10918,7 +10956,7 @@
             <div class="mx-auto max-w-3xl">
               <div class="rounded-t-xl border border-border bg-surface shadow-sm">
                 <div class="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
-                  <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                  <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
                     >{queuedCount > 1
                       ? `Queued · ${queuedCount}`
                       : queuedStartAfterThreads.length > 0
@@ -10936,7 +10974,7 @@
                       <Plus size={13} />
                     </button>
                     <button
-                      class="rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
+                      class="rounded-md px-2 py-0.5 text-[0.75rem] font-medium text-foreground transition-colors hover:bg-elevated"
                       title={`Steer — ${steerModifierLabel}Enter — send this message to the agent now`}
                       onclick={() => void steerQueuedMessage()}
                     >
@@ -11003,7 +11041,7 @@
                   <div class="flex flex-wrap gap-1.5 px-3 pb-2">
                     {#each queuedPromptReferences as reference (reference.id)}
                       <span
-                        class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[11px]"
+                        class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
                         title={reference.comment
                           ? `${reference.comment}\n\n${reference.text}`
                           : reference.text}
@@ -11031,7 +11069,7 @@
                         <Clock size={12} class="shrink-0 text-info" />
                         <button
                           type="button"
-                          class="min-w-0 flex-1 truncate text-left text-[11px] text-info"
+                          class="min-w-0 flex-1 truncate text-left text-[0.75rem] text-info"
                           title={`Open ${dependency.title}`}
                           aria-label={`Open ${dependency.title}`}
                           onclick={() => void openStartAfterThread(dependency.id)}
@@ -11062,25 +11100,25 @@
                 {/if}
                 {#if queuedPresentation}
                   <div class="px-3 pb-2.5">
-                    <p class="text-[11px] italic text-dimmed">{queuedPresentation.action}</p>
+                    <p class="text-[0.75rem] italic text-dimmed">{queuedPresentation.action}</p>
                     {#if queuedPresentation.body}
-                      <p class="mt-1 text-[12px] text-muted line-clamp-3">
+                      <p class="mt-1 text-[0.75rem] text-muted line-clamp-3">
                         {queuedPresentation.body}
                       </p>
                     {/if}
                   </div>
                 {:else}
-                  <p class="px-3 pb-2.5 text-[12px] text-muted line-clamp-3">{queuedMessage}</p>
+                  <p class="px-3 pb-2.5 text-[0.75rem] text-muted line-clamp-3">{queuedMessage}</p>
                 {/if}
                 {#if queuedCount > 1}
                   <div class="border-t px-3 pb-2.5 pt-2">
-                    <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+                    <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
                       Next up
                     </p>
                     {#each rendererRecovery
                       .queuedMessagesFor(thread.projectId, thread.id)
                       .slice(1) as next (next.text)}
-                      <p class="line-clamp-2 pt-1 text-[12px] text-muted">{next.text}</p>
+                      <p class="line-clamp-2 pt-1 text-[0.75rem] text-muted">{next.text}</p>
                     {/each}
                   </div>
                 {/if}
@@ -11474,6 +11512,7 @@
                     actions={activeActions}
                     onActionSelect={handleActionSelection}
                     onSlashCommand={executeHarnessCommand}
+                    usageCreditsCommandId={usageCreditsCommand?.id}
                     contextUsage={contextUsageDisplay}
                     efficiencyKpis={storedEfficiencyKpis}
                     onRevealUsage={revealContextUsage}

@@ -120,7 +120,7 @@
   {#if compactStatusIcon}
     {@const CompactStatusIcon = compactStatusIcon}
     <span
-      class="status-icon rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {statusClass ??
+      class="status-icon rounded-md px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide {statusClass ??
         'bg-raised text-dimmed'}"
       title={statusLabel}
       aria-label={statusLabel}>
@@ -128,7 +128,7 @@
     </span>
   {/if}
   <span
-    class="status-text rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {statusClass ??
+    class="status-text rounded-md px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide {statusClass ??
       'bg-raised text-dimmed'}">{statusLabel}</span
   >
 {/if}
@@ -162,7 +162,7 @@
 </style>
 {#if dirty && canSave}
   <button
-    class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[11px] font-medium hover:bg-overlay disabled:opacity-50"
+    class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
     disabled={busy || savePending}
     title="Save changes (Cmd/Ctrl+S)"
     onclick={onSave}

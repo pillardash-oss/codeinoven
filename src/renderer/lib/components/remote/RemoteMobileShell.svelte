@@ -443,12 +443,12 @@
        fresh shell rather than re-importing a chunk hash that no longer exists. -->
   {#snippet chunkFailure()}
     <div class="flex min-h-40 flex-col items-center justify-center gap-3 px-6 py-8 text-center">
-      <p class="max-w-[16rem] text-[13px] leading-relaxed text-muted">
+      <p class="max-w-[16rem] text-[0.8125rem] leading-relaxed text-muted">
         This panel could not load. If it keeps failing, the desktop may have been updated.
       </p>
       <button
         type="button"
-        class="h-9 cursor-pointer rounded-lg bg-primary px-4 text-[13px] font-medium text-on-primary transition-colors active:bg-primary-hover"
+        class="h-9 cursor-pointer rounded-lg bg-primary px-4 text-[0.8125rem] font-medium text-on-primary transition-colors active:bg-primary-hover"
         title="Reload this panel"
         aria-label="Reload this panel"
         onclick={() => void resetPwaCacheAndReload()}
@@ -489,11 +489,11 @@
       </button>
 
       <div class="min-w-0 px-1 text-center">
-        <p class="truncate text-[14px] font-semibold tracking-tight">
+        <p class="truncate text-[0.875rem] font-semibold tracking-tight">
           {mobileState.selectedThread?.title ?? 'CodeInOven'}
         </p>
         {#if mobileState.selectedThread && ((mobileState.selectedProject && !mobileState.chatMode) || selectedThreadWorking)}
-          <p class="flex items-center justify-center gap-1 truncate text-[11px] text-dimmed">
+          <p class="flex items-center justify-center gap-1 truncate text-[0.6875rem] text-dimmed">
             {#if mobileState.selectedProject && !mobileState.chatMode}
               <span class="truncate">{mobileState.selectedProject.name}</span>
               {#if gitState.branch}
@@ -592,13 +592,13 @@
         <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface">
           <MessageSquare size={24} class="text-primary" />
         </div>
-        <p class="text-[15px] font-medium">Select a thread</p>
-        <p class="max-w-64 text-[13px] leading-relaxed text-dimmed">
+        <p class="text-[0.9375rem] font-medium">Select a thread</p>
+        <p class="max-w-64 text-[0.8125rem] leading-relaxed text-dimmed">
           Open the sidebar to browse your projects and conversations.
         </p>
         <button
           type="button"
-          class="mt-1 flex h-11 cursor-pointer items-center gap-2 rounded-xl bg-primary px-5 text-[14px] font-medium text-on-primary transition-colors active:bg-primary-hover"
+          class="mt-1 flex h-11 cursor-pointer items-center gap-2 rounded-xl bg-primary px-5 text-[0.875rem] font-medium text-on-primary transition-colors active:bg-primary-hover"
           onclick={openSidebar}
         >
           <PanelLeft size={15} />
@@ -638,15 +638,15 @@
         aria-label="System notifications"
       />
       {#if mobileNotifications.permission === 'denied'}
-        <p class="mt-1.5 text-[11px] leading-relaxed text-dimmed">
+        <p class="mt-1.5 text-[0.6875rem] leading-relaxed text-dimmed">
           Notifications are blocked for this site. Allow them in your browser's site settings.
         </p>
       {:else if mobileNotifications.permission === 'unsupported'}
-        <p class="mt-1.5 text-[11px] leading-relaxed text-dimmed">
+        <p class="mt-1.5 text-[0.6875rem] leading-relaxed text-dimmed">
           System notifications are not supported on this browser.
         </p>
       {:else}
-        <p class="mt-1.5 text-[11px] leading-relaxed text-dimmed">
+        <p class="mt-1.5 text-[0.6875rem] leading-relaxed text-dimmed">
           Get a system alert when a thread wants your attention, even when the app is in the
           background.
         </p>
@@ -853,7 +853,7 @@
         {#if showInstall}
           <button
             type="button"
-            class="flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-primary text-[13px] font-medium text-on-primary transition-colors active:bg-primary-hover"
+            class="flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-primary text-[0.8125rem] font-medium text-on-primary transition-colors active:bg-primary-hover"
             title="Install CodeInOven on this device"
             onclick={() => void handleInstall()}
           >
@@ -863,7 +863,7 @@
         {/if}
         <button
           type="button"
-          class="flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-elevated text-[13px] font-medium text-muted transition-colors active:bg-elevated active:text-foreground"
+          class="flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-elevated text-[0.8125rem] font-medium text-muted transition-colors active:bg-elevated active:text-foreground"
           title="Close the sidebar"
           aria-label="Close the sidebar"
           onclick={() => (mobileState.sidebarOpen = false)}
@@ -891,7 +891,7 @@
           <input
             type="search"
             value={searchQuery}
-            class="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-dimmed"
+            class="min-w-0 flex-1 bg-transparent text-[0.875rem] text-foreground outline-none placeholder:text-dimmed"
             placeholder={mobileState.sidebarMode === 'chats'
               ? 'Search chats…'
               : 'Search project threads…'}
@@ -910,7 +910,7 @@
       <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2">
         {#if searchQuery.trim().length >= 2}
           {#if !searching && visibleSearchResults.length === 0}
-            <p class="px-3 py-12 text-center text-[13px] text-dimmed">No matching threads</p>
+            <p class="px-3 py-12 text-center text-[0.8125rem] text-dimmed">No matching threads</p>
           {:else}
             <div class="space-y-px">
               {#each visibleSearchResults as result (result.thread.id)}
@@ -928,12 +928,12 @@
                     {:else}
                       {@render threadStatusDot(result.thread)}
                     {/if}
-                    <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
+                    <span class="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground">
                       {result.thread.title}
                     </span>
                   </span>
                   {#if result.kind === 'message' && result.snippet}
-                    <span class="line-clamp-2 pl-4 text-[11px] leading-snug text-dimmed">
+                    <span class="line-clamp-2 pl-4 text-[0.6875rem] leading-snug text-dimmed">
                       {result.role === 'assistant' ? 'Agent' : 'You'} · {result.snippet}
                     </span>
                   {/if}
@@ -942,21 +942,21 @@
             </div>
           {/if}
         {:else if mobileState.loading}
-          <div class="flex items-center gap-2 px-3 py-4 text-[14px] text-muted">
+          <div class="flex items-center gap-2 px-3 py-4 text-[0.875rem] text-muted">
             <Loader2 size={15} class="animate-spin" />
             Loading…
           </div>
         {:else if mobileState.loadError}
           <div class="flex flex-col items-start gap-3 px-3 py-4">
             <div>
-              <p class="text-[13px] font-medium text-foreground">Could not load the workspace</p>
-              <p class="mt-1 text-[12px] leading-relaxed text-dimmed">
+              <p class="text-[0.8125rem] font-medium text-foreground">Could not load the workspace</p>
+              <p class="mt-1 text-[0.75rem] leading-relaxed text-dimmed">
                 The desktop connection dropped before projects were loaded.
               </p>
             </div>
             <button
               type="button"
-              class="h-9 cursor-pointer rounded-lg bg-primary px-3 text-[12px] font-semibold text-on-primary transition-colors active:bg-primary-hover"
+              class="h-9 cursor-pointer rounded-lg bg-primary px-3 text-[0.75rem] font-semibold text-on-primary transition-colors active:bg-primary-hover"
               onclick={() => void mobileState.loadData()}
             >
               Try again
@@ -980,7 +980,7 @@
                     onclick={() => void mobileState.openThread(thread)}
                   >
                     {@render threadStatusDot(thread)}
-                    <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
+                    <span class="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground">
                       {thread.title}
                     </span>
                     {#if speechController.isRecordingThread(thread.id)}
@@ -988,7 +988,7 @@
                       {:else if speechController.isSpeakingThread(thread.id)}
                         <RecordingIndicator label="Speaking" tone="speech" />
                     {:else}
-                      <span class="shrink-0 text-[10px] text-dimmed"
+                      <span class="shrink-0 text-[0.625rem] text-dimmed"
                         >{relativeTime(thread.lastActivity)}</span
                       >
                     {/if}
@@ -1024,7 +1024,7 @@
                   {:else}
                     <span class="h-4 w-4 shrink-0 rounded bg-elevated"></span>
                   {/if}
-                  <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
+                  <span class="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground">
                     {project.name}
                   </span>
                   {#if working}
@@ -1061,7 +1061,7 @@
                         onclick={() => void mobileState.openThread(thread)}
                       >
                         {@render threadStatusDot(thread)}
-                        <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
+                        <span class="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground">
                           {thread.title}
                         </span>
                         {#if speechController.isRecordingThread(thread.id)}
@@ -1069,7 +1069,7 @@
                           {:else if speechController.isSpeakingThread(thread.id)}
                             <RecordingIndicator label="Speaking" tone="speech" />
                         {:else}
-                          <span class="shrink-0 text-[10px] text-dimmed"
+                          <span class="shrink-0 text-[0.625rem] text-dimmed"
                             >{relativeTime(thread.lastActivity)}</span
                           >
                         {/if}
@@ -1085,15 +1085,15 @@
                       </button>
                     </div>
                   {:else}
-                    <p class="px-2 py-1.5 text-[12px] text-dimmed">No threads yet</p>
+                    <p class="px-2 py-1.5 text-[0.75rem] text-dimmed">No threads yet</p>
                   {/each}
                 </div>
               {/if}
             </div>
           {:else}
             <div class="flex flex-col items-center gap-2 px-2 py-12 text-center">
-              <p class="text-[13px] text-muted">No projects yet</p>
-              <p class="text-[13px] text-dimmed">Add a project on the desktop to get started</p>
+              <p class="text-[0.8125rem] text-muted">No projects yet</p>
+              <p class="text-[0.8125rem] text-dimmed">Add a project on the desktop to get started</p>
             </div>
           {/each}
         {:else if mobileState.sidebarMode === 'threads'}
@@ -1111,7 +1111,7 @@
                 {:else}
                   <span class="h-4 w-4 shrink-0 rounded bg-elevated"></span>
                 {/if}
-                <span class="truncate text-[12px] font-medium text-muted">
+                <span class="truncate text-[0.75rem] font-medium text-muted">
                   {activeThreadProject.name}
                 </span>
               </span>
@@ -1148,7 +1148,7 @@
                     <img src={iconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
                   {/if}
                   {@render threadStatusDot(thread)}
-                  <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
+                  <span class="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground">
                     {thread.title}
                   </span>
                   {#if speechController.isRecordingThread(thread.id)}
@@ -1156,7 +1156,7 @@
                     {:else if speechController.isSpeakingThread(thread.id)}
                       <RecordingIndicator label="Speaking" tone="speech" />
                   {:else}
-                    <span class="shrink-0 text-[10px] text-dimmed"
+                    <span class="shrink-0 text-[0.625rem] text-dimmed"
                       >{relativeTime(thread.lastActivity)}</span
                     >
                   {/if}
@@ -1172,7 +1172,7 @@
                 </button>
               </div>
             {:else}
-              <p class="px-2 py-12 text-center text-[13px] text-dimmed">No threads yet</p>
+              <p class="px-2 py-12 text-center text-[0.8125rem] text-dimmed">No threads yet</p>
             {/each}
           </div>
         {:else}
@@ -1192,7 +1192,7 @@
                   onclick={() => void mobileState.openThread(thread)}
                 >
                   {@render threadStatusDot(thread)}
-                  <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
+                  <span class="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground">
                     {thread.title}
                   </span>
                   {#if speechController.isRecordingThread(thread.id)}
@@ -1200,7 +1200,7 @@
                     {:else if speechController.isSpeakingThread(thread.id)}
                       <RecordingIndicator label="Speaking" tone="speech" />
                   {:else}
-                    <span class="shrink-0 text-[10px] text-dimmed"
+                    <span class="shrink-0 text-[0.625rem] text-dimmed"
                       >{relativeTime(thread.lastActivity)}</span
                     >
                   {/if}
@@ -1218,8 +1218,8 @@
             {:else}
               <div class="flex flex-col items-center gap-2 px-2 py-12 text-center">
                 <MessageSquare size={20} class="text-dimmed" />
-                <p class="text-[13px] text-muted">No chats yet</p>
-                <p class="text-[13px] text-dimmed">Start a chat on the desktop to see it here</p>
+                <p class="text-[0.8125rem] text-muted">No chats yet</p>
+                <p class="text-[0.8125rem] text-dimmed">Start a chat on the desktop to see it here</p>
               </div>
             {/each}
           </div>
@@ -1240,7 +1240,7 @@
               {@const ActiveIcon = activeSidebarMode.icon}
               <ActiveIcon size={15} class="shrink-0 text-muted" />
             {/if}
-            <span class="truncate text-[13px] font-medium text-foreground">
+            <span class="truncate text-[0.8125rem] font-medium text-foreground">
               {activeSidebarMode?.label ?? 'Projects'}
             </span>
           </span>
@@ -1288,7 +1288,7 @@
       aria-label="Install CodeInOven"
     >
       <div class="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
-        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">
+        <p class="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-dimmed">
           Install CodeInOven
         </p>
         <button
@@ -1302,7 +1302,7 @@
         </button>
       </div>
       <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5">
-        <p class="text-[14px] leading-relaxed text-foreground">
+        <p class="text-[0.875rem] leading-relaxed text-foreground">
           Install CodeInOven for a full-screen app icon and notifications that work in the
           background.
         </p>
@@ -1310,28 +1310,28 @@
           <ol class="mt-4 space-y-4">
             <li class="flex items-start gap-3">
               <span
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[0.75rem] font-semibold text-primary"
                 >1</span
               >
-              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+              <span class="min-w-0 flex-1 text-[0.8125rem] leading-relaxed text-muted">
                 Tap the <span class="text-foreground">Share</span> button in Safari's toolbar.
               </span>
             </li>
             <li class="flex items-start gap-3">
               <span
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[0.75rem] font-semibold text-primary"
                 >2</span
               >
-              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+              <span class="min-w-0 flex-1 text-[0.8125rem] leading-relaxed text-muted">
                 Choose <span class="text-foreground">Add to Home Screen</span>.
               </span>
             </li>
             <li class="flex items-start gap-3">
               <span
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[0.75rem] font-semibold text-primary"
                 >3</span
               >
-              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+              <span class="min-w-0 flex-1 text-[0.8125rem] leading-relaxed text-muted">
                 Tap <span class="text-foreground">Add</span>. CodeInOven opens like its own app.
               </span>
             </li>
@@ -1340,29 +1340,29 @@
           <ol class="mt-4 space-y-4">
             <li class="flex items-start gap-3">
               <span
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[0.75rem] font-semibold text-primary"
                 >1</span
               >
-              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+              <span class="min-w-0 flex-1 text-[0.8125rem] leading-relaxed text-muted">
                 Open the browser menu — the <span class="text-foreground">⋮</span> (or ⋯) button.
               </span>
             </li>
             <li class="flex items-start gap-3">
               <span
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[0.75rem] font-semibold text-primary"
                 >2</span
               >
-              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+              <span class="min-w-0 flex-1 text-[0.8125rem] leading-relaxed text-muted">
                 Choose <span class="text-foreground">Install app</span> or
                 <span class="text-foreground">Add to Home screen</span>.
               </span>
             </li>
             <li class="flex items-start gap-3">
               <span
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[0.75rem] font-semibold text-primary"
                 >3</span
               >
-              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+              <span class="min-w-0 flex-1 text-[0.8125rem] leading-relaxed text-muted">
                 Confirm <span class="text-foreground">Install</span>. CodeInOven opens like its own
                 app.
               </span>
@@ -1372,29 +1372,29 @@
           <ol class="mt-4 space-y-4">
             <li class="flex items-start gap-3">
               <span
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[0.75rem] font-semibold text-primary"
                 >1</span
               >
-              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+              <span class="min-w-0 flex-1 text-[0.8125rem] leading-relaxed text-muted">
                 Click the <span class="text-foreground">install icon</span> in the browser's address bar.
               </span>
             </li>
             <li class="flex items-start gap-3">
               <span
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[0.75rem] font-semibold text-primary"
                 >2</span
               >
-              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+              <span class="min-w-0 flex-1 text-[0.8125rem] leading-relaxed text-muted">
                 If there's no icon, open the browser menu and choose
                 <span class="text-foreground">Install CodeInOven</span>.
               </span>
             </li>
             <li class="flex items-start gap-3">
               <span
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[0.75rem] font-semibold text-primary"
                 >3</span
               >
-              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+              <span class="min-w-0 flex-1 text-[0.8125rem] leading-relaxed text-muted">
                 Confirm <span class="text-foreground">Install</span>. CodeInOven opens like its own
                 app.
               </span>
@@ -1403,7 +1403,7 @@
         {/if}
         <div class="mt-5 flex items-start gap-2.5 rounded-xl bg-elevated px-3.5 py-3">
           <Share size={14} class="mt-0.5 shrink-0 text-primary" />
-          <p class="text-[12px] leading-relaxed text-muted">
+          <p class="text-[0.75rem] leading-relaxed text-muted">
             Open the installed icon going forward — the install button here disappears once it's
             added.
           </p>

@@ -52,6 +52,7 @@
     X
   } from '@lucide/svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
+  import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import ProjectInfoDropdown from '$lib/components/shared/ProjectInfoDropdown.svelte'
@@ -72,7 +73,7 @@
     type ScopeBucket
   } from '$shared/types'
   import { SvelteSet } from 'svelte/reactivity'
-  import { tick, type Component } from 'svelte'
+  import { type Component } from 'svelte'
 
   type View = MainView
 
@@ -497,24 +498,13 @@
   let threadRenameValue = $state('')
 
   let showThreadDeleteConfirm = $state(false)
-  /** Delete button inside the confirm modal — focused on open so Enter deletes. */
-  let deleteConfirmButton = $state<HTMLButtonElement>()
-
-  $effect(() => {
-    if (!showThreadDeleteConfirm) return
-    void tick().then(() => deleteConfirmButton?.focus())
-  })
 
   /** Cmd/Ctrl+D deletes the actively opened thread through the normal confirm
-   *  flow; Escape cancels the confirm while it is open. Cmd/Ctrl+0-4 switch
+   *  flow (Escape cancels inside the shared ThreadDeleteConfirm dialog).
+   *  Cmd/Ctrl+0-4 switch
    *  primary views: 0 chats, 1 projects, 2 threads, 3 projects with scope state,
    *  4 scope. */
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape' && showThreadDeleteConfirm) {
-      event.preventDefault()
-      showThreadDeleteConfirm = false
-      return
-    }
     if (event.repeat || event.isComposing) return
     const modifier = event.metaKey || event.ctrlKey
     if (!modifier || event.altKey || event.shiftKey) return
@@ -677,7 +667,7 @@
             onclick={() => void onPrimaryNavClick('scope')}
           >
             <Kanban size={14} strokeWidth={1.8} class={anyProjectWorking ? 'animate-pulse' : ''} />
-            <span class="header-control-label text-[11px] font-medium">Scope</span>
+            <span class="header-control-label text-[0.6875rem] font-medium">Scope</span>
           </button>
         {:else if projectViewMode === 'threads'}
           <button
@@ -698,7 +688,7 @@
               strokeWidth={1.8}
               class={anyProjectWorking ? 'animate-pulse' : ''}
             />
-            <span class="header-control-label text-[11px] font-medium">Threads</span>
+            <span class="header-control-label text-[0.6875rem] font-medium">Threads</span>
           </button>
         {:else}
           <button
@@ -719,7 +709,7 @@
               strokeWidth={1.8}
               class={anyProjectWorking ? 'animate-pulse' : ''}
             />
-            <span class="header-control-label text-[11px] font-medium">Projects</span>
+            <span class="header-control-label text-[0.6875rem] font-medium">Projects</span>
           </button>
           <div class="mx-0.5 h-4 w-px bg-border/40" aria-hidden="true"></div>
           <button
@@ -801,7 +791,7 @@
       onclick={() => void onPrimaryNavClick('chats')}
     >
       <MessageSquare size={14} strokeWidth={1.8} class={anyChatWorking ? 'animate-pulse' : ''} />
-      <span class="header-control-label text-[11px] font-medium">Chats</span>
+      <span class="header-control-label text-[0.6875rem] font-medium">Chats</span>
     </button>
   </nav>
 
@@ -849,7 +839,7 @@
                 {project}
                 class="max-w-36 text-left"
                 nameClass="text-xs font-medium"
-                locationClass="text-[9px] text-dimmed"
+                locationClass="text-[0.5625rem] text-dimmed"
                 showLocation={hasProjectNameCollision(project, scopeState.projects)}
               />
             </button>
@@ -878,7 +868,7 @@
     <div class="flex min-w-0 flex-1 items-center justify-center px-2">
       {#if onSettings}
         <div class="pointer-events-none">
-          <h1 class="text-[11px] font-semibold uppercase tracking-[0.16em] text-dimmed">
+          <h1 class="text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-dimmed">
             {settingsTitle}
           </h1>
         </div>
@@ -925,7 +915,7 @@
           {/if}
           <div class="flex min-w-0 items-center gap-1.5 overflow-hidden">
             <h1
-              class="max-w-52 truncate text-[13px] font-medium tracking-tight text-foreground"
+              class="max-w-52 truncate text-[0.6875rem] font-medium tracking-tight text-foreground"
               title={headerThreadTitle}
             >
               {headerThreadTitle}
@@ -973,7 +963,7 @@
             />
             {#if isWorking}
               <span
-                class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] {isRetryPaused
+                class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.625rem] {isRetryPaused
                   ? 'bg-warning/10 text-warning'
                   : 'bg-info/10 text-info'}"
               >
@@ -1021,7 +1011,7 @@
         </div>
       {:else}
         <div class="pointer-events-none">
-          <h1 class="text-[11px] font-semibold uppercase tracking-[0.16em] text-dimmed">
+          <h1 class="text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-dimmed">
             {viewLabels[activeView]}
           </h1>
         </div>
@@ -1084,52 +1074,13 @@
   {/if}
 
   <!-- Thread Delete Confirmation -->
-  {#if showThreadDeleteConfirm}
-    {@const thread = workspaceState.selectedThread}
-    <div class="fixed inset-0 z-50 flex items-center justify-center">
-      <button
-        class="absolute inset-0 bg-black/13"
-        aria-label="Close"
-        onclick={() => (showThreadDeleteConfirm = false)}
-      ></button>
-      <div class="relative w-full max-w-md border bg-surface p-6 shadow-xl">
-        <div class="mb-4 flex items-center justify-between">
-          <h2 class="text-base font-semibold">Delete Thread</h2>
-          <button
-            class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label="Close"
-            title="Close"
-            onclick={() => (showThreadDeleteConfirm = false)}
-          >
-            <X size={16} />
-          </button>
-        </div>
-        <p class="text-sm leading-relaxed text-muted">
-          This will permanently delete
-          <span class="font-medium text-foreground">{thread?.title}</span>
-          and all of its history. This action cannot be undone.
-        </p>
-        <div class="flex justify-end gap-2 pt-4">
-          <button
-            type="button"
-            class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-            title="Cancel"
-            onclick={() => (showThreadDeleteConfirm = false)}
-          >
-            Cancel
-          </button>
-          <button
-            bind:this={deleteConfirmButton}
-            type="button"
-            class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90"
-            title="Permanently delete this thread"
-            onclick={() => void confirmThreadDelete()}
-          >
-            Delete
-          </button>
-        </div>
-      </div>
-    </div>
+  {#if showThreadDeleteConfirm && workspaceState.selectedThread}
+    <ThreadDeleteConfirm
+      open
+      threadTitle={workspaceState.selectedThread.title}
+      onClose={() => (showThreadDeleteConfirm = false)}
+      onConfirm={confirmThreadDelete}
+    />
   {/if}
 
   <!-- Change Scope Modal -->
@@ -1196,7 +1147,7 @@
             aria-label="Select default editor"
           >
             <p
-              class="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+              class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
             >
               Open projects in
             </p>
@@ -1254,7 +1205,7 @@
         {:else}
           <FileText size={15} />
         {/if}
-        <span class="header-control-label text-[11px] font-medium">
+        <span class="header-control-label text-[0.6875rem] font-medium">
           {workspaceState.specStudioBusy
             ? workspaceState.specStudioFormulating
               ? 'Formulating…'
@@ -1292,13 +1243,13 @@
           <GitBranch size={13} class="shrink-0" />
         {/if}
         {#if gitState.branch}
-          <span class="min-w-0 flex-1 truncate font-mono text-[10px] font-medium">
+          <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] font-medium">
             {gitState.branch}
           </span>
         {/if}
         {#if gitState.conflicted.length > 0}
           <span
-            class="shrink-0 rounded-full bg-warning px-1.5 text-[9px] font-semibold tabular-nums text-on-primary"
+            class="shrink-0 rounded-full bg-warning px-1.5 text-[0.5625rem] font-semibold tabular-nums text-on-primary"
           >
             {gitState.conflicted.length}
           </span>
@@ -1307,7 +1258,7 @@
         {/if}
         {#if gitState.activePrConflictCount > 0}
           <span
-            class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/15 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-danger"
+            class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-danger"
             title={`${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution`}
           >
             <GitPullRequest size={9} class="shrink-0" />
@@ -1316,7 +1267,7 @@
         {/if}
         {#if gitState.stashes.length > 0}
           <span
-            class="absolute -bottom-1.5 left-2 flex items-center gap-0.5 rounded-full bg-info/15 px-1.5 py-0.5 text-[8px] font-semibold tabular-nums text-info ring-1 ring-info/30"
+            class="absolute -bottom-1.5 left-2 flex items-center gap-0.5 rounded-full bg-info/15 px-1.5 py-0.5 text-[0.5rem] font-semibold tabular-nums text-info ring-1 ring-info/30"
             title={`${gitState.stashes.length} stashed change${gitState.stashes.length === 1 ? '' : 's'}`}
           >
             <Archive size={8} class="shrink-0" />

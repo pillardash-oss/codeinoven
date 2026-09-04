@@ -362,14 +362,14 @@
       {:else}
         <Cloud size={12} class="shrink-0 text-muted" />
       {/if}
-      <span class="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground">
+      <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
         {container.label}
       </span>
       <StatusPill tone={tone(status.status)}>{label(status.status)}</StatusPill>
       {#if selectedDeployment?.status === 'failed'}
         <button
           type="button"
-          class="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-border px-2.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-border px-2.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Diagnose this failed deployment with an agent"
           aria-label="Diagnose this failed deployment with an agent"
           onclick={() => onRemediate(readableLog)}
@@ -406,7 +406,7 @@
         />
       {/if}
     </div>
-    <div class="mt-1 flex items-center gap-1.5 text-[9px] text-dimmed">
+    <div class="mt-1 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
       {#if selectedDeployment}
         <span class="font-mono">{selectedDeployment.id.slice(0, 12)}</span>
         {#if selectedDeployment.commit}
@@ -430,7 +430,7 @@
     {#if selectedDeployment}
       <!-- Single deployment detail + its log -->
       <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-        <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+        <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
           Deployment log
         </span>
         {#if selectedDeployment.status && selectedDeployment.status !== 'unknown'}
@@ -443,7 +443,7 @@
         {#if log}
           <button
             type="button"
-            class="ml-auto flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="ml-auto flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Search log (Ctrl/Cmd+F)"
             aria-label="Search log"
             onclick={openSearch}
@@ -453,7 +453,7 @@
           </button>
           <button
             type="button"
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Copy build log"
             aria-label="Copy build log"
             onclick={() => void copyLog()}
@@ -463,7 +463,7 @@
           </button>
           <button
             type="button"
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Copy raw log JSON"
             aria-label="Copy raw log JSON"
             onclick={() => void copyRawLog()}
@@ -480,7 +480,7 @@
             bind:this={searchInputEl}
             bind:value={searchQuery}
             type="text"
-            class="h-6 min-w-0 flex-1 rounded border border-border bg-elevated px-2 text-[10px] text-foreground outline-none placeholder:text-dimmed"
+            class="h-6 min-w-0 flex-1 rounded border border-border bg-elevated px-2 text-[0.625rem] text-foreground outline-none placeholder:text-dimmed"
             placeholder="Search in log…"
             aria-label="Search in deployment log"
             oninput={() => {
@@ -488,7 +488,7 @@
               scrollToMatch(0)
             }}
           />
-          <span class="shrink-0 text-[9px] tabular-nums text-dimmed">
+          <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
             {searchMatches.length > 0 ? `${activeMatch + 1}/${searchMatches.length}` : '0/0'}
           </span>
           <button
@@ -521,13 +521,13 @@
         </div>
       {/if}
       {#if logLoading}
-        <div class="flex items-center justify-center gap-2 px-6 py-8 text-[11px] text-dimmed">
+        <div class="flex items-center justify-center gap-2 px-6 py-8 text-[0.6875rem] text-dimmed">
           <Loader2 size={13} class="animate-spin" />
           Loading log
         </div>
       {:else if logLines.length > 0}
         <div class="p-3">
-          <div class="space-y-0.5 font-mono text-[10px] leading-relaxed">
+          <div class="space-y-0.5 font-mono text-[0.625rem] leading-relaxed">
             {#each logLines as line, index (index)}
               {@const matchIndex = searchMatches.indexOf(index)}
               {@const isActiveMatch = matchIndex !== -1 && matchIndex === activeMatch}
@@ -547,17 +547,17 @@
       {:else if logError}
         <div class="flex flex-col items-center gap-3 px-6 py-8 text-center">
           <CircleX size={18} class="text-danger" />
-          <p class="max-w-[42ch] text-[10px] leading-relaxed text-dimmed">{logError}</p>
+          <p class="max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">{logError}</p>
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground hover:bg-elevated"
+            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
             onclick={() => void selectDeployment(selectedDeployment)}
           >
             Try again
           </button>
         </div>
       {:else}
-        <div class="flex items-center justify-center gap-2 px-6 py-8 text-[11px] text-dimmed">
+        <div class="flex items-center justify-center gap-2 px-6 py-8 text-[0.6875rem] text-dimmed">
           <Loader2 size={13} class="animate-spin" />
           Loading log
         </div>
@@ -565,15 +565,15 @@
     {:else}
       <!-- Deployment history list -->
       <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-        <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+        <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
           Deployment history
         </span>
         {#if deployments.length > 0}
-          <span class="ml-auto text-[9px] tabular-nums text-dimmed">{deployments.length}</span>
+          <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">{deployments.length}</span>
         {/if}
       </div>
       {#if deploymentsLoading && deployments.length === 0}
-        <div class="flex items-center justify-center gap-2 px-3 py-8 text-[11px] text-dimmed">
+        <div class="flex items-center justify-center gap-2 px-3 py-8 text-[0.6875rem] text-dimmed">
           <Loader2 size={13} class="animate-spin" />
           Loading deployments
         </div>
@@ -582,12 +582,12 @@
           {#if error}
             <CircleX size={18} class="text-danger" />
           {/if}
-          <p class="max-w-[42ch] text-[10px] leading-relaxed text-dimmed">
+          <p class="max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">
             {error || 'No deployments found for this container.'}
           </p>
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground hover:bg-elevated"
+            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
             onclick={() => void loadDeployments(true)}
           >
             Try again
@@ -616,7 +616,7 @@
                 <span class="block truncate text-xs font-medium text-foreground">
                   {deployment.id}
                 </span>
-                <span class="mt-0.5 block text-[10px] text-dimmed">
+                <span class="mt-0.5 block text-[0.625rem] text-dimmed">
                   {#if deployment.commit}
                     <span class="font-mono">{deployment.commit.slice(0, 7)}</span>
                     <span> · </span>

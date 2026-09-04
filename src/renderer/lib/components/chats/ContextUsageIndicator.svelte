@@ -174,7 +174,7 @@
     {@const percent = quotaPercent(limit)}
     {@const overage = overageLabel(limit)}
     <div>
-      <div class="mb-1 flex items-center justify-between gap-3 text-[10px]">
+      <div class="mb-1 flex items-center justify-between gap-3 text-[0.625rem]">
         <span class="font-medium text-muted">{limit.label}</span>
         <span class="tabular-nums text-dimmed">
           {#if limit.remaining !== undefined && limit.limit !== undefined}
@@ -198,9 +198,9 @@
           <div class="h-full rounded-full bg-info" style={`width: ${percent}%`}></div>
         </div>
       {/if}
-      <p class="mt-1 text-[9px] text-dimmed">{formatReset(limit.resetsAt)}</p>
+      <p class="mt-1 text-[0.5625rem] text-dimmed">{formatReset(limit.resetsAt)}</p>
       {#if overage}
-        <p class="mt-0.5 text-[9px] text-dimmed">{overage}</p>
+        <p class="mt-0.5 text-[0.5625rem] text-dimmed">{overage}</p>
       {/if}
     </div>
   {/each}
@@ -208,9 +208,9 @@
 
 {#snippet modelRows(models: HarnessModelUsage[])}
   <div class="rounded-md border border-border bg-app/40 p-2">
-    <p class="mb-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted">Models used</p>
+    <p class="mb-1.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">Models used</p>
     {#each models as model (`${model.providerId}:${model.modelId}:${model.thinkingLevel ?? ''}`)}
-      <div class="flex items-baseline justify-between gap-3 py-0.5 text-[10px]">
+      <div class="flex items-baseline justify-between gap-3 py-0.5 text-[0.625rem]">
         <span class="flex min-w-0 items-center gap-1.5">
           {#if model.providerId}
             <VendorIcon
@@ -223,7 +223,7 @@
           <span class="truncate font-medium text-foreground">{model.modelId}</span>
           {#if model.thinkingLevel}
             <span
-              class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1 py-0.5 text-[9px] capitalize text-muted"
+              class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1 py-0.5 text-[0.5625rem] capitalize text-muted"
               title={`Thinking level: ${model.thinkingLevel}`}
               aria-label={`Thinking level: ${model.thinkingLevel}`}
             >
@@ -261,15 +261,15 @@
         <ChevronDown size={13} class="shrink-0 text-dimmed" />
       {/if}
       <AgentIcon agentId={entry.harnessId} size={16} />
-      <span class="min-w-0 truncate text-[10px] font-medium text-foreground">{name}</span>
-      <span class="ml-auto shrink-0 tabular-nums text-[10px] text-dimmed">
+      <span class="min-w-0 truncate text-[0.625rem] font-medium text-foreground">{name}</span>
+      <span class="ml-auto shrink-0 tabular-nums text-[0.625rem] text-dimmed">
         {entry.costUsd > 0 ? `${formatMoney(entry.costUsd)} consumed` : 'Cost not reported'}
       </span>
     </button>
     {#if !collapsed}
       <div class="space-y-2.5 px-2.5 pb-2.5">
         {#if entry.tokens && entry.tokens.total > 0}
-          <p class="text-[9px] text-dimmed">
+          <p class="text-[0.5625rem] text-dimmed">
             Consumed {compactNumber(entry.tokens.total)} tokens
             {#if entry.messageCount}
               · {entry.messageCount} turn{entry.messageCount === 1 ? '' : 's'}
@@ -282,10 +282,10 @@
         {#if entry.rateLimits.length > 0}
           {@render limitRows(entry.rateLimits)}
         {:else if !creditsLine(entry) && !entry.tokens && !entry.models?.length}
-          <p class="text-[10px] text-dimmed">No quota reported for this harness.</p>
+          <p class="text-[0.625rem] text-dimmed">No quota reported for this harness.</p>
         {/if}
         {#if creditsLine(entry)}
-          <p class="text-[9px] text-dimmed">Credits: {creditsLine(entry)}</p>
+          <p class="text-[0.5625rem] text-dimmed">Credits: {creditsLine(entry)}</p>
         {/if}
       </div>
     {/if}
@@ -306,13 +306,13 @@
   <div class="flex items-start justify-between gap-3">
     <div>
       <p class="text-xs font-semibold text-foreground">Usage</p>
-      <p class="mt-0.5 text-[10px] text-dimmed">
+      <p class="mt-0.5 text-[0.625rem] text-dimmed">
         {usage && usage.costUsd > 0 ? `${formatMoney(usage.costUsd)} spent` : 'Cost not reported'}
       </p>
     </div>
     <div class="flex items-center gap-2">
       {#if usage && creditsLine(usage)}
-        <span class="rounded-md bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted">
+        <span class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted">
           {creditsLine(usage)}
         </span>
       {/if}
@@ -339,7 +339,7 @@
   {/if}
 
   <div class="mt-3 border-t border-border pt-3">
-    <div class="mb-1 flex items-center justify-between gap-3 text-[10px]">
+    <div class="mb-1 flex items-center justify-between gap-3 text-[0.625rem]">
       <span class="font-medium text-muted">Context (latest request)</span>
       <span class="tabular-nums text-dimmed">
         {usage?.contextUsed !== undefined
@@ -361,18 +361,18 @@
       <div class={`h-full rounded-full ${fillClass}`} style={`width: ${boundedPercent}%`}></div>
     </div>
     {#if usage?.contextWindow && usage.contextUsed !== undefined}
-      <div class="mt-2 grid grid-cols-3 gap-2 text-[9px] text-dimmed">
+      <div class="mt-2 grid grid-cols-3 gap-2 text-[0.5625rem] text-dimmed">
         <span>Used {compactNumber(usage.contextUsed)}</span>
         <span>Available {compactNumber(Math.max(0, usage.contextWindow - usage.contextUsed))}</span>
         <span>Window {compactNumber(usage.contextWindow)}</span>
       </div>
     {/if}
     {#if usage?.contextEstimated}
-      <p class="mt-1.5 text-[9px] text-dimmed">
+      <p class="mt-1.5 text-[0.5625rem] text-dimmed">
         Estimated from the composed request because this harness does not report context telemetry.
       </p>
     {/if}
-    <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-dimmed">
+    <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[0.5625rem] text-dimmed">
       <span>Input {usage?.tokens ? compactNumber(usage.tokens.input) : 'Unavailable'}</span>
       <span>Output {usage?.tokens ? compactNumber(usage.tokens.output) : 'Unavailable'}</span>
       <span>Reasoning {usage?.tokens ? compactNumber(usage.tokens.reasoning) : 'Unavailable'}</span>
@@ -386,7 +386,7 @@
 
     <button
       type="button"
-      class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border text-[11px] font-medium text-foreground hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
+      class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border text-[0.6875rem] font-medium text-foreground hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
       disabled={!canCompact || compacting}
       title={canCompact
         ? 'Summarize older work to free context'
@@ -431,7 +431,7 @@
         ></span>
         <span class="absolute -right-1 top-[3px] h-1.5 w-0.5 rounded-r bg-current"></span>
       </span>
-      <span class="context-usage-label tabular-nums text-[10px]">{percentLabel}</span>
+      <span class="context-usage-label tabular-nums text-[0.625rem]">{percentLabel}</span>
     </button>
 
     <div

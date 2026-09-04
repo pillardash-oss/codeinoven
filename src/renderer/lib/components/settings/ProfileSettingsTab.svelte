@@ -641,7 +641,7 @@
               <img class="h-5 w-5 rounded-full object-cover" src={accountProfile.image} alt="" />
             {:else}
               <span
-                class="grid h-5 w-5 place-items-center rounded-full bg-primary text-[9px] font-bold text-on-primary"
+                class="grid h-5 w-5 place-items-center rounded-full bg-primary text-[0.5625rem] font-bold text-on-primary"
                 aria-hidden="true">{accountInitials}</span
               >
             {/if}
@@ -841,7 +841,7 @@
     </div>
     {#if rangePreset === 'custom'}
       <div class="mt-3 flex flex-wrap items-end gap-2 border-t pt-3">
-        <label class="grid gap-1 text-[11px] font-medium text-muted">
+        <label class="grid gap-1 text-[0.6875rem] font-medium text-muted">
           Start date
           <input
             type="date"
@@ -850,7 +850,7 @@
             bind:value={customStartDate}
           />
         </label>
-        <label class="grid gap-1 text-[11px] font-medium text-muted">
+        <label class="grid gap-1 text-[0.6875rem] font-medium text-muted">
           End date
           <input
             type="date"
@@ -881,13 +881,13 @@
             aria-hidden="true"
           >
             {#each calendarWeeks as week, index (`month-${index}`)}
-              <span class="min-w-0 overflow-visible whitespace-nowrap text-[10px] text-dimmed">
+              <span class="min-w-0 overflow-visible whitespace-nowrap text-[0.625rem] text-dimmed">
                 {week.monthLabel}
               </span>
             {/each}
           </div>
           <div
-            class="grid w-6 shrink-0 grid-rows-7 gap-1 text-[10px] leading-3 text-dimmed"
+            class="grid w-6 shrink-0 grid-rows-7 gap-1 text-[0.625rem] leading-3 text-dimmed"
             aria-hidden="true"
           >
             <span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span
@@ -924,7 +924,7 @@
           </div>
         </div>
         <div
-          class="mt-3 flex items-center justify-end gap-1 text-[10px] text-dimmed"
+          class="mt-3 flex items-center justify-end gap-1 text-[0.625rem] text-dimmed"
           aria-hidden="true"
         >
           <span class="mr-1">Less</span>
@@ -954,14 +954,14 @@
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
                   <p class="truncate text-sm font-semibold">{device.deviceLabel}</p>
-                  <p class="mt-0.5 text-[11px] text-dimmed">
+                  <p class="mt-0.5 text-[0.6875rem] text-dimmed">
                     {platformLabel(device.platform)} · last synced {formatDateTime(
                       device.updatedAt
                     )}
                   </p>
                 </div>
                 <span
-                  class="shrink-0 rounded-md bg-raised px-2 py-1 text-[10px] font-medium tabular-nums text-muted"
+                  class="shrink-0 rounded-md bg-raised px-2 py-1 text-[0.625rem] font-medium tabular-nums text-muted"
                   title="Total agent runtime"
                 >
                   {formatDuration(device.durationMs)}
@@ -989,7 +989,7 @@
               </dl>
               {#if device.projects.length > 0}
                 <div class="mt-4 border-t pt-3">
-                  <p class="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  <p class="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted">
                     Top projects
                   </p>
                   <ul class="mt-2 space-y-1.5">
@@ -1032,7 +1032,7 @@
           {#each MODEL_RANK_METRICS as metric (metric)}
             <button
               type="button"
-              class="h-7 rounded-md px-2.5 text-[11px] font-semibold capitalize transition-colors {modelRankMetric ===
+              class="h-7 rounded-md px-2.5 text-[0.6875rem] font-semibold capitalize transition-colors {modelRankMetric ===
               metric
                 ? 'bg-thread-working text-on-primary'
                 : 'text-muted hover:bg-elevated hover:text-foreground'}"
@@ -1069,7 +1069,7 @@
               {/if}
               <div class="min-w-0">
                 <p class="truncate text-sm font-semibold">{model.id}</p>
-                <p class="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted">
+                <p class="mt-0.5 flex items-center gap-1.5 text-[0.6875rem] text-muted">
                   <VendorIcon name={model.providerId ?? model.id} id={model.providerId} size={12} />
                   <span class="truncate">
                     {formatIdentifier(model.providerId ?? '')} · {formatIdentifier(
@@ -1081,25 +1081,25 @@
             </div>
             <dl class="grid min-w-80 flex-1 grid-cols-4 gap-x-5">
               <div>
-                <dt class="text-[10px] text-dimmed">Responses</dt>
+                <dt class="text-[0.625rem] text-dimmed">Responses</dt>
                 <dd class="mt-0.5 text-xs font-semibold tabular-nums">
                   {formatNumber(model.messageCount)}
                 </dd>
               </div>
               <div>
-                <dt class="text-[10px] text-dimmed">Tokens</dt>
+                <dt class="text-[0.625rem] text-dimmed">Tokens</dt>
                 <dd class="mt-0.5 text-xs font-semibold tabular-nums">
                   {formatNumber(model.tokens)}
                 </dd>
               </div>
               <div>
-                <dt class="text-[10px] text-dimmed">Cost</dt>
+                <dt class="text-[0.625rem] text-dimmed">Cost</dt>
                 <dd class="mt-0.5 text-xs font-semibold tabular-nums">
                   {formatCost(model.costUsd)}
                 </dd>
               </div>
               <div>
-                <dt class="text-[10px] text-dimmed">Runtime</dt>
+                <dt class="text-[0.625rem] text-dimmed">Runtime</dt>
                 <dd class="mt-0.5 text-xs font-semibold tabular-nums">
                   {formatDuration(model.durationMs)}
                 </dd>
@@ -1120,7 +1120,7 @@
         </div>
         {#if peakDay}
           <div class="text-right">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Peak day</p>
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Peak day</p>
             <p class="mt-0.5 text-xs font-semibold tabular-nums">
               {formatUsageDate(peakDay.date)} · {formatNumber(peakDay.tokens)}
             </p>
@@ -1159,7 +1159,7 @@
         </div>
         {#if peakHour}
           <div class="text-right">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Peak</p>
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Peak</p>
             <p class="mt-0.5 text-xs font-semibold tabular-nums">
               {formatHour(peakHour.hour)} · {formatNumber(peakHour.tokens)}
             </p>
@@ -1180,11 +1180,11 @@
           </div>
         {/each}
       </div>
-      <div class="mt-2 grid grid-cols-4 text-[10px] tabular-nums text-dimmed" aria-hidden="true">
+      <div class="mt-2 grid grid-cols-4 text-[0.625rem] tabular-nums text-dimmed" aria-hidden="true">
         <span>12 AM</span><span class="text-center">6 AM</span><span class="text-center">12 PM</span
         ><span class="text-right">6 PM</span>
       </div>
-      <p class="mt-3 border-t pt-3 text-[11px] text-dimmed">
+      <p class="mt-3 border-t pt-3 text-[0.6875rem] text-dimmed">
         Gold marks the busiest hour; shorter bars show non-peak consumption.
       </p>
     </section>
@@ -1213,7 +1213,7 @@
             {/if}
             <div class="min-w-0 flex-1">
               <h3 class="truncate text-sm font-semibold">{project.name}</h3>
-              <p class="mt-0.5 text-[11px] text-dimmed">
+              <p class="mt-0.5 text-[0.6875rem] text-dimmed">
                 Last active {formatDate(project.lastActiveAt)}
               </p>
             </div>
@@ -1234,7 +1234,7 @@
               <dd class="mt-0.5 font-semibold tabular-nums">{project.activeDays}</dd>
             </div>
           </dl>
-          <p class="mt-3 truncate text-[11px] tabular-nums text-muted">
+          <p class="mt-3 truncate text-[0.6875rem] tabular-nums text-muted">
             {formatNumber(project.tokens)} tokens · {formatCost(project.costUsd)} · {formatDuration(
               project.durationMs
             )}
@@ -1282,7 +1282,7 @@
                 style:width={usageWidth(harness, maxHarnessTokens)}
               ></div>
             </div>
-            <p class="mt-1.5 text-[11px] tabular-nums text-dimmed">
+            <p class="mt-1.5 text-[0.6875rem] tabular-nums text-dimmed">
               {formatNumber(harness.messageCount)} responses
             </p>
           </div>
@@ -1319,7 +1319,7 @@
                 style:width={usageWidth(provider, maxProviderTokens)}
               ></div>
             </div>
-            <p class="mt-1.5 text-[11px] tabular-nums text-dimmed">
+            <p class="mt-1.5 text-[0.6875rem] tabular-nums text-dimmed">
               {formatNumber(provider.messageCount)} responses
             </p>
           </div>
@@ -1358,7 +1358,7 @@
                 style:width={usageWidth(level, maxThinkingTokens)}
               ></div>
             </div>
-            <p class="mt-1.5 text-[11px] tabular-nums text-dimmed">
+            <p class="mt-1.5 text-[0.6875rem] tabular-nums text-dimmed">
               {formatNumber(level.messageCount)} responses · {formatDuration(level.durationMs)}
             </p>
           </div>
@@ -1388,7 +1388,7 @@
           >
             <button
               type="button"
-              class="flex h-7 items-center gap-1 rounded-lg px-2.5 text-[11px] font-medium {thinkingFilter ===
+              class="flex h-7 items-center gap-1 rounded-lg px-2.5 text-[0.6875rem] font-medium {thinkingFilter ===
               'all'
                 ? 'bg-overlay text-foreground'
                 : 'text-muted hover:bg-elevated hover:text-foreground'}"
@@ -1400,7 +1400,7 @@
             {#each availableThinkingLevels as level (level)}
               <button
                 type="button"
-                class="flex h-7 items-center gap-1 rounded-lg px-2.5 text-[11px] font-medium capitalize {thinkingFilter ===
+                class="flex h-7 items-center gap-1 rounded-lg px-2.5 text-[0.6875rem] font-medium capitalize {thinkingFilter ===
                 level
                   ? 'bg-overlay text-foreground'
                   : 'text-muted hover:bg-elevated hover:text-foreground'}"
@@ -1430,7 +1430,7 @@
                 <span class="truncate">{model.id}</span>
                 {#if model.thinkingLevel}
                   <span
-                    class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                    class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] capitalize text-muted"
                     title={`Thinking level: ${model.thinkingLevel}`}
                     aria-label={`Thinking level: ${model.thinkingLevel}`}
                   >
@@ -1449,7 +1449,7 @@
                 style:width={usageWidth(model, maxModelTokens)}
               ></div>
             </div>
-            <p class="mt-1.5 text-[11px] tabular-nums text-dimmed">
+            <p class="mt-1.5 text-[0.6875rem] tabular-nums text-dimmed">
               {formatNumber(model.messageCount)} responses
             </p>
           </div>
@@ -1481,7 +1481,7 @@
       <div class="overflow-x-auto">
         <table class="w-full text-left text-xs">
           <thead>
-            <tr class="border-b text-[11px] uppercase tracking-wide text-muted">
+            <tr class="border-b text-[0.6875rem] uppercase tracking-wide text-muted">
               <th scope="col" class="px-4 py-2 font-medium">Configuration</th>
               <th scope="col" class="px-4 py-2 font-medium">One-shot</th>
               <th scope="col" class="px-4 py-2 font-medium">Multi-shot</th>
@@ -1506,7 +1506,7 @@
                     />
                     <span class="truncate">{entry.modelId}</span>
                   </span>
-                  <span class="mt-1 flex flex-wrap items-center gap-1 text-[10px] text-muted">
+                  <span class="mt-1 flex flex-wrap items-center gap-1 text-[0.625rem] text-muted">
                     {#if entry.thinkingLevel}
                       <span class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 capitalize">
                         <Brain size={9} />
@@ -1523,7 +1523,7 @@
                 </td>
                 <td class="px-4 py-3 tabular-nums">
                   <div class="font-semibold text-foreground">{rankingScoreLabel(entry.oneShot)}</div>
-                  <div class="mt-0.5 text-[11px] text-dimmed">
+                  <div class="mt-0.5 text-[0.6875rem] text-dimmed">
                     {rankingSamplesLabel(entry.oneShot)}
                     {#if entry.oneShot.samples > 0}
                       · {rankingDurationLabel(entry.oneShot)} avg
@@ -1532,7 +1532,7 @@
                 </td>
                 <td class="px-4 py-3 tabular-nums">
                   <div class="font-semibold text-foreground">{rankingScoreLabel(entry.multiShot)}</div>
-                  <div class="mt-0.5 text-[11px] text-dimmed">
+                  <div class="mt-0.5 text-[0.6875rem] text-dimmed">
                     {rankingSamplesLabel(entry.multiShot)}
                     {#if entry.multiShot.samples > 0}
                       · {rankingDurationLabel(entry.multiShot)} avg

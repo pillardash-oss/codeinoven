@@ -2962,7 +2962,7 @@
     >
       {#snippet header()}
         {#if workspaceState.specStudioOpen}
-          <span class="text-[10px] tabular-nums text-dimmed">
+          <span class="text-[0.625rem] tabular-nums text-dimmed">
             {workspaceState.specAgentResponses.length}
           </span>
         {:else if mode === 'chats'}
@@ -3109,7 +3109,7 @@
                 project={scopeProject}
                 class="min-w-0 flex-1"
                 nameClass="text-xs font-semibold text-foreground"
-                locationClass="text-[9px] text-dimmed"
+                locationClass="text-[0.5625rem] text-dimmed"
                 showLocation={hasProjectNameCollision(scopeProject, visibleProjects)}
               />
             {:else}
@@ -3277,7 +3277,7 @@
                   <StatusBadge stage={scopeContext.stage} size="md" />
                   <span class="text-xs font-semibold">{STAGE_LABELS[scopeContext.stage]}</span>
                   {#if scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length > 0}
-                    <span class="tabular-nums text-[10px] text-dimmed"
+                    <span class="tabular-nums text-[0.625rem] text-dimmed"
                       >{scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage)
                         .length}</span
                     >
@@ -3315,7 +3315,7 @@
           {#if pinnedInboxThreads.length > 0}
             <div class="mb-3">
               <p
-                class="px-2 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                class="px-2 pt-1 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
               >
                 Pinned
               </p>
@@ -3385,7 +3385,7 @@
             {#if pinnedTimelineThreads.length > 0}
               <div class="mb-3 pb-3 border-b">
                 <div class="flex items-center gap-1.5 px-2 py-1.5">
-                  <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                  <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
                     >Pinned</span
                   >
                 </div>
@@ -3428,7 +3428,7 @@
             </div>
             {#if hasMoreHistory}
               <button
-                class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+                class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
                 disabled={historyLoading}
                 onclick={() => void loadHistoryPage()}
               >
@@ -3458,7 +3458,7 @@
           {#if pinnedProjects.length > 0}
             <div class="mb-1 pb-2 border-b">
               <p
-                class="px-2 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                class="px-2 pt-1 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
               >
                 Pinned
               </p>
@@ -3534,9 +3534,9 @@
                           : filterThreadsByQuery(folderThreads, '')}
                         <div class="ml-2">
                           {#if isSearching && projectSearching.has(project.id) && searchResults.length === 0}
-                            <p class="px-2 py-1.5 text-[11px] text-dimmed">Searching…</p>
+                            <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
                           {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}
-                            <p class="px-2 py-1.5 text-[11px] text-dimmed">
+                            <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">
                               {searchQ.trim() ? 'No matching threads' : 'No threads yet'}
                             </p>
                           {:else if isSearching}
@@ -3570,7 +3570,7 @@
                             </div>
                             {#if filteredThreads.length > getVisibleCount(project.id)}
                               <button
-                                class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-dimmed transition-colors hover:text-foreground"
+                                class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                                 onclick={() => showMoreThreads(project.id, filteredThreads.length)}
                               >
                                 Show {filteredThreads.length - getVisibleCount(project.id)} more
@@ -3578,7 +3578,7 @@
                             {/if}
                             {#if getVisibleCount(project.id) > THREADS_PER_PAGE}
                               <button
-                                class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-dimmed transition-colors hover:text-foreground"
+                                class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                                 onclick={() => showLessThreads(project.id)}
                               >
                                 Show less
@@ -3736,9 +3736,9 @@
                         : filterThreadsByQuery(folderThreads, '')}
                       <div class="ml-2">
                         {#if isSearching && projectSearching.has(project.id) && searchResults.length === 0}
-                          <p class="px-2 py-1.5 text-[11px] text-dimmed">Searching…</p>
+                          <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
                         {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}
-                          <p class="px-2 py-1.5 text-[11px] text-dimmed">
+                          <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">
                             {searchQ.trim() ? 'No matching threads' : 'No threads yet'}
                           </p>
                         {:else if isSearching}
@@ -3772,7 +3772,7 @@
                           </div>
                           {#if filteredThreads.length > getVisibleCount(project.id)}
                             <button
-                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-dimmed transition-colors hover:text-foreground"
+                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                               onclick={() => showMoreThreads(project.id, filteredThreads.length)}
                             >
                               Show {filteredThreads.length - getVisibleCount(project.id)} more
@@ -3780,7 +3780,7 @@
                           {/if}
                           {#if getVisibleCount(project.id) > THREADS_PER_PAGE}
                             <button
-                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-dimmed transition-colors hover:text-foreground"
+                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                               onclick={() => showLessThreads(project.id)}
                             >
                               Show less
@@ -4249,7 +4249,7 @@
       <span>Manage downloads</span>
       {#if activeDownloadCount > 0}
         <span
-          class="ml-auto rounded-full bg-elevated px-1.5 text-[10px] font-semibold tabular-nums text-muted"
+          class="ml-auto rounded-full bg-elevated px-1.5 text-[0.625rem] font-semibold tabular-nums text-muted"
         >
           {activeDownloadCount}
         </span>
@@ -4380,7 +4380,7 @@
     <div class="flex flex-col items-center justify-center gap-2 py-12 text-center text-dimmed">
       <Download size={20} strokeWidth={1.5} />
       <p class="text-xs">No downloads for this project yet.</p>
-      <p class="text-[11px]">Files download to the location you pick in the save dialog.</p>
+      <p class="text-[0.6875rem]">Files download to the location you pick in the save dialog.</p>
     </div>
   {:else}
     <ul class="space-y-2">
@@ -4405,14 +4405,14 @@
                   {browserDownloadStateLabel(download)}
                 </StatusPill>
               </div>
-              <p class="mt-0.5 truncate text-[11px] text-muted" title={download.url}>
+              <p class="mt-0.5 truncate text-[0.6875rem] text-muted" title={download.url}>
                 {browserDownloadHost(download.url)} · {browserDownloadBytes(download.receivedBytes)}
                 {progressing && download.totalBytes > 0
                   ? ` of ${browserDownloadBytes(download.totalBytes)}`
                   : ''}
               </p>
               {#if progressing && download.speedBytes > 0}
-                <p class="mt-0.5 text-[11px] tabular-nums text-dimmed">
+                <p class="mt-0.5 text-[0.6875rem] tabular-nums text-dimmed">
                   {browserDownloadBytes(download.speedBytes)}/s
                 </p>
               {/if}
@@ -4490,13 +4490,13 @@
                   style={`width: ${percent}%`}
                 ></div>
               </div>
-              <span class="w-9 shrink-0 text-right text-[10px] tabular-nums text-dimmed">
+              <span class="w-9 shrink-0 text-right text-[0.625rem] tabular-nums text-dimmed">
                 {Math.round(percent)}%
               </span>
             </div>
           {/if}
           {#if download.error}
-            <p class="mt-2 text-[11px] text-danger" role="alert">{download.error}</p>
+            <p class="mt-2 text-[0.6875rem] text-danger" role="alert">{download.error}</p>
           {/if}
         </li>
       {/each}

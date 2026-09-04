@@ -230,7 +230,7 @@
   }
 </script>
 
-<div class="mx-auto max-w-2xl p-6 pb-24">
+<div class="p-6 pb-24">
   <div class="mb-6">
     <h1 class="text-xl font-bold tracking-tight">Agents</h1>
     <p class="mt-0.5 text-sm text-muted">
@@ -250,7 +250,7 @@
             <h2 class="text-sm font-semibold text-foreground">{role.label}</h2>
             <p class="mt-0.5 text-xs text-muted">{role.description}</p>
             {#if !selection}
-              <p class="mt-1 text-[11px] text-dimmed">Not set · uses the current thread model</p>
+              <p class="mt-1 text-[0.6875rem] text-dimmed">Not set · uses the current thread model</p>
             {/if}
           </div>
           <div class="flex w-60 shrink-0 items-center gap-1.5">
@@ -331,7 +331,7 @@
           Vision model used to describe images for text-only models that cannot see them.
         </p>
         {#if !defaults.imageDescriptor}
-          <p class="mt-1 text-[11px] text-dimmed">
+          <p class="mt-1 text-[0.6875rem] text-dimmed">
             Not set · you'll be asked when you send an image
           </p>
         {/if}
@@ -385,9 +385,9 @@
           Tried automatically when the primary vision model fails.
         </p>
         {#if !defaults.imageDescriptorFallback}
-          <p class="mt-1 text-[11px] text-dimmed">Not set · primary failures ask you for a model</p>
+          <p class="mt-1 text-[0.6875rem] text-dimmed">Not set · primary failures ask you for a model</p>
         {:else if sameModel(defaults.imageDescriptor, defaults.imageDescriptorFallback)}
-          <p class="mt-1 text-[11px] text-danger">
+          <p class="mt-1 text-[0.6875rem] text-danger">
             Same model as the primary — it cannot act as a fallback.
           </p>
         {/if}

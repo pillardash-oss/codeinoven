@@ -481,52 +481,51 @@
   {/if}
 {/snippet}
 
-<div class="mx-auto max-w-5xl p-6 pb-24">
-  <!-- Header: title, per-tab blurb, and primary actions on the same visual row. -->
-  <div class="flex flex-wrap items-center justify-between gap-4">
-    <div class="min-w-0 flex-1">
-      <div class="flex flex-wrap items-center gap-3">
-        <h1 class="text-xl font-bold tracking-tight">Utilities</h1>
-        <!-- Action buttons — share the title row so they never drift out of alignment. -->
+<div class="p-6 pb-24">
+  <!-- Header: title and description, matching the flow of every other page. -->
+  <div class="min-w-0">
+    <h1 class="text-xl font-bold tracking-tight">Utilities</h1>
+    <p class="mt-1 text-sm text-muted">{TAB_BLURB[activeTab]}</p>
+  </div>
+
+  <!-- Actions and tabs share one row: buttons first, then the section tabs. -->
+  <div class="mt-4 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex flex-wrap items-center gap-3">
+      <button
+        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
+        title="Add a skill, MCP server, or other utility"
+        onclick={openCreate}
+      >
+        <Plus size={13} /> Add utility
+      </button>
+      <button
+        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+        disabled={activeTab === 'tools'
+          ? agentToolsStore.loading || agentToolsStore.refreshing
+          : loading}
+        title="Refresh utilities"
+        onclick={refreshActiveTab}
+      >
+        <RefreshCw
+          size={13}
+          class={(
+            activeTab === 'tools' ? agentToolsStore.loading || agentToolsStore.refreshing : loading
+          )
+            ? 'animate-spin'
+            : ''}
+        /> Refresh
+      </button>
+      {#if activeTab === 'all' || activeTab === 'skills'}
         <button
-          class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
-          title="Add a skill, MCP server, or other utility"
-          onclick={openCreate}
+          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+          title="Open the skills marketplace"
+          onclick={onOpenMarketplace}
         >
-          <Plus size={13} /> Add utility
+          <Search size={13} /> Skills marketplace
         </button>
-        <button
-          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-          disabled={activeTab === 'tools'
-            ? agentToolsStore.loading || agentToolsStore.refreshing
-            : loading}
-          title="Refresh utilities"
-          onclick={refreshActiveTab}
-        >
-          <RefreshCw
-            size={13}
-            class={(
-              activeTab === 'tools' ? agentToolsStore.loading || agentToolsStore.refreshing : loading
-            )
-              ? 'animate-spin'
-              : ''}
-          /> Refresh
-        </button>
-        {#if activeTab === 'all' || activeTab === 'skills'}
-          <button
-            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
-            title="Open the skills marketplace"
-            onclick={onOpenMarketplace}
-          >
-            <Search size={13} /> Skills marketplace
-          </button>
-        {/if}
-      </div>
-      <!-- Per-tab description — stays on the same block as the title, not floating alone. -->
-      <p class="mt-1 text-sm text-muted">{TAB_BLURB[activeTab]}</p>
+      {/if}
     </div>
 
-    <!-- Tabs anchored to the right of the same row. -->
     <div
       class="flex flex-wrap items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
       role="tablist"
@@ -602,7 +601,7 @@
     <div class="mt-4 flex flex-wrap items-center gap-1.5" role="group" aria-label="Filters">
       {#if activeTab === 'tools'}
         <select
-          class="h-7 rounded-lg border bg-elevated px-2 text-[11px] font-medium outline-none focus:border-primary"
+          class="h-7 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium outline-none focus:border-primary"
           aria-label="Filter tools by source"
           value={agentToolsStore.selectedSource}
           onchange={(event: Event) =>
@@ -615,7 +614,7 @@
         {#if toolHarnesses.length && agentToolsStore.selectedSource !== 'application'}
           <button
             type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {agentToolsStore.selectedHarness ===
+            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {agentToolsStore.selectedHarness ===
             null
               ? 'border-primary bg-primary text-on-primary'
               : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -628,7 +627,7 @@
           {#each toolHarnesses as harness (harness.id)}
             <button
               type="button"
-              class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {agentToolsStore.selectedHarness ===
+              class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {agentToolsStore.selectedHarness ===
               harness.id
                 ? 'border-primary bg-primary text-on-primary'
                 : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -645,7 +644,7 @@
       {:else}
         <button
           type="button"
-          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {scopeFilter ===
+          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {scopeFilter ===
           'all'
             ? 'border-primary bg-primary text-on-primary'
             : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -657,7 +656,7 @@
         {#each availableTags as tag (tag)}
           <button
             type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {scopeFilter ===
+            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {scopeFilter ===
             tag
               ? 'border-primary bg-primary text-on-primary'
               : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -713,20 +712,20 @@
                 <div class="flex flex-wrap items-center gap-2">
                   <p class="text-sm font-semibold">{row.name}</p>
                   <span
-                    class="rounded-md bg-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
+                    class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
                   >
                     {rowKindBadge(row)}
                   </span>
                   {#if row.appOwned}
                     <span
-                      class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary"
+                      class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
                       title="Built into the app and always available; it cannot be deleted"
                     >
                       Built-in
                     </span>
                   {/if}
                   {#if row.src === 'registry'}
-                    <span class="text-[11px] text-dimmed">
+                    <span class="text-[0.6875rem] text-dimmed">
                       {row.utility.activation === 'always' ? 'Always available' : 'On demand'}
                     </span>
                   {/if}
@@ -735,12 +734,14 @@
                   <p class="mt-1 text-xs leading-relaxed text-muted">{row.description}</p>
                 {/if}
                 {#if row.src === 'native' && row.entry.detail}
-                  <p class="mt-1 truncate font-mono text-[10px] text-dimmed">{row.entry.detail}</p>
+                  <p class="mt-1 truncate font-mono text-[0.625rem] text-dimmed">
+                    {row.entry.detail}
+                  </p>
                 {/if}
-                <div class="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-dimmed">
+                <div class="mt-2 flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-dimmed">
                   {#each row.tags as tag (tag)}
                     <span
-                      class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-[10px] font-medium text-muted"
+                      class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
                     >
                       {@render tagChip(tag)}
                     </span>
@@ -867,13 +868,13 @@
                   <span class="flex flex-wrap items-center gap-2">
                     <span class="font-mono text-sm font-semibold">{tool.name}</span>
                     <span
-                      class="rounded-md bg-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
+                      class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
                     >
                       {tool.source}
                     </span>
                     {#each group.harnessIds as harnessId (harnessId)}
                       <span
-                        class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-[10px] font-medium text-muted"
+                        class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
                       >
                         <AgentIcon
                           agentId={harnessId}
@@ -885,24 +886,24 @@
                     {/each}
                   </span>
                   {#if tool.transportName}
-                    <span class="mt-1 block text-[11px] text-dimmed">
+                    <span class="mt-1 block text-[0.6875rem] text-dimmed">
                       Wire name: <span class="font-mono">{tool.transportName}</span>
                     </span>
                   {/if}
                   <span class="mt-1 block text-xs leading-relaxed text-muted">
                     {tool.description || 'No description supplied by the harness.'}
                   </span>
-                  <span class="mt-1 block text-[11px] text-dimmed">
+                  <span class="mt-1 block text-[0.6875rem] text-dimmed">
                     Sent when: {group.sentWhen.join(' · ')}
                   </span>
                 </span>
               </summary>
               <div class="border-t p-4">
-                <p class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                <p class="mb-2 text-[0.6875rem] font-semibold uppercase tracking-wide text-muted">
                   Input / parameter schema
                 </p>
                 <pre
-                  class="max-h-128 overflow-auto rounded-lg bg-raised p-3 font-mono text-[11px] leading-relaxed text-foreground"><code
+                  class="max-h-128 overflow-auto rounded-lg bg-raised p-3 font-mono text-[0.6875rem] leading-relaxed text-foreground"><code
                     >{schemaText(tool)}</code
                   ></pre>
               </div>

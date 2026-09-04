@@ -41,7 +41,7 @@
   {:else if failed}
     <p class="text-xs font-medium text-danger">This media file could not be loaded</p>
   {:else}
-    <div class="flex items-center justify-center gap-2 text-[11px] text-dimmed">
+    <div class="flex items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
       <Loader2 size={13} class="animate-spin" />
       Loading {alt}
     </div>

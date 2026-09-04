@@ -478,31 +478,31 @@
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-4">
       {#if tab === 'custom'}
-        <p class="min-w-0 flex-1 text-[11px] text-dimmed">
+        <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
           Add any OpenAI-compatible endpoint by base URL — Ollama, LM Studio, llama.cpp, or a hosted
           gateway. Models are ready in the picker as soon as you save.
         </p>
       {:else if antigravityConnected}
-        <p class="min-w-0 flex-1 text-[11px] text-dimmed">
+        <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
           Antigravity is already connected through the Google account in your system keyring.
         </p>
       {:else if apiKeyEntry && canSignIn}
-        <p class="min-w-0 flex-1 text-[11px] text-dimmed">
+        <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
           Pick any provider from {harness.name}’s catalog and paste its API key — stored in
           {harness.name}’s own credential file.
         </p>
       {:else if pickerLogin}
-        <p class="min-w-0 flex-1 text-[11px] text-dimmed">
+        <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
           Runs {harness.name}’s own interactive provider picker in a built-in terminal — choose any
           provider there and follow the flow it shows (API key or OAuth).
         </p>
       {:else if canSignIn}
-        <p class="min-w-0 flex-1 text-[11px] text-dimmed">
+        <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
           Runs {harness.name}’s own sign-in flow in a built-in terminal rooted at your home
           directory — a browser window opens so you can authenticate.
         </p>
       {:else}
-        <p class="min-w-0 flex-1 text-[11px] text-dimmed">
+        <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
           {harness.name} does not expose a login flow CodeInOven can run. Use the Custom base URL tab
           to add an OpenAI-compatible provider instead.
         </p>
@@ -630,7 +630,7 @@
             <p class="truncate text-xs font-medium">{stateLabel()}</p>
           </div>
           <button
-            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay disabled:opacity-50"
+            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
             title="Re-check {harness.name} sign-in status"
             disabled={checkingAuth}
             onclick={() => void checkAuth()}
@@ -662,7 +662,7 @@
 
       {#if step === 'idle' && authStatus?.accounts.length}
         <div class="space-y-1.5">
-          <p class="text-[11px] font-medium text-dimmed">Connected providers</p>
+          <p class="text-[0.6875rem] font-medium text-dimmed">Connected providers</p>
           {#each authStatus.accounts as account (account.id)}
             <div
               class="flex items-center justify-between gap-2 rounded-lg border bg-surface px-3 py-2"
@@ -672,13 +672,13 @@
                 <span class="truncate text-xs">{account.label}</span>
                 {#if account.method}
                   <span
-                    class="rounded-full bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-dimmed"
+                    class="rounded-full bg-elevated px-1.5 py-0.5 font-mono text-[0.625rem] text-dimmed"
                     >{account.method}</span
                   >
                 {/if}
                 {#if hiddenIds.includes(account.id)}
                   <span
-                    class="rounded-full bg-raised px-1.5 py-0.5 text-[10px] font-medium text-dimmed"
+                    class="rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] font-medium text-dimmed"
                     title="Hidden from the {harness.name} model picker via its config"
                   >
                     Hidden
@@ -696,7 +696,7 @@
                   />
                 {/if}
                 <button
-                  class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-50"
+                  class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-50"
                   title="Disconnect {account.label}"
                   disabled={disconnecting}
                   onclick={() => (disconnectTarget = account)}
@@ -719,16 +719,16 @@
               onExit={(exitCode) => void handleLoginExit(exitCode)}
             />
           </div>
-          <p class="font-mono text-[10px] text-dimmed">
+          <p class="font-mono text-[0.625rem] text-dimmed">
             $ {shellCommand(loginHandoff)}
           </p>
         </div>
       {:else if step === 'picking'}
         <div class="space-y-2">
           <div class="flex items-center justify-between gap-2">
-            <p class="text-[11px] font-medium text-dimmed">Providers {harness.name} offers</p>
+            <p class="text-[0.6875rem] font-medium text-dimmed">Providers {harness.name} offers</p>
             <button
-              class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay"
+              class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
               type="button"
               onclick={backToList}
             >
@@ -783,7 +783,7 @@
                   <span class="min-w-0">
                     <span class="block truncate text-xs font-medium">{provider.name}</span>
                     <span
-                      class="block truncate font-mono text-[10px] {selectedProvider?.id ===
+                      class="block truncate font-mono text-[0.625rem] {selectedProvider?.id ===
                       provider.id
                         ? 'text-on-primary/70'
                         : 'text-dimmed'}"
@@ -793,7 +793,7 @@
                   </span>
                   {#if provider.authenticated}
                     <span
-                      class="shrink-0 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success"
+                      class="shrink-0 rounded-full bg-success/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-success"
                     >
                       Connected
                     </span>
@@ -805,7 +805,7 @@
 
           {#snippet apiKeyField(providerName: string)}
             <label
-              class="block text-[11px] font-medium text-foreground"
+              class="block text-[0.6875rem] font-medium text-foreground"
               for="provider-api-key-input"
             >
               API key for {providerName}
@@ -827,7 +827,7 @@
                 }
               }}
             />
-            <p class="text-[10px] text-dimmed">
+            <p class="text-[0.625rem] text-dimmed">
               Stored by CodeInOven in {harness.name}’s own credential file — never sent anywhere
               else.
             </p>
@@ -839,11 +839,11 @@
                 <div class="space-y-2">
                   <div class="flex items-center gap-2">
                     <Loader2 size={13} class="animate-spin text-primary" />
-                    <p class="min-w-0 flex-1 truncate text-[11px] text-muted">
+                    <p class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted">
                       {oauthStatus || 'Waiting for the provider…'}
                     </p>
                     <button
-                      class="shrink-0 rounded-lg border bg-elevated px-2 py-1 text-[10px] font-medium text-muted hover:bg-overlay"
+                      class="shrink-0 rounded-lg border bg-elevated px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-overlay"
                       type="button"
                       title="Cancel the sign-in"
                       onclick={() => void cancelOAuthSignIn()}
@@ -853,7 +853,7 @@
                   </div>
                   {#if oauthDeviceCode}
                     <div class="rounded-lg border bg-surface p-2.5 text-center">
-                      <p class="text-[10px] text-dimmed">
+                      <p class="text-[0.625rem] text-dimmed">
                         Enter this code at
                         <button
                           class="font-medium text-primary underline underline-offset-2"
@@ -874,7 +874,7 @@
                   {#if oauthPrompt}
                     <div class="space-y-1.5">
                       {#if oauthPrompt.type === 'select' && oauthPrompt.options}
-                        <p class="text-[11px] font-medium text-foreground">{oauthPrompt.message}</p>
+                        <p class="text-[0.6875rem] font-medium text-foreground">{oauthPrompt.message}</p>
                         <div class="space-y-1">
                           {#each oauthPrompt.options as option (option.id)}
                             <button
@@ -889,7 +889,7 @@
                         </div>
                       {:else}
                         <label
-                          class="block text-[11px] font-medium text-foreground"
+                          class="block text-[0.6875rem] font-medium text-foreground"
                           for="oauth-prompt-input"
                         >
                           {oauthPrompt.message}
@@ -926,10 +926,10 @@
                   {/if}
                 </div>
               {:else if selectedProviderIsOauth}
-                <p class="text-[11px] font-medium text-foreground">
+                <p class="text-[0.6875rem] font-medium text-foreground">
                   Sign in to {selectedProvider.name}
                 </p>
-                <p class="text-[10px] text-dimmed">
+                <p class="text-[0.625rem] text-dimmed">
                   A browser window opens, you approve access, and this app finishes the rest — no
                   key pasting needed.
                 </p>
@@ -941,13 +941,13 @@
                 >
                   <KeyRound size={13} /> Sign in with browser
                 </button>
-                <p class="text-center text-[10px] text-dimmed">— or paste an API key —</p>
+                <p class="text-center text-[0.625rem] text-dimmed">— or paste an API key —</p>
                 {@render apiKeyField(selectedProvider.name)}
               {:else}
-                <p class="text-[11px] font-medium text-foreground">
+                <p class="text-[0.6875rem] font-medium text-foreground">
                   Connect to {selectedProvider.name}
                 </p>
-                <p class="text-[10px] text-dimmed">
+                <p class="text-[0.625rem] text-dimmed">
                   {harness.name}'s own sign-in flow runs right here — answer its prompts and the
                   credential is stored in {harness.name}'s credential file.
                 </p>
@@ -966,19 +966,19 @@
       {:else}
         <div class="rounded-xl border border-dashed px-3 py-2.5">
           {#if apiKeyEntry}
-            <p class="text-[11px] text-muted">
+            <p class="text-[0.6875rem] text-muted">
               Click <strong class="font-medium text-foreground">Search providers</strong> below to
               browse {harness.name}’s full provider catalog, then sign in or paste an API key to
               connect.
             </p>
           {:else if pickerLogin}
-            <p class="text-[11px] text-muted">
+            <p class="text-[0.6875rem] text-muted">
               Click <strong class="font-medium text-foreground">Connect provider</strong> below to
               open {harness.name}’s own provider picker in the built-in terminal — choose the
               provider you want there.
             </p>
           {:else}
-            <p class="text-[11px] text-muted">
+            <p class="text-[0.6875rem] text-muted">
               Click <strong class="font-medium text-foreground">Connect provider</strong> below to pick
               a provider and sign in from here — no copying commands.
             </p>
@@ -999,7 +999,7 @@
 
       {#if customProviders.length > 0}
         <div class="space-y-1.5">
-          <p class="text-[11px] font-medium text-dimmed">Custom providers</p>
+          <p class="text-[0.6875rem] font-medium text-dimmed">Custom providers</p>
           {#each customProviders as provider (provider.id)}
             <div
               class="flex items-center justify-between gap-2 rounded-lg border bg-surface px-3 py-2"
@@ -1008,21 +1008,21 @@
                 <Server size={13} class="shrink-0 text-dimmed" />
                 <span class="truncate text-xs">{provider.name}</span>
                 <span
-                  class="truncate rounded-full bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-dimmed"
+                  class="truncate rounded-full bg-elevated px-1.5 py-0.5 font-mono text-[0.625rem] text-dimmed"
                   title={provider.baseURL}
                 >
                   {provider.baseURL}
                 </span>
                 {#if !provider.enabled}
                   <span
-                    class="shrink-0 rounded-full bg-raised px-1.5 py-0.5 text-[10px] font-medium text-dimmed"
+                    class="shrink-0 rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] font-medium text-dimmed"
                   >
                     Disabled
                   </span>
                 {/if}
               </div>
               <button
-                class="flex h-7 shrink-0 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay"
+                class="flex h-7 shrink-0 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
                 title="Edit {provider.name}"
                 type="button"
                 onclick={() => onEditCustom(provider)}

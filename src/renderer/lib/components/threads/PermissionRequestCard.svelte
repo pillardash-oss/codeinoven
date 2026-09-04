@@ -99,7 +99,7 @@
       </p>
       {#if request.policy}
         <span
-          class="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase {riskClass(
+          class="rounded px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase {riskClass(
             request.policy.risk
           )}"
         >
@@ -128,13 +128,13 @@
 
     {#if request.patterns.length > 0}
       <div>
-        <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-dimmed">
+        <p class="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
           Requested resources
         </p>
         <div class="space-y-1">
           {#each request.patterns as pattern, index (`${pattern}-${index}`)}
             <p
-              class="break-all rounded-lg bg-elevated px-2.5 py-1.5 font-mono text-[11px] text-foreground"
+              class="break-all rounded-lg bg-elevated px-2.5 py-1.5 font-mono text-[0.6875rem] text-foreground"
             >
               {pattern}
             </p>
@@ -145,12 +145,12 @@
 
     {#if request.policy && request.policy.scopedPaths.length > 0}
       <div>
-        <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-dimmed">
+        <p class="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
           Resolved scope
         </p>
         <div class="space-y-1">
           {#each request.policy.scopedPaths as path, index (`${path}-${index}`)}
-            <p class="break-all font-mono text-[11px] text-muted">{path}</p>
+            <p class="break-all font-mono text-[0.6875rem] text-muted">{path}</p>
           {/each}
         </div>
       </div>
@@ -158,15 +158,15 @@
 
     {#if metadataEntries.length > 0}
       <div>
-        <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-dimmed">
+        <p class="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
           Request details
         </p>
         <dl class="space-y-2">
           {#each metadataEntries as [key, value] (key)}
             <div class="grid gap-1">
-              <dt class="text-[11px] font-semibold text-muted">{key}</dt>
+              <dt class="text-[0.6875rem] font-semibold text-muted">{key}</dt>
               <dd
-                class="whitespace-pre-wrap break-all rounded-lg bg-elevated px-2.5 py-1.5 font-mono text-[11px] text-foreground"
+                class="whitespace-pre-wrap break-all rounded-lg bg-elevated px-2.5 py-1.5 font-mono text-[0.6875rem] text-foreground"
               >
                 {formatMetadata(value)}
               </dd>
@@ -201,7 +201,7 @@
             disabled={working}
           />
         </div>
-        <p class="mt-1 text-[11px] text-dimmed">
+        <p class="mt-1 text-[0.6875rem] text-dimmed">
           The requested action will be rejected and this instruction will steer the current run.
         </p>
       </div>

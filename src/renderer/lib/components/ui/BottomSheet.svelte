@@ -44,7 +44,7 @@
     aria-label={title}
   >
     <div class="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
-      <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">{title}</p>
+      <p class="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-dimmed">{title}</p>
       <div class="flex items-center gap-1">
         {#if headerExtra}
           {@render headerExtra()}

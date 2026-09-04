@@ -58,6 +58,16 @@ export const rendererAlias = {
   $adapters: resolve(__dirname, 'src/lib/adapters'),
   $shared: resolve(__dirname, 'src/lib')
 }
+export const rendererDedupe = [
+  '@codemirror/state',
+  '@codemirror/view',
+  '@codemirror/language',
+  '@codemirror/language-data',
+  '@codemirror/commands',
+  '@lezer/highlight',
+  '@lezer/common',
+  '@lezer/lr'
+]
 export function rendererPlugins(): PluginOption[] {
   return [
     pwaManifestVersionPlugin(),
@@ -153,7 +163,24 @@ export default defineConfig(({ mode }) => {
       publicDir: rendererPublicDir,
       plugins: rendererPlugins(),
       resolve: {
-        alias: rendererAlias
+        alias: rendererAlias,
+        // CodeMirror's instanceof-based extension checks break if any chunk
+        // ends up with a private copy of @codemirror/state (e.g. a stale
+        // optimizeDeps snapshot taken while nested 6.7.1 copies existed).
+        // Deduping here forces every importer onto the single hoisted copy.
+        dedupe: rendererDedupe
+      },
+      optimizeDeps: {
+        // Bundle the CodeMirror core packages as shared pre-bundled deps so
+        // the dynamic imports in codemirror-file-editor.ts and every language
+        // package resolve to one instance instead of separate chunks.
+        include: [
+          '@codemirror/state',
+          '@codemirror/view',
+          '@codemirror/commands',
+          '@codemirror/language',
+          '@codemirror/language-data'
+        ]
       },
       // Pin the dev origin. The renderer's persisted state (recovery snapshot,
       // thread visits, UI preferences) lives in localStorage keyed by origin,

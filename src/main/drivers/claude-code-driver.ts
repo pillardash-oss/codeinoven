@@ -23,7 +23,11 @@ import type {
 } from '../../lib/types'
 import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-interactions'
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
-import { classifyProviderIssue } from '../../lib/provider-issue'
+import {
+  classifyProviderIssue,
+  extractProviderErrorEnvelope,
+  parseUsageResetAt
+} from '../../lib/provider-issue'
 import type { StorageEngine } from '../storage/storage-engine'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { CLAUDE_CREDENTIAL_LOCK_NAME, CrossProcessMutex } from '../system/cross-process-mutex'
@@ -98,6 +102,21 @@ const AUTH_CONFIRM_TIMEOUT_MS = 60_000
 /** Poll interval while waiting for a spawned session to prove authentication. */
 const AUTH_CONFIRM_POLL_MS = 200
 /**
+ * Marker the Claude Code CLI returns as an Agent tool_result when the call was
+ * queued as a background task instead of running synchronously. The tool call
+ * "completes" instantly, but the CLI keeps the turn process alive and later
+ * injects the agent's <task-notification> as a new prompt in the SAME process,
+ * so that process still needs a live stdin for can_use_tool control responses
+ * (AskUserQuestion and permission prompts) after the first result arrives.
+ */
+const CLAUDE_ASYNC_AGENT_LAUNCH_MARKER = 'Async agent launched successfully'
+/**
+ * How long a turn process with unfinished background agents may keep stdin
+ * open after a result before it is closed so the CLI can exit. Any stdout
+ * record (for example the agent's task-notification turn) resets this timer.
+ */
+const CLAUDE_ASYNC_AGENT_CLOSE_GRACE_MS = 10 * 60_000
+/**
  * Cap on concurrent one-shot `claude` spawns (auth probe, on-demand usage
  * refresh, version probe, model discovery). Every one-shot spawn holds several
  * file descriptors (stdio pipes) for its lifetime, so a burst of threads or
@@ -112,7 +131,11 @@ const ONE_SHOT_SPAWN_LIMIT = 4
 const CLAUDE_NON_INTERACTIVE_COMMANDS: readonly HarnessCommand[] = [
   { name: 'compact', description: 'Summarize older history to free context' },
   { name: 'config', description: 'Set Claude Code preferences with key=value arguments' },
-  { name: 'settings', description: 'Set Claude Code preferences with key=value arguments' }
+  { name: 'settings', description: 'Set Claude Code preferences with key=value arguments' },
+  {
+    name: 'usage-credits',
+    description: 'Switch this session to pay-as-you-go API usage credits'
+  }
 ]
 
 const CLAUDE_COMMANDS_REQUIRING_ARGUMENTS = new Set(['config', 'settings'])
@@ -576,6 +599,30 @@ function claudeSessionLimitIssue(
   return {
     kind: 'quota',
     message: error,
+    rawError: error,
+    harnessId: 'claude-code',
+    retryable: retryAt !== undefined,
+    ...(retryAt === undefined ? {} : { retryAt })
+  }
+}
+
+/**
+ * `result`-type turn failures that aren't a session-limit notice (e.g. "Fable
+ * 5 requires usage credits. Run /usage-credits to continue or switch models
+ * with /model.") otherwise reach the UI as a bare string with no `issue`,
+ * which renders as a generic "Agent output error" instead of the billing
+ * card that lets the user switch models. Classify them the same way every
+ * other driver does.
+ */
+function claudeResultIssue(error: string | undefined): AgentProviderIssue | undefined {
+  if (!error) return undefined
+  const kind = classifyProviderIssue(error)
+  if (kind === 'unknown') return undefined
+  const message = extractProviderErrorEnvelope(error).message
+  const retryAt = kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
+  return {
+    kind,
+    message,
     rawError: error,
     harnessId: 'claude-code',
     retryable: retryAt !== undefined,
@@ -1130,11 +1177,18 @@ export function mapClaudeCodeRecord(
       if (existingSubagent) {
         const output = serializeContent(block['content'])
         const failed = block['is_error'] === true
+        // Claude Code can queue an Agent call as a background task: the tool
+        // result is the async-launch marker and the real agent result arrives
+        // later as a <task-notification> prompt in the same process. Keep the
+        // part running (background) so the turn process is not torn down.
+        const asyncLaunch =
+          !failed && !!output && output.includes(CLAUDE_ASYNC_AGENT_LAUNCH_MARKER)
         parts.push({
           ...existingSubagent,
           activity: {
             ...existingSubagent.activity,
-            status: failed ? 'error' : 'completed',
+            status: failed ? 'error' : asyncLaunch ? 'running' : 'completed',
+            background: asyncLaunch ? true : existingSubagent.activity.background,
             ...(output ? { output } : {}),
             ...(failed ? { error: output ?? 'Claude sub-agent task failed' } : {})
           }
@@ -1156,7 +1210,29 @@ export function mapClaudeCodeRecord(
         )
       )
     }
-    if (!parts.length) return nativeSessionId ? { nativeSessionId } : null
+    if (!parts.length) {
+      // A background agent finishing is delivered as a plain-text user turn
+      // (<task-notification> with the launching tool-use-id). Complete the
+      // matching subagent part so the UI and the stdin-close logic observe the
+      // agent as finished.
+      const notificationText =
+        rawMessage && typeof rawMessage['content'] === 'string' ? rawMessage['content'] : ''
+      if (notificationText.includes('<task-notification>')) {
+        const callId = /<tool-use-id>([^<]+)<\/tool-use-id>/.exec(notificationText)?.[1]
+        const subagent = callId ? findSubagentPart(context, callId) : undefined
+        if (subagent && (subagent.activity.status === 'pending' || subagent.activity.status === 'running')) {
+          const part: AgentPart = {
+            ...subagent,
+            activity: { ...subagent.activity, status: 'completed' }
+          }
+          return {
+            nativeSessionId,
+            events: [{ type: 'message.part.updated' as const, sessionId: context.sessionId, part }]
+          }
+        }
+      }
+      return nativeSessionId ? { nativeSessionId } : null
+    }
     const updated = parts.map((part) => ({
       type: 'message.part.updated' as const,
       sessionId: context.sessionId,
@@ -1309,7 +1385,7 @@ export function mapClaudeCodeRecord(
       ? latestClaudeRateLimits(context)
       : []
     const rateLimits = reportedRateLimits.length > 0 ? reportedRateLimits : inheritedRateLimits
-    const issue = claudeSessionLimitIssue(error, rateLimits)
+    const issue = claudeSessionLimitIssue(error, rateLimits) ?? claudeResultIssue(error)
     const completedAt = Date.now()
     const terminalSubagentEvents: SessionAgentEvent[] = activeClaudeSubagentParts(
       context,
@@ -1419,6 +1495,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   private readonly authenticatedSessions = new Set<string>()
   private readonly pendingClaudeQuestions = new Map<string, ClaudeQuestionRequest>()
   private readonly pendingClaudePermissions = new Map<string, ClaudePermissionRequest>()
+  /** Scheduled stdin closes for turn processes still running background agents. */
+  private readonly asyncAgentCloseTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** Held while a first-party session spawn may be refreshing the credential. */
   private authSlotHeld = false
   /** Resolved when the current credential-refresh window closes. */
@@ -1874,6 +1952,9 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     session: PersistentCliSession,
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
+    // A new turn spawns a fresh CLI process; any stdin-close grace timer left
+    // by the previous turn belongs to a process this turn just replaced.
+    this.cancelAsyncAgentInputClose(session.id)
     // Pre-flight auth gate at message-send time (buildTurnCommand runs per turn,
     // never on thread open). For first-party Anthropic turns, probe the CLI's
     // stored credential so the CLI's own silent OAuth refresh is triggered up
@@ -1949,6 +2030,29 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
           }
         : {})
     }
+  }
+
+  /**
+   * Close a background-agent turn process's stdin after a grace period so the
+   * CLI can exit if the agents never deliver further work. Any later stdout
+   * record cancels and the next result re-arms the timer.
+   */
+  private scheduleAsyncAgentInputClose(sessionId: string): void {
+    this.cancelAsyncAgentInputClose(sessionId)
+    const timer = setTimeout(() => {
+      this.asyncAgentCloseTimers.delete(sessionId)
+      if (!this.activeSessionIds().includes(sessionId)) return
+      this.closeActiveInput(sessionId)
+    }, CLAUDE_ASYNC_AGENT_CLOSE_GRACE_MS)
+    timer.unref?.()
+    this.asyncAgentCloseTimers.set(sessionId, timer)
+  }
+
+  private cancelAsyncAgentInputClose(sessionId: string): void {
+    const timer = this.asyncAgentCloseTimers.get(sessionId)
+    if (!timer) return
+    clearTimeout(timer)
+    this.asyncAgentCloseTimers.delete(sessionId)
   }
 
   private beginAuthenticationReadiness(sessionId: string): void {
@@ -2436,12 +2540,22 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     }
 
     const result = mapClaudeCodeRecord(value, context)
+    // Background-agent bookkeeping: any stdout record proves the turn process
+    // is still doing work, so a scheduled stdin close (armed at result time
+    // while background agents run) must be pushed back out.
+    if (type !== 'result') this.cancelAsyncAgentInputClose(context.sessionId)
     if (type === 'result') {
       this.finishActiveUsageProbe(context.sessionId, null)
-      if (
-        !this.hasPendingInteraction(context.sessionId) &&
-        activeClaudeSubagentParts(context, true).length === 0
-      ) {
+      const backgroundAgents = activeClaudeSubagentParts(context, true).length > 0
+      if (backgroundAgents) {
+        // Background agents keep the CLI process alive after the result: it
+        // will inject their task-notifications as new prompts in this same
+        // process. Ending stdin here would break every later can_use_tool
+        // control response (AskUserQuestion, permission prompts) with
+        // "AbortError: Stream closed". Keep stdin open and arm a grace close
+        // instead; fresh stdout records keep cancelling it.
+        this.scheduleAsyncAgentInputClose(context.sessionId)
+      } else if (!this.hasPendingInteraction(context.sessionId)) {
         this.closeActiveInput(context.sessionId)
       }
     }

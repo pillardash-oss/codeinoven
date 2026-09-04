@@ -211,7 +211,7 @@
     >
       {#each items as item (item.label)}
         <button
-          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-foreground hover:bg-elevated"
+          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground hover:bg-elevated"
           role="menuitem"
           onclick={item.run}
         >

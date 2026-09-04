@@ -36,6 +36,7 @@ const vendorAliases: Record<string, string> = {
   cloudflareai: 'cloudflare',
   cloudflareworkersai: 'cloudflare',
   chatgpt: 'openai',
+  codeinoven: 'cio',
 
   openai: 'codex',
   githubcopilot: 'githubcopilot',

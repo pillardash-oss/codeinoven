@@ -566,7 +566,7 @@
 >
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-3">
-      <p class="min-w-0 flex-1 truncate text-[11px] text-dimmed">
+      <p class="min-w-0 flex-1 truncate text-[0.6875rem] text-dimmed">
         {#if mode === 'provider'}
           Accounts are stored securely in your system keychain and can be reused across projects.
         {:else}
@@ -605,7 +605,7 @@
   >
     <div class="min-w-0">
       <p class="text-xs font-medium">{mode === 'provider' ? 'Add provider' : 'Add container'}</p>
-      <p class="text-[11px] text-muted">
+      <p class="text-[0.6875rem] text-muted">
         {mode === 'provider'
           ? 'Create a reusable account or attach an existing one.'
           : 'Attach a container to a configured provider.'}
@@ -651,7 +651,7 @@
                 <span class="block truncate text-xs font-medium">
                   {PROVIDER_DISPLAY_NAMES[kind]}
                 </span>
-                <span class="block text-[11px] text-muted">
+                <span class="block text-[0.6875rem] text-muted">
                   {isWorking ? 'Available' : isStub ? 'Not implemented yet' : ''}
                 </span>
               </span>
@@ -712,7 +712,7 @@
               />
             </label>
             {#if baseUrl.trim() !== '' && !baseUrlValidation.ok}
-              <p class="text-[11px] text-error">{baseUrlValidation.reason}</p>
+              <p class="text-[0.6875rem] text-error">{baseUrlValidation.reason}</p>
             {/if}
             <label class="block space-y-1 text-xs font-medium">
               <span>API token</span>
@@ -727,7 +727,7 @@
             </label>
           {:else}
             {#if existingAccountsForKind.length === 0}
-              <p class="rounded-lg border bg-elevated px-3 py-2 text-[11px] text-muted">
+              <p class="rounded-lg border bg-elevated px-3 py-2 text-[0.6875rem] text-muted">
                 No {PROVIDER_DISPLAY_NAMES[selectedKind]} accounts exist yet. Create one first.
               </p>
             {:else}
@@ -748,7 +748,7 @@
 
           {#if attachedForSelectedKind.length > 0}
             <div class="space-y-1.5">
-              <p class="text-[11px] font-medium text-muted">Attached accounts (active)</p>
+              <p class="text-[0.6875rem] font-medium text-muted">Attached accounts (active)</p>
               {#each attachedForSelectedKind as accountId (accountId)}
                 {@const account = cloudAccountsState.accountById(accountId)}
                 {#if account}
@@ -756,7 +756,7 @@
                     class="flex items-center justify-between gap-2 rounded-lg border bg-elevated px-3 py-1.5"
                   >
                     <span class="min-w-0 truncate text-xs">{account.label}</span>
-                    <span class="text-[10px] text-dimmed">
+                    <span class="text-[0.625rem] text-dimmed">
                       {account.id ===
                       config?.project.providerAccounts?.[selectedKind ?? 'coolify']?.activeAccountId
                         ? 'Active'
@@ -765,7 +765,7 @@
                     {#if account.id !== config?.project.providerAccounts?.[selectedKind ?? 'coolify']?.activeAccountId}
                       <button
                         type="button"
-                        class="rounded text-[11px] font-medium text-primary hover:underline disabled:opacity-50"
+                        class="rounded text-[0.6875rem] font-medium text-primary hover:underline disabled:opacity-50"
                         disabled={saving}
                         onclick={() => void setActive(selectedKind ?? 'coolify', account.id)}
                       >
@@ -827,11 +827,11 @@
               >
                 <div class="min-w-0">
                   <p class="truncate text-xs font-medium">{containerLabel || containerId}</p>
-                  <p class="truncate font-mono text-[10px] text-dimmed">{containerId}</p>
+                  <p class="truncate font-mono text-[0.625rem] text-dimmed">{containerId}</p>
                 </div>
                 <button
                   type="button"
-                  class="shrink-0 rounded px-2 py-1 text-[11px] font-medium text-muted hover:bg-overlay hover:text-foreground"
+                  class="shrink-0 rounded px-2 py-1 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
                   onclick={() => {
                     containerId = ''
                     containerLabel = ''
@@ -857,22 +857,22 @@
                 />
               </div>
               {#if availableContainers.length === 0}
-                <p class="rounded-lg border bg-elevated px-3 py-2 text-[11px] text-muted">
+                <p class="rounded-lg border bg-elevated px-3 py-2 text-[0.6875rem] text-muted">
                   No containers were found on this account. Pick a different provider or add the
                   container manually below.
                 </p>
               {:else if filteredAvailable.length === 0}
-                <p class="rounded-lg border bg-elevated px-3 py-2 text-[11px] text-muted">
+                <p class="rounded-lg border bg-elevated px-3 py-2 text-[0.6875rem] text-muted">
                   No containers match your search.
                 </p>
               {:else}
                 <div class="flex items-center justify-between gap-2">
-                  <p class="text-[11px] text-dimmed">
+                  <p class="text-[0.6875rem] text-dimmed">
                     {selectedContainerIds.size} selected · click to choose multiple
                   </p>
                   <button
                     type="button"
-                    class="rounded px-1.5 py-0.5 text-[10px] font-medium text-primary hover:underline"
+                    class="rounded px-1.5 py-0.5 text-[0.625rem] font-medium text-primary hover:underline"
                     onclick={() => {
                       if (selectedContainerIds.size === filteredAvailable.length) {
                         selectedContainerIds.clear()
@@ -903,14 +903,14 @@
                         <span class="flex items-center gap-1.5">
                           {#if container.project}
                             <span
-                              class="shrink-0 rounded bg-raised px-1 py-0.5 font-mono text-[9px] text-muted"
+                              class="shrink-0 rounded bg-raised px-1 py-0.5 font-mono text-[0.5625rem] text-muted"
                             >
                               {container.project}
                             </span>
                           {/if}
                           <span class="block truncate text-xs font-medium">{container.label}</span>
                         </span>
-                        <span class="block truncate font-mono text-[10px] text-dimmed">
+                        <span class="block truncate font-mono text-[0.625rem] text-dimmed">
                           {container.id}
                         </span>
                       </span>
@@ -926,7 +926,7 @@
         {/if}
 
         {#if containerProviderKind !== ''}
-          <div class="flex items-center gap-2 text-[11px] text-dimmed">
+          <div class="flex items-center gap-2 text-[0.6875rem] text-dimmed">
             <span class="h-px flex-1 bg-border"> </span>
             or enter manually
             <span class="h-px flex-1 bg-border"> </span>

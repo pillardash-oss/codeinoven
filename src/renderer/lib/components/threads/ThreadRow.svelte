@@ -17,6 +17,7 @@
   import { Portal } from 'bits-ui'
   import { toast } from 'svelte-sonner'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
@@ -38,6 +39,7 @@
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
+  import WaveBars from '$lib/components/speech/WaveBars.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import {
@@ -399,7 +401,15 @@
   )
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
   /** TTS playing on this thread — shares the recorder's indicator slot. */
+  // Last action wins between ASR and TTS: recording start cancels playback, so
+  // a transcription can only overlap a TTS that began after it — in that case
+  // the newer TTS takes the slot; otherwise the transcription waveform shows.
   let isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(thread.id))
+  /** The mic has closed but the transcript has not landed yet — same indicator
+   *  slot, distinct label, shown only when neither recording nor speaking. */
+  let isTranscribing = $derived(
+    !isRecording && !isSpeaking && speechController.isTranscribingThread(thread.id)
+  )
 
   /**
    * Sending clears the draft, which would otherwise flash the badge back to the
@@ -709,7 +719,7 @@
         {/if}
       </span>
       <span
-        class="min-w-0 flex-1 truncate text-[13px] {threadState === 'approval'
+        class="min-w-0 flex-1 truncate text-[0.75rem] {threadState === 'approval'
           ? 'font-medium text-warning'
           : threadState === 'unread'
             ? 'font-medium text-foreground'
@@ -722,6 +732,8 @@
           <RecordingIndicator label="Listening" />
         {:else if isSpeaking}
           <RecordingIndicator label="Speaking" tone="speech" />
+        {:else if isTranscribing}
+          <WaveBars label="Transcribing" />
         {:else if isBusyIndicator && currentModelProviderName}
           <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
             <VendorIcon
@@ -731,7 +743,7 @@
             />
           </span>
         {:else}
-          <span class="whitespace-nowrap text-[10px] text-dimmed">
+          <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
             {relativeTime(thread.lastActivity)}
           </span>
         {/if}
@@ -757,7 +769,7 @@
               <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
             {/each}
             {#if harnessIds.length > 3}
-              <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+              <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
                 +{harnessIds.length - 3}
               </span>
             {/if}
@@ -766,7 +778,7 @@
 
         {#if scopeBucket}
           <span
-            class="relative flex min-w-0 items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            class="relative flex min-w-0 items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[0.5625rem] text-muted"
             title={scopeBucket.name}
             style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
           >
@@ -795,8 +807,10 @@
             <RecordingIndicator label="Listening" />
           {:else if isSpeaking}
             <RecordingIndicator label="Speaking" tone="speech" />
+          {:else if isTranscribing}
+            <WaveBars label="Transcribing" />
           {:else}
-            <span class="whitespace-nowrap text-[10px] text-dimmed">
+            <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
               {relativeTime(thread.lastActivity)}
             </span>
           {/if}
@@ -926,7 +940,7 @@
 
       <!-- Title -->
       <span
-        class="min-w-0 flex-1 truncate text-[13px] {threadState === 'approval'
+        class="min-w-0 flex-1 truncate text-[0.75rem] {threadState === 'approval'
           ? 'font-medium text-warning'
           : threadState === 'unread'
             ? 'font-medium text-foreground'
@@ -942,6 +956,8 @@
           <RecordingIndicator label="Listening" />
         {:else if isSpeaking}
           <RecordingIndicator label="Speaking" tone="speech" />
+        {:else if isTranscribing}
+          <WaveBars label="Transcribing" />
         {:else if isBusyIndicator && currentModelProviderName}
           <span
             class="flex shrink-0 items-center transition-opacity duration-150 {hovered
@@ -958,7 +974,7 @@
           </span>
         {:else}
           <span
-            class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+            class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
               ? 'opacity-0'
               : 'opacity-100'}"
             aria-hidden={hovered}
@@ -1002,7 +1018,7 @@
               <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
             {/each}
             {#if visibleHarnessCount < harnessIds.length}
-              <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+              <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
                 +{harnessIds.length - visibleHarnessCount}
               </span>
             {/if}
@@ -1011,7 +1027,7 @@
 
         {#if scopeBucket && !hideScope}
           <span
-            class="relative col-start-2 flex min-w-0 max-w-[7rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            class="relative col-start-2 flex min-w-0 max-w-[7rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[0.5625rem] text-muted"
             title={scopeBucket.name}
             style="border-bottom-color: color-mix(in srgb, {scopeColor} 20%, var(--color-muted));"
           >
@@ -1040,9 +1056,11 @@
             <RecordingIndicator label="Listening" />
           {:else if isSpeaking}
             <RecordingIndicator label="Speaking" tone="speech" />
+          {:else if isTranscribing}
+            <WaveBars label="Transcribing" />
           {:else}
             <span
-              class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+              class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
                 ? 'opacity-0'
                 : 'opacity-100'}"
               aria-hidden={hovered}
@@ -1142,30 +1160,12 @@
   {/snippet}
 </Modal>
 
-<Modal open={showDeleteModal} title="Delete Thread" onClose={() => (showDeleteModal = false)}>
-  <p class="text-sm leading-relaxed text-muted">
-    This will permanently delete
-    <span class="font-medium text-foreground">{thread.title}</span>
-    and all of its history. This action cannot be undone.
-  </p>
-
-  {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      onclick={() => (showDeleteModal = false)}
-    >
-      Cancel
-    </button>
-    <button
-      type="button"
-      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90"
-      onclick={() => void confirmDelete()}
-    >
-      Delete
-    </button>
-  {/snippet}
-</Modal>
+<ThreadDeleteConfirm
+  open={showDeleteModal}
+  threadTitle={thread.title}
+  onClose={() => (showDeleteModal = false)}
+  onConfirm={confirmDelete}
+/>
 
 {#if showChangeScopeModal && !picker}
   <ChangeScopeModal

@@ -824,7 +824,7 @@
   {#snippet headerExtra()}
     {#if pendingAction && canEdit}
       <div class="flex flex-col gap-2 border-t px-3 py-2.5 md:flex-row md:items-end md:px-4">
-        <label class="min-w-0 flex-1 text-[11px] font-medium text-muted">
+        <label class="min-w-0 flex-1 text-[0.6875rem] font-medium text-muted">
           Additional notes
           <RichMarkdownEditor
             bind:this={decisionNotesEditor}
@@ -885,7 +885,7 @@
     {/each}
   {/snippet}
 
-  <article class="mx-auto max-w-4xl space-y-12 px-4 py-6 text-sm leading-7 md:px-8 md:py-8">
+  <article class="space-y-12 px-6 py-6 text-sm leading-7 md:px-14 md:py-8">
     <header class="space-y-3 border-b pb-8">
       <EditableMarkdown
         text={draft.content.title}
@@ -902,7 +902,7 @@
         <EditableMarkdown
           text={draft.content.summary}
           readOnly={!canEdit}
-          class="brainstorm-markdown max-w-3xl whitespace-pre-wrap rounded-lg px-2 py-1 text-base text-muted outline-none focus:bg-surface focus:text-foreground"
+          class="brainstorm-markdown w-full whitespace-pre-wrap rounded-lg px-2 py-1 text-base text-muted outline-none focus:bg-surface focus:text-foreground"
           ariaLabel="Brainstorm session snapshot"
           onChange={(value) => {
             draft.content.summary = value
@@ -953,10 +953,10 @@
                   title="Open annotation"
                   onclick={() => void openAnnotation(annotation)}
                 >
-                  <span class="line-clamp-2 block text-xs leading-relaxed"
+                  <span class="line-clamp-2 text-xs leading-relaxed"
                     >{annotation.body}</span
                   >
-                  <span class="mt-1 block text-[10px] text-dimmed">{annotation.author}</span>
+                  <span class="mt-1 block text-[0.625rem] text-dimmed">{annotation.author}</span>
                 </button>
               {/each}
             </div>
@@ -976,16 +976,16 @@
                   <p class="text-xs font-semibold text-thread-spec">{prototype.id}</p>
                   <h3 class="mt-1 text-sm font-semibold text-foreground">{prototype.title}</h3>
                 </div>
-                <span class="rounded-full bg-raised px-2 py-1 text-[10px] text-muted">
+                <span class="rounded-full bg-raised px-2 py-1 text-[0.625rem] text-muted">
                   {prototype.fidelity === 'lofi' ? 'LoFi' : 'HiFi'}
                 </span>
               </div>
               {#if prototype.parentPrototypeId}
-                <p class="mt-2 text-[11px] text-muted">
+                <p class="mt-2 text-[0.6875rem] text-muted">
                   Based on {prototype.parentPrototypeId}
                 </p>
               {/if}
-              <p class="mt-3 truncate font-mono text-[10px] text-dimmed">
+              <p class="mt-3 truncate font-mono text-[0.625rem] text-dimmed">
                 {prototype.previewPath}
               </p>
               <div class="mt-3 flex gap-2">

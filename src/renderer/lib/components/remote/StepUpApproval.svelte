@@ -74,7 +74,7 @@
             <dd class="text-foreground">in {formatExpiry(current.expiresAt)}</dd>
           </div>
         </dl>
-        <p class="mt-2 text-[10px] leading-relaxed text-dimmed">
+        <p class="mt-2 text-[0.625rem] leading-relaxed text-dimmed">
           The approval is single-use and bound to this exact request. It never shares any secrets or
           content with the phone.
         </p>

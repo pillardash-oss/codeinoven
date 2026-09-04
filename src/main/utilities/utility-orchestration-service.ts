@@ -94,11 +94,16 @@ export interface UtilityTurnRequest {
   harnessId: string
   projectId: string
   threadId: string
+  /** Human-readable thread title, used to label Cua agent cursors. */
+  threadTitle?: string
   projectPath: string
   /** Main thread session that owns this turn, for scoped user-decision events. */
   sessionId: string
   nativeCapabilities: string[]
   permissionLevel: PermissionLevel
+  /** True when the executing model is recorded as vision-capable (user report),
+   *  so the image descriptor utility stays hidden for this turn. */
+  executingModelVisionCapable?: boolean
   /** Explicit user intent grants the setup-only utility management operation. */
   allowManagement?: boolean
   budgetContext: UtilityTurnBudgetContext
@@ -320,7 +325,7 @@ export class UtilityOrchestrationService {
 
   async startTurn(request: UtilityTurnRequest): Promise<UtilityTurnGateway> {
     const id = randomUUID()
-    const eligible = await this.registry.resolve({
+    let eligible = await this.registry.resolve({
       harnessId: request.harnessId,
       projectId: request.projectId,
       threadId: request.threadId,
@@ -337,6 +342,15 @@ export class UtilityOrchestrationService {
       )
       if (cuaUtility) eligible.push(cuaUtility)
     }
+    // A model the user reported as vision-capable must never see the image
+    // descriptor: announcing it invites the model to call it, which is exactly
+    // the false-positive report path the vision record exists to prevent.
+    if (request.executingModelVisionCapable === true) {
+      eligible = eligible.filter(({ utility }) => utility.kind !== 'image_descriptor')
+    }
+    const imageDescriptorEligible = eligible.some(
+      ({ utility }) => utility.kind === 'image_descriptor'
+    )
     // Stamp the thread's permission level onto the Cua Driver MCP utility so
     // its launch environment always matches how this thread runs tools.
     for (const entry of eligible) {
@@ -409,7 +423,11 @@ export class UtilityOrchestrationService {
             'A search result reports an explicit `notFound` boolean and may return project-aware candidates (`matchType: "candidates"`) to evaluate semantically. Before concluding that any capability (MCP, skill, tool, utility) is unavailable or does not exist, call ' +
               UTILITY_SEARCH_TOOL_NAME +
               ' first; only conclude unavailability when the result reports notFound:true. Never treat "the tools are not exposed in this session" as proof of absence. If you already know an eligible utility id, activate it directly without searching first.',
-            'Describe images: search for the image descriptor utility, activate its id, then invoke it with operation "describe" and input {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}.',
+            ...(imageDescriptorEligible
+              ? [
+                  'Describe images: search for the image descriptor utility, activate its id, then invoke it with operation "describe" and input {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}.'
+                ]
+              : []),
             'When a tool reports the gateway is not active for this turn (queued or steer turn after cleanup), continue without app utilities; the next regular user turn re-arms them.'
           ]
         : []),
@@ -445,7 +463,7 @@ export class UtilityOrchestrationService {
         `Gateway: ${bridgeUrl}`,
         `Authorization header: Bearer ${token}`,
         recoveryInstruction,
-        'Search by capability name or task intent: POST /search with {"query":"capability or task","kinds":["mcp","skill","computer_use","image_descriptor"]}. A `matchType` of `candidates` means you must inspect the project-aware candidates semantically; `notFound` is true only when no eligible utility exists for the requested kinds.',
+        `Search by capability name or task intent: POST /search with {"query":"capability or task","kinds":${JSON.stringify(imageDescriptorEligible ? ['mcp', 'skill', 'computer_use', 'image_descriptor'] : ['mcp', 'skill', 'computer_use'])}}. A \`matchType\` of \`candidates\` means you must inspect the project-aware candidates semantically; \`notFound\` is true only when no eligible utility exists for the requested kinds.`,
         'Before concluding that any capability (MCP, skill, tool, utility) is unavailable or does not exist, search /search first; only conclude unavailability when the result reports notFound:true. Never treat "the tools are not exposed in this session" as proof of absence.',
         'Activate: POST /activate with {"utility_id":"id-from-search"}; if you already know an eligible utility id, activate it directly without searching first.',
         'Invoke: POST /invoke with {"utility_id":"id","operation":"tool-or-operation","input":{}}.',
@@ -454,7 +472,11 @@ export class UtilityOrchestrationService {
               'Install a validated utility bundle: POST /manage with {"action":"install_bundle","bundle":{"name":"...","utilities":[{"definition":{...}}]}}. Never include credential or secret values; the user adds those through Utilities.'
             ]
           : []),
-        'Describe images: search for the image descriptor utility with {"query":"describe image","kinds":["image_descriptor"]}, activate its id, then POST /invoke with {"utility_id":"id","operation":"describe","input":{"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}}.',
+        ...(imageDescriptorEligible
+          ? [
+              'Describe images: search for the image descriptor utility with {"query":"describe image","kinds":["image_descriptor"]}, activate its id, then POST /invoke with {"utility_id":"id","operation":"describe","input":{"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}}.'
+            ]
+          : []),
         `Treat these endpoints exactly like ${UTILITY_SEARCH_TOOL_NAME}, ${UTILITY_ACTIVATE_TOOL_NAME}, and ${UTILITY_INVOKE_TOOL_NAME} tool calls.`
       ].join('\n'),
       directEndpoint: { url: bridgeUrl, token },
@@ -928,7 +950,7 @@ export class UtilityOrchestrationService {
     utilityId: string,
     client: McpClient
   ): Promise<void> {
-    const sessionId = `codeinoven-${state.id}`
+    const sessionId = buildCuaSessionId(state.request.threadTitle, state.id)
     try {
       await client.callTool('start_session', { session: sessionId })
     } catch (error) {
@@ -1682,4 +1704,21 @@ if (!resolved) {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`
+}
+
+const MAX_CUA_SESSION_TITLE_CHARS = 24
+
+/**
+ * Build the Cua session id shown as the on-screen agent cursor label. The
+ * turn id is always kept so session identity stays stable; the thread title
+ * is prepended as a human-readable label (e.g. `cio-fix-pip-focus-a1b2c3`).
+ */
+function buildCuaSessionId(threadTitle: string | undefined, turnId: string): string {
+  const label = (threadTitle ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, MAX_CUA_SESSION_TITLE_CHARS)
+    .replace(/-+$/gu, '')
+  return label ? `cio-${label}-${turnId}` : `codeinoven-${turnId}`
 }

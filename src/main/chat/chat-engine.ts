@@ -1038,8 +1038,8 @@ const BRAINSTORM_DISCUSSION_SYSTEM_PROMPT = [
 const asEditableTemplate = (prompt: string): string =>
   prompt
     .replaceAll(APP_NAME, '{{APP_NAME}}')
-    .replaceAll(ENGINEERING_SPEC_TOOL_NAME, '{{ENGINEERING_SPEC_TOOL_NAME}}')
-    .replaceAll(BRAINSTORM_DOCUMENT_TOOL_NAME, '{{BRAINSTORM_DOCUMENT_TOOL_NAME}}')
+    .replaceAll(ENGINEERING_SPEC_TOOL_NAME, '{{CIO_SPEC_TOOL}}')
+    .replaceAll(BRAINSTORM_DOCUMENT_TOOL_NAME, '{{CIO_BRAINSTORM_DOC_TOOL}}')
 
 registerCioPromptDefault(
   'work-ethics',
@@ -3041,6 +3041,7 @@ export class ChatEngine {
     projectPath: string,
     settings: ThreadSettings,
     budgetContext: UtilityTurnBudgetContext,
+    threadTitle: string,
     skipRuntime = false,
     directGateway = false,
     allowManagement = false
@@ -3079,9 +3080,11 @@ export class ChatEngine {
         projectId,
         threadId,
         sessionId,
+        threadTitle,
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
+        executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
         allowManagement,
         budgetContext,
         attributeReinjectedResult: (attribution) =>
@@ -3174,19 +3177,26 @@ export class ChatEngine {
   private async cleanupTurnUtilities(sessionId: string): Promise<void> {
     const turn = this.utilityTurns.get(sessionId)
     if (!turn) return
-    this.utilityTurns.delete(sessionId)
     this.computerUsePip?.notifyTurnEnded(turn.threadId)
-    try {
-      if (turn.driver.publishUtilityGatewayEndpoint) {
-        await turn.driver.publishUtilityGatewayEndpoint(turn.projectPath, sessionId, null)
+    // Supersession guard: if a newer utility turn re-armed for this session
+    // while this cleanup was in flight (e.g. a held steer was delivered as the
+    // next turn), the shared per-session artifacts now belong to the new turn.
+    // Clearing them here would wipe the new turn's live credentials — only the
+    // replaced turn's own gateway is torn down; the new turn cleans itself up
+    // when it ends.
+    if (this.utilityTurns.get(sessionId) === turn) {
+      this.utilityTurns.delete(sessionId)
+      try {
+        if (turn.driver.publishUtilityGatewayEndpoint) {
+          await turn.driver.publishUtilityGatewayEndpoint(turn.projectPath, sessionId, null)
+        }
+        await turn.driver.applyPreparedUtilityRuntime?.(turn.projectPath, null, sessionId)
+      } catch (error) {
+        await turn.runtime?.cleanup()
+        Logger.error('Harness utility runtime cleanup failed:', error)
       }
-      await turn.driver.applyPreparedUtilityRuntime?.(turn.projectPath, null, sessionId)
-    } catch (error) {
-      await turn.runtime?.cleanup()
-      Logger.error('Harness utility runtime cleanup failed:', error)
-    } finally {
-      await turn.gateway.cleanup()
     }
+    await turn.gateway.cleanup()
   }
 
   /**
@@ -3225,9 +3235,11 @@ export class ChatEngine {
         projectId,
         threadId,
         sessionId,
+        threadTitle: (await this.threadManager.getThread(projectId, threadId))?.title,
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
+        executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
         allowManagement: false,
         budgetContext,
         attributeReinjectedResult: (attribution) =>
@@ -6876,7 +6888,7 @@ export class ChatEngine {
               projectPath,
               origin === 'internal' && previous
                 ? previous.label
-                : (text.slice(0, 80) || 'Agent turn'),
+                : text.slice(0, 80) || 'Agent turn',
               project.changeTrackingMode === 'git',
               origin === 'internal' && previous?.sourceMessageId
                 ? previous.sourceMessageId
@@ -6920,6 +6932,7 @@ export class ChatEngine {
       projectPath,
       settings,
       utilityBudgetContext,
+      targetThread?.title ?? '',
       isChatThread &&
         !chatFileSystemEnabled &&
         !utilitySetupRequested &&
@@ -7621,6 +7634,7 @@ export class ChatEngine {
               composedTurnTokens: 0,
               parentTurnId: turnId
             },
+            title,
             false,
             true,
             true
@@ -8314,6 +8328,23 @@ export class ChatEngine {
     request: ImageDescriptorExecutorRequest
   ): Promise<ImageDescriptorResult[]> {
     const thread = await this.threadManager.getThread(request.projectId, request.threadId)
+    // A model the user reported as vision-capable must never have a dedicated
+    // vision model describe images for it — the report exists precisely so the
+    // descriptor is skipped, even when the model itself asks for the tool.
+    if (thread?.settings && (await this.storage.hasVisionModel(thread.settings.modelId))) {
+      Logger.info('Image descriptor skipped: executing model is recorded as vision-capable', {
+        modelId: thread.settings.modelId,
+        threadId: request.threadId
+      })
+      return request.images.map((entry) => ({
+        id: entry.id,
+        source: entry.source,
+        type: entry.type,
+        description: '',
+        error:
+          'You can see images yourself, so the image descriptor was not run. Inspect the image directly instead of requesting a description.'
+      }))
+    }
     const config = await this.storage.getConfig()
     let selection =
       request.pinnedSelection ??
@@ -14876,6 +14907,7 @@ export class ChatEngine {
             projectPath,
             auditorSettings,
             auditUtilityBudgetContext,
+            auditorThread.title,
             false,
             driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
           )
@@ -16813,7 +16845,16 @@ export class ChatEngine {
     driver: HarnessDriver,
     projectPath: string
   ): Promise<HarnessCommand[]> {
-    const commands = await driver.listCommands(projectPath)
+    const rawCommands = await driver.listCommands(projectPath)
+    // A driver can report skills it loaded from the shared layer even when the
+    // skill is actually owned by another harness's exclusive directory. Drop
+    // those so the slash menu only offers skills the selected harness owns.
+    const claims = await this.capabilityDiscovery.harnessSkillClaims(projectPath)
+    const commands = rawCommands.filter((command) => {
+      if (command.source !== 'skill') return true
+      const claimants = claims.get(command.name.toLowerCase())
+      return !claimants || claimants.has(driver.id)
+    })
     const discovered = [...commands]
     if (driver.id === 'claude-code') {
       const capabilities = await this.capabilityDiscovery.discover(projectPath, driver.id)
@@ -16829,7 +16870,10 @@ export class ChatEngine {
     }
     return discovered.filter(
       (command) =>
-        command.source === 'skill' || command.name === 'config' || command.name === 'settings'
+        command.source === 'skill' ||
+        command.name === 'config' ||
+        command.name === 'settings' ||
+        command.name === 'usage-credits'
     )
   }
 
@@ -17468,9 +17512,13 @@ export class ChatEngine {
         event.type === 'message.completed' &&
         !event.compaction &&
         event.contextUsed === undefined &&
-        this.drivers.get(eventOwner.driverId)?.capabilities.contextUsage === false &&
         eventOwner.estimatedContextUsed !== undefined
       ) {
+        // Some drivers declare `contextUsage: true` yet carry providers that
+        // report no token usage at all (e.g. OpenCode gateways like Console
+        // Go). When the event carries no reported occupancy, the composed
+        // request estimate from dispatch is the only signal available —
+        // flagged as estimated so consumers never mistake it for reported.
         event.contextUsed = eventOwner.estimatedContextUsed
         event.contextEstimated = true
       }
@@ -18213,15 +18261,25 @@ export class ChatEngine {
     this.handledIdleSessions.add(sessionId)
     // The turn ended while a steer was still held (no tool window opened, or
     // the idle arrived between the tool end and the async flush). Deliver it
-    // as the next turn's regular send.
-    if (this.heldSteers.has(sessionId)) {
-      void this.flushHeldSteers(sessionId, 'after-turn')
-    }
-    const finalization = this.onSessionIdle(sessionId).finally(() => {
-      if (this.sessionIdleFinalizations.get(sessionId) === finalization) {
-        this.sessionIdleFinalizations.delete(sessionId)
-      }
-    })
+    // as the next turn's regular send — but only AFTER the idle finalization
+    // completes. The finalization tears down the finished turn's utility
+    // gateway (handoff clear + gateway.cleanup); the steer's deliverAfterTurn
+    // path runs a full sendPrompt that re-arms a fresh gateway turn, and if
+    // the two raced the stale cleanup would wipe the new turn's credentials
+    // mid-turn, leaving the harness with dead cio_util_* tools and a
+    // retrieve_mcp_host fallback that finds no live turn for the session.
+    const finalization = this.onSessionIdle(sessionId)
+      .catch((error) => Logger.error('Session idle finalization failed:', error))
+      .then(() => {
+        if (this.heldSteers.has(sessionId)) {
+          return this.flushHeldSteers(sessionId, 'after-turn')
+        }
+      })
+      .finally(() => {
+        if (this.sessionIdleFinalizations.get(sessionId) === finalization) {
+          this.sessionIdleFinalizations.delete(sessionId)
+        }
+      })
     this.sessionIdleFinalizations.set(sessionId, finalization)
     void finalization.then(
       () => this.settleSessionIdleFinalizationWaiters(sessionId),
@@ -19364,6 +19422,17 @@ export class ChatEngine {
       const turnThinkingLevel = turnSelection?.thinkingLevel ?? thread?.settings?.thinkingLevel
       if (turnAssistant && !turnAssistant.thinkingLevel && turnThinkingLevel) {
         turnAssistant.thinkingLevel = turnThinkingLevel
+      }
+      // Providers that never report token usage leave assistant messages
+      // without a contextUsed signal, blinding usage-based compaction and the
+      // context indicator. Fall back to the composed-request occupancy captured
+      // at dispatch, clearly flagged as an estimate.
+      if (turnAssistant && turnAssistant.contextUsed === undefined) {
+        const composed = info.estimatedContextUsed
+        if (composed !== undefined) {
+          turnAssistant.contextUsed = composed
+          turnAssistant.contextEstimated = true
+        }
       }
 
       this.applyReasoningStamps(sessionId, messages)

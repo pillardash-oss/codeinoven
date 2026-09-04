@@ -182,7 +182,7 @@
             : 'The vision model could not describe this image'}
       </p>
       <p
-        class="mt-1.5 max-h-40 overflow-y-auto break-words whitespace-pre-wrap rounded-lg bg-danger/5 px-3 py-2 font-mono text-[11px] leading-relaxed text-danger"
+        class="mt-1.5 max-h-40 overflow-y-auto break-words whitespace-pre-wrap rounded-lg bg-danger/5 px-3 py-2 font-mono text-[0.6875rem] leading-relaxed text-danger"
       >
         {request.error}
       </p>
@@ -198,7 +198,7 @@
     </div>
 
     <div>
-      <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-dimmed">
+      <p class="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
         Change vision model
       </p>
       <ModelPicker

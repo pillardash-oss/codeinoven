@@ -30,5 +30,5 @@
   onclick={onClick}
 >
   <MessageCircle size={12} class="shrink-0" />
-  <span class="text-[11px] leading-none font-semibold tabular-nums">{number}</span>
+  <span class="text-[0.6875rem] leading-none font-semibold tabular-nums">{number}</span>
 </button>

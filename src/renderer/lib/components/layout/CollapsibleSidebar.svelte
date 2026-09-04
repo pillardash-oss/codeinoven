@@ -103,7 +103,7 @@
       <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">
         <div class="flex min-w-0 items-center gap-2">
           {@render titlePrefix?.()}
-          <h2 class="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
+          <h2 class="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-muted">
             {title}
           </h2>
         </div>
@@ -153,7 +153,7 @@
         <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">
           <div class="flex min-w-0 items-center gap-2">
             {@render titlePrefix?.()}
-            <h2 class="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
+            <h2 class="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-muted">
               {title}
             </h2>
           </div>

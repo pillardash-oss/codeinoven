@@ -254,11 +254,11 @@
         <p class="text-sm font-semibold text-foreground">
           {sourceLabel ? 'Worker output error' : issueTitle(issue.kind)}
         </p>
-        <span class="rounded-full bg-raised px-2 py-0.5 text-[10px] font-semibold text-muted">
+        <span class="rounded-full bg-raised px-2 py-0.5 text-[0.625rem] font-semibold text-muted">
           {providerName}
         </span>
         {#if sourceLabel}
-          <span class="rounded-full bg-danger/10 px-2 py-0.5 text-[10px] font-semibold text-danger">
+          <span class="rounded-full bg-danger/10 px-2 py-0.5 text-[0.625rem] font-semibold text-danger">
             Worker · {sourceLabel}
           </span>
         {/if}

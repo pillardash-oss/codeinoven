@@ -239,8 +239,8 @@
   })
 </script>
 
-<div class="mx-auto max-w-5xl p-6 pb-24">
-  <header class="max-w-3xl">
+<div class="p-6 pb-24">
+  <header>
     <p class="font-mono text-xs text-muted">{entry.source}</p>
     <h1 class="mt-1 break-words text-xl font-bold tracking-tight">{entry.name}</h1>
     <p class="mt-3 text-sm leading-relaxed text-muted">
@@ -298,14 +298,14 @@
     >
       <section class="rounded-xl border bg-surface p-4" aria-labelledby="install-skill-title">
         <h2 id="install-skill-title" class="text-sm font-semibold">Install skill</h2>
-        <p class="mt-1 text-[11px] leading-relaxed text-muted">
+        <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
           Choose who owns the skill and exactly where it should be available.
         </p>
 
         <div class="mt-4 grid grid-cols-2 gap-1 rounded-lg bg-elevated p-1">
           <button
             type="button"
-            class="flex h-8 items-center justify-center gap-1.5 rounded-md text-[11px] font-medium transition-colors {manager ===
+            class="flex h-8 items-center justify-center gap-1.5 rounded-md text-[0.6875rem] font-medium transition-colors {manager ===
             'cio'
               ? 'bg-surface text-foreground shadow-sm'
               : 'text-muted hover:text-foreground'}"
@@ -317,7 +317,7 @@
           </button>
           <button
             type="button"
-            class="flex h-8 items-center justify-center gap-1.5 rounded-md text-[11px] font-medium transition-colors {manager ===
+            class="flex h-8 items-center justify-center gap-1.5 rounded-md text-[0.6875rem] font-medium transition-colors {manager ===
             'native'
               ? 'bg-surface text-foreground shadow-sm'
               : 'text-muted hover:text-foreground'}"
@@ -330,7 +330,7 @@
 
         {#if manager === 'native'}
           <div class="mt-4 min-w-0 space-y-2">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Skills path</p>
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Skills path</p>
             {#if skillPaths.length > 0}
               <div
                 class="grid max-h-[4.25rem] grid-flow-col grid-rows-2 justify-start gap-1.5 overflow-x-auto pb-1"
@@ -340,17 +340,17 @@
                   <span
                     class="flex h-8 max-w-72 shrink-0 items-center gap-2 rounded-lg bg-elevated px-2.5"
                   >
-                    <span class="shrink-0 text-[10px] font-medium text-muted">
+                    <span class="shrink-0 text-[0.625rem] font-medium text-muted">
                       {skillPath.label}
                     </span>
-                    <span class="truncate font-mono text-[10px] text-foreground">
+                    <span class="truncate font-mono text-[0.625rem] text-foreground">
                       {skillPath.path}
                     </span>
                   </span>
                 {/each}
               </div>
             {:else}
-              <p class="h-8 content-center text-[10px] text-dimmed">
+              <p class="h-8 content-center text-[0.625rem] text-dimmed">
                 {scope === 'projects'
                   ? 'Select one or more projects.'
                   : 'Select one or more harnesses.'}
@@ -360,7 +360,7 @@
         {/if}
 
         <div class="mt-4 space-y-2">
-          <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Scope</p>
+          <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Scope</p>
           <div class="grid gap-2 {manager === 'native' ? 'grid-cols-3' : 'grid-cols-2'}">
             <button
               type="button"
@@ -410,7 +410,7 @@
 
         {#if manager === 'cio'}
           <div class="mt-4 space-y-2">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Availability</p>
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Availability</p>
             <button
               type="button"
               class="flex w-full items-start gap-2 rounded-lg border p-2.5 text-left transition-colors {activation ===
@@ -421,7 +421,7 @@
               onclick={() => (activation = 'on_demand')}
             >
               <span class="text-xs font-medium">On demand</span>
-              <span class="ml-auto text-[10px] text-muted">Match by task</span>
+              <span class="ml-auto text-[0.625rem] text-muted">Match by task</span>
             </button>
             <button
               type="button"
@@ -433,12 +433,12 @@
               onclick={() => (activation = 'always')}
             >
               <span class="text-xs font-medium">Always available</span>
-              <span class="ml-auto text-[10px] text-muted">Every turn</span>
+              <span class="ml-auto text-[0.625rem] text-muted">Every turn</span>
             </button>
           </div>
         {:else if scope === 'harnesses'}
           <div class="mt-4 min-w-0 space-y-2">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
               Select harnesses
             </p>
             <div
@@ -447,7 +447,7 @@
               {#each availableHarnesses as harness (harness.id)}
                 <button
                   type="button"
-                  class="flex h-8 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-colors {selectedHarnessIds.includes(
+                  class="flex h-8 items-center gap-1.5 rounded-lg border px-2 text-[0.6875rem] font-medium transition-colors {selectedHarnessIds.includes(
                     harness.id
                   )
                     ? 'border-primary bg-primary/10 text-primary'
@@ -460,7 +460,7 @@
                 </button>
               {/each}
               {#if availableHarnesses.length === 0}
-                <p class="text-[10px] leading-relaxed text-dimmed">
+                <p class="text-[0.625rem] leading-relaxed text-dimmed">
                   No installed harnesses are available.
                 </p>
               {/if}
@@ -469,7 +469,7 @@
         {/if}
 
         {#if manager === 'cio'}
-          <p class="mt-4 text-[10px] leading-relaxed text-dimmed">{destinationSummary}</p>
+          <p class="mt-4 text-[0.625rem] leading-relaxed text-dimmed">{destinationSummary}</p>
         {/if}
         <button
           class="flex h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50 {manager ===
@@ -490,14 +490,14 @@
       <section class="rounded-xl border bg-surface p-4" aria-label="Skill facts">
         <div class="grid grid-cols-2 gap-x-4 gap-y-5">
           <div>
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Installs</p>
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Installs</p>
             <p class="mt-1 font-mono text-lg font-semibold tabular-nums">
               {(detail?.installs ?? entry.installs).toLocaleString()}
             </p>
           </div>
           <div>
             <p
-              class="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted"
+              class="flex items-center gap-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
             >
               <Star size={11} /> Stars
             </p>
@@ -509,7 +509,7 @@
           </div>
           <div>
             <p
-              class="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted"
+              class="flex items-center gap-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
             >
               <CalendarDays size={11} /> First seen
             </p>
@@ -517,7 +517,7 @@
           </div>
           <div>
             <p
-              class="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted"
+              class="flex items-center gap-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
             >
               <GitFork size={11} /> Repository
             </p>
@@ -537,7 +537,7 @@
 
         <div class="mt-5">
           <p
-            class="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted"
+            class="flex items-center gap-1.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
           >
             <ShieldCheck size={12} /> Security audits
           </p>
@@ -545,7 +545,7 @@
             <div class="mt-2 flex flex-wrap gap-1.5">
               {#each detail.audits as audit (audit.name)}
                 <span
-                  class="rounded-md px-1.5 py-1 text-[9px] font-semibold {auditClass(audit.status)}"
+                  class="rounded-md px-1.5 py-1 text-[0.5625rem] font-semibold {auditClass(audit.status)}"
                 >
                   {audit.name} · {audit.status}
                 </span>

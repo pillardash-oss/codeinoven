@@ -1190,7 +1190,7 @@
   {#snippet headerExtra()}
     {#if pendingAction && canDecide && (!assignmentMode || pendingAction === 'review')}
       <div class="flex flex-col gap-2 border-t px-3 py-2.5 md:flex-row md:items-end md:px-4">
-        <label class="min-w-0 flex-1 text-[11px] font-medium text-muted">
+        <label class="min-w-0 flex-1 text-[0.6875rem] font-medium text-muted">
           Additional notes
           <RichMarkdownEditor
             bind:this={decisionNotesEditor}
@@ -1231,11 +1231,11 @@
   {#snippet sidebarExtra()}
     <div class="shrink-0 border-t p-3">
       <div class="flex items-center justify-between gap-2">
-        <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+        <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
           Validation gaps
         </p>
         <span
-          class="text-[10px] tabular-nums {selectedSectionIssues.length
+          class="text-[0.625rem] tabular-nums {selectedSectionIssues.length
             ? 'text-danger'
             : 'text-dimmed'}"
         >
@@ -1249,11 +1249,11 @@
               <AlertCircle size={13} class="mt-0.5 shrink-0 text-danger" />
               <div class="min-w-0 flex-1">
                 <p class="text-xs leading-relaxed text-foreground">{issue.message}</p>
-                <p class="mt-0.5 truncate font-mono text-[9px] text-dimmed" title={issue.path}>
+                <p class="mt-0.5 truncate font-mono text-[0.5625rem] text-dimmed" title={issue.path}>
                   {issue.path}
                 </p>
                 <button
-                  class="mt-1.5 text-[10px] font-semibold text-danger hover:underline"
+                  class="mt-1.5 text-[0.625rem] font-semibold text-danger hover:underline"
                   title="Create an annotation asking the agent to address this validation gap"
                   onclick={(event: MouseEvent) => openValidationAnnotation(issue, event)}
                 >
@@ -1273,7 +1273,7 @@
           </div>
         {:else}
           <p
-            class="rounded-lg border border-dashed px-2.5 py-3 text-center text-[11px] text-dimmed"
+            class="rounded-lg border border-dashed px-2.5 py-3 text-center text-[0.6875rem] text-dimmed"
           >
             This section has no validation gaps.
           </p>
@@ -1308,8 +1308,8 @@
     {/each}
   {/snippet}
 
-  <div class="mx-auto max-w-4xl px-4 py-6 md:px-8 md:py-8">
-    <article class="space-y-12 text-sm leading-7">
+  <div class="px-6 py-6 md:px-14 md:py-8">
+    <article class="space-y-12 text-[0.8125rem] leading-8">
       <section id="spec-section-tldr" class="scroll-mt-5">
         <h2 class="text-xl font-semibold tracking-tight">TL;DR</h2>
         <EditableMarkdown
@@ -1358,7 +1358,7 @@
             />
           </button>
           <button
-            class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[11px] text-muted hover:bg-overlay hover:text-foreground"
+            class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] text-muted hover:bg-overlay hover:text-foreground"
             title="Add phase"
             onclick={addPhase}
           >
@@ -1371,7 +1371,7 @@
             <li class="rounded-xl border bg-surface p-4">
               <div class="flex items-start gap-3">
                 <span
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-on-primary"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-[0.6875rem] font-semibold text-on-primary"
                 >
                   {phaseIndex + 1}
                 </span>
@@ -1414,11 +1414,11 @@
               <div class="mt-3 grid gap-3 lg:grid-cols-2">
                 <div>
                   <div class="flex items-center justify-between">
-                    <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+                    <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
                       Checkpoints
                     </p>
                     <button
-                      class="text-[11px] text-accent hover:underline"
+                      class="text-[0.6875rem] text-accent hover:underline"
                       title="Add checkpoint"
                       onclick={() => addCheckpoint(phase.id)}>Add</button
                     >
@@ -1446,17 +1446,17 @@
                         />
                       </div>
                     {:else}
-                      <p class="text-[11px] text-dimmed">No checkpoints.</p>
+                      <p class="text-[0.6875rem] text-dimmed">No checkpoints.</p>
                     {/each}
                   </div>
                 </div>
                 <div>
                   <div class="flex items-center justify-between">
-                    <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+                    <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
                       File operations
                     </p>
                     <button
-                      class="text-[11px] text-accent hover:underline"
+                      class="text-[0.6875rem] text-accent hover:underline"
                       title="Add file operation"
                       onclick={() => addFileOperation(phase.id)}>Add</button
                     >
@@ -1466,7 +1466,7 @@
                       <div class="rounded-lg bg-elevated p-2 text-xs">
                         <div class="flex items-center gap-2">
                           <select
-                            class="rounded border bg-surface px-1.5 py-1 text-[11px]"
+                            class="rounded border bg-surface px-1.5 py-1 text-[0.6875rem]"
                             bind:value={operation.operation}
                             onchange={markDirty}
                             aria-label={`File operation ${operationIndex + 1} type`}
@@ -1496,7 +1496,7 @@
                         />
                       </div>
                     {:else}
-                      <p class="text-[11px] text-dimmed">No file operations.</p>
+                      <p class="text-[0.6875rem] text-dimmed">No file operations.</p>
                     {/each}
                   </div>
                 </div>
@@ -1676,7 +1676,7 @@
         <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Context</h2>
         <DropdownMenu.Root>
           <DropdownMenu.Trigger
-            class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[11px] hover:bg-overlay"
+            class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] hover:bg-overlay"
             title="Add context to this specification"
           >
             <Plus size={11} />
@@ -1713,7 +1713,7 @@
                   {/if}
                   <span class="min-w-0">
                     <span class="block text-xs font-medium">{item.label}</span>
-                    <span class="mt-0.5 block text-[10px] leading-tight text-dimmed">
+                    <span class="mt-0.5 block text-[0.625rem] leading-tight text-dimmed">
                       {item.description}
                     </span>
                   </span>
@@ -1733,7 +1733,7 @@
                   ? 'Add a rule or skill'
                   : 'Tag a project file'}
               </h3>
-              <p class="mt-0.5 text-[10px] text-dimmed">
+              <p class="mt-0.5 text-[0.625rem] text-dimmed">
                 The project-relative path will be included in review and implementation.
               </p>
             </div>
@@ -1802,7 +1802,7 @@
           <div class="flex items-center gap-2 rounded-lg border bg-surface px-3 py-2">
             <span class="min-w-0 flex-1">
               <span class="block truncate text-xs font-medium">{reference.label}</span>
-              <span class="block truncate text-[10px] text-dimmed"
+              <span class="block truncate text-[0.625rem] text-dimmed"
                 >{reference.type.replace('_', ' ')}{reference.path
                   ? ` · ${reference.path}`
                   : ''}</span
@@ -1835,7 +1835,7 @@
           <div class="mt-3 space-y-3">
             {#each decisionComments as comment (comment.id)}
               <div class="border-l-2 border-border pl-3">
-                <div class="mb-1 flex items-center gap-2 text-[10px] text-dimmed">
+                <div class="mb-1 flex items-center gap-2 text-[0.625rem] text-dimmed">
                   <span class="font-semibold uppercase tracking-wide text-muted">
                     {comment.action === 'review' ? 'Review' : 'Implement'}
                   </span>
@@ -1923,8 +1923,8 @@
           title="Open annotation"
           onclick={() => props.onOpen(annotation)}
         >
-          <span class="line-clamp-2 block text-xs leading-relaxed">{annotation.body}</span>
-          <span class="mt-1 block text-[10px] text-dimmed">{annotation.author}</span>
+          <span class="line-clamp-2 text-xs leading-relaxed">{annotation.body}</span>
+          <span class="mt-1 block text-[0.625rem] text-dimmed">{annotation.author}</span>
         </button>
       {/each}
     </div>
@@ -1956,7 +1956,7 @@
         />
       </button>
       <button
-        class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[11px] text-muted hover:bg-overlay"
+        class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] text-muted hover:bg-overlay"
         title={`Add ${props.title.toLowerCase()} item`}
         onclick={props.onAdd}
       >

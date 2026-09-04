@@ -142,6 +142,26 @@ Buttons should be familiar, compact, and action-oriented.
 
 Avoid arbitrary z-index values when Tailwind has a matching class. For example, use `z-10` instead of `z-[10]`.
 
+## Toast Notifications
+
+Toasts are the app's transient feedback surface. They are rendered by the shared `Toaster.svelte` (svelte-sonner) in the top-right corner and must never be replaced with ad-hoc popups, banners, or inline alerts for one-off feedback.
+
+- Never re-style toasts ad hoc in feature components. All toast theming lives in `src/renderer/lib/components/ui/Toaster.svelte`; calling `toast.success/warning/error/info` from anywhere must pick up the brand styling automatically.
+
+- Status is communicated by color first: each toast carries a status-tinted background wash, a status-tinted hairline border, a status-colored title, a tinted icon chip, and a solid status-colored left accent border. Success uses `--color-success`, warning `--color-warning`, error `--color-danger`, info `--color-info`. The color must read instantly, before the words do.
+
+- The accent is a real `border-left` on the toast, never a `::before`/absolutely-positioned pseudo-element — pseudo-element decorations detach and float during drag, dismissal, and scale transitions.
+
+- Toast layout is strictly row-based: icon and title share the header row (icon left, title immediately beside it), the description gets its own full-width row underneath, and all action buttons share the bottom row side by side. Nothing else sits side by side.
+
+- Action buttons render as a shared full-width row at the bottom of the toast, never beside the text. Error toasts always include a `Copy` action (`reportError` / `reportErrorWithDetails` in `src/renderer/lib/stores/app-errors.svelte.ts` copy the message plus details/stack to the clipboard); any additional action sits next to it on the same row.
+
+- Layout rules must win the cascade over svelte-sonner's internal `[data-styled='true']` selectors — match that specificity and use `!important` deliberately inside `Toaster.svelte` for structural properties.
+
+- Do not remove `richColors`; the brand theming intentionally replaces it. Keep the memory-proposal custom toast (`toast.custom(MemoryToastComponent)`) as the only custom-component toast.
+
+- Do not add toast preview/demo buttons in shipping UI. To tune toast styling, fire toasts temporarily during development, then remove the triggers before committing.
+
 ## Tables And Data Views
 
 Tables are the core of the app. Keep them powerful, compact, and stable.

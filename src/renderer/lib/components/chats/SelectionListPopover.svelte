@@ -21,7 +21,7 @@
   aria-label={`${references.length} attached ${references.length === 1 ? 'selection' : 'selections'}`}
 >
   <div class="flex items-center justify-between gap-1 px-2 pb-1 pt-1">
-    <span class="text-[11px] font-semibold text-muted">
+    <span class="text-[0.6875rem] font-semibold text-muted">
       {references.length} attached {references.length === 1 ? 'selection' : 'selections'}
     </span>
     {#if onRemoveAll}
@@ -41,7 +41,7 @@
       {@const number = referenceIndex + 1}
       <div class="flex items-start gap-2 rounded-lg px-2 py-1.5">
         <span
-          class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[10px] font-semibold text-accent tabular-nums"
+          class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[0.625rem] font-semibold text-accent tabular-nums"
           aria-hidden="true"
         >
           {number}

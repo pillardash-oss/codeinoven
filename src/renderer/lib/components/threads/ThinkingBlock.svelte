@@ -53,7 +53,7 @@
   >
     <Brain size={13} class="shrink-0 text-info/70" />
     <span class="shrink-0">Thinking</span>
-    <span class="tabular-nums text-[10px] text-dimmed">
+    <span class="tabular-nums text-[0.625rem] text-dimmed">
       {formatDuration(elapsed)}
     </span>
     {#if active}
@@ -74,7 +74,7 @@
       {/if}
       {#if part.summary?.trim()}
         <div class={part.text.trim() ? 'mt-3 border-t border-border/40 pt-3' : ''}>
-          <p class="mb-1 text-[10px] font-medium uppercase tracking-wide text-info/80">
+          <p class="mb-1 text-[0.625rem] font-medium uppercase tracking-wide text-info/80">
             Thinking summary
           </p>
           <MarkdownView text={part.summary} class="text-xs text-muted" {onCiteFile} />

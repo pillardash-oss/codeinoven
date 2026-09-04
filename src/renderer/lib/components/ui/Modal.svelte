@@ -133,7 +133,7 @@
 
         {#if footer}
           <div
-            class="flex shrink-0 items-center justify-end gap-2 border-t bg-surface px-6 py-4"
+            class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-6 py-4"
             data-modal-footer
           >
             {@render footer()}

@@ -152,8 +152,8 @@
     <ProjectIdentity
       {project}
       class="min-w-0 flex-1"
-      nameClass="text-[13px] text-foreground"
-      locationClass="text-[9px] text-dimmed"
+      nameClass="text-[0.8125rem] text-foreground"
+      locationClass="text-[0.5625rem] text-dimmed"
       {showLocation}
     />
   </button>

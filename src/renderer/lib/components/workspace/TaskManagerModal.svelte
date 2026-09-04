@@ -427,7 +427,7 @@
                   </p>
                   {#if process.ports.length > 0}
                     <span
-                      class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary"
+                      class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
                     >
                       :{process.ports[0]}
                       {#if process.ports.length > 1}
@@ -436,7 +436,7 @@
                     </span>
                   {/if}
                   <span
-                    class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted {process.scope ===
+                    class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted {process.scope ===
                     'app'
                       ? 'uppercase tracking-wide'
                       : ''}"
@@ -444,11 +444,11 @@
                     {process.scope === 'app' ? 'Shared' : 'Running'}
                   </span>
                 </div>
-                <p class="mt-1 truncate font-mono text-[10px] text-dimmed" title={process.command}>
+                <p class="mt-1 truncate font-mono text-[0.625rem] text-dimmed" title={process.command}>
                   {process.command}
                 </p>
                 <div
-                  class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-dimmed tabular-nums"
+                  class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.625rem] text-dimmed tabular-nums"
                 >
                   <span
                     class="inline-flex items-center gap-1 text-muted"

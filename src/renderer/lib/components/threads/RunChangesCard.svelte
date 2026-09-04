@@ -158,14 +158,14 @@
   {#if open}
     <div class="border-t border-border">
       {#if checkpoint.failure}
-        <p class="border-b border-border px-4 py-2 text-[10px] leading-relaxed text-danger">
+        <p class="border-b border-border px-4 py-2 text-[0.625rem] leading-relaxed text-danger">
           {checkpoint.failure}
         </p>
       {/if}
 
       {#if checkpoint.skippedFiles && checkpoint.skippedFiles.length > 0}
         <p
-          class="border-b border-border px-4 py-2 text-[10px] leading-relaxed text-dimmed"
+          class="border-b border-border px-4 py-2 text-[0.625rem] leading-relaxed text-dimmed"
           title={checkpoint.skippedFiles.join('\n')}
         >
           {checkpoint.skippedFiles.length}
@@ -175,7 +175,7 @@
       {/if}
 
       {#if checkpoint.changes.length === 0}
-        <p class="px-4 py-3 text-[11px] text-dimmed">No file changes detected.</p>
+        <p class="px-4 py-3 text-[0.6875rem] text-dimmed">No file changes detected.</p>
       {:else}
         <div>
           {#each visibleChanges as change (`${change.kind}:${change.path}`)}
@@ -196,7 +196,7 @@
                 {#snippet trigger()}
                   <button
                     type="button"
-                    class="flex min-h-9 min-w-0 flex-1 items-center gap-2 text-left font-mono text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                    class="flex min-h-9 min-w-0 flex-1 items-center gap-2 text-left font-mono text-[0.6875rem] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
                     title={`Reveal ${change.path} on the Changes tab`}
                     onclick={() => onRevealFile(change.path)}
                   >
@@ -215,9 +215,9 @@
                       {change.path}
                     </span>
                     {#if changeRolledBack}
-                      <span class="shrink-0 font-sans text-[9px] text-dimmed">restored</span>
+                      <span class="shrink-0 font-sans text-[0.5625rem] text-dimmed">restored</span>
                     {:else if change.binary}
-                      <span class="shrink-0 font-sans text-[9px] text-dimmed">binary</span>
+                      <span class="shrink-0 font-sans text-[0.5625rem] text-dimmed">binary</span>
                     {:else if added !== null || removed !== null}
                       <span class="flex shrink-0 gap-1 tabular-nums">
                         <span class="text-success">+{added ?? 0}</span>
@@ -243,7 +243,7 @@
         {#if hiddenCount > 0}
           <button
             type="button"
-            class="flex min-h-9 w-full items-center gap-1 border-t border-border bg-elevated px-4 text-[11px] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+            class="flex min-h-9 w-full items-center gap-1 border-t border-border bg-elevated px-4 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
             aria-expanded={showAll}
             onclick={() => (showAll = !showAll)}
           >

@@ -11,7 +11,22 @@ Website: [codeinoven.com](https://codeinoven.com) · [Support](SECURITY.md) · [
 
 ---
 
-![CodeInOven app interface](docs/media/app-screenshot.png)
+| ![CodeInOven app interface](docs/media/app-screenshot.png) |
+|---|
+| <sub>Thread view with working trace, approvals, and side actions</sub> |
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/engineering-toolbox.png" alt="Engineering Toolbox — pick the stages to run: Brainstorm, PRD, Spec, Assignment, Achievement, Auto Pilot"></td>
+    <td width="50%"><img src="docs/media/scopes-board.png" alt="Scopes board — organize threads into Pinned, Todo, Spec, and Done columns across project scopes"></td>
+  </tr>
+</table>
+<table>
+  <tr>
+    <td width="50%"><sub>Engineering Toolbox</sub></td>
+    <td width="50%"><sub>Scopes board</sub></td>
+  </tr>
+</table>
 
 ## What CodeInOven is for
 

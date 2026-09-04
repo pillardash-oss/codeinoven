@@ -77,14 +77,14 @@
       <Network size={16} class="shrink-0 text-primary" />
       <div class="min-w-0">
         <p class="truncate text-sm font-semibold text-foreground">Assignment is ready</p>
-        <p class="text-[11px] text-muted">
+        <p class="text-[0.6875rem] text-muted">
           Review assignment · Sr. Engineer execution graph · version {assignment.version}
         </p>
       </div>
     </div>
     <div class="flex shrink-0 items-center gap-2">
       <span
-        class="rounded-md bg-primary/10 px-2 py-1 text-[10px] font-semibold uppercase text-primary"
+        class="rounded-md bg-primary/10 px-2 py-1 text-[0.625rem] font-semibold uppercase text-primary"
       >
         {assignment.status}
       </span>

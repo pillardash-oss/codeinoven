@@ -76,7 +76,7 @@
           <DropdownMenu.Item
             disabled={item.disabled}
             class={[
-              'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors max-md:py-2.5',
+              'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[0.6875rem] outline-none transition-colors max-md:py-2.5',
               item.danger
                 ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
                 : 'text-foreground hover:bg-elevated focus:bg-elevated',

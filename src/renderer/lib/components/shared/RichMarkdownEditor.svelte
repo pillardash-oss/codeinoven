@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import {
     applyCodeFenceOnEnter,
+    applyEmptyPairCodeRule,
     applyMarkdownInputRule,
     formatRichSelection,
     insertMarkdownLineBreak,
@@ -587,6 +588,18 @@
     publishCaretText()
   }
 
+  /** Rewrites macOS smart-punctuation substitutions back to the literal
+   *  ASCII characters the user typed. A dev workspace needs real characters,
+   *  not typographic ones. */
+  function demoteSmartPunctuation(text: string): string {
+    return text
+      .replaceAll('…', '...')
+      .replaceAll(/[\u2018\u2019\u201b]/gu, "'")
+      .replaceAll(/[\u201c\u201d\u201f]/gu, '"')
+      .replaceAll('\u2013', '-')
+      .replaceAll('\u2014', '--')
+  }
+
   function handleBeforeInput(event: Event): void {
     const inputEvent = event as InputEvent
     if (inputEvent.inputType === 'historyUndo' || inputEvent.inputType === 'historyRedo') {
@@ -595,7 +608,44 @@
       else redo()
       return
     }
+    // macOS smart substitution rewrites what the user typed before it reaches
+    // the editable surface. Plain typing arrives as `insertText` with `data`,
+    // but OS-level text replacements arrive as `insertReplacementText` where
+    // `data` is null and the substituted text rides in `dataTransfer`. Catch
+    // both and insert the raw literal sequence instead.
+    const incomingText =
+      inputEvent.inputType === 'insertText'
+        ? inputEvent.data
+        : inputEvent.inputType === 'insertReplacementText'
+          ? (inputEvent.dataTransfer?.getData('text/plain') ?? null)
+          : null
+    if (incomingText !== null) {
+      const text = demoteSmartPunctuation(incomingText)
+      if (text !== incomingText) {
+        insertRawAtSelection(text)
+        return
+      }
+    }
     pendingHistory = captureHistoryEntry()
+  }
+
+  /** Inserts `text` verbatim at the caret (replacing any selection), recording
+   *  it in undo history. Used to override smart substitution. */
+  function insertRawAtSelection(text: string): void {
+    const historyEntry = captureHistoryEntry()
+    const selection = window.getSelection()
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0)
+      range.deleteContents()
+      const node = document.createTextNode(text)
+      range.insertNode(node)
+      range.setStartAfter(node)
+      range.collapse(true)
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
+    emitEditorValue()
+    commitHistory(historyEntry, 'insertText')
   }
 
   const INLINE_BOUNDARY_TAGS = new Set(['CODE', 'STRONG', 'B', 'EM', 'I', 'DEL', 'S', 'STRIKE'])
@@ -693,6 +743,27 @@
       event.preventDefault()
       redo()
       return
+    }
+
+    // A backtick typed at the end of an inline code span closes it: the caret
+    // moves after the span instead of the backtick nesting inside the code.
+    // Only for a collapsed caret sitting at the span's very end — mid-span and
+    // multi-selection typing stays literal.
+    if (event.key === '`') {
+      const selection = window.getSelection()
+      const codeEl = selection?.anchorNode?.parentElement?.closest?.('code')
+      if (
+        selection?.isCollapsed &&
+        codeEl &&
+        codeEl.parentElement?.tagName !== 'PRE' &&
+        editor.contains(codeEl) &&
+        isCursorAtBoundary(codeEl, false)
+      ) {
+        event.preventDefault()
+        moveCaretOutOfInlineElement(false, codeEl)
+        publishCaretText()
+        return
+      }
     }
 
     if (modifier && (key === 'b' || key === 'i' || key === 'e')) {
@@ -983,6 +1054,9 @@
     const pasteEndsAtEditorEnd = isCursorAtBoundary(editor, false)
     event.preventDefault()
     insertPlainText(editor, text)
+    // Pasting content right after a fresh `` pair opens an inline code span,
+    // exactly like typing the first character there would.
+    applyEmptyPairCodeRule(editor)
     const insideCodeBlock = Boolean(
       window.getSelection()?.anchorNode?.parentElement?.closest?.('[data-editor-codeblock]')
     )
@@ -1095,6 +1169,7 @@
     aria-disabled={disabled}
     tabindex={disabled ? -1 : 0}
     spellcheck="true"
+    {...{ autocorrect: 'false' }}
     onbeforeinput={handleBeforeInput}
     oninput={handleInput}
     onkeydown={handleKeydown}

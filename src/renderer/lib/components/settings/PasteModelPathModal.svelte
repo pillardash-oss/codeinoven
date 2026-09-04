@@ -169,7 +169,7 @@
     </label>
 
     {#if showNormalizedHint}
-      <p class="flex items-center gap-1.5 text-[11px] text-dimmed">
+      <p class="flex items-center gap-1.5 text-[0.6875rem] text-dimmed">
         <Info size={12} aria-hidden="true" />
         Trimmed surrounding quotes and whitespace before validation.
       </p>
@@ -217,31 +217,31 @@
 
     {#if hasBreakup && liveParsed}
       <div class="rounded-xl border bg-surface p-3">
-        <p class="mb-2 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-muted">
+        <p class="mb-2 flex items-center justify-between text-[0.6875rem] font-semibold uppercase tracking-wide text-muted">
           <span>Detected model</span>
           {#if liveParsed.confidence === 'high'}
-            <span class="rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">High confidence</span>
+            <span class="rounded-full bg-success/10 px-2 py-0.5 text-[0.625rem] font-medium text-success">High confidence</span>
           {:else if liveParsed.confidence === 'medium'}
-            <span class="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600">Medium confidence</span>
+            <span class="rounded-full bg-amber-500/10 px-2 py-0.5 text-[0.625rem] font-medium text-amber-600">Medium confidence</span>
           {:else}
-            <span class="rounded-full bg-surface-hover px-2 py-0.5 text-[10px] font-medium text-dimmed">Low confidence</span>
+            <span class="rounded-full bg-surface-hover px-2 py-0.5 text-[0.625rem] font-medium text-dimmed">Low confidence</span>
           {/if}
         </p>
         <p class="text-sm font-semibold leading-none" title={liveParsed.baseWithoutExtension}>{liveParsed.displayName}</p>
-        <p class="mt-1 truncate font-mono text-[11px] text-dimmed" title={liveParsed.rawBasename}>{liveParsed.rawBasename}</p>
+        <p class="mt-1 truncate font-mono text-[0.6875rem] text-dimmed" title={liveParsed.rawBasename}>{liveParsed.rawBasename}</p>
         <div class="mt-2 flex flex-wrap gap-1.5">
           {#each liveParsed.details as d (d.label)}
-            <span class="inline-flex items-center gap-1 rounded-full border bg-elevated px-2 py-0.5 text-[11px]">
+            <span class="inline-flex items-center gap-1 rounded-full border bg-elevated px-2 py-0.5 text-[0.6875rem]">
               <span class="font-medium text-muted">{d.label}:</span>
               <span class="font-semibold">{d.value}</span>
             </span>
           {/each}
         </div>
         {#if liveParsed.tokens.length}
-          <p class="mt-2 flex flex-wrap items-center gap-1 text-[11px] text-dimmed">
-            <span class="text-[10px] uppercase tracking-wide">Breakup:</span>
+          <p class="mt-2 flex flex-wrap items-center gap-1 text-[0.6875rem] text-dimmed">
+            <span class="text-[0.625rem] uppercase tracking-wide">Breakup:</span>
             {#each liveParsed.tokens as tok, i (i)}
-              <code class="rounded bg-elevated px-1 py-0.5 font-mono text-[11px]">{tok}</code>
+              <code class="rounded bg-elevated px-1 py-0.5 font-mono text-[0.6875rem]">{tok}</code>
               {#if i < liveParsed.tokens.length - 1}<span class="opacity-40">·</span>{/if}
             {/each}
           </p>
@@ -250,7 +250,7 @@
     {/if}
 
     {#if validation !== null && !validation.ok && validation.code === 'unsupported-format'}
-      <p class="text-[11px] text-dimmed">
+      <p class="text-[0.6875rem] text-dimmed">
         Tip: use an absolute path. On macOS/Linux use <code class="rounded bg-elevated px-1">/path/to/model</code>,
         on Windows use <code class="rounded bg-elevated px-1">C:\path\to\model</code>. Case is
         platform-dependent.
@@ -258,13 +258,13 @@
     {/if}
 
     {#if validation !== null && validation.code === 'permission-denied'}
-      <p class="text-[11px] text-dimmed">
+      <p class="text-[0.6875rem] text-dimmed">
         Check file permissions or try a different location.
       </p>
     {/if}
 
     {#if validation !== null && validation.code === 'not-found'}
-      <p class="text-[11px] text-dimmed">
+      <p class="text-[0.6875rem] text-dimmed">
         Verify the path exists and is accessible.
       </p>
     {/if}

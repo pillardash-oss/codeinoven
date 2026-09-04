@@ -184,9 +184,6 @@
     >
       <div class="px-2.5 pb-2 pt-1">
         <p class="text-xs font-semibold text-foreground">Engineering Toolbox</p>
-        <p class="mt-0.5 text-[11px] leading-4 text-muted">
-          Select the stages to run. Assignment and Achievement run after an approved Spec.
-        </p>
       </div>
       {#each rows as row (row.stage)}
         <Switch
@@ -200,7 +197,7 @@
         >
           <span class="min-w-0 flex-1 pr-3">
             <span class="block text-xs font-medium text-foreground">{row.label}</span>
-            <span class="mt-0.5 block text-[11px] leading-4 text-muted">{row.description}</span>
+            <span class="mt-0.5 block text-[0.6875rem] leading-4 text-muted">{row.description}</span>
           </span>
         </Switch>
       {/each}
@@ -216,7 +213,7 @@
       >
         <span class="min-w-0 flex-1 pr-3">
           <span class="block text-xs font-medium text-foreground">Auto Pilot</span>
-          <span class="mt-0.5 block text-[11px] leading-4 text-muted">
+          <span class="mt-0.5 block text-[0.6875rem] leading-4 text-muted">
             Brainstorm through Achievement on full autonomy, reworking until complete.
           </span>
         </span>

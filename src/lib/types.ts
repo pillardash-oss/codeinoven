@@ -2400,6 +2400,8 @@ export interface AgentQuestion {
   multiple?: boolean
   /** Allow the user to type a custom answer (default: true). */
   custom?: boolean
+  /** The question asks the user to share files; offer composer-style file attachment. */
+  fileRequest?: boolean
   /** The user's submitted answer text. */
   answer?: string
   /** Raw tool input payload, preserved for debugging schema drift. */
@@ -3885,6 +3887,14 @@ export interface MemoryImportPreview {
 
 export interface AppConfig {
   theme: ThemePreference
+  /** Font family id used across the app UI. */
+  fontFamily: string
+  /** Base font size in px for the app UI; scales all rem-based text. */
+  appFontSize: number
+  /** Base font weight for app text (Light 300 / Regular 400 / Medium 500). */
+  fontWeight: number
+  /** UI zoom level (Electron zoomFactor). 1 = 100%. */
+  zoomLevel: number
   /** True after the user finishes or dismisses the first-run setup guide. */
   onboardingCompleted: boolean
   threadLimit: number
@@ -3951,6 +3961,10 @@ export type AppConfigPatch = Partial<
   Pick<
     AppConfig,
     | 'theme'
+    | 'fontFamily'
+    | 'appFontSize'
+    | 'fontWeight'
+    | 'zoomLevel'
     | 'onboardingCompleted'
     | 'threadLimit'
     | 'questionTimeoutMs'

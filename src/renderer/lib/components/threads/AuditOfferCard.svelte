@@ -75,7 +75,7 @@
         </span>
         before marking it complete?
       </p>
-      <p class="mt-1 text-[11px] text-dimmed">
+      <p class="mt-1 text-[0.6875rem] text-dimmed">
         {selected.provider?.name ?? settings.providerId} / {selected.model?.name ??
           settings.modelId}
       </p>

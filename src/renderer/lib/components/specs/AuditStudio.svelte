@@ -771,7 +771,7 @@
   {#snippet headerExtra()}
     {#if reviewOpen && workflowActionsVisible}
       <div class="flex flex-col gap-2 border-t px-3 py-2.5 md:flex-row md:items-end md:px-4">
-        <label class="min-w-0 flex-1 text-[11px] font-medium text-muted">
+        <label class="min-w-0 flex-1 text-[0.6875rem] font-medium text-muted">
           Additional instructions for the primary agent
           <RichMarkdownEditor
             bind:this={reviewNotesEditor}
@@ -815,14 +815,14 @@
         )}
         {#if severityFindings.length}
           <div class="py-0.5">
-            <div class="flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold capitalize">
+            <div class="flex items-center gap-1.5 px-2 py-1 text-[0.625rem] font-semibold capitalize">
               <span class="h-1.5 w-1.5 rounded-full {severityDotClass(severity)}"></span>
               <span class={severityTextClass(severity)}>{severity}</span>
               <span class="ml-auto text-dimmed">{severityFindings.length}</span>
             </div>
             {#each severityFindings as finding (finding.id)}
               <button
-                class="flex w-full items-baseline gap-1.5 rounded-md px-2 py-1 text-left text-[10px] text-muted hover:bg-elevated hover:text-foreground"
+                class="flex w-full items-baseline gap-1.5 rounded-md px-2 py-1 text-left text-[0.625rem] text-muted hover:bg-elevated hover:text-foreground"
                 title={finding.title}
                 onclick={() => void scrollToFinding(finding.id)}
               >
@@ -864,7 +864,7 @@
     {/each}
   {/snippet}
 
-      <article class="mx-auto max-w-4xl space-y-12 px-4 py-6 text-sm leading-7 md:px-8 md:py-8">
+      <article class="space-y-12 px-6 py-6 text-sm leading-7 md:px-14 md:py-8">
         {@render textSection('executive_summary', 'Executive summary', 'executiveSummary')}
 
         <section id="audit-section-findings" data-audit-section="findings" class="scroll-mt-5">
@@ -1018,12 +1018,12 @@
                             {check.kind}
                           </span>
                           <span
-                            class="rounded-md bg-raised px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted"
+                            class="rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
                           >
                             {check.status.replace('_', ' ')}
                           </span>
                           {#if check.exitCode !== undefined}
-                            <span class="text-[10px] tabular-nums text-dimmed">
+                            <span class="text-[0.625rem] tabular-nums text-dimmed">
                               Exit {check.exitCode}
                             </span>
                           {/if}
@@ -1037,7 +1037,7 @@
                         {/if}
                         <p class="text-xs leading-5 text-muted">{check.evidence}</p>
                         {#if check.files.length}
-                          <p class="break-all text-[10px] leading-4 text-dimmed">
+                          <p class="break-all text-[0.625rem] leading-4 text-dimmed">
                             {check.files.join(', ')}
                           </p>
                         {/if}
@@ -1188,8 +1188,8 @@
           title="Open annotation"
           onclick={() => void props.onOpen(annotation)}
         >
-          <span class="line-clamp-2 block text-xs leading-relaxed">{annotation.body}</span>
-          <span class="mt-1 block text-[10px] text-dimmed">{annotation.author}</span>
+          <span class="line-clamp-2 text-xs leading-relaxed">{annotation.body}</span>
+          <span class="mt-1 block text-[0.625rem] text-dimmed">{annotation.author}</span>
         </button>
       {/each}
     </div>

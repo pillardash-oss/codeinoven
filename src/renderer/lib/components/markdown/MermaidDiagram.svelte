@@ -167,7 +167,7 @@
     {/if}
 
     {#if rendering && svg}
-      <span class="absolute right-3 bottom-3 text-[10px] text-dimmed" role="status">
+      <span class="absolute right-3 bottom-3 text-[0.625rem] text-dimmed" role="status">
         Updating…
       </span>
     {/if}
@@ -186,7 +186,7 @@
         >
           <ZoomOut size={14} />
         </button>
-        <span class="w-10 text-center font-mono text-[10px] text-dimmed">
+        <span class="w-10 text-center font-mono text-[0.625rem] text-dimmed">
           {Math.round(panZoom.zoom * 100)}%
         </span>
         <button
@@ -220,7 +220,7 @@
   {@attach renderDiagram(code.trim(), retryKey)}
 >
   <div class="flex h-8 items-center justify-between border-b px-2">
-    <span class="px-1 font-mono text-[10px] uppercase tracking-wide text-dimmed">Mermaid</span>
+    <span class="px-1 font-mono text-[0.625rem] uppercase tracking-wide text-dimmed">Mermaid</span>
     <div class="flex items-center gap-0.5">
       {#if onAnnotate}
         <button
@@ -278,14 +278,14 @@
         <div class="min-w-0">
           <p>{error}</p>
           {#if errorDetail}
-            <p class="mt-0.5 break-words font-mono text-[10px] text-danger/70" title={errorDetail}>
+            <p class="mt-0.5 break-words font-mono text-[0.625rem] text-danger/70" title={errorDetail}>
               {errorDetail.slice(0, 240)}{errorDetail.length > 240 ? '…' : ''}
             </p>
           {/if}
         </div>
         <button
           type="button"
-          class="shrink-0 rounded-md border border-danger/30 bg-danger/10 px-2 py-1 text-[10px] font-semibold text-danger transition-colors hover:bg-danger/20"
+          class="shrink-0 rounded-md border border-danger/30 bg-danger/10 px-2 py-1 text-[0.625rem] font-semibold text-danger transition-colors hover:bg-danger/20"
           title="Try rendering this Mermaid diagram again"
           aria-label="Try rendering this Mermaid diagram again"
           onclick={() => (retryKey += 1)}

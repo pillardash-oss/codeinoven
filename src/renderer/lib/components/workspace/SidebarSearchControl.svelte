@@ -67,7 +67,7 @@
         <input
           {@attach focusSearchInput}
           type="text"
-          class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[11px] text-foreground outline-none placeholder:text-dimmed"
+          class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
           {placeholder}
           value={query}
           oninput={(e: Event) => onQueryChange((e.currentTarget as HTMLInputElement).value)}

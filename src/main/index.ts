@@ -1106,6 +1106,19 @@ function createWindow(): BrowserWindow {
   }
   windowStateService.attach(window)
 
+  // Restore the persisted UI zoom level before the first paint of the page so
+  // the app never flashes at 100% for users with a custom zoom setting.
+  void storage
+    .getConfig()
+    .then((cfg) => {
+      if (!window.isDestroyed() && cfg.zoomLevel !== 1) {
+        window.webContents.setZoomFactor(cfg.zoomLevel)
+      }
+    })
+    .catch(() => {
+      // defaults already applied
+    })
+
   window.webContents.on('before-input-event', (event, input) => {
     // Cmd/Ctrl+W is handled by the renderer ("close the active surface": modal,
     // settings page, or thread). Prevent the default here so the macOS

@@ -26,7 +26,7 @@
       {:else}
         <button
           type="button"
-          class="flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-left text-[15px] transition-colors active:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 {item.danger
+          class="flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-left text-[0.9375rem] transition-colors active:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 {item.danger
             ? 'text-danger'
             : 'text-foreground'}"
           disabled={item.disabled}

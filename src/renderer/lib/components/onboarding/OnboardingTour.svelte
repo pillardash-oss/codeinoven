@@ -298,7 +298,7 @@
       >
         <div class="flex items-start justify-between gap-4">
           <div>
-            <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
+            <p class="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-primary">
               {activeSpotlight.eyebrow}
             </p>
             <h2 id="onboarding-spotlight-title" class="mt-1 text-base font-semibold">
@@ -321,17 +321,17 @@
           <div class="mt-4 grid gap-2">
             <div class="flex items-center justify-between rounded-lg border bg-elevated px-3 py-2">
               <span class="text-xs text-muted">Send a message</span>
-              <kbd class="rounded-md border bg-surface px-2 py-1 text-[11px] font-medium"
+              <kbd class="rounded-md border bg-surface px-2 py-1 text-[0.6875rem] font-medium"
                 >{sendShortcut}</kbd
               >
             </div>
             <div class="flex items-center justify-between rounded-lg border bg-elevated px-3 py-2">
               <span class="text-xs text-muted">Steer a working agent now</span>
-              <kbd class="rounded-md border bg-surface px-2 py-1 text-[11px] font-medium"
+              <kbd class="rounded-md border bg-surface px-2 py-1 text-[0.6875rem] font-medium"
                 >{steerShortcut}</kbd
               >
             </div>
-            <p class="text-[11px] leading-relaxed text-dimmed">
+            <p class="text-[0.6875rem] leading-relaxed text-dimmed">
               Enter starts a new line. While an agent is busy, Send queues your message and Steer
               delivers it immediately.
             </p>
@@ -429,7 +429,7 @@
             <h3 class="text-base font-semibold">Pi</h3>
             {#if piReady}
               <span
-                class="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success"
+                class="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[0.625rem] font-medium text-success"
               >
                 <Check size={11} /> Ready
               </span>

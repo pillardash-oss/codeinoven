@@ -67,10 +67,10 @@
     {#if !compactViewport.matches}
       <PopoverDragHandle title="Move selection comment" />
     {/if}
-    <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">{headerLabel}</p>
+    <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">{headerLabel}</p>
   </div>
   <blockquote
-    class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
+    class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[0.6875rem] leading-relaxed text-muted"
   >
     “{quote}”
   </blockquote>

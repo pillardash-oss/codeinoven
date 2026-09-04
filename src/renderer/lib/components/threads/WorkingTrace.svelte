@@ -378,7 +378,7 @@
       <span class="ml-auto flex items-center gap-1.5">
         {#if hasCompaction}
           <span
-            class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[9px] text-info"
+            class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info"
             title="This trace includes compacted context. Forking from here restores the compaction summary."
             aria-label="Compacted context. Forking from here restores the compaction summary."
           >
@@ -390,7 +390,7 @@
           {#if coarsePointer}
             <button
               type="button"
-              class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-1 text-[9px] text-info transition-colors active:bg-info/20"
+              class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-1 text-[0.5625rem] text-info transition-colors active:bg-info/20"
               aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
               title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
               onclick={(e: MouseEvent) => {
@@ -409,7 +409,7 @@
           {:else}
             <DropdownMenu.Root>
               <DropdownMenu.Trigger
-                class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[9px] text-info transition-colors hover:bg-info/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-info/40"
+                class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info transition-colors hover:bg-info/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-info/40"
                 aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
                 title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
                 onclick={(e: MouseEvent) => {
@@ -434,12 +434,12 @@
                 >
                   <div class="flex items-center gap-1.5 px-2.5 py-1.5">
                     <Bot size={12} class="shrink-0 text-info" />
-                    <span class="text-[11px] font-semibold text-foreground">
+                    <span class="text-[0.6875rem] font-semibold text-foreground">
                       {subagentCount}
                       {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
                     </span>
                     {#if activeSubagentCount > 0}
-                      <span class="text-[10px] text-dimmed">
+                      <span class="text-[0.625rem] text-dimmed">
                         · {activeSubagentCount} running
                       </span>
                     {/if}
@@ -461,27 +461,27 @@
                         {:else}
                           <Clock size={13} class="shrink-0 text-dimmed" />
                         {/if}
-                        <span class="shrink-0 text-[11px] font-semibold text-foreground">
+                        <span class="shrink-0 text-[0.6875rem] font-semibold text-foreground">
                           {part.activity.agent || 'Sub-agent'}
                         </span>
-                        <span class="min-w-0 flex-1 truncate text-[11px] text-muted">
+                        <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted">
                           {part.activity.description}
                         </span>
                         {#if part.activity.background}
                           <span
-                            class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[9px] text-dimmed"
+                            class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.5625rem] text-dimmed"
                           >
                             <Layers3 size={9} />
                             Background
                           </span>
                         {/if}
                         {#if part.activity.time?.start}
-                          <span class="shrink-0 tabular-nums text-[10px] text-dimmed">
+                          <span class="shrink-0 tabular-nums text-[0.625rem] text-dimmed">
                             {formatDuration(subagentElapsed(part))}
                           </span>
                         {/if}
                         <span
-                          class="shrink-0 text-[10px] {status === 'error'
+                          class="shrink-0 text-[0.625rem] {status === 'error'
                             ? 'text-danger'
                             : status === 'running'
                               ? 'text-info'
@@ -531,14 +531,14 @@
           </div>
         {:else if part.type === 'compaction-summary'}
           <div class="rounded-lg border border-border bg-elevated px-3 py-2">
-            <p class="mb-1 text-[11px] font-medium text-foreground">Compaction summary</p>
+            <p class="mb-1 text-[0.6875rem] font-medium text-foreground">Compaction summary</p>
             <div class="text-sm text-muted">
               <MarkdownView text={part.text} {onCiteFile} />
             </div>
           </div>
         {:else if part.type === 'step-finish'}
           {#if part.reason}
-            <span class="text-[10px] text-dimmed">Step complete · {part.reason}</span>
+            <span class="text-[0.625rem] text-dimmed">Step complete · {part.reason}</span>
           {/if}
         {:else if part.type === 'compaction'}
           <details class="rounded-lg border border-border bg-elevated">
@@ -552,19 +552,19 @@
               {/if}
               <div class="min-w-0">
                 <p
-                  class="flex flex-wrap items-center gap-1.5 text-[11px] font-medium text-foreground"
+                  class="flex flex-wrap items-center gap-1.5 text-[0.6875rem] font-medium text-foreground"
                 >
                   {part.auto ? 'Automatic compaction' : 'Compact Work'}
                   {#if !part.summary && !busy}
                     <span
-                      class="rounded-md bg-warning/10 px-1.5 py-0.5 text-[9px] font-normal text-warning"
+                      class="rounded-md bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-normal text-warning"
                       title="The harness completed compaction without producing a summary."
                     >
                       harness returned nothing
                     </span>
                   {/if}
                 </p>
-                <p class="text-[10px] text-dimmed">
+                <p class="text-[0.625rem] text-dimmed">
                   {part.summary
                     ? 'Earlier work summarized'
                     : part.overflow
@@ -580,7 +580,7 @@
             {/if}
           </details>
         {:else if part.type === 'file'}
-          <div class="flex items-center gap-1.5 text-[10px] text-dimmed">
+          <div class="flex items-center gap-1.5 text-[0.625rem] text-dimmed">
             {#if isImageMime(part.mime)}
               <img
                 src={imageUrls.getUrl(part.url)}
@@ -605,11 +605,11 @@
           {#if rehydrated}
             <span class="flex min-w-0 shrink items-center gap-2">
               <RefreshCw size={11} class="shrink-0 text-info" />
-              <span class="shrink-0 text-[10px] text-info/80">
+              <span class="shrink-0 text-[0.625rem] text-info/80">
                 Showing last saved activity · live run not confirmed
               </span>
               {#if effectiveStartTime}
-                <span class="shrink-0 tabular-nums text-[10px] text-info/80">
+                <span class="shrink-0 tabular-nums text-[0.625rem] text-info/80">
                   · {formatDuration(elapsed)}
                 </span>
               {/if}
@@ -617,9 +617,9 @@
           {:else}
             <span class="flex min-w-0 shrink items-center gap-2">
               <Loader2 size={11} class="shrink-0 animate-spin text-info" />
-              <span class="shrink-0 text-[10px] text-info/80">Agent working…</span>
+              <span class="shrink-0 text-[0.625rem] text-info/80">Agent working…</span>
               {#if effectiveStartTime}
-                <span class="shrink-0 tabular-nums text-[10px] text-info/80">
+                <span class="shrink-0 tabular-nums text-[0.625rem] text-info/80">
                   · {formatDuration(elapsed)}
                 </span>
               {/if}
@@ -627,7 +627,7 @@
           {/if}
           {#if modelLabel}
             <span
-              class="flex min-w-0 items-center gap-1.5 text-[10px] text-dimmed max-sm:basis-full max-sm:pl-[18px] max-sm:text-[9px] sm:ml-auto"
+              class="flex min-w-0 items-center gap-1.5 text-[0.625rem] text-dimmed max-sm:basis-full max-sm:pl-[18px] max-sm:text-[0.5625rem] sm:ml-auto"
             >
               {#if harnessId}
                 <span class="flex shrink-0 items-center gap-1">
@@ -655,7 +655,7 @@
               {/if}
               {#if thinkingLevel}
                 <span
-                  class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                  class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] capitalize text-muted"
                   title={`Thinking level: ${thinkingLevel}`}
                   aria-label={`Thinking level: ${thinkingLevel}`}
                 >

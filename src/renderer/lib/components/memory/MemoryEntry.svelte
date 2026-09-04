@@ -95,7 +95,7 @@
       onclick={() => (expanded = !expanded)}
     >
       <span
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-bold {getPriorityColor(
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[0.625rem] font-bold {getPriorityColor(
           entry.priority
         )} border"
       >
@@ -106,13 +106,13 @@
       </span>
       {#if entry.source === 'auto-detected'}
         <span
-          class="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent"
+          class="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-accent"
         >
           Auto
         </span>
       {/if}
       {#if entry.frequency > 1}
-        <span class="shrink-0 flex items-center gap-0.5 text-[10px] text-dimmed">
+        <span class="shrink-0 flex items-center gap-0.5 text-[0.625rem] text-dimmed">
           <Zap size={10} />
           {entry.frequency}x
         </span>
@@ -238,7 +238,7 @@
         <div class="rounded-lg border border-primary/20 bg-primary/5 p-3">
           <div class="mb-2">
             <p class="text-xs font-medium text-foreground">Models this memory applies to</p>
-            <p class="mt-0.5 text-[11px] text-muted">
+            <p class="mt-0.5 text-[0.6875rem] text-muted">
               Select one or more models. This memory is injected only when one of them is active.
             </p>
           </div>
@@ -255,14 +255,14 @@
             onSelectMultiple={(modelKeys) => onUpdate(index, 'modelKeys', modelKeys)}
           />
           {#if (entry.modelKeys?.length ?? 0) === 0}
-            <p class="mt-2 text-[11px] text-danger" role="alert">
+            <p class="mt-2 text-[0.6875rem] text-danger" role="alert">
               Choose at least one model before saving this entry.
             </p>
           {/if}
         </div>
       {/if}
 
-      <div class="flex items-center gap-4 text-[11px] text-dimmed">
+      <div class="flex items-center gap-4 text-[0.6875rem] text-dimmed">
         <span class="flex items-center gap-1">
           <Clock size={10} />
           Updated {new Date(entry.updatedAt).toLocaleDateString()}

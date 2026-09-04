@@ -699,6 +699,38 @@ function insertInlineCode(root: HTMLElement, content: string, caretInsideCode: b
   selection.addRange(range)
 }
 
+/**
+ * A non-backtick character landing right after a fresh double backtick (``x)
+ * turns ``x into an inline code span with the caret inside — so typing or
+ * pasting content between the backticks "opens" the span, while the bare pair
+ * `` and the triple ``` (a fence) stay literal.
+ */
+export function applyEmptyPairCodeRule(root: HTMLElement): boolean {
+  const selection = selectionInside(root)
+  if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
+  if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return false
+
+  const textNode = selection.anchorNode
+  const endOffset = selection.anchorOffset
+  const prefixText = textNode.data.slice(0, endOffset)
+  const pairContent = prefixText.match(/``([^`\n]+)$/)
+  if (!pairContent) return false
+  // A pair that is itself preceded by a backtick is the tail of ``` (or more)
+  // — that is a code fence being typed, never an inline span.
+  const pairStart = endOffset - pairContent[0].length
+  if (pairStart > 0 && prefixText[pairStart - 1] === '`') return false
+
+  const range = document.createRange()
+  range.setStart(textNode, endOffset - pairContent[0].length)
+  range.setEnd(textNode, endOffset)
+  if (window.getSelection()) {
+    window.getSelection()?.removeAllRanges()
+    window.getSelection()?.addRange(range)
+  }
+  insertInlineCode(root, pairContent[1] ?? '', true)
+  return true
+}
+
 function applyInlineRule(root: HTMLElement): boolean {
   const selection = selectionInside(root)
   if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
@@ -711,34 +743,22 @@ function applyInlineRule(root: HTMLElement): boolean {
   const prefix = textNode.data.slice(0, endOffset)
   const suffix = textNode.data.slice(endOffset)
 
-  // A block whose text is a ``` fence candidate (```lang, or ```…``` /
-  // ```lang\n…``` for the tag-end-then-open flow) belongs to the Enter-triggered
-  // fence rule — inline rules must never eat its backticks while it is typed.
+  // A block whose view is a ``` fence candidate (```lang, or ```…``` across
+  // its own text and following sibling blocks for the tag-end-then-open flow)
+  // belongs to the Enter-triggered fence rule — inline rules must never eat
+  // its backticks while it is typed.
   const fenceBlock = currentBlock(root, selection.anchorNode)
-  if (
-    fenceBlock &&
-    parseFenceBlockText(blockTextWithBreaks(fenceBlock).replace(/[\u200b\u00a0\s]+$/g, ''))
-  ) {
-    return false
+  if (fenceBlock) {
+    const candidate = collectFenceCandidate(root, fenceBlock)
+    if (candidate && parseFenceCandidateText(candidate.text)) return false
   }
 
-  // Two backticks typed back-to-back are an empty `` `` `` pair: turn them into
-  // an empty inline code span with the caret inside so content can be typed
-  // between the delimiters instead of the pair staying dead literal backticks.
-  // Skipped while a fence is being typed: three backticks (or a trailing triple
-  // after the caret) mean the user is building a code block, not an empty span.
-  if (prefix.endsWith('``') && !prefix.endsWith('```') && !suffix.includes('```')) {
-    const range = document.createRange()
-    range.setStart(textNode, endOffset - 2)
-    range.setEnd(textNode, endOffset)
-    const selection = window.getSelection()
-    if (selection) {
-      selection.removeAllRanges()
-      selection.addRange(range)
-    }
-    insertInlineCode(root, '', true)
-    return true
-  }
+  // A non-backtick character typed (or pasted) right after a fresh double
+  // backtick starts an inline code span with the caret inside. The bare pair
+  // `` stays literal, and a third backtick never triggers — that is a code
+  // fence. Skipped while a fence is being built: a trailing triple after the
+  // caret means the closing ``` of the tag-end-then-open flow, not content.
+  if (!suffix.includes('```') && applyEmptyPairCodeRule(root)) return true
 
   // Opening-backtick-last flow: the user tagged the end of a run with a backtick
   // first, moved the caret before the run, and now types the opening backtick.
@@ -814,6 +834,9 @@ function createCodeBlockElement(language: string): HTMLElement {
   langSpan.contentEditable = 'true'
   langSpan.role = 'textbox'
   langSpan.ariaLabel = 'Language'
+  // Chromium's macOS autocorrect mangles punctuation in editable fields
+  // (".." -> ellipsis, "??" -> U+2047) — language names must stay literal.
+  langSpan.setAttribute('autocorrect', 'false')
   langSpan.textContent = language || 'text'
 
   header.append(langSpan)
@@ -850,36 +873,101 @@ function blockTextWithBreaks(block: HTMLElement): string {
   return text
 }
 
-/** Parse a block's text as ```lang [content] ``` per the Enter-triggered fence
- *  flow. Returns null when the text is not a fence candidate. */
-function parseFenceBlockText(text: string): { language: string; content: string } | null {
-  if (!text.startsWith('```')) return null
-  const inner = text.slice(3)
-  if (!inner.endsWith('```')) {
-    // Opening fence only: ``` or ```lang (a bare language token, no spaces).
-    if (!/^[\w+#.-]*$/.test(inner)) return null
-    return { language: inner, content: '' }
+interface FenceCandidate {
+  /** Text of the opening block plus any siblings up to (not including) the
+   *  closing ``` block. */
+  text: string
+  /** Blocks consumed by the candidate: the opening block and content siblings. */
+  nodes: HTMLElement[]
+  /** True when a sibling block whose text is exactly ``` closed the candidate. */
+  closed: boolean
+}
+
+/**
+ * The fence-relevant text for a block: its own text plus following sibling
+ * text blocks, stopping at a sibling that is exactly ``` (the closer) or one
+ * that starts with ``` (another opening — not ours). The composer renders
+ * every Enter-separated line as its own block, so the closing ``` the user
+ * tagged on at the end usually lives in a sibling, not in the same block.
+ */
+function collectFenceCandidate(root: HTMLElement, block: HTMLElement): FenceCandidate | null {
+  const parts: string[] = [blockTextWithBreaks(block).replace(/[\u200b\u00a0\s]+$/g, '')]
+  const nodes: HTMLElement[] = [block]
+  if (parts[0]?.split('\n').some((line) => /^\s*>/.test(line))) return null
+
+  let sibling = block.nextElementSibling
+  while (sibling instanceof HTMLElement && root.contains(sibling)) {
+    const text = blockTextWithBreaks(sibling).replace(/[\u200b\u00a0\s]+$/g, '')
+    if (text === '```') return { text: `${parts.join('\n')}\n\u0060\u0060\u0060`, nodes: [...nodes, sibling], closed: true }
+    if (text.startsWith('```')) break
+    if (sibling.tagName !== 'P' && sibling.tagName !== 'DIV') break
+    if (text.split('\n').some((line) => /^\s*>/.test(line))) return null
+    nodes.push(sibling)
+    parts.push(text)
+    sibling = sibling.nextElementSibling
   }
-  const body = inner.slice(0, -3)
-  if (body.includes('```')) return null
-  const newline = body.indexOf('\n')
-  if (newline > -1) {
-    const firstLine = body.slice(0, newline)
-    if (/^[\w+#.-]+$/.test(firstLine)) {
-      return { language: firstLine, content: body.slice(newline + 1) }
+  return { text: parts.join('\n'), nodes, closed: false }
+}
+
+/** Parse fence-candidate text (```lang, ```lang content…```, ```content```)
+ *  into its language and body, or null when it is not a fence. The language
+ *  token is the word right after the fence: whitespace-bounded, or split off
+ *  at an inner uppercase letter so ```txtError… reads as lang "txt". */
+function parseFenceCandidateText(text: string): { language: string; content: string } | null {
+  if (!text.startsWith('\u0060\u0060\u0060')) return null
+  let rest = text.slice(3)
+  let language = ''
+
+  const token = rest.match(/^([A-Za-z0-9+#_.-]+)/)
+  if (token) {
+    const word = token[1]
+    const after = rest.slice(word.length)
+    const next = after[0]
+    if (next === undefined || /\s/.test(next)) {
+      // Whitespace-bounded word — the language, unless it hides a shorter
+      // lowercase prefix before an uppercase letter ("txtError..." -> "txt").
+      const splitAt = word.slice(1).search(/[A-Z]/)
+      if (splitAt > -1 && splitAt + 1 <= 5) {
+        language = word.slice(0, splitAt + 1)
+        rest = word.slice(splitAt + 1) + after
+      } else {
+        language = word
+        rest = after
+      }
+    } else {
+      // Attached to more text ("```txtError..."): try the uppercase split,
+      // otherwise the whole word is content and there is no language.
+      const splitAt = word.slice(1).search(/[A-Z]/)
+      if (splitAt > -1 && splitAt + 1 <= 5) {
+        language = word.slice(0, splitAt + 1)
+        rest = word.slice(splitAt + 1) + after
+      } else {
+        rest = word + after
+      }
     }
-    return { language: '', content: body }
   }
-  // Single line between the fences: it is content, not a language.
-  return { language: '', content: body }
+
+  if (!rest.endsWith('\u0060\u0060\u0060')) {
+    // Opening fence only: ``` or ```lang with nothing between the fences yet.
+    if (rest === '') return { language, content: '' }
+    if (/^[A-Za-z0-9+#_.-]+$/.test(rest)) return { language: rest, content: '' }
+    return null
+  }
+  let body = rest.slice(0, -3)
+  if (body.includes('\u0060\u0060\u0060')) return null
+  if (language) body = body.replace(/^[ \u00a0\n]/, '')
+  while (body.endsWith('\n')) body = body.slice(0, -1)
+  return { language, content: body }
 }
 
 /**
  * Enter-triggered code fence. Instead of converting as soon as ```lang is
  * typed, the fence only materializes when Enter is pressed in a block whose
- * text is ```lang, or ```content``` / ```lang\ncontent``` — the latter covers
- * the "tag the end of the paragraph first, then open it" flow. Never fires
- * inside a blockquote line or an existing code block.
+ * text is ```lang, or whose view (own text plus following sibling blocks up
+ * to a closing ```) parses as ```lang content ``` / ```content``` — the
+ * composer puts every Enter-separated line in its own block, so the closing
+ * ``` the user tagged on usually lives in a sibling. Never fires inside a
+ * blockquote line or an existing code block.
  */
 export function applyCodeFenceOnEnter(root: HTMLElement): boolean {
   const selection = selectionInside(root)
@@ -891,11 +979,9 @@ export function applyCodeFenceOnEnter(root: HTMLElement): boolean {
     return false
   }
 
-  const text = blockTextWithBreaks(block).replace(/[\u200b\u00a0\s]+$/g, '')
-  // Markdown quote lines never grow code blocks.
-  if (text.split('\n').some((line) => /^\s*>/.test(line))) return false
-
-  const parsed = parseFenceBlockText(text)
+  const candidate = collectFenceCandidate(root, block)
+  if (!candidate) return false
+  const parsed = parseFenceCandidateText(candidate.text)
   if (!parsed) return false
 
   const wrapper = createCodeBlockElement(parsed.language)
@@ -903,6 +989,7 @@ export function applyCodeFenceOnEnter(root: HTMLElement): boolean {
   if (code) {
     if (parsed.content) {
       const lines = parsed.content.split('\n')
+      if (lines.at(-1) === '') lines.pop()
       code.replaceChildren(
         ...lines.flatMap((line, index) => {
           const parts: Node[] = []
@@ -911,9 +998,10 @@ export function applyCodeFenceOnEnter(root: HTMLElement): boolean {
           return parts
         })
       )
-      if (code.childNodes.length === 0) code.append(document.createElement('br'))
     }
-    block.replaceWith(wrapper)
+    if (code.childNodes.length === 0) code.append(document.createElement('br'))
+    block.parentNode?.insertBefore(wrapper, block)
+    for (const node of candidate.nodes) node.remove()
     placeCaretAtEnd(code)
   }
   return true

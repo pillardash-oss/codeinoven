@@ -622,7 +622,7 @@
     </button>
     <div class="my-3 flex items-center gap-3" aria-hidden="true">
       <span class="h-px flex-1 bg-border"></span>
-      <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+      <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
         Or enter the code
       </span>
       <span class="h-px flex-1 bg-border"></span>
@@ -703,7 +703,7 @@
         </div>
       {/if}
 
-      <p class="mt-5 text-[11px] text-dimmed">v{__CODEINOVEN_APP_VERSION__}</p>
+      <p class="mt-5 text-[0.6875rem] text-dimmed">v{__CODEINOVEN_APP_VERSION__}</p>
     </section>
   </main>
 {:else}
@@ -811,7 +811,7 @@
                   <span class="h-2 w-2 rounded-full bg-success"></span>
                 </span>
               {:else}
-                <span class="shrink-0 text-[10px] font-semibold text-dimmed">Offline</span>
+                <span class="shrink-0 text-[0.625rem] font-semibold text-dimmed">Offline</span>
               {/if}
             </button>
             <button
@@ -850,7 +850,7 @@
 
   <!-- App version, pinned and subtle so an update is easy to spot on the landing page. -->
   <p
-    class="pointer-events-none fixed bottom-[calc(0.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 select-none rounded-full bg-app/80 px-2.5 py-0.5 text-[10px] text-dimmed backdrop-blur-sm"
+    class="pointer-events-none fixed bottom-[calc(0.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 select-none rounded-full bg-app/80 px-2.5 py-0.5 text-[0.625rem] text-dimmed backdrop-blur-sm"
     title={`CodeInOven ${__CODEINOVEN_APP_VERSION__}`}
   >
     v{__CODEINOVEN_APP_VERSION__}

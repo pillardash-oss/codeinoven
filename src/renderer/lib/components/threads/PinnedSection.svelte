@@ -32,7 +32,7 @@
 {#if threads.length > 0}
   <div class="mb-3 pb-3 border-b">
     <div class="flex items-center gap-1.5 px-2 py-1.5">
-      <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Pinned</span>
+      <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Pinned</span>
     </div>
 
     <div class="space-y-px" role="list">

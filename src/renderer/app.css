@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import '@fontsource-variable/jetbrains-mono';
 
 /* ─── CodeInOven Design Tokens ───────────────────────────────────────────── */
 /* Obsidian #081825 | Ivory #F7F6F2 | Auric #D4AF37 */
@@ -77,8 +78,15 @@
   --color-terminal-bright-cyan: #87d7d7;
   --color-terminal-bright-white: #f5f4f0;
 
-  /* Font */
-  --font-sans: 'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* Font — the whole app renders in JetBrains Mono (bundled, Ghostty's
+     default family) for a uniform dev-workspace feel with unambiguous
+     code glyphs like backticks. --font-app is overridden at runtime by
+     the Appearance settings (app-config store). */
+  --font-app: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace,
+    'SFMono-Regular', Menlo, monospace;
+  --font-sans: var(--font-app);
+  --font-mono: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace,
+    'SFMono-Regular', Menlo, Monaco, 'Cascadia Code', monospace;
 }
 
 /* ─── Dark Mode ──────────────────────────────────────────────────────────── */
@@ -120,7 +128,10 @@ html {
 }
 
 body {
-  font-family: var(--font-sans);
+  font-family: var(--font-app);
+  /* Explicit, user-settable base weight (Appearance settings); 300 keeps
+     JetBrains Mono prose light next to semibold chrome. */
+  font-weight: var(--font-weight-base, 200);
   background-color: var(--color-app);
   color: var(--color-foreground);
   -webkit-font-smoothing: antialiased;
@@ -242,9 +253,15 @@ body {
 .markdown-body {
   min-width: 0;
   max-width: 100%;
-  line-height: 1.65;
+  /* Conversation gets the comfortable reading treatment: a step larger than
+     panel chrome and a generous line-height for long prose. */
+  font-size: 0.8125rem;
+  line-height: 1.8;
   overflow-wrap: anywhere;
   white-space: normal;
+  /* Dev workspace: chat prose follows the app font so code characters
+     like backticks are unambiguous. */
+  font-family: var(--font-app);
 }
 
 .markdown-body > * {
@@ -346,7 +363,16 @@ body {
 }
 
 .markdown-body ol {
-  list-style: decimal;
+  list-style: decimal outside;
+  padding-left: 1.75em;
+}
+
+/* Keep ordered-list numbers visible and legible even under aggressive
+   preflight resets (they were reported disappearing on the CIO Prompts page). */
+.markdown-body ol > li::marker {
+  content: counter(list-item) '. ';
+  color: var(--color-muted);
+  font-weight: 500;
 }
 
 .markdown-body li + li,
@@ -375,7 +401,11 @@ body {
 }
 
 .markdown-body table {
+  /* Block + max-content keeps native table column sizing (no min-content
+     squeeze of narrow columns) while still allowing horizontal scroll. */
   display: block;
+  width: max-content;
+  max-width: 100%;
   overflow-x: auto;
   border-collapse: collapse;
   font-size: 0.9em;
@@ -599,10 +629,23 @@ body {
   color: inherit;
 }
 
+html body [data-sonner-toaster] {
+  /* svelte-sonner hard-codes its own system font stack inline; keep toasts
+     on the app font for uniformity (needs !important to beat the inline style). */
+  font-family: var(--font-app) !important;
+}
+
 /* ─── Rich markdown editor: GitHub-style links and footnotes ────────────── */
 /* Links render for recognition (GitHub reference-style + inline) but clicks
    are intercepted in the editor so composing never navigates. Footnote
    references render as superscript numbers like GitHub. */
+.rich-markdown-editor {
+  /* The composer mirrors chat prose: same comfortable reading size. */
+  font-size: 0.8125rem;
+  line-height: 1.8;
+  font-family: var(--font-app);
+}
+
 .rich-markdown-editor a[data-editor-link] {
   color: var(--color-info);
   text-decoration: underline;

@@ -111,7 +111,7 @@
   }}
 >
   <DropdownMenu.Trigger
-    class="flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50 data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+    class="flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50 data-[state=open]:bg-elevated data-[state=open]:text-foreground"
     disabled={isBusy}
     title="Switch branch"
     aria-label="Switch branch"
@@ -137,13 +137,13 @@
             size={12}
             class="shrink-0 text-dimmed"
           />
-          <span class="min-w-0 flex-1 truncate font-mono text-[9px] text-dimmed">
+          <span class="min-w-0 flex-1 truncate font-mono text-[0.5625rem] text-dimmed">
             {remoteIdentity?.path ?? primaryRemote.url}
           </span>
           {#if onReplaceOrigin}
             <button
               type="button"
-              class="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              class="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
               title="Replace origin ({primaryRemote.name})"
               onclick={onReplaceOrigin}
             >
@@ -154,7 +154,7 @@
       {:else if onAddOrigin}
         <button
           type="button"
-          class="flex w-full cursor-pointer items-center gap-1.5 border-b border-border px-3 py-1.5 text-[10px] font-medium text-muted outline-none transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex w-full cursor-pointer items-center gap-1.5 border-b border-border px-3 py-1.5 text-[0.625rem] font-medium text-muted outline-none transition-colors hover:bg-elevated hover:text-foreground"
           title="Add a git remote so you can fetch and push"
           aria-label="Add Git Origin"
           onclick={onAddOrigin}
@@ -168,7 +168,7 @@
         <div class="flex items-center gap-2 rounded-lg bg-elevated px-2 py-1">
           <Search size={12} class="shrink-0 text-dimmed" />
           <input
-            class="min-w-0 flex-1 bg-transparent font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed"
+            class="min-w-0 flex-1 bg-transparent font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
             placeholder="Search branches…"
             bind:value={search}
             onkeydown={handleKeydown}
@@ -178,20 +178,20 @@
 
       <div class="max-h-60 overflow-y-auto py-1">
         {#if localBranches.length > 0}
-          <p class="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-dimmed">
+          <p class="px-3 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">
             Local
           </p>
           {#each localBranches as branch (branch.ref)}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
-              class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] outline-none transition-colors hover:bg-elevated"
+              class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] outline-none transition-colors hover:bg-elevated"
               onclick={() => handleSelect(branch)}
               onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && handleSelect(branch)}
             >
               <GitBranch size={11} class="shrink-0 text-dimmed" />
               <span class="min-w-0 flex-1 truncate text-left text-foreground">{branch.name}</span>
               {#if branch.ahead > 0 || branch.behind > 0}
-                <span class="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums">
+                <span class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums">
                   {#if branch.ahead > 0}
                     <span class="text-success">+{branch.ahead}</span>
                   {/if}
@@ -219,18 +219,18 @@
 
         {#if worktreeBranches.length > 0}
           <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-          <p class="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-dimmed">
+          <p class="px-3 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">
             Worktrees
           </p>
           {#each worktreeBranches as branch (branch.ref)}
             <div
-              class="flex w-full items-center gap-2 px-3 py-1.5 text-[11px] outline-none"
+              class="flex w-full items-center gap-2 px-3 py-1.5 text-[0.6875rem] outline-none"
               title={`Checked out in worktree ${branch.worktreePath ?? ''}`}
             >
               <FolderTree size={11} class="shrink-0 text-warning" />
               <span class="min-w-0 flex-1 truncate text-left text-muted">{branch.name}</span>
               {#if branch.ahead > 0 || branch.behind > 0}
-                <span class="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums">
+                <span class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums">
                   {#if branch.ahead > 0}
                     <span class="text-success">+{branch.ahead}</span>
                   {/if}
@@ -240,7 +240,7 @@
                 </span>
               {/if}
               <span
-                class="shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-warning"
+                class="shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning"
               >
                 worktree
               </span>
@@ -250,14 +250,14 @@
 
         {#if remoteBranches.length > 0}
           <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-          <p class="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-dimmed">
+          <p class="px-3 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">
             Remote
           </p>
           {#each remoteBranches as branch (branch.ref)}
             <button
               type="button"
               class={[
-                'flex w-full items-center gap-2 px-3 py-1.5 text-[11px] outline-none transition-colors',
+                'flex w-full items-center gap-2 px-3 py-1.5 text-[0.6875rem] outline-none transition-colors',
                 localNames.has(branch.name)
                   ? 'cursor-default opacity-60'
                   : 'cursor-pointer hover:bg-elevated'
@@ -271,14 +271,14 @@
               <GitBranch size={11} class="shrink-0 text-dimmed" />
               <span class="min-w-0 flex-1 truncate text-left text-muted">{branch.ref}</span>
               {#if localNames.has(branch.name)}
-                <span class="shrink-0 text-[9px] text-dimmed">local exists</span>
+                <span class="shrink-0 text-[0.5625rem] text-dimmed">local exists</span>
               {/if}
             </button>
           {/each}
         {/if}
 
         {#if filtered.length === 0}
-          <p class="px-3 py-2 text-center text-[10px] text-dimmed">No branches found</p>
+          <p class="px-3 py-2 text-center text-[0.625rem] text-dimmed">No branches found</p>
         {/if}
       </div>
 
@@ -286,14 +286,14 @@
         {#if creating}
           <div class="flex items-center gap-1.5">
             <input
-              class="min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 py-1 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+              class="min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 py-1 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
               placeholder="new-feature"
               bind:value={newBranchName}
               onkeydown={handleKeydown}
             />
             <button
               type="button"
-              class="shrink-0 cursor-pointer rounded-md bg-primary px-2 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              class="shrink-0 cursor-pointer rounded-md bg-primary px-2 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
               disabled={!newBranchName.trim()}
               onclick={handleCreate}
             >
@@ -303,7 +303,7 @@
         {:else}
           <button
             type="button"
-            class="flex w-full cursor-pointer items-center gap-2 text-[11px] text-muted outline-none transition-colors hover:text-foreground"
+            class="flex w-full cursor-pointer items-center gap-2 text-[0.6875rem] text-muted outline-none transition-colors hover:text-foreground"
             onclick={() => (creating = true)}
           >
             <Plus size={12} class="shrink-0" />

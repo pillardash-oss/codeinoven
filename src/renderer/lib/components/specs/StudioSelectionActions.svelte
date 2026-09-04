@@ -26,6 +26,6 @@
     onclick={onQuickChat}
   >
     <MessageSquareDashed size={13} aria-hidden="true" />
-    Add to Quick Chats
+    Quick Chat
   </button>
 </div>

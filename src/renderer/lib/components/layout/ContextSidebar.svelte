@@ -325,7 +325,7 @@
                 >
                   {@render tabIcon(tab)}
                   <span
-                    class="truncate text-[11px] font-medium {tab.kind === 'files' && tab.preview
+                    class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' && tab.preview
                       ? 'italic'
                       : ''}">{tab.title}</span
                   >
@@ -350,7 +350,7 @@
         <div class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-foreground">
           {@render tabIcon(activeTab)}
           <span
-            class="truncate text-[11px] font-medium {activeTab.kind === 'files' && activeTab.preview
+            class="truncate text-[0.6875rem] font-medium {activeTab.kind === 'files' && activeTab.preview
               ? 'italic'
               : ''}"
           >
@@ -366,7 +366,7 @@
                 aria-label="Switch to another open panel"
                 title="Switch open panel"
               >
-                <span class="text-[10px] font-medium">{siblingTabs.length}</span>
+                <span class="text-[0.625rem] font-medium">{siblingTabs.length}</span>
                 <ChevronDown size={11} />
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
@@ -387,7 +387,7 @@
                         >{tab.title}</span
                       >
                       {#if tab.id === activeTabId}
-                        <span class="text-[10px] text-dimmed">open</span>
+                        <span class="text-[0.625rem] text-dimmed">open</span>
                       {/if}
                     </DropdownMenu.Item>
                   {/each}
@@ -490,7 +490,7 @@
     {#if tabs.length === 0}
       <div class="flex h-full items-center justify-center px-6">
         <p
-          class="max-w-64 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+          class="max-w-64 text-center text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
         >
           Nothing open
         </p>

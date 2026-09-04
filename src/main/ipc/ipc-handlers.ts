@@ -846,6 +846,10 @@ function validateLocalProfileAnalyticsRange(value: unknown): LocalProfileAnalyti
 }
 const CONFIG_PATCH_FIELDS = new Set([
   'theme',
+  'fontFamily',
+  'appFontSize',
+  'fontWeight',
+  'zoomLevel',
   'onboardingCompleted',
   'threadLimit',
   'questionTimeoutMs',
@@ -1601,6 +1605,17 @@ function requireTimestamp(value: unknown, label: string): number {
   return value
 }
 
+/** Font family ids offered in Appearance settings. */
+const FONT_FAMILIES = new Set([
+  'jetbrains-mono',
+  'satoshi',
+  'system',
+  'sf-mono',
+  'menlo',
+  'monaco',
+  'fira-code'
+])
+
 /** Validate the complete renderer-controlled config boundary. */
 export function validateAppConfigPatch(value: unknown): AppConfigPatch {
   if (!isRecord(value)) throw new TypeError('Config patch must be an object')
@@ -1618,6 +1633,50 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Invalid theme')
     }
     patch.theme = value.theme as AppConfigPatch['theme']
+  }
+
+  if ('fontFamily' in value) {
+    if (typeof value.fontFamily !== 'string' || !FONT_FAMILIES.has(value.fontFamily)) {
+      throw new TypeError('Invalid font family')
+    }
+    patch.fontFamily = value.fontFamily
+  }
+
+  if ('appFontSize' in value) {
+    if (
+      typeof value.appFontSize !== 'number' ||
+      !Number.isInteger(value.appFontSize) ||
+      value.appFontSize < 12 ||
+      value.appFontSize > 18
+    ) {
+      throw new TypeError('App font size must be an integer between 12 and 18')
+    }
+    patch.appFontSize = value.appFontSize
+  }
+
+  if ('fontWeight' in value) {
+    if (
+      typeof value.fontWeight !== 'number' ||
+      !Number.isInteger(value.fontWeight) ||
+      value.fontWeight < 100 ||
+      value.fontWeight > 800 ||
+      value.fontWeight % 100 !== 0
+    ) {
+      throw new TypeError('Font weight must be a multiple of 100 between 100 and 800')
+    }
+    patch.fontWeight = value.fontWeight
+  }
+
+  if ('zoomLevel' in value) {
+    if (
+      typeof value.zoomLevel !== 'number' ||
+      !Number.isFinite(value.zoomLevel) ||
+      value.zoomLevel < 0.5 ||
+      value.zoomLevel > 2
+    ) {
+      throw new TypeError('Zoom level must be between 0.5 and 2')
+    }
+    patch.zoomLevel = value.zoomLevel
   }
 
   if ('onboardingCompleted' in value) {
@@ -2130,10 +2189,16 @@ function validateHeartbeatTimes(value: unknown): string[] {
   return [...new Set(times)]
 }
 
+/**
+ * Heartbeat thinking levels are optional — not every model supports thinking.
+ * Absent, null, or unrecognized levels (including driver-specific preset ids
+ * outside the standard set) simply omit the level instead of failing the save;
+ * the driver then applies its own default for the selected model.
+ */
 function validateHeartbeatThinkingLevel(value: unknown): ThinkingLevel | undefined {
-  if (value === undefined) return undefined
+  if (value === undefined || value === null) return undefined
   if (typeof value !== 'string' || !THINKING_LEVEL_ORDER.includes(value as ThinkingLevel)) {
-    throw new TypeError('Heartbeat thinking level is invalid')
+    return undefined
   }
   return value as ThinkingLevel
 }
@@ -2646,6 +2711,10 @@ export function registerIpcHandlers(
     }
     const config = { ...(await storage.getConfig()), ...patch }
     await storage.saveConfig(config)
+    if (patch.zoomLevel !== undefined) {
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+      if (win && !win.isDestroyed()) win.webContents.setZoomFactor(config.zoomLevel)
+    }
     options.powerWakeService?.setEnabled(config.keepAwakeWhileWorking)
     options.powerWakeService?.setRemoteEnabled(config.keepAwakeWhileRemoteConnected)
     options.retryScheduler?.setEnabled(config.autoRetryAfterReset)
@@ -4171,10 +4240,10 @@ export function registerIpcHandlers(
     'attachment:saveText',
     async (_event, rawScope: unknown, rawText: unknown, rawExistingPath: unknown) => {
       const scope = validateAttachmentStorageScope(rawScope)
-      const text = validateBoundedString(rawText, 'Text attachment', 1, 16 * 1024 * 1024)
-      if (Buffer.byteLength(text, 'utf8') > 16 * 1024 * 1024) {
-        throw new TypeError('Text attachment must be at most 16 MB')
+      if (typeof rawText !== 'string' || rawText.trim().length === 0) {
+        throw new TypeError('Text attachment must be a non-empty string')
       }
+      const text = rawText
 
       const directory = await attachmentStorageDirectory(scope)
       await mkdir(directory, { recursive: true })
