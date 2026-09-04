@@ -10868,7 +10868,11 @@
          the window edge lives here so the scroll-to-latest button can float at
          the top of the whole stack: straddling an error card when one is shown
          and dropping back to its normal spot above the composer otherwise. -->
-    <div class="bottom-chrome relative shrink-0">
+    <div
+      class="bottom-chrome relative {emptyConversation
+        ? 'flex min-h-0 flex-1 flex-col justify-center'
+        : 'shrink-0'}"
+    >
       {#if userScrolledAway}
         <button
           type="button"
@@ -11179,11 +11183,7 @@
 
         <!-- Composer — always anchored at the bottom. Blocking permission and question
        tools replace it until the user responds. -->
-        <div
-          class="conversation-gutter composer-gutter relative px-6 pt-2 {emptyConversation
-            ? 'flex min-h-0 flex-1 flex-col justify-center pb-5'
-            : 'shrink-0 pb-5'}"
-        >
+        <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
           <div class="mx-auto w-full {emptyConversation ? 'max-w-4xl' : 'max-w-3xl'}">
             {#if emptyConversation}
               <div class="mb-5 text-center">
