@@ -51,16 +51,16 @@
     {
       step: 1,
       selector: '[data-onboarding="view-switcher"]',
-      eyebrow: 'Move around',
-      title: 'Projects, Threads, Scope, and Chats',
+      eyebrow: 'Conversation View type',
+      title: 'Projects|Threads|Scope|Chats',
       description:
-        'Use Projects for work grouped by folder. Threads shows every project conversation. Scope gives you a board view. Chats works without a project.'
+        "Projects groups by folder. Threads shows every project conversation. Scope is for board view and worktrees. Chat is for tasks that don't need a projects for a start."
     },
     {
       step: 2,
       selector: '[data-onboarding="project-sidebar"]',
-      eyebrow: 'Your work',
-      title: 'Projects stay on the left',
+      eyebrow: 'Left Sidebar',
+      title: 'Threads and Projects',
       description:
         'The sidebar holds your projects and conversations. Pick a project, then open a thread or start a new one.'
     },
@@ -78,7 +78,7 @@
       eyebrow: 'Send and steer',
       title: 'Type what you want done',
       description:
-        'The composer accepts plain instructions, files, and images. You can also dictate with the microphone, or tap it to read a message in Sound settings.'
+        "The composer accepts plain instructions, file attachments of all kinds. You can also dictate with the microphone, or tap it to read the agent's response. Check the sound settings for more"
     },
     {
       step: 5,
@@ -194,16 +194,10 @@
 />
 
 {#if step === 0}
-  <Modal open title={`Welcome to ${APP_NAME}`} onClose={onFinish} size="xl" closeOnBackdrop={false}>
+  <Modal open title={`Welcome to ${APP_NAME}`} onClose={onFinish} size="lg" closeOnBackdrop={false}>
     <div class="space-y-6">
       <div class="flex items-start gap-4">
-        <div
-          class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-on-primary"
-        >
-          <VendorIcon size={20} name="CodeInOven" id="cio" />
-        </div>
         <div>
-          <h3 class="text-lg font-semibold tracking-tight">Let's get you ready to work</h3>
           <p class="mt-1 text-sm leading-relaxed text-muted">
             This short tour shows where projects, conversations, tools, and notifications live. Then
             you can add a folder and connect your first coding agent.
@@ -214,14 +208,14 @@
       <div class="grid gap-2 sm:grid-cols-3">
         <div class="rounded-xl border bg-elevated p-3">
           <FolderKanban size={17} class="text-primary" />
-          <p class="mt-2 text-sm font-medium">Add your work</p>
+          <p class="mt-2 text-sm font-medium">Import your work</p>
           <p class="mt-1 text-xs leading-relaxed text-dimmed">
-            Choose a folder already on your computer.
+            Start with a folder already on your computer.
           </p>
         </div>
         <div class="rounded-xl border bg-elevated p-3">
           <MessageSquare size={17} class="text-primary" />
-          <p class="mt-2 text-sm font-medium">Ask in plain language</p>
+          <p class="mt-2 text-sm font-medium">Prompt the agent</p>
           <p class="mt-1 text-xs leading-relaxed text-dimmed">
             Describe a task and review what the agent does.
           </p>
@@ -332,10 +326,6 @@
                 >{steerShortcut}</kbd
               >
             </div>
-            <p class="text-[0.6875rem] leading-relaxed text-dimmed">
-              Enter starts a new line. While an agent is busy, Send queues your message and Steer
-              delivers it immediately.
-            </p>
           </div>
         {/if}
 
@@ -379,18 +369,17 @@
           <FolderInput size={20} />
         </div>
         <div>
-          <h3 class="text-base font-semibold">Choose a folder from your computer</h3>
           <p class="mt-1 text-sm leading-relaxed text-muted">
-            A project is simply a folder that contains your work. {APP_NAME} keeps the folder where it
-            is and adds it to the project sidebar.
+            A project is simply a folder that contains your work. {APP_NAME} adds it to the project sidebar
+            so you can work seamlessly.
           </p>
         </div>
       </div>
       <div class="rounded-xl border bg-elevated p-4">
         <p class="text-xs font-medium text-foreground">Good first choices</p>
-        <p class="mt-1 text-xs leading-relaxed text-dimmed">
+        <p class="mt-1 text-xs leading-relaxed text-muted">
           Pick an existing app or website folder. If you are learning, you can also make an empty
-          folder first and choose it here.
+          folder directly from here or outside the app.
         </p>
       </div>
       <div class="flex items-center justify-between border-t pt-4">
@@ -407,7 +396,7 @@
           data-modal-primary
           onclick={onChooseProject}
         >
-          <FolderInput size={15} /> Choose a folder
+          <FolderInput size={15} /> Add a Project
         </button>
       </div>
     </div>
@@ -426,19 +415,10 @@
           <AgentIcon agentId="pi" size={24} />
         </div>
         <div class="min-w-0 flex-1">
-          <div class="flex flex-wrap items-center gap-2">
-            <h3 class="text-base font-semibold">Pi</h3>
-            {#if piReady}
-              <span
-                class="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[0.625rem] font-medium text-success"
-              >
-                <Check size={11} /> Ready
-              </span>
-            {/if}
-          </div>
           <p class="mt-1 text-sm leading-relaxed text-muted">
-            Pi ships with {APP_NAME} — no separate install. It reads your request, works in the project
-            folder you choose, and reports the result in the conversation.
+            Pi ships with {APP_NAME}, but uses your installed version if available. It reads your
+            request, works in the project folder you choose, and reports the result in the
+            conversation.
           </p>
         </div>
       </div>
@@ -449,7 +429,8 @@
             {piBundled ? 'Pi is bundled and ready to use.' : 'Pi is installed and ready to use.'}
           </p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
-            Connect a Claude, OpenAI, or Google account from Harness settings, then start working.
+            Connect a Claude, OpenAI, or OpenCode, OpenRouter, etc account from Harness settings,
+            then start working.
           </p>
         </div>
       {:else}
