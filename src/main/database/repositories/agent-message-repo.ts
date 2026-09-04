@@ -1,4 +1,5 @@
 import { createHash } from 'crypto'
+import { capPersistedParts } from '../../chat/bounded-tool-output'
 import type { Database } from '../database'
 import type {
   AgentMessage,
@@ -172,6 +173,11 @@ export interface ProviderDeltaSyncResult {
 }
 
 function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMessage {
+  // Defensive read-side cap: threads persisted before the persist-time output
+  // cap existed can still carry multi-megabyte tool outputs in their rows.
+  // Capping at decode time keeps every later consumer (transcript page loads,
+  // forks, exports) bounded even for legacy rows.
+  const decodedParts = capPersistedParts(JSON.parse(row.parts) as AgentPart[])
   return {
     id: row.id,
     role: row.role as 'user' | 'assistant',
@@ -179,7 +185,7 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
     ...(row.visibility !== 'conversation'
       ? { visibility: row.visibility as AgentMessageVisibility }
       : {}),
-    parts: JSON.parse(row.parts),
+    parts: decodedParts,
     ...(includeTransport && row.transport_parts
       ? { transportParts: JSON.parse(row.transport_parts) }
       : {}),
@@ -263,7 +269,7 @@ export function encodeAgentMessage(
   const targetSessionId = sessionId ?? null
   const origin = message.origin ?? (sessionId ? 'subagent' : 'provider')
   const visibility = message.visibility ?? (sessionId ? 'subagent_trace' : 'conversation')
-  const partsJson = JSON.stringify(message.parts)
+  const partsJson = JSON.stringify(capPersistedParts(message.parts))
   const searchText = partsToSearchText(message.parts)
   const transportPartsJson = message.transportParts ? JSON.stringify(message.transportParts) : null
   const transportOrigin = message.transportOrigin ?? null

@@ -210,6 +210,7 @@ import {
   INBOX_PROJECT_ID,
   isOrchestrationChildThread
 } from '../../lib/types'
+import { capPersistedPart } from './bounded-tool-output'
 import { foldTurnStreamEvents, type TurnStreamEvent } from './turn-stream'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
@@ -18481,6 +18482,9 @@ export class ChatEngine {
     // trace keeps a real anchor instead of an empty tag that no reload fold
     // can ever re-attach.
     const turnId = owner.activeTurnId ?? owner.lastTurnId ?? ''
+    // Oversized tool outputs (base64 image payloads, megabyte file dumps) are
+    // capped before they reach the durable stream log — an uncapped line makes
+    // every later log re-parse (reopen, fold, fork) pay for it forever.
     const streamEvent: TurnStreamEvent =
       event.type === 'message.part.updated'
         ? {
@@ -18489,7 +18493,7 @@ export class ChatEngine {
             messageId: event.part.messageID,
             turnId,
             ts,
-            part: event.part
+            part: capPersistedPart(event.part)
           }
         : {
             kind: 'part.delta',
@@ -18497,10 +18501,15 @@ export class ChatEngine {
             messageId: event.messageId,
             partId: event.partId,
             field: event.field,
-            delta: event.delta,
+            delta: event.delta.length > MAX_PERSISTED_DELTA ? '' : event.delta,
             turnId,
             ts
           }
+    if (event.type === 'message.part.delta' && streamEvent.kind === 'part.delta' && streamEvent.delta === '') {
+      // A single delta larger than the whole bounded output is pure payload
+      // (e.g. one base64 chunk); persisting it would re-poison the log.
+      return
+    }
     await this.storage.appendRaw(
       this.turnStreamPath(owner.projectId, owner.threadId),
       `${JSON.stringify(streamEvent)}\n`
@@ -22236,6 +22245,8 @@ const TOOL_ACTION_PATTERNS: Array<{ match: RegExp; label: string }> = [
 
 const TOOL_CALL_INPUT_PARAM_CAP = 150
 const TOOL_CALL_RESULT_CAP = 500
+/** A single stream delta larger than this is raw payload, never persisted. */
+const MAX_PERSISTED_DELTA = 16 * 1024
 
 /** First present, truthy input field a resume recap can show as the call's subject. */
 function summarizeToolInput(input: Record<string, unknown>): string {

@@ -1490,6 +1490,12 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       resolvePromise = resolve
       rejectPromise = reject
     })
+    // The rejection can fire while `sendPrompt` is still being awaited (the
+    // harness process may emit its error `result` before the caller reaches
+    // `await completion.promise`). Attach a no-op handler immediately so that
+    // early rejection is never reported as an unhandled rejection; a later
+    // `await` still observes it and the one-shot fallback runs normally.
+    promise.catch(() => undefined)
     const timer = setTimeout(() => {
       this.clearTitleTurnWaiter(sessionId)
       rejectPromise(new Error(`${this.name} auxiliary completion timed out`))

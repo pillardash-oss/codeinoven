@@ -1249,16 +1249,23 @@ export class ThreadManager {
    */
   async saveMessages(projectId: string, threadId: string, messages: AgentMessage[]): Promise<void> {
     if (!this.getOwnedThread(projectId, threadId)) return
-    const outcome = await this.db.transactionViaWorker(
-      buildSaveMessagesStatements(threadId, messages)
-    )
-    if (!outcome.ok) {
-      // Fallback: identical batching semantics on the primary connection.
-      this.db.transaction(() => {
-        for (const statement of buildSaveMessagesStatements(threadId, messages)) {
-          this.db.run(statement.sql, ...statement.params)
-        }
-      })
+    // Batch the statements so one huge transcript never materializes a single
+    // multi-megabyte transaction payload in memory. Every batch is its own
+    // transaction; the delete+upsert sequence below preserves the same
+    // end state because the delete always precedes the first upsert batch.
+    const statements = buildSaveMessagesStatements(threadId, messages)
+    const BATCH = 64
+    for (let offset = 0; offset < statements.length; offset += BATCH) {
+      const batch = statements.slice(offset, offset + BATCH)
+      const outcome = await this.db.transactionViaWorker(batch)
+      if (!outcome.ok) {
+        // Fallback: identical batching semantics on the primary connection.
+        this.db.transaction(() => {
+          for (const statement of batch) {
+            this.db.run(statement.sql, ...statement.params)
+          }
+        })
+      }
     }
   }
 
@@ -1548,6 +1555,10 @@ export class ThreadManager {
       }
     }
     if (copied.length > 0) {
+      // Yield the main-process event loop before the copy so an active agent
+      // stream (or the renderer) is never starved by the fork's serialization
+      // work, even for a large legacy transcript.
+      await new Promise<void>((resolve) => setImmediate(resolve))
       const withNewIds = remapCopiedMessages(copied)
       await this.saveMessages(destinationProjectId, forked.id, withNewIds)
     }
