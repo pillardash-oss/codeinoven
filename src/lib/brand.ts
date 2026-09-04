@@ -21,4 +21,4 @@ export const ORG_SLUG = 'pillardash'
 /** Official web links shown on the About settings page. */
 export const WEBSITE_URL = 'https://codeinoven.com'
 export const GITHUB_URL = 'https://github.com/pillardash-oss/codeinoven'
-export const X_URL = 'https://x.com/pillardash'
+export const X_URL = 'https://x.com/codeinoven'

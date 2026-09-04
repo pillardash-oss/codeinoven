@@ -22,7 +22,7 @@
   } from '$shared/types'
   import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import { APP_NAME, APP_SLUG, ORG_SLUG, WEBSITE_URL, GITHUB_URL, X_URL } from '$shared/brand'
-  import VendorIcon from '../vendor-icons/VendorIcon.svelte'
+  import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import {
     AlertCircle,
