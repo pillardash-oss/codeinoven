@@ -882,7 +882,8 @@ class ThreadMessagesStore {
     contextUsed?: number,
     contextEstimated?: boolean,
     rateLimits?: AgentMessage['rateLimits'],
-    credits?: AgentMessage['credits']
+    credits?: AgentMessage['credits'],
+    bankedResets?: AgentMessage['bankedResets']
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
     this.#flushReveal(threadKey(projectId, threadId))
@@ -898,6 +899,7 @@ class ThreadMessagesStore {
     if (contextEstimated !== undefined) doneMsg.contextEstimated = contextEstimated
     if (rateLimits) doneMsg.rateLimits = rateLimits
     if (credits) doneMsg.credits = credits
+    if (bankedResets) doneMsg.bankedResets = bankedResets
     if (compaction) {
       doneMsg.parts = doneMsg.parts.map((part): AgentPart =>
         part.type === 'text'
@@ -946,7 +948,8 @@ class ThreadMessagesStore {
     contextEstimated?: boolean,
     cost?: number,
     rateLimits?: AgentMessage['rateLimits'],
-    credits?: AgentMessage['credits']
+    credits?: AgentMessage['credits'],
+    bankedResets?: AgentMessage['bankedResets']
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
     this.#flushReveal(threadKey(projectId, threadId))
@@ -960,6 +963,7 @@ class ThreadMessagesStore {
     if (cost !== undefined) message.cost = cost
     if (rateLimits) message.rateLimits = rateLimits
     if (credits) message.credits = credits
+    if (bankedResets) message.bankedResets = bankedResets
     entry.messages = [...entry.messages]
     this.#notifyStreaming(projectId, threadId)
   }
@@ -1144,7 +1148,8 @@ class ThreadMessagesStore {
           event.contextUsed,
           event.contextEstimated,
           event.rateLimits,
-          event.credits
+          event.credits,
+          event.bankedResets
         )
         break
       case 'usage.updated':
@@ -1159,7 +1164,8 @@ class ThreadMessagesStore {
           event.contextEstimated,
           event.cost,
           event.rateLimits,
-          event.credits
+          event.credits,
+          event.bankedResets
         )
         break
       case 'session.status':

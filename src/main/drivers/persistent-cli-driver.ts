@@ -1266,6 +1266,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         if (event.contextEstimated !== undefined) message.contextEstimated = event.contextEstimated
         if (event.rateLimits) message.rateLimits = event.rateLimits
         if (event.credits) message.credits = event.credits
+        if (event.bankedResets) message.bankedResets = event.bankedResets
         this.estimateMissingCost(message)
       }
     }
@@ -1280,6 +1281,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         if (event.cost !== undefined) message.cost = event.cost
         if (event.rateLimits) message.rateLimits = event.rateLimits
         if (event.credits) message.credits = event.credits
+        if (event.bankedResets) message.bankedResets = event.bankedResets
         this.estimateMissingCost(message)
       }
     }

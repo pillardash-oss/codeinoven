@@ -1559,13 +1559,15 @@
       if (entry) {
         if (usage.rateLimits.length) entry.rateLimits = usage.rateLimits
         if (usage.credits) entry.credits = usage.credits
+        if (usage.bankedResets) entry.bankedResets = usage.bankedResets
       } else {
         byHarness[usage.harnessId] = {
           harnessId: usage.harnessId,
           providerId: usage.providerId,
           costUsd: 0,
           rateLimits: usage.rateLimits,
-          ...(usage.credits ? { credits: usage.credits } : {})
+          ...(usage.credits ? { credits: usage.credits } : {}),
+          ...(usage.bankedResets ? { bankedResets: usage.bankedResets } : {})
         }
       }
     }
@@ -1587,6 +1589,7 @@
       (entry) =>
         entry.rateLimits.length > 0 ||
         entry.credits ||
+        entry.bankedResets ||
         entry.costUsd > 0 ||
         (entry.tokens?.total ?? 0) > 0 ||
         (entry.messageCount ?? 0) > 0 ||

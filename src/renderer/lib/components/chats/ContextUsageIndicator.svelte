@@ -233,7 +233,7 @@
       onclick={onActivateBankedReset}
     >
       <RotateCcw size={10} />
-      Activate
+      Use banked reset
     </button>
   </div>
 {/snippet}
@@ -364,16 +364,19 @@
         {@render harnessSection(entry)}
       {/each}
     </div>
-  {:else if harnessUsage[0] && harnessUsage[0].rateLimits.length > 0}
+  {:else if harnessUsage[0] && (harnessUsage[0].rateLimits.length > 0 || harnessUsage[0].bankedResets)}
     <div class="mt-3 space-y-2.5 border-t border-border pt-3">
       {#if harnessUsage[0]?.models?.length}
         {@render modelRows(harnessUsage[0].models)}
       {/if}
       {@render limitRows(harnessUsage[0].rateLimits)}
+      {#if harnessUsage[0]?.bankedResets?.availableCount}
+        {@render bankedResetRow(harnessUsage[0].bankedResets.availableCount)}
+      {/if}
     </div>
   {/if}
 
-  {#if !multiHarness && usage?.bankedResets?.availableCount}
+  {#if !multiHarness && !harnessUsage[0]?.bankedResets && usage?.bankedResets?.availableCount}
     <div class="mt-3 border-t border-border pt-3">
       {@render bankedResetRow(usage.bankedResets.availableCount)}
     </div>

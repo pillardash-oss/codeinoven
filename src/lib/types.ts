@@ -2584,6 +2584,8 @@ export interface AgentMessage {
   rateLimits?: AgentRateLimitWindow[]
   /** Prepaid-credit balance reported alongside quota windows. */
   credits?: AgentUsageCredits
+  /** Banked rate-limit resets available to redeem (currently Codex-only). */
+  bankedResets?: AgentBankedResets
   /** Present on assistant messages that ended with an error. */
   error?: string
   /** Validated JSON-schema result returned by a harness structured-output tool. */
@@ -2737,6 +2739,8 @@ export type AgentEvent =
       rateLimits?: AgentRateLimitWindow[]
       /** Prepaid-credit balance reported alongside quota windows. */
       credits?: AgentUsageCredits
+      /** Banked rate-limit resets available to redeem (currently Codex-only). */
+      bankedResets?: AgentBankedResets
       /** The completed assistant message summarizes a compaction and is trace-only. */
       compaction?: boolean
       /** Driver-internal silent-continue marker; stripped before broadcast. */
@@ -2754,6 +2758,8 @@ export type AgentEvent =
       cost?: number
       rateLimits?: AgentRateLimitWindow[]
       credits?: AgentUsageCredits
+      /** Banked rate-limit resets available to redeem (currently Codex-only). */
+      bankedResets?: AgentBankedResets
     }
   | { type: 'session.status'; sessionId: string; status: AgentSessionStatus }
   | { type: 'session.idle'; sessionId: string }

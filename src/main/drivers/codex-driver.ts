@@ -1304,13 +1304,14 @@ export class CodexDriver extends PersistentCliDriver {
         const finalMessage = [...active.session.messages]
           .reverse()
           .find((message) => message.role === 'assistant')
-        if ((telemetry.rateLimits.length > 0 || telemetry.credits) && finalMessage) {
+        if ((telemetry.rateLimits.length > 0 || telemetry.credits || telemetry.bankedResets) && finalMessage) {
           const event: AgentEvent = {
             type: 'usage.updated',
             sessionId: active.session.id,
             messageId: finalMessage.id,
             ...(telemetry.rateLimits.length > 0 ? { rateLimits: telemetry.rateLimits } : {}),
-            ...(telemetry.credits ? { credits: telemetry.credits } : {})
+            ...(telemetry.credits ? { credits: telemetry.credits } : {}),
+            ...(telemetry.bankedResets ? { bankedResets: telemetry.bankedResets } : {})
           }
           this.applyEventToSession(active.session, event)
           this.emit(event)
@@ -1697,13 +1698,14 @@ export class CodexDriver extends PersistentCliDriver {
       await this.appServerRequest(host, 'account/rateLimits/read')
     )
 
-    if (telemetry.rateLimits.length === 0 && !telemetry.credits) return
+    if (telemetry.rateLimits.length === 0 && !telemetry.credits && !telemetry.bankedResets) return
     const event: AgentEvent = {
       type: 'usage.updated',
       sessionId: session.id,
       messageId,
       ...(telemetry.rateLimits.length > 0 ? { rateLimits: telemetry.rateLimits } : {}),
-      ...(telemetry.credits ? { credits: telemetry.credits } : {})
+      ...(telemetry.credits ? { credits: telemetry.credits } : {}),
+      ...(telemetry.bankedResets ? { bankedResets: telemetry.bankedResets } : {})
     }
     this.applyEventToSession(session, event)
     this.emit(event)
