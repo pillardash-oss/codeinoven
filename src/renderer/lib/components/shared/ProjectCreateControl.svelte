@@ -45,9 +45,17 @@
   const componentId = $props.id()
   const sshProjectFormId = `${componentId}-ssh-project-form`
 
+  /** Highest trigger value already handled. The control unmounts in other modes
+   *  (e.g. Chats) and remounts later; re-initialising from the live value keeps
+   *  a stale trigger from re-opening the add-project flow on remount. */
+  // Intentional initial-value capture — this is the baseline that later triggers
+  // are compared against.
+  // svelte-ignore state_referenced_locally
+  let handledTrigger = triggerAddProject
   /** React to external trigger (e.g. keyboard shortcut) to start the add-project flow. */
   $effect(() => {
-    if (triggerAddProject > 0) {
+    if (triggerAddProject > handledTrigger) {
+      handledTrigger = triggerAddProject
       if (triggerKind === 'git-clone') addGitCloneProject()
       else void addLocalFolder()
     }
