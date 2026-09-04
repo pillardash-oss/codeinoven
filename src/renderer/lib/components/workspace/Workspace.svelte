@@ -132,6 +132,7 @@
   import { threadSortState } from '$lib/stores/thread-sort.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
   import { scopeState, STAGE_LABELS, STAGE_COLORS, STAGE_ORDER } from '$lib/stores/scope.svelte'
   import {
     coordinatorHasActiveDelegates,
@@ -150,7 +151,8 @@
     PromptAttachment,
     ScopeBucket,
     Thread,
-    ThreadSearchResult
+    ThreadSearchResult,
+    AgentHarnessUsage
   } from '$shared/types'
   import type {
     BrowserDownload,
@@ -415,6 +417,34 @@
   /** Effective chat settings — the chat's own model when one has been picked,
    *  else the last project model so a fresh chat starts on the model in use. */
   let chatComposerSettings = $derived(chatEffectiveSettings())
+
+  /** Live account quota for the not-yet-created "Start a new chat" composer —
+   *  the exact same hover-fetch cache the thread battery uses, keyed by the
+   *  inbox conversation root instead of a thread row. */
+  const newChatUsage = createAccountUsageCache()
+  function revealNewChatUsage(): void {
+    if (newChatUsage.isStale()) {
+      void newChatUsage.refresh({
+        projectId: INBOX_PROJECT_ID,
+        threadId: 'new-chat',
+        overrides: {
+          harnessId: chatComposerSettings.harnessId,
+          providerId: chatComposerSettings.providerId
+        }
+      })
+    }
+  }
+  const newChatHarnessUsage = $derived.by(
+    (): AgentHarnessUsage[] =>
+      newChatUsage.usage.map((usage) => ({
+        harnessId: usage.harnessId,
+        providerId: usage.providerId,
+        costUsd: 0,
+        rateLimits: usage.rateLimits,
+        ...(usage.credits ? { credits: usage.credits } : {}),
+        ...(usage.bankedResets ? { bankedResets: usage.bankedResets } : {})
+      }))
+  )
   $effect(() => {
     if (mode !== 'chats') return
     let alive = true
@@ -3983,6 +4013,10 @@
                       files
                     )}
                   onSend={(msg, files) => void createStandaloneChat(msg, files)}
+                  onRevealUsage={revealNewChatUsage}
+                  onHideUsage={() => newChatUsage.markStale()}
+                  usageRefreshing={newChatUsage.refreshing}
+                  harnessUsage={newChatHarnessUsage}
                 />
                 <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
                   {#each chatSuggestedPrompts as prompt (prompt)}

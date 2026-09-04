@@ -65,6 +65,7 @@
   import CodexBankedResetConfirm from '../ui/CodexBankedResetConfirm.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
   import AgentTodoCard from './AgentTodoCard.svelte'
   import AgentQuestionCard from './AgentQuestionCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
@@ -183,7 +184,6 @@
     AgentContextUsage,
     AgentRateLimitWindow,
     AgentHarnessUsage,
-    AgentAccountUsage,
     AgentProviderIssue,
     AgentSessionStatus,
     AgentDefaultsConfig,
@@ -1554,7 +1554,7 @@
     }
     // Layer the live account quota over the matching harness so the battery
     // shows current windows/credits even for old threads with no message data.
-    for (const usage of liveAccountUsage ?? []) {
+    for (const usage of accountUsageCache.usage) {
       const entry = byHarness[usage.harnessId]
       if (entry) {
         if (usage.rateLimits.length) entry.rateLimits = usage.rateLimits
@@ -1681,88 +1681,62 @@
    *  threads (or threads whose turns predate quota capture) still show current
    *  rate-limit windows and credits in the battery popover. One entry per
    *  harness used on the thread. */
-  let liveAccountUsage = $state<AgentAccountUsage[]>([])
-  let refreshingAccountUsage = $state(false)
-  /** Quota is fetched on battery hover and cached briefly so rapid re-hovers
-   *  don't hammer the harness CLIs. */
-  let accountUsageFetchedAt = 0
-  const ACCOUNT_USAGE_CACHE_MS = 5000
-  /** Fast drivers (pi answers over an in-memory RPC session in a few ms)
-   *  would make the loading bar flash imperceptibly, reading as "nothing
-   *  happened". Hold the fetching state briefly so the hover always gives
-   *  the same visible feedback the slower harness CLIs produce naturally. */
-  const ACCOUNT_USAGE_MIN_LOADING_MS = 800
-
-  function delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms))
-  }
+  const accountUsageCache = createAccountUsageCache()
 
   function revealContextUsage(): void {
     if (contextUsage) commitContextUsage(contextUsage)
     void refreshEfficiencyKpis()
     // Fetch live quota only when the battery is revealed (hover), and only if
     // the cached copy is stale — never on thread open.
-    const stale =
-      liveAccountUsage.length === 0 ||
-      accountUsageFetchedAt === 0 ||
-      Date.now() - accountUsageFetchedAt > ACCOUNT_USAGE_CACHE_MS
-    if (stale) void refreshAccountUsageOnDemand()
+    if (accountUsageCache.isStale()) void refreshAccountUsageOnDemand()
   }
 
   /** Called when the user stops hovering the usage indicator. Resets the quota
    *  cache so the *next* hover always fetches fresh data — while the user keeps
    *  hovering, no further fetch is scheduled. */
   function hideContextUsage(): void {
-    accountUsageFetchedAt = 0
+    accountUsageCache.markStale()
   }
 
-  async function refreshAccountUsageOnDemand(refreshKey?: string): Promise<void> {
-    if (refreshingAccountUsage) return
-    refreshingAccountUsage = true
-    try {
-      const usageList = await invoke('agent:refreshAccountUsage', thread.projectId, thread.id)
-      // Guard against a stale/partial main process resolving the call with a
-      // non-array; an undefined `liveAccountUsage` crashes the battery derived
-      // on every render flush and freezes the thread view.
-      if (!Array.isArray(usageList)) return
-      // Drop a response for a harness selection the user already moved away
-      // from — an out-of-order resolve must not clobber the current selection.
-      if (refreshKey && refreshKey !== `${settings.harnessId}:${settings.providerId}`) return
-      liveAccountUsage = usageList
-      accountUsageFetchedAt = Date.now()
-      const currentUsage = usageList.find(
-        (usage) =>
-          usage.harnessId === settings.harnessId && usage.providerId === settings.providerId
-      )
-      if (currentUsage) {
-        // Fold the fresh quota over whatever the meter already shows so an empty
-        // rate-limit list or missing credits can never erase the bars the user is
-        // viewing — it can only replace them with newer, richer data.
-        const merged = mergeContextUsage(contextUsageDisplay, {
-          ...(contextUsageDisplay ?? {
-            costUsd: 0,
-            rateLimits: []
-          }),
-          rateLimits: currentUsage.rateLimits,
-          ...(currentUsage.contextWindow !== undefined
-            ? { contextWindow: currentUsage.contextWindow }
-            : {}),
-          ...(currentUsage.contextUsed !== undefined
-            ? { contextUsed: currentUsage.contextUsed }
-            : {}),
-          ...(currentUsage.credits ? { credits: currentUsage.credits } : {})
-        })
-        // Persist the fresh quota with the current context snapshot so it
-        // restores on the next mount without another harness round-trip.
-        commitContextUsage(merged)
-      }
-    } catch {
-      // Best-effort quota refresh — never surface a transient harness failure.
-    } finally {
-      const elapsed = Date.now() - accountUsageFetchedAt
-      const wait = Math.max(0, ACCOUNT_USAGE_MIN_LOADING_MS - elapsed)
-      if (wait > 0) await delay(wait)
-      refreshingAccountUsage = false
+  async function refreshAccountUsageOnDemand(): Promise<void> {
+    // Drop a response for a harness selection the user already moved away
+    // from — an out-of-order resolve must not clobber the current selection.
+    const refreshKey = `${settings.harnessId}:${settings.providerId}`
+    const usageList = await accountUsageCache.refresh(
+      {
+        projectId: thread.projectId,
+        threadId: thread.id,
+        overrides: {
+          harnessId: settings.harnessId,
+          providerId: settings.providerId
+        }
+      },
+      () => refreshKey !== `${settings.harnessId}:${settings.providerId}`
+    )
+    const currentUsage = usageList.find(
+      (usage) => usage.harnessId === settings.harnessId && usage.providerId === settings.providerId
+    )
+    if (currentUsage) {
+      // Fold the fresh quota over whatever the meter already shows so an empty
+      // rate-limit list or missing credits can never erase the bars the user is
+      // viewing — it can only replace them with newer, richer data.
+      const merged = mergeContextUsage(contextUsageDisplay, {
+        ...(contextUsageDisplay ?? {
+          costUsd: 0,
+          rateLimits: []
+        }),
+        rateLimits: currentUsage.rateLimits,
+        ...(currentUsage.contextWindow !== undefined
+          ? { contextWindow: currentUsage.contextWindow }
+          : {}),
+        ...(currentUsage.contextUsed !== undefined
+          ? { contextUsed: currentUsage.contextUsed }
+          : {}),
+        ...(currentUsage.credits ? { credits: currentUsage.credits } : {})
+      })
+      // Persist the fresh quota with the current context snapshot so it
+      // restores on the next mount without another harness round-trip.
+      commitContextUsage(merged)
     }
   }
 
@@ -5321,10 +5295,12 @@
     const { projectId, id } = thread
     const result = await invoke('agent:activateBankedReset', projectId, id)
     if (!result) return
-    liveAccountUsage = liveAccountUsage.map((usage) =>
-      usage.harnessId === result.harnessId && usage.providerId === result.providerId
-        ? result
-        : usage
+    accountUsageCache.replaceUsage(
+      accountUsageCache.usage.map((usage) =>
+        usage.harnessId === result.harnessId && usage.providerId === result.providerId
+          ? result
+          : usage
+      )
     )
     if (result.harnessId === settings.harnessId && result.providerId === settings.providerId) {
       commitContextUsage(
@@ -6198,7 +6174,7 @@
     assignmentError = ''
     if (previousHarnessId !== updated.harnessId || previousProviderId !== updated.providerId) {
       contextUsageDisplay = undefined
-      accountUsageFetchedAt = 0
+      accountUsageCache.markStale()
     }
     syncAgentRole('seniorEngineer', selection)
     commitSettings(updated)
@@ -8714,7 +8690,7 @@
       // stays visible and refreshes on the next hover. Force that hover to
       // refetch so the newly selected harness's quota is current.
       contextUsageDisplay = undefined
-      accountUsageFetchedAt = 0
+      accountUsageCache.markStale()
       // A provider card produced by the previous harness no longer applies once
       // the user switches to another harness — otherwise the stale issue's
       // message and links (e.g. a Codex usage-limit URL) linger under the badge
@@ -11604,7 +11580,7 @@
                     efficiencyKpis={storedEfficiencyKpis}
                     onRevealUsage={revealContextUsage}
                     onHideUsage={hideContextUsage}
-                    usageRefreshing={refreshingAccountUsage}
+                    usageRefreshing={accountUsageCache.refreshing}
                     {harnessUsage}
                     canCompact={supportsManualCompaction(
                       settings.harnessId,

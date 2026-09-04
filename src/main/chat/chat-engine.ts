@@ -130,6 +130,7 @@ import {
 } from '../services/image-descriptor'
 import type {
   AgentAccountUsage,
+  AgentAccountUsageOverrides,
   AgentArtifact,
   AgentEvent,
   AgentMessage,
@@ -1204,6 +1205,8 @@ interface TemporaryChatSession {
   threadId: string
   projectPath: string
   driverId: string
+  /** Provider the session's turns run against, for quota reads. */
+  providerId?: string
   sessionId: string
   isolated?: IsolatedHandle
   contextApplied: boolean
@@ -2040,8 +2043,10 @@ export class ChatEngine {
     ipcMain.handle('agent:refreshProviderCatalog', (_, projectId: string, force = true) =>
       this.listProviders(projectId, force === true)
     )
-    ipcMain.handle('agent:refreshAccountUsage', (_, projectId: string, threadId: string) =>
-      this.refreshAccountUsage(projectId, threadId)
+    ipcMain.handle(
+      'agent:refreshAccountUsage',
+      (_, projectId: string, threadId: string, overrides?: AgentAccountUsageOverrides) =>
+        this.refreshAccountUsage(projectId, threadId, overrides)
     )
     ipcMain.handle('agent:activateBankedReset', (_, projectId: string, threadId: string) =>
       this.activateBankedReset(projectId, threadId)
@@ -3389,83 +3394,148 @@ export class ChatEngine {
    * the dedicated `harness_usage` table, augmented with the thread's current
    * settings harness.
    */
-  async refreshAccountUsage(projectId: string, threadId: string): Promise<AgentAccountUsage[]> {
+  async refreshAccountUsage(
+    projectId: string,
+    threadId: string,
+    overrides?: AgentAccountUsageOverrides
+  ): Promise<AgentAccountUsage[]> {
     const projectIdSafe = validateEntityId(projectId, 'Project ID')
     await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectIdSafe, threadId)
-    if (!thread) return []
-    const usageRows = this.threadManager.harnessUsageFor(projectIdSafe, threadId)
-    const providerByHarness = new Map<string, string>()
-    for (const row of usageRows) {
-      providerByHarness.set(row.harnessId, row.providerId)
-    }
-    const harnessIds = new Set<string>(usageRows.map((row) => row.harnessId))
-    const current = thread.settings?.harnessId
-    if (current) harnessIds.add(current)
-    const results = await Promise.all(
-      [...harnessIds].map(async (harnessId): Promise<AgentAccountUsage | null> => {
+    // The same telemetry chain answers for every conversation kind: a real
+    // thread row, an active temporary chat session, or — before a temporary
+    // session / new inbox chat has ever run a turn — the harness/provider the
+    // composer is currently pointed at. No branch diverges from the others.
+    const targets: {
+      harnessId: string
+      providerId: string
+      driver: HarnessDriver
+      projectPath: string
+    }[] = []
+    if (thread) {
+      const usageRows = this.threadManager.harnessUsageFor(projectIdSafe, threadId)
+      const providerByHarness = new Map<string, string>()
+      for (const row of usageRows) {
+        providerByHarness.set(row.harnessId, row.providerId)
+      }
+      const harnessIds = new Set<string>(usageRows.map((row) => row.harnessId))
+      const current = thread.settings?.harnessId
+      if (current) harnessIds.add(current)
+      for (const harnessId of harnessIds) {
         try {
           const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
-          const providerId =
-            providerByHarness.get(harnessId) ?? thread.settings?.providerId ?? harnessId
-          const nativeTelemetry = driver.readAccountUsage
-            ? await driver.readAccountUsage(projectPath, providerId)
-            : null
-          // OpenUsage is keyed by PROVIDER, not harness: resolve the provider
-          // the harness session actually ran against (e.g. a pi thread pointed
-          // at Z.AI queries "z-ai", not "pi").
-          const openUsage = await this.openUsage.readProviderUsage(
-            providerId,
-            harnessId === 'pi' ? ['pi'] : []
-          )
-          // A custom provider with a user-defined usage route answers the
-          // quota question directly when the harness itself reports nothing.
-          const customUsage =
-            nativeTelemetry?.rateLimits.length || openUsage?.rateLimits.length
-              ? null
-              : await this.readCustomProviderUsage(harnessId, providerId)
-          const telemetry =
-            nativeTelemetry || openUsage || customUsage
-              ? {
-                  rateLimits: nativeTelemetry?.rateLimits.length
-                    ? nativeTelemetry.rateLimits
-                    : openUsage?.rateLimits.length
-                      ? openUsage.rateLimits
-                      : (customUsage?.rateLimits ?? []),
-                  ...(nativeTelemetry?.credits
-                    ? { credits: nativeTelemetry.credits }
-                    : openUsage?.credits
-                      ? { credits: openUsage.credits }
-                      : customUsage?.credits
-                        ? { credits: customUsage.credits }
-                        : {}),
-                  ...(nativeTelemetry?.bankedResets
-                    ? { bankedResets: nativeTelemetry.bankedResets }
-                    : {}),
-                  ...(nativeTelemetry?.contextWindow === undefined
-                    ? {}
-                    : { contextWindow: nativeTelemetry.contextWindow }),
-                  ...(nativeTelemetry?.contextUsed === undefined
-                    ? {}
-                    : { contextUsed: nativeTelemetry.contextUsed })
-                }
-              : null
-          if (
-            !telemetry ||
-            (telemetry.rateLimits.length === 0 &&
-              telemetry.contextWindow === undefined &&
-              telemetry.contextUsed === undefined)
-          ) {
-            return null
-          }
-          return { harnessId, providerId, ...telemetry }
+          targets.push({
+            harnessId,
+            providerId: providerByHarness.get(harnessId) ?? thread.settings?.providerId ?? harnessId,
+            driver,
+            projectPath
+          })
         } catch (error) {
           Logger.dev('On-demand account usage refresh unavailable:', error)
-          return null
         }
-      })
-    )
+      }
+    } else {
+      const temporary = this.temporaryChats.get(threadId)
+      if (temporary) {
+        const driver = this.drivers.get(temporary.driverId)
+        if (driver) {
+          targets.push({
+            harnessId: temporary.driverId,
+            providerId: temporary.providerId ?? overrides?.providerId ?? temporary.driverId,
+            driver,
+            projectPath: temporary.projectPath
+          })
+        }
+      } else if (overrides?.harnessId) {
+        // No thread row and no live temporary session (e.g. the inbox
+        // "Start a new chat" composer) — read the provider-level quota cache
+        // against the conversation working directory.
+        try {
+          const projectPath = await this.resolveProjectPath(projectIdSafe)
+          const driver = this.drivers.get(overrides.harnessId)
+          if (driver) {
+            targets.push({
+              harnessId: overrides.harnessId,
+              providerId: overrides.providerId ?? overrides.harnessId,
+              driver,
+              projectPath
+            })
+          }
+        } catch (error) {
+          Logger.dev('On-demand account usage refresh unavailable:', error)
+        }
+      }
+    }
+    const results = await Promise.all(targets.map((target) => this.readHarnessAccountUsage(target)))
     return results.filter((entry): entry is AgentAccountUsage => entry !== null)
+  }
+
+  /** One harness's on-demand account quota — the single telemetry chain
+   *  (harness-native capture, then OpenUsage, then a custom provider's usage
+   *  route) shared by thread, temporary-chat, and threadless reads. */
+  private async readHarnessAccountUsage(target: {
+    harnessId: string
+    providerId: string
+    driver: HarnessDriver
+    projectPath: string
+  }): Promise<AgentAccountUsage | null> {
+    const { harnessId, providerId, driver, projectPath } = target
+    try {
+      const nativeTelemetry = driver.readAccountUsage
+        ? await driver.readAccountUsage(projectPath, providerId)
+        : null
+      // OpenUsage is keyed by PROVIDER, not harness: resolve the provider
+      // the harness session actually ran against (e.g. a pi thread pointed
+      // at Z.AI queries "z-ai", not "pi").
+      const openUsage = await this.openUsage.readProviderUsage(
+        providerId,
+        harnessId === 'pi' ? ['pi'] : []
+      )
+      // A custom provider with a user-defined usage route answers the
+      // quota question directly when the harness itself reports nothing.
+      const customUsage =
+        nativeTelemetry?.rateLimits.length || openUsage?.rateLimits.length
+          ? null
+          : await this.readCustomProviderUsage(harnessId, providerId)
+      const telemetry =
+        nativeTelemetry || openUsage || customUsage
+          ? {
+              rateLimits: nativeTelemetry?.rateLimits.length
+                ? nativeTelemetry.rateLimits
+                : openUsage?.rateLimits.length
+                  ? openUsage.rateLimits
+                  : (customUsage?.rateLimits ?? []),
+              ...(nativeTelemetry?.credits
+                ? { credits: nativeTelemetry.credits }
+                : openUsage?.credits
+                  ? { credits: openUsage.credits }
+                  : customUsage?.credits
+                    ? { credits: customUsage.credits }
+                    : {}),
+              ...(nativeTelemetry?.bankedResets
+                ? { bankedResets: nativeTelemetry.bankedResets }
+                : {}),
+              ...(nativeTelemetry?.contextWindow === undefined
+                ? {}
+                : { contextWindow: nativeTelemetry.contextWindow }),
+              ...(nativeTelemetry?.contextUsed === undefined
+                ? {}
+                : { contextUsed: nativeTelemetry.contextUsed })
+            }
+          : null
+      if (
+        !telemetry ||
+        (telemetry.rateLimits.length === 0 &&
+          telemetry.contextWindow === undefined &&
+          telemetry.contextUsed === undefined)
+      ) {
+        return null
+      }
+      return { harnessId, providerId, ...telemetry }
+    } catch (error) {
+      Logger.dev('On-demand account usage refresh unavailable:', error)
+      return null
+    }
   }
 
   /**
@@ -7440,6 +7510,7 @@ export class ChatEngine {
         threadId,
         projectPath,
         driverId,
+        providerId: settings.providerId,
         sessionId,
         isolated,
         contextApplied: false,

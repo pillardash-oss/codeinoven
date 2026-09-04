@@ -155,6 +155,7 @@ import type {
   Thread,
   ThreadContextUsage,
   AgentAccountUsage,
+  AgentAccountUsageOverrides,
   AttachmentStorageScope,
   ThreadMessageCursor,
   ThreadMessagePage,
@@ -883,7 +884,10 @@ export interface IpcInvokeContract {
   'agent:listProviders': Contract<[projectId: string], ProviderCatalog[]>
   'agent:listProviderSnapshot': Contract<[projectId: string], ProviderCatalog[]>
   'agent:refreshProviderCatalog': Contract<[projectId: string, force?: boolean], ProviderCatalog[]>
-  'agent:refreshAccountUsage': Contract<[projectId: string, threadId: string], AgentAccountUsage[]>
+  'agent:refreshAccountUsage': Contract<
+    [projectId: string, threadId: string, overrides?: AgentAccountUsageOverrides],
+    AgentAccountUsage[]
+  >
   /** Redeem one banked Codex rate-limit reset credit. Destructive: resets the
    *  account's active usage windows and consumes one banked credit. */
   'agent:activateBankedReset': Contract<

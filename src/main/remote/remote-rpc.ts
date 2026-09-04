@@ -99,6 +99,7 @@ import type {
   CreateThreadInput,
   EngineeringSpecContent,
   GitResetMode,
+  AgentAccountUsageOverrides,
   PromptAttachment,
   PromptAssignmentTaskReference,
   PromptProjectReference,
@@ -889,7 +890,11 @@ export class RemoteRpcDispatcher {
       case 'agent:refreshProviderCatalog':
         return chatEngine.listProviders(this.string(args[0]), args[1] !== false)
       case 'agent:refreshAccountUsage':
-        return chatEngine.refreshAccountUsage(this.string(args[0]), this.string(args[1]))
+        return chatEngine.refreshAccountUsage(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.optionalAccountUsageOverrides(args[2])
+        )
       case 'agent:getHarnessAuthStatus':
         return chatEngine.getHarnessAuthStatus(this.string(args[0]), this.string(args[1]))
       case 'agent:getSessionStatus':
@@ -2275,6 +2280,21 @@ export class RemoteRpcDispatcher {
     if (value === undefined) return undefined
     if (typeof value !== 'boolean') throw new TypeError('Expected a boolean argument')
     return value
+  }
+
+  private optionalAccountUsageOverrides(value: unknown): AgentAccountUsageOverrides | undefined {
+    if (value === undefined) return undefined
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new TypeError('Expected an overrides object argument')
+    }
+    const raw = value as Record<string, unknown>
+    const harnessId = this.optionalString(raw.harnessId)
+    const providerId = this.optionalString(raw.providerId)
+    if (harnessId === undefined && providerId === undefined) return undefined
+    return {
+      ...(harnessId !== undefined ? { harnessId } : {}),
+      ...(providerId !== undefined ? { providerId } : {})
+    }
   }
 
   private boolean(value: unknown): boolean {

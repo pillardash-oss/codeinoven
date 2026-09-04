@@ -2055,6 +2055,14 @@ export interface AgentHarnessUsage {
   models?: HarnessModelUsage[]
 }
 
+/** Optional harness/provider the quota read should answer for when no thread
+ *  row (or live temporary session) exists yet — e.g. the inbox "Start a new
+ *  chat" composer before its first turn. */
+export interface AgentAccountUsageOverrides {
+  harnessId?: string
+  providerId?: string
+}
+
 /** On-demand account quota snapshot for one harness used on a thread. */
 export interface AgentAccountUsage {
   harnessId: string
