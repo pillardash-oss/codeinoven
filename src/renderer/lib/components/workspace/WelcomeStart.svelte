@@ -13,7 +13,7 @@
 
   let { onNewChat, onAddProject, onOpenSettings }: Props = $props()
 
-  const logoUrl = publicAssetUrl('assets/cua-logo-mono.svg')
+  const logoUrl = publicAssetUrl('icon-mono.svg')
 
   const actions = [
     {
