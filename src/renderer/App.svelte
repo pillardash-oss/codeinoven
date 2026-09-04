@@ -1432,6 +1432,12 @@
     const unsubscribeNewTerminalShortcut = subscribe('window:newTerminalShortcut', () => {
       handleNewTerminalShortcut()
     })
+    const unsubscribeHistoryBack = subscribe('window:historyBack', () => {
+      void goBack()
+    })
+    const unsubscribeHistoryForward = subscribe('window:historyForward', () => {
+      void goForward()
+    })
     updaterState.init()
     // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
     // initialise the store here so the overlay's dynamic import can be gated on
@@ -1448,6 +1454,8 @@
       unsubscribeThreadDeleted()
       unsubscribeCloseShortcut()
       unsubscribeNewTerminalShortcut()
+      unsubscribeHistoryBack()
+      unsubscribeHistoryForward()
       updaterState.destroy()
     }
   }
@@ -1667,6 +1675,25 @@
 
   navigationHistoryState.init(rendererRecovery.activeView, rendererRecovery.selectedThread)
 
+  /**
+   * Timestamp of the last mouse side-button navigation. Windows/Linux deliver
+   * a side press both as an app command (forwarded over IPC) and — through
+   * Chromium — as a renderer mouse event; macOS only delivers the raw event.
+   * A short dedupe window keeps one physical press from navigating twice.
+   */
+  let lastMouseHistoryNavAt = 0
+
+  /** Mouse back/forward buttons (button 3 = back, 4 = forward) — macOS path. */
+  function onMouseHistoryButton(e: MouseEvent): void {
+    if (e.button !== 3 && e.button !== 4) return
+    const now = Date.now()
+    if (now - lastMouseHistoryNavAt < 150) return
+    lastMouseHistoryNavAt = now
+    e.preventDefault()
+    if (e.button === 3) void goBack()
+    else void goForward()
+  }
+
   onMount(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
     systemDark = mq.matches
@@ -1677,6 +1704,8 @@
     }
     mq.addEventListener('change', onColorSchemeChange)
     window.addEventListener('keydown', onKeydown)
+    window.addEventListener('mousedown', onMouseHistoryButton)
+    window.addEventListener('auxclick', onMouseHistoryButton)
     const uninstallVoiceShortcut = initVoiceShortcutListener()
 
     const restoreWorkspaceCallbacks = installWorkspaceCallbacks()
@@ -1705,6 +1734,8 @@
     return () => {
       mq.removeEventListener('change', onColorSchemeChange)
       window.removeEventListener('keydown', onKeydown)
+      window.removeEventListener('mousedown', onMouseHistoryButton)
+      window.removeEventListener('auxclick', onMouseHistoryButton)
       uninstallVoiceShortcut()
       restoreWorkspaceCallbacks()
       unsubscribeIpc()

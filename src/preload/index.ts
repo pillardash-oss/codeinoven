@@ -621,6 +621,8 @@ const EVENT_CHANNELS = [
   'window:confirmClose',
   'window:closeShortcut',
   'window:newTerminalShortcut',
+  'window:historyBack',
+  'window:historyForward',
   'updater:status',
   'updater:waiting-for-threads',
   'computerUse:pipFrame',

@@ -2712,6 +2712,17 @@ export interface IpcEventContract {
    * panel — right sidebar or bottom dock, whichever is active.
    */
   'window:newTerminalShortcut': []
+  /**
+   * Emitted when the user presses the mouse's back side button. Windows and
+   * Linux surface it as the `browser-backward` app command in the main process;
+   * the main process forwards it here so the renderer can walk its own
+   * in-app navigation history (the window has no native browser history).
+   * On macOS the renderer instead sees a raw `mousedown`/`auxclick` with
+   * button 3 — handled directly in App.svelte.
+   */
+  'window:historyBack': []
+  /** Emitted when the user presses the mouse's forward side button. */
+  'window:historyForward': []
   'updater:status': [status: UpdaterStatus]
   'updater:waiting-for-threads': [activeCount: number]
   'computerUse:pipFrame': [frame: ComputerUsePipFrame]

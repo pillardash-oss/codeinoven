@@ -1176,6 +1176,19 @@ function createWindow(): BrowserWindow {
     }
   })
 
+  // Mouse side buttons (back/forward). Windows and Linux deliver them as app
+  // commands; the renderer walks its own in-app navigation history because the
+  // single-page window has no native browser history to navigate. On macOS no
+  // app-command is emitted — the renderer handles the raw buttons directly.
+  window.on('app-command', (_event, command) => {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) return
+    if (command === 'browser-backward') {
+      sendToRenderer(window.webContents, 'window:historyBack')
+    } else if (command === 'browser-forward') {
+      sendToRenderer(window.webContents, 'window:historyForward')
+    }
+  })
+
   // Renderer freeze/crash diagnostics. On a slow machine (e.g. M1) the renderer
   // can seize up or be torn down in ways that never surface as a JS exception —
   // the OS shows "not responding" while nothing lands in the log. These
