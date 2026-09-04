@@ -137,6 +137,12 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
+  /* JetBrains Mono ships programming ligatures (contextual alternates) for
+     sequences like "...", "??", "//", "->" — great in a code editor, but a
+     dev workspace's prose and composers need every literal character to
+     render as typed, not merge into a compact glyph. Disable app-wide. */
+  font-variant-ligatures: none;
+  font-feature-settings: 'calt' 0, 'liga' 0, 'dlig' 0;
 }
 
 /* Any scroll call that passes an explicit `behavior` (e.g. the chat stream's
