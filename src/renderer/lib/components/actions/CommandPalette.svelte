@@ -101,9 +101,18 @@
       return
     }
     // Alt/Opt+ArrowLeft — go back to the previous surface (e.g. the main Cmd+K).
+    // Only the LEFT Alt/Opt key triggers this: right-Option sits next to the arrow
+    // keys on many keyboards, and Option+ArrowLeft is word-jump while editing the
+    // query, so pressing it must not bounce the user back to the actions list.
     // Shift is excluded so Shift+Alt+ArrowLeft keeps its native text-selection behavior.
     // Cmd/Meta+ArrowLeft is intentionally ignored so word-jump remains native.
-    if (onBack && event.key === 'ArrowLeft' && !event.shiftKey && event.altKey) {
+    if (
+      onBack &&
+      event.key === 'ArrowLeft' &&
+      !event.shiftKey &&
+      event.altKey &&
+      event.code === 'AltLeft'
+    ) {
       event.preventDefault()
       event.stopPropagation()
       onBack()

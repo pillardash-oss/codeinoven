@@ -101,7 +101,8 @@
   let filterQuery = $state('')
   let filterOpen = $state(false)
   let revealedSearchPath = $state<string | null>(null)
-  let lastTurnOnly = $state(false)
+  /** Backed by the per-project files store so sidebar tab remounts keep it. */
+  let lastTurnOnly = $derived(projectState.lastTurnOnly)
   let autoFiltered = $state(false)
   let searchRequestId = 0
   /** Directories the user explicitly collapsed while a filter (search query or
@@ -235,11 +236,11 @@
     const checkpointId = activeCheckpointId
     if (checkpointId && checkpointId !== lastAppliedCheckpointId) {
       lastAppliedCheckpointId = checkpointId
-      lastTurnOnly = true
+      projectFilesWorkspace.setLastTurnOnly(projectId, true)
       autoFiltered = true
     } else if (!checkpointId && autoFiltered) {
       lastAppliedCheckpointId = null
-      lastTurnOnly = false
+      projectFilesWorkspace.setLastTurnOnly(projectId, false)
       autoFiltered = false
     }
   })
@@ -305,10 +306,11 @@
   }
 
   function toggleLastTurnFilter(): void {
-    lastTurnOnly = !lastTurnOnly
-    autoFiltered = false
+    const next = !lastTurnOnly
+    projectFilesWorkspace.setLastTurnOnly(projectId, next)
+    if (!next) autoFiltered = false
     clearCollapsedOverrides()
-    void revealActivePathAfterFilterChange()
+    if (!next) void revealActivePathAfterFilterChange()
   }
 
   function toggleConflictsFilter(): void {

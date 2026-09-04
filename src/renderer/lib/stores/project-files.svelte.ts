@@ -65,6 +65,10 @@ export interface ProjectFilesState {
   sessions: Record<string, ProjectFileSession>
   /** Scope bucket the cached listings were read from. */
   activeScope: string
+  /** Whether the "Last turn" filter is active in the file tree. Lives here
+   *  (per project) instead of local component state so panel remounts from
+   *  sidebar tab changes (e.g. previewing a file) do not reset it. */
+  lastTurnOnly: boolean
 }
 
 export interface ProjectFileClipboard {
@@ -98,7 +102,8 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     selectionAnchor: null,
     loadingPaths: {},
     sessions: {},
-    activeScope: DEFAULT_SCOPE_BUCKET_ID
+    activeScope: DEFAULT_SCOPE_BUCKET_ID,
+    lastTurnOnly: false
   }
 }
 
@@ -219,6 +224,10 @@ class ProjectFilesWorkspace {
       explorerVisible: state.explorerVisible,
       width: state.explorerWidth
     })
+  }
+
+  setLastTurnOnly(projectId: string, value: boolean): void {
+    this.ensureState(projectId).lastTurnOnly = value
   }
 
   async toggleDirectory(projectId: string, directory: string): Promise<void> {
