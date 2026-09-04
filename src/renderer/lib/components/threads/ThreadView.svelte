@@ -1296,6 +1296,19 @@
       // unknown provenance are intentionally excluded from the live meter.
       if (message.harnessId !== settings.harnessId || message.providerId !== settings.providerId)
         continue
+      // A compaction summary rewrites the harness's context: occupancy and
+      // token totals reported by earlier messages no longer describe the
+      // session. Drop them here so the meter never shows a stale
+      // pre-compaction reading (e.g. a stuck "≈100%") — the next reported
+      // or estimated turn re-seeds the signal from the compacted context.
+      if (
+        message.origin === 'compaction' ||
+        message.parts.some((part) => part.type === 'compaction-summary')
+      ) {
+        latestContextUsed = undefined
+        latestContextEstimated = false
+        latestTokens = undefined
+      }
       latestMessage = message
       const stepCost = message.parts.reduce(
         (total, part) => total + (part.type === 'step-finish' ? (part.cost ?? 0) : 0),
