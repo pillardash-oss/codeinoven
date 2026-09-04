@@ -16870,7 +16870,10 @@ export class ChatEngine {
     }
     return discovered.filter(
       (command) =>
-        command.source === 'skill' || command.name === 'config' || command.name === 'settings'
+        command.source === 'skill' ||
+        command.name === 'config' ||
+        command.name === 'settings' ||
+        command.name === 'usage-credits'
     )
   }
 
@@ -17509,9 +17512,13 @@ export class ChatEngine {
         event.type === 'message.completed' &&
         !event.compaction &&
         event.contextUsed === undefined &&
-        this.drivers.get(eventOwner.driverId)?.capabilities.contextUsage === false &&
         eventOwner.estimatedContextUsed !== undefined
       ) {
+        // Some drivers declare `contextUsage: true` yet carry providers that
+        // report no token usage at all (e.g. OpenCode gateways like Console
+        // Go). When the event carries no reported occupancy, the composed
+        // request estimate from dispatch is the only signal available —
+        // flagged as estimated so consumers never mistake it for reported.
         event.contextUsed = eventOwner.estimatedContextUsed
         event.contextEstimated = true
       }
@@ -19415,6 +19422,17 @@ export class ChatEngine {
       const turnThinkingLevel = turnSelection?.thinkingLevel ?? thread?.settings?.thinkingLevel
       if (turnAssistant && !turnAssistant.thinkingLevel && turnThinkingLevel) {
         turnAssistant.thinkingLevel = turnThinkingLevel
+      }
+      // Providers that never report token usage leave assistant messages
+      // without a contextUsed signal, blinding usage-based compaction and the
+      // context indicator. Fall back to the composed-request occupancy captured
+      // at dispatch, clearly flagged as an estimate.
+      if (turnAssistant && turnAssistant.contextUsed === undefined) {
+        const composed = info.estimatedContextUsed
+        if (composed !== undefined) {
+          turnAssistant.contextUsed = composed
+          turnAssistant.contextEstimated = true
+        }
       }
 
       this.applyReasoningStamps(sessionId, messages)

@@ -517,6 +517,42 @@ function mapOpenCodeUsage(raw: unknown): {
   return { aggregateTokens, normalizedUsage }
 }
 
+/**
+ * Derive the context a completed OpenCode message occupies from its
+ * step-finish token reports.
+ *
+ * OpenCode reports token categories per step. The context after the message
+ * is the prompt the final step saw (uncached input + cache reads + cache
+ * writes) plus everything generated across all steps (output + reasoning),
+ * since each step's generation stays in the context for the next one.
+ * Returns undefined when the provider reported no token categories at all
+ * (e.g. Console Go gateways), leaving context occupancy unknown so the
+ * engine's composed-request estimate can take over instead.
+ */
+function openCodeContextFromParts(parts: Array<Record<string, unknown>>): number | undefined {
+  let lastStepPrompt: number | undefined
+  let generated = 0
+  for (const part of parts) {
+    if (part['type'] !== 'step-finish') continue
+    const tokens = recordValue(part['tokens'])
+    if (!tokens) continue
+    const cache = recordValue(tokens['cache'])
+    const promptCategories = [
+      numberValue(tokens['input']),
+      numberValue(cache?.['read']),
+      numberValue(cache?.['write'])
+    ].filter((value): value is number => value !== undefined)
+    if (promptCategories.length > 0) {
+      lastStepPrompt = promptCategories.reduce((sum, value) => sum + value, 0)
+    }
+    for (const value of [numberValue(tokens['output']), numberValue(tokens['reasoning'])]) {
+      if (value !== undefined) generated += value
+    }
+  }
+  if (lastStepPrompt === undefined) return undefined
+  return lastStepPrompt + generated
+}
+
 interface OpenCodeTaskEnvelope {
   id: string
   state: 'running' | 'completed' | 'error'
@@ -2796,6 +2832,7 @@ export class OpenCodeDriver implements HarnessDriver {
         ? undefined
         : (stringValue(errorData?.['message']) ?? stringValue(error?.['message']))
     const { aggregateTokens, normalizedUsage } = mapOpenCodeUsage(info['tokens'])
+    const contextUsed = openCodeContextFromParts(parts)
     const hiddenTransportParts = parts
       .filter(isOpenCodeCompactionContinuePart)
       .map((part, index): AgentPart => ({
@@ -2848,6 +2885,7 @@ export class OpenCodeDriver implements HarnessDriver {
       cost: numberValue(info['cost']),
       ...(normalizedUsage ? { normalizedUsage } : {}),
       tokens: aggregateTokens,
+      ...(contextUsed !== undefined ? { contextUsed } : {}),
       error: errorMessage,
       structuredOutput: info['structured'] ?? info['structured_output']
     }
