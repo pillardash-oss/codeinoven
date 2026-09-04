@@ -358,7 +358,7 @@
                 title="Open comment"
                 onclick={() => void openAnnotation(annotation)}
               >
-                <span class="line-clamp-2 block text-xs leading-relaxed">{annotation.body}</span>
+                <span class="line-clamp-2 text-xs leading-relaxed">{annotation.body}</span>
                 <span class="mt-1 block text-[0.625rem] text-dimmed">
                   {annotation.status === 'open' ? annotation.author : annotation.status}
                 </span>

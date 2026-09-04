@@ -1188,7 +1188,7 @@
           title="Open annotation"
           onclick={() => void props.onOpen(annotation)}
         >
-          <span class="line-clamp-2 block text-xs leading-relaxed">{annotation.body}</span>
+          <span class="line-clamp-2 text-xs leading-relaxed">{annotation.body}</span>
           <span class="mt-1 block text-[0.625rem] text-dimmed">{annotation.author}</span>
         </button>
       {/each}
