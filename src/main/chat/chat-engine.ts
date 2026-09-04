@@ -7001,7 +7001,7 @@ export class ChatEngine {
         isChatThread ? 'standalone-chat' : 'project-thread',
         messageId
       ),
-      this.buildHistoryRecap(projectId, threadId, driverId),
+      this.buildHistoryRecap(projectId, threadId, driverId, undefined, messageId),
       transportPromise
     ])
     const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
@@ -9365,7 +9365,8 @@ export class ChatEngine {
     projectId: string,
     threadId: string,
     driverId: string,
-    maxInputTokens?: number
+    maxInputTokens?: number,
+    currentMessageId?: string
   ): Promise<string> {
     const thread = await this.threadManager.getThread(projectId, threadId)
     const sameHarness = !thread?.settings?.harnessId || thread.settings.harnessId === driverId
@@ -9419,7 +9420,15 @@ export class ChatEngine {
     // else, and a recap that announces an earlier conversation but only echoes
     // the question back reads to the model as a fabricated/injected context —
     // the exact pattern that makes resuming models refuse to continue.
-    const mirror = mirrored.at(-1)?.role === 'user' ? mirrored.slice(0, -1) : mirrored
+    // Matched by id, not merely by trailing role: an earlier turn that errored
+    // out before an assistant reply was persisted (e.g. a rate limit) also
+    // leaves a trailing 'user' record, and it is real prior history, not a
+    // duplicate of the prompt about to be sent — stripping it by role alone
+    // silently drops the last thing the user said across a harness switch.
+    const last = mirrored.at(-1)
+    const mirror = last?.role === 'user' && (!currentMessageId || last.id === currentMessageId)
+      ? mirrored.slice(0, -1)
+      : mirrored
     if (mirror.length === 0) return ''
     if (thread?.sessionId && sameHarness) {
       // `ensureSession` already confirmed whether the harness natively holds
