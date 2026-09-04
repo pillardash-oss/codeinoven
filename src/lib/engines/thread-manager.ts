@@ -1414,6 +1414,14 @@ export class ThreadManager {
     return this.threadRepo.listAllForHydrationViaWorker(options)
   }
 
+  /** Thread list for the sidebar: worker-backed like listThreadsForHydration,
+   *  but with harness-usage decoration so multi-harness rows can render their
+   *  second line. The usage query is a single batched GROUP BY on the worker,
+   *  so it does not reintroduce the main-thread stall this path once had. */
+  async listThreadsForSidebar(options?: ThreadListOptions): Promise<Thread[]> {
+    return this.threadRepo.listAllViaWorker(options)
+  }
+
   /**
    * Deterministic thread-capacity view for the current project. Exposes the
    * limit, active/protected counts, and how many threads could be deleted to
