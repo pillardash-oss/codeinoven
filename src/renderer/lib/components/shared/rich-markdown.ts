@@ -890,13 +890,20 @@ interface FenceCandidate {
  * every Enter-separated line as its own block, so the closing ``` the user
  * tagged on at the end usually lives in a sibling, not in the same block.
  */
+// Bounds the sibling walk below so typing anywhere in a large document (specs,
+// notes) can never turn into an O(document length) scan on every keystroke.
+// Real in-progress fences never span this many blocks.
+const MAX_FENCE_CANDIDATE_SIBLINGS = 200
+
 function collectFenceCandidate(root: HTMLElement, block: HTMLElement): FenceCandidate | null {
   const parts: string[] = [blockTextWithBreaks(block).replace(/[\u200b\u00a0\s]+$/g, '')]
   const nodes: HTMLElement[] = [block]
   if (parts[0]?.split('\n').some((line) => /^\s*>/.test(line))) return null
 
   let sibling = block.nextElementSibling
+  let scanned = 0
   while (sibling instanceof HTMLElement && root.contains(sibling)) {
+    if (++scanned > MAX_FENCE_CANDIDATE_SIBLINGS) return null
     const text = blockTextWithBreaks(sibling).replace(/[\u200b\u00a0\s]+$/g, '')
     if (text === '```') return { text: `${parts.join('\n')}\n\u0060\u0060\u0060`, nodes: [...nodes, sibling], closed: true }
     if (text.startsWith('```')) break

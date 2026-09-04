@@ -622,6 +622,7 @@
     if (incomingText !== null) {
       const text = demoteSmartPunctuation(incomingText)
       if (text !== incomingText) {
+        inputEvent.preventDefault()
         insertRawAtSelection(text)
         return
       }
