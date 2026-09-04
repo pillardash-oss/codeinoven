@@ -1,14 +1,15 @@
 <script lang="ts">
   import {
     Archive,
+    BatteryCharging,
     BatteryMedium,
     Brain,
     ChevronDown,
     ChevronRight,
-    Loader2,
-    RotateCcw
+    Loader2
   } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
+  import { slide } from 'svelte/transition'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -184,7 +185,10 @@
   {#each limits as limit (limit.id)}
     {@const percent = quotaPercent(limit)}
     {@const overage = overageLabel(limit)}
-    <div>
+    <div
+      transition:slide={{ duration: 300 }}
+      class="overflow-hidden"
+    >
       <div class="mb-1 flex items-center justify-between gap-3 text-[0.625rem]">
         <span class="font-medium text-muted">{limit.label}</span>
         <span class="tabular-nums text-dimmed">
@@ -206,7 +210,7 @@
           aria-valuemax="100"
           aria-valuenow={Math.round(percent)}
         >
-          <div class="h-full rounded-full bg-info" style={`width: ${percent}%`}></div>
+          <div class="h-full rounded-full bg-info transition-[width] duration-700 ease-out" style={`width: ${percent}%`}></div>
         </div>
       {/if}
       <p class="mt-1 text-[0.5625rem] text-dimmed">{formatReset(limit.resetsAt)}</p>
@@ -218,22 +222,25 @@
 {/snippet}
 
 {#snippet bankedResetRow(availableCount: number)}
-  <div class="flex items-center justify-between gap-3 rounded-md border border-border bg-app/40 p-2">
-    <div class="min-w-0">
-      <p class="text-[0.625rem] font-medium text-muted">Banked resets</p>
-      <p class="mt-0.5 text-[0.5625rem] text-dimmed">
-        {availableCount} available to redeem
-      </p>
+  <div transition:slide={{ duration: 250 }} class="rounded-md border border-border bg-app/40 p-2.5">
+    <div class="flex items-center gap-2">
+      <BatteryCharging size={16} class="shrink-0 text-info" aria-hidden="true" />
+      <span class="text-base leading-none font-semibold tabular-nums text-foreground">
+        {availableCount}
+      </span>
+      <span class="text-[0.625rem] font-medium text-muted">
+        banked reset{availableCount === 1 ? '' : 's'} available
+      </span>
     </div>
     <button
       type="button"
-      class="flex h-6 shrink-0 items-center gap-1 rounded-md border border-border px-2 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
+      class="mt-2.5 flex h-6 w-full items-center justify-center gap-1.5 rounded-md border border-border text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
       title="Redeem one banked reset — this immediately resets your usage windows"
       disabled={!onActivateBankedReset}
       onclick={onActivateBankedReset}
     >
-      <RotateCcw size={10} />
-      Use banked reset
+      <BatteryCharging size={11} aria-hidden="true" />
+      Reset usage
     </button>
   </div>
 {/snippet}
@@ -402,7 +409,7 @@
       aria-valuemax="100"
       aria-valuenow={Math.round(boundedPercent ?? 0)}
     >
-      <div class={`h-full rounded-full ${fillClass}`} style={`width: ${boundedPercent}%`}></div>
+      <div class={`h-full rounded-full ${fillClass} transition-[width] duration-700 ease-out`} style={`width: ${boundedPercent}%`}></div>
     </div>
     {#if usage?.contextWindow && usage.contextUsed !== undefined}
       <div class="mt-2 grid grid-cols-3 gap-2 text-[0.5625rem] text-dimmed">
