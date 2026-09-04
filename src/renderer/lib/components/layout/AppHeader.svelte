@@ -271,6 +271,17 @@
   /** Find a thread by ID across all projects and open it, restoring the
    *  project context.  No-op if the thread no longer exists. */
   async function restoreThread(threadId: string): Promise<void> {
+    // Cache-first: restoring from the in-memory scope lists keeps openThread on
+    // the same synchronous tick as the navigation, so the target view never
+    // paints its empty state for a frame or two while IPC round-trips resolve.
+    const cached = scopeState.allScopeThreads.find((candidate) => candidate.id === threadId)
+    if (cached) {
+      const cachedProject =
+        scopeState.projectRecords.find((candidate) => candidate.id === cached.projectId) ?? null
+      workspaceState.openThread(cached, cachedProject)
+      void scopeState.ensureBoardLoaded(cached.projectId)
+      return
+    }
     const allThreads: Thread[] = await invoke('thread:listAll')
     const thread = allThreads.find((t) => t.id === threadId)
     if (!thread) return
