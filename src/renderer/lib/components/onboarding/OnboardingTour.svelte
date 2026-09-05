@@ -4,14 +4,12 @@
   import {
     ArrowLeft,
     ArrowRight,
-    Check,
     Download,
     FolderInput,
     FolderKanban,
     Loader2,
     MessageSquare,
     PanelRight,
-    Sparkles,
     X
   } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -20,7 +18,6 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { APP_NAME } from '$shared/brand'
-  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
 
   interface Props {
     step: number
