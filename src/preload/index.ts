@@ -538,6 +538,8 @@ const INVOKE_CHANNELS = [
   'thread:list',
   'thread:listAll',
   'thread:listRecent',
+  'thread:listRecentPerProject',
+  'thread:listProjectPage',
   'thread:listHistoryPage',
   'threads:search',
   'thread:loadMessages',
