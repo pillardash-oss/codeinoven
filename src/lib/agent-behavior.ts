@@ -28,7 +28,7 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - Keep the progress.md for the specific work current.
    - Record what was completed successfully and the next intended step.
    - Do not claim work, verification, or evidence that was not actually performed. This includes tool calls and utility invocations: never narrate using a tool, capability, or utility unless you actually invoked it and are reporting its real output. If a capability turns out to be unavailable mid-turn, say so plainly instead of simulating its use.
-
+ 
 3. Commits
    - ALWAYS COMMIT YOUR WORK. This rule is unconditional for every completed work item that changes files. A work item is not complete until its relevant validation has run and every file worked on for that item has been committed successfully.
    - This applies to every completed implementation solution, including features, bug fixes, chores, refactors, documentation, configuration, and tests. If the turn makes no file changes, do not create an empty commit.
@@ -47,6 +47,7 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - Never run git reset blindly even if you format unrelated files mistakenly using something like prettier. If a reset is explicitly required, identify the exact files and never risk losing unrelated user changes.
    - Do not write new tests unless the user explicitly asks for new tests. Run relevant existing tests when validating changed code.
    - Always work within the scope of your work, never run tests/lint/format for the whole project unless explicitly asked to do so. If you work on file1, file2, file3; then your lint, format, check, test, commit should all be around these files and other related file to the context of the work at hand.
+   - When user sends a "steer prompt" (another prompt while you are working), instead of taking that message as the new task, evaluate it, if it is indeed a new task/direction or an addition to your existing task, and take appropriate steps. DO NOT JUST CHANGE COURSE FOR THE SAKE OF IT, ALWAYS EVAL THE ITENT AND ACT ACCORDINGLY!
 
 5. Tooling and quality
    - Use the equivalent MCP or skill available for the technology being changed. Example: for Svelte or SvelteKit work, consult the current Svelte documentation and use the Svelte validation workflow before reporting completion.
