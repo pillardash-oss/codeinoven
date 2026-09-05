@@ -15,7 +15,7 @@ import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { serializeProviderClipboard } from '../../lib/provider-clipboard'
 import { discoverBaseUrlModels } from './base-url-model-discovery'
-import { normalizeUsagePath } from './base-url-provider-service'
+import { normalizeUsagePath, normalizeModelsPath } from './base-url-provider-service'
 import { CustomProviderUsageClient } from './custom-provider-usage-client'
 
 const CREATE_FIELDS = new Set([
@@ -27,6 +27,7 @@ const CREATE_FIELDS = new Set([
   'headers',
   'models',
   'usagePath',
+  'modelsPath',
   'enabled',
   'id'
 ])
@@ -39,6 +40,7 @@ const UPDATE_FIELDS = new Set([
   'headers',
   'models',
   'usagePath',
+  'modelsPath',
   'enabled'
 ])
 /** Model IDs routinely include slashes/at-signs (LM Studio: `org/model`, HF: `org/model@precision`, Cloudflare: `@cf/org/model`). */
@@ -74,6 +76,7 @@ export function registerBaseUrlProviderIpc(
         headers: input.headers,
         models: input.models,
         ...(input.usagePath === undefined ? {} : { usagePath: input.usagePath }),
+        ...(input.modelsPath === undefined ? {} : { modelsPath: input.modelsPath }),
         ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
         ...(input.id === undefined ? {} : { id: input.id })
       } satisfies BaseUrlProviderCreateRequest)
@@ -117,6 +120,7 @@ export function registerBaseUrlProviderIpc(
           ...(patch.headers === undefined ? {} : { headers: patch.headers }),
           ...(patch.models === undefined ? {} : { models: patch.models }),
           ...(patch.usagePath === undefined ? {} : { usagePath: patch.usagePath }),
+          ...(patch.modelsPath === undefined ? {} : { modelsPath: patch.modelsPath }),
           ...(patch.enabled === undefined ? {} : { enabled: patch.enabled }),
           ...(patch.removeApiKey === true ? { removeApiKey: true } : {}),
           ...(nextApiKeyRef !== undefined ? { apiKeyRef: nextApiKeyRef } : {})
@@ -160,6 +164,7 @@ export function registerBaseUrlProviderIpc(
         apiKey,
         headers: input.headers ?? '',
         ...(input.usagePath ? { usagePath: input.usagePath } : {}),
+        ...(input.modelsPath ? { modelsPath: input.modelsPath } : {}),
         models: input.models,
         enabled: input.enabled
       })
@@ -176,6 +181,7 @@ export function registerBaseUrlProviderIpc(
     return discoverBaseUrlModels(input.baseURL, {
       ...(apiKey ? { apiKey } : {}),
       ...(input.headers ? { headers: input.headers } : {}),
+      ...(input.modelsPath ? { modelsPath: input.modelsPath } : {}),
       force: input.force
     })
   })
@@ -211,6 +217,7 @@ interface ParsedCreateRequest {
   headers?: Record<string, string>
   models: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
   usagePath?: string
+  modelsPath?: string
   enabled?: boolean
   /** Reuses an existing provider id to link this record to sibling harnesses. */
   id?: string
@@ -225,6 +232,7 @@ interface ParsedUpdateRequest {
   headers?: Record<string, string>
   models?: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
   usagePath?: string
+  modelsPath?: string
   enabled?: boolean
 }
 
@@ -242,6 +250,7 @@ function parseCreateRequest(value: unknown): ParsedCreateRequest {
     headers: parseHeaders(raw['headers']),
     models: raw['models'] === undefined ? [] : parseModels(raw['models']),
     ...(raw['usagePath'] === undefined ? {} : { usagePath: parseUsagePath(raw['usagePath']) }),
+    ...(raw['modelsPath'] === undefined ? {} : { modelsPath: parseModelsPath(raw['modelsPath']) }),
     ...(raw['enabled'] === undefined ? {} : { enabled: asBoolean(raw['enabled'], 'enabled') }),
     ...(raw['id'] === undefined
       ? {}
@@ -258,6 +267,7 @@ function parseCopyClipboardRequest(value: unknown): {
   apiKey?: string
   headers?: string
   usagePath?: string
+  modelsPath?: string
   models: Array<{
     id: string
     name: string
@@ -287,6 +297,9 @@ function parseCopyClipboardRequest(value: unknown): {
     ...(raw['usagePath'] === undefined
       ? {}
       : { usagePath: preserveStr(raw['usagePath'], 'Usage route', 0, 2_048) }),
+    ...(raw['modelsPath'] === undefined
+      ? {}
+      : { modelsPath: preserveStr(raw['modelsPath'], 'Model list route', 0, 2_048) }),
     models: parseClipboardModels(raw['models']),
     enabled: raw['enabled'] === undefined ? true : asBoolean(raw['enabled'], 'enabled')
   }
@@ -349,6 +362,9 @@ function parseFetchModelsRequest(value: unknown): BaseUrlProviderFetchModelsRequ
       ? {}
       : { apiKey: boundedStr(raw['apiKey'], 'API key', 1, 8_192) }),
     ...(raw['headers'] === undefined ? {} : { headers: parseHeaders(raw['headers']) }),
+    ...(raw['modelsPath'] === undefined
+      ? {}
+      : { modelsPath: preserveStr(raw['modelsPath'], 'Model list route', 0, 2_048) }),
     ...(raw['force'] === undefined ? {} : { force: asBoolean(raw['force'], 'force') })
   }
 }
@@ -375,6 +391,7 @@ function parseUpdateRequest(value: unknown): ParsedUpdateRequest {
     headers: raw['headers'] === undefined ? undefined : parseHeaders(raw['headers']),
     models: raw['models'] === undefined ? undefined : parseModels(raw['models']),
     ...(raw['usagePath'] === undefined ? {} : { usagePath: parseUsagePath(raw['usagePath']) }),
+    ...(raw['modelsPath'] === undefined ? {} : { modelsPath: parseModelsPath(raw['modelsPath']) }),
     ...(raw['enabled'] === undefined ? {} : { enabled: asBoolean(raw['enabled'], 'enabled') })
   }
 }
@@ -383,6 +400,12 @@ function parseUpdateRequest(value: unknown): ParsedUpdateRequest {
 function parseUsagePath(value: unknown): string {
   const raw = preserveStr(value, 'Usage route', 0, 2_048)
   return normalizeUsagePath(raw) ?? ''
+}
+
+/** Validate an optional model-list route (absolute URL or root-relative path). */
+function parseModelsPath(value: unknown): string {
+  const raw = preserveStr(value, 'Model list route', 0, 2_048)
+  return normalizeModelsPath(raw) ?? ''
 }
 
 function parseHeaders(value: unknown): Record<string, string> | undefined {

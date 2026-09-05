@@ -101,6 +101,7 @@ import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { CIO_UTILITY_SETUP_PROMPT, isCioUtilityRequest } from '../utilities/cio-utility-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import { refreshCustomProviderModels } from '../providers/base-url-model-refresh'
 import { AgentProcessService } from '../agents/agent-process-service'
 import {
   UtilityOrchestrationService,
@@ -2041,12 +2042,18 @@ export class ChatEngine {
     ipcMain.handle('agent:listProviderSnapshot', (_, projectId: string) =>
       this.listProviderSnapshot(projectId)
     )
-    ipcMain.handle('agent:refreshProviderCatalog', (_, projectId: string, force = true) =>
-      this.listProviders(projectId, force === true)
-    )
-    ipcMain.handle(
-      'agent:refreshAccountUsage',
-      (_, overrides?: AgentAccountUsageOverrides) => this.refreshAccountUsage(overrides)
+    ipcMain.handle('agent:refreshProviderCatalog', async (_, projectId: string, force = true) => {
+      // A forced picker refresh also re-probes every custom provider's model
+      // endpoint so newly added/removed upstream models reach the catalog.
+      if (force === true) {
+        await refreshCustomProviderModels(this.baseUrlProviders, this.secretVault).catch(() => {
+          // Per-provider failures already preserve their old model lists.
+        })
+      }
+      return this.listProviders(projectId, force === true)
+    })
+    ipcMain.handle('agent:refreshAccountUsage', (_, overrides?: AgentAccountUsageOverrides) =>
+      this.refreshAccountUsage(overrides)
     )
     ipcMain.handle('agent:activateBankedReset', (_, projectId: string, threadId: string) =>
       this.activateBankedReset(projectId, threadId)
@@ -3388,9 +3395,7 @@ export class ChatEngine {
    * surface reads the same cache. The caller names the harness/provider the
    * UI is currently showing; the shared telemetry chain does the rest.
    */
-  async refreshAccountUsage(
-    overrides?: AgentAccountUsageOverrides
-  ): Promise<AgentAccountUsage[]> {
+  async refreshAccountUsage(overrides?: AgentAccountUsageOverrides): Promise<AgentAccountUsage[]> {
     const harnessId = overrides?.harnessId
     if (!harnessId) return []
     const driver = this.drivers.get(harnessId)
@@ -3486,7 +3491,10 @@ export class ChatEngine {
    * windows and consumes one banked credit. Only Codex currently supports
    * this; other harnesses return null.
    */
-  async activateBankedReset(projectId: string, threadId: string): Promise<AgentAccountUsage | null> {
+  async activateBankedReset(
+    projectId: string,
+    threadId: string
+  ): Promise<AgentAccountUsage | null> {
     const projectIdSafe = validateEntityId(projectId, 'Project ID')
     await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectIdSafe, threadId)
@@ -9427,9 +9435,10 @@ export class ChatEngine {
     // duplicate of the prompt about to be sent — stripping it by role alone
     // silently drops the last thing the user said across a harness switch.
     const last = mirrored.at(-1)
-    const mirror = last?.role === 'user' && (!currentMessageId || last.id === currentMessageId)
-      ? mirrored.slice(0, -1)
-      : mirrored
+    const mirror =
+      last?.role === 'user' && (!currentMessageId || last.id === currentMessageId)
+        ? mirrored.slice(0, -1)
+        : mirrored
     if (mirror.length === 0) return ''
     // `mirror` is non-empty real prior history at this point. If the format
     // step still can't render it into text, that content would otherwise be
@@ -18512,7 +18521,11 @@ export class ChatEngine {
             turnId,
             ts
           }
-    if (event.type === 'message.part.delta' && streamEvent.kind === 'part.delta' && streamEvent.delta === '') {
+    if (
+      event.type === 'message.part.delta' &&
+      streamEvent.kind === 'part.delta' &&
+      streamEvent.delta === ''
+    ) {
       // A single delta larger than the whole bounded output is pure payload
       // (e.g. one base64 chunk); persisting it would re-poison the log.
       return

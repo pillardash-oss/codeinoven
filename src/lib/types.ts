@@ -917,6 +917,11 @@ export interface BaseUrlProvider {
    * usage UI. Empty means the provider reports no usage.
    */
   usagePath?: string
+  /**
+   * Optional model-list route relative to `baseURL` (defaults to `/models`) or
+   * an absolute URL. Used when discovering/refreshing this provider's models.
+   */
+  modelsPath?: string
   enabled: boolean
   createdAt: number
   updatedAt: number
@@ -934,6 +939,8 @@ export interface BaseUrlProviderCreateRequest {
   models: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
   /** Optional account status/usage route relative to `baseURL`, or an absolute URL. */
   usagePath?: string
+  /** Optional model-list route relative to `baseURL` (default `/models`), or an absolute URL. */
+  modelsPath?: string
   enabled?: boolean
   /**
    * Reuse this id instead of generating one. Lets the renderer link the same
@@ -956,6 +963,8 @@ export interface BaseUrlProviderUpdateRequest {
   models?: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
   /** Optional account status/usage route; empty string clears it. */
   usagePath?: string
+  /** Optional model-list route; empty string clears it (falls back to `/models`). */
+  modelsPath?: string
   enabled?: boolean
 }
 
@@ -972,6 +981,8 @@ export interface BaseUrlProviderCopyClipboardRequest {
   headers?: string
   /** Account status/usage route carried through copy/paste. */
   usagePath?: string
+  /** Model-list route carried through copy/paste. */
+  modelsPath?: string
   models: Array<{
     id: string
     name: string
@@ -992,6 +1003,8 @@ export interface BaseUrlProviderFetchModelsRequest {
   baseURL: string
   apiKey?: string
   headers?: Record<string, string>
+  /** Model-list route override; omitted resolves the provider's saved route (default `/models`). */
+  modelsPath?: string
   force?: boolean
 }
 
