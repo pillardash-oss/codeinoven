@@ -166,9 +166,17 @@
   /** Path whose HTML is currently loaded — guards against tab swaps. */
   let documentHtmlPath = $state<string | null>(null)
   /** Path whose HTML is currently being fetched — guards against effect
-   *  re-runs (driven by `activeTab` reference churn) starting duplicate
-   *  chains that cancel each other and leave the spinner stuck. */
-  let documentLoadingPath = $state<string | null>(null)
+   *  re-runs (driven by `activeTab` reference churn) starting duplicate IPC
+   *  chains that would otherwise cancel or pile on top of each other.
+   *  Deliberately NOT `$state`: the effect both reads and writes it, so a
+   *  reactive variable here would re-trigger the effect on its own write
+   *  (effect_update_depth_exceeded) — same reason the previous run token was
+   *  a plain `let`. Only the async callbacks consult it after each run. */
+  let documentInFlightPath: string | null = null
+  /** Monotonic ownership token, incremented only when a new chain actually
+   *  starts. Lets stale callbacks tell themselves apart from the current
+   *  chain without participating in reactivity. */
+  let documentEffectToken = 0
   /** Scope bucket is read as a derived value OUTSIDE the effect: the getter
    *  touches `workspaceState.selectedThread`, which is reassigned on every
    *  thread update. Reading it inside the effect would re-run (and cancel)
@@ -179,7 +187,7 @@
     if (!activeTab || !documentPreview || activeTab.view !== 'preview') {
       documentHtml = null
       documentHtmlPath = null
-      documentLoadingPath = null
+      documentInFlightPath = null
       documentFailed = false
       documentError = null
       documentLoading = false
@@ -187,13 +195,13 @@
     }
     const path = activeTab.path
     // Bail if this path is already loaded OR already being fetched — the
-    // in-flight chain will settle its own state. Without the loading-path
-    // guard, every `activeTab` reference change (from `projectState.tabs`
-    // mutation) restarts the chain and cancels the previous one, leaving
-    // `documentLoading` stuck true forever.
-    if (documentHtmlPath === path || documentLoadingPath === path) return
+    // in-flight chain settles its own state. Without the in-flight guard,
+    // every `activeTab` reference change restarts the chain and the previous
+    // one never gets to clear `documentLoading` — the infinite spinner.
+    if (documentHtmlPath === path || documentInFlightPath === path) return
+    documentInFlightPath = path
+    const token = ++documentEffectToken
     documentLoading = true
-    documentLoadingPath = path
     documentFailed = false
     documentError = null
     // `file:readDocumentPreview` requires an absolute path, but the tab only
@@ -202,10 +210,10 @@
     const scopeBucketId = documentScopeBucketId
     // Hard cap: a hung IPC chain must never leave the spinner spinning forever.
     const timeout = setTimeout(() => {
-      if (documentLoadingPath !== path) return
+      if (token !== documentEffectToken) return
       documentHtml = null
       documentHtmlPath = path
-      documentLoadingPath = null
+      documentInFlightPath = null
       documentFailed = true
       documentError = 'Document preview timed out'
       documentLoading = false
@@ -213,24 +221,26 @@
     void invoke('projectFiles:info', projectId, path, scopeBucketId)
       .then((info: ProjectFileInfo) => invoke('file:readDocumentPreview', info.absolutePath))
       .then((html: string | null) => {
-        if (documentLoadingPath !== path) return
+        if (token !== documentEffectToken) return
         documentHtml = html ? DOMPurify.sanitize(html) : null
         documentHtmlPath = path
-        documentLoadingPath = null
+        documentInFlightPath = null
         documentFailed = html === null
         documentError = html === null ? 'The document could not be converted for preview' : null
       })
       .catch((error: unknown) => {
-        if (documentLoadingPath !== path) return
+        if (token !== documentEffectToken) return
         documentHtml = null
         documentHtmlPath = path
-        documentLoadingPath = null
+        documentInFlightPath = null
         documentFailed = true
         documentError = error instanceof Error ? error.message : String(error)
       })
       .finally(() => {
         clearTimeout(timeout)
-        if (documentLoadingPath === path) documentLoading = false
+        // Only the current chain may settle the spinner; a stale chain that
+        // lands after a newer load started must leave it alone.
+        if (token === documentEffectToken) documentLoading = false
       })
   })
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')
