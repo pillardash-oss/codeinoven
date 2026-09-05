@@ -117,6 +117,17 @@ const CLAUDE_ASYNC_AGENT_LAUNCH_MARKER = 'Async agent launched successfully'
  */
 const CLAUDE_ASYNC_AGENT_CLOSE_GRACE_MS = 10 * 60_000
 /**
+ * Absolute ceiling on how long a turn process may be held open by unfinished
+ * background agents after its result, regardless of stdout activity. The
+ * inactivity grace above resets on every stdout record — including forwarded
+ * sub-agent text — so a sub-agent that keeps trickling output (or a CLI that
+ * never finishes its background wait) could otherwise keep the turn process
+ * (and the parent turn) alive forever. When this cap fires, stdin is closed
+ * unconditionally so the CLI can exit; a still-live agent's task-notification
+ * then arrives via a resumed process instead of wedging the parent turn.
+ */
+const CLAUDE_ASYNC_AGENT_MAX_HOLD_MS = 30 * 60_000
+/**
  * Cap on concurrent one-shot `claude` spawns (auth probe, on-demand usage
  * refresh, version probe, model discovery). Every one-shot spawn holds several
  * file descriptors (stdio pipes) for its lifetime, so a burst of threads or
@@ -1497,6 +1508,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   private readonly pendingClaudePermissions = new Map<string, ClaudePermissionRequest>()
   /** Scheduled stdin closes for turn processes still running background agents. */
   private readonly asyncAgentCloseTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Absolute stdin-close deadlines, immune to stdout-driven grace resets. */
+  private readonly asyncAgentHoldDeadlines = new Map<string, ReturnType<typeof setTimeout>>()
   /** Held while a first-party session spawn may be refreshing the credential. */
   private authSlotHeld = false
   /** Resolved when the current credential-refresh window closes. */
@@ -2039,6 +2052,15 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    */
   private scheduleAsyncAgentInputClose(sessionId: string): void {
     this.cancelAsyncAgentInputClose(sessionId)
+    if (!this.asyncAgentHoldDeadlines.has(sessionId)) {
+      const deadline = setTimeout(() => {
+        this.asyncAgentHoldDeadlines.delete(sessionId)
+        if (!this.activeSessionIds().includes(sessionId)) return
+        this.closeActiveInput(sessionId)
+      }, CLAUDE_ASYNC_AGENT_MAX_HOLD_MS)
+      deadline.unref?.()
+      this.asyncAgentHoldDeadlines.set(sessionId, deadline)
+    }
     const timer = setTimeout(() => {
       this.asyncAgentCloseTimers.delete(sessionId)
       if (!this.activeSessionIds().includes(sessionId)) return
@@ -2050,9 +2072,15 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
 
   private cancelAsyncAgentInputClose(sessionId: string): void {
     const timer = this.asyncAgentCloseTimers.get(sessionId)
-    if (!timer) return
-    clearTimeout(timer)
-    this.asyncAgentCloseTimers.delete(sessionId)
+    if (timer) {
+      clearTimeout(timer)
+      this.asyncAgentCloseTimers.delete(sessionId)
+    }
+    const deadline = this.asyncAgentHoldDeadlines.get(sessionId)
+    if (deadline) {
+      clearTimeout(deadline)
+      this.asyncAgentHoldDeadlines.delete(sessionId)
+    }
   }
 
   private beginAuthenticationReadiness(sessionId: string): void {
@@ -2515,6 +2543,11 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   override dispose(): void {
     this.authProbeCache.clear()
     this.authenticatedSessions.clear()
+    for (const timer of [...this.asyncAgentCloseTimers.values(), ...this.asyncAgentHoldDeadlines.values()]) {
+      clearTimeout(timer)
+    }
+    this.asyncAgentCloseTimers.clear()
+    this.asyncAgentHoldDeadlines.clear()
     for (const sessionId of this.activeUsageProbes.keys()) {
       this.finishActiveUsageProbe(sessionId, null)
     }
