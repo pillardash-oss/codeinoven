@@ -687,7 +687,7 @@
       const kind = attachmentPreviewKind(part.mime, filename)
       closeAttachmentPreview()
       previewAttachment = { mime: part.mime, url: part.url, filename }
-      if (kind === 'markdown' || kind === 'text' || kind === 'csv') {
+      if (kind === 'markdown' || kind === 'text') {
         previewText = new TextDecoder().decode(bytes)
       } else {
         previewSrc = URL.createObjectURL(

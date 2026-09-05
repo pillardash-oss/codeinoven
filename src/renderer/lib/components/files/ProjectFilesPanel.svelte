@@ -9,12 +9,14 @@
     Code2,
     Eye,
     FileDiff,
+    FileQuestion,
     FolderTree,
     FolderOpen,
     Loader2,
     Minimize2,
     Save
   } from '@lucide/svelte'
+  import DOMPurify from 'dompurify'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
@@ -23,7 +25,15 @@
     ConflictResolutionStatus
   } from './conflict-resolution'
   import { motionDuration } from '$lib/motion'
-  import { isAudioMime, isImageMime, isSvgMime, isVideoMime, mimeFromPath } from '$lib/mime'
+  import {
+    isAudioMime,
+    isImageMime,
+    isSvgMime,
+    isVideoMime,
+    mimeFromPath,
+    isDocumentPreviewPath,
+    pathToFileUrl
+  } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -146,6 +156,46 @@
   })
   let imagePreviewSrc = $derived(svg ? svgPreviewUrl : previewUrl)
   let imagePreviewFailed = $derived(svg ? svgPreviewFailed : false)
+  /** Office/CSV documents render as sanitized converted HTML (no PDF path). */
+  let documentPreview = $derived(activeTab ? isDocumentPreviewPath(activeTab.path) : false)
+  let documentHtml = $state<string | null>(null)
+  let documentLoading = $state(false)
+  let documentFailed = $state(false)
+  /** Path whose HTML is currently loaded — guards against tab swaps. */
+  let documentHtmlPath = $state<string | null>(null)
+  $effect(() => {
+    if (!activeTab || !documentPreview || activeTab.view !== 'preview') {
+      documentHtml = null
+      documentHtmlPath = null
+      documentFailed = false
+      documentLoading = false
+      return
+    }
+    const path = activeTab.path
+    if (documentHtmlPath === path) return
+    documentLoading = true
+    documentFailed = false
+    let cancelled = false
+    void invoke('file:readDocumentPreview', pathToFileUrl(path))
+      .then((html: string | null) => {
+        if (cancelled) return
+        documentHtml = html ? DOMPurify.sanitize(html) : null
+        documentHtmlPath = path
+        documentFailed = html === null
+      })
+      .catch(() => {
+        if (cancelled) return
+        documentHtml = null
+        documentHtmlPath = path
+        documentFailed = true
+      })
+      .finally(() => {
+        if (!cancelled) documentLoading = false
+      })
+    return () => {
+      cancelled = true
+    }
+  })
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')
   let visibleContent = $derived(
     deletedAtCheckpoint ? historicalContent : (activeSession?.draft ?? historicalContent)
@@ -533,7 +583,7 @@
           >
             <FileDiff size={12} />
           </button>
-          {#if markdown || pdf || image || video || audio}
+          {#if markdown || pdf || image || video || audio || documentPreview}
             <button
               type="button"
               class={[
@@ -548,9 +598,11 @@
                   ? 'Preview video'
                   : audio
                     ? 'Preview audio'
-                    : image
-                      ? 'Preview image'
-                      : 'Preview Markdown'}
+                    : documentPreview
+                      ? 'Preview document'
+                      : image
+                        ? 'Preview image'
+                        : 'Preview Markdown'}
               aria-pressed={activeTab.view === 'preview'}
               title={pdf
                 ? 'PDF preview'
@@ -558,9 +610,11 @@
                   ? 'Video preview'
                   : audio
                     ? 'Audio preview'
-                    : image
-                      ? 'Image preview'
-                      : 'Markdown preview'}
+                    : documentPreview
+                      ? 'Document preview'
+                      : image
+                        ? 'Image preview'
+                        : 'Markdown preview'}
               onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'preview')}
             >
               <Eye size={12} />
@@ -589,8 +643,9 @@
               class="ml-1 font-mono text-[0.625rem] tabular-nums text-success"
               aria-label="Added lines">+{diffStats.additions}</span
             >
-            <span class="font-mono text-[0.625rem] tabular-nums text-danger" aria-label="Deleted lines"
-              >−{diffStats.deletions}</span
+            <span
+              class="font-mono text-[0.625rem] tabular-nums text-danger"
+              aria-label="Deleted lines">−{diffStats.deletions}</span
             >
             {#if checkpointDiff?.truncated}
               <span class="text-[0.5625rem] text-warning" title="Preview truncated at 64 KiB"
@@ -729,6 +784,30 @@
               class="h-full w-full border-0"
               title={`Preview ${activeTab.path}`}
             ></iframe>
+          {/if}
+        </div>
+      {:else if activeTab.view === 'preview' && documentPreview}
+        <div class="min-h-0 flex-1 overflow-auto bg-surface">
+          {#if documentLoading}
+            <div class="flex h-full items-center justify-center gap-2 text-dimmed" role="status">
+              <Loader2 size={16} class="animate-spin" />
+              <span class="sr-only">Loading document preview</span>
+            </div>
+          {:else if documentHtml}
+            <iframe
+              srcdoc={documentHtml}
+              sandbox=""
+              class="h-full w-full border-0"
+              title={`Preview ${activeTab.path}`}
+            ></iframe>
+          {:else if documentFailed}
+            <div
+              class="flex h-full flex-col items-center justify-center gap-2 text-dimmed"
+              role="status"
+            >
+              <FileQuestion size={24} />
+              <span class="text-xs">This document could not be previewed</span>
+            </div>
           {/if}
         </div>
       {:else if activeTab.view === 'preview' && image}
@@ -901,7 +980,7 @@
           >
             <FileDiff size={12} />
           </button>
-          {#if markdown || pdf || image || video || audio}
+          {#if markdown || pdf || image || video || audio || documentPreview}
             <button
               type="button"
               class={[
@@ -916,9 +995,11 @@
                   ? 'Preview video'
                   : audio
                     ? 'Preview audio'
-                    : image
-                      ? 'Preview image'
-                      : 'Preview Markdown'}
+                    : documentPreview
+                      ? 'Preview document'
+                      : image
+                        ? 'Preview image'
+                        : 'Preview Markdown'}
               aria-pressed={activeTab.view === 'preview'}
               title={pdf
                 ? 'PDF preview'
@@ -926,9 +1007,11 @@
                   ? 'Video preview'
                   : audio
                     ? 'Audio preview'
-                    : image
-                      ? 'Image preview'
-                      : 'Markdown preview'}
+                    : documentPreview
+                      ? 'Document preview'
+                      : image
+                        ? 'Image preview'
+                        : 'Markdown preview'}
               onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'preview')}
             >
               <Eye size={12} />
@@ -957,8 +1040,9 @@
               class="ml-1 font-mono text-[0.625rem] tabular-nums text-success"
               aria-label="Added lines">+{diffStats.additions}</span
             >
-            <span class="font-mono text-[0.625rem] tabular-nums text-danger" aria-label="Deleted lines"
-              >−{diffStats.deletions}</span
+            <span
+              class="font-mono text-[0.625rem] tabular-nums text-danger"
+              aria-label="Deleted lines">−{diffStats.deletions}</span
             >
             {#if checkpointDiff?.truncated}
               <span class="text-[0.5625rem] text-warning" title="Preview truncated at 64 KiB"
@@ -1029,6 +1113,33 @@
                   class="h-full w-full border-0"
                   title={`Preview ${activeTab.path}`}
                 ></iframe>
+              {/if}
+            </div>
+          {:else if activeTab?.view === 'preview' && documentPreview}
+            <div class="min-h-0 flex-1 overflow-auto bg-surface">
+              {#if documentLoading}
+                <div
+                  class="flex h-full items-center justify-center gap-2 text-dimmed"
+                  role="status"
+                >
+                  <Loader2 size={16} class="animate-spin" />
+                  <span class="sr-only">Loading document preview</span>
+                </div>
+              {:else if documentHtml}
+                <iframe
+                  srcdoc={documentHtml}
+                  sandbox=""
+                  class="h-full w-full border-0"
+                  title={`Preview ${activeTab.path}`}
+                ></iframe>
+              {:else if documentFailed}
+                <div
+                  class="flex h-full flex-col items-center justify-center gap-2 text-dimmed"
+                  role="status"
+                >
+                  <FileQuestion size={24} />
+                  <span class="text-xs">This document could not be previewed</span>
+                </div>
               {/if}
             </div>
           {:else if activeTab?.view === 'preview' && image}

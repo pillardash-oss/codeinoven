@@ -10,12 +10,21 @@ const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingm
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 const ODT_MIME = 'application/vnd.oasis.opendocument.text'
 const DOC_MIME = 'application/msword'
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+const XLS_MIME = 'application/vnd.ms-excel'
+const ODS_MIME = 'application/vnd.oasis.opendocument.spreadsheet'
+const CSV_MIME = 'text/csv'
 const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
 const MAX_EXTRACTED_CHARACTERS = 200_000
 const MAX_PREVIEW_CHARACTERS = 4_000_000
+/** Maximum sheet rows rendered per sheet and sheets rendered per workbook —
+ *  keeps untrusted-workbook HTML inside the preview budget. */
+const MAX_SHEET_ROWS = 5_000
+const MAX_SHEET_COLUMNS = 200
+const MAX_SHEETS = 30
 
 /** The document formats this module can extract content from. */
-type DocumentKind = 'docx' | 'doc' | 'odt' | 'pptx'
+type DocumentKind = 'docx' | 'doc' | 'odt' | 'pptx' | 'xlsx' | 'xls' | 'ods' | 'csv'
 
 function documentAttachmentLabel(attachment: PromptAttachment): string {
   return (attachment.filename ?? attachment.url).replace(/[\r\n]+/gu, ' ')
@@ -28,6 +37,10 @@ function documentExtension(attachment: PromptAttachment): string {
   return dot < 0 ? '' : withoutQuery.slice(dot + 1).toLowerCase()
 }
 
+function extensionIsTsv(attachment: PromptAttachment): boolean {
+  return documentExtension(attachment) === 'tsv'
+}
+
 /** Resolve the document kind from the mime type first, falling back to the
  *  filename extension (many sources report `application/octet-stream`). */
 function documentKind(attachment: PromptAttachment): DocumentKind | null {
@@ -36,9 +49,23 @@ function documentKind(attachment: PromptAttachment): DocumentKind | null {
   if (mime === DOC_MIME) return 'doc'
   if (mime === ODT_MIME) return 'odt'
   if (mime === PPTX_MIME) return 'pptx'
+  if (mime === XLSX_MIME) return 'xlsx'
+  if (mime === XLS_MIME) return 'xls'
+  if (mime === ODS_MIME) return 'ods'
+  if (mime === CSV_MIME) return 'csv'
   const extension = documentExtension(attachment)
-  if (extension === 'docx' || extension === 'doc' || extension === 'odt' || extension === 'pptx') {
-    return extension
+  if (
+    extension === 'docx' ||
+    extension === 'doc' ||
+    extension === 'odt' ||
+    extension === 'pptx' ||
+    extension === 'xlsx' ||
+    extension === 'xls' ||
+    extension === 'ods' ||
+    extension === 'csv' ||
+    extension === 'tsv'
+  ) {
+    return extension === 'tsv' ? 'csv' : extension
   }
   return null
 }
@@ -47,6 +74,151 @@ function documentKind(attachment: PromptAttachment): DocumentKind | null {
  *  legacy DOC, ODT, PPTX). */
 export function isDocumentAttachment(attachment: PromptAttachment): boolean {
   return documentKind(attachment) !== null
+}
+
+// ─── Spreadsheets (XLSX, legacy XLS, ODS, CSV/TSV) ─────────────────────────
+
+interface SheetTable {
+  name: string
+  rows: string[][]
+}
+
+interface Workbook {
+  sheets: SheetTable[]
+  /** True when any sheet was truncated (row, column, or sheet count caps). */
+  truncated: boolean
+}
+
+function sheetTableToHtml(table: SheetTable): string {
+  const sections: string[] = [`<h2>${escapeHtml(table.name)}</h2>`]
+  if (table.rows.length === 0) {
+    sections.push('<p>(empty sheet)</p>')
+    return sections.join('\n')
+  }
+  const [header, ...body] = table.rows
+  const head = header.map((cell) => `<th>${escapeHtml(cell)}</th>`).join('')
+  const rows = body
+    .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`)
+    .join('\n')
+  sections.push(`<table>\n<thead><tr>${head}</tr></thead>\n<tbody>\n${rows}\n</tbody>\n</table>`)
+  return sections.join('\n')
+}
+
+function workbookToHtml(workbook: Workbook): string {
+  const sections = workbook.sheets.map(sheetTableToHtml)
+  if (workbook.truncated) {
+    sections.push(
+      '<p><em>(Preview truncated: the workbook exceeded the preview row, column, or sheet limits.)</em></p>'
+    )
+  }
+  return sections.join('\n<hr>\n')
+}
+
+function workbookToText(workbook: Workbook): string {
+  const lines: string[] = []
+  for (const sheet of workbook.sheets) {
+    lines.push(`[Sheet: ${sheet.name}]`)
+    for (const row of sheet.rows) lines.push(row.map((cell) => cell.trim()).join('\t'))
+    lines.push('')
+  }
+  if (workbook.truncated) {
+    lines.push(
+      '[Preview truncated: the workbook exceeded the preview row, column, or sheet limits.]'
+    )
+  }
+  return lines.join('\n').trim()
+}
+
+/** Cap a raw sheet grid to the preview limits, dropping fully-empty trailing
+ *  rows/columns first so blank padding does not consume the budget. */
+function boundSheet(name: string, rows: string[][]): { table: SheetTable; truncated: boolean } {
+  while (rows.length > 0 && rows[rows.length - 1]!.every((cell) => cell.trim() === '')) rows.pop()
+  while (rows.length > 0 && rows[0]!.every((cell) => cell.trim() === '')) rows.shift()
+  let width = 0
+  for (const row of rows) {
+    let last = row.length
+    while (last > 0 && row[last - 1]!.trim() === '') last -= 1
+    if (last > width) width = last
+  }
+  const truncatedRows = rows.length > MAX_SHEET_ROWS
+  const truncatedColumns = width > MAX_SHEET_COLUMNS
+  const bounded = rows.slice(0, MAX_SHEET_ROWS).map((row) => row.slice(0, MAX_SHEET_COLUMNS))
+  return {
+    table: { name, rows: bounded },
+    truncated: truncatedRows || truncatedColumns
+  }
+}
+
+/** XLSX / legacy XLS / ODS via SheetJS (supports all three). CSV/TSV are
+ *  parsed natively to keep delimited text independent of the workbook parser. */
+async function readWorkbook(
+  bytes: Buffer,
+  kind: 'xlsx' | 'xls' | 'ods' | 'csv',
+  tsv: boolean
+): Promise<Workbook | null> {
+  if (kind === 'csv') {
+    const delimiter = tsv ? '\t' : ','
+    const text = bytes.toString('utf8')
+    const rows: string[][] = []
+    let row: string[] = []
+    let field = ''
+    let inQuotes = false
+    for (let i = 0; i < text.length; i += 1) {
+      const char = text[i]
+      if (inQuotes) {
+        if (char === '"') {
+          if (text[i + 1] === '"') {
+            field += '"'
+            i += 1
+          } else {
+            inQuotes = false
+          }
+        } else {
+          field += char
+        }
+      } else if (char === '"') {
+        inQuotes = true
+      } else if (char === delimiter) {
+        row.push(field)
+        field = ''
+      } else if (char === '\n' || char === '\r') {
+        if (char === '\r' && text[i + 1] === '\n') i += 1
+        row.push(field)
+        field = ''
+        rows.push(row)
+        row = []
+      } else {
+        field += char
+      }
+    }
+    if (field !== '' || row.length > 0) {
+      row.push(field)
+      rows.push(row)
+    }
+    const bound = boundSheet('Sheet 1', rows)
+    return { sheets: [bound.table], truncated: bound.truncated }
+  }
+
+  const XLSX = await import('xlsx')
+  const parsed = XLSX.read(bytes, { type: 'buffer', dense: false, cellDates: false })
+  const sheetNames = parsed.SheetNames.slice(0, MAX_SHEETS)
+  const sheets: SheetTable[] = []
+  let truncated = parsed.SheetNames.length > MAX_SHEETS
+  for (const name of sheetNames) {
+    const grid = XLSX.utils.sheet_to_json<string[]>(parsed.Sheets[name]!, {
+      header: 1,
+      raw: false,
+      defval: '',
+      blankrows: true
+    })
+    const bound = boundSheet(
+      name,
+      grid.map((row) => [...row])
+    )
+    sheets.push(bound.table)
+    if (bound.truncated) truncated = true
+  }
+  return sheets.length > 0 ? { sheets, truncated } : null
 }
 
 function escapeHtml(text: string): string {
@@ -338,8 +510,8 @@ function pptxSlidesToText(slides: readonly PptxSlide[]): string | null {
 
 /**
  * Extract model-readable text from a supported document attachment (DOCX,
- * legacy DOC, ODT, PPTX). Returns null when the source is unavailable,
- * oversized, invalid, or contains no readable text.
+ * legacy DOC, ODT, PPTX, XLSX, legacy XLS, ODS, CSV/TSV). Returns null when
+ * the source is unavailable, oversized, invalid, or contains no readable text.
  */
 export async function readDocumentText(attachment: PromptAttachment): Promise<string | null> {
   const kind = documentKind(attachment)
@@ -356,9 +528,12 @@ export async function readDocumentText(attachment: PromptAttachment): Promise<st
     } else if (kind === 'odt') {
       const blocks = await readOpenDocumentBlocks(bytes)
       text = blocks ? odtBlocksToText(blocks).join('\n') : null
-    } else {
+    } else if (kind === 'pptx') {
       const slides = await readPptxSlides(bytes)
       text = slides ? pptxSlidesToText(slides) : null
+    } else if (kind === 'xlsx' || kind === 'xls' || kind === 'ods' || kind === 'csv') {
+      const workbook = await readWorkbook(bytes, kind, kind === 'csv' && extensionIsTsv(attachment))
+      text = workbook ? workbookToText(workbook) : null
     }
     return boundDocumentText(text ?? '') || null
   } catch (error) {
@@ -368,11 +543,13 @@ export async function readDocumentText(attachment: PromptAttachment): Promise<st
 }
 
 /**
- * Convert a supported document attachment (DOCX, legacy DOC, ODT, PPTX) to
- * semantic HTML for the attachment preview. The renderer sanitizes and isolates
- * this markup before displaying it.
+ * Convert a supported document attachment (DOCX, legacy DOC, ODT, PPTX,
+ * XLSX, legacy XLS, ODS, CSV/TSV) to bounded HTML for the attachment preview.
+ * The renderer sanitizes and isolates this markup before displaying it.
  */
-export async function readDocumentPreviewHtml(attachment: PromptAttachment): Promise<string | null> {
+export async function readDocumentPreviewHtml(
+  attachment: PromptAttachment
+): Promise<string | null> {
   try {
     const bytes = await documentAttachmentBytes(attachment)
     if (!bytes) return null
@@ -389,6 +566,9 @@ export async function readDocumentPreviewHtml(attachment: PromptAttachment): Pro
     } else if (kind === 'pptx') {
       const slides = await readPptxSlides(bytes)
       html = slides ? pptxSlidesToHtml(slides) : null
+    } else if (kind === 'xlsx' || kind === 'xls' || kind === 'ods' || kind === 'csv') {
+      const workbook = await readWorkbook(bytes, kind, kind === 'csv' && extensionIsTsv(attachment))
+      html = workbook ? workbookToHtml(workbook) : null
     }
     const trimmed = html?.trim() ?? ''
     if (!trimmed || trimmed.length > MAX_PREVIEW_CHARACTERS) return null

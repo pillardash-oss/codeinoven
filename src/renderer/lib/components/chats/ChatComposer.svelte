@@ -43,10 +43,7 @@
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
-  import {
-    getInlineFileTypeIconSvg,
-    getInlineFolderTypeIconSvg
-  } from '../files/file-type-icons'
+  import { getInlineFileTypeIconSvg, getInlineFolderTypeIconSvg } from '../files/file-type-icons'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { attachmentPreviewKind, fileUrlToPath, mimeFromPath, pathToFileUrl } from '$lib/mime'
@@ -1108,9 +1105,7 @@
               'all',
               workspaceState.activeScopeBucketIdFor(fileTagProjectId)
             )
-          ).filter(
-            (entry) => !isEntryHiddenByVisibility(entry.path, entry.ignored)
-          )
+          ).filter((entry) => !isEntryHiddenByVisibility(entry.path, entry.ignored))
         : []
       const entries: ComposerMentionEntry[] = [
         ...utilityEntries,
@@ -1352,7 +1347,7 @@
         return
       }
       const bytes = await window.api.readFile(filePath)
-      if (kind === 'markdown' || kind === 'text' || kind === 'csv') {
+      if (kind === 'markdown' || kind === 'text') {
         if (previewTexts[file.url] !== undefined) return
         previewTexts = { ...previewTexts, [file.url]: new TextDecoder().decode(bytes) }
         return
