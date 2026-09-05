@@ -1385,6 +1385,8 @@ interface PendingImageDescriptorDecision {
   threadId: string
   request: ImageDescriptorErrorRequest
   resolve: (decision: ImageDescriptorUserDecision) => void
+  /** Thread status to restore once the decision resolves. */
+  resumeStatus: Extract<ThreadStatus, 'planning' | 'executing'>
   timer?: ReturnType<typeof setTimeout>
 }
 
@@ -5620,6 +5622,9 @@ export class ChatEngine {
         ) ||
         [...this.pendingPermissions.values()].some(
           (pending) => pending.request.sessionId === sessionId
+        ) ||
+        [...this.pendingImageDescriptorDecisions.values()].some(
+          (pending) => pending.sessionId === sessionId
         )
       if (awaitingInput) return
       const expectedStatus: Extract<ThreadStatus, 'planning' | 'executing'> =
@@ -8884,6 +8889,14 @@ export class ChatEngine {
         candidate.threadId === request.threadId || candidate.id === owningThread?.assignmentTaskId
     )
     return new Promise<ImageDescriptorUserDecision>((resolve) => {
+      // The card blocks the turn on user input, exactly like the question tool:
+      // park the thread on "Needs attention" and restore the working status
+      // once the decision resolves (reply, ignore, or timeout).
+      const session = this.sessionRegistry.get(request.sessionId)
+      const resumeStatus: Extract<ThreadStatus, 'planning' | 'executing'> =
+        session?.activeTurnId || this.planningSessions.has(request.sessionId)
+          ? 'executing'
+          : 'planning'
       const requestForCard: ImageDescriptorErrorRequest = {
         id,
         sessionId: request.sessionId,
@@ -8915,13 +8928,20 @@ export class ChatEngine {
         threadId: request.threadId,
         request: requestForCard,
         resolve,
+        resumeStatus,
         timer: setTimeout(() => {
           this.pendingImageDescriptorDecisions.delete(id)
           this.startSessionWatchdog(request.sessionId)
+          void this.threadManager
+            .setStatus(request.projectId, request.threadId, resumeStatus)
+            .catch(() => undefined)
           resolve({ action: 'ignore' })
         }, IMAGE_DESCRIPTOR_DECISION_TIMEOUT_MS)
       }
       this.pendingImageDescriptorDecisions.set(id, pending)
+      void this.threadManager
+        .setStatus(request.projectId, request.threadId, 'awaiting_approval', { read: false })
+        .catch(() => undefined)
       this.broadcast({
         type: 'imageDescriptor.error',
         sessionId: request.sessionId,
@@ -10071,6 +10091,11 @@ export class ChatEngine {
     }
     this.pendingImageDescriptorDecisions.delete(requestId)
     this.startSessionWatchdog(pending.sessionId)
+    // The decision resolved the user-input block: restore the thread's working
+    // status (same contract as the question tool's resolution path).
+    void this.threadManager
+      .setStatus(pending.projectId, pending.threadId, pending.resumeStatus)
+      .catch(() => undefined)
     this.broadcast({
       type: 'imageDescriptor.resolved',
       sessionId: pending.sessionId,
@@ -19706,6 +19731,9 @@ export class ChatEngine {
         ) ||
         [...this.pendingPermissions.values()].some(
           (pending) => pending.request.sessionId === sessionId
+        ) ||
+        [...this.pendingImageDescriptorDecisions.values()].some(
+          (pending) => pending.sessionId === sessionId
         )
       const engineeringContractActive = this.engineeringImplementationSessions.has(sessionId)
       const contractResponse = turnAssistant ? assistantText(turnAssistant).trim() : ''
