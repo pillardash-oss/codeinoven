@@ -854,6 +854,7 @@ class ProjectFilesWorkspace {
     state.loadingPaths[path] = true
     try {
       const source = await invoke('projectFiles:read', projectId, path, this.scopeFor(projectId))
+      if (!source) throw new Error('This file cannot be opened in the sidebar')
       state.sessions[path] = {
         source,
         draft: source.content,
@@ -989,6 +990,7 @@ class ProjectFilesWorkspace {
     state.loadingPaths[path] = true
     try {
       const source = await invoke('projectFiles:read', projectId, path, this.scopeFor(projectId))
+      if (!source) throw new Error('This file cannot be opened in the sidebar')
       state.sessions[path] = {
         source,
         draft: source.content,

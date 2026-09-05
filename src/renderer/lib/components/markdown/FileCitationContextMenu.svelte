@@ -200,6 +200,10 @@
     if (!resolved) return
     try {
       const textFile = await invoke('projectFiles:read', resolved.projectId, resolved.relativePath)
+      if (!textFile) {
+        toast.error('This file cannot be copied as text.')
+        return
+      }
       await copyText(textFile.content, 'File contents copied to clipboard.')
     } catch {
       toast.error('This file cannot be copied as text.')

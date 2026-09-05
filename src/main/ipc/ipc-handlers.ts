@@ -5082,12 +5082,20 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'projectFiles:read',
-    (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
-      projectFilesService.readText(
-        validateEntityId(projectId, 'Project ID'),
-        requireString(relativePath, 'Project file path'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
-      )
+    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) => {
+      // Read failures (binary files, size limits, missing paths) are surfaced
+      // gracefully by renderer call sites; returning null avoids a noisy
+      // main-process "Error occurred in handler" log for every expected case.
+      try {
+        return await projectFilesService.readText(
+          validateEntityId(projectId, 'Project ID'),
+          requireString(relativePath, 'Project file path'),
+          scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        )
+      } catch {
+        return null
+      }
+    }
   )
   ipcMain.handle(
     'projectFiles:rename',

@@ -136,8 +136,8 @@
       activeTab.path,
       workspaceState.activeScopeBucketIdFor(projectId)
     )
-      .then((source: ProjectTextFile) => {
-        if (cancelled) return
+      .then((source: ProjectTextFile | null) => {
+        if (cancelled || !source) return
         const url = URL.createObjectURL(new Blob([source.content], { type: 'image/svg+xml' }))
         svgPreviewUrl = url
       })
