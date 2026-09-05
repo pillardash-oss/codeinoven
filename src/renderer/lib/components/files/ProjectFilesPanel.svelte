@@ -169,8 +169,11 @@
    *  the preview load on each thread churn, leaving `documentLoading` stuck
    *  true — the infinite spinner. */
   let documentScopeBucketId = $derived(workspaceState.activeScopeBucketIdFor(projectId))
-  /** Monotonic run token: only the newest effect run may touch preview state. */
-  let documentEffectRun = $state(0)
+  /** Monotonic run token: only the newest effect run may touch preview state.
+   *  Deliberately NOT `$state` — the effect increments it, and reactive state
+   *  written inside its own effect would loop forever
+   *  (effect_update_depth_exceeded). It never needs to trigger reactivity. */
+  let documentEffectRun = 0
   $effect(() => {
     const run = ++documentEffectRun
     if (!activeTab || !documentPreview || activeTab.view !== 'preview') {
