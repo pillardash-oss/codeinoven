@@ -17925,6 +17925,13 @@ export class ChatEngine {
       if (currentStatus?.state !== 'error' && !resetWaitIdle) {
         this.sessionStatuses.set(event.sessionId, { state: 'idle' })
       }
+      // The turn just ended. Drivers that report idle through the dedicated
+      // `session.idle` event (claude-code among them) never pass through the
+      // `session.status` branch above, so the turn watchdog armed at the
+      // `working` status must be cleared here. Without this, the watchdog
+      // fires minutes after a successful turn and misreports the finished
+      // session as "went idle without completing the turn".
+      this.clearSessionWatchdog(event.sessionId)
       this.handleSessionIdleSignal(event.sessionId)
       if (resetWaitIdle) return
       if (eventOwner) {
