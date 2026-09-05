@@ -183,6 +183,22 @@ export function isDocMime(mime: string): boolean {
 
 const DOCUMENT_PREVIEW_EXTENSION_PATTERN = /\.(?:docx|doc|odt|pptx|xlsx|xls|ods|csv|tsv)$/iu
 
+/** True when the mime is one of the converted-document preview types (Office
+ *  documents and delimited data). Such files must never be loaded as text. */
+export function isDocumentPreviewMime(mime: string): boolean {
+  return (
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mime === 'application/msword' ||
+    mime === 'application/vnd.oasis.opendocument.text' ||
+    mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+    mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mime === 'application/vnd.ms-excel' ||
+    mime === 'application/vnd.oasis.opendocument.spreadsheet' ||
+    mime === 'text/csv' ||
+    mime === 'text/tab-separated-values'
+  )
+}
+
 /** True when the project-relative path can be rendered as converted document
  *  HTML in the files panel (Office documents and delimited data). Conversion
  *  runs in the main process via `file:readDocumentPreview`. */
