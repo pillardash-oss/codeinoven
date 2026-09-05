@@ -165,43 +165,47 @@
   let documentError = $state<string | null>(null)
   /** Path whose HTML is currently loaded — guards against tab swaps. */
   let documentHtmlPath = $state<string | null>(null)
+  /** Path whose HTML is currently being fetched — guards against effect
+   *  re-runs (driven by `activeTab` reference churn) starting duplicate
+   *  chains that cancel each other and leave the spinner stuck. */
+  let documentLoadingPath = $state<string | null>(null)
   /** Scope bucket is read as a derived value OUTSIDE the effect: the getter
    *  touches `workspaceState.selectedThread`, which is reassigned on every
    *  thread update. Reading it inside the effect would re-run (and cancel)
    *  the preview load on each thread churn, leaving `documentLoading` stuck
    *  true — the infinite spinner. */
   let documentScopeBucketId = $derived(workspaceState.activeScopeBucketIdFor(projectId))
-  /** Monotonic run token: only the newest effect run may touch preview state.
-   *  Deliberately NOT `$state` — the effect increments it, and reactive state
-   *  written inside its own effect would loop forever
-   *  (effect_update_depth_exceeded). It never needs to trigger reactivity. */
-  let documentEffectRun = 0
   $effect(() => {
-    const run = ++documentEffectRun
     if (!activeTab || !documentPreview || activeTab.view !== 'preview') {
       documentHtml = null
       documentHtmlPath = null
+      documentLoadingPath = null
       documentFailed = false
       documentError = null
       documentLoading = false
       return
     }
     const path = activeTab.path
-    if (documentHtmlPath === path) return
+    // Bail if this path is already loaded OR already being fetched — the
+    // in-flight chain will settle its own state. Without the loading-path
+    // guard, every `activeTab` reference change (from `projectState.tabs`
+    // mutation) restarts the chain and cancels the previous one, leaving
+    // `documentLoading` stuck true forever.
+    if (documentHtmlPath === path || documentLoadingPath === path) return
     documentLoading = true
+    documentLoadingPath = path
     documentFailed = false
     documentError = null
     // `file:readDocumentPreview` requires an absolute path, but the tab only
     // carries a project-relative path (which may live inside a managed worktree
     // scope). Resolve the authoritative absolute path through main first.
     const scopeBucketId = documentScopeBucketId
-    let settled = false
     // Hard cap: a hung IPC chain must never leave the spinner spinning forever.
     const timeout = setTimeout(() => {
-      if (settled || run !== documentEffectRun) return
-      settled = true
+      if (documentLoadingPath !== path) return
       documentHtml = null
       documentHtmlPath = path
+      documentLoadingPath = null
       documentFailed = true
       documentError = 'Document preview timed out'
       documentLoading = false
@@ -209,24 +213,24 @@
     void invoke('projectFiles:info', projectId, path, scopeBucketId)
       .then((info: ProjectFileInfo) => invoke('file:readDocumentPreview', info.absolutePath))
       .then((html: string | null) => {
-        if (run !== documentEffectRun) return
-        settled = true
+        if (documentLoadingPath !== path) return
         documentHtml = html ? DOMPurify.sanitize(html) : null
         documentHtmlPath = path
+        documentLoadingPath = null
         documentFailed = html === null
         documentError = html === null ? 'The document could not be converted for preview' : null
       })
       .catch((error: unknown) => {
-        if (run !== documentEffectRun) return
-        settled = true
+        if (documentLoadingPath !== path) return
         documentHtml = null
         documentHtmlPath = path
+        documentLoadingPath = null
         documentFailed = true
         documentError = error instanceof Error ? error.message : String(error)
       })
       .finally(() => {
         clearTimeout(timeout)
-        if (run === documentEffectRun) documentLoading = false
+        if (documentLoadingPath === path) documentLoading = false
       })
   })
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')
