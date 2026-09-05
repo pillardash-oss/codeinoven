@@ -16,7 +16,7 @@
     Minimize2,
     Save
   } from '@lucide/svelte'
-  import DOMPurify from 'dompurify'
+  import { documentPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
@@ -222,7 +222,10 @@
       .then((info: ProjectFileInfo) => invoke('file:readDocumentPreview', info.absolutePath))
       .then((html: string | null) => {
         if (token !== documentEffectToken) return
-        documentHtml = html ? DOMPurify.sanitize(html) : null
+        // documentPreviewFrame sanitizes and wraps the raw converter HTML in
+        // a styled page (white "paper" surface) so the preview matches the
+        // chat-attachment document preview instead of rendering transparent.
+        documentHtml = html ? documentPreviewFrame(html) : null
         documentHtmlPath = path
         documentInFlightPath = null
         documentFailed = html === null

@@ -19,7 +19,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import type { PromptAttachment } from '$shared/types'
   import { attachmentPreviewKind } from '$lib/mime'
-  import DOMPurify from 'dompurify'
+  import { documentPreviewFrame } from '$lib/document-preview-frame'
 
   interface Props {
     attachment: PromptAttachment
@@ -99,29 +99,6 @@
     document.body.appendChild(link)
     link.click()
     link.remove()
-  }
-
-  function documentPreviewFrame(html: string): string {
-    const sanitized = DOMPurify.sanitize(html)
-    return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-      :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      body { box-sizing: border-box; max-width: 52rem; min-height: calc(100vh - 4rem); margin: 2rem auto; padding: 3.5rem 4rem; color: #202124; background: #fff; box-shadow: 0 8px 30px rgb(0 0 0 / 14%); line-height: 1.55; }
-      h1, h2, h3, h4, h5, h6 { line-height: 1.25; }
-      img { max-width: 100%; height: auto; }
-      table { width: 100%; border-collapse: collapse; }
-      th, td { border: 1px solid #d5d7da; padding: .45rem .6rem; vertical-align: top; }
-      li + li { margin-top: .35rem; }
-      a { color: #0969da; }
-      @media (max-width: 700px) { body { margin: 0; padding: 1.5rem; box-shadow: none; } }
-    </style>
-  </head>
-  <body>${sanitized}</body>
-</html>`
   }
 
   function handleDownload(): void {
