@@ -111,10 +111,11 @@ export class ModelRankingRepo {
     )
   }
 
-  /** Every aggregate row, strongest one-shot record first. */
+  /** Every aggregate row with at least 5 total ranked conversations, strongest one-shot record first. */
   listAll(): ModelRankingRow[] {
     return this.db.all<ModelRankingRow>(
       `SELECT * FROM model_rankings
+       WHERE (one_shot_samples + multi_shot_samples) >= ${MIN_RANKING_SAMPLES}
        ORDER BY (one_shot_score_sum / CASE WHEN one_shot_samples > 0 THEN one_shot_samples ELSE 1 END) DESC,
                 updated_at DESC`
     )
@@ -157,6 +158,9 @@ export class ModelRankingRepo {
 function rankingRowId(input: ModelRankingIncrement): string {
   return `${input.harnessId}:${input.providerId}:${input.modelId}:${input.thinkingLevel}:${input.rubricVersion}`
 }
+
+/** Minimum total ranked conversations (one-shot + multi-shot) for a ranking row to be reported. */
+const MIN_RANKING_SAMPLES = 5
 
 /** Sum/count round-trip for one shot category; null averages before any sample. */
 function modeStats(
