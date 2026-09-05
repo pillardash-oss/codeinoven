@@ -22,6 +22,7 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
 
   type ThinkingFilter = 'all' | ThinkingLevel
+  type ShotFilter = 'all' | 'one_shot' | 'multi_shot'
   type RangePreset = 'today' | 'yesterday' | '7d' | '30d' | 'year' | 'custom'
   type ModelRankMetric = 'cost' | 'tokens' | 'runtime'
 
@@ -263,6 +264,20 @@
   )
 
   let thinkingFilter = $state<ThinkingFilter>('all')
+  let shotFilter = $state<ShotFilter>('all')
+
+  const filteredRankings = $derived(
+    shotFilter === 'all'
+      ? usage.modelRankings
+      : usage.modelRankings.filter((entry) =>
+          shotFilter === 'one_shot' ? entry.oneShot.samples > 0 : entry.multiShot.samples > 0
+        )
+  )
+  const shotFilterOptions: { value: ShotFilter; label: string }[] = [
+    { value: 'all', label: 'All' },
+    { value: 'one_shot', label: 'One-shot' },
+    { value: 'multi_shot', label: 'Multi-shot' }
+  ]
 
   const topModels = $derived.by(() => {
     const grouped = new SvelteMap<string, LocalProfileUsageBreakdown>()
@@ -1477,18 +1492,43 @@
         </p>
       {/if}
     </div>
-    {#if usage.modelRankings.length > 0}
+    <div
+      class="border-b px-4 py-2"
+      role="group"
+      aria-label="Filter rankings by shot category"
+    >
+      <div class="flex flex-wrap items-center gap-1">
+        {#each shotFilterOptions as option (option.value)}
+          <button
+            type="button"
+            class="flex h-7 items-center rounded-lg px-2.5 text-[0.6875rem] font-medium {shotFilter ===
+            option.value
+              ? 'bg-overlay text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground'}"
+            aria-pressed={shotFilter === option.value}
+            onclick={() => (shotFilter = option.value)}
+          >
+            {option.label}
+          </button>
+        {/each}
+      </div>
+    </div>
+    {#if filteredRankings.length > 0}
       <div class="overflow-x-auto">
         <table class="w-full text-left text-xs">
           <thead>
             <tr class="border-b text-[0.6875rem] uppercase tracking-wide text-muted">
               <th scope="col" class="px-4 py-2 font-medium">Configuration</th>
-              <th scope="col" class="px-4 py-2 font-medium">One-shot</th>
-              <th scope="col" class="px-4 py-2 font-medium">Multi-shot</th>
+              {#if shotFilter !== 'multi_shot'}
+                <th scope="col" class="px-4 py-2 font-medium">One-shot</th>
+              {/if}
+              {#if shotFilter !== 'one_shot'}
+                <th scope="col" class="px-4 py-2 font-medium">Multi-shot</th>
+              {/if}
             </tr>
           </thead>
           <tbody class="divide-y">
-            {#each usage.modelRankings.slice(0, 10) as entry (`${entry.harnessId}:${entry.providerId}:${entry.modelId}:${entry.thinkingLevel}:${entry.rubricVersion}`)}
+            {#each filteredRankings.slice(0, 10) as entry (`${entry.harnessId}:${entry.providerId}:${entry.modelId}:${entry.thinkingLevel}:${entry.rubricVersion}`)}
               <tr>
                 <td class="max-w-56 px-4 py-3">
                   <span class="flex min-w-0 items-center gap-1.5 font-semibold">
@@ -1521,24 +1561,28 @@
                     </span>
                   </span>
                 </td>
-                <td class="px-4 py-3 tabular-nums">
-                  <div class="font-semibold text-foreground">{rankingScoreLabel(entry.oneShot)}</div>
-                  <div class="mt-0.5 text-[0.6875rem] text-dimmed">
-                    {rankingSamplesLabel(entry.oneShot)}
-                    {#if entry.oneShot.samples > 0}
-                      · {rankingDurationLabel(entry.oneShot)} avg
-                    {/if}
-                  </div>
-                </td>
-                <td class="px-4 py-3 tabular-nums">
-                  <div class="font-semibold text-foreground">{rankingScoreLabel(entry.multiShot)}</div>
-                  <div class="mt-0.5 text-[0.6875rem] text-dimmed">
-                    {rankingSamplesLabel(entry.multiShot)}
-                    {#if entry.multiShot.samples > 0}
-                      · {rankingDurationLabel(entry.multiShot)} avg
-                    {/if}
-                  </div>
-                </td>
+                {#if shotFilter !== 'multi_shot'}
+                  <td class="px-4 py-3 tabular-nums">
+                    <div class="font-semibold text-foreground">{rankingScoreLabel(entry.oneShot)}</div>
+                    <div class="mt-0.5 text-[0.6875rem] text-dimmed">
+                      {rankingSamplesLabel(entry.oneShot)}
+                      {#if entry.oneShot.samples > 0}
+                        · {rankingDurationLabel(entry.oneShot)} avg
+                      {/if}
+                    </div>
+                  </td>
+                {/if}
+                {#if shotFilter !== 'one_shot'}
+                  <td class="px-4 py-3 tabular-nums">
+                    <div class="font-semibold text-foreground">{rankingScoreLabel(entry.multiShot)}</div>
+                    <div class="mt-0.5 text-[0.6875rem] text-dimmed">
+                      {rankingSamplesLabel(entry.multiShot)}
+                      {#if entry.multiShot.samples > 0}
+                        · {rankingDurationLabel(entry.multiShot)} avg
+                      {/if}
+                    </div>
+                  </td>
+                {/if}
               </tr>
             {/each}
           </tbody>
