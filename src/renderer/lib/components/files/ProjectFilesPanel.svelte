@@ -31,8 +31,7 @@
     isSvgMime,
     isVideoMime,
     mimeFromPath,
-    isDocumentPreviewPath,
-    pathToFileUrl
+    isDocumentPreviewPath
   } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -56,6 +55,7 @@
   import ProjectFileViewerMenu from './ProjectFileViewerMenu.svelte'
   import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
   import type { ProjectTextFile } from '$shared/types'
+  import type { ProjectFileInfo } from '$lib/types'
 
   interface Props {
     projectId: string
@@ -176,7 +176,12 @@
     documentLoading = true
     documentFailed = false
     let cancelled = false
-    void invoke('file:readDocumentPreview', pathToFileUrl(path))
+    // `file:readDocumentPreview` requires an absolute path, but the tab only
+    // carries a project-relative path (which may live inside a managed worktree
+    // scope). Resolve the authoritative absolute path through main first.
+    const scopeBucketId = workspaceState.activeScopeBucketIdFor(projectId)
+    void invoke('projectFiles:info', projectId, path, scopeBucketId)
+      .then((info: ProjectFileInfo) => invoke('file:readDocumentPreview', info.absolutePath))
       .then((html: string | null) => {
         if (cancelled) return
         documentHtml = html ? DOMPurify.sanitize(html) : null
