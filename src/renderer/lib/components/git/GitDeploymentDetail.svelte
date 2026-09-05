@@ -128,7 +128,11 @@
     } catch (reason) {
       logErrors = {
         ...logErrors,
-        [job.id]: reason instanceof Error ? reason.message : 'The log could not be loaded.'
+        [job.id]: /Provider returned HTTP 404/u.test(String((reason as Error)?.message ?? ''))
+          ? 'No log is available for this job yet.'
+          : reason instanceof Error
+            ? reason.message
+            : 'The log could not be loaded.'
       }
     } finally {
       loadingLog = { ...loadingLog, [job.id]: false }

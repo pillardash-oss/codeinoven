@@ -705,7 +705,14 @@ export class GitHubProvider implements GitProvider {
         (init.method ?? 'GET').toUpperCase() === 'GET' &&
         this.baseUrl === GITHUB_API_BASE_URL
       ) {
-        response = await this.fetch(path, init, null, controller.signal)
+        const anonymousResponse = await this.fetch(path, init, null, controller.signal)
+        // Only prefer the anonymous retry when it actually succeeds or still reports
+        // "not found". An anonymous 403 just means the resource requires auth (e.g. a
+        // private repo's job logs) — that must not clobber the original 404, which is
+        // usually the accurate "not available yet" status (e.g. logs not generated yet).
+        if (anonymousResponse.ok || anonymousResponse.status === 404) {
+          response = anonymousResponse
+        }
       }
       if (!response.ok) {
         const message = await this.readErrorMessage(response)
@@ -755,7 +762,14 @@ export class GitHubProvider implements GitProvider {
         (init.method ?? 'GET').toUpperCase() === 'GET' &&
         this.baseUrl === GITHUB_API_BASE_URL
       ) {
-        response = await this.fetch(path, init, null, controller.signal)
+        const anonymousResponse = await this.fetch(path, init, null, controller.signal)
+        // Only prefer the anonymous retry when it actually succeeds or still reports
+        // "not found". An anonymous 403 just means the resource requires auth (e.g. a
+        // private repo's job logs) — that must not clobber the original 404, which is
+        // usually the accurate "not available yet" status (e.g. logs not generated yet).
+        if (anonymousResponse.ok || anonymousResponse.status === 404) {
+          response = anonymousResponse
+        }
       }
       if (!response.ok) {
         const message = await this.readErrorMessage(response)
