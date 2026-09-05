@@ -408,10 +408,12 @@ body {
 
 .markdown-body table {
   /* Block + max-content keeps native table column sizing (no min-content
-     squeeze of narrow columns) while still allowing horizontal scroll. */
+     squeeze of narrow columns) while still allowing horizontal scroll.
+     max-width: none overrides .markdown-body > *'s max-width: 100%
+     so the table can expand to its content width. */
   display: block;
   width: max-content;
-  max-width: 100%;
+  max-width: none;
   overflow-x: auto;
   border-collapse: collapse;
   font-size: 0.9em;
