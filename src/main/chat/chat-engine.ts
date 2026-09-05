@@ -21528,6 +21528,35 @@ export class ChatEngine {
       return
     }
 
+    // A harness can settle a session without the driver noticing: pi's
+    // auto-compaction aborts the active run, compacts, and (on overflow)
+    // retries, and the driver's turn registration is gone by the time the
+    // final `agent_settled` arrives — so no idle finalization ever fires and
+    // the thread sits on a working card forever. A settled, still-connected
+    // session with no registered driver turn is not an error: emit a synthetic
+    // idle so the engine's normal finalization runs (its incomplete-turn
+    // recovery continues the thread) instead of parking it on an error card.
+    const watchdogDriver = this.drivers.get(info.driverId)
+    if (
+      watchdogDriver?.hasActiveTurn &&
+      !watchdogDriver.hasActiveTurn(sessionId) &&
+      watchdogDriver.isSessionBusy &&
+      (await this.probeSessionLiveness(watchdogDriver, info, sessionId)) === 'idle' &&
+      !this.hasInFlightWork(sessionId, info)
+    ) {
+      Logger.info('Session settled without driver finalization (compaction/retry gap) — reconciling to idle', {
+        sessionId,
+        projectId: info.projectId,
+        threadId: info.threadId
+      })
+      this.clearSessionWatchdog(sessionId)
+      // Route through the driver-event pipeline so every idle consumer
+      // (status broadcast, thread finalization, notifications) sees the same
+      // synthetic signal it would have seen from a real driver idle event.
+      this.handleDriverEvent(info.driverId, { type: 'session.idle', sessionId })
+      return
+    }
+
     // Surface the issue to every renderer bound to the thread so the user sees
     // the real failure (with a Retry affordance) instead of a silent fail.
     await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
