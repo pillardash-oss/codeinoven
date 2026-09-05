@@ -33,10 +33,12 @@ import {
 } from './database-worker'
 import {
   runProviderDeltaSync,
+  mapMessageRows,
+  mapUserMessageRows,
   type ProviderDeltaSyncResult
 } from './repositories/agent-message-repo'
 import { runHistoryAppend } from './repositories/history-repo'
-import type { AgentMessage } from '../../lib/types'
+import type { AgentMessage, UserMessageSummary } from '../../lib/types'
 import { buildBoundedQuery } from './bounded-query'
 
 /** Main-thread SQLite work above one 60 Hz frame is diagnostic-worthy. */
@@ -429,6 +431,73 @@ export class Database {
       }
     }
     return runLocalBoundedQuery(this, sql, params, maxRows)
+  }
+
+  /**
+   * Bounded read decoded straight to `AgentMessage[]` on the worker's
+   * connection: the `parts` JSON is parsed and capped there, so a
+   * multi-megabyte tool-output string never crosses into the main process.
+   * Falls back to decoding on the primary connection (main thread) only when
+   * the worker itself is unavailable.
+   */
+  async queryMessagesViaWorker(
+    sql: string,
+    params: unknown[],
+    maxRows: number,
+    includeTransport = false
+  ): Promise<{ ok: boolean; messages: AgentMessage[]; truncated: boolean; error?: string }> {
+    const worker = this.maintenanceWorker
+    if (worker?.isRunning()) {
+      const response = await worker.queryMessages(sql, params, maxRows, includeTransport)
+      if (response.ok) {
+        return {
+          ok: true,
+          messages: response.messages ?? [],
+          truncated: response.truncated ?? false
+        }
+      }
+      if (response.error) {
+        Logger.error(
+          'Database worker query-messages failed; falling back to primary connection',
+          response.error
+        )
+      }
+    }
+    const local = runLocalBoundedQuery(this, sql, params, maxRows)
+    if (!local.ok) return { ok: false, messages: [], truncated: false, error: local.error }
+    return {
+      ok: true,
+      messages: mapMessageRows(local.rows, includeTransport),
+      truncated: local.truncated
+    }
+  }
+
+  /** Bounded read decoded straight to `UserMessageSummary[]` on the worker's connection. */
+  async queryUserMessagesViaWorker(
+    sql: string,
+    params: unknown[],
+    maxRows: number
+  ): Promise<{ ok: boolean; messages: UserMessageSummary[]; truncated: boolean; error?: string }> {
+    const worker = this.maintenanceWorker
+    if (worker?.isRunning()) {
+      const response = await worker.queryUserMessages(sql, params, maxRows)
+      if (response.ok) {
+        return {
+          ok: true,
+          messages: response.messages ?? [],
+          truncated: response.truncated ?? false
+        }
+      }
+      if (response.error) {
+        Logger.error(
+          'Database worker query-user-messages failed; falling back to primary connection',
+          response.error
+        )
+      }
+    }
+    const local = runLocalBoundedQuery(this, sql, params, maxRows)
+    if (!local.ok) return { ok: false, messages: [], truncated: false, error: local.error }
+    return { ok: true, messages: mapUserMessageRows(local.rows), truncated: local.truncated }
   }
 
   /** Single write statement on the worker's connection; primary fallback. */

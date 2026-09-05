@@ -32,7 +32,7 @@ import {
   runProviderDeltaSync,
   type ProviderDeltaSyncExecutor
 } from './repositories/agent-message-repo'
-import { mapMessageRows } from './repositories/agent-message-repo'
+import { mapMessageRows, mapUserMessageRows } from './repositories/agent-message-repo'
 import { runHistoryAppend, type HistoryAppendArgs } from './repositories/history-repo'
 import { buildTranscriptMarkdown } from '../../lib/transcript'
 import { buildBoundedQuery } from './bounded-query'
@@ -496,30 +496,80 @@ function estimateRowBytes(row: Record<string, unknown>): number {
   return total
 }
 
+/**
+ * Shared bounded-read core: runs `sql` capped at `maxRows`, then trims further
+ * to keep the serialized response under `MAX_QUERY_RESPONSE_BYTES` (a row
+ * boundary is always kept whole, and the first row is always kept so
+ * cursor-paged callers make forward progress). Used by both the raw `query`
+ * command and `query-messages`/`query-user-messages`, which decode the same
+ * bounded row set into typed messages before it ever crosses the worker port.
+ */
+function boundedRows(
+  sql: string,
+  params: unknown[],
+  maxRows: number
+): { rows: Record<string, unknown>[]; truncated: boolean } {
+  const boundedQuery = buildBoundedQuery(sql, maxRows)
+  const queryParams = [...params]
+  if (boundedQuery.limitParam !== undefined) {
+    queryParams.push(boundedQuery.limitParam)
+  }
+  const rows = connection()
+    .prepare(boundedQuery.sql)
+    .all(...queryParams) as Record<string, unknown>[]
+  const bounded = Math.max(0, Math.floor(maxRows))
+  const rowCapped = bounded > 0 && rows.length > bounded
+  const cappedRows = rowCapped ? rows.slice(0, bounded) : rows
+  let bytes = 0
+  let end = 0
+  while (end < cappedRows.length) {
+    bytes += estimateRowBytes(cappedRows[end])
+    if (bytes > MAX_QUERY_RESPONSE_BYTES && end > 0) break
+    end++
+  }
+  return { rows: cappedRows.slice(0, end), truncated: rowCapped || end < cappedRows.length }
+}
+
 function query(request: Extract<DatabaseWorkerRequest, { kind: 'query' }>): DatabaseWorkerResult {
   try {
-    const boundedQuery = buildBoundedQuery(request.sql, request.maxRows)
-    const params = [...request.params]
-    if (boundedQuery.limitParam !== undefined) {
-      params.push(boundedQuery.limitParam)
-    }
-    const rows = connection()
-      .prepare(boundedQuery.sql)
-      .all(...params) as Record<string, unknown>[]
-    const maxRows = Math.max(0, Math.floor(request.maxRows))
-    const rowCapped = maxRows > 0 && rows.length > maxRows
-    const cappedRows = rowCapped ? rows.slice(0, maxRows) : rows
-    let bytes = 0
-    let end = 0
-    while (end < cappedRows.length) {
-      bytes += estimateRowBytes(cappedRows[end])
-      if (bytes > MAX_QUERY_RESPONSE_BYTES && end > 0) break
-      end++
-    }
-    const truncated = rowCapped || end < cappedRows.length
-    return { kind: 'query', ok: true, rows: cappedRows.slice(0, end), truncated }
+    const { rows, truncated } = boundedRows(request.sql, request.params, request.maxRows)
+    return { kind: 'query', ok: true, rows, truncated }
   } catch (error) {
     return { kind: 'query', ok: false, error: String(error) }
+  }
+}
+
+/**
+ * Bounded read that decodes straight to `AgentMessage[]` on the worker
+ * thread — the multi-megabyte `parts` JSON string (and the bounded-output cap
+ * applied to legacy oversized tool outputs) is parsed here and never crosses
+ * the worker port as raw text. See `bounded-tool-output.ts` for the cap.
+ */
+function queryMessages(
+  request: Extract<DatabaseWorkerRequest, { kind: 'query-messages' }>
+): DatabaseWorkerResult {
+  try {
+    const { rows, truncated } = boundedRows(request.sql, request.params, request.maxRows)
+    return {
+      kind: 'query-messages',
+      ok: true,
+      messages: mapMessageRows(rows, request.includeTransport),
+      truncated
+    }
+  } catch (error) {
+    return { kind: 'query-messages', ok: false, error: String(error) }
+  }
+}
+
+/** Bounded read that decodes straight to `UserMessageSummary[]` on the worker thread. */
+function queryUserMessages(
+  request: Extract<DatabaseWorkerRequest, { kind: 'query-user-messages' }>
+): DatabaseWorkerResult {
+  try {
+    const { rows, truncated } = boundedRows(request.sql, request.params, request.maxRows)
+    return { kind: 'query-user-messages', ok: true, messages: mapUserMessageRows(rows), truncated }
+  } catch (error) {
+    return { kind: 'query-user-messages', ok: false, error: String(error) }
   }
 }
 
@@ -631,6 +681,10 @@ function handle(
       return health()
     case 'query':
       return query(request)
+    case 'query-messages':
+      return queryMessages(request)
+    case 'query-user-messages':
+      return queryUserMessages(request)
     case 'execute':
       return execute(request)
     case 'transaction':
