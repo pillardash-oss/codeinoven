@@ -161,6 +161,8 @@
   let documentHtml = $state<string | null>(null)
   let documentLoading = $state(false)
   let documentFailed = $state(false)
+  /** Human-readable reason when a preview fails — surfaced in the pane. */
+  let documentError = $state<string | null>(null)
   /** Path whose HTML is currently loaded — guards against tab swaps. */
   let documentHtmlPath = $state<string | null>(null)
   /** Scope bucket is read as a derived value OUTSIDE the effect: the getter
@@ -180,6 +182,7 @@
       documentHtml = null
       documentHtmlPath = null
       documentFailed = false
+      documentError = null
       documentLoading = false
       return
     }
@@ -187,25 +190,42 @@
     if (documentHtmlPath === path) return
     documentLoading = true
     documentFailed = false
+    documentError = null
     // `file:readDocumentPreview` requires an absolute path, but the tab only
     // carries a project-relative path (which may live inside a managed worktree
     // scope). Resolve the authoritative absolute path through main first.
     const scopeBucketId = documentScopeBucketId
+    let settled = false
+    // Hard cap: a hung IPC chain must never leave the spinner spinning forever.
+    const timeout = setTimeout(() => {
+      if (settled || run !== documentEffectRun) return
+      settled = true
+      documentHtml = null
+      documentHtmlPath = path
+      documentFailed = true
+      documentError = 'Document preview timed out'
+      documentLoading = false
+    }, 15000)
     void invoke('projectFiles:info', projectId, path, scopeBucketId)
       .then((info: ProjectFileInfo) => invoke('file:readDocumentPreview', info.absolutePath))
       .then((html: string | null) => {
         if (run !== documentEffectRun) return
+        settled = true
         documentHtml = html ? DOMPurify.sanitize(html) : null
         documentHtmlPath = path
         documentFailed = html === null
+        documentError = html === null ? 'The document could not be converted for preview' : null
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (run !== documentEffectRun) return
+        settled = true
         documentHtml = null
         documentHtmlPath = path
         documentFailed = true
+        documentError = error instanceof Error ? error.message : String(error)
       })
       .finally(() => {
+        clearTimeout(timeout)
         if (run === documentEffectRun) documentLoading = false
       })
   })
@@ -820,6 +840,11 @@
             >
               <FileQuestion size={24} />
               <span class="text-xs">This document could not be previewed</span>
+              {#if documentError}
+                <span class="max-w-md text-center text-[0.625rem] break-words text-danger">
+                  {documentError}
+                </span>
+              {/if}
             </div>
           {/if}
         </div>
