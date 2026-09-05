@@ -15,7 +15,11 @@ import type {
 import { UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
-import { APP_BROWSER_UTILITY_ID, UtilityRegistryService } from './utility-registry-service'
+import {
+  APP_BROWSER_UTILITY_ID,
+  APP_IMAGE_DESCRIPTOR_UTILITY_ID,
+  UtilityRegistryService
+} from './utility-registry-service'
 import { CuaBridgeService } from './cua-bridge-service'
 import {
   GATEWAY_TOOLS,
@@ -912,7 +916,7 @@ export class UtilityOrchestrationService {
           threadId: state.request.threadId,
           projectPath: state.request.projectPath,
           sessionId: state.request.sessionId,
-          pinnedSelection: this.pinnedImageDescriptorSelection(state)
+          pinnedSelection: await this.pinnedImageDescriptorSelection()
         })
       }
     } else {
@@ -922,20 +926,23 @@ export class UtilityOrchestrationService {
     return result
   }
 
-  /** Vision model pinned by an eligible, configured image-descriptor utility. */
-  private pinnedImageDescriptorSelection(
-    state: TurnState
-  ): { harnessId: string; providerId: string; modelId: string } | undefined {
-    for (const { utility } of state.eligible.values()) {
-      if (utility.kind !== 'image_descriptor') continue
-      if (!utility.config.providerId || !utility.config.modelId) continue
-      return {
-        harnessId: utility.config.harnessId,
-        providerId: utility.config.providerId,
-        modelId: utility.config.modelId
-      }
+  /**
+   * Vision model pinned by the configured image-descriptor utility, read fresh
+   * from the registry at invoke time. Reading the registry (not the turn-start
+   * utility snapshot) means a model the user re-pins mid-turn applies to every
+   * later descriptor call in that same turn.
+   */
+  private async pinnedImageDescriptorSelection(): Promise<
+    { harnessId: string; providerId: string; modelId: string } | undefined
+  > {
+    const utility = await this.registry.get(APP_IMAGE_DESCRIPTOR_UTILITY_ID)
+    if (!utility || utility.kind !== 'image_descriptor') return undefined
+    if (!utility.config.providerId || !utility.config.modelId) return undefined
+    return {
+      harnessId: utility.config.harnessId,
+      providerId: utility.config.providerId,
+      modelId: utility.config.modelId
     }
-    return undefined
   }
 
   private isComputerUseUtility(resolved: ResolvedUtility): boolean {

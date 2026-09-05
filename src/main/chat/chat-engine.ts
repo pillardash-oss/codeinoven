@@ -8489,9 +8489,12 @@ export class ChatEngine {
       }))
     }
     const config = await this.storage.getConfig()
+    // A thread-level pick (e.g. a model chosen on the error card) always wins,
+    // then the utility pin, then the global default. The pin is read fresh at
+    // invoke time so re-pinning mid-turn affects later descriptor calls.
     let selection =
-      request.pinnedSelection ??
       thread?.settings?.imageDescriptor ??
+      request.pinnedSelection ??
       config.agentDefaults.imageDescriptor ??
       this.firstVisionModelFromCache(request.projectId)
     // A configured fallback vision model is tried automatically when the
