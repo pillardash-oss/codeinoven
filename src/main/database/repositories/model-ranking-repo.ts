@@ -131,26 +131,32 @@ export class ModelRankingRepo {
 
   /** IPC-shaped view of the aggregates; averages are always sum ÷ count. */
   analytics(): LocalProfileModelRanking[] {
-    return this.listAll().map((row) => ({
-      harnessId: row.harness_id,
-      providerId: row.provider_id,
-      modelId: row.model_id,
-      thinkingLevel: row.thinking_level ? (row.thinking_level as ThinkingLevel) : null,
-      rubricVersion: row.rubric_version,
-      oneShot: modeStats(
-        row.one_shot_score_sum,
-        row.one_shot_samples,
-        row.one_shot_duration_sum_ms,
-        row.one_shot_cost_usd
-      ),
-      multiShot: modeStats(
-        row.multi_shot_score_sum,
-        row.multi_shot_samples,
-        row.multi_shot_duration_sum_ms,
-        row.multi_shot_cost_usd
-      ),
-      updatedAt: row.updated_at
-    }))
+    // Returns every aggregate row regardless of sample count — the
+    // statistical-significance threshold is a display concern applied by
+    // listAll(), not a data-integrity one. Callers (Profile analytics, IPC)
+    // must see aggregates as soon as the first ranked conversation lands.
+    return this.db
+      .all<ModelRankingRow>('SELECT * FROM model_rankings ORDER BY updated_at DESC')
+      .map((row) => ({
+        harnessId: row.harness_id,
+        providerId: row.provider_id,
+        modelId: row.model_id,
+        thinkingLevel: row.thinking_level ? (row.thinking_level as ThinkingLevel) : null,
+        rubricVersion: row.rubric_version,
+        oneShot: modeStats(
+          row.one_shot_score_sum,
+          row.one_shot_samples,
+          row.one_shot_duration_sum_ms,
+          row.one_shot_cost_usd
+        ),
+        multiShot: modeStats(
+          row.multi_shot_score_sum,
+          row.multi_shot_samples,
+          row.multi_shot_duration_sum_ms,
+          row.multi_shot_cost_usd
+        ),
+        updatedAt: row.updated_at
+      }))
   }
 }
 
