@@ -1,4 +1,4 @@
-import { signAsync } from '@electron/osx-sign'
+import { sign as signAsync } from '@electron/osx-sign'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { retry } from 'builder-util'
