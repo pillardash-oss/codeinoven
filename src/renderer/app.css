@@ -406,13 +406,19 @@ body {
   color: var(--color-muted);
 }
 
-.markdown-body table {
-  /* Block + max-content keeps native table column sizing (no min-content
-     squeeze of narrow columns) while still allowing horizontal scroll. */
+.markdown-body .md-table-wrap {
   display: block;
-  width: max-content;
   max-width: 100%;
   overflow-x: auto;
+}
+
+.markdown-body table {
+  /* Native table column sizing: every column keeps at least one word of
+     width; content wider than the container scrolls inside .md-table-wrap
+     instead of squeezing sibling columns. min-width keeps narrow tables
+     filling the container like a normal block. */
+  width: 100%;
+  min-width: max-content;
   border-collapse: collapse;
   font-size: 0.9em;
 }
@@ -422,13 +428,11 @@ body {
   border: 1px solid var(--color-border);
   padding: 0.35em 0.6em;
   text-align: left;
-  /* Cells must NOT inherit `.markdown-body { overflow-wrap: anywhere }`:
-     `anywhere` collapses each word's min-content to ~2 chars, letting the
-     auto table layout legally crush narrow columns ("medium" → "me di um")
-     when a sibling column holds long inline code. Normal wrapping keeps
-     each column at least one word wide; extra width overflows into the
-     table's own horizontal scroll instead of stealing from neighbors. */
-  overflow-wrap: normal;
+  /* Cells may wrap long tokens inside their own column (GitHub-style):
+     the table's min-width: max-content guarantees each column its natural
+     width first, so `anywhere` only kicks in when the table is genuinely
+     wider than the container. */
+  overflow-wrap: anywhere;
   word-break: normal;
 }
 

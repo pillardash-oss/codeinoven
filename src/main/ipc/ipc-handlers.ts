@@ -4556,7 +4556,12 @@ export function registerIpcHandlers(
         docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         doc: 'application/msword',
         odt: 'application/vnd.oasis.opendocument.text',
-        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        xls: 'application/vnd.ms-excel',
+        ods: 'application/vnd.oasis.opendocument.spreadsheet',
+        csv: 'text/csv',
+        tsv: 'text/tab-separated-values'
       }
       const mime = mimeByExtension[extension]
       if (!mime) return null
@@ -5082,12 +5087,20 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'projectFiles:read',
-    (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
-      projectFilesService.readText(
-        validateEntityId(projectId, 'Project ID'),
-        requireString(relativePath, 'Project file path'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
-      )
+    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) => {
+      // Read failures (binary files, size limits, missing paths) are surfaced
+      // gracefully by renderer call sites; returning null avoids a noisy
+      // main-process "Error occurred in handler" log for every expected case.
+      try {
+        return await projectFilesService.readText(
+          validateEntityId(projectId, 'Project ID'),
+          requireString(relativePath, 'Project file path'),
+          scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        )
+      } catch {
+        return null
+      }
+    }
   )
   ipcMain.handle(
     'projectFiles:rename',

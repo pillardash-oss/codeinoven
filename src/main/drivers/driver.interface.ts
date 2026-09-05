@@ -382,6 +382,12 @@ export interface HarnessDriver {
    */
   isSessionBusy?(projectPath: string, sessionId: string): Promise<boolean>
 
+  /** Whether the driver still has a registered live turn for this session.
+   *  When absent, callers must assume a turn may exist. Used by the engine's
+   *  watchdog to distinguish a driver that lost its turn registration (e.g.
+   *  pi's auto-compaction gap) from one still streaming. */
+  hasActiveTurn?(sessionId: string): boolean
+
   /** Load the full message history for a session. */
   loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]>
 

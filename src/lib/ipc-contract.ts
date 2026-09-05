@@ -1978,7 +1978,8 @@ export interface IpcInvokeContract {
   >
   'projectFiles:read': Contract<
     [projectId: string, relativePath: string, scopeBucketId?: string],
-    ProjectTextFile
+    /** null when the file cannot be read as text (binary, too large, missing). */
+    ProjectTextFile | null
   >
   'projectFiles:rename': Contract<
     [projectId: string, relativePath: string, name: string, scopeBucketId?: string],

@@ -28,8 +28,8 @@
     "@codemirror/view": "^6.43.10"
   },
   "scripts": {
-    "postinstall": "bun scripts/patch-binary-data.ts && bun scripts/patch-plist-xmldom.ts && electron-builder install-app-deps",
-    "predev": "bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun scripts/brand-electron.ts",
+    "postinstall": "bun scripts/ensure-electron-binary.ts && bun scripts/patch-binary-data.ts && bun scripts/patch-plist-xmldom.ts && bun scripts/patch-mammoth-xmldom.ts && bun scripts/patch-electron-builder-keychain.ts && electron-builder install-app-deps",
+    "predev": "bun scripts/ensure-electron-binary.ts && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun scripts/brand-electron.ts",
     "dev": "electron-vite dev",
     "dev:remote-pwa": "bun scripts/dev-remote-pwa.ts",
     "dev:remote-pwa:tunnel": "bun scripts/dev-remote-pwa.ts --tunnel",
@@ -79,7 +79,8 @@
     "sherpa-onnx-node": "1.13.7",
     "web-push": "^3.6.7",
     "werift": "^0.24.4",
-    "word-extractor": "^1.0.4"
+    "word-extractor": "^1.0.4",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.259",

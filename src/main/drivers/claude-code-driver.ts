@@ -117,6 +117,17 @@ const CLAUDE_ASYNC_AGENT_LAUNCH_MARKER = 'Async agent launched successfully'
  */
 const CLAUDE_ASYNC_AGENT_CLOSE_GRACE_MS = 10 * 60_000
 /**
+ * Absolute ceiling on how long a turn process may be held open by unfinished
+ * background agents after its result, regardless of stdout activity. The
+ * inactivity grace above resets on every stdout record — including forwarded
+ * sub-agent text — so a sub-agent that keeps trickling output (or a CLI that
+ * never finishes its background wait) could otherwise keep the turn process
+ * (and the parent turn) alive forever. When this cap fires, stdin is closed
+ * unconditionally so the CLI can exit; a still-live agent's task-notification
+ * then arrives via a resumed process instead of wedging the parent turn.
+ */
+const CLAUDE_ASYNC_AGENT_MAX_HOLD_MS = 30 * 60_000
+/**
  * Cap on concurrent one-shot `claude` spawns (auth probe, on-demand usage
  * refresh, version probe, model discovery). Every one-shot spawn holds several
  * file descriptors (stdio pipes) for its lifetime, so a burst of threads or
@@ -1214,16 +1225,34 @@ export function mapClaudeCodeRecord(
       // A background agent finishing is delivered as a plain-text user turn
       // (<task-notification> with the launching tool-use-id). Complete the
       // matching subagent part so the UI and the stdin-close logic observe the
-      // agent as finished.
+      // agent as finished. The stream-json transport may deliver the
+      // notification text either as a bare string or wrapped in a text block;
+      // both shapes must be recognized or the subagent part stays "running"
+      // forever and the parent turn is never torn down.
       const notificationText =
-        rawMessage && typeof rawMessage['content'] === 'string' ? rawMessage['content'] : ''
+        rawMessage && typeof rawMessage['content'] === 'string'
+          ? rawMessage['content']
+          : Array.isArray(rawMessage?.['content'])
+            ? rawMessage['content']
+                .filter(
+                  (blockValue): blockValue is Record<string, unknown> =>
+                    record(blockValue)?.['type'] === 'text'
+                )
+                .map((block) => string(block['text']) ?? '')
+                .join('\n')
+            : ''
       if (notificationText.includes('<task-notification>')) {
         const callId = /<tool-use-id>([^<]+)<\/tool-use-id>/.exec(notificationText)?.[1]
         const subagent = callId ? findSubagentPart(context, callId) : undefined
         if (subagent && (subagent.activity.status === 'pending' || subagent.activity.status === 'running')) {
+          const resultText = /<result>([\s\S]*?)<\/result>/.exec(notificationText)?.[1]
           const part: AgentPart = {
             ...subagent,
-            activity: { ...subagent.activity, status: 'completed' }
+            activity: {
+              ...subagent.activity,
+              status: 'completed',
+              ...(resultText ? { output: resultText } : {})
+            }
           }
           return {
             nativeSessionId,
@@ -1497,6 +1526,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   private readonly pendingClaudePermissions = new Map<string, ClaudePermissionRequest>()
   /** Scheduled stdin closes for turn processes still running background agents. */
   private readonly asyncAgentCloseTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Absolute stdin-close deadlines, immune to stdout-driven grace resets. */
+  private readonly asyncAgentHoldDeadlines = new Map<string, ReturnType<typeof setTimeout>>()
   /** Held while a first-party session spawn may be refreshing the credential. */
   private authSlotHeld = false
   /** Resolved when the current credential-refresh window closes. */
@@ -2033,9 +2064,11 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   /**
-   * Close a background-agent turn process's stdin after a grace period so the
-   * CLI can exit if the agents never deliver further work. Any later stdout
-   * record cancels and the next result re-arms the timer.
+   * Close a background-agent turn process's stdin after a silence window so
+   * the CLI can exit if the agents never deliver further work. Any stdout
+   * record pushes both the inactivity grace and the hold deadline back out —
+   * a sub-agent that is genuinely streaming keeps its process alive
+   * indefinitely; only true silence (a wedged or dead wait) reaches the cap.
    */
   private scheduleAsyncAgentInputClose(sessionId: string): void {
     this.cancelAsyncAgentInputClose(sessionId)
@@ -2046,13 +2079,26 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     }, CLAUDE_ASYNC_AGENT_CLOSE_GRACE_MS)
     timer.unref?.()
     this.asyncAgentCloseTimers.set(sessionId, timer)
+    const deadline = setTimeout(() => {
+      this.asyncAgentHoldDeadlines.delete(sessionId)
+      if (!this.activeSessionIds().includes(sessionId)) return
+      this.closeActiveInput(sessionId)
+    }, CLAUDE_ASYNC_AGENT_MAX_HOLD_MS)
+    deadline.unref?.()
+    this.asyncAgentHoldDeadlines.set(sessionId, deadline)
   }
 
   private cancelAsyncAgentInputClose(sessionId: string): void {
     const timer = this.asyncAgentCloseTimers.get(sessionId)
-    if (!timer) return
-    clearTimeout(timer)
-    this.asyncAgentCloseTimers.delete(sessionId)
+    if (timer) {
+      clearTimeout(timer)
+      this.asyncAgentCloseTimers.delete(sessionId)
+    }
+    const deadline = this.asyncAgentHoldDeadlines.get(sessionId)
+    if (deadline) {
+      clearTimeout(deadline)
+      this.asyncAgentHoldDeadlines.delete(sessionId)
+    }
   }
 
   private beginAuthenticationReadiness(sessionId: string): void {
@@ -2515,6 +2561,11 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   override dispose(): void {
     this.authProbeCache.clear()
     this.authenticatedSessions.clear()
+    for (const timer of [...this.asyncAgentCloseTimers.values(), ...this.asyncAgentHoldDeadlines.values()]) {
+      clearTimeout(timer)
+    }
+    this.asyncAgentCloseTimers.clear()
+    this.asyncAgentHoldDeadlines.clear()
     for (const sessionId of this.activeUsageProbes.keys()) {
       this.finishActiveUsageProbe(sessionId, null)
     }
@@ -2541,9 +2592,17 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
 
     const result = mapClaudeCodeRecord(value, context)
     // Background-agent bookkeeping: any stdout record proves the turn process
-    // is still doing work, so a scheduled stdin close (armed at result time
-    // while background agents run) must be pushed back out.
-    if (type !== 'result') this.cancelAsyncAgentInputClose(context.sessionId)
+    // is still doing work, so the scheduled stdin close (armed at result time
+    // while background agents run) must be pushed back out — both the
+    // inactivity grace and the silence cap reset on live activity. A result
+    // record re-arms them itself below when background agents remain.
+    if (type !== 'result') {
+      if (this.asyncAgentHoldDeadlines.has(context.sessionId)) {
+        this.scheduleAsyncAgentInputClose(context.sessionId)
+      } else {
+        this.cancelAsyncAgentInputClose(context.sessionId)
+      }
+    }
     if (type === 'result') {
       this.finishActiveUsageProbe(context.sessionId, null)
       const backgroundAgents = activeClaudeSubagentParts(context, true).length > 0

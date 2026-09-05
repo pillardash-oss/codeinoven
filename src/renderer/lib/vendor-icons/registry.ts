@@ -97,12 +97,3 @@ export function getVendorIconSvg(name: string | undefined): string | undefined {
   const slug = getVendorSlug(name)
   return slug ? iconsBySlug.get(slug) : undefined
 }
-
-/**
- * Data-URI form of a bundled vendor icon for `<img>`-based renderers
- * (e.g. rich inline badges) that can't use inline SVG markup.
- */
-export function getVendorIconDataUri(name: string | undefined): string | undefined {
-  const svg = getVendorIconSvg(name)
-  return svg ? `data:image/svg+xml,${encodeURIComponent(svg)}` : undefined
-}

@@ -628,6 +628,10 @@ interface PiTurnState {
   /** Streamed part ids already announced with a placeholder
    *  `message.part.updated`, so their first delta only needs the delta. */
   announcedStreamParts?: Set<string>
+  /** Set while a driver-initiated compaction runs. The compaction is part of
+   *  the working trace but produces no assistant response of its own, so its
+   *  `agent_settled` must not finalize the outer turn. */
+  compacting?: boolean
 }
 
 /**
@@ -1784,7 +1788,7 @@ export class PiDriver extends PersistentCliDriver {
     _settings: ThreadSettings
   ): Promise<void> {
     void _settings
-    await this.requireSession(projectPath, sessionId)
+    const session = await this.requireSession(projectPath, sessionId)
     // An idle thread has no live RPC process (app restart, idle dispose, crash
     // cleanup all evict clients). Boot one on demand — ensureRpcClient resumes
     // the persisted native transcript so compaction sees the full history.
@@ -1793,7 +1797,23 @@ export class PiDriver extends PersistentCliDriver {
     // both mid-turn and on an idle session. Awaiting here keeps the handoff
     // deterministic from the caller's view; compaction_start/compaction_end
     // events stream out as it summarizes.
-    await client.compact()
+    const currentTurnState = this.turnStates.get(sessionId)
+    this.turnStates.set(sessionId, {
+      assistantMessageId: currentTurnState?.assistantMessageId ?? null,
+      turnIndex: Math.max(
+        currentTurnState?.turnIndex ?? 0,
+        latestPiTurnIndex(session.messages, sessionId)
+      ),
+      compacting: true
+    })
+    this.activeTurns.add(sessionId)
+    try {
+      await client.compact()
+    } finally {
+      this.activeTurns.delete(sessionId)
+      const state = this.turnStates.get(sessionId)
+      if (state) this.turnStates.set(sessionId, { ...state, compacting: false })
+    }
   }
 
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
@@ -2219,6 +2239,13 @@ export class PiDriver extends PersistentCliDriver {
    * surviving pi process is still executing — the same role OpenCode's
    * session-status probe plays for its shared server.
    */
+  /** Whether the driver still tracks a live turn for this session. The engine's
+   *  watchdog uses this to detect a turn the session settled without the
+   *  driver noticing (pi's auto-compaction / retry gap). */
+  hasActiveTurn(sessionId: string): boolean {
+    return this.activeTurns.has(sessionId)
+  }
+
   async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
     const client = this.rpcClients.get(sessionId)
     if (!client || this.sessionProjects.get(sessionId) !== projectPath) return false
@@ -2631,6 +2658,13 @@ export class PiDriver extends PersistentCliDriver {
         // `agent_settled` is a stable signal that no retry or queued
         // continuation remains, so never finalize a turn on `agent_end`.
         if (record['type'] === 'agent_settled') {
+          // A settled signal during an RPC-initiated compaction is the
+          // compaction run itself finishing, not the end of the logical turn:
+          // pi still owes the user a retry of the aborted prompt. Register the
+          // compaction turn so its streaming and finalization are tracked like
+          // any other turn, and never finalize here — the compaction's own
+          // `agent_settled` finalizes the whole turn.
+          if (this.turnStates.get(session.id)?.compacting) return
           if (this.beginSilentContinue(session)) return
           this.activeTurns.delete(session.id)
           void this.refreshSessionUsage(session).finally(() => {
