@@ -6219,7 +6219,38 @@ export class ChatEngine {
       })
       return withoutTransportParts(userMessage)
     }
-    await deliverNow()
+    try {
+      await deliverNow()
+    } catch (error) {
+      // The turn can settle inside the race window between the working check
+      // above and this delivery (auto-compaction, silent continue, retry) —
+      // pi considers compaction part of the working trace but the driver's
+      // registered turn is already gone. A settled trace must never reject the
+      // user's message: deliver it as the next regular turn instead.
+      const state = this.sessionStatuses.get(activeSessionId)?.state
+      if (state === 'working' || state === 'waiting') throw error
+      Logger.info('Steer landed on a settled turn — delivering as a regular send:', {
+        projectId,
+        threadId,
+        sessionId: activeSessionId,
+        error: rawErrorMessage(error)
+      })
+      await this.sendPrompt(
+        projectId,
+        threadId,
+        steerSettings,
+        text,
+        attachments,
+        undefined,
+        messageId,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        'user',
+        presentation,
+        taskReferences
+      )
+    }
     return withoutTransportParts(userMessage)
   }
 

@@ -1929,8 +1929,29 @@ export class PiDriver extends PersistentCliDriver {
   async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
     await this.requireSession(projectPath, options.sessionId)
     const client = this.rpcClients.get(options.sessionId)
-    if (!client || !this.activeTurns.has(options.sessionId)) {
+    if (!client) {
       throw new Error(`No active Pi turn is available to steer for session ${options.sessionId}`)
+    }
+    // A live turn must be registered before steering. When it is not, the
+    // session may still be busy inside pi's own lifecycle (auto-compaction,
+    // retry windows) that CodeInOven reports as "working" — pi's docs treat
+    // compaction/retry as part of the running trace, so never reject user
+    // input there. `follow_up` is accepted in exactly those states: pi queues
+    // it and runs it as the continuation of the same session, whether the
+    // trace is compacting, retrying, or momentarily between agent runs.
+    if (!this.activeTurns.has(options.sessionId)) {
+      const busy = await this.isSessionBusy(projectPath, options.sessionId)
+      if (!busy) {
+        throw new Error(`No active Pi turn is available to steer for session ${options.sessionId}`)
+      }
+      const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
+      const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
+      this.appendUserMessage(
+        await this.requireSession(projectPath, options.sessionId),
+        options
+      )
+      await client.followUp(message, images)
+      return
     }
     await this.steerIntoActiveTurn(options.sessionId, options.text, options.attachments)
   }
