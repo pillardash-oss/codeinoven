@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ChevronDown, MessageSquare, MessageSquarePlus } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { onDestroy, onMount, tick } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
   import { copyText } from '$lib/copy-text'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
@@ -16,12 +16,11 @@
   import StudioVersionBar from './StudioVersionBar.svelte'
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
+  import { offsetsForQuote, offsetsForRange } from './studio-annotation-anchors'
   import {
-    offsetsForQuote,
-    offsetsForRange,
-    rangeForAnnotation,
-    waitForScrollSettle
-  } from './studio-annotation-anchors'
+    StudioAnnotationOverlay,
+    clampPendingPosition
+  } from './studio-annotation-overlay.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import type {
     BrainstormAnnotation,
@@ -44,13 +43,6 @@
     endLine: number
     startOffset: number
     endOffset: number
-  }
-
-  interface PendingAnnotation extends AnnotationAnchor {
-    section: BrainstormSectionId
-    x: number
-    y: number
-    sectionLevel: boolean
   }
 
   interface Props {
@@ -146,10 +138,9 @@
   let savePending = $state(false)
   let pendingAction = $state<BrainstormDecisionAction | null>(null)
   let additionalNotes = $state('')
-  let pendingAnnotation = $state<PendingAnnotation | null>(null)
+  const overlay = new StudioAnnotationOverlay<BrainstormAnnotation>('brainstorm-annotation-anchor')
+  const pendingAnnotation = $derived(overlay.pending)
   let annotationBody = $state('')
-  let editingAnnotation = $state<BrainstormAnnotation | null>(null)
-  let editingAnnotationBody = $state('')
   let decisionNotesEditor = $state<RichMarkdownEditor>()
   const pendingSpeechTargetId = `brainstorm-annotation-${crypto.randomUUID()}`
   const decisionSpeechTargetId = `brainstorm-decision-${crypto.randomUUID()}`
@@ -162,14 +153,12 @@
   function decisionSpeechTarget() {
     return decisionNotesEditor?.speechEditorTarget(decisionSpeechTargetId) ?? null
   }
-  let annotationEditMode = $state(false)
-  let editingAnnotationPosition = $state<{ x: number; y: number } | null>(null)
-  let annotationMarkers = $state<Array<{ annotation: BrainstormAnnotation; x: number; y: number }>>(
-    []
-  )
+  const editingAnnotation = $derived(overlay.editing)
+  const annotationEditMode = $derived(overlay.editMode)
+  const editingAnnotationPosition = $derived(overlay.editingPosition)
+  const annotationMarkers = $derived(overlay.markers)
   let documentScroller = $state<HTMLElement | null>(null)
   let markerResizeObserver: ResizeObserver | null = null
-  const BRAINSTORM_ANNOTATION_HIGHLIGHT = 'brainstorm-annotation-anchor'
 
   const sortedVersions = $derived(
     [...versions]
@@ -340,15 +329,14 @@
     if (!sectionElement || !section || !quote) return
     const rect = range.getBoundingClientRect()
     selectedSection = section
-    pendingAnnotation = {
+    overlay.beginPending({
       section,
       quote,
       ...markdownLineForQuote(quote, section),
       ...offsetsForRange(sectionElement, range),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      ...clampPendingPosition(rect),
       sectionLevel: false
-    }
+    })
     annotationBody = ''
   }
 
@@ -368,15 +356,14 @@
         ? event.currentTarget.getBoundingClientRect()
         : { left: event.clientX, bottom: event.clientY }
     selectedSection = sectionId
-    pendingAnnotation = {
+    overlay.beginPending({
       section: sectionId,
       quote: title,
       ...markdownLineForQuote(title, sectionId),
       ...offsetsForQuote(sectionElement, title),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      ...clampPendingPosition(rect),
       sectionLevel: true
-    }
+    })
     annotationBody = ''
   }
 
@@ -404,10 +391,10 @@
     const body = annotationBody.trim()
     if (!anchor || !body) return
     if (dirty && !(await saveDraft())) return
-    const updated = await onAddAnnotation(anchor.section, body, {
+    const updated = await onAddAnnotation(anchor.section as BrainstormSectionId, body, {
       quote: anchor.quote,
-      startLine: anchor.startLine,
-      endLine: anchor.endLine,
+      startLine: anchor.startLine ?? 0,
+      endLine: anchor.endLine ?? 0,
       startOffset: anchor.startOffset,
       endOffset: anchor.endOffset
     })
@@ -427,117 +414,64 @@
   }
 
   function closePendingAnnotation(): void {
+    overlay.closePending()
     window.getSelection()?.removeAllRanges()
-    pendingAnnotation = null
     annotationBody = ''
   }
 
   function openSelectionChat(mode: 'explain' | 'quick'): void {
     const selection = pendingAnnotation
-    if (!selection || selection.sectionLevel) return
+    if (!selection || selection.sectionLevel || !selection.quote) return
     const documentContext = exportMarkdown()
     if (mode === 'explain') onExplainSelection?.(selection.quote, documentContext)
     else onQuickChatSelection?.(selection.quote, documentContext)
     closePendingAnnotation()
   }
 
+  function sectionElementFor(annotation: BrainstormAnnotation): HTMLElement | null {
+    return document.querySelector<HTMLElement>(
+      `[data-brainstorm-section="${CSS.escape(annotation.section)}"]`
+    )
+  }
+
   async function refreshAnnotationMarkers(): Promise<void> {
-    await tick()
-    const scroller = documentScroller
-    if (!scroller) return
-    const scrollerRect = scroller.getBoundingClientRect()
-    annotationMarkers = draft.annotations.flatMap((annotation) => {
-      if (annotation.status !== 'open') return []
-      const section = document.querySelector<HTMLElement>(
-        `[data-brainstorm-section="${annotation.section}"]`
-      )
-      const range = section ? rangeForAnnotation(section, annotation) : null
-      const rect = range?.getBoundingClientRect() ?? section?.getBoundingClientRect()
-      if (!rect) return []
-      return [
-        {
-          annotation,
-          x: Math.max(4, rect.right - scrollerRect.left + scroller.scrollLeft + 6),
-          y: Math.max(4, rect.top - scrollerRect.top + scroller.scrollTop)
-        }
-      ]
+    await overlay.refreshMarkers(draft.annotations, {
+      scroller: documentScroller,
+      sectionFor: sectionElementFor
     })
   }
 
   async function openAnnotation(annotation: BrainstormAnnotation): Promise<void> {
-    window.getSelection()?.removeAllRanges()
-    CSS.highlights?.delete(BRAINSTORM_ANNOTATION_HIGHLIGHT)
-    closeAnnotation()
-    selectedSection = annotation.section
-    pendingAnnotation = null
-    await tick()
-    const section = document.querySelector<HTMLElement>(
-      `[data-brainstorm-section="${annotation.section}"]`
-    )
-    const range = section ? rangeForAnnotation(section, annotation) : null
-    const scroller = documentScroller
-    const initialRect = range?.getBoundingClientRect() ?? section?.getBoundingClientRect()
-    if (scroller && initialRect) {
-      const scrollerRect = scroller.getBoundingClientRect()
-      const centeredTop =
-        scroller.scrollTop +
-        initialRect.top -
-        scrollerRect.top -
-        (scroller.clientHeight - initialRect.height) / 2
-      scroller.scrollTo({ top: Math.max(0, centeredTop), behavior: 'smooth' })
-      await waitForScrollSettle(scroller)
-    }
-    await refreshAnnotationMarkers()
-    await tick()
-    const marker = document.querySelector<HTMLElement>(
-      `[data-brainstorm-annotation-marker="${CSS.escape(annotation.id)}"]`
-    )
-    const rect = marker?.getBoundingClientRect() ?? range?.getBoundingClientRect() ?? initialRect
-    if (range && typeof Highlight !== 'undefined' && CSS.highlights) {
-      CSS.highlights.set(BRAINSTORM_ANNOTATION_HIGHLIGHT, new Highlight(range))
-    }
-    editingAnnotation = annotation
-    editingAnnotationBody = annotation.body
-    annotationEditMode = false
-    if (!rect) {
-      editingAnnotationPosition = { x: 12, y: 12 }
-      return
-    }
-    const width = 320
-    const preferredX = rect.right + 8
-    const x = preferredX + width <= window.innerWidth - 12 ? preferredX : rect.left - width - 8
-    editingAnnotationPosition = {
-      x: Math.max(12, Math.min(x, window.innerWidth - width - 12)),
-      y: Math.max(12, Math.min(rect.top, window.innerHeight - 288))
-    }
+    await overlay.openAnnotation(annotation, {
+      scroller: documentScroller,
+      sectionElement: sectionElementFor(annotation),
+      markerAttribute: 'data-brainstorm-annotation-marker',
+      annotations: draft.annotations,
+      sectionFor: sectionElementFor
+    })
   }
 
   function closeAnnotation(): void {
-    CSS.highlights?.delete(BRAINSTORM_ANNOTATION_HIGHLIGHT)
-    editingAnnotation = null
-    editingAnnotationBody = ''
-    editingAnnotationPosition = null
-    annotationEditMode = false
+    overlay.closeEditing()
   }
 
   async function saveAnnotationEdit(): Promise<void> {
-    const annotation = editingAnnotation
-    const body = editingAnnotationBody.trim()
+    const annotation = overlay.editing
+    const body = overlay.editingBody.trim()
     if (!annotation || !body) return
     const updated = await onUpdateAnnotation(annotation.id, body)
     if (!updated) return
     speechController.observeSent(`brainstorm-annotation-edit-${annotation.id}`, body)
     applyDocument(updated)
-    editingAnnotation =
-      updated.annotations.find((candidate) => candidate.id === annotation.id) ?? null
-    editingAnnotationBody = editingAnnotation?.body ?? ''
-    annotationEditMode = false
+    overlay.editing = updated.annotations.find((candidate) => candidate.id === annotation.id) ?? null
+    overlay.editingBody = overlay.editing?.body ?? ''
+    overlay.editMode = false
   }
 
   async function resolveAnnotation(annotationId: string): Promise<void> {
     const updated = await onResolveAnnotation(annotationId)
     if (updated) applyDocument(updated)
-    closeAnnotation()
+    overlay.closeEditing()
   }
 
   const REVIEW_EDIT_FRAGMENT_LIMIT = 4_000
@@ -681,7 +615,7 @@
 
   onDestroy(() => {
     markerResizeObserver?.disconnect()
-    CSS.highlights?.delete(BRAINSTORM_ANNOTATION_HIGHLIGHT)
+    overlay.clearHighlight()
   })
 </script>
 
@@ -1026,7 +960,7 @@
 {#if pendingAnnotation}
   <StudioPendingAnnotationPopover
     position={{ x: pendingAnnotation.x, y: pendingAnnotation.y }}
-    quote={pendingAnnotation.quote}
+    quote={pendingAnnotation.quote ?? ''}
     canAnnotate={canEdit}
     showSelectionActions={!pendingAnnotation.sectionLevel}
     {busy}
@@ -1061,13 +995,13 @@
     dialogLabel="Brainstorm annotation"
     speechTargetId={`brainstorm-annotation-edit-${editingAnnotation.id}`}
     scope={speechScope}
-    bind:body={editingAnnotationBody}
+    bind:body={overlay.editingBody}
     onResolve={() => {
-      if (editingAnnotation) void resolveAnnotation(editingAnnotation.id)
+      if (overlay.editing) void resolveAnnotation(overlay.editing.id)
     }}
     onSave={saveAnnotationEdit}
-    onCancelEdit={() => (annotationEditMode = false)}
-    onEditClick={() => (annotationEditMode = true)}
+    onCancelEdit={() => overlay.cancelEdit()}
+    onEditClick={() => overlay.startEdit()}
     onClose={closeAnnotation}
   />
 {/if}
