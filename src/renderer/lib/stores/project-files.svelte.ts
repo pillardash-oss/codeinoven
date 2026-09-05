@@ -914,7 +914,8 @@ class ProjectFilesWorkspace {
     focusLine?: number
   ): Promise<void> {
     const mime = mimeFromPath(path)
-    if (isPdfMime(mime) || isImageMime(mime)) preferredView = 'preview'
+    if (isPdfMime(mime) || isImageMime(mime) || isDocumentPreviewMime(mime))
+      preferredView = 'preview'
     const state = this.ensureState(projectId)
     const tabId = `working:${path}`
     let tab = state.tabs.find((candidate) => candidate.id === tabId)
