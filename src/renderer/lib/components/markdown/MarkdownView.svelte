@@ -374,6 +374,14 @@
       <blockquote>
         {@render renderBlocks(token.tokens)}
       </blockquote>
+    {:else if token.type === 'table'}
+      <!-- Tables need their own horizontal-scroll wrapper: the table sizes to
+           its content (min 100% of the container) so no column is ever
+           starved by a sibling column's long tokens. -->
+      <div class="md-table-wrap">
+        <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
+        {@html renderBlockHtml(token)}
+      </div>
     {:else if token.type !== 'space'}
       <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
       {@html renderBlockHtml(token)}
