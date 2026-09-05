@@ -1629,6 +1629,18 @@
       e.preventDefault()
       navigate('settings')
     }
+    // Keyboard fallback for back/forward: Cmd+[ / Cmd+] is the convention
+    // third-party mouse utilities (Logi Options+, SteerMouse, Mac Mouse Fix)
+    // remap side buttons to on macOS, since there's no native OS-level
+    // back/forward gesture API for non-Apple mice. Alt+Left/Alt+Right mirrors
+    // the same convention on Windows/Linux.
+    if ((isMac && e.metaKey && (e.key === '[' || e.key === ']')) ||
+      (!isMac && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))) {
+      e.preventDefault()
+      if (e.repeat) return
+      if (e.key === '[' || e.key === 'ArrowLeft') void goBack()
+      else void goForward()
+    }
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
       e.preventDefault()
       if (e.repeat) return
