@@ -772,16 +772,26 @@ async function bootPostPaintServices(): Promise<void> {
       import('./system/restart-recovery-service')
     ])
 
-    ptyService = new PtyService(storage, database, scopeRootResolver, (process) => {
-      chatEngine?.trackPtyProcess(
-        process.scopeId,
-        process.projectId,
-        process.threadId,
-        process.pid,
-        process.command,
-        process.cwd
-      )
-    })
+    ptyService = new PtyService(
+      storage,
+      database,
+      scopeRootResolver,
+      (process) => {
+        chatEngine?.trackPtyProcess(
+          process.scopeId,
+          process.projectId,
+          process.threadId,
+          process.pid,
+          process.command,
+          process.cwd
+        )
+      },
+      (projectId, projectPath) => {
+        // User typed in a project terminal — open a user-activity window so
+        // their shell-driven edits are excluded from concurrent agent turns.
+        chatEngine?.recordUserTerminalInput(projectId, projectPath)
+      }
+    )
     // A probe that changes a harness's install state (new install, version
     // bump) invalidates cached provider catalogs so the model picker reflects it.
     providerConnection = new ProviderConnectionService(() => {

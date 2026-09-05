@@ -534,6 +534,10 @@ const MUTATING_FILE_PATH_KEYS = new Set([
   'targetfile'
 ])
 
+/** How long after a user's last terminal keystroke the user-activity window
+ *  stays open, covering commands that finish writing files after Enter. */
+const USER_TERMINAL_SETTLE_MS = 10_000
+
 function rawErrorMessage(error: unknown): string {
   const fallback = 'The harness did not provide a readable error.'
   if (error instanceof Error) return error.message.trim() || fallback
@@ -1191,6 +1195,9 @@ interface SessionInfo {
   preciseChangedPaths?: Map<string, number>
   /** Shell-like tool part ids currently in flight for the active turn. */
   openUnboundedTools?: Set<string>
+  /** Paths the user saved through the in-app editor while this turn ran.
+   *  These are the user's own edits — never attributed to the thread. */
+  userTouchedPaths?: Set<string>
   /** In-flight reopen of a just-settled turn whose edits kept arriving. */
   pendingReopen?: Promise<void>
   /** Filesystem fingerprint taken when the first of those tools started. */
@@ -1633,6 +1640,13 @@ export class ChatEngine {
   private streamBroadcastTimer: ReturnType<typeof setTimeout> | null = null
   /** Number of hidden continuations issued after a turn ended without a final response. */
   private incompleteTurnRecoveryAttempts = new Map<string, number>()
+  /** Per-project user-terminal activity: an open fingerprint window while the
+   *  user is typing commands, so their shell-driven edits are never swept into
+   *  a concurrent agent turn's bash-window diff. */
+  private userTerminalWindows = new Map<
+    string,
+    { fingerprint: Promise<ProjectFingerprint | null>; lastInput: number; timer: NodeJS.Timeout }
+  >()
   /** Harness sessions implementing an approved specification until its contract is fulfilled. */
   private engineeringImplementationSessions = new Set<string>()
   private temporaryChats = new Map<string, TemporaryChatSession>()
@@ -4905,6 +4919,56 @@ export class ChatEngine {
       this.agentProcesses.claimSession(scopeId, projectId, threadId)
     }
     this.agentProcesses.watchProcess(scopeId, pid, command, cwd)
+  }
+
+  /**
+   * The user saved a file through the in-app editor. Record the path against
+   * every active turn session in that project so their own edit is never
+   * attributed to a running agent thread's file-changes card.
+   */
+  recordUserFileSave(projectId: string, relativePath: string): void {
+    const normalized = relativePath.trim().replaceAll('\\', '/')
+    if (!normalized || normalized.startsWith('../') || normalized === '..') return
+    for (const session of this.sessionRegistry.values()) {
+      if (session.projectId !== projectId || !session.activeTurnId) continue
+      ;(session.userTouchedPaths ??= new Set()).add(normalized)
+    }
+  }
+
+  /**
+   * The user typed in an in-app project terminal. While activity keeps
+   * arriving (and for a short settle window after the last keystroke) a
+   * fingerprint window stays open so any files their commands mutate are
+   * recognized as user edits and excluded from concurrent agent turns.
+   */
+  recordUserTerminalInput(projectId: string, projectPath: string): void {
+    const existing = this.userTerminalWindows.get(projectId)
+    if (existing) {
+      existing.lastInput = Date.now()
+      clearTimeout(existing.timer)
+      existing.timer = setTimeout(() => {
+        const current = this.userTerminalWindows.get(projectId)
+        if (current?.timer === existing.timer) {
+          this.userTerminalWindows.delete(projectId)
+        }
+      }, USER_TERMINAL_SETTLE_MS)
+      return
+    }
+    const window = {
+      fingerprint: this.checkpointManager
+        .fingerprint(projectId, projectPath)
+        .catch((error) => {
+          Logger.error('user-terminal fingerprint failed:', error)
+          return null
+        }),
+      lastInput: Date.now(),
+      timer: setTimeout(() => undefined, 0)
+    }
+    window.timer = setTimeout(() => {
+      const current = this.userTerminalWindows.get(projectId)
+      if (current?.timer === window.timer) this.userTerminalWindows.delete(projectId)
+    }, USER_TERMINAL_SETTLE_MS)
+    this.userTerminalWindows.set(projectId, window)
   }
 
   /** Delete a harness-native or app-managed skill. */
@@ -17854,6 +17918,10 @@ export class ChatEngine {
             session.preciseChangedPaths ??= new Map()
             const claimedAt = Date.now()
             for (const path of precisePaths) {
+              // A path the user saved through the in-app editor during this
+              // turn is the user's edit — the agent must not claim it even
+              // when a tool event names the same file.
+              if (session.userTouchedPaths?.has(path)) continue
               session.changedPaths.add(path)
               session.preciseChangedPaths.set(path, claimedAt)
             }
@@ -21000,6 +21068,11 @@ export class ChatEngine {
     session.openUnboundedTools?.clear()
     if (!start) return
     const turnId = session.activeTurnId
+    // Snapshot any open user-terminal window for this project: paths that
+    // moved while the user was typing commands in the in-app terminal are the
+    // user's edits, not this turn's bash work.
+    const userWindow = this.userTerminalWindows.get(session.projectId)
+    const userBefore = userWindow ? userWindow.fingerprint : undefined
     const pendingScans = (session.pendingWindowScans ??= new Set())
     const scan = (async (): Promise<void> => {
       try {
@@ -21010,12 +21083,22 @@ export class ChatEngine {
           session.projectPath
         )
         if (session.activeTurnId !== turnId) return
+        let userMoved: Set<string> | undefined
+        if (userBefore) {
+          const userStart = await userBefore
+          if (userStart) {
+            userMoved = new Set(
+              this.checkpointManager.diffFingerprints(session.projectId, userStart, after)
+            )
+          }
+        }
         session.changedPaths ??= new Set()
         for (const path of this.checkpointManager.diffFingerprints(
           session.projectId,
           before,
           after
         )) {
+          if (userMoved?.has(path)) continue
           session.changedPaths.add(path)
         }
       } catch (error) {
@@ -21063,13 +21146,15 @@ export class ChatEngine {
           // Worker sub-agent threads dispatched by this thread are part of the
           // same logical turn: their captured checkpoints must never mark the
           // turn's real changes as foreign concurrent edits.
-          ownThreadIds
+          ownThreadIds,
+          excludedPaths: info.userTouchedPaths
         }
       )
       info.activeTurnId = undefined
       info.activeTurnUserMessageId = undefined
       info.changedPaths = undefined
       info.preciseChangedPaths = undefined
+      info.userTouchedPaths = undefined
       info.openUnboundedTools = undefined
       info.unboundedWindowStart = undefined
       info.pendingWindowScans = undefined
@@ -21165,6 +21250,7 @@ export class ChatEngine {
     if (!session?.activeTurnId) return null
     const checkpoint = await this.checkpointManager.getActive(projectId, threadId)
     if (!checkpoint) return null
+    const userTouched = session.userTouchedPaths
 
     // Scanner: validate that each claimed path actually changed from the turn's
     // opening snapshot (before) to current disk. Steer does not reset the
@@ -21203,6 +21289,8 @@ export class ChatEngine {
           if (claimedAt !== undefined && claimedAt >= turnStart && !precise.has(path)) {
             return null
           }
+          // The user's own in-app editor saves are never the thread's changes.
+          if (userTouched?.has(path)) return null
           const before = checkpoint.before.files[path]
           const abs = join(checkpoint.before.projectRoot, path)
           let afterBuf: Uint8Array
@@ -21269,6 +21357,14 @@ export class ChatEngine {
     if (!session.activeTurnId || !session.changedPaths || session.changedPaths.size === 0) return
     const checkpoint = await this.checkpointManager.getActive(session.projectId, session.threadId)
     if (!checkpoint) return
+    // The user's own in-app editor saves are never the thread's changes.
+    if (session.userTouchedPaths) {
+      for (const path of session.userTouchedPaths) {
+        session.changedPaths.delete(path)
+        session.preciseChangedPaths?.delete(path)
+      }
+      if (session.changedPaths.size === 0) return
+    }
     const toCheck = [...session.changedPaths]
     const BATCH = 8
     const keep = new Set<string>()
@@ -21339,6 +21435,7 @@ export class ChatEngine {
       estimatedContextUsed: activeTurnId ? undefined : existing?.estimatedContextUsed,
       changedPaths: activeTurnId ? undefined : existing?.changedPaths,
       preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
+      userTouchedPaths: activeTurnId ? undefined : existing?.userTouchedPaths,
       openUnboundedTools: activeTurnId ? new Set() : existing?.openUnboundedTools,
       unboundedWindowStart: activeTurnId ? undefined : existing?.unboundedWindowStart,
       pendingWindowScans: activeTurnId ? new Set() : existing?.pendingWindowScans,

@@ -22,6 +22,12 @@ interface PtySession {
   process: pty.IPty
 }
 
+/** Called when the user types into a project terminal, so concurrent agent
+ *  turns can exclude the user's own shell-driven edits from their cards. */
+export interface PtyUserInputHook {
+  (projectId: string, projectPath: string): void
+}
+
 export interface PtyTrackedProcess {
   scopeId?: string
   projectId?: string
@@ -85,7 +91,8 @@ export class PtyService {
     private storage: StorageEngine,
     _database: Database,
     scopeResolver?: ScopeRootResolver,
-    private readonly trackProcess?: (process: PtyTrackedProcess) => void
+    private readonly trackProcess?: (process: PtyTrackedProcess) => void,
+    private readonly onUserInput?: PtyUserInputHook
   ) {
     this.projectManager = new ProjectManager(_database)
     this.scopeRoots = scopeResolver ? scopeRootProvider(scopeResolver) : undefined
@@ -400,7 +407,14 @@ export class PtyService {
   }
 
   private write(id: string, data: string): void {
-    this.sessions.get(id)?.process.write(data)
+    const session = this.sessions.get(id)
+    if (!session) return
+    // Any user keystroke (including pastes) keeps the user-activity window
+    // open so their commands' file writes are never claimed by an agent turn.
+    if (data.length > 0 && this.onUserInput) {
+      this.onUserInput(session.projectId, session.cwd)
+    }
+    session.process.write(data)
   }
 
   private resize(id: string, cols: number, rows: number): void {

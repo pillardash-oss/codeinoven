@@ -2255,6 +2255,7 @@ export function registerIpcHandlers(
     | 'activeTurnChangeSummary'
     | 'hasActiveProcessesInScope'
     | 'abort'
+    | 'recordUserFileSave'
   > &
     Partial<Pick<ChatEngine, 'runVirtualTask'>>,
   options: RegisterIpcHandlersOptions = {}
@@ -5202,7 +5203,15 @@ export function registerIpcHandlers(
         requireString(content, 'Project file content', true),
         revision,
         scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
-      )
+      ).then((result) => {
+        // The user saved this file themselves — record it so a concurrent
+        // agent turn's file-changes card never claims their edit.
+        chatEngine?.recordUserFileSave(
+          validateEntityId(projectId, 'Project ID'),
+          requireString(relativePath, 'Project file path')
+        )
+        return result
+      })
     }
   )
   ipcMain.handle(
