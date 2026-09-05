@@ -1225,16 +1225,34 @@ export function mapClaudeCodeRecord(
       // A background agent finishing is delivered as a plain-text user turn
       // (<task-notification> with the launching tool-use-id). Complete the
       // matching subagent part so the UI and the stdin-close logic observe the
-      // agent as finished.
+      // agent as finished. The stream-json transport may deliver the
+      // notification text either as a bare string or wrapped in a text block;
+      // both shapes must be recognized or the subagent part stays "running"
+      // forever and the parent turn is never torn down.
       const notificationText =
-        rawMessage && typeof rawMessage['content'] === 'string' ? rawMessage['content'] : ''
+        rawMessage && typeof rawMessage['content'] === 'string'
+          ? rawMessage['content']
+          : Array.isArray(rawMessage?.['content'])
+            ? rawMessage['content']
+                .filter(
+                  (blockValue): blockValue is Record<string, unknown> =>
+                    record(blockValue)?.['type'] === 'text'
+                )
+                .map((block) => string(block['text']) ?? '')
+                .join('\n')
+            : ''
       if (notificationText.includes('<task-notification>')) {
         const callId = /<tool-use-id>([^<]+)<\/tool-use-id>/.exec(notificationText)?.[1]
         const subagent = callId ? findSubagentPart(context, callId) : undefined
         if (subagent && (subagent.activity.status === 'pending' || subagent.activity.status === 'running')) {
+          const resultText = /<result>([\s\S]*?)<\/result>/.exec(notificationText)?.[1]
           const part: AgentPart = {
             ...subagent,
-            activity: { ...subagent.activity, status: 'completed' }
+            activity: {
+              ...subagent.activity,
+              status: 'completed',
+              ...(resultText ? { output: resultText } : {})
+            }
           }
           return {
             nativeSessionId,
