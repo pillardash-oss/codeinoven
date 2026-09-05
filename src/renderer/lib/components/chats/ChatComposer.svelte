@@ -44,8 +44,8 @@
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import {
-    getInlineFileTypeIconDataUri,
-    getInlineFolderTypeIconDataUri
+    getInlineFileTypeIconSvg,
+    getInlineFolderTypeIconSvg
   } from '../files/file-type-icons'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
@@ -72,7 +72,7 @@
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
-  import { getVendorIconDataUri } from '$lib/vendor-icons/registry'
+  import { getVendorIconSvg } from '$lib/vendor-icons/registry'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import type { SpeechEditorApplyResult, SpeechEditorTarget } from '../../speech/editor-target'
@@ -104,7 +104,7 @@
   type StartAfterSelection = Pick<Thread, 'id' | 'title'>
   const MAX_PROMPT_CHARACTERS = 200_000
   const LONG_PASTE_ATTACHMENT_CHARACTERS = 100_000
-  const codeInOvenIconUrl = getVendorIconDataUri(APP_NAME)
+  const codeInOvenIconSvg = getVendorIconSvg(APP_NAME)
 
   interface Props {
     /** Called with the trimmed message and attachments when the user sends.
@@ -391,8 +391,8 @@
           [
             projectReferenceToken(reference),
             reference.kind === 'directory'
-              ? await getInlineFolderTypeIconDataUri(reference.name)
-              : await getInlineFileTypeIconDataUri(reference.path)
+              ? await getInlineFolderTypeIconSvg(reference.name)
+              : await getInlineFileTypeIconSvg(reference.path)
           ] as const
       )
     ).then((entries) => {
@@ -407,7 +407,7 @@
     ...(value.includes('@cio-utility')
       ? [
           {
-            iconSrc: codeInOvenIconUrl,
+            iconSvg: codeInOvenIconSvg,
             label: 'utility',
             title: `${APP_NAME} utility`,
             value: '@cio-utility'
@@ -415,7 +415,7 @@
         ]
       : []),
     ...projectReferences.map((reference) => ({
-      iconSrc: projectReferenceIcons[projectReferenceToken(reference)],
+      iconSvg: projectReferenceIcons[projectReferenceToken(reference)],
       label: reference.name,
       title: `${reference.kind === 'directory' ? 'Directory' : 'File'}: ${reference.path}`,
       value: projectReferenceToken(reference)

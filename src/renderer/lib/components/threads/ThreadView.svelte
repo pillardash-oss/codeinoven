@@ -240,7 +240,7 @@
     representativeLifecycleSelection
   } from '$shared/engines/engineering-lifecycle-engine'
   import { APP_NAME } from '$shared/brand'
-  import { getVendorIconDataUri } from '$lib/vendor-icons/registry'
+  import { getVendorIconSvg } from '$lib/vendor-icons/registry'
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
@@ -8903,10 +8903,14 @@
   }
 
   function inlineUtilityChipHtml(): string {
-    const icon = getVendorIconDataUri(APP_NAME)
+    // Inline SVG (not an `<img>` data URI) so the icon's embedded `.dark`
+    // selector can see the theme class on `<html>` — the mark's ink follows
+    // the active theme (black on light, white on dark). The chip's
+    // `text-[0.75rem]` sets the em box the 1em-sized SVG scales into.
+    const icon = getVendorIconSvg(APP_NAME)
     const safeTitle = escapeHtmlForChip(`${APP_NAME} utility`)
     const iconHtml = icon
-      ? `<img src="${icon}" width="12" height="12" class="shrink-0" alt="" />`
+      ? `<span class="inline-flex shrink-0 text-[0.75rem] leading-none" aria-hidden="true">${icon}</span>`
       : ''
     return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-utility-chip="cio-utility">${iconHtml}<span class="max-w-48 truncate font-medium">utility</span></span>`
   }

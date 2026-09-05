@@ -464,7 +464,7 @@
     return inlineBadges
       .map(
         (badge) =>
-          `${badge.value}\u0000${badge.label}\u0000${badge.title}\u0000${badge.iconSrc ?? ''}`
+          `${badge.value}\u0000${badge.label}\u0000${badge.title}\u0000${badge.iconSvg ?? ''}`
       )
       .join('\u0001')
   }

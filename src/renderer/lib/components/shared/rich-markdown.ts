@@ -32,7 +32,8 @@ function escapeHtml(value: string): string {
 }
 
 export interface RichInlineBadge {
-  iconSrc?: string
+  /** Raw inline SVG markup (theme-aware marks rely on inline DOM rendering). */
+  iconSvg?: string
   label: string
   title: string
   value: string
@@ -165,8 +166,8 @@ function renderInline(
       ) {
         return match
       }
-      const icon = badge.iconSrc
-        ? `<img src="${escapeHtml(badge.iconSrc)}" alt="" class="${INLINE_BADGE_ICON_CLASS}">`
+      const icon = badge.iconSvg
+        ? `<span class="${INLINE_BADGE_ICON_CLASS} inline-flex shrink-0 text-[0.875rem]">${badge.iconSvg}</span>`
         : ''
       const html = `<span contenteditable="false" data-editor-inline-badge="true" data-editor-value="${escapeHtml(badge.value)}" title="${escapeHtml(badge.title)}" class="${INLINE_BADGE_CLASS}">${icon}<span class="${INLINE_BADGE_LABEL_CLASS}">${escapeHtml(badge.label)}</span></span>`
       const index = badges.push(html)
