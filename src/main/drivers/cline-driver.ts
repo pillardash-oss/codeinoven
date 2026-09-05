@@ -533,11 +533,6 @@ function clineApprovalRequest(payload: Record<string, unknown>): PermissionReque
   }
 }
 
-/** Derive the stable interaction request id for a Cline question tool call. */
-function clineInteractionRequestId(sessionId: string, callId: string): string {
-  return `cline-question-${sessionId}-${callId}`.replace(/[^a-zA-Z0-9._-]+/gu, '-')
-}
-
 function clineMessage(state: ClineTurnState): AgentMessage {
   return {
     id: state.messageId,
@@ -642,13 +637,12 @@ function mapClineContentEvent(
     // Promote the call into the shared interaction stream so the chat engine
     // can pause the turn here and resume it with the user's answers; the
     // question boundary is handled by the driver's `onJsonRecord` hook.
-    if (isQuestionToolName(toolName) && !complete) {
-      const requestId = clineInteractionRequestId(context.sessionId, callId)
-      state.questionRequestIds.add(requestId)
+    if (isQuestionToolName(toolName) && !state.questionRequestIds.has(callId)) {
+      state.questionRequestIds.add(callId)
       events.push({
         type: 'question.asked',
         sessionId: context.sessionId,
-        requestId,
+        requestId: callId,
         questions: normalizeAgentQuestions(part.state.input),
         tool: { messageID: messageId, callID: callId }
       })
@@ -1249,11 +1243,13 @@ export class ClineDriver extends PersistentCliDriver {
     // user's answers as a new turn. The durable CodeInOven transcript replays
     // the conversation (`nativeResume: false`, `messageHistory: 'mirrored'`).
     const turnState = this.turnStates.get(session.id)
-    this.continuationOptions.set(session.id, {
-      ...options,
-      settings: { ...options.settings },
-      attachments: [...options.attachments]
-    })
+    if (turnState && turnState.questionRequestIds.size === 0) {
+      this.continuationOptions.set(session.id, {
+        ...options,
+        settings: { ...options.settings },
+        attachments: [...options.attachments]
+      })
+    }
 
     return {
       command: 'cline',
@@ -1472,11 +1468,11 @@ export class ClineDriver extends PersistentCliDriver {
   override async replyToQuestion(
     projectPath: string,
     sessionId: string,
-    _requestId: string,
+    requestId: string,
     answers: string[][]
   ): Promise<void> {
     const options = this.continuationOptions.get(sessionId)
-    if (!options) throw new QuestionRequestGoneError(sessionId, _requestId, this.name)
+    if (!options) throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     const formatted = answers
       .map((values, index) => `${index + 1}. ${values.join(', ')}`)
       .join('\n')
@@ -1508,6 +1504,9 @@ export class ClineDriver extends PersistentCliDriver {
   ): Promise<void> {
     const options = this.continuationOptions.get(sessionId)
     if (!options) return
+    // Consume the continuation options immediately so a double resolution
+    // (answer racing dismiss) cannot dispatch two continuation turns.
+    this.continuationOptions.delete(sessionId)
     const continuationText = [
       'Continue this CodeInOven-managed task without relying on Cline session memory.',
       `Active task context:\n${options.text}`,
@@ -1520,6 +1519,11 @@ export class ClineDriver extends PersistentCliDriver {
       // ("A turn is already active") — same teardown contract steerPrompt
       // relies on.
       await this.settleActiveProcess(sessionId)
+      // Drop the stopped turn's state only after settlement; `sendPrompt`
+      // installs a fresh state for the continuation turn, and the old
+      // questionRequestIds must not leak into its suppressIdle check.
+      const previousState = this.turnStates.get(sessionId)
+      if (previousState?.expectsProcessStop) this.turnStates.delete(sessionId)
       await this.sendPrompt(projectPath, {
         ...options,
         sessionId,
@@ -1528,7 +1532,6 @@ export class ClineDriver extends PersistentCliDriver {
       })
     } finally {
       this.hiddenContinuationSessions.delete(sessionId)
-      this.turnStates.delete(sessionId)
     }
   }
 
