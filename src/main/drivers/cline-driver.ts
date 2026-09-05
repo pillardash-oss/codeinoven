@@ -12,7 +12,11 @@ import type {
   ProviderModel,
   ThinkingPreset
 } from '../../lib/types'
-import { permissionPatterns } from '../../lib/agent-interactions'
+import {
+  isQuestionToolName,
+  normalizeAgentQuestions,
+  permissionPatterns
+} from '../../lib/agent-interactions'
 import { classifyProviderIssue, parseUsageResetAt } from '../../lib/provider-issue'
 import type {
   CliLineParseContext,
@@ -22,13 +26,14 @@ import type {
   TitleModelCandidate
 } from './persistent-cli-driver'
 import { PersistentCliDriver } from './persistent-cli-driver'
-import type {
-  GenerateTitleOptions,
-  GradeTurnOptions,
-  HarnessCapabilities,
-  SendPromptOptions,
-  UtilityRuntimeOverlay,
-  UtilityRuntimePreparationRequest
+import {
+  QuestionRequestGoneError,
+  type GenerateTitleOptions,
+  type GradeTurnOptions,
+  type HarnessCapabilities,
+  type SendPromptOptions,
+  type UtilityRuntimeOverlay,
+  type UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { PermissionPolicy, type PermissionRequest } from '../permissions/permission-policy'
 import { Logger } from '../system/logger'
@@ -412,6 +417,10 @@ interface ClineTurnState {
   messageId: string
   createdAt: number
   parts: AgentPart[]
+  /** Interaction request ids promoted from the live turn (used to suppress idle). */
+  questionRequestIds: Set<string>
+  /** Set when the driver deliberately stops the process at a question boundary. */
+  expectsProcessStop?: boolean
 }
 
 /**
@@ -524,6 +533,11 @@ function clineApprovalRequest(payload: Record<string, unknown>): PermissionReque
   }
 }
 
+/** Derive the stable interaction request id for a Cline question tool call. */
+function clineInteractionRequestId(sessionId: string, callId: string): string {
+  return `cline-question-${sessionId}-${callId}`.replace(/[^a-zA-Z0-9._-]+/gu, '-')
+}
+
 function clineMessage(state: ClineTurnState): AgentMessage {
   return {
     id: state.messageId,
@@ -620,10 +634,26 @@ function mapClineContentEvent(
       }
     }
     upsertPart(state, part)
-    return {
-      messages: [clineMessage(state)],
-      events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+    const events: SessionAgentEvent[] = [
+      { type: 'message.part.updated', sessionId: context.sessionId, part }
+    ]
+    // Cline's headless `ask_question` executor never blocks on stdin — it
+    // resolves immediately with the first option (`Promise.resolve(F[0])`).
+    // Promote the call into the shared interaction stream so the chat engine
+    // can pause the turn here and resume it with the user's answers; the
+    // question boundary is handled by the driver's `onJsonRecord` hook.
+    if (isQuestionToolName(toolName) && !complete) {
+      const requestId = clineInteractionRequestId(context.sessionId, callId)
+      state.questionRequestIds.add(requestId)
+      events.push({
+        type: 'question.asked',
+        sessionId: context.sessionId,
+        requestId,
+        questions: normalizeAgentQuestions(part.state.input),
+        tool: { messageID: messageId, callID: callId }
+      })
     }
+    return { messages: [clineMessage(state)], events }
   }
 
   return { events: [] }
@@ -838,42 +868,21 @@ function mapClineRecordToEvents(
     const questionType = ask ?? 'tool'
     const questionText = text || `Allow ${questionType}?`
 
-    if (questionType === 'tool') {
-      return {
-        events: [
-          {
-            type: 'message.part.updated',
-            sessionId,
-            part: {
-              type: 'tool',
-              id: partId,
-              messageID: messageId,
-              callID: partId,
-              tool: 'permission',
-              state: {
-                status: 'running',
-                input: { prompt: questionText, ask: questionType },
-                title: questionText
-              }
-            }
-          }
-        ]
-      }
-    }
-
     return {
       events: [
         {
           type: 'message.part.updated',
           sessionId,
           part: {
-            type: 'question',
+            type: 'tool',
             id: partId,
             messageID: messageId,
-            question: {
-              prompt: questionText,
-              multiple: false,
-              options: questionType === 'tool' ? ['Allow', 'Deny'] : ['Yes', 'No']
+            callID: partId,
+            tool: 'permission',
+            state: {
+              status: 'running',
+              input: { prompt: questionText, ask: questionType },
+              title: questionText
             }
           }
         }
@@ -959,6 +968,13 @@ export class ClineDriver extends PersistentCliDriver {
   private approvalBridges = new Map<string, ClineApprovalBridge>()
   /** Web-only hook directories keyed by CodeInOven session id. */
   private webOnlyHookDirectories = new Map<string, string>()
+  /**
+   * Options of the turn that raised a pending question, kept so the user's
+   * answer can resume the stateless turn as a continuation prompt.
+   */
+  private continuationOptions = new Map<string, SendPromptOptions>()
+  /** Sessions whose continuation prompt must stay out of the visible transcript. */
+  private hiddenContinuationSessions = new Set<string>()
 
   constructor(
     storage: StorageEngine,
@@ -1136,7 +1152,8 @@ export class ClineDriver extends PersistentCliDriver {
       iteration: 1,
       messageId: `cline:${session.id}:${turnIndex}:1`,
       createdAt: Date.now(),
-      parts: []
+      parts: [],
+      questionRequestIds: new Set()
     })
 
     const customProvider = await this.resolveCustomProvider(options.settings.providerId)
@@ -1225,11 +1242,43 @@ export class ClineDriver extends PersistentCliDriver {
       onProcessExit = () => this.stopWebOnlyHook(session.id)
     }
 
+    // Continuation support for headless questions: Cline's headless
+    // `ask_question` executor never blocks on stdin (it resolves with the
+    // first option immediately), so the only way to honor a user's answer is
+    // to stop the turn at the question boundary and resume it with the
+    // user's answers as a new turn. The durable CodeInOven transcript replays
+    // the conversation (`nativeResume: false`, `messageHistory: 'mirrored'`).
+    const turnState = this.turnStates.get(session.id)
+    this.continuationOptions.set(session.id, {
+      ...options,
+      settings: { ...options.settings },
+      attachments: [...options.attachments]
+    })
+
     return {
       command: 'cline',
       args,
       env,
       parseStderrJson: true,
+      onJsonRecord: (value) => {
+        // The question tool call just started (its `content_end` record carries
+        // the full input). Stop the process at this boundary: the turn result
+        // is otherwise meaningless because the executor auto-picked an option.
+        const envelope = record(value)
+        const event = record(envelope?.['event'])
+        if (
+          turnState &&
+          stringValue(envelope?.['type']) === 'agent_event' &&
+          stringValue(event?.['type']) === 'content_end' &&
+          stringValue(event?.['contentType']) === 'tool' &&
+          isQuestionToolName(stringValue(event?.['toolName']) ?? '')
+        ) {
+          turnState.expectsProcessStop = true
+          this.stopActiveProcess(session.id)
+        }
+      },
+      suppressIdle: () => turnState !== undefined && turnState.questionRequestIds.size > 0,
+      isExpectedExit: () => turnState?.expectsProcessStop === true,
       ...(onProcessExit ? { onProcessExit } : {})
     }
   }
@@ -1413,9 +1462,92 @@ export class ClineDriver extends PersistentCliDriver {
     return mapClineRecord(value, context)
   }
 
+  /**
+   * Resume a question-blocked Cline turn with the user's answers. Cline
+   * cannot receive interactive replies (headless `ask_question` resolves
+   * instantly), so the blocked turn is settled and restarted with the
+   * answers woven into a continuation prompt. Mirrors the Muse driver's
+   * interaction continuation contract.
+   */
+  override async replyToQuestion(
+    projectPath: string,
+    sessionId: string,
+    _requestId: string,
+    answers: string[][]
+  ): Promise<void> {
+    const options = this.continuationOptions.get(sessionId)
+    if (!options) throw new QuestionRequestGoneError(sessionId, _requestId, this.name)
+    const formatted = answers
+      .map((values, index) => `${index + 1}. ${values.join(', ')}`)
+      .join('\n')
+    await this.continueAfterQuestion(
+      projectPath,
+      sessionId,
+      `The user answered Cline's earlier ask_question prompt through CodeInOven:\n${formatted}\nContinue from these answers without asking the same question again.`
+    )
+  }
+
+  override async rejectQuestion(
+    projectPath: string,
+    sessionId: string,
+    requestId: string
+  ): Promise<void> {
+    const options = this.continuationOptions.get(sessionId)
+    if (!options) throw new QuestionRequestGoneError(sessionId, requestId, this.name)
+    await this.continueAfterQuestion(
+      projectPath,
+      sessionId,
+      "The user dismissed Cline's earlier ask_question prompt. Continue without that answer, or explain why the task cannot continue."
+    )
+  }
+
+  private async continueAfterQuestion(
+    projectPath: string,
+    sessionId: string,
+    text: string
+  ): Promise<void> {
+    const options = this.continuationOptions.get(sessionId)
+    if (!options) return
+    const continuationText = [
+      'Continue this CodeInOven-managed task without relying on Cline session memory.',
+      `Active task context:\n${options.text}`,
+      `New interaction result:\n${text}`
+    ].join('\n\n')
+    this.hiddenContinuationSessions.add(sessionId)
+    try {
+      // The gated run was stopped at the question boundary. Await the process
+      // settlement so resuming never collides with the still-active turn
+      // ("A turn is already active") — same teardown contract steerPrompt
+      // relies on.
+      await this.settleActiveProcess(sessionId)
+      await this.sendPrompt(projectPath, {
+        ...options,
+        sessionId,
+        text: continuationText,
+        attachments: [...options.attachments]
+      })
+    } finally {
+      this.hiddenContinuationSessions.delete(sessionId)
+      this.turnStates.delete(sessionId)
+    }
+  }
+
+  protected override appendUserMessage(
+    session: PersistentCliSession,
+    options: Pick<SendPromptOptions, 'text' | 'attachments' | 'userMessageId'>
+  ): void {
+    super.appendUserMessage(session, options)
+    if (!this.hiddenContinuationSessions.has(session.id)) return
+    const message = session.messages.findLast((candidate) => candidate.role === 'user')
+    if (message) message.visibility = 'hidden'
+  }
+
   override async deleteSession(projectPath: string, sessionId: string): Promise<void> {
     this.stopApprovalBridge(sessionId)
     this.stopWebOnlyHook(sessionId)
+    this.continuationOptions.delete(sessionId)
+    this.hiddenContinuationSessions.delete(sessionId)
+    this.turnStates.delete(sessionId)
     await super.deleteSession(projectPath, sessionId)
   }
 
@@ -1428,6 +1560,8 @@ export class ClineDriver extends PersistentCliDriver {
     }
     this.turnStates.clear()
     this.turnCounts.clear()
+    this.continuationOptions.clear()
+    this.hiddenContinuationSessions.clear()
     super.dispose()
   }
 }
