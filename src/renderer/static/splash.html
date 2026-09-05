@@ -24,7 +24,8 @@
       justify-content: center;
       background: #000000;
       color: #f7f6f2;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular', Menlo, Monaco,
+        'Cascadia Code', monospace;
       overflow: hidden;
       user-select: none;
       cursor: default;
@@ -285,6 +286,9 @@
   <script>
     const version = new URLSearchParams(window.location.search).get('version')
     if (version) {
+      // `version` already carries the full prerelease semver on nightly builds
+      // (e.g. 0.5.53-nightly.4), since CI resolves that tag before packaging
+      // and bakes it into the bundle via __CODEINOVEN_APP_VERSION__.
       document.getElementById('splash-version').textContent = `v${version.replace(/^v/i, '')}`
     }
   </script>

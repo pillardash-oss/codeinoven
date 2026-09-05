@@ -44,11 +44,17 @@ function pwaManifestVersionPlugin(): Plugin {
   }
 }
 
+// Nightly CI resolves the full prerelease semver (e.g. 0.5.53-nightly.4) before
+// packaging and passes it here so the splash/about surfaces show the exact
+// build instead of the bare package.json version electron-builder would
+// otherwise fall back to.
+const resolvedAppVersion = process.env['CODEINOVEN_BUILD_VERSION'] || packageJson.version
+
 /** Renderer root/aliases/plugins, shared with scripts/dev-remote-pwa.ts so a
  *  standalone Vite dev server for the phone PWA stays in sync with the real
  *  electron-vite renderer config instead of drifting out of a duplicate. */
 export const rendererDefine = {
-  __CODEINOVEN_APP_VERSION__: JSON.stringify(packageJson.version)
+  __CODEINOVEN_APP_VERSION__: JSON.stringify(resolvedAppVersion)
 }
 export const rendererRoot = resolve(__dirname, 'src/renderer')
 export const rendererPublicDir = resolve(__dirname, 'src/renderer/static')
@@ -95,8 +101,8 @@ export default defineConfig(({ mode }) => {
     main: {
       define: {
         // Keep the splash copy tied to the package version used to build the
-        // Electron bundle.
-        __CODEINOVEN_APP_VERSION__: JSON.stringify(packageJson.version),
+        // Electron bundle (or the CI-resolved nightly prerelease version).
+        __CODEINOVEN_APP_VERSION__: JSON.stringify(resolvedAppVersion),
         // Bake the GitHub App client ID into the main bundle at build time.
         // The identifier is replaced by Vite's `define` from the shared
         // CODEINOVEN_GITHUB_CLIENT_ID value. Public by design — never a secret.

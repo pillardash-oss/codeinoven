@@ -48,14 +48,68 @@ jobs:
           BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$previous" CURRENT_VERSION="$current" \
             bun scripts/validate-release-promotion.ts
 
+  version:
+    name: Resolve nightly version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: validate
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      full: ${{ steps.version.outputs.full }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine nightly version
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          base="$(node -p "require('./package.json').version")"
+          if ! printf '%s' "$base" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::package.json version must be stable major.minor.patch, got $base"
+            exit 1
+          fi
+          echo "version=$base" >> "$GITHUB_OUTPUT"
+          # Semver-correct: stable 0.5.51 -> nightly 0.5.52-nightly-1
+          # nightly's package.json already bumped to next patch, so base is next stable.
+          # N increments per base version. Supports legacy v{base}-nightly.{N} tags.
+          max_n=0
+          for tag in $(git ls-remote --tags origin "v${base}-nightly*" | awk '{print $2}' | sed 's|refs/tags/||'); do
+            # match vX.Y.Z-nightly-N or vX.Y.Z-nightly.N
+            n=$(printf '%s' "$tag" | sed -n -E "s/^v${base}-nightly[.-]([0-9]+)$/\1/p")
+            if [ -n "$n" ] && [ "$n" -gt "$max_n" ] 2>/dev/null; then max_n=$n; fi
+          done
+          # Also check GitHub releases (covers tags not yet fetched / race)
+          for tag in $(gh release list --limit 200 --json tagName --jq '.[].tagName' 2>/dev/null | grep -E "^v${base}-nightly[.-][0-9]+$" || true); do
+            n=$(printf '%s' "$tag" | sed -n -E "s/^v${base}-nightly[.-]([0-9]+)$/\1/p")
+            if [ -n "$n" ] && [ "$n" -gt "$max_n" ] 2>/dev/null; then max_n=$n; fi
+          done
+          next=$((max_n + 1))
+          # Use a DOT between the channel and the counter (nightly.N): electron-updater's
+          # GitHub provider derives the nightly channel from the first dot-separated
+          # prerelease identifier. With a hyphen (nightly-N) the identifier is "nightly-N",
+          # which never matches the configured "nightly" channel and the update check
+          # fails with ERR_UPDATER_NO_PUBLISHED_VERSIONS ("No published versions on GitHub").
+          echo "tag=v${base}-nightly.${next}" >> "$GITHUB_OUTPUT"
+          echo "full=${base}-nightly.${next}" >> "$GITHUB_OUTPUT"
+          echo "Resolved nightly tag v${base}-nightly.${next} (base $base, max existing $max_n)"
+
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    needs: validate
+    needs: version
     env:
       MAIN_VITE_REMOTE_API_ORIGIN: ${{ vars.REMOTE_API_ORIGIN || 'https://mobile.codeinoven.com' }}
       CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
+      CODEINOVEN_BUILD_VERSION: ${{ needs.version.outputs.full }}
     strategy:
       fail-fast: false
       matrix:
@@ -132,7 +186,7 @@ jobs:
               exit 1
             fi
           fi
-          bunx electron-builder --${{ matrix.target }} ${{ matrix.arch }} --publish never -c.publish.channel=nightly -c.forceCodeSigning=true
+          bunx electron-builder --${{ matrix.target }} ${{ matrix.arch }} --publish never -c.publish.channel=nightly -c.forceCodeSigning=true -c.extraMetadata.version="$CODEINOVEN_BUILD_VERSION"
 
       - name: Verify packaged artifacts
         run: bun run verify:packaged-app --target ${{ matrix.target }} --artifact-dir dist
@@ -178,7 +232,7 @@ jobs:
 
   publish:
     name: Publish nightly prerelease
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -189,38 +243,6 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
-      - name: Determine nightly version
-        id: version
-        run: |
-          base="$(node -p "require('./package.json').version")"
-          if ! printf '%s' "$base" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
-            echo "::error::package.json version must be stable major.minor.patch, got $base"
-            exit 1
-          fi
-          echo "version=$base" >> "$GITHUB_OUTPUT"
-          # Semver-correct: stable 0.5.51 -> nightly 0.5.52-nightly-1
-          # nightly's package.json already bumped to next patch, so base is next stable.
-          # N increments per base version. Supports legacy v{base}-nightly.{N} tags.
-          max_n=0
-          for tag in $(git ls-remote --tags origin "v${base}-nightly*" | awk '{print $2}' | sed 's|refs/tags/||'); do
-            # match vX.Y.Z-nightly-N or vX.Y.Z-nightly.N
-            n=$(printf '%s' "$tag" | sed -n -E "s/^v${base}-nightly[.-]([0-9]+)$/\1/p")
-            if [ -n "$n" ] && [ "$n" -gt "$max_n" ] 2>/dev/null; then max_n=$n; fi
-          done
-          # Also check GitHub releases (covers tags not yet fetched / race)
-          for tag in $(gh release list --limit 200 --json tagName --jq '.[].tagName' 2>/dev/null | grep -E "^v${base}-nightly[.-][0-9]+$" || true); do
-            n=$(printf '%s' "$tag" | sed -n -E "s/^v${base}-nightly[.-]([0-9]+)$/\1/p")
-            if [ -n "$n" ] && [ "$n" -gt "$max_n" ] 2>/dev/null; then max_n=$n; fi
-          done
-          next=$((max_n + 1))
-          # Use a DOT between the channel and the counter (nightly.N): electron-updater's
-          # GitHub provider derives the nightly channel from the first dot-separated
-          # prerelease identifier. With a hyphen (nightly-N) the identifier is "nightly-N",
-          # which never matches the configured "nightly" channel and the update check
-          # fails with ERR_UPDATER_NO_PUBLISHED_VERSIONS ("No published versions on GitHub").
-          echo "tag=v${base}-nightly.${next}" >> "$GITHUB_OUTPUT"
-          echo "Resolved nightly tag v${base}-nightly.${next} (base $base, max existing $max_n)" 
 
       - name: Download build artifacts
         uses: actions/download-artifact@v7
@@ -242,8 +264,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          version="${{ steps.version.outputs.version }}"
-          tag="${{ steps.version.outputs.tag }}"
+          version="${{ needs.version.outputs.version }}"
+          tag="${{ needs.version.outputs.tag }}"
           if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
             tagged_commit="$(git rev-list -n 1 "$tag")"
             if [ "$tagged_commit" != "$GITHUB_SHA" ]; then
