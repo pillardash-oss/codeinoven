@@ -1784,13 +1784,23 @@
   const workingSections = $derived(
     fileSections.filter((section) => section.title !== 'Staged' && section.title !== 'Conflicts')
   )
-  /**
+    /**
    * Panes: Conflicts (if any) shares the stack with Staged/Unstaged/Untracked.
    * Each pane hugs its content so adjacent panes stay attached (no dead space
-   * between them), but never grows past 50% of the shared height — anything
-   * taller scrolls inside the pane.
+   * between them). When several panes are visible at once, each is capped at
+   * 50% of the shared height (taller content scrolls inside the pane). When
+   * only one pane is visible, it may grow to fill the full container instead.
    */
-  const paneClass = 'min-h-0 max-h-[50%] overflow-y-auto'
+  const visiblePaneCount = $derived(
+    (conflictSections.length > 0 ? 1 : 0) +
+      (stagedSections.length > 0 ? 1 : 0) +
+      (workingSections.length > 0 ? 1 : 0)
+  )
+  const singlePaneClass = 'min-h-0 flex-1 overflow-y-auto'
+  const sharedPaneClass = 'min-h-0 max-h-[50%] overflow-y-auto'
+  const paneClass = $derived(
+    visiblePaneCount > 1 ? sharedPaneClass : singlePaneClass
+  )
 </script>
 
 {#snippet commitTreeNode(node: CommitTreeNode, depth: number)}

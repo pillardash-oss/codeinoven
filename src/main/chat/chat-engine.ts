@@ -101,6 +101,7 @@ import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { CIO_UTILITY_SETUP_PROMPT, isCioUtilityRequest } from '../utilities/cio-utility-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import { refreshCustomProviderModels } from '../providers/base-url-model-refresh'
 import { AgentProcessService } from '../agents/agent-process-service'
 import {
   UtilityOrchestrationService,
@@ -130,6 +131,7 @@ import {
 } from '../services/image-descriptor'
 import type {
   AgentAccountUsage,
+  AgentAccountUsageOverrides,
   AgentArtifact,
   AgentEvent,
   AgentMessage,
@@ -209,6 +211,7 @@ import {
   INBOX_PROJECT_ID,
   isOrchestrationChildThread
 } from '../../lib/types'
+import { capPersistedPart } from './bounded-tool-output'
 import { foldTurnStreamEvents, type TurnStreamEvent } from './turn-stream'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
@@ -530,6 +533,10 @@ const MUTATING_FILE_PATH_KEYS = new Set([
   'path',
   'targetfile'
 ])
+
+/** How long after a user's last terminal keystroke the user-activity window
+ *  stays open, covering commands that finish writing files after Enter. */
+const USER_TERMINAL_SETTLE_MS = 10_000
 
 function rawErrorMessage(error: unknown): string {
   const fallback = 'The harness did not provide a readable error.'
@@ -1188,6 +1195,9 @@ interface SessionInfo {
   preciseChangedPaths?: Map<string, number>
   /** Shell-like tool part ids currently in flight for the active turn. */
   openUnboundedTools?: Set<string>
+  /** Paths the user saved through the in-app editor while this turn ran.
+   *  These are the user's own edits — never attributed to the thread. */
+  userTouchedPaths?: Set<string>
   /** In-flight reopen of a just-settled turn whose edits kept arriving. */
   pendingReopen?: Promise<void>
   /** Filesystem fingerprint taken when the first of those tools started. */
@@ -1204,6 +1214,8 @@ interface TemporaryChatSession {
   threadId: string
   projectPath: string
   driverId: string
+  /** Provider the session's turns run against, for quota reads. */
+  providerId?: string
   sessionId: string
   isolated?: IsolatedHandle
   contextApplied: boolean
@@ -1628,6 +1640,13 @@ export class ChatEngine {
   private streamBroadcastTimer: ReturnType<typeof setTimeout> | null = null
   /** Number of hidden continuations issued after a turn ended without a final response. */
   private incompleteTurnRecoveryAttempts = new Map<string, number>()
+  /** Per-project user-terminal activity: an open fingerprint window while the
+   *  user is typing commands, so their shell-driven edits are never swept into
+   *  a concurrent agent turn's bash-window diff. */
+  private userTerminalWindows = new Map<
+    string,
+    { fingerprint: Promise<ProjectFingerprint | null>; lastInput: number; timer: NodeJS.Timeout }
+  >()
   /** Harness sessions implementing an approved specification until its contract is fulfilled. */
   private engineeringImplementationSessions = new Set<string>()
   private temporaryChats = new Map<string, TemporaryChatSession>()
@@ -2037,11 +2056,21 @@ export class ChatEngine {
     ipcMain.handle('agent:listProviderSnapshot', (_, projectId: string) =>
       this.listProviderSnapshot(projectId)
     )
-    ipcMain.handle('agent:refreshProviderCatalog', (_, projectId: string, force = true) =>
-      this.listProviders(projectId, force === true)
+    ipcMain.handle('agent:refreshProviderCatalog', async (_, projectId: string, force = true) => {
+      // A forced picker refresh also re-probes every custom provider's model
+      // endpoint so newly added/removed upstream models reach the catalog.
+      if (force === true) {
+        await refreshCustomProviderModels(this.baseUrlProviders, this.secretVault).catch(() => {
+          // Per-provider failures already preserve their old model lists.
+        })
+      }
+      return this.listProviders(projectId, force === true)
+    })
+    ipcMain.handle('agent:refreshAccountUsage', (_, overrides?: AgentAccountUsageOverrides) =>
+      this.refreshAccountUsage(overrides)
     )
-    ipcMain.handle('agent:refreshAccountUsage', (_, projectId: string, threadId: string) =>
-      this.refreshAccountUsage(projectId, threadId)
+    ipcMain.handle('agent:activateBankedReset', (_, projectId: string, threadId: string) =>
+      this.activateBankedReset(projectId, threadId)
     )
     ipcMain.handle('agent:getHarnessAuthStatus', (_, projectId: string, harnessId: string) =>
       this.getHarnessAuthStatus(projectId, harnessId)
@@ -3373,93 +3402,125 @@ export class ChatEngine {
   }
 
   /**
-   * Fetch the current account quota for the thread's harness on demand. Used by
-   * the battery popover so threads whose turns predate quota capture (or where a
-   * turn-time refresh silently failed) still show live rate-limit windows and
-   * credits. Returns null when the harness cannot report quota without a turn.
+   * Fetch the current account quota on demand. Account usage is
+   * PROVIDER-level account state — it has nothing to do with any thread or
+   * conversation context — so one channel answers for every surface (project
+   * threads, inbox chats, temporary chats, the new-chat composer) and every
+   * surface reads the same cache. The caller names the harness/provider the
+   * UI is currently showing; the shared telemetry chain does the rest.
    */
+  async refreshAccountUsage(overrides?: AgentAccountUsageOverrides): Promise<AgentAccountUsage[]> {
+    const harnessId = overrides?.harnessId
+    if (!harnessId) return []
+    const driver = this.drivers.get(harnessId)
+    if (!driver) {
+      Logger.dev(`On-demand account usage refresh: unknown harness "${harnessId}"`)
+      return []
+    }
+    const providerId = overrides?.providerId ?? harnessId
+    // Quota reads never depend on where a conversation lives. Read against the
+    // shared chats working directory so every surface gets the same answer.
+    let projectPath: string
+    try {
+      projectPath = await this.resolveProjectPath(INBOX_PROJECT_ID)
+    } catch {
+      await this.storage.ensureDirectory(CHATS_CWD_DIR)
+      projectPath = this.storage.resolve(CHATS_CWD_DIR)
+    }
+    const entry = await this.readHarnessAccountUsage({ harnessId, providerId, driver, projectPath })
+    return entry ? [entry] : []
+  }
+
+  /** One harness's on-demand account quota — the single telemetry chain
+   *  (harness-native capture, then OpenUsage, then a custom provider's usage
+   *  route) shared by thread, temporary-chat, and threadless reads. */
+  private async readHarnessAccountUsage(target: {
+    harnessId: string
+    providerId: string
+    driver: HarnessDriver
+    projectPath: string
+  }): Promise<AgentAccountUsage | null> {
+    const { harnessId, providerId, driver, projectPath } = target
+    try {
+      const nativeTelemetry = driver.readAccountUsage
+        ? await driver.readAccountUsage(projectPath, providerId)
+        : null
+      // OpenUsage is keyed by PROVIDER, not harness: resolve the provider
+      // the harness session actually ran against (e.g. a pi thread pointed
+      // at Z.AI queries "z-ai", not "pi").
+      const openUsage = await this.openUsage.readProviderUsage(
+        providerId,
+        harnessId === 'pi' ? ['pi'] : []
+      )
+      // A custom provider with a user-defined usage route answers the
+      // quota question directly when the harness itself reports nothing.
+      const customUsage =
+        nativeTelemetry?.rateLimits.length || openUsage?.rateLimits.length
+          ? null
+          : await this.readCustomProviderUsage(harnessId, providerId)
+      const telemetry =
+        nativeTelemetry || openUsage || customUsage
+          ? {
+              rateLimits: nativeTelemetry?.rateLimits.length
+                ? nativeTelemetry.rateLimits
+                : openUsage?.rateLimits.length
+                  ? openUsage.rateLimits
+                  : (customUsage?.rateLimits ?? []),
+              ...(nativeTelemetry?.credits
+                ? { credits: nativeTelemetry.credits }
+                : openUsage?.credits
+                  ? { credits: openUsage.credits }
+                  : customUsage?.credits
+                    ? { credits: customUsage.credits }
+                    : {}),
+              ...(nativeTelemetry?.bankedResets
+                ? { bankedResets: nativeTelemetry.bankedResets }
+                : {}),
+              ...(nativeTelemetry?.contextWindow === undefined
+                ? {}
+                : { contextWindow: nativeTelemetry.contextWindow }),
+              ...(nativeTelemetry?.contextUsed === undefined
+                ? {}
+                : { contextUsed: nativeTelemetry.contextUsed })
+            }
+          : null
+      if (
+        !telemetry ||
+        (telemetry.rateLimits.length === 0 &&
+          telemetry.contextWindow === undefined &&
+          telemetry.contextUsed === undefined)
+      ) {
+        return null
+      }
+      return { harnessId, providerId, ...telemetry }
+    } catch (error) {
+      Logger.dev('On-demand account usage refresh unavailable:', error)
+      return null
+    }
+  }
+
   /**
-   * Fetch the current account quota for every harness used on the thread, on
-   * demand. Used by the battery popover so old threads (whose turns predate
-   * quota capture, or where a turn-time refresh silently failed) still show live
-   * rate-limit windows and credits for each harness. The harness set comes from
-   * the dedicated `harness_usage` table, augmented with the thread's current
-   * settings harness.
+   * Redeem one banked rate-limit reset credit for the thread's harness.
+   * Destructive and irreversible — it immediately resets the account's usage
+   * windows and consumes one banked credit. Only Codex currently supports
+   * this; other harnesses return null.
    */
-  async refreshAccountUsage(projectId: string, threadId: string): Promise<AgentAccountUsage[]> {
+  async activateBankedReset(
+    projectId: string,
+    threadId: string
+  ): Promise<AgentAccountUsage | null> {
     const projectIdSafe = validateEntityId(projectId, 'Project ID')
     await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectIdSafe, threadId)
-    if (!thread) return []
-    const usageRows = this.threadManager.harnessUsageFor(projectIdSafe, threadId)
-    const providerByHarness = new Map<string, string>()
-    for (const row of usageRows) {
-      providerByHarness.set(row.harnessId, row.providerId)
-    }
-    const harnessIds = new Set<string>(usageRows.map((row) => row.harnessId))
-    const current = thread.settings?.harnessId
-    if (current) harnessIds.add(current)
-    const results = await Promise.all(
-      [...harnessIds].map(async (harnessId): Promise<AgentAccountUsage | null> => {
-        try {
-          const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
-          const providerId =
-            providerByHarness.get(harnessId) ?? thread.settings?.providerId ?? harnessId
-          const nativeTelemetry = driver.readAccountUsage
-            ? await driver.readAccountUsage(projectPath, providerId)
-            : null
-          // OpenUsage is keyed by PROVIDER, not harness: resolve the provider
-          // the harness session actually ran against (e.g. a pi thread pointed
-          // at Z.AI queries "z-ai", not "pi").
-          const openUsage = await this.openUsage.readProviderUsage(
-            providerId,
-            harnessId === 'pi' ? ['pi'] : []
-          )
-          // A custom provider with a user-defined usage route answers the
-          // quota question directly when the harness itself reports nothing.
-          const customUsage =
-            nativeTelemetry?.rateLimits.length || openUsage?.rateLimits.length
-              ? null
-              : await this.readCustomProviderUsage(harnessId, providerId)
-          const telemetry =
-            nativeTelemetry || openUsage || customUsage
-              ? {
-                  rateLimits: nativeTelemetry?.rateLimits.length
-                    ? nativeTelemetry.rateLimits
-                    : openUsage?.rateLimits.length
-                      ? openUsage.rateLimits
-                      : (customUsage?.rateLimits ?? []),
-                  ...(nativeTelemetry?.credits
-                    ? { credits: nativeTelemetry.credits }
-                    : openUsage?.credits
-                      ? { credits: openUsage.credits }
-                      : customUsage?.credits
-                        ? { credits: customUsage.credits }
-                        : {}),
-                  ...(nativeTelemetry?.contextWindow === undefined
-                    ? {}
-                    : { contextWindow: nativeTelemetry.contextWindow }),
-                  ...(nativeTelemetry?.contextUsed === undefined
-                    ? {}
-                    : { contextUsed: nativeTelemetry.contextUsed })
-                }
-              : null
-          if (
-            !telemetry ||
-            (telemetry.rateLimits.length === 0 &&
-              telemetry.contextWindow === undefined &&
-              telemetry.contextUsed === undefined)
-          ) {
-            return null
-          }
-          return { harnessId, providerId, ...telemetry }
-        } catch (error) {
-          Logger.dev('On-demand account usage refresh unavailable:', error)
-          return null
-        }
-      })
-    )
-    return results.filter((entry): entry is AgentAccountUsage => entry !== null)
+    if (!thread) return null
+    const harnessId = thread.settings?.harnessId
+    if (!harnessId) return null
+    const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
+    if (!driver.activateBankedReset) return null
+    const telemetry = await driver.activateBankedReset(projectPath)
+    if (!telemetry) return null
+    const providerId = thread.settings?.providerId ?? harnessId
+    return { harnessId, providerId, ...telemetry }
   }
 
   /**
@@ -4860,6 +4921,56 @@ export class ChatEngine {
     this.agentProcesses.watchProcess(scopeId, pid, command, cwd)
   }
 
+  /**
+   * The user saved a file through the in-app editor. Record the path against
+   * every active turn session in that project so their own edit is never
+   * attributed to a running agent thread's file-changes card.
+   */
+  recordUserFileSave(projectId: string, relativePath: string): void {
+    const normalized = relativePath.trim().replaceAll('\\', '/')
+    if (!normalized || normalized.startsWith('../') || normalized === '..') return
+    for (const session of this.sessionRegistry.values()) {
+      if (session.projectId !== projectId || !session.activeTurnId) continue
+      ;(session.userTouchedPaths ??= new Set()).add(normalized)
+    }
+  }
+
+  /**
+   * The user typed in an in-app project terminal. While activity keeps
+   * arriving (and for a short settle window after the last keystroke) a
+   * fingerprint window stays open so any files their commands mutate are
+   * recognized as user edits and excluded from concurrent agent turns.
+   */
+  recordUserTerminalInput(projectId: string, projectPath: string): void {
+    const existing = this.userTerminalWindows.get(projectId)
+    if (existing) {
+      existing.lastInput = Date.now()
+      clearTimeout(existing.timer)
+      existing.timer = setTimeout(() => {
+        const current = this.userTerminalWindows.get(projectId)
+        if (current?.timer === existing.timer) {
+          this.userTerminalWindows.delete(projectId)
+        }
+      }, USER_TERMINAL_SETTLE_MS)
+      return
+    }
+    const window = {
+      fingerprint: this.checkpointManager
+        .fingerprint(projectId, projectPath)
+        .catch((error) => {
+          Logger.error('user-terminal fingerprint failed:', error)
+          return null
+        }),
+      lastInput: Date.now(),
+      timer: setTimeout(() => undefined, 0)
+    }
+    window.timer = setTimeout(() => {
+      const current = this.userTerminalWindows.get(projectId)
+      if (current?.timer === window.timer) this.userTerminalWindows.delete(projectId)
+    }, USER_TERMINAL_SETTLE_MS)
+    this.userTerminalWindows.set(projectId, window)
+  }
+
   /** Delete a harness-native or app-managed skill. */
   deleteSkill(source: AgentCapabilitySource): Promise<boolean> {
     return this.capabilityDiscovery.deleteSkill(source)
@@ -6172,7 +6283,38 @@ export class ChatEngine {
       })
       return withoutTransportParts(userMessage)
     }
-    await deliverNow()
+    try {
+      await deliverNow()
+    } catch (error) {
+      // The turn can settle inside the race window between the working check
+      // above and this delivery (auto-compaction, silent continue, retry) —
+      // pi considers compaction part of the working trace but the driver's
+      // registered turn is already gone. A settled trace must never reject the
+      // user's message: deliver it as the next regular turn instead.
+      const state = this.sessionStatuses.get(activeSessionId)?.state
+      if (state === 'working' || state === 'waiting') throw error
+      Logger.info('Steer landed on a settled turn — delivering as a regular send:', {
+        projectId,
+        threadId,
+        sessionId: activeSessionId,
+        error: rawErrorMessage(error)
+      })
+      await this.sendPrompt(
+        projectId,
+        threadId,
+        steerSettings,
+        text,
+        attachments,
+        undefined,
+        messageId,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        'user',
+        presentation,
+        taskReferences
+      )
+    }
     return withoutTransportParts(userMessage)
   }
 
@@ -6963,7 +7105,7 @@ export class ChatEngine {
         isChatThread ? 'standalone-chat' : 'project-thread',
         messageId
       ),
-      this.buildHistoryRecap(projectId, threadId, driverId),
+      this.buildHistoryRecap(projectId, threadId, driverId, undefined, messageId),
       transportPromise
     ])
     const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
@@ -7413,6 +7555,7 @@ export class ChatEngine {
         threadId,
         projectPath,
         driverId,
+        providerId: settings.providerId,
         sessionId,
         isolated,
         contextApplied: false,
@@ -9326,7 +9469,8 @@ export class ChatEngine {
     projectId: string,
     threadId: string,
     driverId: string,
-    maxInputTokens?: number
+    maxInputTokens?: number,
+    currentMessageId?: string
   ): Promise<string> {
     const thread = await this.threadManager.getThread(projectId, threadId)
     const sameHarness = !thread?.settings?.harnessId || thread.settings.harnessId === driverId
@@ -9380,8 +9524,28 @@ export class ChatEngine {
     // else, and a recap that announces an earlier conversation but only echoes
     // the question back reads to the model as a fabricated/injected context —
     // the exact pattern that makes resuming models refuse to continue.
-    const mirror = mirrored.at(-1)?.role === 'user' ? mirrored.slice(0, -1) : mirrored
+    // Matched by id, not merely by trailing role: an earlier turn that errored
+    // out before an assistant reply was persisted (e.g. a rate limit) also
+    // leaves a trailing 'user' record, and it is real prior history, not a
+    // duplicate of the prompt about to be sent — stripping it by role alone
+    // silently drops the last thing the user said across a harness switch.
+    const last = mirrored.at(-1)
+    const mirror =
+      last?.role === 'user' && (!currentMessageId || last.id === currentMessageId)
+        ? mirrored.slice(0, -1)
+        : mirrored
     if (mirror.length === 0) return ''
+    // `mirror` is non-empty real prior history at this point. If the format
+    // step still can't render it into text, that content would otherwise be
+    // silently lost from the conversation — rescue it into a fresh thread
+    // rather than let the turn proceed with no memory of it.
+    const emitRecap = (): string => {
+      const recap = formatHistoryRecap(mirror, { maxInputTokens: budget })
+      if (!recap) {
+        void this.rescueUnreplayableHistory(projectId, threadId, driverId).catch(() => {})
+      }
+      return recap
+    }
     if (thread?.sessionId && sameHarness) {
       // `ensureSession` already confirmed whether the harness natively holds
       // the conversation — skip the redundant provider history load entirely
@@ -9389,18 +9553,48 @@ export class ChatEngine {
       const nativeHistory = this.sessionNativeHistory.get(thread.sessionId)
       if (nativeHistory === true) return ''
       if (nativeHistory === false) {
-        return formatHistoryRecap(mirror, { maxInputTokens: budget })
+        return emitRecap()
       }
       try {
         const { driver } = await this.resolve(projectId, driverId, threadId)
         if (driver.capabilities?.nativeResume === false) {
-          return formatHistoryRecap(mirror, { maxInputTokens: budget })
+          return emitRecap()
         }
       } catch {
         // The durable mirror remains the safe fallback when the driver is unavailable.
       }
     }
-    return formatHistoryRecap(mirror, { maxInputTokens: budget })
+    return emitRecap()
+  }
+
+  /**
+   * Safety net for history that could not be carried forward as a recap
+   * (e.g. a harness switch where the durable mirror still failed to render).
+   * Forks the thread's full transcript into a new thread so the conversation
+   * is never silently lost, and notifies the user where to find it.
+   */
+  private async rescueUnreplayableHistory(
+    projectId: string,
+    threadId: string,
+    driverId: string
+  ): Promise<void> {
+    try {
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      if (!thread) return
+      const rescueTitle = `${thread.title || 'Untitled'} (recovered)`
+      const forked = await this.threadManager.forkThread(projectId, threadId, rescueTitle)
+      broadcastThreadUpdate(forked)
+      this.broadcastToast(
+        `Prior context on "${thread.title || 'this thread'}" couldn't carry over to ${driverId}. Saved the full conversation to a new thread: "${rescueTitle}".`,
+        'info'
+      )
+    } catch (error) {
+      Logger.error('History rescue fork failed', {
+        projectId,
+        threadId,
+        error: rawErrorMessage(error)
+      })
+    }
   }
 
   /**
@@ -17724,6 +17918,10 @@ export class ChatEngine {
             session.preciseChangedPaths ??= new Map()
             const claimedAt = Date.now()
             for (const path of precisePaths) {
+              // A path the user saved through the in-app editor during this
+              // turn is the user's edit — the agent must not claim it even
+              // when a tool event names the same file.
+              if (session.userTouchedPaths?.has(path)) continue
               session.changedPaths.add(path)
               session.preciseChangedPaths.set(path, claimedAt)
             }
@@ -17835,6 +18033,13 @@ export class ChatEngine {
       if (currentStatus?.state !== 'error' && !resetWaitIdle) {
         this.sessionStatuses.set(event.sessionId, { state: 'idle' })
       }
+      // The turn just ended. Drivers that report idle through the dedicated
+      // `session.idle` event (claude-code among them) never pass through the
+      // `session.status` branch above, so the turn watchdog armed at the
+      // `working` status must be cleared here. Without this, the watchdog
+      // fires minutes after a successful turn and misreports the finished
+      // session as "went idle without completing the turn".
+      this.clearSessionWatchdog(event.sessionId)
       this.handleSessionIdleSignal(event.sessionId)
       if (resetWaitIdle) return
       if (eventOwner) {
@@ -18392,6 +18597,9 @@ export class ChatEngine {
     // trace keeps a real anchor instead of an empty tag that no reload fold
     // can ever re-attach.
     const turnId = owner.activeTurnId ?? owner.lastTurnId ?? ''
+    // Oversized tool outputs (base64 image payloads, megabyte file dumps) are
+    // capped before they reach the durable stream log — an uncapped line makes
+    // every later log re-parse (reopen, fold, fork) pay for it forever.
     const streamEvent: TurnStreamEvent =
       event.type === 'message.part.updated'
         ? {
@@ -18400,7 +18608,7 @@ export class ChatEngine {
             messageId: event.part.messageID,
             turnId,
             ts,
-            part: event.part
+            part: capPersistedPart(event.part)
           }
         : {
             kind: 'part.delta',
@@ -18408,10 +18616,19 @@ export class ChatEngine {
             messageId: event.messageId,
             partId: event.partId,
             field: event.field,
-            delta: event.delta,
+            delta: event.delta.length > MAX_PERSISTED_DELTA ? '' : event.delta,
             turnId,
             ts
           }
+    if (
+      event.type === 'message.part.delta' &&
+      streamEvent.kind === 'part.delta' &&
+      streamEvent.delta === ''
+    ) {
+      // A single delta larger than the whole bounded output is pure payload
+      // (e.g. one base64 chunk); persisting it would re-poison the log.
+      return
+    }
     await this.storage.appendRaw(
       this.turnStreamPath(owner.projectId, owner.threadId),
       `${JSON.stringify(streamEvent)}\n`
@@ -20851,6 +21068,11 @@ export class ChatEngine {
     session.openUnboundedTools?.clear()
     if (!start) return
     const turnId = session.activeTurnId
+    // Snapshot any open user-terminal window for this project: paths that
+    // moved while the user was typing commands in the in-app terminal are the
+    // user's edits, not this turn's bash work.
+    const userWindow = this.userTerminalWindows.get(session.projectId)
+    const userBefore = userWindow ? userWindow.fingerprint : undefined
     const pendingScans = (session.pendingWindowScans ??= new Set())
     const scan = (async (): Promise<void> => {
       try {
@@ -20861,12 +21083,22 @@ export class ChatEngine {
           session.projectPath
         )
         if (session.activeTurnId !== turnId) return
+        let userMoved: Set<string> | undefined
+        if (userBefore) {
+          const userStart = await userBefore
+          if (userStart) {
+            userMoved = new Set(
+              this.checkpointManager.diffFingerprints(session.projectId, userStart, after)
+            )
+          }
+        }
         session.changedPaths ??= new Set()
         for (const path of this.checkpointManager.diffFingerprints(
           session.projectId,
           before,
           after
         )) {
+          if (userMoved?.has(path)) continue
           session.changedPaths.add(path)
         }
       } catch (error) {
@@ -20914,13 +21146,15 @@ export class ChatEngine {
           // Worker sub-agent threads dispatched by this thread are part of the
           // same logical turn: their captured checkpoints must never mark the
           // turn's real changes as foreign concurrent edits.
-          ownThreadIds
+          ownThreadIds,
+          excludedPaths: info.userTouchedPaths
         }
       )
       info.activeTurnId = undefined
       info.activeTurnUserMessageId = undefined
       info.changedPaths = undefined
       info.preciseChangedPaths = undefined
+      info.userTouchedPaths = undefined
       info.openUnboundedTools = undefined
       info.unboundedWindowStart = undefined
       info.pendingWindowScans = undefined
@@ -21016,6 +21250,7 @@ export class ChatEngine {
     if (!session?.activeTurnId) return null
     const checkpoint = await this.checkpointManager.getActive(projectId, threadId)
     if (!checkpoint) return null
+    const userTouched = session.userTouchedPaths
 
     // Scanner: validate that each claimed path actually changed from the turn's
     // opening snapshot (before) to current disk. Steer does not reset the
@@ -21054,6 +21289,8 @@ export class ChatEngine {
           if (claimedAt !== undefined && claimedAt >= turnStart && !precise.has(path)) {
             return null
           }
+          // The user's own in-app editor saves are never the thread's changes.
+          if (userTouched?.has(path)) return null
           const before = checkpoint.before.files[path]
           const abs = join(checkpoint.before.projectRoot, path)
           let afterBuf: Uint8Array
@@ -21120,6 +21357,14 @@ export class ChatEngine {
     if (!session.activeTurnId || !session.changedPaths || session.changedPaths.size === 0) return
     const checkpoint = await this.checkpointManager.getActive(session.projectId, session.threadId)
     if (!checkpoint) return
+    // The user's own in-app editor saves are never the thread's changes.
+    if (session.userTouchedPaths) {
+      for (const path of session.userTouchedPaths) {
+        session.changedPaths.delete(path)
+        session.preciseChangedPaths?.delete(path)
+      }
+      if (session.changedPaths.size === 0) return
+    }
     const toCheck = [...session.changedPaths]
     const BATCH = 8
     const keep = new Set<string>()
@@ -21190,6 +21435,7 @@ export class ChatEngine {
       estimatedContextUsed: activeTurnId ? undefined : existing?.estimatedContextUsed,
       changedPaths: activeTurnId ? undefined : existing?.changedPaths,
       preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
+      userTouchedPaths: activeTurnId ? undefined : existing?.userTouchedPaths,
       openUnboundedTools: activeTurnId ? new Set() : existing?.openUnboundedTools,
       unboundedWindowStart: activeTurnId ? undefined : existing?.unboundedWindowStart,
       pendingWindowScans: activeTurnId ? new Set() : existing?.pendingWindowScans,
@@ -22147,6 +22393,8 @@ const TOOL_ACTION_PATTERNS: Array<{ match: RegExp; label: string }> = [
 
 const TOOL_CALL_INPUT_PARAM_CAP = 150
 const TOOL_CALL_RESULT_CAP = 500
+/** A single stream delta larger than this is raw payload, never persisted. */
+const MAX_PERSISTED_DELTA = 16 * 1024
 
 /** First present, truthy input field a resume recap can show as the call's subject. */
 function summarizeToolInput(input: Record<string, unknown>): string {

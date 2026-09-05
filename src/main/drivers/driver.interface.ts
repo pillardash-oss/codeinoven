@@ -1,4 +1,5 @@
 import type {
+  AgentBankedResets,
   AgentEvent,
   AgentMessage,
   AgentQuestionRequest,
@@ -521,8 +522,21 @@ export interface HarnessDriver {
   readAccountUsage?(projectPath: string, providerId?: string): Promise<{
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits
+    bankedResets?: AgentBankedResets
     contextWindow?: number
     contextUsed?: number
+  } | null>
+
+  /**
+   * Redeem one banked rate-limit reset credit, when the harness supports
+   * banking (currently Codex). This is destructive and irreversible — it
+   * resets the account's active usage windows and consumes one banked
+   * credit. Returns the refreshed quota telemetry, or null if unsupported.
+   */
+  activateBankedReset?(projectPath: string): Promise<{
+    rateLimits: AgentRateLimitWindow[]
+    credits?: AgentUsageCredits
+    bankedResets?: AgentBankedResets
   } | null>
 
   /** Build, but do not execute, an interactive login handoff. */

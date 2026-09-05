@@ -110,7 +110,7 @@
     theme: 'system',
     fontFamily: 'jetbrains-mono',
     appFontSize: 15,
-  fontWeight: 200,
+    fontWeight: 200,
     zoomLevel: 1,
     onboardingCompleted: false,
     threadLimit: 70,
@@ -469,6 +469,14 @@
   function applyTheme(): void {
     document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
   }
+
+  /** Welcome screen (and other surfaces) can request the getting-started tour. */
+  $effect(() => {
+    if (workspaceState.consumeOnboardingRequest()) {
+      onboardingStep = 0
+      onboardingOpen = true
+    }
+  })
 
   async function loadConfig(): Promise<void> {
     try {
@@ -1424,6 +1432,12 @@
     const unsubscribeNewTerminalShortcut = subscribe('window:newTerminalShortcut', () => {
       handleNewTerminalShortcut()
     })
+    const unsubscribeHistoryBack = subscribe('window:historyBack', () => {
+      void goBack()
+    })
+    const unsubscribeHistoryForward = subscribe('window:historyForward', () => {
+      void goForward()
+    })
     updaterState.init()
     // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
     // initialise the store here so the overlay's dynamic import can be gated on
@@ -1440,6 +1454,8 @@
       unsubscribeThreadDeleted()
       unsubscribeCloseShortcut()
       unsubscribeNewTerminalShortcut()
+      unsubscribeHistoryBack()
+      unsubscribeHistoryForward()
       updaterState.destroy()
     }
   }
@@ -1528,9 +1544,9 @@
     // The sidebar keeps GitStatusPanel mounted but display:none for every
     // context tab, so only treat the git panel as the target when it is
     // actually visible (offsetParent is null while hidden).
-    const visibleGitPanel = Array.from(
-      document.querySelectorAll('[data-region="git-panel"]')
-    ).some((el) => (el instanceof HTMLElement ? el.offsetParent : null) !== null)
+    const visibleGitPanel = Array.from(document.querySelectorAll('[data-region="git-panel"]')).some(
+      (el) => (el instanceof HTMLElement ? el.offsetParent : null) !== null
+    )
     if (
       active?.closest('[data-region="git-panel"]') ||
       (active?.closest('[data-region="context-sidebar"]') && visibleGitPanel)
@@ -1613,6 +1629,18 @@
       e.preventDefault()
       navigate('settings')
     }
+    // Keyboard fallback for back/forward: Cmd+[ / Cmd+] is the convention
+    // third-party mouse utilities (Logi Options+, SteerMouse, Mac Mouse Fix)
+    // remap side buttons to on macOS, since there's no native OS-level
+    // back/forward gesture API for non-Apple mice. Alt+Left/Alt+Right mirrors
+    // the same convention on Windows/Linux.
+    if ((isMac && e.metaKey && (e.key === '[' || e.key === ']')) ||
+      (!isMac && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))) {
+      e.preventDefault()
+      if (e.repeat) return
+      if (e.key === '[' || e.key === 'ArrowLeft') void goBack()
+      else void goForward()
+    }
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
       e.preventDefault()
       if (e.repeat) return
@@ -1659,6 +1687,25 @@
 
   navigationHistoryState.init(rendererRecovery.activeView, rendererRecovery.selectedThread)
 
+  /**
+   * Timestamp of the last mouse side-button navigation. Windows/Linux deliver
+   * a side press both as an app command (forwarded over IPC) and — through
+   * Chromium — as a renderer mouse event; macOS only delivers the raw event.
+   * A short dedupe window keeps one physical press from navigating twice.
+   */
+  let lastMouseHistoryNavAt = 0
+
+  /** Mouse back/forward buttons (button 3 = back, 4 = forward) — macOS path. */
+  function onMouseHistoryButton(e: MouseEvent): void {
+    if (e.button !== 3 && e.button !== 4) return
+    const now = Date.now()
+    if (now - lastMouseHistoryNavAt < 150) return
+    lastMouseHistoryNavAt = now
+    e.preventDefault()
+    if (e.button === 3) void goBack()
+    else void goForward()
+  }
+
   onMount(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
     systemDark = mq.matches
@@ -1669,6 +1716,8 @@
     }
     mq.addEventListener('change', onColorSchemeChange)
     window.addEventListener('keydown', onKeydown)
+    window.addEventListener('mousedown', onMouseHistoryButton)
+    window.addEventListener('auxclick', onMouseHistoryButton)
     const uninstallVoiceShortcut = initVoiceShortcutListener()
 
     const restoreWorkspaceCallbacks = installWorkspaceCallbacks()
@@ -1697,6 +1746,8 @@
     return () => {
       mq.removeEventListener('change', onColorSchemeChange)
       window.removeEventListener('keydown', onKeydown)
+      window.removeEventListener('mousedown', onMouseHistoryButton)
+      window.removeEventListener('auxclick', onMouseHistoryButton)
       uninstallVoiceShortcut()
       restoreWorkspaceCallbacks()
       unsubscribeIpc()

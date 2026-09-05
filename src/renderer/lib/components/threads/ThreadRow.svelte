@@ -2,25 +2,13 @@
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import {
-    Check,
-    Clock,
-    Copy,
-    Pin,
-    PinOff,
-    Pencil,
-    Trash2,
-    GitFork,
-    Kanban,
-    StickyNote
-  } from '@lucide/svelte'
+  import { Check, Clock, Pin, StickyNote } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
-  import { toast } from 'svelte-sonner'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
-  import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
+  import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -52,7 +40,6 @@
   } from '$shared/types'
   import type { Thread } from '$shared/types'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
-  import { copyText } from '$lib/copy-text'
 
   interface Props {
     thread: Thread
@@ -260,71 +247,28 @@
     }
   }
 
-  let showRenameModal = $state(false)
-  let renameValue = $state('')
-  let showDeleteModal = $state(false)
-  let showChangeScopeModal = $state(false)
-  let actionError = $state<string | null>(null)
-
-  let menuItems = $derived<MenuItem[]>([
-    {
-      label: 'Rename',
-      icon: Pencil,
-      onClick: () => {
-        renameValue = thread.title
-        showRenameModal = true
-      }
+  const actionsMenu = createThreadActionsMenu({
+    getThread: () => thread,
+    onRename: (t, newName) => onRename(t, newName),
+    onTogglePin: (t) => onTogglePin(t),
+    onFork: (t) => onFork(t),
+    onDelete: (t) => onDelete(t),
+    onDeleteError: (error) =>
+      reportError(error, 'Could not delete thread', {
+        projectId: thread.projectId,
+        threadId: thread.id
+      }),
+    onOpenNotes: (t) => {
+      onOpen(t)
+      contextSidebarState.openThreadNote(t.projectId, t.id, t.title, {
+        edit: true,
+        focusEditor: true
+      })
     },
-    {
-      label: effectivePinned ? 'Unpin' : 'Pin',
-      icon: effectivePinned ? PinOff : Pin,
-      onClick: () => onTogglePin(thread)
-    },
-    {
-      label: 'Fork',
-      icon: GitFork,
-      onClick: () => onFork(thread)
-    },
-    ...(showChangeScope
-      ? [
-          {
-            label: 'Change Scope',
-            icon: Kanban,
-            onClick: () => {
-              void scopeState.ensureBoardLoaded(thread.projectId)
-              showChangeScopeModal = true
-            }
-          }
-        ]
-      : []),
-    {
-      label: 'Notes',
-      icon: StickyNote,
-      onClick: () => {
-        onOpen(thread)
-        contextSidebarState.openThreadNote(thread.projectId, thread.id, thread.title, {
-          edit: true,
-          focusEditor: true
-        })
-      }
-    },
-    {
-      label: 'Copy thread id',
-      icon: Copy,
-      onClick: () => {
-        void copyThreadId()
-      }
-    },
-    { label: '', divider: true },
-    {
-      label: 'Delete',
-      icon: Trash2,
-      onClick: () => {
-        showDeleteModal = true
-      },
-      danger: true
-    }
-  ] as MenuItem[])
+    showChangeScope: () => showChangeScope,
+    showNotes: () => true,
+    showCopyId: () => true
+  })
 
   const POPOVER_WIDTH = 256
   const POPOVER_ESTIMATED_HEIGHT = 290
@@ -637,42 +581,7 @@
     showMenu = true
   }
 
-  function errorMessage(error: unknown, fallback: string): string {
-    return error instanceof Error ? error.message : fallback
-  }
 
-  async function copyThreadId(): Promise<void> {
-    try {
-      await copyText(thread.id)
-      toast.success('Thread ID copied.')
-    } catch {
-      toast.error('The thread ID could not be copied.')
-    }
-  }
-
-  async function confirmRename(): Promise<void> {
-    if (!renameValue.trim()) return
-    try {
-      actionError = null
-      await onRename(thread, renameValue.trim())
-      showRenameModal = false
-    } catch (error) {
-      actionError = errorMessage(error, 'Could not rename thread')
-    }
-  }
-
-  async function confirmDelete(): Promise<void> {
-    try {
-      actionError = null
-      await onDelete(thread)
-      showDeleteModal = false
-    } catch (error) {
-      reportError(error, 'Could not delete thread', {
-        projectId: thread.projectId,
-        threadId: thread.id
-      })
-    }
-  }
 </script>
 
 {#if picker}
@@ -1081,7 +990,7 @@
     >
       <ThreadDropdown
         bind:open={showMenu}
-        items={menuItems}
+        items={actionsMenu.items}
         vertical={showBottomRow}
         onOpen={() => {
           showPopover = false
@@ -1110,21 +1019,25 @@
   {/if}
 </div>
 
-{#if actionError}
+{#if actionsMenu.renameError}
   <div
     class="fixed bottom-4 right-4 z-60 rounded-lg bg-danger px-4 py-2 text-sm text-white shadow-lg"
   >
-    {actionError}
+    {actionsMenu.renameError}
   </div>
 {/if}
 
-<Modal open={showRenameModal} title="Rename Thread" onClose={() => (showRenameModal = false)}>
+<Modal
+  open={actionsMenu.showRenameModal}
+  title="Rename Thread"
+  onClose={actionsMenu.cancelRename}
+>
   <form
     id={renameThreadFormId}
     class="space-y-4"
     onsubmit={(e: SubmitEvent) => {
       e.preventDefault()
-      void confirmRename()
+      void actionsMenu.confirmRename()
     }}
   >
     <div>
@@ -1135,7 +1048,7 @@
         id="thread-rename-input"
         type="text"
         class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
-        bind:value={renameValue}
+        bind:value={actionsMenu.renameValue}
         oninput={() => onRenameInputChange?.(thread)}
       />
     </div>
@@ -1145,7 +1058,7 @@
     <button
       type="button"
       class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      onclick={() => (showRenameModal = false)}
+      onclick={actionsMenu.cancelRename}
     >
       Cancel
     </button>
@@ -1153,7 +1066,7 @@
       type="submit"
       form={renameThreadFormId}
       class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-      disabled={!renameValue.trim()}
+      disabled={!actionsMenu.renameValue.trim()}
     >
       Save
     </button>
@@ -1161,16 +1074,16 @@
 </Modal>
 
 <ThreadDeleteConfirm
-  open={showDeleteModal}
+  open={actionsMenu.showDeleteModal}
   threadTitle={thread.title}
-  onClose={() => (showDeleteModal = false)}
-  onConfirm={confirmDelete}
+  onClose={actionsMenu.cancelDelete}
+  onConfirm={actionsMenu.confirmDelete}
 />
 
-{#if showChangeScopeModal && !picker}
+{#if actionsMenu.showChangeScopeModal && !picker}
   <ChangeScopeModal
-    open={showChangeScopeModal}
-    onClose={() => (showChangeScopeModal = false)}
+    open={actionsMenu.showChangeScopeModal}
+    onClose={actionsMenu.cancelChangeScope}
     threadId={thread.id}
     projectId={thread.projectId}
     currentBucketId={thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID}

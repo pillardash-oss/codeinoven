@@ -810,6 +810,20 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     }
   }
 
+  /**
+   * Cheap liveness probe for the session watchdog: true while this session's
+   * child process is still running. Persistent-CLI drivers (claude-code among
+   * them) never emit an explicit error when their process dies mid-turn — the
+   * stream just goes silent — so without this the watchdog can never tell a
+   * dead process from a long-running one and extends the "working" state
+   * forever, leaving the turn stuck until the user ends it manually.
+   */
+  async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
+    await this.requireSession(projectPath, sessionId)
+    const child = this.activeProcesses.get(sessionId)
+    return !!child && !this.hasProcessExited(child)
+  }
+
   private hasProcessExited(child: ChildProcess): boolean {
     return (
       (child.exitCode !== null && child.exitCode !== undefined) ||
@@ -1252,6 +1266,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         if (event.contextEstimated !== undefined) message.contextEstimated = event.contextEstimated
         if (event.rateLimits) message.rateLimits = event.rateLimits
         if (event.credits) message.credits = event.credits
+        if (event.bankedResets) message.bankedResets = event.bankedResets
         this.estimateMissingCost(message)
       }
     }
@@ -1266,6 +1281,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         if (event.cost !== undefined) message.cost = event.cost
         if (event.rateLimits) message.rateLimits = event.rateLimits
         if (event.credits) message.credits = event.credits
+        if (event.bankedResets) message.bankedResets = event.bankedResets
         this.estimateMissingCost(message)
       }
     }
@@ -1474,6 +1490,12 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       resolvePromise = resolve
       rejectPromise = reject
     })
+    // The rejection can fire while `sendPrompt` is still being awaited (the
+    // harness process may emit its error `result` before the caller reaches
+    // `await completion.promise`). Attach a no-op handler immediately so that
+    // early rejection is never reported as an unhandled rejection; a later
+    // `await` still observes it and the one-shot fallback runs normally.
+    promise.catch(() => undefined)
     const timer = setTimeout(() => {
       this.clearTitleTurnWaiter(sessionId)
       rejectPromise(new Error(`${this.name} auxiliary completion timed out`))

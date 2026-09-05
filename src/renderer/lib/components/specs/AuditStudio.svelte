@@ -27,22 +27,20 @@
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
+  import {
+    StudioAnnotationOverlay,
+    clampPendingPosition
+  } from './studio-annotation-overlay.svelte'
+  import { offsetsForQuote as offsetsForQuoteIn, offsetsForRange } from './studio-annotation-anchors'
   import { onDestroy, onMount, tick } from 'svelte'
 
   type CallbackResult = void | Promise<void>
   interface AnnotationAnchor {
     quote: string
-    startLine: number
-    endLine: number
+    startLine?: number
+    endLine?: number
     startOffset: number
     endOffset: number
-  }
-
-  interface PendingAnnotation extends AnnotationAnchor {
-    section: AuditSectionId
-    x: number
-    y: number
-    sectionLevel: boolean
   }
 
   interface Props {
@@ -117,9 +115,8 @@
   let reviewNotes = $state('')
   let reviewSubmitting = $state(false)
   let annotationBody = $state('')
-  let pendingAnnotation = $state<PendingAnnotation | null>(null)
-  let editingAnnotation = $state<AuditAnnotation | null>(null)
-  let editingAnnotationBody = $state('')
+  const overlay = new StudioAnnotationOverlay<AuditAnnotation>('audit-annotation-anchor')
+  const pendingAnnotation = $derived(overlay.pending)
   let reviewNotesEditor = $state<RichMarkdownEditor>()
   const pendingSpeechTargetId = `audit-annotation-${crypto.randomUUID()}`
   const reviewSpeechTargetId = `audit-review-${crypto.randomUUID()}`
@@ -132,9 +129,10 @@
   function reviewSpeechTarget() {
     return reviewNotesEditor?.speechEditorTarget(reviewSpeechTargetId) ?? null
   }
-  let editingAnnotationPosition = $state<{ x: number; y: number } | null>(null)
-  let annotationEditMode = $state(false)
-  let annotationMarkers = $state<Array<{ annotation: AuditAnnotation; x: number; y: number }>>([])
+  const editingAnnotation = $derived(overlay.editing)
+  const annotationEditMode = $derived(overlay.editMode)
+  const editingAnnotationPosition = $derived(overlay.editingPosition)
+  const annotationMarkers = $derived(overlay.markers)
   let severityEditingId = $state<string | null>(null)
   let selectedSection = $state<AuditSectionId>('executive_summary')
   /** Phone only: the section rail is a bottom drawer instead of a column. */
@@ -165,7 +163,6 @@
   const isLatestVersion = $derived(draft.version === latestVersion)
   const reviewStarted = $derived(draft.annotations.length > 0 || reviewOpen)
   const workflowActionsVisible = $derived(actionsAvailable && isLatestVersion)
-  const AUDIT_ANNOTATION_HIGHLIGHT = 'audit-annotation-anchor'
 
   // Sidebar headings are a projection of the fixed audit sections with open annotation counts.
   const shellSections = $derived<StudioShellSection<AuditSectionId>[]>(
@@ -222,11 +219,10 @@
   })
 
   $effect(() => {
-    const annotationSignature = draft.annotations
+    draft.annotations
       .map((annotation) => `${annotation.id}:${annotation.status}:${annotation.body}`)
       .join('|')
-    if (annotationSignature) void refreshAnnotationMarkers()
-    else annotationMarkers = []
+    void refreshAnnotationMarkers()
   })
 
   function changed(): void {
@@ -325,26 +321,6 @@
     return occurrenceIndexes(prefix.toString(), quote).length
   }
 
-  function offsetsForRange(
-    sectionElement: HTMLElement,
-    range: Range
-  ): { startOffset: number; endOffset: number } {
-    const startPrefix = document.createRange()
-    startPrefix.selectNodeContents(sectionElement)
-    const endPrefix = document.createRange()
-    endPrefix.selectNodeContents(sectionElement)
-    try {
-      startPrefix.setEnd(range.startContainer, range.startOffset)
-      endPrefix.setEnd(range.endContainer, range.endOffset)
-    } catch {
-      return { startOffset: 0, endOffset: range.toString().length }
-    }
-    return {
-      startOffset: startPrefix.toString().length,
-      endOffset: endPrefix.toString().length
-    }
-  }
-
   function offsetsForQuote(
     section: AuditSectionId,
     quote: string
@@ -353,10 +329,7 @@
     endOffset: number
   } {
     const sectionElement = document.querySelector<HTMLElement>(`[data-audit-section="${section}"]`)
-    const startOffset = sectionElement?.textContent?.indexOf(quote) ?? -1
-    return startOffset < 0
-      ? { startOffset: 0, endOffset: quote.length }
-      : { startOffset, endOffset: startOffset + quote.length }
+    return offsetsForQuoteIn(sectionElement, quote)
   }
 
   function markdownLineForQuote(
@@ -398,15 +371,14 @@
     if (!sectionElement || !section || !quote) return
     const rect = range.getBoundingClientRect()
     selectedSection = section
-    pendingAnnotation = {
+    overlay.beginPending({
       section,
       quote,
       ...markdownLineForQuote(quote, section, selectionOccurrence(sectionElement, range, quote)),
       ...offsetsForRange(sectionElement, range),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      ...clampPendingPosition(rect),
       sectionLevel: false
-    }
+    })
     annotationBody = ''
   }
 
@@ -419,15 +391,14 @@
         ? event.currentTarget.getBoundingClientRect()
         : { left: event.clientX, bottom: event.clientY }
     selectedSection = section
-    pendingAnnotation = {
+    overlay.beginPending({
       section,
       quote: title,
       ...markdownLineForQuote(title, section),
       ...offsetsForQuote(section, title),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      ...clampPendingPosition(rect),
       sectionLevel: true
-    }
+    })
     annotationBody = ''
   }
 
@@ -436,10 +407,10 @@
     const body = annotationBody.trim()
     if (!anchor || !body) return
     if (dirty && !(await save())) return
-    const updated = await onAddAnnotation(anchor.section, body, {
+    const updated = await onAddAnnotation(anchor.section as AuditSectionId, body, {
       quote: anchor.quote,
-      startLine: anchor.startLine,
-      endLine: anchor.endLine,
+      startLine: anchor.startLine ?? 0,
+      endLine: anchor.endLine ?? 0,
       startOffset: anchor.startOffset,
       endOffset: anchor.endOffset
     })
@@ -459,8 +430,8 @@
   }
 
   function closePendingAnnotation(): void {
+    overlay.closePending()
     window.getSelection()?.removeAllRanges()
-    pendingAnnotation = null
     annotationBody = ''
   }
 
@@ -473,179 +444,51 @@
     closePendingAnnotation()
   }
 
-  function textNodesWithin(root: HTMLElement): Text[] {
-    const nodes: Text[] = []
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-    let current = walker.nextNode()
-    while (current) {
-      if (current instanceof Text) nodes.push(current)
-      current = walker.nextNode()
-    }
-    return nodes
-  }
-
-  function rangeForOffsets(
-    root: HTMLElement,
-    startOffset: number,
-    endOffset: number
-  ): Range | null {
-    const nodes = textNodesWithin(root)
-    let cursor = 0
-    let startNode: Text | null = null
-    let endNode: Text | null = null
-    let localStart = 0
-    let localEnd = 0
-    for (const node of nodes) {
-      const next = cursor + node.data.length
-      if (!startNode && startOffset >= cursor && startOffset <= next) {
-        startNode = node
-        localStart = Math.min(startOffset - cursor, node.data.length)
-      }
-      if (endOffset >= cursor && endOffset <= next) {
-        endNode = node
-        localEnd = Math.min(endOffset - cursor, node.data.length)
-        break
-      }
-      cursor = next
-    }
-    if (!startNode || !endNode) return null
-    const range = document.createRange()
-    range.setStart(startNode, localStart)
-    range.setEnd(endNode, localEnd)
-    return range
-  }
-
-  function rangeForAnnotation(root: HTMLElement, annotation: AuditAnnotation): Range | null {
-    if (annotation.startOffset !== undefined && annotation.endOffset !== undefined) {
-      const anchored = rangeForOffsets(root, annotation.startOffset, annotation.endOffset)
-      if (anchored?.toString().trim() === annotation.quote?.trim()) return anchored
-    }
-    const quote = annotation.quote?.trim()
-    if (!quote) return null
-    const sectionText = root.textContent ?? ''
-    const startOffset = sectionText.indexOf(quote)
-    return startOffset < 0 ? null : rangeForOffsets(root, startOffset, startOffset + quote.length)
+  function sectionElementFor(annotation: AuditAnnotation): HTMLElement | null {
+    return document.querySelector<HTMLElement>(
+      `[data-audit-section="${CSS.escape(annotation.section)}"]`
+    )
   }
 
   async function refreshAnnotationMarkers(): Promise<void> {
-    await tick()
-    const scroller = documentScroller
-    if (!scroller) return
-    const scrollerRect = scroller.getBoundingClientRect()
-    annotationMarkers = draft.annotations.flatMap((annotation) => {
-      if (annotation.status !== 'open') return []
-      const section = document.querySelector<HTMLElement>(
-        `[data-audit-section="${annotation.section}"]`
-      )
-      const range = section ? rangeForAnnotation(section, annotation) : null
-      const rect = range?.getBoundingClientRect() ?? section?.getBoundingClientRect()
-      if (!rect) return []
-      return [
-        {
-          annotation,
-          x: Math.max(4, rect.right - scrollerRect.left + scroller.scrollLeft + 6),
-          y: Math.max(4, rect.top - scrollerRect.top + scroller.scrollTop)
-        }
-      ]
-    })
-  }
-
-  function waitForScrollSettle(scroller: HTMLElement): Promise<void> {
-    return new Promise((resolve) => {
-      const startedAt = performance.now()
-      let previousTop = scroller.scrollTop
-      let stableFrames = 0
-      const check = (): void => {
-        const currentTop = scroller.scrollTop
-        stableFrames = Math.abs(currentTop - previousTop) < 0.5 ? stableFrames + 1 : 0
-        previousTop = currentTop
-        if (stableFrames >= 3 || performance.now() - startedAt >= 900) {
-          resolve()
-          return
-        }
-        requestAnimationFrame(check)
-      }
-      requestAnimationFrame(check)
+    await overlay.refreshMarkers(draft.annotations, {
+      scroller: documentScroller,
+      sectionFor: sectionElementFor
     })
   }
 
   async function openAnnotation(annotation: AuditAnnotation): Promise<void> {
-    window.getSelection()?.removeAllRanges()
-    CSS.highlights?.delete(AUDIT_ANNOTATION_HIGHLIGHT)
-    editingAnnotation = null
-    editingAnnotationPosition = null
     selectedSection = annotation.section
-    pendingAnnotation = null
-    await tick()
-    const section = document.querySelector<HTMLElement>(
-      `[data-audit-section="${annotation.section}"]`
-    )
-    const range = section ? rangeForAnnotation(section, annotation) : null
-    const scroller = documentScroller
-    const initialRect = range?.getBoundingClientRect() ?? section?.getBoundingClientRect()
-    if (scroller && initialRect) {
-      const scrollerRect = scroller.getBoundingClientRect()
-      const centeredTop =
-        scroller.scrollTop +
-        initialRect.top -
-        scrollerRect.top -
-        (scroller.clientHeight - initialRect.height) / 2
-      scroller.scrollTo({ top: Math.max(0, centeredTop), behavior: 'smooth' })
-      await waitForScrollSettle(scroller)
-    }
-    await refreshAnnotationMarkers()
-    await tick()
-    const marker = document.querySelector<HTMLElement>(
-      `[data-audit-annotation-marker="${CSS.escape(annotation.id)}"]`
-    )
-    const rect = marker?.getBoundingClientRect() ?? range?.getBoundingClientRect() ?? initialRect
-    if (range && typeof Highlight !== 'undefined' && CSS.highlights) {
-      CSS.highlights.set(AUDIT_ANNOTATION_HIGHLIGHT, new Highlight(range))
-    }
-    editingAnnotation = annotation
-    editingAnnotationBody = annotation.body
-    annotationEditMode = false
-    if (rect) {
-      const width = 320
-      const preferredX = rect.right + 8
-      const x = preferredX + width <= window.innerWidth - 12 ? preferredX : rect.left - width - 8
-      editingAnnotationPosition = {
-        x: Math.max(12, Math.min(x, window.innerWidth - width - 12)),
-        y: Math.max(12, Math.min(rect.top, window.innerHeight - 288))
-      }
-    } else {
-      editingAnnotationPosition = { x: 12, y: 12 }
-    }
+    await overlay.openAnnotation(annotation, {
+      scroller: documentScroller,
+      sectionElement: sectionElementFor(annotation),
+      markerAttribute: 'data-audit-annotation-marker',
+      annotations: draft.annotations,
+      sectionFor: sectionElementFor
+    })
   }
 
   function closeAnnotation(): void {
-    CSS.highlights?.delete(AUDIT_ANNOTATION_HIGHLIGHT)
-    editingAnnotation = null
-    editingAnnotationBody = ''
-    editingAnnotationPosition = null
-    annotationEditMode = false
+    overlay.closeEditing()
   }
 
   async function saveAnnotationEdit(): Promise<void> {
-    const annotation = editingAnnotation
-    const body = editingAnnotationBody.trim()
+    const annotation = overlay.editing
+    const body = overlay.editingBody.trim()
     if (!annotation || !body) return
     const updated = await onUpdateAnnotation(annotation.id, body)
     if (!updated) return
     speechController.observeSent(`audit-annotation-edit-${annotation.id}`, body)
     applyReport(updated)
-    const saved = updated.annotations.find((candidate) => candidate.id === annotation.id)
-    if (saved) {
-      editingAnnotation = saved
-      editingAnnotationBody = saved.body
-    }
-    annotationEditMode = false
+    overlay.editing = updated.annotations.find((candidate) => candidate.id === annotation.id) ?? null
+    overlay.editingBody = overlay.editing?.body ?? ''
+    overlay.editMode = false
   }
 
   async function resolveAnnotation(annotationId: string): Promise<void> {
     const updated = await onResolveAnnotation(annotationId)
     if (updated) applyReport(updated)
-    closeAnnotation()
+    overlay.closeEditing()
   }
 
   onMount(() => {
@@ -656,7 +499,7 @@
 
   onDestroy(() => {
     markerResizeObserver?.disconnect()
-    CSS.highlights?.delete(AUDIT_ANNOTATION_HIGHLIGHT)
+    overlay.clearHighlight()
   })
 
   function severityClass(severity: AuditFindingSeverity): string {
@@ -1125,13 +968,13 @@
     dialogLabel="Audit annotation"
     speechTargetId={`audit-annotation-edit-${editingAnnotation.id}`}
     scope={speechScope}
-    bind:body={editingAnnotationBody}
+    bind:body={overlay.editingBody}
     onResolve={() => {
       if (editingAnnotation) void resolveAnnotation(editingAnnotation.id)
     }}
     onSave={saveAnnotationEdit}
-    onCancelEdit={() => (annotationEditMode = false)}
-    onEditClick={() => (annotationEditMode = true)}
+    onCancelEdit={() => overlay.cancelEdit()}
+    onEditClick={() => overlay.startEdit()}
     onClose={closeAnnotation}
   />
 {/if}

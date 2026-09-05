@@ -772,16 +772,26 @@ async function bootPostPaintServices(): Promise<void> {
       import('./system/restart-recovery-service')
     ])
 
-    ptyService = new PtyService(storage, database, scopeRootResolver, (process) => {
-      chatEngine?.trackPtyProcess(
-        process.scopeId,
-        process.projectId,
-        process.threadId,
-        process.pid,
-        process.command,
-        process.cwd
-      )
-    })
+    ptyService = new PtyService(
+      storage,
+      database,
+      scopeRootResolver,
+      (process) => {
+        chatEngine?.trackPtyProcess(
+          process.scopeId,
+          process.projectId,
+          process.threadId,
+          process.pid,
+          process.command,
+          process.cwd
+        )
+      },
+      (projectId, projectPath) => {
+        // User typed in a project terminal — open a user-activity window so
+        // their shell-driven edits are excluded from concurrent agent turns.
+        chatEngine?.recordUserTerminalInput(projectId, projectPath)
+      }
+    )
     // A probe that changes a harness's install state (new install, version
     // bump) invalidates cached provider catalogs so the model picker reflects it.
     providerConnection = new ProviderConnectionService(() => {
@@ -1173,6 +1183,19 @@ function createWindow(): BrowserWindow {
   window.webContents.on('will-navigate', (event, url) => {
     if (!windowBoundaryValidator.isTrustedNavigation(url)) {
       event.preventDefault()
+    }
+  })
+
+  // Mouse side buttons (back/forward). Windows and Linux deliver them as app
+  // commands; the renderer walks its own in-app navigation history because the
+  // single-page window has no native browser history to navigate. On macOS no
+  // app-command is emitted — the renderer handles the raw buttons directly.
+  window.on('app-command', (_event, command) => {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) return
+    if (command === 'browser-backward') {
+      sendToRenderer(window.webContents, 'window:historyBack')
+    } else if (command === 'browser-forward') {
+      sendToRenderer(window.webContents, 'window:historyForward')
     }
   })
 

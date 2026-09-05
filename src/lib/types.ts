@@ -340,6 +340,9 @@ export interface ProjectFileEntry {
   kind: 'directory' | 'file'
   size?: number
   modifiedAt?: number
+  /** Whether the entry is git-ignored. Set by the search index only; a
+   *  directory is ignored when every file below it is ignored. */
+  ignored?: boolean
 }
 
 export interface ProjectFileInfo extends ProjectFileEntry {
@@ -914,6 +917,11 @@ export interface BaseUrlProvider {
    * usage UI. Empty means the provider reports no usage.
    */
   usagePath?: string
+  /**
+   * Optional model-list route relative to `baseURL` (defaults to `/models`) or
+   * an absolute URL. Used when discovering/refreshing this provider's models.
+   */
+  modelsPath?: string
   enabled: boolean
   createdAt: number
   updatedAt: number
@@ -931,6 +939,8 @@ export interface BaseUrlProviderCreateRequest {
   models: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
   /** Optional account status/usage route relative to `baseURL`, or an absolute URL. */
   usagePath?: string
+  /** Optional model-list route relative to `baseURL` (default `/models`), or an absolute URL. */
+  modelsPath?: string
   enabled?: boolean
   /**
    * Reuse this id instead of generating one. Lets the renderer link the same
@@ -953,6 +963,8 @@ export interface BaseUrlProviderUpdateRequest {
   models?: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
   /** Optional account status/usage route; empty string clears it. */
   usagePath?: string
+  /** Optional model-list route; empty string clears it (falls back to `/models`). */
+  modelsPath?: string
   enabled?: boolean
 }
 
@@ -969,6 +981,8 @@ export interface BaseUrlProviderCopyClipboardRequest {
   headers?: string
   /** Account status/usage route carried through copy/paste. */
   usagePath?: string
+  /** Model-list route carried through copy/paste. */
+  modelsPath?: string
   models: Array<{
     id: string
     name: string
@@ -989,6 +1003,8 @@ export interface BaseUrlProviderFetchModelsRequest {
   baseURL: string
   apiKey?: string
   headers?: Record<string, string>
+  /** Model-list route override; omitted resolves the provider's saved route (default `/models`). */
+  modelsPath?: string
   force?: boolean
 }
 
@@ -1991,6 +2007,14 @@ export interface AgentRateLimitWindow {
   isUsingOverage?: boolean
 }
 
+/** Banked rate-limit resets a user has accumulated and can redeem on demand
+ *  (currently Codex-only). Codex's app-server only reports the count, not
+ *  each credit's individual grant/expiry date. */
+export interface AgentBankedResets {
+  /** Number of banked resets available to redeem. */
+  availableCount: number
+}
+
 /** Prepaid-credit balance reported alongside quota windows (e.g. Codex credits). */
 export interface AgentUsageCredits {
   /** Remaining balance in the provider's credit currency, when metered. */
@@ -2017,6 +2041,8 @@ export interface AgentContextUsage {
   rateLimits: AgentRateLimitWindow[]
   /** Prepaid-credit balance reported alongside quota windows. */
   credits?: AgentUsageCredits
+  /** Banked rate-limit resets available to redeem (currently Codex-only). */
+  bankedResets?: AgentBankedResets
 }
 
 /** Per-harness quota telemetry for threads that used more than one harness. */
@@ -2030,6 +2056,8 @@ export interface AgentHarnessUsage {
   rateLimits: AgentRateLimitWindow[]
   /** Prepaid-credit balance reported by this harness on the thread. */
   credits?: AgentUsageCredits
+  /** Banked rate-limit resets available to redeem (currently Codex-only). */
+  bankedResets?: AgentBankedResets
   /** Cumulative token accounting from the harness_usage table, when available. */
   tokens?: AgentTokenUsage
   /** Assistant messages attributed to this harness on the thread. */
@@ -2040,12 +2068,22 @@ export interface AgentHarnessUsage {
   models?: HarnessModelUsage[]
 }
 
+/** Optional harness/provider the quota read should answer for when no thread
+ *  row (or live temporary session) exists yet — e.g. the inbox "Start a new
+ *  chat" composer before its first turn. */
+export interface AgentAccountUsageOverrides {
+  harnessId?: string
+  providerId?: string
+}
+
 /** On-demand account quota snapshot for one harness used on a thread. */
 export interface AgentAccountUsage {
   harnessId: string
   providerId: string
   rateLimits: AgentRateLimitWindow[]
   credits?: AgentUsageCredits
+  /** Banked rate-limit resets available to redeem (currently Codex-only). */
+  bankedResets?: AgentBankedResets
   /** Effective model context window (tokens) for the active session, when known. */
   contextWindow?: number
   /** Tokens currently occupying the model context, when known. */
@@ -2570,6 +2608,8 @@ export interface AgentMessage {
   rateLimits?: AgentRateLimitWindow[]
   /** Prepaid-credit balance reported alongside quota windows. */
   credits?: AgentUsageCredits
+  /** Banked rate-limit resets available to redeem (currently Codex-only). */
+  bankedResets?: AgentBankedResets
   /** Present on assistant messages that ended with an error. */
   error?: string
   /** Validated JSON-schema result returned by a harness structured-output tool. */
@@ -2723,6 +2763,8 @@ export type AgentEvent =
       rateLimits?: AgentRateLimitWindow[]
       /** Prepaid-credit balance reported alongside quota windows. */
       credits?: AgentUsageCredits
+      /** Banked rate-limit resets available to redeem (currently Codex-only). */
+      bankedResets?: AgentBankedResets
       /** The completed assistant message summarizes a compaction and is trace-only. */
       compaction?: boolean
       /** Driver-internal silent-continue marker; stripped before broadcast. */
@@ -2740,6 +2782,8 @@ export type AgentEvent =
       cost?: number
       rateLimits?: AgentRateLimitWindow[]
       credits?: AgentUsageCredits
+      /** Banked rate-limit resets available to redeem (currently Codex-only). */
+      bankedResets?: AgentBankedResets
     }
   | { type: 'session.status'; sessionId: string; status: AgentSessionStatus }
   | { type: 'session.idle'; sessionId: string }

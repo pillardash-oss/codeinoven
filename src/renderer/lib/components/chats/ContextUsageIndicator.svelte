@@ -1,6 +1,15 @@
 <script lang="ts">
-  import { Archive, BatteryMedium, Brain, ChevronDown, ChevronRight, Loader2 } from '@lucide/svelte'
+  import {
+    Archive,
+    BatteryCharging,
+    BatteryMedium,
+    Brain,
+    ChevronDown,
+    ChevronRight,
+    Loader2
+  } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
+  import { slide } from 'svelte/transition'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -21,6 +30,8 @@
     canCompact?: boolean
     compacting?: boolean
     onCompact?: () => void
+    /** Opens the destructive confirmation dialog for redeeming a banked reset. */
+    onActivateBankedReset?: () => void
     /** Called when the user hovers the indicator to flush the latest usage. */
     onReveal?: () => void
     /** Called when the user stops hovering the indicator. */
@@ -42,6 +53,7 @@
     canCompact = false,
     compacting = false,
     onCompact,
+    onActivateBankedReset,
     onReveal,
     onHide,
     refreshing = false,
@@ -173,7 +185,10 @@
   {#each limits as limit (limit.id)}
     {@const percent = quotaPercent(limit)}
     {@const overage = overageLabel(limit)}
-    <div>
+    <div
+      transition:slide={{ duration: 300 }}
+      class="overflow-hidden"
+    >
       <div class="mb-1 flex items-center justify-between gap-3 text-[0.625rem]">
         <span class="font-medium text-muted">{limit.label}</span>
         <span class="tabular-nums text-dimmed">
@@ -195,7 +210,7 @@
           aria-valuemax="100"
           aria-valuenow={Math.round(percent)}
         >
-          <div class="h-full rounded-full bg-info" style={`width: ${percent}%`}></div>
+          <div class="h-full rounded-full bg-info transition-[width] duration-700 ease-out" style={`width: ${percent}%`}></div>
         </div>
       {/if}
       <p class="mt-1 text-[0.5625rem] text-dimmed">{formatReset(limit.resetsAt)}</p>
@@ -204,6 +219,30 @@
       {/if}
     </div>
   {/each}
+{/snippet}
+
+{#snippet bankedResetRow(availableCount: number)}
+  <div transition:slide={{ duration: 250 }} class="rounded-md border border-border bg-app/40 p-2.5">
+    <div class="flex items-center gap-2">
+      <BatteryCharging size={16} class="shrink-0 text-info" aria-hidden="true" />
+      <span class="text-base leading-none font-semibold tabular-nums text-foreground">
+        {availableCount}
+      </span>
+      <span class="text-[0.625rem] font-medium text-muted">
+        banked reset{availableCount === 1 ? '' : 's'} available
+      </span>
+    </div>
+    <button
+      type="button"
+      class="mt-2.5 flex h-6 w-full items-center justify-center gap-1.5 rounded-md border border-border text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
+      title="Redeem one banked reset — this immediately resets your usage windows"
+      disabled={!onActivateBankedReset}
+      onclick={onActivateBankedReset}
+    >
+      <BatteryCharging size={11} aria-hidden="true" />
+      Reset usage
+    </button>
+  </div>
 {/snippet}
 
 {#snippet modelRows(models: HarnessModelUsage[])}
@@ -287,6 +326,9 @@
         {#if creditsLine(entry)}
           <p class="text-[0.5625rem] text-dimmed">Credits: {creditsLine(entry)}</p>
         {/if}
+        {#if entry.bankedResets?.availableCount}
+          {@render bankedResetRow(entry.bankedResets.availableCount)}
+        {/if}
       </div>
     {/if}
   </div>
@@ -329,12 +371,21 @@
         {@render harnessSection(entry)}
       {/each}
     </div>
-  {:else if harnessUsage[0] && harnessUsage[0].rateLimits.length > 0}
+  {:else if harnessUsage[0] && (harnessUsage[0].rateLimits.length > 0 || harnessUsage[0].bankedResets)}
     <div class="mt-3 space-y-2.5 border-t border-border pt-3">
       {#if harnessUsage[0]?.models?.length}
         {@render modelRows(harnessUsage[0].models)}
       {/if}
       {@render limitRows(harnessUsage[0].rateLimits)}
+      {#if harnessUsage[0]?.bankedResets?.availableCount}
+        {@render bankedResetRow(harnessUsage[0].bankedResets.availableCount)}
+      {/if}
+    </div>
+  {/if}
+
+  {#if !multiHarness && !harnessUsage[0]?.bankedResets && usage?.bankedResets?.availableCount}
+    <div class="mt-3 border-t border-border pt-3">
+      {@render bankedResetRow(usage.bankedResets.availableCount)}
     </div>
   {/if}
 
@@ -358,7 +409,7 @@
       aria-valuemax="100"
       aria-valuenow={Math.round(boundedPercent ?? 0)}
     >
-      <div class={`h-full rounded-full ${fillClass}`} style={`width: ${boundedPercent}%`}></div>
+      <div class={`h-full rounded-full ${fillClass} transition-[width] duration-700 ease-out`} style={`width: ${boundedPercent}%`}></div>
     </div>
     {#if usage?.contextWindow && usage.contextUsed !== undefined}
       <div class="mt-2 grid grid-cols-3 gap-2 text-[0.5625rem] text-dimmed">

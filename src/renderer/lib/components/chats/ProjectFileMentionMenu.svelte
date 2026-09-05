@@ -12,12 +12,12 @@
     activeIndex: number
     query: string
     onSelect: (entry: ComposerMentionEntry) => void
-    /** Re-run the mention search after the .cio visibility switch toggles, so
+    /** Re-run the mention search after a visibility switch toggles, so
      *  the open result list reflects the new state immediately. */
-    onCioFilterChange: () => void
+    onFilterChange: () => void
   }
 
-  let { entries, activeIndex, query, onSelect, onCioFilterChange }: Props = $props()
+  let { entries, activeIndex, query, onSelect, onFilterChange }: Props = $props()
   let listboxElement: HTMLDivElement
 
   $effect(() => {
@@ -52,18 +52,32 @@
     <p class="min-w-0 truncate text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
       {query ? `References matching “${query}”` : 'Built-in actions, files, and Assignment tasks'}
     </p>
-    <Switch
-      checked={cioSearchVisibility.includeCio}
-      label="cio files"
-      class="text-[0.625rem] font-semibold text-dimmed"
-      title="Include .cio files in tag search"
-      aria-label="Include .cio files in tag search"
-      onmousedown={(event: MouseEvent) => event.preventDefault()}
-      onchange={(checked: boolean) => {
-        cioSearchVisibility.setIncludeCio(checked)
-        onCioFilterChange()
-      }}
-    />
+    <div class="flex shrink-0 items-center gap-2">
+      <Switch
+        checked={cioSearchVisibility.includeIgnored}
+        label="ignored"
+        class="text-[0.625rem] font-semibold text-dimmed"
+        title="Include git-ignored files in tag search"
+        aria-label="Include git-ignored files in tag search"
+        onmousedown={(event: MouseEvent) => event.preventDefault()}
+        onchange={(checked: boolean) => {
+          cioSearchVisibility.setIncludeIgnored(checked)
+          onFilterChange()
+        }}
+      />
+      <Switch
+        checked={cioSearchVisibility.includeCio}
+        label="cio files"
+        class="text-[0.625rem] font-semibold text-dimmed"
+        title="Include .cio files in tag search"
+        aria-label="Include .cio files in tag search"
+        onmousedown={(event: MouseEvent) => event.preventDefault()}
+        onchange={(checked: boolean) => {
+          cioSearchVisibility.setIncludeCio(checked)
+          onFilterChange()
+        }}
+      />
+    </div>
   </div>
   <div class="min-h-0 flex-1 overflow-y-auto">
   {#if entries.length === 0}
@@ -74,7 +88,8 @@
         type="button"
         class={[
           'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none',
-          index === activeIndex ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated'
+          index === activeIndex ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated',
+          mention.type === 'project' && mention.entry.ignored === true ? 'opacity-45' : ''
         ]}
         role="option"
         aria-selected={index === activeIndex}

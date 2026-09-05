@@ -29,8 +29,14 @@ import type {
   HarnessCapabilities,
   SendPromptOptions
 } from './driver.interface'
+import { open } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import type { StorageEngine } from '../storage/storage-engine'
 import { runHarnessCommand } from './harness-runtime'
+import { Logger } from '../system/logger'
+import { parseBrainTraceLine } from './antigravity-brain-trace'
 
 /**
  * Antigravity CLI reads its stdin and hangs when that pipe stays open without
@@ -71,6 +77,58 @@ const EFFORT_PRESETS: Record<'low' | 'medium' | 'high', ThinkingPreset> = {
 
 /** Provider id under which every Antigravity-cloud model is catalogued. */
 const ANTIGRAVITY_PROVIDER_ID = 'google'
+
+/** Brain-transcript tail cadence for the current turn's thinking backfill. */
+const ANTIGRAVITY_BRAIN_POLL_MS = 800
+/** How long the tailer keeps looking for the brain transcript before giving up. */
+const ANTIGRAVITY_BRAIN_FIND_TIMEOUT_MS = 60_000
+/** How long after process exit the tailer keeps catching final flushes. */
+const ANTIGRAVITY_BRAIN_TAIL_GRACE_MS = 4_000
+/**
+ * Root of Antigravity's per-conversation "brain" directories under the user
+ * home. agy persists the per-step thinking trace it strips from headless
+ * streams there: `brain/<conversation_id>/.system_generated/logs/transcript.jsonl`.
+ */
+function brainTranscriptRoot(): string {
+  return brainRootOverride ?? join(homedir(), '.gemini', 'antigravity-cli', 'brain')
+}
+
+function brainTranscriptPath(conversationId: string): string {
+  return join(
+    brainTranscriptRoot(),
+    conversationId,
+    '.system_generated',
+    'logs',
+    'transcript.jsonl'
+  )
+}
+
+/**
+ * Test seam: overrides the brain root for the process. Production code never
+ * calls this; tests point it at a temp directory to exercise the tailer.
+ */
+export function setAntigravityBrainRootForTests(root: string | undefined): void {
+  brainRootOverride = root
+}
+
+let brainRootOverride: string | undefined
+
+/** Incremental-tail state for one turn's brain transcript. */
+interface AntigravityBrainTraceWatcher {
+  turnState: AntigravityTurnState
+  session: PersistentCliSession
+  projectPath: string
+  conversationId: string
+  /** Byte offset of the next unread transcript byte. */
+  offset: number
+  /** Partial trailing line carried between polls. */
+  pending: string
+  /** Wall-clock deadline after which an undiscoverable transcript gives up. */
+  giveUpAfter: number
+  timer: ReturnType<typeof setInterval> | null
+  stopTimer: ReturnType<typeof setTimeout> | null
+  stopping: boolean
+}
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null
@@ -306,6 +364,10 @@ function mapAntigravityRateLimits(value: unknown): AgentRateLimitWindow[] {
 
 /** Turn-scoped state correlating the streamed steps of one assistant message. */
 interface AntigravityTurnState {
+  /** agy conversation id, latched from the stream or the resumed conversation. */
+  conversationId: string | undefined
+  /** Thinking text per streamed step already merged from the brain transcript. */
+  brainThinking: Map<number, string>
   turnIndex: number
   messageId: string
   createdAt: number
@@ -369,6 +431,44 @@ function textPart(state: AntigravityTurnState): Extract<AgentPart, { type: 'text
   }
 }
 
+/**
+ * Merge brain-transcript thinking text into the turn's reasoning part for a
+ * step. Reuses the timed reasoning part's id scheme so the streamed timed
+ * entry and the brain-backed text entry are one card: when the stream already
+ * emitted the part (thinking tokens without text) its timing is preserved and
+ * only the text is filled; when the stream produced no part for the step, one
+ * is created positioned at the end of the reconstructed step timeline.
+ * Returns the part only when the merge changed something, so replays of
+ * already-applied brain entries emit nothing.
+ */
+function mergeBrainThinking(
+  state: AntigravityTurnState,
+  stepIndex: number,
+  thinking: string
+): Extract<AgentPart, { type: 'reasoning' }> | null {
+  const known = state.brainThinking.get(stepIndex)
+  if (known === thinking) return null
+  state.brainThinking.set(stepIndex, thinking)
+  const id = `${state.messageId}:thinking:${stepIndex}`
+  const existing = state.parts.find(
+    (candidate): candidate is Extract<AgentPart, { type: 'reasoning' }> =>
+      candidate.id === id && candidate.type === 'reasoning'
+  )
+  if (existing) return { ...existing, text: thinking }
+  // No streamed part exists for this step (no thinking tokens were reported
+  // or the stream missed it). Anchor the card to the reconstructed timeline:
+  // it ends at the cumulative elapsed time and starts one tick earlier, which
+  // keeps the working trace ordered without pretending to know the real span.
+  const end = state.timelineAnchor + state.elapsedMs
+  return {
+    type: 'reasoning',
+    id,
+    messageID: state.messageId,
+    text: thinking,
+    time: { start: end, end }
+  }
+}
+
 function usageEvent(
   state: AntigravityTurnState,
   rawUsage: unknown,
@@ -406,6 +506,7 @@ export function mapAntigravityRecord(
   if (state.timelineAnchor === 0) state.timelineAnchor = Date.now()
   const eventType = stringValue(entry['event'])
   const conversationId = stringValue(entry['conversation_id'])
+  if (conversationId) state.conversationId = conversationId
   const base: CliLineParseResult = conversationId ? { nativeSessionId: conversationId } : {}
 
   if (eventType === 'result') {
@@ -625,6 +726,7 @@ export class AntigravityDriver extends PersistentCliDriver {
   }
 
   private turnStates = new Map<string, AntigravityTurnState>()
+  private brainTraceWatchers = new Map<string, AntigravityBrainTraceWatcher>()
   private modelVariants = new Map<string, Map<ThinkingLevel, string>>()
   private modelVariantsAttempted = false
 
@@ -790,17 +892,50 @@ export class AntigravityDriver extends PersistentCliDriver {
     args.push('--print-timeout', '30m')
 
     const turnIndex = session.messages.filter((message) => message.role === 'assistant').length + 1
-    this.turnStates.set(session.id, {
+    const turnState: AntigravityTurnState = {
       turnIndex,
       messageId: `antigravity:${session.id}:${turnIndex}`,
       createdAt: Date.now(),
       text: '',
       parts: [],
       started: false,
+      conversationId: session.nativeSessionId,
+      brainThinking: new Map(),
       timelineAnchor: 0,
       elapsedMs: 0
-    })
-    return { command: 'agy', args, env: buildProcessEnvironment() }
+    }
+    this.turnStates.set(session.id, turnState)
+    // agy persists the per-step thinking text to its brain transcript, which
+    // the headless stream omits. Tail that transcript for the duration of the
+    // turn so the working trace shows live thinking text. The conversation id
+    // is known up front for resumed conversations; a fresh conversation's id
+    // arrives on the stream, so the watcher starts lazily on first sight of it
+    // via `onJsonRecord`.
+    if (turnState.conversationId) {
+      this.startBrainTraceWatcher(
+        session.id,
+        turnState,
+        session,
+        projectPath,
+        turnState.conversationId
+      )
+    }
+    return {
+      command: 'agy',
+      args,
+      env: buildProcessEnvironment(),
+      onJsonRecord: (value) => {
+        if (turnState.conversationId) return
+        const conversationId = stringValue(record(value)?.['conversation_id'])
+        if (!conversationId) return
+        turnState.conversationId = conversationId
+        this.startBrainTraceWatcher(session.id, turnState, session, projectPath, conversationId)
+      },
+      onProcessExit: () => {
+        // Keep tailing briefly so thinking agy flushes at exit is captured.
+        this.scheduleBrainTraceWatcherStop(session.id)
+      }
+    }
   }
 
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
@@ -809,7 +944,115 @@ export class AntigravityDriver extends PersistentCliDriver {
     return mapAntigravityRecord(value, context, state)
   }
 
+  /**
+   * Tail Antigravity's brain transcript for the duration of a turn. agy strips
+   * thought summaries from headless streams, but persists the per-step thinking
+   * text to `~/.gemini/antigravity-cli/brain/<conversation_id>/.../transcript.jsonl`
+   * incrementally as the run progresses. New `PLANNER_RESPONSE` entries are
+   * joined onto the streamed step timeline by `step_index` and re-emitted as
+   * text-filled reasoning cards, so the working trace shows live thinking.
+   */
+  private startBrainTraceWatcher(
+    sessionId: string,
+    turnState: AntigravityTurnState,
+    session: PersistentCliSession,
+    projectPath: string,
+    conversationId: string
+  ): void {
+    this.stopBrainTraceWatcher(sessionId)
+    const watcher: AntigravityBrainTraceWatcher = {
+      turnState,
+      session,
+      projectPath,
+      conversationId,
+      offset: 0,
+      pending: '',
+      giveUpAfter: Date.now() + ANTIGRAVITY_BRAIN_FIND_TIMEOUT_MS,
+      timer: null,
+      stopTimer: null,
+      stopping: false
+    }
+    watcher.timer = setInterval(() => {
+      void this.pollBrainTrace(sessionId, watcher)
+    }, ANTIGRAVITY_BRAIN_POLL_MS)
+    this.brainTraceWatchers.set(sessionId, watcher)
+  }
+
+  private stopBrainTraceWatcher(sessionId: string): void {
+    const watcher = this.brainTraceWatchers.get(sessionId)
+    if (!watcher) return
+    if (watcher.timer) clearInterval(watcher.timer)
+    if (watcher.stopTimer) clearTimeout(watcher.stopTimer)
+    this.brainTraceWatchers.delete(sessionId)
+  }
+
+  /** Keep tailing briefly after process exit to catch agy's final flushes. */
+  private scheduleBrainTraceWatcherStop(sessionId: string): void {
+    const watcher = this.brainTraceWatchers.get(sessionId)
+    if (!watcher || watcher.stopTimer) return
+    watcher.stopping = true
+    watcher.stopTimer = setTimeout(() => {
+      this.stopBrainTraceWatcher(sessionId)
+    }, ANTIGRAVITY_BRAIN_TAIL_GRACE_MS)
+  }
+
+  private async pollBrainTrace(
+    sessionId: string,
+    watcher: AntigravityBrainTraceWatcher
+  ): Promise<void> {
+    if (this.turnStates.get(sessionId) !== watcher.turnState) {
+      this.stopBrainTraceWatcher(sessionId)
+      return
+    }
+    try {
+      const path = brainTranscriptPath(watcher.conversationId)
+      if (!existsSync(path)) {
+        if (Date.now() > watcher.giveUpAfter) this.stopBrainTraceWatcher(sessionId)
+        return
+      }
+      const handle = await open(path, 'r')
+      let grew = false
+      try {
+        const stat = await handle.stat()
+        if (stat.size <= watcher.offset) return
+        const buffer = Buffer.alloc(stat.size - watcher.offset)
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, watcher.offset)
+        watcher.offset += bytesRead
+        watcher.pending += buffer.toString('utf8')
+        grew = true
+      } finally {
+        await handle.close()
+      }
+      if (!grew) return
+      const lines = watcher.pending.split(/\r?\n/u)
+      watcher.pending = lines.pop() ?? ''
+      for (const line of lines) {
+        const parsed = parseBrainTraceLine(line)
+        if (!parsed) continue
+        // A later brain entry for the same step is an agy-side revision; the
+        // merge helper dedupes identical text and re-emits revised text.
+        const part = mergeBrainThinking(watcher.turnState, parsed.stepIndex, parsed.thinking)
+        if (!part) continue
+        this.applyParseResult(
+          {
+            messages: [antigravityMessage(watcher.turnState)],
+            events: [{ type: 'message.part.updated', sessionId, part }]
+          },
+          watcher.session
+        )
+      }
+    } catch (error) {
+      // The transcript appears when agy first persists the run and may be
+      // truncated mid-write; failures here must never break the turn.
+      Logger.dev('Antigravity brain trace tail skipped a poll:', error)
+    }
+  }
+
   dispose(): void {
+    for (const sessionId of [...this.brainTraceWatchers.keys()]) {
+      this.stopBrainTraceWatcher(sessionId)
+    }
+    this.brainTraceWatchers.clear()
     this.turnStates.clear()
     this.modelVariants.clear()
     super.dispose()

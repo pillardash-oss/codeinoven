@@ -20,12 +20,8 @@
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { validateAssignment } from '$shared/assignment/assignment-validation'
   import { exportAssignmentMarkdown } from '$shared/assignment/assignment-markdown'
-  import {
-    offsetsForQuote,
-    offsetsForRange,
-    rangeForAnnotation,
-    waitForScrollSettle
-  } from './studio-annotation-anchors'
+  import { offsetsForQuote, offsetsForRange } from './studio-annotation-anchors'
+  import { StudioAnnotationOverlay, clampPendingPosition } from './studio-annotation-overlay.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import type {
     AssignmentAnnotation,
@@ -164,18 +160,9 @@
   // The effect below reconciles later Assignment versions into this local annotation buffer.
   // svelte-ignore state_referenced_locally
   let annotations = $state<AssignmentAnnotation[]>($state.snapshot(assignment.annotations ?? []))
-  let pendingAnnotation = $state<{
-    section: string
-    quote: string
-    startOffset: number
-    endOffset: number
-    x: number
-    y: number
-    sectionLevel: boolean
-  } | null>(null)
+  const overlay = new StudioAnnotationOverlay<AssignmentAnnotation>('assignment-annotation-anchor')
+  const pendingAnnotation = $derived(overlay.pending)
   let annotationBody = $state('')
-  let editingAnnotation = $state<AssignmentAnnotation | null>(null)
-  let editingAnnotationBody = $state('')
   const pendingSpeechTargetId = `assignment-annotation-${crypto.randomUUID()}`
   const speechScope = $derived({
     kind: 'project',
@@ -183,11 +170,15 @@
     threadId
   } as const)
 
-  let editingAnnotationPosition = $state<{ x: number; y: number } | null>(null)
-  let annotationMarkers = $state<Array<{ annotation: AssignmentAnnotation; x: number; y: number }>>(
-    []
-  )
-  const ASSIGNMENT_ANNOTATION_HIGHLIGHT = 'assignment-annotation-anchor'
+  const editingAnnotation = $derived(overlay.editing)
+  const editingAnnotationPosition = $derived(overlay.editingPosition)
+  const annotationMarkers = $derived(overlay.markers)
+
+  function sectionElementFor(annotation: AssignmentAnnotation): HTMLElement | null {
+    return document.querySelector<HTMLElement>(
+      `[data-assignment-section="${CSS.escape(annotation.section)}"]`
+    )
+  }
 
   const validation = $derived(validateAssignment(draft))
   const sections = $derived([
@@ -289,8 +280,7 @@
     draft = $state.snapshot(previous)
     dirty = history.dirty
     closePendingAnnotation()
-    editingAnnotation = null
-    editingAnnotationPosition = null
+    closeAnnotation()
     void refreshAnnotationMarkers()
   }
 
@@ -300,8 +290,7 @@
     draft = $state.snapshot(next)
     dirty = history.dirty
     closePendingAnnotation()
-    editingAnnotation = null
-    editingAnnotationPosition = null
+    closeAnnotation()
     void refreshAnnotationMarkers()
   }
 
@@ -353,14 +342,13 @@
     const quote = selection.toString().trim()
     if (!sectionElement || !section || !quote) return
     const rect = range.getBoundingClientRect()
-    pendingAnnotation = {
+    overlay.beginPending({
       section,
       quote,
       ...offsetsForRange(sectionElement, range),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      ...clampPendingPosition(rect),
       sectionLevel: false
-    }
+    })
     annotationBody = ''
   }
 
@@ -375,14 +363,13 @@
       event.currentTarget instanceof HTMLElement
         ? event.currentTarget.getBoundingClientRect()
         : { left: event.clientX, bottom: event.clientY }
-    pendingAnnotation = {
+    overlay.beginPending({
       section,
       quote: title,
       ...offsetsForQuote(sectionElement, title),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      ...clampPendingPosition(rect),
       sectionLevel: true
-    }
+    })
     annotationBody = ''
   }
 
@@ -423,8 +410,12 @@
 
   function closePendingAnnotation(): void {
     window.getSelection()?.removeAllRanges()
-    pendingAnnotation = null
+    overlay.closePending()
     annotationBody = ''
+  }
+
+  function closeAnnotation(): void {
+    overlay.closeEditing()
   }
 
   function openSelectionChat(mode: 'explain' | 'quick'): void {
@@ -441,33 +432,13 @@
   }
 
   async function refreshAnnotationMarkers(): Promise<void> {
-    await tick()
-    const scroller = documentScroller
-    if (!scroller) return
-    const scrollerRect = scroller.getBoundingClientRect()
-    annotationMarkers = annotations.flatMap((annotation) => {
-      if (annotation.status !== 'open') return []
-      const section = document.querySelector<HTMLElement>(
-        `[data-assignment-section="${CSS.escape(annotation.section)}"]`
-      )
-      const range = section ? rangeForAnnotation(section, annotation) : null
-      const rect = range?.getBoundingClientRect() ?? section?.getBoundingClientRect()
-      if (!rect) return []
-      return [
-        {
-          annotation,
-          x: Math.max(4, rect.right - scrollerRect.left + scroller.scrollLeft + 6),
-          y: Math.max(4, rect.top - scrollerRect.top + scroller.scrollTop)
-        }
-      ]
+    await overlay.refreshMarkers(annotations, {
+      scroller: documentScroller,
+      sectionFor: sectionElementFor
     })
   }
 
   async function openAnnotation(annotation: AssignmentAnnotation): Promise<void> {
-    window.getSelection()?.removeAllRanges()
-    CSS.highlights?.delete(ASSIGNMENT_ANNOTATION_HIGHLIGHT)
-    editingAnnotation = null
-    editingAnnotationPosition = null
     if (annotation.section.startsWith('phase:')) {
       selectedSection = annotation.section.slice('phase:'.length)
     } else if (annotation.section.startsWith('task:')) {
@@ -476,60 +447,34 @@
     } else {
       selectedSection = annotation.section
     }
-    const section = document.querySelector<HTMLElement>(
-      `[data-assignment-section="${CSS.escape(annotation.section)}"]`
-    )
-    const range = section ? rangeForAnnotation(section, annotation) : null
-    const initialRect = range?.getBoundingClientRect() ?? section?.getBoundingClientRect()
-    if (documentScroller && initialRect) {
-      const scrollerRect = documentScroller.getBoundingClientRect()
-      const top =
-        documentScroller.scrollTop +
-        initialRect.top -
-        scrollerRect.top -
-        (documentScroller.clientHeight - initialRect.height) / 2
-      documentScroller.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
-      await waitForScrollSettle(documentScroller)
-    }
-    await refreshAnnotationMarkers()
-    await tick()
-    const marker = document.querySelector<HTMLElement>(
-      `[data-assignment-annotation-marker="${CSS.escape(annotation.id)}"]`
-    )
-    const rect = marker?.getBoundingClientRect() ?? range?.getBoundingClientRect() ?? initialRect
-    if (range && typeof Highlight !== 'undefined' && CSS.highlights) {
-      CSS.highlights.set(ASSIGNMENT_ANNOTATION_HIGHLIGHT, new Highlight(range))
-    }
-    editingAnnotation = annotation
-    editingAnnotationBody = annotation.body
-    editingAnnotationPosition = rect
-      ? {
-          x: Math.max(12, Math.min(rect.right + 8, window.innerWidth - 332)),
-          y: Math.max(12, Math.min(rect.top, window.innerHeight - 288))
-        }
-      : { x: 12, y: 12 }
+    await overlay.openAnnotation(annotation, {
+      scroller: documentScroller,
+      sectionElement: sectionElementFor(annotation),
+      markerAttribute: 'data-assignment-annotation-marker',
+      annotations,
+      sectionFor: sectionElementFor
+    })
   }
 
   async function saveAnnotationEdit(): Promise<void> {
-    if (!editingAnnotation || !editingAnnotationBody.trim() || !onUpdateAnnotation) return
-    const updated = await onUpdateAnnotation(editingAnnotation.id, editingAnnotationBody.trim())
+    const annotation = overlay.editing
+    const body = overlay.editingBody.trim()
+    if (!annotation || !body || !onUpdateAnnotation) return
+    const updated = await onUpdateAnnotation(annotation.id, body)
     if (!updated) return
-    speechController.observeSent(
-      `assignment-annotation-edit-${editingAnnotation.id}`,
-      editingAnnotationBody.trim()
-    )
+    speechController.observeSent(`assignment-annotation-edit-${annotation.id}`, body)
     applyAssignment(updated)
-    editingAnnotation =
-      (updated.annotations ?? []).find((item) => item.id === editingAnnotation?.id) ?? null
+    overlay.editing =
+      (updated.annotations ?? []).find((item) => item.id === annotation.id) ?? null
+    overlay.editingBody = overlay.editing?.body ?? ''
+    overlay.editMode = false
   }
 
   async function resolveAnnotation(annotationId: string): Promise<void> {
     if (!onResolveAnnotation) return
     const updated = await onResolveAnnotation(annotationId)
     if (updated) applyAssignment(updated)
-    CSS.highlights?.delete(ASSIGNMENT_ANNOTATION_HIGHLIGHT)
-    editingAnnotation = null
-    editingAnnotationPosition = null
+    overlay.closeEditing()
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
@@ -546,7 +491,7 @@
 
   onDestroy(() => {
     markerResizeObserver?.disconnect()
-    CSS.highlights?.delete(ASSIGNMENT_ANNOTATION_HIGHLIGHT)
+    overlay.clearHighlight()
   })
 </script>
 
@@ -759,21 +704,19 @@
     position={editingAnnotationPosition}
     annotation={editingAnnotation}
     canEdit={!readOnly}
-    editorMode={!readOnly}
+    editorMode={!readOnly && overlay.editMode}
     headerLabel="Anchored comment"
     dialogLabel="Anchored assignment comment"
     speechTargetId={`assignment-annotation-edit-${editingAnnotation.id}`}
     scope={speechScope}
-    bind:body={editingAnnotationBody}
+    bind:body={overlay.editingBody}
     onResolve={() => {
       if (editingAnnotation) void resolveAnnotation(editingAnnotation.id)
     }}
     onSave={saveAnnotationEdit}
-    onClose={() => {
-      CSS.highlights?.delete(ASSIGNMENT_ANNOTATION_HIGHLIGHT)
-      editingAnnotation = null
-      editingAnnotationPosition = null
-    }}
+    onCancelEdit={() => overlay.cancelEdit()}
+    onEditClick={() => overlay.startEdit()}
+    onClose={closeAnnotation}
   >
     {#snippet bodyView(annotation)}
       <div class="mt-3 text-xs leading-relaxed text-foreground">

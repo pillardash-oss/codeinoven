@@ -5,11 +5,13 @@ import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
-import type { ThreadSettings } from '../../../src/lib/types'
+import type { AgentPart, ThreadSettings } from '../../../src/lib/types'
 import {
   AntigravityDriver,
-  mapAntigravityUsage
+  mapAntigravityUsage,
+  setAntigravityBrainRootForTests
 } from '../../../src/main/drivers/antigravity-driver'
+import { parseBrainTraceLine } from '../../../src/main/drivers/antigravity-brain-trace'
 
 const spawnMock = vi.hoisted(() => vi.fn())
 vi.mock('child_process', () => ({ spawn: spawnMock }))
@@ -79,7 +81,7 @@ describe.skipIf(process.platform === 'win32')('AntigravityDriver', () => {
         providerId: 'google',
         modelId: 'gemini-3.6-flash',
         thinkingLevel: 'high',
-        permissionLevel: 'auto_review',
+        permissionLevel: 'auto_review'
       }
     })
 
@@ -116,7 +118,7 @@ describe.skipIf(process.platform === 'win32')('AntigravityDriver', () => {
         providerId: 'google',
         modelId: 'gemini-3.1-pro',
         thinkingLevel: 'medium',
-        permissionLevel: 'auto_review',
+        permissionLevel: 'auto_review'
       }
     })
 
@@ -154,7 +156,7 @@ describe.skipIf(process.platform === 'win32')('AntigravityDriver', () => {
         providerId: 'google',
         modelId: 'claude-sonnet-4-6',
         thinkingLevel: 'high',
-        permissionLevel: 'auto_review',
+        permissionLevel: 'auto_review'
       }
     })
 
@@ -184,7 +186,7 @@ describe.skipIf(process.platform === 'win32')('AntigravityDriver', () => {
       providerId: 'google',
       modelId: 'gemini-3.6-flash',
       thinkingLevel: 'medium',
-      permissionLevel: 'auto_review',
+      permissionLevel: 'auto_review'
     }
     const first = await driver.createSession('/project', 'First')
     await driver.sendPrompt('/project', {
@@ -202,6 +204,166 @@ describe.skipIf(process.platform === 'win32')('AntigravityDriver', () => {
     })
 
     expect(probeCount).toBe(1)
+  })
+
+  it('backfills thinking text from the brain transcript onto the step timeline', async () => {
+    vi.useFakeTimers()
+    try {
+      const brainRoot = await mkdtemp(join(tmpdir(), 'codeinoven-antigravity-brain-'))
+      roots.push(brainRoot)
+      setAntigravityBrainRootForTests(brainRoot)
+      const conversationId = 'conv-123'
+      let turnChild: FakeChild | undefined
+      spawnMock.mockImplementation((_command: string, args: string[]) => {
+        const child = new FakeChild()
+        if (args.includes('-p')) turnChild = child
+        if (args.includes('models')) {
+          queueMicrotask(() => {
+            child.stdout.emit('data', Buffer.from('claude-sonnet-4-6\n'))
+            child.emit('exit', 0, null)
+          })
+        }
+        return child as unknown as ChildProcess
+      })
+
+      const driver = new AntigravityDriver(await storage())
+      const sessionId = await driver.createSession('/project', 'Antigravity thread')
+      const updatedParts: Extract<AgentPart, { type: 'reasoning' }>[] = []
+      driver.onEvent((event) => {
+        if (event.type === 'message.part.updated' && event.part.type === 'reasoning') {
+          updatedParts.push(event.part)
+        }
+      })
+      const sending = driver
+        .sendPrompt('/project', {
+          sessionId,
+          text: 'Read the project',
+          attachments: [],
+          settings: {
+            harnessId: 'antigravity',
+            providerId: 'google',
+            modelId: 'claude-sonnet-4-6',
+            thinkingLevel: 'high',
+            permissionLevel: 'auto_review'
+          }
+        })
+        .then(() => 'done')
+        .catch(() => 'failed')
+      await vi.waitFor(() => {
+        if (!turnChild) throw new Error('turn child not spawned')
+      })
+      const turn = turnChild as FakeChild
+
+      // The stream opens a fresh conversation: its id arrives on the records.
+      turn.stdout.emit(
+        'data',
+        Buffer.from(JSON.stringify({ event: 'init', conversation_id: conversationId }) + '\n')
+      )
+      turn.stdout.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            event: 'step_update',
+            conversation_id: conversationId,
+            step_update: { step_type: 'tool', step_index: 1, state: 'DONE', duration_seconds: 2 }
+          }) + '\n'
+        )
+      )
+
+      // agy persists the brain transcript while the turn runs. Append a
+      // thinking entry for step 1 after the tool step streamed.
+      const logDir = join(brainRoot, conversationId, '.system_generated', 'logs')
+      const { mkdir, writeFile } = await import('fs/promises')
+      await mkdir(logDir, { recursive: true })
+      await writeFile(
+        join(logDir, 'transcript.jsonl'),
+        JSON.stringify({
+          type: 'PLANNER_RESPONSE',
+          step_index: 1,
+          thinking: 'Inspect the project layout first.'
+        }) + '\n'
+      )
+
+      // The poller (800ms interval) picks the entry up while the turn is
+      // still running and upserts the reasoning part. The poll's awaited fs
+      // work settles outside timer advancement, so wait on the condition.
+      await vi.waitFor(
+        () => {
+          expect(
+            updatedParts.some((part) => part.text === 'Inspect the project layout first.')
+          ).toBe(true)
+        },
+        { timeout: 5000 }
+      )
+      // The brain-backed card joins the streamed step timeline by step index.
+      expect(updatedParts[0]?.id.endsWith(':thinking:1')).toBe(true)
+
+      // Finish the turn.
+      turn.stdout.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            event: 'result',
+            conversation_id: conversationId,
+            result: { status: 'SUCCESS', response: 'Done.' }
+          }) + '\n'
+        )
+      )
+      turn.emit('exit', 0, null)
+      expect(await sending).toBe('done')
+    } finally {
+      setAntigravityBrainRootForTests(undefined)
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('Antigravity brain trace parser', () => {
+  it('extracts step-indexed thinking from PLANNER_RESPONSE lines', () => {
+    const line = JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      step_index: 3,
+      thinking: '**Reading the schema**\n\nThe plan requires care.'
+    })
+    expect(parseBrainTraceLine(line)).toEqual({
+      stepIndex: 3,
+      thinking: '**Reading the schema**\n\nThe plan requires care.'
+    })
+  })
+
+  it('skips entries without thinking text or a usable step index', () => {
+    expect(
+      parseBrainTraceLine(JSON.stringify({ type: 'GENERIC', step_index: 1, content: 'x' }))
+    ).toBeNull()
+    expect(
+      parseBrainTraceLine(JSON.stringify({ type: 'PLANNER_RESPONSE', thinking: 'no step' }))
+    ).toBeNull()
+    expect(
+      parseBrainTraceLine(
+        JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: -1, thinking: 'neg' })
+      )
+    ).toBeNull()
+    expect(
+      parseBrainTraceLine(
+        JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 1.5, thinking: 'frac' })
+      )
+    ).toBeNull()
+  })
+
+  it('skips noise without throwing', () => {
+    expect(parseBrainTraceLine('')).toBeNull()
+    expect(parseBrainTraceLine('not json')).toBeNull()
+    expect(parseBrainTraceLine('{broken')).toBeNull()
+    expect(parseBrainTraceLine('null')).toBeNull()
+    expect(parseBrainTraceLine('[]')).toBeNull()
+  })
+
+  it('keeps a partial trailing line out of parsed entries', () => {
+    // A tailer splits full lines and keeps the incomplete last one in its
+    // pending buffer; the parser itself must also refuse truncated JSON.
+    expect(
+      parseBrainTraceLine('{"type":"PLANNER_RESPONSE","step_index":2,"thinking":"cut')
+    ).toBeNull()
   })
 })
 

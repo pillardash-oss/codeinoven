@@ -1,13 +1,13 @@
 <script lang="ts">
   import { Check, ChevronDown, MessageSquarePlus } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { tick } from 'svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioShell from './StudioShell.svelte'
   import type { StudioShellSection } from './StudioShell.svelte'
   import StudioSidebarFileActions from './StudioSidebarFileActions.svelte'
   import StudioVersionBar from './StudioVersionBar.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
+  import { StudioAnnotationOverlay } from './studio-annotation-overlay.svelte'
   import type { PrdAnnotation, PrdContent, PrdDocument, PrdSectionId } from '$shared/types'
 
   type PrdNavigationSectionId = PrdSectionId | 'summary'
@@ -75,10 +75,11 @@
   let selectedSection = $state<PrdNavigationSectionId>('summary')
   let sectionsOpen = $state(false)
   let documentScroller = $state<HTMLElement | null>(null)
-  let editingAnnotation = $state<PrdAnnotation | null>(null)
-  let editingAnnotationBody = $state('')
-  let editingAnnotationPosition = $state<{ x: number; y: number } | null>(null)
-  let annotationEditMode = $state(false)
+
+  const overlay = new StudioAnnotationOverlay<PrdAnnotation>('prd-annotation-anchor')
+  const editingAnnotation = $derived(overlay.editing)
+  const annotationEditMode = $derived(overlay.editMode)
+  const editingAnnotationPosition = $derived(overlay.editingPosition)
 
   const canEdit = $derived(prd.status === 'draft')
 
@@ -129,45 +130,33 @@
     return prd.annotations.filter((annotation) => annotation.section === section)
   }
 
+  function sectionElementFor(annotation: PrdAnnotation): HTMLElement | null {
+    return document.querySelector<HTMLElement>(
+      `[data-prd-section="${CSS.escape(annotation.section)}"]`
+    )
+  }
+
   async function openAnnotation(annotation: PrdAnnotation): Promise<void> {
     selectedSection = annotation.section
-    editingAnnotation = annotation
-    editingAnnotationBody = annotation.body
-    await tick()
-    const sectionElement = document.querySelector<HTMLElement>(
-      `[data-prd-section="${annotation.section}"]`
-    )
-    editingAnnotationPosition = sectionElement
-      ? {
-          x: Math.max(
-            12,
-            Math.min(sectionElement.getBoundingClientRect().right + 8, window.innerWidth - 332)
-          ),
-          y: Math.max(
-            12,
-            Math.min(sectionElement.getBoundingClientRect().top, window.innerHeight - 288)
-          )
-        }
-      : { x: 12, y: 12 }
+    await overlay.openAnnotation(annotation, {
+      scroller: documentScroller,
+      sectionElement: sectionElementFor(annotation),
+      markerAttribute: 'data-prd-annotation-marker',
+      annotations: prd.annotations,
+      sectionFor: sectionElementFor
+    })
   }
 
   function closeAnnotation(): void {
-    editingAnnotation = null
-    editingAnnotationBody = ''
-    editingAnnotationPosition = null
-    annotationEditMode = false
+    overlay.closeEditing()
   }
 
   async function saveAnnotationEdit(): Promise<void> {
-    const annotation = editingAnnotation
-    const body = editingAnnotationBody.trim()
+    const annotation = overlay.editing
+    const body = overlay.editingBody.trim()
     if (!annotation || !body) return
     await onUpdateAnnotation(annotation.id, body)
     closeAnnotation()
-  }
-
-  function editAnnotation(): void {
-    annotationEditMode = true
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
@@ -412,14 +401,14 @@
     dialogLabel="PRD comment"
     speechTargetId={`prd-annotation-edit-${editingAnnotation.id}`}
     scope={{ kind: 'project', projectId: prd.projectId, threadId: prd.threadId }}
-    bind:body={editingAnnotationBody}
+    bind:body={overlay.editingBody}
     onResolve={() => {
       if (editingAnnotation) void onResolveAnnotation(editingAnnotation.id)
       closeAnnotation()
     }}
     onSave={saveAnnotationEdit}
-    onCancelEdit={() => (annotationEditMode = false)}
-    onEditClick={editAnnotation}
+    onCancelEdit={() => overlay.cancelEdit()}
+    onEditClick={() => overlay.startEdit()}
     onClose={closeAnnotation}
   />
 {/if}

@@ -21,7 +21,9 @@
     ThemePreference
   } from '$shared/types'
   import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
-  import { APP_NAME, APP_SLUG, ORG_SLUG } from '$shared/brand'
+  import { APP_NAME, APP_SLUG, ORG_SLUG, WEBSITE_URL, GITHUB_URL, X_URL } from '$shared/brand'
+  import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
   import {
     AlertCircle,
     AlertTriangle,
@@ -889,7 +891,9 @@
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-sm font-medium">Question timeout</p>
-                  <p class="text-xs leading-relaxed text-dimmed">Pick the recommended answer after this wait</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Pick the recommended answer after this wait
+                  </p>
                 </div>
                 <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
                   <input
@@ -960,9 +964,213 @@
       <div class="p-6 pb-24">
         <div class="mb-6">
           <h1 class="text-xl font-bold tracking-tight">About</h1>
-          <p class="mt-0.5 text-sm text-muted">
-            Build, product information, data storage, and diagnostics.
+        </div>
+
+        <!-- Identity: icon, version, copyright -->
+        <div class="flex flex-col items-center gap-1.5 pb-2 pt-4 text-center">
+          <VendorIcon name="CodeInOven" size={72} />
+          <p
+            class="mt-3 text-[0.9375rem] font-semibold text-foreground"
+            title="Installed app version"
+          >
+            {APP_NAME} v{displayVersion}
           </p>
+          <p class="text-[0.8125rem] text-dimmed">
+            © 2026 Pillardash Solutions Limited. All rights reserved.
+          </p>
+
+          <!-- Official links -->
+          <div class="mt-5 flex items-center gap-2">
+            <button
+              type="button"
+              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
+              title="Open the CodeInOven website"
+              onclick={() => void openInBrowser(WEBSITE_URL)}
+            >
+              <VendorIcon name="CodeInOven" size={15} />
+              Website
+            </button>
+            <button
+              type="button"
+              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
+              title="Open the GitHub repository"
+              onclick={() => void openInBrowser(GITHUB_URL)}
+            >
+              <VendorIcon name="GitHub" size={15} />
+              GitHub
+            </button>
+            <button
+              type="button"
+              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
+              title="Open the X (Twitter) page"
+              onclick={() => void openInBrowser(X_URL)}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+                class="h-[0.9375rem] w-[0.9375rem]"
+              >
+                <path
+                  d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231 5.451-6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117l11.966 15.644Z"
+                />
+              </svg>
+              X
+            </button>
+          </div>
+        </div>
+
+        <div id="settings-block-about-updates" class="mt-4 rounded-xl border bg-surface p-4">
+          <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Updates</h3>
+
+          <!-- Update status -->
+          {#if updaterState.status.state === 'checking'}
+            <div class="mb-3 flex items-center gap-2 text-xs text-muted">
+              <Loader2 size={13} class="animate-spin" />
+              Checking for updates…
+            </div>
+          {:else if updaterState.status.state === 'available'}
+            <div class="mb-3 flex items-center gap-2 text-xs text-primary">
+              <Download size={13} />
+              <span>
+                Update <strong>{updaterState.status.availableVersion}</strong> available
+              </span>
+            </div>
+          {:else if updaterState.status.state === 'downloading'}
+            <div class="mb-3">
+              <DownloadProgress
+                percent={updaterState.status.downloadProgress}
+                label="Downloading update…"
+                detail={updaterState.status.downloadProgress !== undefined
+                  ? `${updaterState.status.downloadProgress}%`
+                  : undefined}
+                ariaLabel="Update download progress"
+              />
+            </div>
+          {:else if updaterState.status.state === 'downloaded'}
+            <div class="mb-3 flex items-center gap-2 text-xs text-primary">
+              <CheckCircle2 size={13} />
+              <span>
+                Update <strong>{updaterState.status.availableVersion}</strong> ready to install
+              </span>
+            </div>
+          {:else if updaterState.status.state === 'waiting'}
+            <div class="mb-3 flex items-center gap-2 text-xs text-accent">
+              <Clock size={13} />
+              <span>
+                Waiting for {updaterState.waitingForThreads} active thread{updaterState.waitingForThreads !==
+                1
+                  ? 's'
+                  : ''} to finish before installing…
+              </span>
+            </div>
+          {:else if updaterState.status.state === 'error'}
+            <div class="mb-3 flex items-center gap-2 text-xs text-danger">
+              <AlertCircle size={13} />
+              <span>{updaterState.status.errorMessage ?? 'Update check failed'}</span>
+            </div>
+          {:else if updaterState.status.state === 'idle' && updaterState.status.canAutoUpdate}
+            <div class="mb-3 flex items-center gap-2 text-xs text-dimmed">
+              <CheckCircle2 size={13} />
+              <span>{APP_NAME} is up to date</span>
+            </div>
+          {/if}
+
+          <!-- Vertical toggle cards + check-for-updates button -->
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <!-- Nightly builds enrollment -->
+            <div class="flex flex-col items-start gap-2 rounded-lg bg-elevated p-3">
+              <p class="text-sm font-medium">Nightly builds</p>
+              <p class="text-xs leading-relaxed text-dimmed">
+                Over-the-air updates from the nightly channel
+              </p>
+              <div class="mt-auto pt-1">
+                <Switch
+                  checked={isNightlyChannel}
+                  onchange={onNightlyToggleRequested}
+                  aria-label="Toggle nightly builds"
+                  disabled={!settingsReady || channelBusy}
+                  title="Opt into nightly prerelease builds"
+                />
+              </div>
+            </div>
+
+            <!-- Auto-download toggle -->
+            <div class="flex flex-col items-start gap-2 rounded-lg bg-elevated p-3">
+              <p class="text-sm font-medium">Auto-download</p>
+              <p class="text-xs leading-relaxed text-dimmed">
+                Automatically download updates when available
+              </p>
+              <div class="mt-auto pt-1">
+                <Switch
+                  checked={config.autoDownloadUpdates}
+                  onchange={() =>
+                    void updateConfig({ autoDownloadUpdates: !config.autoDownloadUpdates })}
+                  aria-label="Toggle auto-download"
+                  disabled={!settingsReady}
+                />
+              </div>
+            </div>
+
+            <!-- Auto-install toggle -->
+            <div class="flex flex-col items-start gap-2 rounded-lg bg-elevated p-3">
+              <p class="text-sm font-medium">Auto-install</p>
+              <p class="text-xs leading-relaxed text-dimmed">
+                Automatically restart and install after download
+              </p>
+              <div class="mt-auto pt-1">
+                <Switch
+                  checked={config.autoInstallUpdates}
+                  onchange={() =>
+                    void updateConfig({ autoInstallUpdates: !config.autoInstallUpdates })}
+                  aria-label="Toggle auto-install"
+                  disabled={!settingsReady}
+                />
+              </div>
+            </div>
+
+            <!-- Check for updates -->
+            <div class="flex flex-col items-start gap-2 rounded-lg bg-elevated p-3">
+              <p class="text-sm font-medium">Check for updates</p>
+              <p class="text-xs leading-relaxed text-dimmed">Look for a new release now</p>
+              <div class="mt-auto flex flex-wrap items-center gap-2 pt-1">
+                <button
+                  class="flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                  disabled={updaterState.status.state === 'checking' || !settingsReady}
+                  title="Check for updates now"
+                  onclick={() => void updaterState.checkForUpdates()}
+                >
+                  <RefreshCw
+                    size={13}
+                    class={updaterState.status.state === 'checking' ? 'animate-spin' : ''}
+                  />
+                  Check
+                </button>
+
+                {#if updaterState.status.state === 'available'}
+                  <button
+                    class="flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                    title="Download update"
+                    onclick={() => void updaterState.downloadUpdate()}
+                  >
+                    <Download size={13} />
+                    Download
+                  </button>
+                {/if}
+
+                {#if updaterState.status.state === 'downloaded'}
+                  <button
+                    class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+                    title="Restart and install update"
+                    onclick={() => void updaterState.installUpdate()}
+                  >
+                    <RefreshCw size={13} />
+                    Restart &amp; install
+                  </button>
+                {/if}
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Storage -->
@@ -973,7 +1181,9 @@
           >
             <div>
               <p class="text-sm font-medium">Data directory</p>
-              <p class="text-xs leading-relaxed text-dimmed">All projects, threads, and history stored here</p>
+              <p class="text-xs leading-relaxed text-dimmed">
+                All projects, threads, and history stored here
+              </p>
             </div>
             <div class="flex flex-wrap items-center gap-2 sm:justify-end">
               <span class="rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted">
@@ -1021,159 +1231,6 @@
               Export
             </button>
           </div>
-        </div>
-
-        <!-- Updates -->
-        <div id="settings-block-about-updates" class="mt-4 rounded-xl border bg-surface p-4">
-          <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Updates</h3>
-
-          <!-- Update status -->
-          {#if updaterState.status.state === 'checking'}
-            <div class="mb-3 flex items-center gap-2 text-xs text-muted">
-              <Loader2 size={13} class="animate-spin" />
-              Checking for updates…
-            </div>
-          {:else if updaterState.status.state === 'available'}
-            <div class="mb-3 flex items-center gap-2 text-xs text-primary">
-              <Download size={13} />
-              <span>
-                Update <strong>{updaterState.status.availableVersion}</strong> available
-              </span>
-            </div>
-          {:else if updaterState.status.state === 'downloading'}
-            <div class="mb-3">
-              <DownloadProgress
-                percent={updaterState.status.downloadProgress}
-                label="Downloading update…"
-                detail={updaterState.status.downloadProgress !== undefined ? `${updaterState.status.downloadProgress}%` : undefined}
-                ariaLabel="Update download progress"
-              />
-            </div>
-          {:else if updaterState.status.state === 'downloaded'}
-            <div class="mb-3 flex items-center gap-2 text-xs text-primary">
-              <CheckCircle2 size={13} />
-              <span>
-                Update <strong>{updaterState.status.availableVersion}</strong> ready to install
-              </span>
-            </div>
-          {:else if updaterState.status.state === 'waiting'}
-            <div class="mb-3 flex items-center gap-2 text-xs text-accent">
-              <Clock size={13} />
-              <span>
-                Waiting for {updaterState.waitingForThreads} active thread{updaterState.waitingForThreads !==
-                1
-                  ? 's'
-                  : ''} to finish before installing…
-              </span>
-            </div>
-          {:else if updaterState.status.state === 'error'}
-            <div class="mb-3 flex items-center gap-2 text-xs text-danger">
-              <AlertCircle size={13} />
-              <span>{updaterState.status.errorMessage ?? 'Update check failed'}</span>
-            </div>
-          {:else if updaterState.status.state === 'idle' && updaterState.status.canAutoUpdate}
-            <div class="mb-3 flex items-center gap-2 text-xs text-dimmed">
-              <CheckCircle2 size={13} />
-              <span>{APP_NAME} is up to date</span>
-            </div>
-          {/if}
-
-          <div class="space-y-3">
-            <!-- Nightly builds enrollment -->
-            <div class="flex items-center justify-between gap-4">
-              <div>
-                <p class="text-sm font-medium">Nightly builds</p>
-                <p class="text-xs leading-relaxed text-dimmed">
-                  Receive over-the-air updates from the nightly channel
-                </p>
-              </div>
-              <Switch
-                checked={isNightlyChannel}
-                onchange={onNightlyToggleRequested}
-                aria-label="Toggle nightly builds"
-                disabled={!settingsReady || channelBusy}
-                title="Opt into nightly prerelease builds"
-              />
-            </div>
-
-            <!-- Auto-download toggle -->
-            <div class="flex items-center justify-between">
-              <div>
-                <p class="text-sm font-medium">Auto-download</p>
-                <p class="text-xs leading-relaxed text-dimmed">Automatically download updates when available</p>
-              </div>
-              <Switch
-                checked={config.autoDownloadUpdates}
-                onchange={() =>
-                  void updateConfig({ autoDownloadUpdates: !config.autoDownloadUpdates })}
-                aria-label="Toggle auto-download"
-                disabled={!settingsReady}
-              />
-            </div>
-
-            <!-- Auto-install toggle -->
-            <div class="flex items-center justify-between">
-              <div>
-                <p class="text-sm font-medium">Auto-install</p>
-                <p class="text-xs leading-relaxed text-dimmed">Automatically restart and install after download</p>
-              </div>
-              <Switch
-                checked={config.autoInstallUpdates}
-                onchange={() =>
-                  void updateConfig({ autoInstallUpdates: !config.autoInstallUpdates })}
-                aria-label="Toggle auto-install"
-                disabled={!settingsReady}
-              />
-            </div>
-
-            <!-- Action buttons -->
-            <div class="flex items-center gap-2 pt-1">
-              <button
-                class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-                disabled={updaterState.status.state === 'checking' || !settingsReady}
-                title="Check for updates now"
-                onclick={() => void updaterState.checkForUpdates()}
-              >
-                <RefreshCw
-                  size={13}
-                  class={updaterState.status.state === 'checking' ? 'animate-spin' : ''}
-                />
-                Check for updates
-              </button>
-
-              {#if updaterState.status.state === 'available'}
-                <button
-                  class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-                  title="Download update"
-                  onclick={() => void updaterState.downloadUpdate()}
-                >
-                  <Download size={13} />
-                  Download
-                </button>
-              {/if}
-
-              {#if updaterState.status.state === 'downloaded'}
-                <button
-                  class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-                  title="Restart and install update"
-                  onclick={() => void updaterState.installUpdate()}
-                >
-                  <RefreshCw size={13} />
-                  Restart & install
-                </button>
-              {/if}
-            </div>
-          </div>
-        </div>
-
-        <!-- Version & copyright -->
-        <div class="mt-6 flex flex-col items-center gap-1 text-center">
-          <p class="text-xs text-muted" title="Installed app version">
-            {APP_NAME} v{displayVersion}
-          </p>
-          <p class="text-[0.6875rem] text-dimmed">
-            © 2026 Pillardash Solutions Limited. All rights reserved.
-          </p>
         </div>
       </div>
     {/if}

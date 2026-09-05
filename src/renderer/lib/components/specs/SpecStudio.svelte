@@ -31,13 +31,13 @@
   import StudioVersionBar from './StudioVersionBar.svelte'
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
+  import { offsetsForQuote, offsetsForRange } from './studio-annotation-anchors'
   import {
-    offsetsForQuote,
-    offsetsForRange,
-    rangeForAnnotation,
-    waitForScrollSettle
-  } from './studio-annotation-anchors'
+    StudioAnnotationOverlay,
+    clampPendingPosition
+  } from './studio-annotation-overlay.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
+  import type { PendingOverlayAnchor } from './studio-annotation-overlay.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import type {
@@ -64,11 +64,9 @@
     endOffset: number
   }
 
-  interface PendingAnnotation extends AnnotationAnchor {
-    section: SpecSectionId
-    x: number
-    y: number
-    sectionLevel: boolean
+  interface PendingAnnotation extends PendingOverlayAnchor {
+    startLine: number
+    endLine: number
     selectionActions: boolean
   }
 
@@ -269,9 +267,13 @@
   let pendingAction = $state<SpecDecisionAction | null>(null)
   let additionalNotes = $state('')
   let annotationBody = $state('')
-  let pendingAnnotation = $state<PendingAnnotation | null>(null)
-  let editingAnnotation = $state<SpecAnnotation | null>(null)
-  let editingAnnotationBody = $state('')
+  const overlay = new StudioAnnotationOverlay<SpecAnnotation>('spec-annotation-anchor')
+  const pendingAnnotation = $derived(overlay.pending as PendingAnnotation | null)
+  const editingAnnotation = $derived(overlay.editing)
+  const editingAnnotationBody = $derived(overlay.editingBody)
+  const annotationEditMode = $derived(overlay.editMode)
+  const editingAnnotationPosition = $derived(overlay.editingPosition)
+  const annotationMarkers = $derived(overlay.markers)
   let decisionNotesEditor = $state<RichMarkdownEditor>()
   const pendingSpeechTargetId = `spec-annotation-${crypto.randomUUID()}`
   const decisionSpeechTargetId = `spec-decision-${crypto.randomUUID()}`
@@ -284,8 +286,6 @@
   function decisionSpeechTarget() {
     return decisionNotesEditor?.speechEditorTarget(decisionSpeechTargetId) ?? null
   }
-  let editingAnnotationPosition = $state<{ x: number; y: number } | null>(null)
-  let annotationMarkers = $state<Array<{ annotation: SpecAnnotation; x: number; y: number }>>([])
   let documentScroller = $state<HTMLElement | null>(null)
   let shellElement = $state<HTMLElement | null>(null)
   let contextPickerType = $state<Exclude<CapturableSpecContextType, 'attachment'> | null>(null)
@@ -296,7 +296,6 @@
   let contextSearchRequest = 0
   let contextSearchTimer: ReturnType<typeof setTimeout> | undefined
   let contextDropActive = $state(false)
-  const SPEC_ANNOTATION_HIGHLIGHT = 'spec-annotation-anchor'
 
   const sortedVersions = $derived(
     [...versions]
@@ -358,8 +357,8 @@
       history.markSaved($state.snapshot(spec))
       draft = $state.snapshot(spec)
       dirty = false
-      pendingAnnotation = null
-      editingAnnotation = null
+      overlay.closePending()
+      overlay.closeEditing()
       annotationBody = ''
       if (selectedSection === 'additional_info' && spec.content.additionalInfo === undefined) {
         selectedSection = 'documentation'
@@ -387,7 +386,7 @@
     draft = $state.snapshot(previous)
     dirty = history.dirty
     closePendingAnnotation()
-    editingAnnotation = null
+    overlay.closeEditing()
     closeContextPicker()
     void refreshAnnotationMarkers()
   }
@@ -398,7 +397,7 @@
     draft = $state.snapshot(next)
     dirty = history.dirty
     closePendingAnnotation()
-    editingAnnotation = null
+    overlay.closeEditing()
     closeContextPicker()
     void refreshAnnotationMarkers()
   }
@@ -508,7 +507,7 @@
 
   onDestroy(() => {
     clearTimeout(contextSearchTimer)
-    CSS.highlights?.delete(SPEC_ANNOTATION_HIGHLIGHT)
+    overlay.clearHighlight()
   })
 
   function setString(
@@ -692,16 +691,16 @@
       selectionOccurrence(sectionElement, range, quote)
     )
     selectedSection = sectionId
-    pendingAnnotation = {
+    const anchor: PendingAnnotation = {
       section: sectionId,
       quote,
       ...lines,
       ...offsetsForRange(sectionElement, range),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      ...clampPendingPosition(rect),
       sectionLevel: false,
       selectionActions: true
     }
+    overlay.beginPending(anchor)
     annotationBody = ''
   }
 
@@ -716,16 +715,16 @@
     const quote = sectionLabel(sectionId)
     const sectionElement = document.querySelector<HTMLElement>(`[data-spec-section="${sectionId}"]`)
     selectedSection = sectionId
-    pendingAnnotation = {
+    const anchor: PendingAnnotation = {
       section: sectionId,
       quote,
       ...markdownLineForQuote(quote, sectionId),
       ...offsetsForQuote(sectionElement, quote),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      ...clampPendingPosition(rect),
       sectionLevel: true,
       selectionActions: false
     }
+    overlay.beginPending(anchor)
     annotationBody = ''
   }
 
@@ -739,16 +738,16 @@
         : { left: event.clientX, bottom: event.clientY }
     selectedSection = sectionId
     const sectionElement = document.querySelector<HTMLElement>(`[data-spec-section="${sectionId}"]`)
-    pendingAnnotation = {
+    const anchor: PendingAnnotation = {
       section: sectionId,
       quote,
       ...markdownLineForQuote(quote, sectionId),
       ...offsetsForQuote(sectionElement, quote),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      ...clampPendingPosition(rect),
       sectionLevel: false,
       selectionActions: false
     }
+    overlay.beginPending(anchor)
     annotationBody = ''
   }
 
@@ -763,16 +762,16 @@
     const sectionElement = document.querySelector<HTMLElement>(
       `[data-spec-section="${issue.section}"]`
     )
-    pendingAnnotation = {
+    const anchor: PendingAnnotation = {
       section: issue.section,
       quote,
       ...markdownLineForQuote(quote, issue.section),
       ...offsetsForQuote(sectionElement, quote),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      ...clampPendingPosition(rect),
       sectionLevel: true,
       selectionActions: false
     }
+    overlay.beginPending(anchor)
     annotationBody = `Please address this validation gap: ${issue.message}`
   }
 
@@ -786,10 +785,10 @@
     const body = annotationBody.trim()
     if (!anchor || !body) return
     if (dirty && !(await saveDraft())) return
-    const updated = await onAddAnnotation(anchor.section, body, {
+    const updated = await onAddAnnotation(anchor.section as SpecSectionId, body, {
       quote: anchor.quote,
-      startLine: anchor.startLine,
-      endLine: anchor.endLine,
+      startLine: anchor.startLine ?? 0,
+      endLine: anchor.endLine ?? 0,
       startOffset: anchor.startOffset,
       endOffset: anchor.endOffset
     })
@@ -815,74 +814,34 @@
     dirty = false
   }
 
+  function sectionElementFor(annotation: SpecAnnotation): HTMLElement | null {
+    return document.querySelector<HTMLElement>(
+      `[data-spec-section="${CSS.escape(annotation.section)}"]`
+    )
+  }
+
   async function refreshAnnotationMarkers(): Promise<void> {
-    await tick()
-    const scroller = documentScroller
-    if (!scroller) return
-    const scrollerRect = scroller.getBoundingClientRect()
-    annotationMarkers = draft.annotations.flatMap((annotation) => {
-      if (annotation.status !== 'open') return []
-      const section = document.querySelector<HTMLElement>(
-        `[data-spec-section="${annotation.section}"]`
-      )
-      const range = section ? rangeForAnnotation(section, annotation) : null
-      const rect = range?.getBoundingClientRect() ?? section?.getBoundingClientRect()
-      if (!rect) return []
-      return [
-        {
-          annotation,
-          x: Math.max(4, rect.right - scrollerRect.left + scroller.scrollLeft + 6),
-          y: Math.max(4, rect.top - scrollerRect.top + scroller.scrollTop)
-        }
-      ]
+    await overlay.refreshMarkers(draft.annotations, {
+      scroller: documentScroller,
+      sectionFor: sectionElementFor
     })
   }
 
   async function openAnnotation(annotation: SpecAnnotation): Promise<void> {
-    window.getSelection()?.removeAllRanges()
-    CSS.highlights?.delete(SPEC_ANNOTATION_HIGHLIGHT)
-    editingAnnotation = null
-    editingAnnotationPosition = null
     selectedSection = annotation.section
-    pendingAnnotation = null
-    await tick()
-    const section = document.querySelector<HTMLElement>(
-      `[data-spec-section="${annotation.section}"]`
-    )
-    const range = section ? rangeForAnnotation(section, annotation) : null
-    const initialRect = range?.getBoundingClientRect() ?? section?.getBoundingClientRect()
-    if (documentScroller && initialRect) {
-      const scrollerRect = documentScroller.getBoundingClientRect()
-      const top =
-        documentScroller.scrollTop +
-        initialRect.top -
-        scrollerRect.top -
-        (documentScroller.clientHeight - initialRect.height) / 2
-      documentScroller.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
-      await waitForScrollSettle(documentScroller)
-    }
-    await refreshAnnotationMarkers()
-    await tick()
-    const marker = document.querySelector<HTMLElement>(
-      `[data-spec-annotation-marker="${CSS.escape(annotation.id)}"]`
-    )
-    const rect = marker?.getBoundingClientRect() ?? range?.getBoundingClientRect() ?? initialRect
-    if (range && typeof Highlight !== 'undefined' && CSS.highlights) {
-      CSS.highlights.set(SPEC_ANNOTATION_HIGHLIGHT, new Highlight(range))
-    }
-    editingAnnotation = annotation
-    editingAnnotationBody = annotation.body
-    editingAnnotationPosition = rect
-      ? {
-          x: Math.max(12, Math.min(rect.right + 8, window.innerWidth - 332)),
-          y: Math.max(12, Math.min(rect.top, window.innerHeight - 288))
-        }
-      : { x: 12, y: 12 }
+    await overlay.openAnnotation(annotation, {
+      scroller: documentScroller,
+      sectionElement: sectionElementFor(annotation),
+      markerAttribute: 'data-spec-annotation-marker',
+      annotations: draft.annotations,
+      sectionFor: sectionElementFor
+    })
+    overlay.editMode = canDecide
   }
 
   function closePendingAnnotation(): void {
     window.getSelection()?.removeAllRanges()
-    pendingAnnotation = null
+    overlay.closePending()
     annotationBody = ''
   }
 
@@ -905,22 +864,19 @@
     applySpec(updated)
     const saved = updated.annotations.find((candidate) => candidate.id === annotation.id)
     if (saved) {
-      editingAnnotation = saved
-      editingAnnotationBody = saved.body
+      overlay.editing = saved
+      overlay.editingBody = saved.body
     }
   }
 
   function closeAnnotation(): void {
-    CSS.highlights?.delete(SPEC_ANNOTATION_HIGHLIGHT)
-    editingAnnotation = null
-    editingAnnotationBody = ''
-    editingAnnotationPosition = null
+    overlay.closeEditing()
   }
 
   async function resolveAnnotation(annotationId: string): Promise<void> {
     const updated = await onResolveAnnotation(annotationId)
     if (updated) applySpec(updated)
-    closeAnnotation()
+    overlay.closeEditing()
   }
 
   async function submitAction(action: SpecDecisionAction, notes: string): Promise<void> {
@@ -1891,16 +1847,18 @@
     position={editingAnnotationPosition}
     annotation={editingAnnotation}
     canEdit={canDecide}
-    editorMode={canDecide}
+    editorMode={annotationEditMode}
     headerLabel="Anchored comment"
     dialogLabel="Anchored annotation"
     speechTargetId={`spec-annotation-edit-${editingAnnotation.id}`}
     scope={speechScope}
-    bind:body={editingAnnotationBody}
+    bind:body={overlay.editingBody}
     onResolve={() => {
-      if (editingAnnotation) void resolveAnnotation(editingAnnotation.id)
+      if (overlay.editing) void resolveAnnotation(overlay.editing.id)
     }}
     onSave={saveAnnotationEdit}
+    onCancelEdit={() => overlay.cancelEdit()}
+    onEditClick={() => overlay.startEdit()}
     onClose={closeAnnotation}
   >
     {#snippet bodyView(annotation: { body: string })}

@@ -44,6 +44,7 @@
     StickyNote
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
+  import WelcomeStart from './WelcomeStart.svelte'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
   import ProjectIdentity from '../shared/ProjectIdentity.svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
@@ -131,6 +132,7 @@
   import { threadSortState } from '$lib/stores/thread-sort.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
   import { scopeState, STAGE_LABELS, STAGE_COLORS, STAGE_ORDER } from '$lib/stores/scope.svelte'
   import {
     coordinatorHasActiveDelegates,
@@ -149,7 +151,8 @@
     PromptAttachment,
     ScopeBucket,
     Thread,
-    ThreadSearchResult
+    ThreadSearchResult,
+    AgentHarnessUsage
   } from '$shared/types'
   import type {
     BrowserDownload,
@@ -191,6 +194,13 @@
   let hasMoreHistory = $state(true)
   /** Remounts the empty-state chats composer to restore a failed first send. */
   let chatsComposerRestoreKey = $state(0)
+  let chatsComposer: ChatComposer | undefined = $state(undefined)
+
+  const chatSuggestedPrompts = [
+    'Research a question using my device',
+    'Run a task for me on this computer',
+    'Brainstorm ideas with me'
+  ]
 
   // ─── Sidebar focus-follow ────────────────────────────────────────────────
   // While a thread is selected, the sidebar keeps its row (and thus its
@@ -407,6 +417,29 @@
   /** Effective chat settings — the chat's own model when one has been picked,
    *  else the last project model so a fresh chat starts on the model in use. */
   let chatComposerSettings = $derived(chatEffectiveSettings())
+
+  /** Live account quota for the not-yet-created "Start a new chat" composer —
+   *  the exact same provider-level hover-fetch cache the thread battery uses. */
+  const newChatUsage = createAccountUsageCache()
+  function revealNewChatUsage(): void {
+    if (newChatUsage.isStale()) {
+      void newChatUsage.refresh({
+        harnessId: chatComposerSettings.harnessId,
+        providerId: chatComposerSettings.providerId
+      })
+    }
+  }
+  const newChatHarnessUsage = $derived.by(
+    (): AgentHarnessUsage[] =>
+      newChatUsage.usage.map((usage) => ({
+        harnessId: usage.harnessId,
+        providerId: usage.providerId,
+        costUsd: 0,
+        rateLimits: usage.rateLimits,
+        ...(usage.credits ? { credits: usage.credits } : {}),
+        ...(usage.bankedResets ? { bankedResets: usage.bankedResets } : {})
+      }))
+  )
   $effect(() => {
     if (mode !== 'chats') return
     let alive = true
@@ -425,6 +458,8 @@
   })
 
   let projectCreateTrigger = $state(0)
+  /** Which add-project flow the next trigger should start. */
+  let projectCreateTriggerKind = $state<'local' | 'git-clone'>('local')
   let prevCreateThreadCount = 0
   let prevAddProjectCount = 0
   let prevNewChatCount = 0
@@ -3062,6 +3097,7 @@
               onProjectCreated={handleProjectCreated}
               onExisting={handleExistingProject}
               triggerAddProject={projectCreateTrigger}
+              triggerKind={projectCreateTriggerKind}
             />
           </div>
         {/if}
@@ -3879,6 +3915,9 @@
                 <ThreadView
                   thread={selectedThread}
                   chatMode={mode === 'chats'}
+                  allowCenteredComposer={mode === 'chats' ||
+                    ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 &&
+                      !workspaceState.headStartUsedThreadIds.has(selectedThread.id))}
                   onForked={handleForkedThread}
                   projects={visibleProjects}
                   {projectIcons}
@@ -3911,80 +3950,99 @@
             {/key}
           </div>
         {:else if mode === 'chats'}
-          <!-- Empty state — greeting centered, composer anchored at the bottom -->
-          <div class="flex h-full flex-col">
-            <div class="flex flex-1 items-center justify-center px-6">
-              <div class="text-center">
-                <MessageSquare size={32} class="mx-auto mb-3 text-dimmed" />
-                <h1 class="text-lg font-semibold tracking-tight">Start a new chat</h1>
-                <p class="mt-1 text-sm text-dimmed">Send a message to begin — no project needed</p>
-              </div>
+          <!-- Empty state — greeting, composer, and suggested prompts centered -->
+          <div class="flex h-full flex-col items-center justify-center px-6">
+            <div class="mb-6 text-center">
+              <h1 class="text-[1.375rem] font-semibold tracking-tight">Start a new chat</h1>
+              <p class="mt-1 text-[0.875rem] text-muted">
+                Send a message to begin — no project needed
+              </p>
             </div>
-            <div class="shrink-0 px-6 pb-6">
-              <div class="mx-auto w-full max-w-2xl">
-                {#key chatsComposerRestoreKey}
-                  <ChatComposer
-                    placeholder="What do you want to work on?"
-                    autofocus
-                    showEngineeringMode={false}
-                    showChatModes
-                    hidePermissionSelector
-                    settings={chatComposerSettings}
-                    onSettingsChange={(settings) => chatSettings.commit(settings)}
-                    providers={chatProviders}
-                    projectId={chatInboxId}
-                    attachmentStorage={{
-                      kind: 'chat',
-                      projectId: INBOX_PROJECT_ID,
-                      threadId: 'new-chat'
-                    }}
-                    harnessId={chatComposerSettings.harnessId}
-                    favoriteModels={rendererRecovery.chatFavoriteModels}
-                    onToggleFavorite={(providerId, modelId, harnessId) =>
-                      rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
-                    onReorderFavorite={(draggedKey, targetKey, position) =>
-                      rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
-                    recentModels={rendererRecovery.chatRecentModels}
-                    onRemoveRecent={(key) => rendererRecovery.removeChatRecentModel(key)}
-                    onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
-                    imageDescriptorDefault={config?.agentDefaults.imageDescriptor}
-                    imageDescriptorAskAgain={config?.imageDescriptorAskAgain === true}
-                    onImageDescriptorDefaultChange={(selection) =>
-                      void updateConfig?.({
-                        agentDefaults: {
-                          ...(config?.agentDefaults ?? { syncFromThreadChanges: false }),
-                          imageDescriptor: selection
-                        }
-                      })}
-                    onImageDescriptorAskAgainChange={(value) =>
-                      void updateConfig?.({ imageDescriptorAskAgain: value })}
-                    initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
-                    onValueChange={(value) =>
-                      rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)}
-                    initialAttachments={rendererRecovery.attachmentsFor(
+            <div class="w-full max-w-4xl">
+              {#key chatsComposerRestoreKey}
+                <ChatComposer
+                  bind:this={chatsComposer}
+                  placeholder="What do you want to work on?"
+                  autofocus
+                  showEngineeringMode={false}
+                  showChatModes
+                  hidePermissionSelector
+                  settings={chatComposerSettings}
+                  onSettingsChange={(settings) => chatSettings.commit(settings)}
+                  providers={chatProviders}
+                  projectId={chatInboxId}
+                  attachmentStorage={{
+                    kind: 'chat',
+                    projectId: INBOX_PROJECT_ID,
+                    threadId: 'new-chat'
+                  }}
+                  harnessId={chatComposerSettings.harnessId}
+                  favoriteModels={rendererRecovery.chatFavoriteModels}
+                  onToggleFavorite={(providerId, modelId, harnessId) =>
+                    rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
+                  onReorderFavorite={(draggedKey, targetKey, position) =>
+                    rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
+                  recentModels={rendererRecovery.chatRecentModels}
+                  onRemoveRecent={(key) => rendererRecovery.removeChatRecentModel(key)}
+                  onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
+                  imageDescriptorDefault={config?.agentDefaults.imageDescriptor}
+                  imageDescriptorAskAgain={config?.imageDescriptorAskAgain === true}
+                  onImageDescriptorDefaultChange={(selection) =>
+                    void updateConfig?.({
+                      agentDefaults: {
+                        ...(config?.agentDefaults ?? { syncFromThreadChanges: false }),
+                        imageDescriptor: selection
+                      }
+                    })}
+                  onImageDescriptorAskAgainChange={(value) =>
+                    void updateConfig?.({ imageDescriptorAskAgain: value })}
+                  initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
+                  onValueChange={(value) =>
+                    rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)}
+                  initialAttachments={rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')}
+                  onAttachmentsChange={(files) =>
+                    rendererRecovery.setDraft(
                       INBOX_PROJECT_ID,
-                      'new-chat'
+                      'new-chat',
+                      rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
+                      files
                     )}
-                    onAttachmentsChange={(files) =>
-                      rendererRecovery.setDraft(
-                        INBOX_PROJECT_ID,
-                        'new-chat',
-                        rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
-                        files
-                      )}
-                    onSend={(msg, files) => void createStandaloneChat(msg, files)}
-                  />
-                {/key}
-              </div>
+                  onSend={(msg, files) => void createStandaloneChat(msg, files)}
+                  onRevealUsage={revealNewChatUsage}
+                  onHideUsage={() => newChatUsage.markStale()}
+                  usageRefreshing={newChatUsage.refreshing}
+                  harnessUsage={newChatHarnessUsage}
+                />
+                <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
+                  {#each chatSuggestedPrompts as prompt (prompt)}
+                    <button
+                      type="button"
+                      class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      onclick={() => chatsComposer?.setComposerText(prompt)}
+                    >
+                      {prompt}
+                    </button>
+                  {/each}
+                </div>
+              {/key}
             </div>
           </div>
         {:else}
-          <div class="flex h-full items-center justify-center">
-            <div class="text-center">
-              <MessageSquare size={28} class="mx-auto mb-2 text-dimmed" />
-              <p class="text-sm text-dimmed">Select a thread or create one to get started</p>
-            </div>
-          </div>
+          <WelcomeStart
+            onNewChat={() => navigate('chats')}
+            onAddProject={() => {
+              navigate('projects')
+              projectCreateTriggerKind = 'local'
+              workspaceState.requestAddProject()
+            }}
+            onCloneRepo={() => {
+              navigate('projects')
+              projectCreateTriggerKind = 'git-clone'
+              workspaceState.requestAddProject()
+            }}
+            onOpenSettings={() => navigate('settings')}
+            onShowTour={() => workspaceState.requestOnboarding()}
+          />
         {/if}
       </div>
 

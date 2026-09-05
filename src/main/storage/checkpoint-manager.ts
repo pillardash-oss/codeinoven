@@ -65,6 +65,9 @@ export interface TurnCompletionOptions {
    * during the turn are part of THIS turn's work, never foreign.
    */
   ownThreadIds?: ReadonlySet<string>
+  /** Paths the user edited themselves (in-app editor saves, user-terminal
+   *  activity) while the turn ran. These are never the thread's changes. */
+  excludedPaths?: ReadonlySet<string>
 }
 
 /** Cap on foreign-thread checkpoints scanned while reconciling concurrent edits. */
@@ -250,8 +253,10 @@ export class CheckpointManager {
       const foreign =
         allChanges.length > 0 ? await this.foreignClaimedPaths(checkpoint, options) : undefined
       const precisePaths = options.precisePaths ?? new Set<string>()
+      const excludedPaths = options.excludedPaths
       const keepChange = (path: string): boolean =>
-        foreign === undefined || !foreign.has(path) || precisePaths.has(path)
+        (foreign === undefined || !foreign.has(path) || precisePaths.has(path)) &&
+        !(excludedPaths?.has(path) ?? false)
       // `undefined` preserves the project-wide snapshot behavior used by
       // recovery and direct checkpoint callers. A supplied empty set means the
       // owning turn reported no mutations and must record no workspace diff.

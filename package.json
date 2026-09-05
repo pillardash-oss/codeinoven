@@ -28,7 +28,7 @@
     "@codemirror/view": "^6.43.10"
   },
   "scripts": {
-    "postinstall": "bun scripts/patch-binary-data.ts && electron-builder install-app-deps",
+    "postinstall": "bun scripts/patch-binary-data.ts && bun scripts/patch-plist-xmldom.ts && electron-builder install-app-deps",
     "predev": "bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun scripts/brand-electron.ts",
     "dev": "electron-vite dev",
     "dev:remote-pwa": "bun scripts/dev-remote-pwa.ts",
@@ -60,7 +60,6 @@
     "deploy:main": "bash scripts/deploy-main.sh"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.259",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/language": "^6.12.4",
     "@codemirror/language-data": "^6.5.2",
@@ -83,14 +82,16 @@
     "word-extractor": "^1.0.4"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@anthropic-ai/claude-agent-sdk": "0.3.259",
     "@baybreezy/file-extension-icon": "^0.0.5",
+    "@earendil-works/pi-coding-agent": "0.85.0",
     "@electron-toolkit/utils": "^4.0.0",
     "@electron/fuses": "2.1.3",
     "@electron/osx-sign": "2.7.0",
     "@eslint/js": "^10.0.1",
     "@lobehub/icons-static-svg": "^1.94.0",
     "@lucide/svelte": "^1.39.0",
+    "@resvg/resvg-js": "^2.6.2",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/better-sqlite3": "^9.6.0",
@@ -115,6 +116,7 @@
     "jsonc-parser": "^3.3.1",
     "marked": "^18.0.11",
     "mermaid": "^11.17.2",
+    "png-to-ico": "^3.0.2",
     "prettier": "^3.9.6",
     "prettier-plugin-svelte": "^4.1.1",
     "qr-scanner": "1.4.2",

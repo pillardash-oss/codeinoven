@@ -62,8 +62,10 @@
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
   import TranscriptExportModal from './TranscriptExportModal.svelte'
   import Modal from '../ui/Modal.svelte'
+  import CodexBankedResetConfirm from '../ui/CodexBankedResetConfirm.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
   import AgentTodoCard from './AgentTodoCard.svelte'
   import AgentQuestionCard from './AgentQuestionCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
@@ -182,7 +184,6 @@
     AgentContextUsage,
     AgentRateLimitWindow,
     AgentHarnessUsage,
-    AgentAccountUsage,
     AgentProviderIssue,
     AgentSessionStatus,
     AgentDefaultsConfig,
@@ -280,6 +281,10 @@
      *  the scrollable message list. Used by surfaces such as temporary chats to
      *  expose their own header actions without duplicating ThreadView internals. */
     headerSnippet?: Snippet
+    /** Whether the centered composer head start may show on an empty
+     *  conversation. Workspace gates this: always true in chat mode, and in
+     *  project mode only for a project's sole, untouched thread. */
+    allowCenteredComposer?: boolean
   }
 
   let {
@@ -292,7 +297,8 @@
     onProjectCreated,
     onContinueInThread,
     controller,
-    headerSnippet
+    headerSnippet,
+    allowCenteredComposer = true
   }: Props = $props()
 
   // Workspace clears its selected-thread state before this keyed view's
@@ -373,6 +379,51 @@
    *  always extends to the tail, so streaming trace entries render the
    *  moment they land — never staged, never evicted from below the reader. */
   let visibleMessages = $derived(hasController ? messages : messages.slice(mountedStartIndex))
+
+  /** True when the thread has no conversation yet — the composer is centered
+   *  with suggested prompts instead of docked at the bottom. */
+  /** Resolved icon for the centered head-start header — same pipeline as the
+   *  project sidebar: stored image, SVG icon type, then initials fallback. */
+  const centeredProjectIconUrl = $derived(
+    project && !chatMode ? getProjectIcon(project, projectIconUrl ?? undefined) : null
+  )
+  /** Display name of the thread's selected model, or null when none is set. */
+  const centeredModelName = $derived.by(() => {
+    if (!settings.modelId) return null
+    const model =
+      allModels.find(
+        (m) =>
+          m.id === settings.modelId &&
+          (!settings.providerId || m.providerId === settings.providerId)
+      ) ?? allModels.find((m) => m.id === settings.modelId)
+    return model?.name ?? settings.modelId
+  })
+  let emptyConversation = $derived(
+    loaded &&
+      visibleMessages.length === 0 &&
+      !busy &&
+      !failureRetryVisible &&
+      pendingPermissions.length === 0 &&
+      pendingQuestionRequests.length === 0
+  )
+
+  /** Centered composer head start: empty conversation AND the workspace
+   *  allows it (sole untouched thread in project mode, always in chat mode). */
+  let centeredComposer = $derived(emptyConversation && allowCenteredComposer)
+
+  const projectSuggestedPrompts = [
+    'Summarize this project: architecture, key modules, and entry points',
+    'Review the codebase and list the top improvement opportunities',
+    'Find and fix a bug — explain the root cause as you go'
+  ]
+
+  const chatSuggestedPrompts = [
+    'Research a question using my device',
+    'Run a task for me on this computer',
+    'Brainstorm ideas with me'
+  ]
+
+  const suggestedPrompts = $derived(chatMode ? chatSuggestedPrompts : projectSuggestedPrompts)
 
   /** Auto-fill the mounted window up to HISTORY_WINDOW_SIZE after the first
    *  paint, one batch per frame. Batches mount above the viewport only, so
@@ -1462,6 +1513,7 @@
         entry.costUsd += message.cost ?? stepCost
         if (message.rateLimits?.length) entry.rateLimits = message.rateLimits
         if (message.credits) entry.credits = message.credits
+        if (message.bankedResets) entry.bankedResets = message.bankedResets
         if (message.modelId) entry.modelId = message.modelId
         continue
       }
@@ -1471,7 +1523,8 @@
         ...(message.modelId ? { modelId: message.modelId } : {}),
         costUsd: message.cost ?? stepCost,
         rateLimits: message.rateLimits ?? [],
-        ...(message.credits ? { credits: message.credits } : {})
+        ...(message.credits ? { credits: message.credits } : {}),
+        ...(message.bankedResets ? { bankedResets: message.bankedResets } : {})
       }
     }
     // Merge the whole-thread cumulative analytics from the harness_usage table
@@ -1517,18 +1570,20 @@
     }
     // Layer the live account quota over the matching harness so the battery
     // shows current windows/credits even for old threads with no message data.
-    for (const usage of liveAccountUsage ?? []) {
+    for (const usage of accountUsageCache.usage) {
       const entry = byHarness[usage.harnessId]
       if (entry) {
         if (usage.rateLimits.length) entry.rateLimits = usage.rateLimits
         if (usage.credits) entry.credits = usage.credits
+        if (usage.bankedResets) entry.bankedResets = usage.bankedResets
       } else {
         byHarness[usage.harnessId] = {
           harnessId: usage.harnessId,
           providerId: usage.providerId,
           costUsd: 0,
           rateLimits: usage.rateLimits,
-          ...(usage.credits ? { credits: usage.credits } : {})
+          ...(usage.credits ? { credits: usage.credits } : {}),
+          ...(usage.bankedResets ? { bankedResets: usage.bankedResets } : {})
         }
       }
     }
@@ -1550,6 +1605,7 @@
       (entry) =>
         entry.rateLimits.length > 0 ||
         entry.credits ||
+        entry.bankedResets ||
         entry.costUsd > 0 ||
         (entry.tokens?.total ?? 0) > 0 ||
         (entry.messageCount ?? 0) > 0 ||
@@ -1614,6 +1670,11 @@
         ? { credits: incoming.credits }
         : previous.credits
           ? { credits: previous.credits }
+          : {}),
+      ...(incoming.bankedResets
+        ? { bankedResets: incoming.bankedResets }
+        : previous.bankedResets
+          ? { bankedResets: previous.bankedResets }
           : {})
     }
   }
@@ -1636,88 +1697,58 @@
    *  threads (or threads whose turns predate quota capture) still show current
    *  rate-limit windows and credits in the battery popover. One entry per
    *  harness used on the thread. */
-  let liveAccountUsage = $state<AgentAccountUsage[]>([])
-  let refreshingAccountUsage = $state(false)
-  /** Quota is fetched on battery hover and cached briefly so rapid re-hovers
-   *  don't hammer the harness CLIs. */
-  let accountUsageFetchedAt = 0
-  const ACCOUNT_USAGE_CACHE_MS = 5000
-  /** Fast drivers (pi answers over an in-memory RPC session in a few ms)
-   *  would make the loading bar flash imperceptibly, reading as "nothing
-   *  happened". Hold the fetching state briefly so the hover always gives
-   *  the same visible feedback the slower harness CLIs produce naturally. */
-  const ACCOUNT_USAGE_MIN_LOADING_MS = 800
-
-  function delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms))
-  }
+  const accountUsageCache = createAccountUsageCache()
 
   function revealContextUsage(): void {
     if (contextUsage) commitContextUsage(contextUsage)
     void refreshEfficiencyKpis()
     // Fetch live quota only when the battery is revealed (hover), and only if
     // the cached copy is stale — never on thread open.
-    const stale =
-      liveAccountUsage.length === 0 ||
-      accountUsageFetchedAt === 0 ||
-      Date.now() - accountUsageFetchedAt > ACCOUNT_USAGE_CACHE_MS
-    if (stale) void refreshAccountUsageOnDemand()
+    if (accountUsageCache.isStale()) void refreshAccountUsageOnDemand()
   }
 
   /** Called when the user stops hovering the usage indicator. Resets the quota
    *  cache so the *next* hover always fetches fresh data — while the user keeps
    *  hovering, no further fetch is scheduled. */
   function hideContextUsage(): void {
-    accountUsageFetchedAt = 0
+    accountUsageCache.markStale()
   }
 
-  async function refreshAccountUsageOnDemand(refreshKey?: string): Promise<void> {
-    if (refreshingAccountUsage) return
-    refreshingAccountUsage = true
-    try {
-      const usageList = await invoke('agent:refreshAccountUsage', thread.projectId, thread.id)
-      // Guard against a stale/partial main process resolving the call with a
-      // non-array; an undefined `liveAccountUsage` crashes the battery derived
-      // on every render flush and freezes the thread view.
-      if (!Array.isArray(usageList)) return
-      // Drop a response for a harness selection the user already moved away
-      // from — an out-of-order resolve must not clobber the current selection.
-      if (refreshKey && refreshKey !== `${settings.harnessId}:${settings.providerId}`) return
-      liveAccountUsage = usageList
-      accountUsageFetchedAt = Date.now()
-      const currentUsage = usageList.find(
-        (usage) =>
-          usage.harnessId === settings.harnessId && usage.providerId === settings.providerId
-      )
-      if (currentUsage) {
-        // Fold the fresh quota over whatever the meter already shows so an empty
-        // rate-limit list or missing credits can never erase the bars the user is
-        // viewing — it can only replace them with newer, richer data.
-        const merged = mergeContextUsage(contextUsageDisplay, {
-          ...(contextUsageDisplay ?? {
-            costUsd: 0,
-            rateLimits: []
-          }),
-          rateLimits: currentUsage.rateLimits,
-          ...(currentUsage.contextWindow !== undefined
-            ? { contextWindow: currentUsage.contextWindow }
-            : {}),
-          ...(currentUsage.contextUsed !== undefined
-            ? { contextUsed: currentUsage.contextUsed }
-            : {}),
-          ...(currentUsage.credits ? { credits: currentUsage.credits } : {})
-        })
-        // Persist the fresh quota with the current context snapshot so it
-        // restores on the next mount without another harness round-trip.
-        commitContextUsage(merged)
-      }
-    } catch {
-      // Best-effort quota refresh — never surface a transient harness failure.
-    } finally {
-      const elapsed = Date.now() - accountUsageFetchedAt
-      const wait = Math.max(0, ACCOUNT_USAGE_MIN_LOADING_MS - elapsed)
-      if (wait > 0) await delay(wait)
-      refreshingAccountUsage = false
+  async function refreshAccountUsageOnDemand(): Promise<void> {
+    // Drop a response for a harness selection the user already moved away
+    // from — an out-of-order resolve must not clobber the current selection.
+    const refreshKey = `${settings.harnessId}:${settings.providerId}`
+    const usageList = await accountUsageCache.refresh(
+      {
+        harnessId: settings.harnessId,
+        providerId: settings.providerId
+      },
+      () => refreshKey !== `${settings.harnessId}:${settings.providerId}`
+    )
+    const currentUsage = usageList.find(
+      (usage) => usage.harnessId === settings.harnessId && usage.providerId === settings.providerId
+    )
+    if (currentUsage) {
+      // Fold the fresh quota over whatever the meter already shows so an empty
+      // rate-limit list or missing credits can never erase the bars the user is
+      // viewing — it can only replace them with newer, richer data.
+      const merged = mergeContextUsage(contextUsageDisplay, {
+        ...(contextUsageDisplay ?? {
+          costUsd: 0,
+          rateLimits: []
+        }),
+        rateLimits: currentUsage.rateLimits,
+        ...(currentUsage.contextWindow !== undefined
+          ? { contextWindow: currentUsage.contextWindow }
+          : {}),
+        ...(currentUsage.contextUsed !== undefined
+          ? { contextUsed: currentUsage.contextUsed }
+          : {}),
+        ...(currentUsage.credits ? { credits: currentUsage.credits } : {})
+      })
+      // Persist the fresh quota with the current context snapshot so it
+      // restores on the next mount without another harness round-trip.
+      commitContextUsage(merged)
     }
   }
 
@@ -2113,6 +2144,9 @@
     const promptContext = [responseReferenceContext(), taskContext].filter(Boolean).join('\n\n')
     const promptReferences = [...responseReferences]
     clearResponseReferences()
+    // The centered head start must never return for this thread once a real
+    // message was sent — even if the messages are deleted right after.
+    if (!chatMode) workspaceState.markThreadHeadStartUsed(thread.id)
     void (async () => {
       const staged = pendingLifecycleSelection
       if (staged) {
@@ -3254,12 +3288,12 @@
     // fetch loop needs no scroll compensation at all.
     windowStartId ??= messages[Math.max(0, messages.length - mountedCount)]?.id ?? null
     try {
-      // One click loads THREE pages: the store usually already holds some of
-      // them, so fetch only while it does not — each fetch is a bounded
-      // 40-message page and turns that span more than one page keep it
-      // fetching until all three page starts exist in the store.
+      // One click loads THREE turn-aligned pages: the store usually already
+      // holds some of them, so fetch only while it does not — each fetch is a
+      // bounded 40-message page and turns that span more than one page keep
+      // it fetching until three deduped turn starts exist before the anchor.
       for (let attempt = 0; attempt < 30; attempt++) {
-        if (promptPagesBefore(mountedStartIndex, 3) !== -1) break
+        if (turnStartPromptsBefore(mountedStartIndex, 3).length === 3) break
         const el = scrollEl
         if (!el || !olderMessagesAvailable) break
         const oldest = messages[0]
@@ -3267,6 +3301,34 @@
           olderMessagesAvailable = false
           break
         }
+        const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
+        const page = await invoke(
+          'thread:loadMessages',
+          thread.projectId,
+          thread.id,
+          before,
+          HISTORY_WINDOW_SIZE
+        )
+        if (!alive) return
+        olderMessagesAvailable = page.hasOlder
+        if (page.messages.length === 0) {
+          olderMessagesAvailable = false
+          break
+        }
+        threadMessages.mergePage(thread.projectId, thread.id, page.messages)
+        mountedCount += page.messages.length
+        await tick()
+      }
+      // Turn-align the store's oldest boundary: a raw 40-row page can end
+      // mid-turn, cutting that turn's prompt out of the cache entirely — the
+      // loaded page would then begin at a working trace with its prompt
+      // missing above it. Extend the fetch until the oldest row is a turn's
+      // prompt (or the thread truly has nothing older).
+      for (let align = 0; align < 4; align++) {
+        const oldest = messages[0]
+        if (!oldest) break
+        if (oldest.role === 'user' && !isActivityOnlyUserMessage(oldest)) break
+        if (!olderMessagesAvailable) break
         const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
         const page = await invoke(
           'thread:loadMessages',
@@ -3303,8 +3365,16 @@
           : undefined
       const previousHeight = el?.scrollHeight ?? 0
       const previousTop = el?.scrollTop ?? 0
-      const walked = promptPagesBefore(mountedStartIndex, 3)
-      const target = walked === -1 ? 0 : walked
+      // The anchor must be the start of a turn — a user prompt — never a
+      // trace row. Landing on a trace presented the loaded page cut off at
+      // its beginning, with the turn's prompt missing above it.
+      const starts = turnStartPromptsBefore(mountedStartIndex, 3)
+      let target = starts.length === 3 ? starts[starts.length - 1] : 0
+      const isRealPrompt = (index: number): boolean => {
+        const message = messages[index]
+        return !!message && message.role === 'user' && !isActivityOnlyUserMessage(message)
+      }
+      while (target < mountedStartIndex && !isRealPrompt(target)) target += 1
       if (target < mountedStartIndex) {
         windowStartId = messages[target]?.id ?? null
         // Keep the tail-relative count in sync so releasing the anchor at
@@ -5267,6 +5337,31 @@
     }
   }
 
+  let showBankedResetConfirm = $state(false)
+
+  async function activateBankedReset(): Promise<void> {
+    const { projectId, id } = thread
+    const result = await invoke('agent:activateBankedReset', projectId, id)
+    if (!result) return
+    accountUsageCache.replaceUsage(
+      accountUsageCache.usage.map((usage) =>
+        usage.harnessId === result.harnessId && usage.providerId === result.providerId
+          ? result
+          : usage
+      )
+    )
+    if (result.harnessId === settings.harnessId && result.providerId === settings.providerId) {
+      commitContextUsage(
+        mergeContextUsage(contextUsageDisplay, {
+          ...(contextUsageDisplay ?? { costUsd: 0, rateLimits: [] }),
+          rateLimits: result.rateLimits,
+          credits: result.credits,
+          bankedResets: result.bankedResets
+        })
+      )
+    }
+  }
+
   async function compactWork(): Promise<void> {
     if (compacting || busy) return
     const { projectId, id } = thread
@@ -6127,7 +6222,7 @@
     assignmentError = ''
     if (previousHarnessId !== updated.harnessId || previousProviderId !== updated.providerId) {
       contextUsageDisplay = undefined
-      accountUsageFetchedAt = 0
+      accountUsageCache.markStale()
     }
     syncAgentRole('seniorEngineer', selection)
     commitSettings(updated)
@@ -8643,7 +8738,7 @@
       // stays visible and refreshes on the next hover. Force that hover to
       // refetch so the newly selected harness's quota is current.
       contextUsageDisplay = undefined
-      accountUsageFetchedAt = 0
+      accountUsageCache.markStale()
       // A provider card produced by the previous harness no longer applies once
       // the user switches to another harness — otherwise the stale issue's
       // message and links (e.g. a Codex usage-limit URL) linger under the badge
@@ -9424,6 +9519,23 @@
     )
   }
 
+  /** Deduped turn-start prompt indices before `fromIndex`, newest-first.
+   *  Every persisted turn carries the prompt twice (the display row and the
+   *  harness echo under its own id); counting both corrupts the "three pages"
+   *  anchor math, so adjacent prompt copies count as one turn start. */
+  function turnStartPromptsBefore(fromIndex: number, count: number): number[] {
+    const starts: number[] = []
+    for (let index = fromIndex - 1; index >= 0 && starts.length < count; index--) {
+      const message = messages[index]
+      if (!message) break
+      if (message.role !== 'user' || isActivityOnlyUserMessage(message)) continue
+      const previous = messages[index - 1]
+      if (previous?.role === 'user' && !isActivityOnlyUserMessage(previous)) continue
+      starts.push(index)
+    }
+    return starts
+  }
+
   /** Activity-only user messages (compaction notices, sub-agent envelopes) ride
    *  mid-turn on the user role. They must stay invisible in the transcript but
    *  also transparent to turn grouping: one prompt → one working trace, with
@@ -10109,7 +10221,9 @@
     <!-- Scrollable conversation area -->
     <div
       bind:this={scrollEl}
-      class="conversation-scroll conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20"
+      class="conversation-scroll conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20 {centeredComposer
+        ? 'hidden'
+        : ''}"
       onscroll={onScroll}
       onwheel={onWheel}
       onpointerup={captureResponseSelection}
@@ -10181,7 +10295,9 @@
                     {@const previousTurnAudit = getPreviousTurnAudit(absIndex)}
                     {@const explicitPresentation = explicitMessagePresentation(msg)}
                     {#if previousTurnAudit}
-                      <div class="mb-1 flex items-center gap-1.5 self-end text-[0.625rem] text-dimmed">
+                      <div
+                        class="mb-1 flex items-center gap-1.5 self-end text-[0.625rem] text-dimmed"
+                      >
                         <span>Previous turn completed</span>
                         <span>·</span>
                         <span class="tabular-nums"
@@ -10818,7 +10934,11 @@
          the window edge lives here so the scroll-to-latest button can float at
          the top of the whole stack: straddling an error card when one is shown
          and dropping back to its normal spot above the composer otherwise. -->
-    <div class="bottom-chrome relative shrink-0">
+    <div
+      class="bottom-chrome relative {centeredComposer
+        ? 'flex min-h-0 flex-1 flex-col justify-center'
+        : 'shrink-0'}"
+    >
       {#if userScrolledAway}
         <button
           type="button"
@@ -11130,7 +11250,29 @@
         <!-- Composer — always anchored at the bottom. Blocking permission and question
        tools replace it until the user responds. -->
         <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
-          <div class="mx-auto w-full max-w-3xl">
+          <div class="mx-auto w-full {centeredComposer ? 'max-w-4xl' : 'max-w-3xl'}">
+            {#if centeredComposer}
+              <div class="mb-5 text-center">
+                <h1
+                  class="flex items-center justify-center gap-2.5 text-[1.375rem] font-semibold tracking-tight text-foreground"
+                >
+                  {#if centeredProjectIconUrl}
+                    <img
+                      src={centeredProjectIconUrl}
+                      alt=""
+                      aria-hidden="true"
+                      class="size-7 rounded-[0.375rem] object-cover"
+                    />
+                  {/if}
+                  {project?.name ?? 'New thread'}
+                </h1>
+                <p class="mt-1 text-[0.875rem] text-muted">
+                  {centeredModelName
+                    ? `What should ${centeredModelName} work on?`
+                    : 'How can CIO serve you today?'}
+                </p>
+              </div>
+            {/if}
             {#if pendingImageDescriptorError && !achievementAutonomous}
               {#key pendingImageDescriptorError.id}
                 <ImageDescriptorErrorCard
@@ -11517,7 +11659,7 @@
                     efficiencyKpis={storedEfficiencyKpis}
                     onRevealUsage={revealContextUsage}
                     onHideUsage={hideContextUsage}
-                    usageRefreshing={refreshingAccountUsage}
+                    usageRefreshing={accountUsageCache.refreshing}
                     {harnessUsage}
                     canCompact={supportsManualCompaction(
                       settings.harnessId,
@@ -11525,6 +11667,9 @@
                     ) && !busy}
                     {compacting}
                     onCompact={() => void compactWork()}
+                    onActivateBankedReset={() => {
+                      showBankedResetConfirm = true
+                    }}
                     projectContext={composerProject}
                     projectId={thread.projectId}
                     threadId={thread.id}
@@ -11655,6 +11800,19 @@
                     onImageDescriptorDefaultChange={setImageDescriptorDefault}
                     onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
                   />
+                  {#if centeredComposer}
+                    <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
+                      {#each suggestedPrompts as prompt (prompt)}
+                        <button
+                          type="button"
+                          class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                          onclick={() => composer?.setComposerText(prompt)}
+                        >
+                          {prompt}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
                 {/key}
               {/if}
             {/if}
@@ -11791,6 +11949,19 @@
   {chatMode}
   onClose={() => (transcriptExportOpen = false)}
   onExport={(includeTrace) => exportTranscript(includeTrace)}
+/>
+
+<CodexBankedResetConfirm
+  open={showBankedResetConfirm}
+  usedPercent={contextUsageDisplay?.rateLimits
+    .map((window) => window.usedPercent)
+    .filter((percent): percent is number => percent !== undefined)
+    .reduce((max, percent) => Math.max(max, percent), 0)}
+  onClose={() => (showBankedResetConfirm = false)}
+  onConfirm={async () => {
+    await activateBankedReset()
+    showBankedResetConfirm = false
+  }}
 />
 
 <StartAfterThreadPicker

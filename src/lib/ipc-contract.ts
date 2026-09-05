@@ -155,6 +155,7 @@ import type {
   Thread,
   ThreadContextUsage,
   AgentAccountUsage,
+  AgentAccountUsageOverrides,
   AttachmentStorageScope,
   ThreadMessageCursor,
   ThreadMessagePage,
@@ -883,7 +884,13 @@ export interface IpcInvokeContract {
   'agent:listProviders': Contract<[projectId: string], ProviderCatalog[]>
   'agent:listProviderSnapshot': Contract<[projectId: string], ProviderCatalog[]>
   'agent:refreshProviderCatalog': Contract<[projectId: string, force?: boolean], ProviderCatalog[]>
-  'agent:refreshAccountUsage': Contract<[projectId: string, threadId: string], AgentAccountUsage[]>
+  'agent:refreshAccountUsage': Contract<[overrides?: AgentAccountUsageOverrides], AgentAccountUsage[]>
+  /** Redeem one banked Codex rate-limit reset credit. Destructive: resets the
+   *  account's active usage windows and consumes one banked credit. */
+  'agent:activateBankedReset': Contract<
+    [projectId: string, threadId: string],
+    AgentAccountUsage | null
+  >
   'agent:getHarnessAuthStatus': Contract<[projectId: string, harnessId: string], boolean | null>
   'agent:listTools': Contract<
     [
@@ -2706,6 +2713,17 @@ export interface IpcEventContract {
    * panel — right sidebar or bottom dock, whichever is active.
    */
   'window:newTerminalShortcut': []
+  /**
+   * Emitted when the user presses the mouse's back side button. Windows and
+   * Linux surface it as the `browser-backward` app command in the main process;
+   * the main process forwards it here so the renderer can walk its own
+   * in-app navigation history (the window has no native browser history).
+   * On macOS the renderer instead sees a raw `mousedown`/`auxclick` with
+   * button 3 — handled directly in App.svelte.
+   */
+  'window:historyBack': []
+  /** Emitted when the user presses the mouse's forward side button. */
+  'window:historyForward': []
   'updater:status': [status: UpdaterStatus]
   'updater:waiting-for-threads': [activeCount: number]
   'computerUse:pipFrame': [frame: ComputerUsePipFrame]

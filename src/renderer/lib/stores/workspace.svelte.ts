@@ -4,6 +4,7 @@
  * through view components.
  */
 import type { Project, Thread } from '$shared/types'
+import { SvelteSet } from 'svelte/reactivity'
 import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
 import type { AgentSource } from '$lib/agent-sources'
 import { contextSidebarState } from './context-sidebar.svelte'
@@ -124,8 +125,7 @@ class WorkspaceState {
    * chat notifications switch to the chats view.  Registered by App.svelte.
    */
   openThreadFromNotification:
-    | ((thread: Thread, project: Project, temporaryChatId?: string) => Promise<void>)
-    | null = null
+    ((thread: Thread, project: Project, temporaryChatId?: string) => Promise<void>) | null = null
 
   // ─── Sources (fed by ThreadView) ───────────────────────────────────────
   sources: AgentSource[] = $state([])
@@ -323,6 +323,30 @@ class WorkspaceState {
     if (this.consumedAddProjectRequestCount === this.requestAddProjectCount) return false
     this.consumedAddProjectRequestCount = this.requestAddProjectCount
     return true
+  }
+
+  /** Incremented to signal the app shell to open the getting-started tour. */
+  requestOnboardingCount = $state(0)
+  private consumedOnboardingRequestCount = 0
+
+  requestOnboarding(): void {
+    this.requestOnboardingCount++
+  }
+
+  consumeOnboardingRequest(): boolean {
+    if (this.consumedOnboardingRequestCount === this.requestOnboardingCount) return false
+    this.consumedOnboardingRequestCount = this.requestOnboardingCount
+    return true
+  }
+
+  /** Thread ids that had a user message this session. The centered composer
+   *  head start never returns for these — even if the messages are deleted —
+   *  so it never interrupts a user mid-thought. Session-scoped by design:
+   *  after a restart an empty thread is a fresh start again. */
+  headStartUsedThreadIds: SvelteSet<string> = new SvelteSet<string>()
+
+  markThreadHeadStartUsed(threadId: string): void {
+    this.headStartUsedThreadIds.add(threadId)
   }
 
   /** A project added externally (e.g. from Scope view) that Workspace needs to pick up. */

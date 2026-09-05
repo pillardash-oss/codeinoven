@@ -21,6 +21,8 @@
     onExisting?: (project: Project) => void | Promise<void>
     title?: string
     triggerAddProject?: number
+    /** Which add-project flow the external trigger should start. */
+    triggerKind?: 'local' | 'git-clone'
     /** Spotlight mode renders the creation options as a centered dialog instead of the plus dropdown. */
     mode?: 'dropdown' | 'spotlight'
     /** Spotlight mode: controlled visibility. */
@@ -34,6 +36,7 @@
     onExisting,
     title = 'Add project',
     triggerAddProject = 0,
+    triggerKind = 'local',
     mode = 'dropdown',
     open = false,
     onClose = () => {}
@@ -42,10 +45,19 @@
   const componentId = $props.id()
   const sshProjectFormId = `${componentId}-ssh-project-form`
 
+  /** Highest trigger value already handled. The control unmounts in other modes
+   *  (e.g. Chats) and remounts later; re-initialising from the live value keeps
+   *  a stale trigger from re-opening the add-project flow on remount. */
+  // Intentional initial-value capture — this is the baseline that later triggers
+  // are compared against.
+  // svelte-ignore state_referenced_locally
+  let handledTrigger = triggerAddProject
   /** React to external trigger (e.g. keyboard shortcut) to start the add-project flow. */
   $effect(() => {
-    if (triggerAddProject > 0) {
-      void addLocalFolder()
+    if (triggerAddProject > handledTrigger) {
+      handledTrigger = triggerAddProject
+      if (triggerKind === 'git-clone') addGitCloneProject()
+      else void addLocalFolder()
     }
   })
   let showSshModal = $state(false)
@@ -255,7 +267,7 @@
 <GitCloneModal
   open={showGitCloneModal}
   onClose={() => (showGitCloneModal = false)}
-  onProjectCreated={onProjectCreated}
+  {onProjectCreated}
 />
 
 <Modal open={showSshModal} title="Connect SSH Project" onClose={() => (showSshModal = false)}>

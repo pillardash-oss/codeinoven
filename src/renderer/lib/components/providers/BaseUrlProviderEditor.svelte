@@ -65,6 +65,8 @@
     headers: string
     /** Optional account status/usage route (e.g. /status or /usage). */
     usagePath: string
+    /** Optional model-list route (defaults to /models when empty). */
+    modelsPath: string
     models: ModelDraft[]
     enabled: boolean
   }
@@ -178,6 +180,7 @@
         ...(draft.id ? { id: draft.id, harnessId: draft.harnessIds[0] } : {}),
         ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
         ...(parseHeaders(draft.headers) ? { headers: parseHeaders(draft.headers) } : {}),
+        ...(draft.modelsPath.trim() ? { modelsPath: draft.modelsPath.trim() } : {}),
         force
       })
     } catch (fetchError) {
@@ -208,6 +211,7 @@
           ...(draft.id ? { id: draft.id, harnessId: draft.harnessIds[0] } : {}),
           ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
           ...(headers ? { headers } : {}),
+          ...(draft.modelsPath.trim() ? { modelsPath: draft.modelsPath.trim() } : {}),
           force: true
         })
         discoveredModels = models
@@ -273,6 +277,7 @@
               .join('\n')
           : '',
         usagePath: provider.usagePath ?? '',
+        modelsPath: provider.modelsPath ?? '',
         models: provider.models.map((model) => ({
           id: model.id,
           name: model.name,
@@ -315,6 +320,7 @@
       removeApiKey: false,
       headers: '',
       usagePath: '',
+      modelsPath: '',
       models: [],
       enabled: true
     }
@@ -426,6 +432,7 @@
           models,
           enabled: draft.enabled,
           usagePath: draft.usagePath.trim(),
+          modelsPath: draft.modelsPath.trim(),
           ...(headers === undefined ? {} : { headers }),
           ...(draft.removeApiKey ? { removeApiKey: true } : {}),
           ...(draft.apiKey ? { apiKey: draft.apiKey } : {})
@@ -447,6 +454,7 @@
           models,
           enabled: draft.enabled,
           ...(draft.usagePath.trim() ? { usagePath: draft.usagePath.trim() } : {}),
+          ...(draft.modelsPath.trim() ? { modelsPath: draft.modelsPath.trim() } : {}),
           ...(headers === undefined ? {} : { headers }),
           ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
           ...(groupId ? { id: groupId } : {})
@@ -491,6 +499,7 @@
         ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
         headers: draft.headers,
         usagePath: draft.usagePath,
+        modelsPath: draft.modelsPath,
         models: draft.models,
         enabled: draft.enabled
       }
@@ -515,6 +524,7 @@
         removeApiKey: false,
         headers: provider.headers,
         ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
+        ...(provider.modelsPath ? { modelsPath: provider.modelsPath } : {}),
         models: provider.models.map(modelToDraft),
         enabled: provider.enabled
       }
@@ -743,6 +753,22 @@
       <span class="block text-[0.6875rem] font-normal text-dimmed">
         Path (relative to the base URL) or full URL that reports this account's usage/limit. Used to
         show quota bars; leave empty if the provider has none.
+      </span>
+    </label>
+
+    <label class="block space-y-1 text-xs font-medium" for="base-url-provider-models-path">
+      <span>Models route (optional)</span>
+      <input
+        id="base-url-provider-models-path"
+        class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
+        placeholder="/models"
+        autocomplete="off"
+        spellcheck="false"
+        bind:value={draft.modelsPath}
+      />
+      <span class="block text-[0.6875rem] font-normal text-dimmed">
+        Path (relative to the base URL) or full URL that lists this provider's models. Defaults to
+        /models when empty; used for model discovery and refresh.
       </span>
     </label>
 
