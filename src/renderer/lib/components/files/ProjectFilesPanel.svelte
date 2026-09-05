@@ -163,7 +163,16 @@
   let documentFailed = $state(false)
   /** Path whose HTML is currently loaded — guards against tab swaps. */
   let documentHtmlPath = $state<string | null>(null)
+  /** Scope bucket is read as a derived value OUTSIDE the effect: the getter
+   *  touches `workspaceState.selectedThread`, which is reassigned on every
+   *  thread update. Reading it inside the effect would re-run (and cancel)
+   *  the preview load on each thread churn, leaving `documentLoading` stuck
+   *  true — the infinite spinner. */
+  let documentScopeBucketId = $derived(workspaceState.activeScopeBucketIdFor(projectId))
+  /** Monotonic run token: only the newest effect run may touch preview state. */
+  let documentEffectRun = $state(0)
   $effect(() => {
+    const run = ++documentEffectRun
     if (!activeTab || !documentPreview || activeTab.view !== 'preview') {
       documentHtml = null
       documentHtmlPath = null
@@ -175,31 +184,27 @@
     if (documentHtmlPath === path) return
     documentLoading = true
     documentFailed = false
-    let cancelled = false
     // `file:readDocumentPreview` requires an absolute path, but the tab only
     // carries a project-relative path (which may live inside a managed worktree
     // scope). Resolve the authoritative absolute path through main first.
-    const scopeBucketId = workspaceState.activeScopeBucketIdFor(projectId)
+    const scopeBucketId = documentScopeBucketId
     void invoke('projectFiles:info', projectId, path, scopeBucketId)
       .then((info: ProjectFileInfo) => invoke('file:readDocumentPreview', info.absolutePath))
       .then((html: string | null) => {
-        if (cancelled) return
+        if (run !== documentEffectRun) return
         documentHtml = html ? DOMPurify.sanitize(html) : null
         documentHtmlPath = path
         documentFailed = html === null
       })
       .catch(() => {
-        if (cancelled) return
+        if (run !== documentEffectRun) return
         documentHtml = null
         documentHtmlPath = path
         documentFailed = true
       })
       .finally(() => {
-        if (!cancelled) documentLoading = false
+        if (run === documentEffectRun) documentLoading = false
       })
-    return () => {
-      cancelled = true
-    }
   })
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')
   let visibleContent = $derived(
