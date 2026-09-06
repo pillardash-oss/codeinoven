@@ -53,6 +53,25 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
     if (thread) settleThreadBranch(branchDeps, thread)
     return thread
   })
+  /**
+   * Bounded per-project recent threads for first-paint hydration: at most
+   * `RECENT_THREADS_PER_PROJECT` per project, with the inbox (Chats) project
+   * capped at its configured thread_limit instead. Registered on the early
+   * hydration surface because App.svelte invokes it during first paint.
+   */
+  ipcMain.handle('thread:listRecentPerProject', async () => {
+    const threads = await threadManager.listRecentPerProject()
+    return threads.filter((thread) => !thread.archived)
+  })
+  /** Paged threads for one project (project filter precedes the SQL LIMIT). */
+  ipcMain.handle('thread:listProjectPage', async (_, rawOptions: unknown) => {
+    const options = isRecord(rawOptions) ? rawOptions : {}
+    if (options.projectId === undefined) throw new TypeError('Project ID is required')
+    const projectId = validateEntityId(options.projectId, 'Project ID')
+    const limit = validateBoundedInteger(options.limit ?? 50, 'History page limit', 1, 200)
+    const offset = validateBoundedInteger(options.offset ?? 0, 'History page offset', 0, 100_000)
+    return threadManager.listProjectThreads(projectId, { limit, offset })
+  })
   ipcMain.handle('note:get', async (_, projectId: unknown, threadId: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')
