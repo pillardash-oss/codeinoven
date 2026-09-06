@@ -2419,6 +2419,20 @@ export interface IpcInvokeContract {
     [options: { projectId?: string; limit?: number; offset?: number }],
     Thread[]
   >
+  /**
+   * Bounded per-project recent threads for first-paint hydration: at most
+   * `RECENT_THREADS_PER_PROJECT` per project, with the inbox (Chats) project
+   * capped at its configured thread_limit instead.
+   */
+  'thread:listRecentPerProject': Contract<[], Thread[]>
+  /**
+   * Paged threads for one project; the project filter is applied in SQL
+   * before the limit so "load more" reaches older rows reliably.
+   */
+  'thread:listProjectPage': Contract<
+    [options: { projectId: string; limit?: number; offset?: number }],
+    Thread[]
+  >
   'thread:reorder': Contract<[projectId: string, orderedIds: string[]], Thread[]>
   'thread:setSortOrder': Contract<[projectId: string, threadId: string, sortOrder: number], Thread>
   'thread:reorderPinned': Contract<[projectId: string, orderedPinnedIds: string[]], Thread[]>

@@ -1098,14 +1098,12 @@
       const icons = await loadProjectIcons(projectList)
       scopeState.setScopesFromProjects(projectList, icons, preferredProjectId)
 
-      // 2. Tasks — recent rows only, via the bounded hydration query. The full
-      //    task history never crosses IPC at startup; older rows page in on
-      //    demand through the workspace/scope views. The selected project is
-      //    ordered first so its visible threads render immediately.
-      const threadList = await invoke('thread:listRecent', {
-        projectId: scopeState.activeProjectId ?? undefined,
-        limit: 200
-      })
+      // 2. Tasks — recent rows only, via the bounded per-project hydration
+      //    query. Each project contributes its own recent slice (inbox gets its
+      //    configured bucket size), so one busy project can never evict other
+      //    projects' threads from the initial paint. Older rows page in on
+      //    demand through the workspace/scope views.
+      const threadList = await invoke('thread:listRecentPerProject')
       const visibleThreads = threadList.filter((thread) => !thread.archived)
       scopeState.setThreads(visibleThreads)
       notificationPanelState.hydrateFromThreads(visibleThreads, projectList)

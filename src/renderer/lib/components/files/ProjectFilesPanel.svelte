@@ -16,7 +16,7 @@
     Minimize2,
     Save
   } from '@lucide/svelte'
-  import DOMPurify from 'dompurify'
+  import { documentPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
@@ -165,29 +165,42 @@
   let documentError = $state<string | null>(null)
   /** Path whose HTML is currently loaded — guards against tab swaps. */
   let documentHtmlPath = $state<string | null>(null)
+  /** Path whose HTML is currently being fetched — guards against effect
+   *  re-runs (driven by `activeTab` reference churn) starting duplicate IPC
+   *  chains that would otherwise cancel or pile on top of each other.
+   *  Deliberately NOT `$state`: the effect both reads and writes it, so a
+   *  reactive variable here would re-trigger the effect on its own write
+   *  (effect_update_depth_exceeded) — same reason the previous run token was
+   *  a plain `let`. Only the async callbacks consult it after each run. */
+  let documentInFlightPath: string | null = null
+  /** Monotonic ownership token, incremented only when a new chain actually
+   *  starts. Lets stale callbacks tell themselves apart from the current
+   *  chain without participating in reactivity. */
+  let documentEffectToken = 0
   /** Scope bucket is read as a derived value OUTSIDE the effect: the getter
    *  touches `workspaceState.selectedThread`, which is reassigned on every
    *  thread update. Reading it inside the effect would re-run (and cancel)
    *  the preview load on each thread churn, leaving `documentLoading` stuck
    *  true — the infinite spinner. */
   let documentScopeBucketId = $derived(workspaceState.activeScopeBucketIdFor(projectId))
-  /** Monotonic run token: only the newest effect run may touch preview state.
-   *  Deliberately NOT `$state` — the effect increments it, and reactive state
-   *  written inside its own effect would loop forever
-   *  (effect_update_depth_exceeded). It never needs to trigger reactivity. */
-  let documentEffectRun = 0
   $effect(() => {
-    const run = ++documentEffectRun
     if (!activeTab || !documentPreview || activeTab.view !== 'preview') {
       documentHtml = null
       documentHtmlPath = null
+      documentInFlightPath = null
       documentFailed = false
       documentError = null
       documentLoading = false
       return
     }
     const path = activeTab.path
-    if (documentHtmlPath === path) return
+    // Bail if this path is already loaded OR already being fetched — the
+    // in-flight chain settles its own state. Without the in-flight guard,
+    // every `activeTab` reference change restarts the chain and the previous
+    // one never gets to clear `documentLoading` — the infinite spinner.
+    if (documentHtmlPath === path || documentInFlightPath === path) return
+    documentInFlightPath = path
+    const token = ++documentEffectToken
     documentLoading = true
     documentFailed = false
     documentError = null
@@ -195,13 +208,12 @@
     // carries a project-relative path (which may live inside a managed worktree
     // scope). Resolve the authoritative absolute path through main first.
     const scopeBucketId = documentScopeBucketId
-    let settled = false
     // Hard cap: a hung IPC chain must never leave the spinner spinning forever.
     const timeout = setTimeout(() => {
-      if (settled || run !== documentEffectRun) return
-      settled = true
+      if (token !== documentEffectToken) return
       documentHtml = null
       documentHtmlPath = path
+      documentInFlightPath = null
       documentFailed = true
       documentError = 'Document preview timed out'
       documentLoading = false
@@ -209,24 +221,29 @@
     void invoke('projectFiles:info', projectId, path, scopeBucketId)
       .then((info: ProjectFileInfo) => invoke('file:readDocumentPreview', info.absolutePath))
       .then((html: string | null) => {
-        if (run !== documentEffectRun) return
-        settled = true
-        documentHtml = html ? DOMPurify.sanitize(html) : null
+        if (token !== documentEffectToken) return
+        // documentPreviewFrame sanitizes and wraps the raw converter HTML in
+        // a styled page (white "paper" surface) so the preview matches the
+        // chat-attachment document preview instead of rendering transparent.
+        documentHtml = html ? documentPreviewFrame(html) : null
         documentHtmlPath = path
+        documentInFlightPath = null
         documentFailed = html === null
         documentError = html === null ? 'The document could not be converted for preview' : null
       })
       .catch((error: unknown) => {
-        if (run !== documentEffectRun) return
-        settled = true
+        if (token !== documentEffectToken) return
         documentHtml = null
         documentHtmlPath = path
+        documentInFlightPath = null
         documentFailed = true
         documentError = error instanceof Error ? error.message : String(error)
       })
       .finally(() => {
         clearTimeout(timeout)
-        if (run === documentEffectRun) documentLoading = false
+        // Only the current chain may settle the spinner; a stale chain that
+        // lands after a newer load started must leave it alone.
+        if (token === documentEffectToken) documentLoading = false
       })
   })
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')

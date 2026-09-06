@@ -23,6 +23,7 @@ import {
 import {
   buildThreadSearchSql,
   mergeThreadSearchResults,
+  RECENT_THREADS_PER_PROJECT,
   ThreadRepo,
   type ThreadCapacityCandidate
 } from '../../main/database/repositories/thread-repo'
@@ -46,6 +47,9 @@ import {
   isManagedScopeRoot,
   type ScopeBoard
 } from '../types'
+
+/** Sidebar quota for the inbox (Chats) project: show all of its recent threads. */
+const INBOX_PROJECT_ID = 'inbox'
 
 /**
  * Raised when `createThread` is asked to exceed a project's thread limit while
@@ -1427,6 +1431,33 @@ export class ThreadManager {
    *  so it does not reintroduce the main-thread stall this path once had. */
   async listThreadsForSidebar(options?: ThreadListOptions): Promise<Thread[]> {
     return this.threadRepo.listAllViaWorker(options)
+  }
+
+  /**
+   * Bounded per-project recent-thread list for sidebar hydration. The inbox
+   * (Chats) project gets its configured `thread_limit` quota; every other
+   * project gets `RECENT_THREADS_PER_PROJECT`. Older rows stay reachable via
+   * `listProjectThreads` paging.
+   */
+  async listRecentPerProject(): Promise<Thread[]> {
+    return this.threadRepo.listRecentPerProjectViaWorker((projectId) =>
+      projectId === INBOX_PROJECT_ID
+        ? Number.MAX_SAFE_INTEGER
+        : RECENT_THREADS_PER_PROJECT
+    )
+  }
+
+  /** Paged threads for one project: the project filter is applied in SQL
+   *  before the limit, so "load more" always reaches the project's older rows. */
+  async listProjectThreads(
+    projectId: string,
+    options?: ThreadListOptions
+  ): Promise<Thread[]> {
+    return this.threadRepo.listByProjectViaWorker(projectId, {
+      includeArchived: false,
+      order: 'activity',
+      ...options
+    })
   }
 
   /**

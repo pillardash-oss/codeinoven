@@ -183,8 +183,10 @@
     updateConfig
   }: Props = $props()
 
-  const INITIAL_THREAD_LIMIT = 100
   const HISTORY_PAGE_LIMIT = 50
+  /** Threads fetched from the DB per project when a list is expanded past its
+   *  initial per-project hydration slice. */
+  const PROJECT_PAGE_LIMIT = 50
 
   let projects = $state<Project[]>([])
   let allThreads = $state<Thread[]>([])
@@ -192,6 +194,11 @@
   let historyOffset = $state(0)
   let historyLoading = $state(false)
   let hasMoreHistory = $state(true)
+  /** Per-project DB paging state for "Show more" beyond the hydrated slice:
+   *  how many rows were fetched so far, and whether the project has more. */
+  const projectPageOffsets = new SvelteMap<string, number>()
+  const projectExhausted = new SvelteSet<string>()
+  let projectPageLoading = $state<string | null>(null)
   /** Remounts the empty-state chats composer to restore a failed first send. */
   let chatsComposerRestoreKey = $state(0)
   let chatsComposer: ChatComposer | undefined = $state(undefined)
@@ -1981,16 +1988,13 @@
     try {
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
-        invoke('thread:listRecent', {
-          projectId: rendererRecovery.selectedProjectId ?? undefined,
-          limit: INITIAL_THREAD_LIMIT
-        })
+        invoke('thread:listRecentPerProject')
       ])
       projects = projectList
       const uniqueThreads = uniqueThreadList(threadList)
       allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
-      historyOffset = threadList.length
-      hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
+      historyOffset = uniqueThreadList(threadList).length
+      hasMoreHistory = false
       notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
       // Publish the workspace with deterministic fallback icons immediately.
@@ -2109,16 +2113,13 @@
     try {
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
-        invoke('thread:listRecent', {
-          projectId: workspaceState.activeProject?.id ?? undefined,
-          limit: INITIAL_THREAD_LIMIT
-        })
+        invoke('thread:listRecentPerProject')
       ])
       projects = projectList
       const uniqueThreads = uniqueThreadList(threadList)
       allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
-      historyOffset = threadList.length
-      hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
+      historyOffset = uniqueThreadList(threadList).length
+      hasMoreHistory = false
       notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
@@ -2181,6 +2182,42 @@
     } finally {
       historyLoading = false
     }
+  }
+
+  /**
+   * Fetch a project's older threads from the DB when its sidebar list is
+   * expanded past the per-project hydration slice. Results accumulate in
+   * `allThreads`, so subsequent renders are served from the in-memory cache.
+   */
+  async function loadProjectThreadsPage(projectId: string): Promise<void> {
+    if (projectPageLoading === projectId) return
+    projectPageLoading = projectId
+    try {
+      const offset = projectPageOffsets.get(projectId) ?? 0
+      const page = await invoke('thread:listProjectPage', {
+        projectId,
+        limit: PROJECT_PAGE_LIMIT,
+        offset
+      })
+      projectPageOffsets.set(projectId, offset + page.length)
+      if (page.length < PROJECT_PAGE_LIMIT) projectExhausted.add(projectId)
+      const additions = page
+        .filter((t) => !isOrchestrationChildThread(t))
+        .filter((t) => !allThreads.some((existing) => existing.id === t.id))
+      if (additions.length > 0) {
+        allThreads = [...allThreads, ...additions]
+        for (const thread of additions) {
+          if (!thread.archived) scopeState.updateThread(thread)
+        }
+      }
+    } finally {
+      projectPageLoading = null
+    }
+  }
+
+  /** Whether a project's sidebar list still has unfetched older rows in the DB. */
+  function projectHasMoreInDb(projectId: string): boolean {
+    return !projectExhausted.has(projectId)
   }
 
   // ─── Folder interactions ─────────────────────────────────────────────────
@@ -3611,6 +3648,19 @@
                               >
                                 Show {filteredThreads.length - getVisibleCount(project.id)} more
                               </button>
+                            {:else if
+                              getVisibleCount(project.id) >= filteredThreads.length &&
+                              filteredThreads.length > 0 &&
+                              projectHasMoreInDb(project.id)}
+                              <button
+                                class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+                                disabled={projectPageLoading === project.id}
+                                onclick={() => void loadProjectThreadsPage(project.id)}
+                              >
+                                {projectPageLoading === project.id
+                                  ? 'Loading…'
+                                  : 'Load older threads'}
+                              </button>
                             {/if}
                             {#if getVisibleCount(project.id) > THREADS_PER_PAGE}
                               <button
@@ -3812,6 +3862,17 @@
                               onclick={() => showMoreThreads(project.id, filteredThreads.length)}
                             >
                               Show {filteredThreads.length - getVisibleCount(project.id)} more
+                            </button>
+                          {:else if
+                            getVisibleCount(project.id) >= filteredThreads.length &&
+                            filteredThreads.length > 0 &&
+                            projectHasMoreInDb(project.id)}
+                            <button
+                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+                              disabled={projectPageLoading === project.id}
+                              onclick={() => void loadProjectThreadsPage(project.id)}
+                            >
+                              {projectPageLoading === project.id ? 'Loading…' : 'Load older threads'}
                             </button>
                           {/if}
                           {#if getVisibleCount(project.id) > THREADS_PER_PAGE}
