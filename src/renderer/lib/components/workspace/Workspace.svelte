@@ -2210,6 +2210,15 @@
           if (!thread.archived) scopeState.updateThread(thread)
         }
       }
+      // Reveal the freshly fetched rows immediately — the user asked for older
+      // threads, so they must not need a second "Show more" click to see them.
+      if (additions.length > 0 || page.length > 0) {
+        const current = threadShowCount.get(projectId) ?? THREADS_PER_PAGE
+        const folderThreads = allThreads.filter(
+          (t) => t.projectId === projectId && !t.archived && !t.pinned
+        )
+        threadShowCount.set(projectId, Math.min(current + additions.length, folderThreads.length))
+      }
     } finally {
       projectPageLoading = null
     }
