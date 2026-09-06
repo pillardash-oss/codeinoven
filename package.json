@@ -25,7 +25,8 @@
     "qs": "6.16.0",
     "fast-uri": "3.1.7",
     "@codemirror/state": "^6.7.2",
-    "@codemirror/view": "^6.43.10"
+    "@codemirror/view": "^6.43.10",
+    "undici": "6.28.1"
   },
   "scripts": {
     "postinstall": "bun scripts/ensure-electron-binary.ts && bun scripts/patch-binary-data.ts && bun scripts/patch-plist-xmldom.ts && bun scripts/patch-mammoth-xmldom.ts && bun scripts/patch-electron-builder-keychain.ts && electron-builder install-app-deps",
