@@ -21,13 +21,7 @@ export function validateReleasePromotion(input: {
   currentVersion: string
 }): void {
   const expectedHead =
-    input.baseBranch === 'nightly'
-      ? 'dev'
-      : input.baseBranch === 'main'
-        ? input.headBranch.startsWith('promotion/stable-')
-          ? input.headBranch
-          : 'nightly'
-        : null
+    input.baseBranch === 'nightly' ? 'dev' : input.baseBranch === 'main' ? 'nightly' : null
   if (!expectedHead) return
   if (input.headBranch !== expectedHead) {
     throw new Error(
@@ -57,8 +51,9 @@ export function validateReleasePromotion(input: {
     }
     return
   }
-  // main promotion: current must be exactly one patch ahead of base (e.g. 0.5.53 → 0.5.54).
-  // deploy:main commits this bump on a promotion/stable-v<version> branch.
+  // main promotion: current must be exactly one patch ahead of the last published
+  // stable base (e.g. 0.5.52 -> 0.5.53). deploy:main passes the last published
+  // stable release as the base version, since main's package.json can drift.
   if (compareVersions(currentVersion, baseVersion) <= 0) {
     throw new Error(
       `package.json version must increase for ${input.headBranch} → ${input.baseBranch} ` +

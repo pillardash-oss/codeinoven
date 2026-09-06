@@ -39,37 +39,29 @@ jobs:
             echo "::error::main must be promoted from the current nightly branch"
             exit 1
           fi
-          previous="$(git show "${BEFORE_SHA}:package.json" | jq -r .version)"
+          previous="$(gh release list --limit 1000 --json tagName,isPrerelease --jq '[.[] | select(.isPrerelease | not) | .tagName] | max_by(ltrimstr("v"))' | sed 's/^v//')"
           version="$(node -p "require('./package.json').version")"
           upstream="$(git show origin/nightly:package.json | jq -r .version)"
-          # Stable promotion bumps the version: deploy:main creates the bump on
-          # promotion/stable-v<version> from main, so main's version is exactly
-          # one patch ahead of the last-published stable. Nightly carries the
-          # NEXT stable version (stable 0.5.54 -> nightly 0.5.55-nightly.N), so
-          # main must equal nightly OR be one patch behind nightly (mid-cycle
-          # promotion before nightly moved on).
-          if [ "$version" != "$upstream" ]; then
-            expected="$(node -e "const v='$upstream'.split('.').map(Number); v[2]-=1; if(v[2]<0){v[2]=99;v[1]-=1} console.log(v.join('.'))")"
-            if [ "$version" != "$expected" ]; then
-              echo "::error::main version $version must be the next stable after the last release and at most one patch behind nightly $upstream (expected $expected or $upstream)"
-              exit 1
-            fi
-          fi
-          # Require at least one nightly prerelease for the base (supports both - and . separators for legacy)
-          if ! gh release list --limit 1000 --json tagName,isPrerelease | \
-            jq -e --arg base "$upstream" \
-              'any(.[]; .isPrerelease and (.tagName | test("^v\($base)-nightly[.-][0-9]+$")))' > /dev/null; then
-            # Also accept nightlies of the version being promoted (deploy:main bumps past nightly's base)
-            promoted="$(node -e "const v='$upstream'.split('.').map(Number); v[2]-=1; if(v[2]<0){v[2]=99;v[1]-=1} console.log(v.join('.'))")"
-            if ! gh release list --limit 1000 --json tagName,isPrerelease | \
-              jq -e --arg base "$promoted" \
-                'any(.[]; .isPrerelease and (.tagName | test("^v\($base)-nightly[.-][0-9]+$")))' >/dev/null; then
-              echo "::error::No published nightly prerelease exists for base $upstream or $promoted (expected v{base}-nightly-{N})"
-              exit 1
-            fi
+          # Semver-correct nightly: nightly's base IS the next stable version
+          # (stable 0.5.52 -> 0.5.53-nightly.N -> stable 0.5.53). The version
+          # being promoted must be exactly one patch ahead of the last
+          # PUBLISHED stable release (main's package.json can drift).
+          if [ -z "$previous" ]; then
+            echo "::error::Could not determine the last published stable release"
+            exit 1
           fi
           BASE_BRANCH=main HEAD_BRANCH=nightly BASE_VERSION="$previous" CURRENT_VERSION="$version" \
             bun scripts/validate-release-promotion.ts
+          if [ "$version" != "$upstream" ]; then
+            echo "::warning::main version $version differs from nightly version $upstream (expected nightly base to be promoted)"
+          fi
+          # Require at least one nightly prerelease for the version being promoted
+          if ! gh release list --limit 1000 --json tagName,isPrerelease | \
+            jq -e --arg base "$version" \
+              'any(.[]; .isPrerelease and (.tagName | test("^v\($base)-nightly[.-][0-9]+$")))' >/dev/null; then
+            echo "::error::No published nightly prerelease exists for base $version (expected v${version}-nightly-{N})"
+            exit 1
+          fi
 
   build:
     name: Build ${{ matrix.name }}
