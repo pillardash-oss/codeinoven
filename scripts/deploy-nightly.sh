@@ -147,27 +147,27 @@ DEV_VERSION="$(pkg_version dev)"
 # Semver-correct: stable 0.5.51 -> nightly 0.5.52-nightly-1 must be > stable.
 # dev must be one patch ahead of nightly (first nightly after stable),
 # or equal for subsequent nightlies on same base.
-# Only auto-bump when dev==nightly AND nightly equals stable (main) — i.e. first nightly after a stable.
+# Only auto-bump when dev==nightly — i.e. the next nightly cycle after dev caught up.
+# (deploy:main now bumps the stable version itself, so no main check is needed.)
 if ! BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$NIGHTLY_VERSION" \
     CURRENT_VERSION="$DEV_VERSION" bun scripts/validate-release-promotion.ts >/dev/null 2>&1; then
   if [ "$DEV_VERSION" = "$NIGHTLY_VERSION" ]; then
-    MAIN_VERSION="$(pkg_version origin/main 2>/dev/null || echo "$NIGHTLY_VERSION")"
-    if [ "$NIGHTLY_VERSION" = "$MAIN_VERSION" ]; then
-      warn "dev ($DEV_VERSION) equals nightly ($NIGHTLY_VERSION) which equals stable ($MAIN_VERSION) — bumping dev to next patch for semver-correct nightly (stable $MAIN_VERSION -> nightly $MAIN_VERSION+1)..."
-      if [[ "$DRY_RUN" -eq 0 ]]; then
-        git checkout dev
-        bun scripts/bump-version.ts
-        DEV_VERSION="$(pkg_version dev)"
-        git add package.json src/renderer/static/manifest.webmanifest services/remote-control/package.json
-        git commit -m "chore: bump version for nightly promotion"
-        git push origin dev
-        ok "Bumped dev to $DEV_VERSION and pushed."
-      else
-        say "(dry-run) bun scripts/bump-version.ts && git push origin dev"
-        DEV_VERSION="$(node -p "(() => { const v='"$DEV_VERSION"'.split('.').map(Number); let [M,m,p]=v; p+=1; if(p===100){p=0;m+=1} if(m===100){m=0;M+=1} return M+'.'+m+'.'+p })()")"
-      fi
+    # Stable promotion (deploy:main) bumps the stable version independently of
+    # nightly, so dev only needs to move one patch ahead of nightly to carry
+    # the next stable cycle. This keeps nightly's base one stable ahead of main
+    # (stable 0.5.54 -> nightly 0.5.55-nightly.N).
+    warn "dev ($DEV_VERSION) equals nightly ($NIGHTLY_VERSION) — bumping dev to next patch so nightly carries the next stable version..."
+    if [[ "$DRY_RUN" -eq 0 ]]; then
+      git checkout dev
+      bun scripts/bump-version.ts
+      DEV_VERSION="$(pkg_version dev)"
+      git add package.json src/renderer/static/manifest.webmanifest services/remote-control/package.json
+      git commit -m "chore: bump version for nightly promotion"
+      git push origin dev
+      ok "Bumped dev to $DEV_VERSION and pushed."
     else
-      die "dev ($DEV_VERSION) must be one patch ahead of nightly ($NIGHTLY_VERSION) for semver-correct nightly (nightly $NIGHTLY_VERSION is already ahead of stable $MAIN_VERSION)."
+      say "(dry-run) bun scripts/bump-version.ts && git push origin dev"
+      DEV_VERSION="$(node -p "(() => { const v='"$DEV_VERSION"'.split('.').map(Number); let [M,m,p]=v; p+=1; if(p===100){p=0;m+=1} if(m===100){m=0;M+=1} return M+'.'+m+'.'+p })()")"
     fi
   else
     die "dev ($DEV_VERSION) must be equal or one patch ahead of nightly ($NIGHTLY_VERSION) (e.g. stable $NIGHTLY_VERSION -> 0.5.52-nightly-1, then 0.5.52-nightly-2)."
