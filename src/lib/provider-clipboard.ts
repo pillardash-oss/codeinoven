@@ -28,6 +28,8 @@ export interface BaseUrlProviderClipboardData {
   headers: string
   /** Account status/usage route carried through copy/paste. Empty when none. */
   usagePath?: string
+  /** Model-list route carried through copy/paste. Empty when default. */
+  modelsPath?: string
   models: BaseUrlProviderModelClipboardData[]
   enabled: boolean
 }
@@ -127,6 +129,7 @@ function parseProvider(raw: unknown): BaseUrlProviderClipboardData {
     apiKey: optionalString(provider['apiKey']),
     headers: optionalString(provider['headers']),
     usagePath: optionalString(provider['usagePath']),
+    modelsPath: optionalString(provider['modelsPath']),
     models: provider['models'].map(parseModel),
     enabled: provider['enabled'] !== false
   }

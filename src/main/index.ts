@@ -603,11 +603,12 @@ async function bootPostPaintServices(): Promise<void> {
     scopeRootProvider(scopeRootResolver),
     modelPricingService
   )
-  // Grade any turn outcomes whose persisted deadline elapsed while the app was
-  // closed (non-fatal: a failed sweep leaves rows pending for the next launch).
+  // Grade any ranking snapshots whose persisted close deadline elapsed while
+  // the app was closed (non-fatal: a failed sweep leaves rows queued for the
+  // next launch).
   void chatEngine
-    .recoverPendingTurnGrades()
-    .catch((error) => Logger.dev('Pending turn grade recovery failed (non-fatal):', error))
+    .recoverPendingRankingGrades()
+    .catch((error) => Logger.dev('Pending ranking grade recovery failed (non-fatal):', error))
   // Merge the app-managed lean opencode agents into the machine-wide global
   // config. Idempotent, additive-only and non-fatal; runs after first paint
   // so it never blocks the workspace, and logs a dev-only summary.
@@ -638,7 +639,9 @@ async function bootPostPaintServices(): Promise<void> {
     undefined,
     (input) => chatEngine!.cleanupSpeechTranscript(input),
     (input) => chatEngine!.transcribeSpeechAudio(input),
-    (input) => chatEngine!.learnSpeechLessons(input)
+    (input) => chatEngine!.learnSpeechLessons(input),
+    (pid, command, cwd) =>
+      chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
   )
   await speechService.initialize()
   // Initialize auto-evict timers from persisted sound settings
@@ -769,7 +772,26 @@ async function bootPostPaintServices(): Promise<void> {
       import('./system/restart-recovery-service')
     ])
 
-    ptyService = new PtyService(storage, database, scopeRootResolver)
+    ptyService = new PtyService(
+      storage,
+      database,
+      scopeRootResolver,
+      (process) => {
+        chatEngine?.trackPtyProcess(
+          process.scopeId,
+          process.projectId,
+          process.threadId,
+          process.pid,
+          process.command,
+          process.cwd
+        )
+      },
+      (projectId, projectPath) => {
+        // User typed in a project terminal — open a user-activity window so
+        // their shell-driven edits are excluded from concurrent agent turns.
+        chatEngine?.recordUserTerminalInput(projectId, projectPath)
+      }
+    )
     // A probe that changes a harness's install state (new install, version
     // bump) invalidates cached provider catalogs so the model picker reflects it.
     providerConnection = new ProviderConnectionService(() => {
@@ -993,6 +1015,19 @@ async function bootPostPaintServices(): Promise<void> {
       Logger.error('Line-stats repair failed (non-fatal):', error)
     }
 
+    // One-time repair of file-change cards misattributed to hidden internal
+    // prompts (search nudges, mermaid repairs, incomplete-turn continuations)
+    // by turns that ran before internal attribution existed. Bounded,
+    // idempotent, and batched; a no-op once every candidate is repaired.
+    try {
+      const repaired = await new CheckpointManager(database).repairMisattributedInternalCheckpoints()
+      if (repaired > 0) {
+        Logger.info(`Reattributed ${repaired} internal-turn file-change checkpoints`)
+      }
+    } catch (error) {
+      Logger.error('Internal-attribution repair failed (non-fatal):', error)
+    }
+
     // Restore remote mode after paint so users can see app UI while the LAN
     // stack spins up in the background.
     reconcileRemoteTransportOwnership(true)
@@ -1081,6 +1116,19 @@ function createWindow(): BrowserWindow {
   }
   windowStateService.attach(window)
 
+  // Restore the persisted UI zoom level before the first paint of the page so
+  // the app never flashes at 100% for users with a custom zoom setting.
+  void storage
+    .getConfig()
+    .then((cfg) => {
+      if (!window.isDestroyed() && cfg.zoomLevel !== 1) {
+        window.webContents.setZoomFactor(cfg.zoomLevel)
+      }
+    })
+    .catch(() => {
+      // defaults already applied
+    })
+
   window.webContents.on('before-input-event', (event, input) => {
     // Cmd/Ctrl+W is handled by the renderer ("close the active surface": modal,
     // settings page, or thread). Prevent the default here so the macOS
@@ -1135,6 +1183,19 @@ function createWindow(): BrowserWindow {
   window.webContents.on('will-navigate', (event, url) => {
     if (!windowBoundaryValidator.isTrustedNavigation(url)) {
       event.preventDefault()
+    }
+  })
+
+  // Mouse side buttons (back/forward). Windows and Linux deliver them as app
+  // commands; the renderer walks its own in-app navigation history because the
+  // single-page window has no native browser history to navigate. On macOS no
+  // app-command is emitted — the renderer handles the raw buttons directly.
+  window.on('app-command', (_event, command) => {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) return
+    if (command === 'browser-backward') {
+      sendToRenderer(window.webContents, 'window:historyBack')
+    } else if (command === 'browser-forward') {
+      sendToRenderer(window.webContents, 'window:historyForward')
     }
   })
 

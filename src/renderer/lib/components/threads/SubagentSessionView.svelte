@@ -380,7 +380,7 @@
             {tab.activity.agent || 'Sub-agent'}
           </h2>
           <span
-            class="flex shrink-0 items-center gap-1 text-[10px] {effectiveStatus === 'error'
+            class="flex shrink-0 items-center gap-1 text-[0.625rem] {effectiveStatus === 'error'
               ? 'text-danger'
               : effectiveStatus === 'completed'
                 ? 'text-success'
@@ -429,7 +429,7 @@
       {#if tab.activity.prompt}
         <div class="ml-auto max-w-[90%]">
           <p
-            class="mb-1 text-right text-[9px] font-semibold uppercase tracking-[0.12em] text-dimmed"
+            class="mb-1 text-right text-[0.5625rem] font-semibold uppercase tracking-[0.12em] text-dimmed"
           >
             Delegated by parent
           </p>
@@ -457,8 +457,8 @@
           <CheckCircle2 size={14} class="mt-0.5 shrink-0 text-success" />
           <div class="min-w-0 flex-1">
             <p class="text-xs font-semibold text-foreground">Sub-agent connection recovered</p>
-            <p class="mt-0.5 text-[11px] leading-relaxed text-muted">{recoveryNotice.message}</p>
-            <p class="mt-1 text-[10px] text-dimmed">
+            <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">{recoveryNotice.message}</p>
+            <p class="mt-1 text-[0.625rem] text-dimmed">
               {formatTime(recoveryNotice.recoveredAt)}
             </p>
           </div>
@@ -477,7 +477,7 @@
       {#if actionError}
         <div class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5" role="alert">
           <p class="text-xs font-medium text-danger">Sub-agent action failed</p>
-          <p class="mt-1 text-[11px] text-muted">{actionError}</p>
+          <p class="mt-1 text-[0.6875rem] text-muted">{actionError}</p>
         </div>
       {/if}
 
@@ -489,10 +489,10 @@
       {:else if loadError}
         <div class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5">
           <p class="text-xs font-medium text-danger">Could not load the sub-agent session</p>
-          <p class="mt-1 text-[11px] text-muted">{loadError}</p>
+          <p class="mt-1 text-[0.6875rem] text-muted">{loadError}</p>
           <button
             type="button"
-            class="mt-2 text-[10px] font-medium text-info hover:underline"
+            class="mt-2 text-[0.625rem] font-medium text-info hover:underline"
             onclick={() => void loadMessages()}
           >
             Try again
@@ -508,7 +508,7 @@
                 <MarkdownView text={part.text} />
               {/each}
             </div>
-            <p class="mt-1 text-right text-[9px] text-dimmed">{formatTime(message.createdAt)}</p>
+            <p class="mt-1 text-right text-[0.5625rem] text-dimmed">{formatTime(message.createdAt)}</p>
           </div>
         {:else}
           {@const traceParts = workingParts(message)}
@@ -533,13 +533,13 @@
             {/each}
             {#if message.error}
               <div
-                class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-[11px] text-danger"
+                class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-[0.6875rem] text-danger"
               >
                 {message.error}
               </div>
             {/if}
             {#if message.completedAt}
-              <p class="text-[9px] text-dimmed">{formatTime(message.completedAt)}</p>
+              <p class="text-[0.5625rem] text-dimmed">{formatTime(message.completedAt)}</p>
             {/if}
           </div>
         {/if}
@@ -551,16 +551,16 @@
         </div>
       {:else if !sessionId && !loading && !loadError && !busy}
         {#if effectiveStatus === 'completed' || effectiveStatus === 'error'}
-          <p class="text-[10px] text-dimmed">
+          <p class="text-[0.625rem] text-dimmed">
             No further output was recorded for this sub-agent.
           </p>
         {:else}
-          <p class="text-[10px] text-dimmed">Sub-agent output will appear here as it is produced.</p>
+          <p class="text-[0.625rem] text-dimmed">Sub-agent output will appear here as it is produced.</p>
         {/if}
       {/if}
 
       {#if busy}
-        <div class="flex items-center gap-2 text-[10px] text-info">
+        <div class="flex items-center gap-2 text-[0.625rem] text-info">
           <Loader2 size={11} class="animate-spin" />
           Sub-agent working…
         </div>

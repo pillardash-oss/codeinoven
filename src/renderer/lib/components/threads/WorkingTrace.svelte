@@ -102,6 +102,53 @@
   const TRACE_SCROLL_THRESHOLD = 32
   let traceScrollEl = $state<HTMLDivElement>()
   let traceAtBottom = $state(true)
+  /** The trace renders its own pagination: the newest 15 entries first, and
+   *  one older page (15 more) whenever the reader scrolls the trace's inner
+   *  scroller until the ante-penultimate rendered item is in view. The header
+   *  count always reflects the FULL entry count — the window limits what
+   *  mounts, never what is reported. Entries come from the already-loaded
+   *  message cache, so paging here costs no IPC. */
+  const TRACE_PAGE_SIZE = 15
+  let traceWindow = $state(TRACE_PAGE_SIZE)
+  /** A live turn streams UNBOUNDED: every entry renders the instant it lands
+   *  so wrong direction can be caught and steered early. The 15-entry page
+   *  applies to finished traces (history), which load older pages lazily on
+   *  inner scroll. When the turn folds on completion, pagination restarts. */
+  const pagedParts = $derived(
+    busy ? visibleParts : visibleParts.slice(Math.max(0, visibleParts.length - traceWindow))
+  )
+
+  $effect(() => {
+    if (!busy) traceWindow = TRACE_PAGE_SIZE
+  })
+
+  /** Prepend one older page of trace entries, keeping the reader's viewport
+   *  stable across the mount (same compensation the conversation list uses). */
+  function expandTracePage(): void {
+    if (traceWindow >= visibleParts.length) return
+    const el = traceScrollEl
+    const previousHeight = el?.scrollHeight ?? 0
+    const previousTop = el?.scrollTop ?? 0
+    traceWindow = Math.min(visibleParts.length, traceWindow + TRACE_PAGE_SIZE)
+    void tick().then(() => {
+      if (!el) return
+      const grown = el.scrollHeight - previousHeight
+      if (grown > 0) el.scrollTop = previousTop + grown
+    })
+  }
+
+  /** Load the next older page once the ante-penultimate rendered entry
+   *  (third from the top of the current window) enters the scroller's view. */
+  function maybeExpandOlderEntries(element: HTMLDivElement): void {
+    if (busy || traceWindow >= visibleParts.length) return
+    const third = element.children[2] as HTMLElement | undefined
+    if (!third) return
+    const scrollerRect = element.getBoundingClientRect()
+    const thirdRect = third.getBoundingClientRect()
+    const visibleInScroller =
+      thirdRect.bottom > scrollerRect.top && thirdRect.top < scrollerRect.bottom
+    if (visibleInScroller) expandTracePage()
+  }
 
   // When no explicit start is available, fall back to the earliest working
   // part timestamp so the timer keeps counting even at message boundaries.
@@ -214,6 +261,7 @@
     if (!element) return
     traceAtBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight <= TRACE_SCROLL_THRESHOLD
+    maybeExpandOlderEntries(element)
   }
 
   // New live parts follow the trace only while the user remains at its bottom.
@@ -330,7 +378,7 @@
       <span class="ml-auto flex items-center gap-1.5">
         {#if hasCompaction}
           <span
-            class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[9px] text-info"
+            class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info"
             title="This trace includes compacted context. Forking from here restores the compaction summary."
             aria-label="Compacted context. Forking from here restores the compaction summary."
           >
@@ -342,7 +390,7 @@
           {#if coarsePointer}
             <button
               type="button"
-              class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-1 text-[9px] text-info transition-colors active:bg-info/20"
+              class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-1 text-[0.5625rem] text-info transition-colors active:bg-info/20"
               aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
               title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
               onclick={(e: MouseEvent) => {
@@ -361,7 +409,7 @@
           {:else}
             <DropdownMenu.Root>
               <DropdownMenu.Trigger
-                class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[9px] text-info transition-colors hover:bg-info/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-info/40"
+                class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info transition-colors hover:bg-info/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-info/40"
                 aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
                 title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
                 onclick={(e: MouseEvent) => {
@@ -386,12 +434,12 @@
                 >
                   <div class="flex items-center gap-1.5 px-2.5 py-1.5">
                     <Bot size={12} class="shrink-0 text-info" />
-                    <span class="text-[11px] font-semibold text-foreground">
+                    <span class="text-[0.6875rem] font-semibold text-foreground">
                       {subagentCount}
                       {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
                     </span>
                     {#if activeSubagentCount > 0}
-                      <span class="text-[10px] text-dimmed">
+                      <span class="text-[0.625rem] text-dimmed">
                         · {activeSubagentCount} running
                       </span>
                     {/if}
@@ -413,27 +461,27 @@
                         {:else}
                           <Clock size={13} class="shrink-0 text-dimmed" />
                         {/if}
-                        <span class="shrink-0 text-[11px] font-semibold text-foreground">
+                        <span class="shrink-0 text-[0.6875rem] font-semibold text-foreground">
                           {part.activity.agent || 'Sub-agent'}
                         </span>
-                        <span class="min-w-0 flex-1 truncate text-[11px] text-muted">
+                        <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted">
                           {part.activity.description}
                         </span>
                         {#if part.activity.background}
                           <span
-                            class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[9px] text-dimmed"
+                            class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.5625rem] text-dimmed"
                           >
                             <Layers3 size={9} />
                             Background
                           </span>
                         {/if}
                         {#if part.activity.time?.start}
-                          <span class="shrink-0 tabular-nums text-[10px] text-dimmed">
+                          <span class="shrink-0 tabular-nums text-[0.625rem] text-dimmed">
                             {formatDuration(subagentElapsed(part))}
                           </span>
                         {/if}
                         <span
-                          class="shrink-0 text-[10px] {status === 'error'
+                          class="shrink-0 text-[0.625rem] {status === 'error'
                             ? 'text-danger'
                             : status === 'running'
                               ? 'text-info'
@@ -455,10 +503,10 @@
   {#if isOpen}
     <div
       bind:this={traceScrollEl}
-      class="max-h-[min(55vh,36rem)] overflow-y-auto px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2"
+      class="max-h-[min(55vh,36rem)] overflow-y-auto overscroll-contain px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2"
       onscroll={onTraceScroll}
     >
-      {#each visibleParts as part (part.id)}
+      {#each pagedParts as part (part.id)}
         {#if part.type === 'reasoning'}
           <ThinkingBlock
             {part}
@@ -483,14 +531,14 @@
           </div>
         {:else if part.type === 'compaction-summary'}
           <div class="rounded-lg border border-border bg-elevated px-3 py-2">
-            <p class="mb-1 text-[11px] font-medium text-foreground">Compaction summary</p>
+            <p class="mb-1 text-[0.6875rem] font-medium text-foreground">Compaction summary</p>
             <div class="text-sm text-muted">
               <MarkdownView text={part.text} {onCiteFile} />
             </div>
           </div>
         {:else if part.type === 'step-finish'}
           {#if part.reason}
-            <span class="text-[10px] text-dimmed">Step complete · {part.reason}</span>
+            <span class="text-[0.625rem] text-dimmed">Step complete · {part.reason}</span>
           {/if}
         {:else if part.type === 'compaction'}
           <details class="rounded-lg border border-border bg-elevated">
@@ -504,19 +552,19 @@
               {/if}
               <div class="min-w-0">
                 <p
-                  class="flex flex-wrap items-center gap-1.5 text-[11px] font-medium text-foreground"
+                  class="flex flex-wrap items-center gap-1.5 text-[0.6875rem] font-medium text-foreground"
                 >
                   {part.auto ? 'Automatic compaction' : 'Compact Work'}
                   {#if !part.summary && !busy}
                     <span
-                      class="rounded-md bg-warning/10 px-1.5 py-0.5 text-[9px] font-normal text-warning"
+                      class="rounded-md bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-normal text-warning"
                       title="The harness completed compaction without producing a summary."
                     >
                       harness returned nothing
                     </span>
                   {/if}
                 </p>
-                <p class="text-[10px] text-dimmed">
+                <p class="text-[0.625rem] text-dimmed">
                   {part.summary
                     ? 'Earlier work summarized'
                     : part.overflow
@@ -532,7 +580,7 @@
             {/if}
           </details>
         {:else if part.type === 'file'}
-          <div class="flex items-center gap-1.5 text-[10px] text-dimmed">
+          <div class="flex items-center gap-1.5 text-[0.625rem] text-dimmed">
             {#if isImageMime(part.mime)}
               <img
                 src={imageUrls.getUrl(part.url)}
@@ -557,11 +605,11 @@
           {#if rehydrated}
             <span class="flex min-w-0 shrink items-center gap-2">
               <RefreshCw size={11} class="shrink-0 text-info" />
-              <span class="shrink-0 text-[10px] text-info/80">
+              <span class="shrink-0 text-[0.625rem] text-info/80">
                 Showing last saved activity · live run not confirmed
               </span>
               {#if effectiveStartTime}
-                <span class="shrink-0 tabular-nums text-[10px] text-info/80">
+                <span class="shrink-0 tabular-nums text-[0.625rem] text-info/80">
                   · {formatDuration(elapsed)}
                 </span>
               {/if}
@@ -569,9 +617,9 @@
           {:else}
             <span class="flex min-w-0 shrink items-center gap-2">
               <Loader2 size={11} class="shrink-0 animate-spin text-info" />
-              <span class="shrink-0 text-[10px] text-info/80">Agent working…</span>
+              <span class="shrink-0 text-[0.625rem] text-info/80">Agent working…</span>
               {#if effectiveStartTime}
-                <span class="shrink-0 tabular-nums text-[10px] text-info/80">
+                <span class="shrink-0 tabular-nums text-[0.625rem] text-info/80">
                   · {formatDuration(elapsed)}
                 </span>
               {/if}
@@ -579,7 +627,7 @@
           {/if}
           {#if modelLabel}
             <span
-              class="flex min-w-0 items-center gap-1.5 text-[10px] text-dimmed max-sm:basis-full max-sm:pl-[18px] max-sm:text-[9px] sm:ml-auto"
+              class="flex min-w-0 items-center gap-1.5 text-[0.625rem] text-dimmed max-sm:basis-full max-sm:pl-[18px] max-sm:text-[0.5625rem] sm:ml-auto"
             >
               {#if harnessId}
                 <span class="flex shrink-0 items-center gap-1">
@@ -607,7 +655,7 @@
               {/if}
               {#if thinkingLevel}
                 <span
-                  class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                  class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] capitalize text-muted"
                   title={`Thinking level: ${thinkingLevel}`}
                   aria-label={`Thinking level: ${thinkingLevel}`}
                 >

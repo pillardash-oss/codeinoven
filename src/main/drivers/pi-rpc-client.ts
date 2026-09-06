@@ -95,6 +95,12 @@ export class PiRpcClient {
     return !this.disposed && !this.child.killed
   }
 
+  /** The spawned `pi --mode rpc` child, exposed so drivers can register it
+   * with the app's process tracker (task manager, orphan reaping). */
+  get process(): ChildProcess {
+    return this.child
+  }
+
   /** Send an RPC command and resolve with its `data` once the matching response arrives. */
   send(command: Record<string, unknown>): Promise<unknown> {
     if (this.disposed || !this.child.stdin || this.child.killed) {
@@ -143,6 +149,17 @@ export class PiRpcClient {
   async steer(message: string, images?: PiRpcImage[]): Promise<void> {
     await this.send(
       images && images.length > 0 ? { type: 'steer', message, images } : { type: 'steer', message }
+    )
+  }
+
+  /** Queue a follow-up message processed after the agent finishes. Unlike
+   *  `steer`, this is accepted while no turn is streaming — pi runs it as the
+   *  continuation of the session (after compaction/retry windows settle). */
+  async followUp(message: string, images?: PiRpcImage[]): Promise<void> {
+    await this.send(
+      images && images.length > 0
+        ? { type: 'follow_up', message, images }
+        : { type: 'follow_up', message }
     )
   }
 

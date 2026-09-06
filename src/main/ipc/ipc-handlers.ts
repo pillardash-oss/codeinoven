@@ -71,7 +71,7 @@ import {
 import { parseThreadContextUsage } from '../database/repositories/thread-repo'
 import { AttachmentGrantRepo } from '../database/repositories/attachment-grant-repo'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
-import { TurnFeedbackRepo } from '../database/repositories/turn-feedback-repo'
+import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
 import { NoteRepo } from '../database/repositories/note-repo'
 import { readDocumentPreviewHtml } from '../drivers/document-attachment'
 import {
@@ -117,6 +117,7 @@ import {
   validateScopeCollapsePatch,
   validateScopeCreateInput,
   validateScopeLifecycleAction,
+  validateScopeMergeMode,
   validateScopeAdoptInput,
   validateScopeOrderIds,
   validateScopeSlice,
@@ -845,6 +846,10 @@ function validateLocalProfileAnalyticsRange(value: unknown): LocalProfileAnalyti
 }
 const CONFIG_PATCH_FIELDS = new Set([
   'theme',
+  'fontFamily',
+  'appFontSize',
+  'fontWeight',
+  'zoomLevel',
   'onboardingCompleted',
   'threadLimit',
   'questionTimeoutMs',
@@ -918,6 +923,7 @@ const AGENT_DEFAULT_FIELDS = new Set([
   'worker',
   'auditor',
   'imageDescriptor',
+  'imageDescriptorFallback',
   'syncFromThreadChanges'
 ])
 
@@ -1015,6 +1021,14 @@ function validateAgentDefaults(value: unknown): AgentDefaultsConfig {
           imageDescriptor: validateAgentModelSelection(
             value.imageDescriptor,
             'Image descriptor default'
+          )
+        }),
+    ...(value.imageDescriptorFallback === undefined
+      ? {}
+      : {
+          imageDescriptorFallback: validateAgentModelSelection(
+            value.imageDescriptorFallback,
+            'Image descriptor fallback default'
           )
         })
   }
@@ -1591,6 +1605,17 @@ function requireTimestamp(value: unknown, label: string): number {
   return value
 }
 
+/** Font family ids offered in Appearance settings. */
+const FONT_FAMILIES = new Set([
+  'jetbrains-mono',
+  'satoshi',
+  'system',
+  'sf-mono',
+  'menlo',
+  'monaco',
+  'fira-code'
+])
+
 /** Validate the complete renderer-controlled config boundary. */
 export function validateAppConfigPatch(value: unknown): AppConfigPatch {
   if (!isRecord(value)) throw new TypeError('Config patch must be an object')
@@ -1608,6 +1633,50 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Invalid theme')
     }
     patch.theme = value.theme as AppConfigPatch['theme']
+  }
+
+  if ('fontFamily' in value) {
+    if (typeof value.fontFamily !== 'string' || !FONT_FAMILIES.has(value.fontFamily)) {
+      throw new TypeError('Invalid font family')
+    }
+    patch.fontFamily = value.fontFamily
+  }
+
+  if ('appFontSize' in value) {
+    if (
+      typeof value.appFontSize !== 'number' ||
+      !Number.isInteger(value.appFontSize) ||
+      value.appFontSize < 12 ||
+      value.appFontSize > 18
+    ) {
+      throw new TypeError('App font size must be an integer between 12 and 18')
+    }
+    patch.appFontSize = value.appFontSize
+  }
+
+  if ('fontWeight' in value) {
+    if (
+      typeof value.fontWeight !== 'number' ||
+      !Number.isInteger(value.fontWeight) ||
+      value.fontWeight < 100 ||
+      value.fontWeight > 800 ||
+      value.fontWeight % 100 !== 0
+    ) {
+      throw new TypeError('Font weight must be a multiple of 100 between 100 and 800')
+    }
+    patch.fontWeight = value.fontWeight
+  }
+
+  if ('zoomLevel' in value) {
+    if (
+      typeof value.zoomLevel !== 'number' ||
+      !Number.isFinite(value.zoomLevel) ||
+      value.zoomLevel < 0.5 ||
+      value.zoomLevel > 2
+    ) {
+      throw new TypeError('Zoom level must be between 0.5 and 2')
+    }
+    patch.zoomLevel = value.zoomLevel
   }
 
   if ('onboardingCompleted' in value) {
@@ -2120,10 +2189,16 @@ function validateHeartbeatTimes(value: unknown): string[] {
   return [...new Set(times)]
 }
 
+/**
+ * Heartbeat thinking levels are optional — not every model supports thinking.
+ * Absent, null, or unrecognized levels (including driver-specific preset ids
+ * outside the standard set) simply omit the level instead of failing the save;
+ * the driver then applies its own default for the selected model.
+ */
 function validateHeartbeatThinkingLevel(value: unknown): ThinkingLevel | undefined {
-  if (value === undefined) return undefined
+  if (value === undefined || value === null) return undefined
   if (typeof value !== 'string' || !THINKING_LEVEL_ORDER.includes(value as ThinkingLevel)) {
-    throw new TypeError('Heartbeat thinking level is invalid')
+    return undefined
   }
   return value as ThinkingLevel
 }
@@ -2180,8 +2255,7 @@ export function registerIpcHandlers(
     | 'activeTurnChangeSummary'
     | 'hasActiveProcessesInScope'
     | 'abort'
-    | 'handleThreadReadForGrading'
-    | 'handleThreadDraftChangedForGrading'
+    | 'recordUserFileSave'
   > &
     Partial<Pick<ChatEngine, 'runVirtualTask'>>,
   options: RegisterIpcHandlersOptions = {}
@@ -2229,6 +2303,17 @@ export function registerIpcHandlers(
     },
     scopeRoots
   )
+  // The merge lifecycle deletes/moves threads in the source scope after the
+  // git merge lands; the thread manager is created after the worktree service,
+  // so the service receives it here.
+  scopeWorktreeService.attachThreadLifecycle({
+    countThreadsInScope: (projectId, bucketId) =>
+      threadManager.countThreadsInScope(projectId, bucketId),
+    deleteThreadsInScope: (projectId, bucketId) =>
+      threadManager.deleteThreadsInScope(projectId, bucketId),
+    moveThreadsOutOfScope: (projectId, fromBucketId) =>
+      threadManager.moveThreadsOutOfScope(projectId, fromBucketId)
+  })
   const historyEngine = new HistoryEngine(database)
   const engineeringLifecycleEngine = new EngineeringLifecycleEngine(database)
   const planEngine = new PlanEngine(storage, database)
@@ -2256,7 +2341,7 @@ export function registerIpcHandlers(
   const memoryService = new MemoryService(storage)
   const attachmentGrantRepo = new AttachmentGrantRepo(database)
   const harnessUsageRepo = new HarnessUsageRepo(database)
-  const turnFeedbackRepo = new TurnFeedbackRepo(database)
+  const modelRankingRepo = new ModelRankingRepo(database)
   const noteRepo = new NoteRepo(database)
 
   /**
@@ -2290,12 +2375,19 @@ export function registerIpcHandlers(
     'engineeringLifecycle:select',
     async (_, projectId: unknown, threadId: unknown, input: unknown) => {
       const ids = await waitForThreadReady(projectId, threadId)
+      const selectionInput = validateEngineeringLifecycleSelectionInput(input)
+      // The independent audit owns the workflow: engineering modes stay locked
+      // out of a thread for its lifetime once the audit switch was turned on.
+      if (selectionInput.autopilot === true || selectionInput.stages.length > 0) {
+        const auditThread = await threadManager.getThread(ids.projectId, ids.threadId)
+        if (auditThread?.independentAudit === true) {
+          throw new Error(
+            'Engineering modes are locked while the independent audit is enabled. Fork the thread to use them.'
+          )
+        }
+      }
       const previous = engineeringLifecycleEngine.get(ids.projectId, ids.threadId)
-      const next = engineeringLifecycleEngine.select(
-        ids.projectId,
-        ids.threadId,
-        validateEngineeringLifecycleSelectionInput(input)
-      )
+      const next = engineeringLifecycleEngine.select(ids.projectId, ids.threadId, selectionInput)
       // Engineering is now expressed purely through the lifecycle selection, so
       // the senior-engineer/auditor defaults attach the moment a thread first
       // gains an active selection (previously tied to the creation-time flag).
@@ -2317,50 +2409,57 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'engineeringLifecycle:start',
-    (_, projectId: unknown, threadId: unknown, stage: unknown) =>
-      engineeringLifecycleEngine.start(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
+    async (_, projectId: unknown, threadId: unknown, stage: unknown) => {
+      const ids = await waitForThreadReady(projectId, threadId)
+      return engineeringLifecycleEngine.start(
+        ids.projectId,
+        ids.threadId,
         stage === undefined || stage === null ? undefined : validateEngineeringLifecycleStage(stage)
       )
+    }
   )
   ipcMain.handle(
     'engineeringLifecycle:complete',
-    (_, projectId: unknown, threadId: unknown, stage: unknown) =>
-      engineeringLifecycleEngine.completeStage(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
+    async (_, projectId: unknown, threadId: unknown, stage: unknown) => {
+      const ids = await waitForThreadReady(projectId, threadId)
+      return engineeringLifecycleEngine.completeStage(
+        ids.projectId,
+        ids.threadId,
         validateEngineeringLifecycleStage(stage)
       )
+    }
   )
   ipcMain.handle(
     'engineeringLifecycle:resume',
-    (_, projectId: unknown, threadId: unknown, resumeToken: unknown, decision: unknown) =>
-      engineeringLifecycleEngine.resume(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
+    async (_, projectId: unknown, threadId: unknown, resumeToken: unknown, decision: unknown) => {
+      const ids = await waitForThreadReady(projectId, threadId)
+      return engineeringLifecycleEngine.resume(
+        ids.projectId,
+        ids.threadId,
         validateEngineeringLifecycleResumeToken(resumeToken),
         validateEngineeringLifecycleDecision(decision)
       )
+    }
   )
   ipcMain.handle(
     'engineeringLifecycle:retry',
-    (_, projectId: unknown, threadId: unknown, resumeToken: unknown) =>
-      engineeringLifecycleEngine.retry(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
+    async (_, projectId: unknown, threadId: unknown, resumeToken: unknown) => {
+      const ids = await waitForThreadReady(projectId, threadId)
+      return engineeringLifecycleEngine.retry(
+        ids.projectId,
+        ids.threadId,
         validateEngineeringLifecycleResumeToken(resumeToken)
       )
+    }
   )
   ipcMain.handle(
     'engineeringLifecycle:cancel',
     async (_, projectId: unknown, threadId: unknown, confirmed: unknown) => {
       if (confirmed !== true)
         throw new TypeError('Engineering lifecycle cancellation requires confirmation')
-      const pid = validateEntityId(projectId, 'Project ID')
-      const tid = validateEntityId(threadId, 'Thread ID')
-      const before = engineeringLifecycleEngine.get(pid, tid)
-      const result = engineeringLifecycleEngine.cancel(pid, tid)
+      const ids = await waitForThreadReady(projectId, threadId)
+      const before = engineeringLifecycleEngine.get(ids.projectId, ids.threadId)
+      const result = engineeringLifecycleEngine.cancel(ids.projectId, ids.threadId)
       // A user-initiated stop must halt the in-flight generation turn too,
       // otherwise the thread stays planning/executing and is re-surfaced on
       // view switch or resumed by restart recovery. abort() tears down the
@@ -2373,7 +2472,7 @@ export function registerIpcHandlers(
           before.selection !== 'none') &&
         chatEngine?.abort
       ) {
-        await chatEngine.abort(pid, tid)
+        await chatEngine.abort(ids.projectId, ids.threadId)
       }
       return result
     }
@@ -2498,14 +2597,14 @@ export function registerIpcHandlers(
   ipcMain.handle('account:getLocalUsage', async (_, input: unknown) => {
     const range = validateLocalProfileAnalyticsRange(input)
     const analytics = await harnessUsageRepo.profileAnalytics(range)
-    analytics.modelPerformance = turnFeedbackRepo.modelPerformance(range)
-    analytics.feedbackCost = turnFeedbackRepo.feedbackCost(range)
+    analytics.modelRankings = modelRankingRepo.analytics()
+    analytics.gradingSpend = modelRankingRepo.gradingSpend()
     return analytics
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('config:get', () => storage.getConfig())
-    ipcMain.handle('visionModels:list', () => storage.getVisionModels())
   }
+  ipcMain.handle('visionModels:list', () => storage.getVisionModels())
   const projectActionsPath = (projectId: string): string =>
     `projects/${validateEntityId(projectId, 'Project ID')}/actions.json`
   const readProjectActions = async (projectId: string): Promise<ProjectAction[]> => {
@@ -2538,12 +2637,25 @@ export function registerIpcHandlers(
     })
     if (new Set(variables.map((variable) => variable.name)).size !== variables.length)
       throw new TypeError('Variable names must be unique')
-    return { name, script, variables }
+    let color: string | null = null
+    const rawColor = record['color']
+    if (rawColor !== undefined && rawColor !== null && rawColor !== '') {
+      if (typeof rawColor !== 'string' || !/^#[0-9a-fA-F]{6}$/u.test(rawColor))
+        throw new TypeError('Action color is invalid')
+      color = rawColor.toLowerCase()
+    }
+    return { name, script, variables, color }
   }
   ipcMain.handle('projectActions:list', (_, projectId: string) => readProjectActions(projectId))
   ipcMain.handle(
     'projectActions:save',
-    async (_, projectId: string, actionId: string | null, value: unknown) => {
+    async (
+      _,
+      projectId: string,
+      actionId: string | null,
+      value: unknown,
+      insertAfterId?: string | null
+    ) => {
       const input = validateProjectActionInput(value)
       const actions = await readProjectActions(projectId)
       const now = Date.now()
@@ -2554,9 +2666,18 @@ export function registerIpcHandlers(
         createdAt: existing?.createdAt ?? now,
         updatedAt: now
       }
-      const next = existing
-        ? actions.map((item) => (item.id === action.id ? action : item))
-        : [...actions, action]
+      let next: ProjectAction[]
+      if (existing) {
+        next = actions.map((item) => (item.id === action.id ? action : item))
+      } else if (insertAfterId) {
+        // Duplicates land directly beneath the source action, not at the end.
+        const anchorIndex = actions.findIndex((item) => item.id === insertAfterId)
+        next = [...actions]
+        if (anchorIndex === -1) next.push(action)
+        else next.splice(anchorIndex + 1, 0, action)
+      } else {
+        next = [...actions, action]
+      }
       await storage.write(projectActionsPath(projectId), { actions: next })
       return action
     }
@@ -2591,6 +2712,10 @@ export function registerIpcHandlers(
     }
     const config = { ...(await storage.getConfig()), ...patch }
     await storage.saveConfig(config)
+    if (patch.zoomLevel !== undefined) {
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+      if (win && !win.isDestroyed()) win.webContents.setZoomFactor(config.zoomLevel)
+    }
     options.powerWakeService?.setEnabled(config.keepAwakeWhileWorking)
     options.powerWakeService?.setRemoteEnabled(config.keepAwakeWhileRemoteConnected)
     options.retryScheduler?.setEnabled(config.autoRetryAfterReset)
@@ -3717,8 +3842,24 @@ export function registerIpcHandlers(
       await threadManager.setStatus(validProjectId, validThreadId, 'completed')
       return threadManager.setAuditState(validProjectId, validThreadId, undefined)
     }
+    // Non-assignment implementation audits settle the coordinator on `spec`
+    // while the report is under review. Accepting the report ends the audit
+    // cycle, so the thread must land on `completed` instead of staying on
+    // "Spec ready" (which also keeps it out of the done slice and blocks
+    // thread cleanup). Guarded so an actively working thread is never clobbered.
+    const thread = await threadManager.getThread(validProjectId, validThreadId)
+    if (thread && thread.status === 'spec') {
+      await threadManager.setStatus(validProjectId, validThreadId, 'completed')
+    }
     return threadManager.setAuditState(validProjectId, validThreadId, undefined)
   })
+  ipcMain.handle('audit:dismiss', (_, projectId: unknown, threadId: unknown) =>
+    threadManager.setAuditState(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID'),
+      undefined
+    )
+  )
   ipcMain.handle('audit:beginRework', (_, projectId: unknown, threadId: unknown) =>
     threadManager.setAuditState(
       validateEntityId(projectId, 'Project ID'),
@@ -4100,10 +4241,10 @@ export function registerIpcHandlers(
     'attachment:saveText',
     async (_event, rawScope: unknown, rawText: unknown, rawExistingPath: unknown) => {
       const scope = validateAttachmentStorageScope(rawScope)
-      const text = validateBoundedString(rawText, 'Text attachment', 1, 16 * 1024 * 1024)
-      if (Buffer.byteLength(text, 'utf8') > 16 * 1024 * 1024) {
-        throw new TypeError('Text attachment must be at most 16 MB')
+      if (typeof rawText !== 'string' || rawText.trim().length === 0) {
+        throw new TypeError('Text attachment must be a non-empty string')
       }
+      const text = rawText
 
       const directory = await attachmentStorageDirectory(scope)
       await mkdir(directory, { recursive: true })
@@ -4132,7 +4273,13 @@ export function registerIpcHandlers(
   ipcMain.handle('clipboard:saveImage', async (_event, rawScope: unknown) => {
     try {
       const scope = validateAttachmentStorageScope(rawScope)
-      const image = clipboard.readImage()
+      const items = await clipboard.read()
+      const imageItem = items.find((item) => item.types.some((type) => type.startsWith('image/')))
+      const imageType = imageItem?.types.find((type) => type.startsWith('image/'))
+      if (!imageItem || !imageType) return null
+      const blob = await imageItem.getType(imageType)
+      if (!(blob instanceof Blob)) return null
+      const image = nativeImage.createFromBuffer(Buffer.from(await blob.arrayBuffer()))
       if (image.isEmpty()) return null
       const tempDir = await attachmentStorageDirectory(scope)
       await mkdir(tempDir, { recursive: true })
@@ -4409,7 +4556,12 @@ export function registerIpcHandlers(
         docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         doc: 'application/msword',
         odt: 'application/vnd.oasis.opendocument.text',
-        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        xls: 'application/vnd.ms-excel',
+        ods: 'application/vnd.oasis.opendocument.spreadsheet',
+        csv: 'text/csv',
+        tsv: 'text/tab-separated-values'
       }
       const mime = mimeByExtension[extension]
       if (!mime) return null
@@ -4641,14 +4793,12 @@ export function registerIpcHandlers(
       validateEntityId(bucketId, 'Scope bucket ID')
     )
   )
-  ipcMain.handle(
-    'scope:setPinned',
-    (_, projectId: unknown, bucketId: unknown, pinned: unknown) =>
-      scopeManager.setPinned(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(bucketId, 'Scope bucket ID'),
-        validateBoolean(pinned, 'Pinned')
-      )
+  ipcMain.handle('scope:setPinned', (_, projectId: unknown, bucketId: unknown, pinned: unknown) =>
+    scopeManager.setPinned(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(bucketId, 'Scope bucket ID'),
+      validateBoolean(pinned, 'Pinned')
+    )
   )
   ipcMain.handle('scope:setWorktreeDefaults', (_, projectId: unknown, defaults: unknown) =>
     scopeManager.setWorktreeDefaults(
@@ -4716,6 +4866,34 @@ export function registerIpcHandlers(
     const runSetup = input === undefined ? true : validateBoolean(input.runSetup, 'Run setup')
     return scopeWorktreeService.runSetupFromFailure(validatedTarget, { runSetup })
   })
+  ipcMain.handle(
+    'scope:worktree:confirmDeleteScope',
+    (_, target: unknown, confirmationId: unknown, deleteBranch: unknown) =>
+      scopeWorktreeService.confirmDeleteScope(
+        validateScopeTarget(target),
+        validateConfirmationToken(confirmationId),
+        validateBoolean(deleteBranch, 'Delete branch')
+      )
+  )
+  ipcMain.handle(
+    'scope:worktree:mergePreflight',
+    (_, target: unknown, mergeTarget: unknown, mode: unknown) =>
+      scopeWorktreeService.mergePreflight(
+        validateScopeTarget(target),
+        validateScopeTarget(mergeTarget),
+        validateScopeMergeMode(mode)
+      )
+  )
+  ipcMain.handle(
+    'scope:worktree:confirmMerge',
+    (_, target: unknown, mergeTarget: unknown, mode: unknown, confirmationId: unknown) =>
+      scopeWorktreeService.confirmMerge(
+        validateScopeTarget(target),
+        validateScopeTarget(mergeTarget),
+        validateScopeMergeMode(mode),
+        validateConfirmationToken(confirmationId)
+      )
+  )
   ipcMain.handle(
     'project:update',
     async (_, projectId: string, input: Partial<CreateProjectInput>) => {
@@ -4909,12 +5087,20 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'projectFiles:read',
-    (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
-      projectFilesService.readText(
-        validateEntityId(projectId, 'Project ID'),
-        requireString(relativePath, 'Project file path'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
-      )
+    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) => {
+      // Read failures (binary files, size limits, missing paths) are surfaced
+      // gracefully by renderer call sites; returning null avoids a noisy
+      // main-process "Error occurred in handler" log for every expected case.
+      try {
+        return await projectFilesService.readText(
+          validateEntityId(projectId, 'Project ID'),
+          requireString(relativePath, 'Project file path'),
+          scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        )
+      } catch {
+        return null
+      }
+    }
   )
   ipcMain.handle(
     'projectFiles:rename',
@@ -5030,7 +5216,15 @@ export function registerIpcHandlers(
         requireString(content, 'Project file content', true),
         revision,
         scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
-      )
+      ).then((result) => {
+        // The user saved this file themselves — record it so a concurrent
+        // agent turn's file-changes card never claims their edit.
+        chatEngine?.recordUserFileSave(
+          validateEntityId(projectId, 'Project ID'),
+          requireString(relativePath, 'Project file path')
+        )
+        return result
+      })
     }
   )
   ipcMain.handle(
@@ -5261,6 +5455,14 @@ export function registerIpcHandlers(
   )
   ipcMain.handle('git:branches', async (_, projectId: unknown, scopeBucketId?: unknown) =>
     gitService.listBranches(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
+  )
+  ipcMain.handle('git:defaultBranch', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.getDefaultBranch(
       await resolveProjectPath(
         validateEntityId(projectId, 'Project ID'),
         scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
@@ -5534,6 +5736,20 @@ export function registerIpcHandlers(
       )
   )
   ipcMain.handle(
+    'git:setRemoteUrl',
+    async (_, projectId: unknown, name: unknown, url: unknown, scopeBucketId?: unknown) =>
+      gitService.setRemoteUrl(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateRemoteName(name),
+        validateRemoteUrl(url)
+      )
+  )
+  ipcMain.handle(
     'git:removeRemote',
     async (_, projectId: unknown, name: unknown, scopeBucketId?: unknown) =>
       gitService.removeRemote(
@@ -5670,6 +5886,19 @@ export function registerIpcHandlers(
     'git:preparePrResolve',
     async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
       gitService.preparePrResolve(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validatePrResolveOptions(options)
+      )
+  )
+  ipcMain.handle(
+    'git:finishPrResolve',
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
+      gitService.finishPrResolve(
         await resolveProjectPath(
           validateEntityId(projectId, 'Project ID'),
           scopeBucketId === undefined
@@ -7403,19 +7632,17 @@ export function registerIpcHandlers(
     return threadManager.efficiencyKpisFor(safeProjectId, safeThreadId)
   })
   ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
-    // Opening a thread to read the final output anchors the LLM grading
-    // countdown for its pending turn outcomes.
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    chatEngine?.handleThreadReadForGrading(projectId, safeThreadId)
     return threadManager.markRead(projectId, safeThreadId)
   })
   ipcMain.handle(
     'thread:draftActivity',
     (_, projectId: string, threadId: string, drafting: boolean) => {
-      const safeProjectId = validateEntityId(projectId, 'Project ID')
-      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      // Composer activity no longer anchors any grading deadline: ranking
+      // conversations close on thread deletion or the inactivity deadline.
+      validateEntityId(projectId, 'Project ID')
+      validateEntityId(threadId, 'Thread ID')
       validateBoolean(drafting, 'Drafting')
-      chatEngine?.handleThreadDraftChangedForGrading(safeProjectId, safeThreadId, drafting)
     }
   )
   ipcMain.handle('thread:reorder', (_, projectId: unknown, orderedIds: unknown) =>
@@ -7462,6 +7689,18 @@ export function registerIpcHandlers(
       const safeSettings = validateThreadSettings(settings)
       await threadCreation.awaitReady(safeThreadId)
       return threadManager.updateSettings(safeProjectId, safeThreadId, safeSettings)
+    }
+  )
+  ipcMain.handle(
+    'thread:setIndependentAudit',
+    async (_, projectId: unknown, threadId: unknown, enabled: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      if (typeof enabled !== 'boolean') {
+        throw new Error('Independent audit toggle must be a boolean')
+      }
+      await threadCreation.awaitReady(safeThreadId)
+      return threadManager.setIndependentAudit(safeProjectId, safeThreadId, enabled)
     }
   )
   ipcMain.handle(

@@ -174,7 +174,7 @@
     <div class="mb-2 flex items-center justify-between">
       <div>
         <h3 class="text-sm font-semibold">Custom providers</h3>
-        <p class="text-[11px] text-dimmed">API keys stay in secure storage.</p>
+        <p class="text-[0.6875rem] text-dimmed">API keys stay in secure storage.</p>
       </div>
       <button
         class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
@@ -193,7 +193,7 @@
       >
         <button
           type="button"
-          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {!harnessFilterActive
+          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
             ? 'border-primary bg-primary text-on-primary'
             : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
           aria-pressed={!harnessFilterActive}
@@ -206,7 +206,7 @@
         {#each filterHarnesses as harness (harness.id)}
           <button
             type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {selectedHarnesses.has(
+            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {selectedHarnesses.has(
               harness.id
             )
               ? 'border-primary bg-primary text-on-primary'
@@ -222,7 +222,7 @@
         {#if harnessFilterActive}
           <button
             type="button"
-            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium text-muted hover:bg-overlay hover:text-foreground"
+            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
             title="Clear harness filter"
             onclick={clearHarnessFilter}
           >
@@ -266,7 +266,7 @@
               <div class="flex items-center gap-2">
                 <p class="truncate text-xs font-semibold">{provider.name}</p>
                 <span
-                  class="rounded-full px-1.5 py-0.5 text-[10px] font-medium {provider.enabled
+                  class="rounded-full px-1.5 py-0.5 text-[0.625rem] font-medium {provider.enabled
                     ? 'bg-success/10 text-success'
                     : 'bg-raised text-dimmed'}"
                 >
@@ -276,7 +276,7 @@
               <div class="mt-0.5 flex flex-wrap items-center gap-x-1 gap-y-0.5">
                 {#each group as member (member.harnessId)}
                   <span
-                    class="flex items-center gap-1 rounded-full bg-raised px-1.5 py-0.5 text-[10px] text-dimmed"
+                    class="flex items-center gap-1 rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] text-dimmed"
                     title={providerName(member.harnessId)}
                   >
                     <AgentIcon
@@ -287,13 +287,13 @@
                     {providerName(member.harnessId)}
                   </span>
                 {/each}
-                <span class="text-[10px] text-dimmed">
+                <span class="text-[0.625rem] text-dimmed">
                   · {provider.models.length}
                   {provider.models.length === 1 ? 'model' : 'models'}
                 </span>
               </div>
             </div>
-            <p class="truncate font-mono text-[10px] text-dimmed" title={provider.baseURL}>
+            <p class="truncate font-mono text-[0.625rem] text-dimmed" title={provider.baseURL}>
               {provider.baseURL}
             </p>
             <div class="flex items-center gap-1">

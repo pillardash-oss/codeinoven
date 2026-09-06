@@ -194,10 +194,10 @@
       {part.state.title ?? part.tool}
     </span>
     {#if start}
-      <span class="tabular-nums text-[10px] text-dimmed">{formatDuration(elapsed)}</span>
+      <span class="tabular-nums text-[0.625rem] text-dimmed">{formatDuration(elapsed)}</span>
     {/if}
     {#if !open && inputPreview}
-      <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-dimmed">{inputPreview}</span>
+      <span class="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-dimmed">{inputPreview}</span>
     {:else}
       <span class="flex-1"></span>
     {/if}
@@ -213,9 +213,9 @@
         <InlineToolDiff diffs={displayDiffs} />
       {:else if Object.keys(part.state.input).length > 0}
         <div>
-          <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed">Input</p>
+          <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Input</p>
           <pre
-            class="max-h-40 overflow-auto rounded-md bg-elevated p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted">{JSON.stringify(
+            class="max-h-40 overflow-auto rounded-md bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted">{JSON.stringify(
               part.state.input,
               null,
               2
@@ -224,17 +224,17 @@
       {/if}
       {#if displayDiffs.length === 0 && part.state.output}
         <div>
-          <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed">Output</p>
+          <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Output</p>
           <pre
-            class="max-h-40 overflow-auto rounded-md bg-elevated p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-foreground">{part
+            class="max-h-40 overflow-auto rounded-md bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-foreground">{part
               .state.output}</pre>
         </div>
       {/if}
       {#if part.state.error}
         <div>
-          <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed">Error</p>
+          <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Error</p>
           <pre
-            class="max-h-40 overflow-auto rounded-md bg-danger/5 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-danger">{part
+            class="max-h-40 overflow-auto rounded-md bg-danger/5 p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-danger">{part
               .state.error}</pre>
         </div>
       {/if}

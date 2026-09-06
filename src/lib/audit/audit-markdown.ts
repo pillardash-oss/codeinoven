@@ -60,7 +60,11 @@ export function exportAuditReportMarkdown(
     '# Audit Report',
     '',
     `Audit-Version: ${report.version}`,
-    `Specification: ${report.specId} v${report.specVersion}`,
+    ...(report.specId !== undefined && report.specVersion !== undefined
+      ? [`Specification: ${report.specId} v${report.specVersion}`]
+      : report.independent === true
+        ? ['Audit-Scope: Independent (no specification)']
+        : []),
     ...(report.assignmentId && report.assignmentVersion !== undefined
       ? [
           `Assignment: ${report.assignmentId} v${report.assignmentVersion}`,

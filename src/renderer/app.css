@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import '@fontsource-variable/jetbrains-mono';
 
 /* ─── CodeInOven Design Tokens ───────────────────────────────────────────── */
 /* Obsidian #081825 | Ivory #F7F6F2 | Auric #D4AF37 */
@@ -77,8 +78,15 @@
   --color-terminal-bright-cyan: #87d7d7;
   --color-terminal-bright-white: #f5f4f0;
 
-  /* Font */
-  --font-sans: 'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* Font — the whole app renders in JetBrains Mono (bundled, Ghostty's
+     default family) for a uniform dev-workspace feel with unambiguous
+     code glyphs like backticks. --font-app is overridden at runtime by
+     the Appearance settings (app-config store). */
+  --font-app: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace,
+    'SFMono-Regular', Menlo, monospace;
+  --font-sans: var(--font-app);
+  --font-mono: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace,
+    'SFMono-Regular', Menlo, Monaco, 'Cascadia Code', monospace;
 }
 
 /* ─── Dark Mode ──────────────────────────────────────────────────────────── */
@@ -120,12 +128,21 @@ html {
 }
 
 body {
-  font-family: var(--font-sans);
+  font-family: var(--font-app);
+  /* Explicit, user-settable base weight (Appearance settings); 300 keeps
+     JetBrains Mono prose light next to semibold chrome. */
+  font-weight: var(--font-weight-base, 200);
   background-color: var(--color-app);
   color: var(--color-foreground);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
+  /* JetBrains Mono ships programming ligatures (contextual alternates) for
+     sequences like "...", "??", "//", "->" — great in a code editor, but a
+     dev workspace's prose and composers need every literal character to
+     render as typed, not merge into a compact glyph. Disable app-wide. */
+  font-variant-ligatures: none;
+  font-feature-settings: 'calt' 0, 'liga' 0, 'dlig' 0;
 }
 
 /* Any scroll call that passes an explicit `behavior` (e.g. the chat stream's
@@ -242,9 +259,15 @@ body {
 .markdown-body {
   min-width: 0;
   max-width: 100%;
-  line-height: 1.65;
+  /* Conversation gets the comfortable reading treatment: a step larger than
+     panel chrome and a generous line-height for long prose. */
+  font-size: 0.8125rem;
+  line-height: 1.8;
   overflow-wrap: anywhere;
   white-space: normal;
+  /* Dev workspace: chat prose follows the app font so code characters
+     like backticks are unambiguous. */
+  font-family: var(--font-app);
 }
 
 .markdown-body > * {
@@ -346,7 +369,16 @@ body {
 }
 
 .markdown-body ol {
-  list-style: decimal;
+  list-style: decimal outside;
+  padding-left: 1.75em;
+}
+
+/* Keep ordered-list numbers visible and legible even under aggressive
+   preflight resets (they were reported disappearing on the CIO Prompts page). */
+.markdown-body ol > li::marker {
+  content: counter(list-item) '. ';
+  color: var(--color-muted);
+  font-weight: 500;
 }
 
 .markdown-body li + li,
@@ -374,9 +406,19 @@ body {
   color: var(--color-muted);
 }
 
-.markdown-body table {
+.markdown-body .md-table-wrap {
   display: block;
+  max-width: 100%;
   overflow-x: auto;
+}
+
+.markdown-body table {
+  /* Native table column sizing: every column keeps at least one word of
+     width; content wider than the container scrolls inside .md-table-wrap
+     instead of squeezing sibling columns. min-width keeps narrow tables
+     filling the container like a normal block. */
+  width: 100%;
+  min-width: max-content;
   border-collapse: collapse;
   font-size: 0.9em;
 }
@@ -386,6 +428,12 @@ body {
   border: 1px solid var(--color-border);
   padding: 0.35em 0.6em;
   text-align: left;
+  /* Cells may wrap long tokens inside their own column (GitHub-style):
+     the table's min-width: max-content guarantees each column its natural
+     width first, so `anywhere` only kicks in when the table is genuinely
+     wider than the container. */
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .markdown-body th {
@@ -599,10 +647,23 @@ body {
   color: inherit;
 }
 
+html body [data-sonner-toaster] {
+  /* svelte-sonner hard-codes its own system font stack inline; keep toasts
+     on the app font for uniformity (needs !important to beat the inline style). */
+  font-family: var(--font-app) !important;
+}
+
 /* ─── Rich markdown editor: GitHub-style links and footnotes ────────────── */
 /* Links render for recognition (GitHub reference-style + inline) but clicks
    are intercepted in the editor so composing never navigates. Footnote
    references render as superscript numbers like GitHub. */
+.rich-markdown-editor {
+  /* The composer mirrors chat prose: same comfortable reading size. */
+  font-size: 0.8125rem;
+  line-height: 1.8;
+  font-family: var(--font-app);
+}
+
 .rich-markdown-editor a[data-editor-link] {
   color: var(--color-info);
   text-decoration: underline;
@@ -653,5 +714,40 @@ body {
 @media (hover: none) {
   [class~='group-hover:opacity-100'] {
     opacity: 1;
+  }
+}
+
+/* ─── Conversation message blocks ────────────────────────────────────────── */
+/*
+ * Note: content-visibility was removed here deliberately. It once carried its
+ * weight when the whole transcript mounted, but the mounted window is now
+ * bounded (~40 messages) and oversized single runs render collapsed via
+ * LongTextBlock, so there is nothing left for it to skip — and its
+ * near-viewport misclassification during batch mounts above the scroll
+ * position was observed to blank the entire conversation while the reader was
+ * scrolled up (recovered only on the next paint). The entrance fade stays.
+ */
+.message-block {
+  /* Subtle entrance: window fills and streaming appends mount blocks in
+   * batches, and a hard pop-in reads as jank. A short opacity-only fade
+   * (no transform — a transform here would briefly become the containing
+   * block for fixed-position tooltips inside the block) masks the appearance
+   * without costing layout. Compositor-only, so it stays cheap even when
+   * dozens of blocks mount in one batch. */
+  animation: message-block-enter 150ms ease-out;
+}
+
+@keyframes message-block-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-block {
+    animation: none;
   }
 }

@@ -2,11 +2,13 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { pathToFileUrl } from '$lib/mime'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
-  import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
+  import { DEFAULT_SCOPE_BUCKET_ID, type PromptAttachment } from '$shared/types'
   import type {
     GitBranchInfo,
     GitCommitInfo,
@@ -132,6 +134,14 @@
   let forceDeleteBranchConfirm = $state<string | null>(null)
   let creatingBranch = $state(false)
   let newBranchName = $state('')
+  /** Add/Replace Git Origin modal on the branch picker. */
+  let originModalOpen = $state(false)
+  let originMode = $state<'add' | 'replace'>('add')
+  let originName = $state('origin')
+  let originUrl = $state('')
+  let originBusy = $state(false)
+  /** Destructive confirmation that a replace-origin is intended. */
+  let originReplaceConfirm = $state(false)
   let acknowledgeActiveTurn = $state(false)
   let agentTurnActive = $state(false)
   let activeTab = $state<TabId>(savedView.activeTab)
@@ -241,6 +251,10 @@
   async function refreshStatus(): Promise<void> {
     gitState.ensureProjectEvents(projectId)
     await gitState.refresh(projectId)
+    // The refresh button must bring the whole panel up to date, including the
+    // History tab — its pages are cached client-side and would otherwise keep
+    // showing stale commits until a mutation happens to reload them.
+    if (activeTab === 'history' || commitHistory.length > 0) await reloadHistory()
   }
 
   async function loadRepoState(): Promise<void> {
@@ -438,8 +452,8 @@
     activeTab = 'deployments'
   }
 
-  /** Open a new agent thread with bounded deployment evidence prefilled. */
-  async function createDeploymentDiagnosisThread(title: string, prompt: string): Promise<void> {
+  /** Open a new agent thread and return it, or null when unavailable. */
+  async function createDeploymentDiagnosisThread(title: string) {
     const project = await invoke('project:get', projectId).catch(() => null)
     if (!project) return
     const thread = await invoke('thread:create', {
@@ -450,8 +464,7 @@
       settings: { ...threadSettings.lastUsed }
     }).catch(() => null)
     if (!thread) return
-    rendererRecovery.setDraft(projectId, thread.id, prompt, [], [])
-    workspaceState.openThread(thread, project)
+    return thread
   }
 
   /** Keep one failed job's evidence useful without overfilling the composer. */
@@ -482,10 +495,39 @@
         'Job log: unavailable; diagnose from the supplied metadata and local files.'
       ]
     }
-    const maxChars = 24_000
+    const maxChars = 4_000
     const excerpt =
       log.log.length > maxChars ? `[earlier output omitted]\n${log.log.slice(-maxChars)}` : log.log
-    return [...lines, '', 'Failed job log excerpt:', '```text', excerpt, '```']
+    return [
+      ...lines,
+      '',
+      'Failed job log excerpt (the full log is attached as "Pasted text.txt"):',
+      '```text',
+      excerpt,
+      '```'
+    ]
+  }
+
+  /**
+   * Save the full job log through the composer's existing pasted-text
+   * pipeline (the same one used for long clipboard pastes), so large logs
+   * never flow through the prompt itself (which caps at 200k characters).
+   */
+  async function jobLogAttachment(
+    log: GitHubDeploymentJobLog,
+    threadId: string
+  ): Promise<PromptAttachment[]> {
+    try {
+      const path = await invoke(
+        'attachment:saveText',
+        { kind: 'chat', projectId, threadId },
+        log.log
+      )
+      return [{ mime: 'text/plain', url: pathToFileUrl(path), filename: 'Pasted text.txt' }]
+    } catch (error) {
+      reportError(error, 'Could not attach the job log.')
+      return []
+    }
   }
 
   function startWorkflowDiagnosis(
@@ -511,7 +553,15 @@
       'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials.',
       'Do not push, rerun workflows, or deploy.'
     ].join('\n')
-    void createDeploymentDiagnosisThread(`Review failed job: ${job.name}`, prompt)
+    void (async () => {
+      const project = await invoke('project:get', projectId).catch(() => null)
+      if (!project) return
+      const thread = await createDeploymentDiagnosisThread(`Review failed job: ${job.name}`)
+      if (!thread) return
+      const attachments = log ? await jobLogAttachment(log, thread.id) : []
+      rendererRecovery.setDraft(projectId, thread.id, prompt, attachments, [])
+      workspaceState.openThread(thread, project)
+    })()
   }
 
   function startDeploymentDiagnosis(
@@ -539,7 +589,15 @@
       'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials.',
       'Do not push, rerun workflows, or deploy.'
     ].join('\n')
-    void createDeploymentDiagnosisThread(`Review failed job: ${job.name}`, prompt)
+    void (async () => {
+      const project = await invoke('project:get', projectId).catch(() => null)
+      if (!project) return
+      const thread = await createDeploymentDiagnosisThread(`Review failed job: ${job.name}`)
+      if (!thread) return
+      const attachments = log ? await jobLogAttachment(log, thread.id) : []
+      rendererRecovery.setDraft(projectId, thread.id, prompt, attachments, [])
+      workspaceState.openThread(thread, project)
+    })()
   }
 
   /**
@@ -607,10 +665,13 @@
    */
   async function resolveConflictsLocally(pr: PullRequestSummary): Promise<void> {
     const remote = primaryRemote?.name ?? 'origin'
+    const returnBranch = gitState.status?.branch ?? 'main'
     await gitState.preparePrResolve(projectId, {
       remote,
       pullNumber: pr.number,
-      baseBranch: pr.baseRef
+      baseBranch: pr.baseRef,
+      headBranch: pr.headRef,
+      returnBranch
     })
     if (gitState.error) return
     selectedPullRequest = null
@@ -628,10 +689,13 @@
     const project = await invoke('project:get', projectId).catch(() => null)
     if (!project) return
     const remote = primaryRemote?.name ?? 'origin'
+    const returnBranch = gitState.status?.branch ?? 'main'
     await gitState.preparePrResolve(projectId, {
       remote,
       pullNumber: pr.number,
-      baseBranch: pr.baseRef
+      baseBranch: pr.baseRef,
+      headBranch: pr.headRef,
+      returnBranch
     })
     if (gitState.error) return
     const conflictedPaths = [...gitState.conflicted]
@@ -675,7 +739,7 @@
       '1. `git add -A`',
       `2. \`git commit -m "Resolve merge conflicts with ${pr.baseRef}"\``,
       '',
-      'Do NOT push — finish in the Git panel with the app push, which uses your stored GitHub credentials.'
+      'Do NOT push — after committing, the user finishes in the Git panel with the Resolve merge button, which pushes the resolution to the pull request and cleans up the temporary branch.'
     ].join('\n')
   }
 
@@ -701,11 +765,15 @@
     if (commitHistory.length > 0) return
     loadingHistory = true
     const request = ++historyRequestId
-    const page = await gitState.getLog(projectId, HISTORY_PAGE_SIZE)
-    if (request !== historyRequestId) return
-    commitHistory = page
-    historyHasMore = page.length === HISTORY_PAGE_SIZE
-    loadingHistory = false
+    try {
+      const page = await gitState.getLog(projectId, HISTORY_PAGE_SIZE)
+      if (request !== historyRequestId) return
+      commitHistory = page
+      historyHasMore = page.length === HISTORY_PAGE_SIZE
+    } finally {
+      // A superseded or failed request must never leave the spinner stuck.
+      if (request === historyRequestId) loadingHistory = false
+    }
   }
 
   /** Pages in older commits as the history list scrolls toward its end. */
@@ -713,14 +781,14 @@
     if (loadingHistory || loadingMoreHistory || !historyHasMore) return
     loadingMoreHistory = true
     const request = ++historyRequestId
-    const page = await gitState.getLog(projectId, HISTORY_PAGE_SIZE, commitHistory.length)
-    if (request !== historyRequestId) {
-      loadingMoreHistory = false
-      return
+    try {
+      const page = await gitState.getLog(projectId, HISTORY_PAGE_SIZE, commitHistory.length)
+      if (request !== historyRequestId) return
+      commitHistory = [...commitHistory, ...page]
+      historyHasMore = page.length === HISTORY_PAGE_SIZE
+    } finally {
+      if (request === historyRequestId) loadingMoreHistory = false
     }
-    commitHistory = [...commitHistory, ...page]
-    historyHasMore = page.length === HISTORY_PAGE_SIZE
-    loadingMoreHistory = false
   }
 
   /** Infinite scroll for the History tab — the panel's tabs share one scroll container. */
@@ -1341,7 +1409,111 @@
     }
   }
 
+  /** Open the Add-origin modal (no remote configured yet). */
+  function openAddOrigin(): void {
+    originMode = 'add'
+    originName = 'origin'
+    originUrl = ''
+    originReplaceConfirm = false
+    originModalOpen = true
+  }
+
+  /** Open the Replace-origin modal, prefilled with the current primary remote URL. */
+  function openReplaceOrigin(): void {
+    originMode = 'replace'
+    originName = primaryRemote?.name ?? 'origin'
+    originUrl = primaryRemote?.url ?? ''
+    originReplaceConfirm = false
+    originModalOpen = true
+  }
+
+  function closeOriginModal(): void {
+    if (originBusy) return
+    originModalOpen = false
+    originReplaceConfirm = false
+  }
+
+  /** First step of the save button: replace routes through a destructive
+   *  confirmation first; add commits immediately. */
+  function requestSetOrigin(): void {
+    if (!originUrl.trim() || originBusy) return
+    if (originMode === 'replace') {
+      originReplaceConfirm = true
+      return
+    }
+    void runSetOrigin()
+  }
+
+  /** `git remote add <name> <url>` or `git remote set-url <name> <url>`. */
+  async function runSetOrigin(): Promise<void> {
+    const name = originName.trim()
+    const url = originUrl.trim()
+    if (!url || !name || originBusy) return
+    originBusy = true
+    const mode = originMode
+    try {
+      if (mode === 'replace') {
+        await gitState.setRemoteUrl(projectId, name, url)
+      } else {
+        await gitState.addRemote(projectId, name, url)
+      }
+      if (!gitState.error) {
+        originModalOpen = false
+        originReplaceConfirm = false
+        originUrl = ''
+        void refreshStatus()
+      }
+    } finally {
+      originBusy = false
+    }
+  }
+
   const conflictState = $derived(gitState.conflictState)
+
+  /**
+   * A merge is in progress (MERGE_HEAD exists) and every conflicted file has
+   * been resolved and staged. Git is waiting for the merge commit, so the
+   * panel surfaces a dedicated Resolve button instead of leaving the user to
+   * figure out that a normal commit finishes the merge.
+   */
+  const mergePending = $derived(conflictState === 'merge' && conflicted.length === 0)
+
+  /** Resolve-merge modal state: optional title/description, defaults auto-generated. */
+  let resolveMergeOpen = $state(false)
+  let mergeTitle = $state('')
+  let mergeDescription = $state('')
+  const resolveMergeBusy = $derived(gitState.isBusy(['commit', 'push']))
+
+  function openResolveMerge(): void {
+    mergeTitle = ''
+    mergeDescription = ''
+    resolveMergeOpen = true
+  }
+
+  /** The commit message actually used: user text when given, a generated default otherwise. */
+  function mergeCommitMessage(): string {
+    const title = mergeTitle.trim()
+    const description = mergeDescription.trim()
+    const resolvedTitle =
+      title || `Merge ${status?.upstream ? `branch '${status.upstream}'` : 'changes'}`
+    return description ? `${resolvedTitle}\n\n${description}` : resolvedTitle
+  }
+
+  async function confirmResolveMerge(): Promise<void> {
+    if (resolveMergeBusy) return
+    await gitState.commit(projectId, mergeCommitMessage())
+    if (gitState.error) return
+    // A recorded PR-conflict session finishes itself: push the resolution back
+    // to the PR head branch, check out the original branch, delete pr-<n>.
+    // A plain local merge is already complete once committed.
+    const finished = await gitState.finishPrResolve(projectId)
+    if (!finished && gitState.prResolveSession) return
+    resolveMergeOpen = false
+    mergeTitle = ''
+    mergeDescription = ''
+    void refreshStatus()
+  }
+
   const integrateBusy = $derived(
     gitState.isBusy(['merge', 'rebase', 'stash', 'abortMerge', 'abortRebase'])
   )
@@ -1612,11 +1784,23 @@
   const workingSections = $derived(
     fileSections.filter((section) => section.title !== 'Staged' && section.title !== 'Conflicts')
   )
-  /**
+    /**
    * Panes: Conflicts (if any) shares the stack with Staged/Unstaged/Untracked.
-   * Each pane gets equal flex space when several exist; a lone pane fills it all.
+   * Each pane hugs its content so adjacent panes stay attached (no dead space
+   * between them). When several panes are visible at once, each is capped at
+   * 50% of the shared height (taller content scrolls inside the pane). When
+   * only one pane is visible, it may grow to fill the full container instead.
    */
-  const paneClass = 'min-h-0 flex-1 overflow-y-auto'
+  const visiblePaneCount = $derived(
+    (conflictSections.length > 0 ? 1 : 0) +
+      (stagedSections.length > 0 ? 1 : 0) +
+      (workingSections.length > 0 ? 1 : 0)
+  )
+  const singlePaneClass = 'min-h-0 flex-1 overflow-y-auto'
+  const sharedPaneClass = 'min-h-0 max-h-[50%] overflow-y-auto'
+  const paneClass = $derived(
+    visiblePaneCount > 1 ? sharedPaneClass : singlePaneClass
+  )
 </script>
 
 {#snippet commitTreeNode(node: CommitTreeNode, depth: number)}
@@ -1635,7 +1819,7 @@
         <ChevronDown size={12} class="shrink-0 text-dimmed" />
         <FolderOpen size={13} class="shrink-0 text-dimmed" />
       {/if}
-      <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">{dir.name}</span>
+      <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">{dir.name}</span>
     </button>
     {#if !dirCollapsed}
       {@render commitTreeNode(dir, depth + 1)}
@@ -1702,10 +1886,10 @@
               >
                 <Search size={12} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
                 <span class="min-w-0 flex-1">
-                  <span class="block truncate text-[11px] leading-snug">
+                  <span class="block truncate text-[0.6875rem] leading-snug">
                     {commit.message.split('\n')[0]}
                   </span>
-                  <span class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                  <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
                     <span class="font-mono">{commit.shortHash}</span>
                     <span>·</span>
                     <span class="truncate">{commit.author}</span>
@@ -1742,11 +1926,13 @@
           onSelect={requestCheckout}
           onCreate={(name) => void createBranchAction(name)}
           onDelete={(name) => void deleteBranchAction(name)}
+          onAddOrigin={openAddOrigin}
+          onReplaceOrigin={openReplaceOrigin}
         />
       {:else}
         <div class="flex items-center gap-1.5 px-2">
           <GitBranch size={12} class="shrink-0 text-muted" />
-          <span class="font-mono text-[11px] font-medium text-foreground">
+          <span class="font-mono text-[0.6875rem] font-medium text-foreground">
             {status?.branch ?? (repoState === 'git' ? 'detached' : 'Repository')}
           </span>
         </div>
@@ -1759,14 +1945,14 @@
           <span class="flex shrink-0 items-center gap-1">
             {#if status.ahead > 0}
               <span
-                class="rounded bg-success/10 px-1 py-0.5 font-mono text-[9px] tabular-nums text-success"
+                class="rounded bg-success/10 px-1 py-0.5 font-mono text-[0.5625rem] tabular-nums text-success"
               >
                 ↑{status.ahead}
               </span>
             {/if}
             {#if status.behind > 0}
               <span
-                class="rounded bg-danger/10 px-1 py-0.5 font-mono text-[9px] tabular-nums text-danger"
+                class="rounded bg-danger/10 px-1 py-0.5 font-mono text-[0.5625rem] tabular-nums text-danger"
               >
                 ↓{status.behind}
               </span>
@@ -1775,7 +1961,7 @@
         {/if}
         <span
           class={[
-            'shrink-0 rounded-full px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide',
+            'shrink-0 rounded-full px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide',
             status.clean ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
           ]}
         >
@@ -1829,14 +2015,14 @@
               class="z-50 w-52 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
             >
               <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
               >
                 <GitPullRequest size={12} class="shrink-0 text-dimmed" />
                 Create pull request…
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
                 disabled={localBranches.length < 2}
                 onSelect={() => (showIntegrateModal = true)}
               >
@@ -1845,7 +2031,7 @@
               </DropdownMenu.Item>
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
               <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
                 disabled={status?.clean ?? true}
                 onSelect={() => (showStashModal = true)}
               >
@@ -1866,7 +2052,7 @@
           <button
             type="button"
             class={[
-              'flex shrink-0 items-center gap-1.5 border-b-2 pb-1.5 pt-0.5 text-[11px] font-medium transition-colors',
+              'flex shrink-0 items-center gap-1.5 border-b-2 pb-1.5 pt-0.5 text-[0.6875rem] font-medium transition-colors',
               activeTab === tab.id
                 ? 'border-primary text-foreground'
                 : 'border-transparent text-dimmed hover:text-muted'
@@ -1881,7 +2067,7 @@
             {#if tab.count !== null}
               <span
                 class={[
-                  'rounded-full px-1.5 text-[9px] font-semibold tabular-nums leading-[1.15rem]',
+                  'rounded-full px-1.5 text-[0.5625rem] font-semibold tabular-nums leading-[1.15rem]',
                   activeTab === tab.id ? 'bg-primary/15 text-primary' : 'bg-elevated text-dimmed'
                 ]}
               >
@@ -1907,11 +2093,11 @@
           <Unplug size={18} class="text-dimmed" />
         </div>
         <p class="text-xs font-medium text-muted">Git is not available</p>
-        <p class="mt-1 max-w-[28ch] text-[10px] leading-relaxed text-dimmed">
+        <p class="mt-1 max-w-[28ch] text-[0.625rem] leading-relaxed text-dimmed">
           Install Git for your operating system, then restart CodeInOven.
         </p>
         {#if preflightDetail}
-          <p class="mt-2 max-w-[30ch] break-words font-mono text-[9px] text-dimmed">
+          <p class="mt-2 max-w-[30ch] break-words font-mono text-[0.5625rem] text-dimmed">
             {preflightDetail}
           </p>
         {/if}
@@ -1922,12 +2108,12 @@
           <GitFork size={18} class="text-dimmed" />
         </div>
         <p class="text-xs font-medium text-muted">Not a Git repository</p>
-        <p class="mt-1 max-w-[28ch] text-[10px] leading-relaxed text-dimmed">
+        <p class="mt-1 max-w-[28ch] text-[0.625rem] leading-relaxed text-dimmed">
           Initialize a repository to track changes and manage pull requests.
         </p>
         <button
           type="button"
-          class="mt-3 flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-50"
+          class="mt-3 flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-50"
           disabled={gitState.isBusy('init')}
           onclick={() => void initializeRepository()}
         >
@@ -1945,12 +2131,12 @@
           class="mx-2 mt-2 flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2"
         >
           <Unplug size={13} class="shrink-0 text-warning" />
-          <p class="min-w-0 flex-1 text-[10px] leading-relaxed text-muted">
+          <p class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-muted">
             {gitState.githubPermission.message}
           </p>
           <button
             type="button"
-            class="h-7 shrink-0 rounded-md border border-border bg-surface px-2.5 text-[10px] font-medium text-foreground hover:bg-elevated"
+            class="h-7 shrink-0 rounded-md border border-border bg-surface px-2.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
             onclick={() => void openInBrowser(gitState.githubPermission?.settingsUrl ?? '')}
           >
             Update GitHub access
@@ -1959,7 +2145,7 @@
       {:else if gitState.error}
         <div class="mx-2 mt-2">
           <p
-            class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
+            class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
           >
             {gitState.error}
           </p>
@@ -1968,16 +2154,16 @@
 
       {#if identityNeeded}
         <div class="mx-2 mt-2 rounded-lg border border-border bg-surface px-3 py-2">
-          <p class="text-[10px] font-medium text-foreground">Commit identity not configured</p>
+          <p class="text-[0.625rem] font-medium text-foreground">Commit identity not configured</p>
           {#if showIdentityForm}
             <div class="mt-2 space-y-1.5">
               <input
-                class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
                 placeholder="Name"
                 bind:value={identityName}
               />
               <input
-                class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
                 placeholder="Email"
                 type="email"
                 bind:value={identityEmail}
@@ -1985,14 +2171,14 @@
               <div class="flex items-center justify-end gap-1.5">
                 <button
                   type="button"
-                  class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
+                  class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated"
                   onclick={() => (showIdentityForm = false)}
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                  class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
                   disabled={!identityName.trim() || !identityEmail.trim()}
                   onclick={() => void saveIdentity()}
                 >
@@ -2003,7 +2189,7 @@
           {:else}
             <button
               type="button"
-              class="mt-1.5 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+              class="mt-1.5 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
               onclick={() => {
                 identityName = gitState.identity?.name ?? ''
                 identityEmail = gitState.identity?.email ?? ''
@@ -2057,10 +2243,10 @@
                 </button>
               </div>
               <div class="min-w-0 flex-1">
-                <p class="truncate text-[11px] font-medium text-foreground">
+                <p class="truncate text-[0.6875rem] font-medium text-foreground">
                   {commit.message.split('\n')[0]}
                 </p>
-                <div class="flex items-center gap-1.5 text-[9px] text-dimmed">
+                <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
                   <span class="font-mono">{commit.shortHash}</span>
                   <span>·</span>
                   <span>{commit.author}</span>
@@ -2071,7 +2257,7 @@
               {#if isHeadCommit}
                 <button
                   type="button"
-                  class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                  class="shrink-0 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
                   disabled={gitState.isBusy('reset') || gitState.isBusy('amend')}
                   onclick={startAmend}
                 >
@@ -2086,7 +2272,7 @@
                 <button
                   type="button"
                   class={[
-                    'flex h-5 items-center gap-1 rounded px-2 text-[10px] font-medium transition-colors',
+                    'flex h-5 items-center gap-1 rounded px-2 text-[0.625rem] font-medium transition-colors',
                     changesView === 'list'
                       ? 'bg-surface text-foreground shadow-sm'
                       : 'text-dimmed hover:text-foreground'
@@ -2099,7 +2285,7 @@
                 <button
                   type="button"
                   class={[
-                    'flex h-5 items-center gap-1 rounded px-2 text-[10px] font-medium transition-colors',
+                    'flex h-5 items-center gap-1 rounded px-2 text-[0.625rem] font-medium transition-colors',
                     changesView === 'tree'
                       ? 'bg-surface text-foreground shadow-sm'
                       : 'text-dimmed hover:text-foreground'
@@ -2151,15 +2337,15 @@
               <div class="flex flex-col items-center justify-center py-12 text-center">
                 <GitCommit size={22} class="mx-auto mb-2 text-dimmed" />
                 <p class="text-xs font-medium text-muted">No file changes</p>
-                <p class="mt-1 text-[10px] text-dimmed">This commit has no changes.</p>
+                <p class="mt-1 text-[0.625rem] text-dimmed">This commit has no changes.</p>
               </div>
             {:else}
               <div class="overflow-hidden rounded-lg border border-border bg-surface">
                 <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
-                  <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
+                  <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
                     Changed files
                   </span>
-                  <span class="text-[8px] tabular-nums text-dimmed">
+                  <span class="text-[0.5rem] tabular-nums text-dimmed">
                     {commitDiffChanges.length}
                   </span>
                 </div>
@@ -2194,7 +2380,7 @@
                   <Check size={18} class="text-success" />
                 </div>
                 <p class="text-xs font-medium text-muted">Working tree is clean</p>
-                <p class="mt-1 max-w-[26ch] text-[10px] leading-relaxed text-dimmed">
+                <p class="mt-1 max-w-[26ch] text-[0.625rem] leading-relaxed text-dimmed">
                   No staged, unstaged, or untracked changes.
                 </p>
               </div>
@@ -2204,7 +2390,7 @@
                 {#if conflicted.length > 0}
                   <button
                     type="button"
-                    class="flex shrink-0 items-center gap-1.5 rounded-md border border-danger/40 px-2.5 py-1 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
+                    class="flex shrink-0 items-center gap-1.5 rounded-md border border-danger/40 px-2.5 py-1 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
                     disabled={integrateBusy || conflictState === 'none'}
                     onclick={requestAbortConflict}
                   >
@@ -2216,7 +2402,7 @@
                     Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
                   </button>
                   <span
-                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-warning"
+                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-warning"
                   >
                     {conflicted.length}
                     {conflicted.length === 1 ? 'conflict' : 'conflicts'}
@@ -2224,7 +2410,7 @@
                 {:else if unstaged.length + untracked.length > 0}
                   <button
                     type="button"
-                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
                     disabled={gitState.isBusy('stage')}
                     onclick={() => void stageAll()}
                   >
@@ -2233,7 +2419,7 @@
                 {:else if staged.length > 0}
                   <button
                     type="button"
-                    class="shrink-0 rounded-md border border-danger/30 px-2 py-1 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
+                    class="shrink-0 rounded-md border border-danger/30 px-2 py-1 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
                     disabled={gitState.isBusy('unstage')}
                     onclick={() => void unstageAll()}
                   >
@@ -2241,7 +2427,7 @@
                   </button>
                 {/if}
                 {#if changes.length > 0 && selectedPathList.length > 0}
-                  <span class="shrink-0 text-[10px] font-medium tabular-nums text-foreground">
+                  <span class="shrink-0 text-[0.625rem] font-medium tabular-nums text-foreground">
                     {selectedPathList.length} selected
                   </span>
                   <DropdownMenu.Root>
@@ -2262,7 +2448,7 @@
                         collisionPadding={8}
                       >
                         <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
                           disabled={batchBusy}
                           onSelect={() => void stageSelectedAction(false)}
                         >
@@ -2270,17 +2456,17 @@
                           Stage
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
                           disabled={batchBusy}
                           onSelect={() => void stageSelectedAction(true)}
                         >
-                          <span class="inline-block w-3 text-center text-[10px] text-danger">−</span
+                          <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span
                           >
                           Unstage
                         </DropdownMenu.Item>
                         <DropdownMenu.Separator class="my-1 h-px bg-border" />
                         <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
                           disabled={batchBusy}
                           onSelect={requestCommitSelected}
                         >
@@ -2288,7 +2474,7 @@
                           Commit…
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
                           disabled={batchBusy}
                           onSelect={() => requestStashFor(selectedPathList)}
                         >
@@ -2296,16 +2482,16 @@
                           Stash…
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
                           disabled={batchBusy}
                           onSelect={() => void ignoreSelectedAction()}
                         >
-                          <span class="inline-block w-3 text-center text-[10px]">⊘</span>
+                          <span class="inline-block w-3 text-center text-[0.625rem]">⊘</span>
                           Add to gitignore
                         </DropdownMenu.Item>
                         <DropdownMenu.Separator class="my-1 h-px bg-border" />
                         <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
                           disabled={batchBusy}
                           onSelect={() => requestDiscard(selectedPathList)}
                         >
@@ -2326,7 +2512,7 @@
                     <button
                       type="button"
                       class={[
-                        'flex h-5 items-center gap-1 rounded px-2 text-[10px] font-medium transition-colors',
+                        'flex h-5 items-center gap-1 rounded px-2 text-[0.625rem] font-medium transition-colors',
                         changesView === 'list'
                           ? 'bg-surface text-foreground shadow-sm'
                           : 'text-dimmed hover:text-foreground'
@@ -2339,7 +2525,7 @@
                     <button
                       type="button"
                       class={[
-                        'flex h-5 items-center gap-1 rounded px-2 text-[10px] font-medium transition-colors',
+                        'flex h-5 items-center gap-1 rounded px-2 text-[0.625rem] font-medium transition-colors',
                         changesView === 'tree'
                           ? 'bg-surface text-foreground shadow-sm'
                           : 'text-dimmed hover:text-foreground'
@@ -2381,17 +2567,17 @@
                           {#if si > 0}<div class="border-t border-border"></div>{/if}
                           <div class="flex items-center gap-2 bg-warning/10 px-3 py-1.5">
                             <span
-                              class="text-[9px] font-semibold uppercase tracking-wide text-muted"
+                              class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted"
                             >
                               {section.title}
                             </span>
-                            <span class="text-[8px] tabular-nums text-dimmed">
+                            <span class="text-[0.5rem] tabular-nums text-dimmed">
                               {section.files.length}
                             </span>
                             <span class="flex-1"></span>
                             <button
                               type="button"
-                              class="rounded px-1.5 py-0.5 text-[9px] font-medium text-warning transition-colors hover:bg-warning/10"
+                              class="rounded px-1.5 py-0.5 text-[0.5625rem] font-medium text-warning transition-colors hover:bg-warning/10"
                               title="Open the conflict resolution panel"
                               onclick={() => routeConflictResolution(section.files[0]?.path)}
                             >
@@ -2466,11 +2652,11 @@
                               />
                             </span>
                             <span
-                              class="text-[9px] font-semibold uppercase tracking-wide text-muted"
+                              class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted"
                             >
                               {section.title}
                             </span>
-                            <span class="text-[8px] tabular-nums text-dimmed">
+                            <span class="text-[0.5rem] tabular-nums text-dimmed">
                               {section.files.length}
                             </span>
                           </div>
@@ -2547,11 +2733,11 @@
                               />
                             </span>
                             <span
-                              class="text-[9px] font-semibold uppercase tracking-wide text-muted"
+                              class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted"
                             >
                               {section.title}
                             </span>
-                            <span class="text-[8px] tabular-nums text-dimmed">
+                            <span class="text-[0.5rem] tabular-nums text-dimmed">
                               {section.files.length}
                             </span>
                           </div>
@@ -2593,7 +2779,7 @@
             <div class="flex flex-col items-center justify-center py-12 text-center">
               <History size={22} class="mx-auto mb-2 text-dimmed" />
               <p class="text-xs font-medium text-muted">No commits yet</p>
-              <p class="mt-1 text-[10px] text-dimmed">Make your first commit to see history.</p>
+              <p class="mt-1 text-[0.625rem] text-dimmed">Make your first commit to see history.</p>
             </div>
           {:else}
             <div class="space-y-0.5">
@@ -2603,7 +2789,7 @@
                 {#if unpushedCount > 0 && index === unpushedCount}
                   <div class="flex items-center gap-2 px-2 py-1">
                     <span class="h-px flex-1 bg-border"></span>
-                    <span class="shrink-0 text-[9px] font-medium text-dimmed">
+                    <span class="shrink-0 text-[0.5625rem] font-medium text-dimmed">
                       Pushed to {status?.upstream}
                     </span>
                     <span class="h-px flex-1 bg-border"></span>
@@ -2635,10 +2821,10 @@
                             : undefined}
                         ></div>
                         <div class="min-w-0 flex-1">
-                          <p class="truncate text-[11px] leading-snug text-foreground">
+                          <p class="truncate text-[0.6875rem] leading-snug text-foreground">
                             {commit.message.split('\n')[0]}
                           </p>
-                          <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                          <div class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
                             <span class="font-mono">{commit.shortHash}</span>
                             <span>·</span>
                             <span>{commit.author}</span>
@@ -2646,7 +2832,7 @@
                             <span>{relativeTime(commit.date)}</span>
                             {#if isUnpushed}
                               <span
-                                class="rounded px-1 py-px text-[8px] font-medium uppercase tracking-wide text-warning"
+                                class="rounded px-1 py-px text-[0.5rem] font-medium uppercase tracking-wide text-warning"
                               >
                                 local
                               </span>
@@ -2679,12 +2865,12 @@
                 </ContextMenu.Root>
               {/each}
               {#if loadingMoreHistory}
-                <div class="flex items-center justify-center gap-2 py-4 text-[10px] text-dimmed">
+                <div class="flex items-center justify-center gap-2 py-4 text-[0.625rem] text-dimmed">
                   <Loader2 size={12} class="animate-spin" />
                   Loading older commits
                 </div>
               {:else if !historyHasMore}
-                <p class="py-4 text-center text-[9px] text-dimmed">Start of history</p>
+                <p class="py-4 text-center text-[0.5625rem] text-dimmed">Start of history</p>
               {/if}
             </div>
           {/if}
@@ -2697,7 +2883,7 @@
               <div class="flex items-center gap-1.5">
                 <input
                   bind:this={newBranchInput}
-                  class="min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 py-1 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                  class="min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 py-1 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
                   placeholder="new-feature"
                   bind:value={newBranchName}
                   onkeydown={(event: KeyboardEvent) => {
@@ -2710,7 +2896,7 @@
                 />
                 <button
                   type="button"
-                  class="shrink-0 cursor-pointer rounded-md bg-primary px-2 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+                  class="shrink-0 cursor-pointer rounded-md bg-primary px-2 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
                   disabled={!newBranchName.trim() || gitState.isBusy('checkout')}
                   onclick={() => void submitNewBranch()}
                 >
@@ -2718,7 +2904,7 @@
                 </button>
                 <button
                   type="button"
-                  class="shrink-0 cursor-pointer rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+                  class="shrink-0 cursor-pointer rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
                   onclick={() => {
                     creatingBranch = false
                     newBranchName = ''
@@ -2730,7 +2916,7 @@
             {:else}
               <button
                 type="button"
-                class="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1 py-1 text-[11px] font-medium text-muted transition-colors hover:text-foreground"
+                class="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1 py-1 text-[0.6875rem] font-medium text-muted transition-colors hover:text-foreground"
                 onclick={() => (creatingBranch = true)}
               >
                 <Plus size={12} class="shrink-0" />
@@ -2771,7 +2957,7 @@
               <div class="space-y-0.5">
                 {#each branchSections as section (section.key)}
                   <p
-                    class="px-2 pb-1 pt-2 text-[9px] font-semibold uppercase tracking-wide text-dimmed"
+                    class="px-2 pb-1 pt-2 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
                   >
                     {section.label}
                   </p>
@@ -2805,7 +2991,7 @@
                           <span class="min-w-0 flex-1">
                             <button
                               type="button"
-                              class="block w-full cursor-pointer truncate text-left text-[11px] text-foreground disabled:cursor-default"
+                              class="block w-full cursor-pointer truncate text-left text-[0.6875rem] text-foreground disabled:cursor-default"
                               disabled={branch.current || hasLocalCounterpart || inWorktree}
                               title={branch.current
                                 ? undefined
@@ -2821,29 +3007,29 @@
                               {branch.kind === 'local' ? branch.name : branch.ref}
                             </button>
                             {#if branch.kind === 'local' && branch.upstream}
-                              <span class="block truncate text-[9px] text-dimmed">
+                              <span class="block truncate text-[0.5625rem] text-dimmed">
                                 tracks {branch.upstream}
                               </span>
                             {:else if inWorktree}
-                              <span class="block truncate text-[9px] text-dimmed">
+                              <span class="block truncate text-[0.5625rem] text-dimmed">
                                 checked out in worktree
                               </span>
                             {:else if branch.kind === 'remote'}
-                              <span class="block truncate text-[9px] text-dimmed">
+                              <span class="block truncate text-[0.5625rem] text-dimmed">
                                 {hasLocalCounterpart ? 'local branch exists' : 'remote branch'}
                               </span>
                             {/if}
                           </span>
                           {#if inWorktree}
                             <span
-                              class="shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-warning"
+                              class="shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning"
                             >
                               worktree
                             </span>
                           {/if}
                           {#if branch.ahead > 0 || branch.behind > 0}
                             <span
-                              class="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums"
+                              class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums"
                             >
                               {#if branch.ahead > 0}
                                 <span class="text-success">+{branch.ahead}</span>
@@ -2888,7 +3074,7 @@
                             </DropdownMenu.Root>
                             {#if branch.current}
                               <span
-                                class="pointer-events-none absolute inset-y-0 right-0 flex items-center whitespace-nowrap rounded bg-primary/15 px-1.5 text-[8px] font-semibold text-primary opacity-100 transition-opacity group-hover:opacity-0 peer-hover:opacity-0 peer-data-[state=open]:opacity-0"
+                                class="pointer-events-none absolute inset-y-0 right-0 flex items-center whitespace-nowrap rounded bg-primary/15 px-1.5 text-[0.5rem] font-semibold text-primary opacity-100 transition-opacity group-hover:opacity-0 peer-hover:opacity-0 peer-data-[state=open]:opacity-0"
                               >
                                 current
                               </span>
@@ -2980,8 +3166,8 @@
                   <ArrowLeft size={12} />
                 </button>
                 <div class="min-w-0 flex-1">
-                  <p class="truncate text-[11px] font-medium text-foreground">{stash.message}</p>
-                  <div class="flex items-center gap-1.5 text-[9px] text-dimmed">
+                  <p class="truncate text-[0.6875rem] font-medium text-foreground">{stash.message}</p>
+                  <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
                     <span class="font-mono">{stash.id}</span>
                     {#if stash.branch}
                       <span>·</span>
@@ -3003,15 +3189,15 @@
                 <div class="flex flex-col items-center justify-center py-12 text-center">
                   <Archive size={22} class="mx-auto mb-2 text-dimmed" />
                   <p class="text-xs font-medium text-muted">No file changes</p>
-                  <p class="mt-1 text-[10px] text-dimmed">This stash has no changes.</p>
+                  <p class="mt-1 text-[0.625rem] text-dimmed">This stash has no changes.</p>
                 </div>
               {:else}
                 <div class="overflow-hidden rounded-lg border border-border bg-surface">
                   <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
-                    <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
+                    <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
                       Changed files
                     </span>
-                    <span class="text-[8px] tabular-nums text-dimmed">
+                    <span class="text-[0.5rem] tabular-nums text-dimmed">
                       {stashDiffChanges.length}
                     </span>
                   </div>
@@ -3047,10 +3233,10 @@
                   >
                     <Archive size={12} class="shrink-0 text-dimmed" />
                     <span class="min-w-0 flex-1">
-                      <span class="block truncate text-[11px] leading-snug text-foreground">
+                      <span class="block truncate text-[0.6875rem] leading-snug text-foreground">
                         {stash.message}
                       </span>
-                      <span class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                      <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
                         <span class="font-mono">{stash.id}</span>
                         {#if stash.branch}
                           <span>·</span>
@@ -3063,7 +3249,7 @@
                   </button>
                   <button
                     type="button"
-                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
                     disabled={stashOpBusy}
                     title="Restore stash {stash.id} into the working tree"
                     onclick={() => void popStash(stash.id)}
@@ -3083,7 +3269,7 @@
                 </div>
               {/each}
             </div>
-            <p class="mt-2 px-1 text-[9px] leading-relaxed text-dimmed">
+            <p class="mt-2 px-1 text-[0.5625rem] leading-relaxed text-dimmed">
               Click a stash to inspect its changes. Popping restores it to your working tree and
               removes it from this list.
             </p>
@@ -3099,12 +3285,12 @@
       {#if amendMode}
         <div class="flex items-center gap-2 border-b border-border bg-warning/10 px-3 py-1.5">
           <GitCommit size={11} class="shrink-0 text-warning" />
-          <p class="min-w-0 flex-1 text-[9px] leading-relaxed text-warning">
+          <p class="min-w-0 flex-1 text-[0.5625rem] leading-relaxed text-warning">
             Amending the most recent commit — no new commit will be created.
           </p>
           <button
             type="button"
-            class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium text-muted hover:bg-elevated"
+            class="shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted hover:bg-elevated"
             onclick={() => (amendMode = false)}
           >
             Cancel
@@ -3114,7 +3300,7 @@
       <div class="px-2 pt-2">
         <textarea
           bind:this={commitTextarea}
-          class="min-h-11 w-full resize-none rounded-md border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="min-h-11 w-full resize-none rounded-md border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder={amendMode ? 'Amended commit message…' : 'Commit message…'}
           bind:value={commitMessage}
           onkeydown={onCommitMessageKeydown}></textarea>
@@ -3123,7 +3309,7 @@
         <span class="flex-1"></span>
         <button
           type="button"
-          class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
+          class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
           disabled={!commitMessage.trim() || commitBusy || (!amendMode && staged.length === 0)}
           onclick={() => void commitInline()}
         >
@@ -3141,21 +3327,21 @@
   <!-- Pinned action bar -->
   {#if pushConfirm}
     <div class="shrink-0 border-t border-border bg-warning/10 px-3 py-2">
-      <p class="text-[10px] font-medium text-foreground">Push with upstream?</p>
-      <p class="mt-0.5 text-[9px] leading-relaxed text-muted">
+      <p class="text-[0.625rem] font-medium text-foreground">Push with upstream?</p>
+      <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-muted">
         Set <span class="font-mono text-foreground">{primaryRemote?.name}/{status?.branch}</span> as upstream.
       </p>
       <div class="mt-1.5 flex justify-end gap-1.5">
         <button
           type="button"
-          class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
+          class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated"
           onclick={() => (pushConfirm = false)}
         >
           Cancel
         </button>
         <button
           type="button"
-          class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           disabled={syncBusy}
           onclick={() => void confirmPushUpstream()}
         >
@@ -3168,11 +3354,11 @@
   {#if pushDiverged}
     <Modal open title="Push blocked — branch has diverged" onClose={() => (pushDiverged = false)}>
       <div class="space-y-2">
-        <p class="text-[10px] leading-relaxed text-muted">
+        <p class="text-[0.625rem] leading-relaxed text-muted">
           The remote branch has commits you don't have locally, so Git will not let you push over
           them. Integrate the remote changes first, then push again.
         </p>
-        <p class="rounded-lg border border-border bg-surface px-3 py-2 text-[10px] text-dimmed">
+        <p class="rounded-lg border border-border bg-surface px-3 py-2 text-[0.625rem] text-dimmed">
           {status?.branch && primaryRemote
             ? `${primaryRemote.name}/${status.branch}`
             : 'Remote branch'}
@@ -3181,7 +3367,7 @@
             <span class="font-medium text-muted">{status?.behind ?? 0} behind</span>
           {/if}
         </p>
-        <p class="text-[9px] leading-relaxed text-dimmed">
+        <p class="text-[0.5625rem] leading-relaxed text-dimmed">
           Merge keeps both histories and adds a merge commit. Rebase replays your commits on top of
           the remote for a straight history. Conflicts pause integration so you can resolve them
           here before anything is pushed.
@@ -3191,14 +3377,14 @@
         <div class="flex items-center justify-end gap-2">
           <button
             type="button"
-            class="cursor-pointer rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            class="cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
             onclick={() => (pushDiverged = false)}
           >
             Cancel
           </button>
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
             disabled={pushRecoverMode !== null}
             onclick={() => void recoverPush('rebase')}
           >
@@ -3209,7 +3395,7 @@
           </button>
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
             disabled={pushRecoverMode !== null}
             onclick={() => void recoverPush('merge')}
           >
@@ -3227,28 +3413,28 @@
     <Modal open title="Choose pull strategy" onClose={closePullStrategy}>
       <div class="space-y-3">
         <div class="rounded-lg border border-border bg-elevated px-3 py-2">
-          <p class="text-[10px] font-medium text-foreground">
+          <p class="text-[0.625rem] font-medium text-foreground">
             Pull into <span class="font-mono">{status?.branch ?? 'current branch'}</span>
           </p>
-          <p class="mt-0.5 text-[9px] text-dimmed">
+          <p class="mt-0.5 text-[0.5625rem] text-dimmed">
             {status?.ahead ?? 0} ahead, {status?.behind ?? 0} behind
             <span class="font-mono">{status?.upstream ?? 'its remote'}</span>
           </p>
         </div>
         {#if pullStrategyError}
           <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
-            <p class="text-[10px] font-semibold text-danger">That pull strategy could not finish</p>
+            <p class="text-[0.625rem] font-semibold text-danger">That pull strategy could not finish</p>
             <p
-              class="mt-0.5 whitespace-pre-wrap break-words text-[9px] leading-relaxed text-danger"
+              class="mt-0.5 whitespace-pre-wrap break-words text-[0.5625rem] leading-relaxed text-danger"
             >
               {pullStrategyError}
             </p>
-            <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
+            <p class="mt-1 text-[0.5625rem] leading-relaxed text-dimmed">
               Choose another strategy below, or cancel without changing the branch further.
             </p>
           </div>
         {/if}
-        <div class="space-y-1 text-[9px] leading-relaxed text-dimmed">
+        <div class="space-y-1 text-[0.5625rem] leading-relaxed text-dimmed">
           <p>
             <span class="font-medium text-foreground">Merge</span> keeps both histories and may create
             a merge commit.
@@ -3267,7 +3453,7 @@
         <div class="flex items-center justify-end gap-2">
           <button
             type="button"
-            class="cursor-pointer rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            class="cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
             disabled={gitState.isBusy('pull')}
             onclick={closePullStrategy}
           >
@@ -3275,7 +3461,7 @@
           </button>
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
             disabled={gitState.isBusy('pull')}
             onclick={() => void performPull('ff-only')}
           >
@@ -3283,7 +3469,7 @@
           </button>
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
             disabled={gitState.isBusy('pull')}
             onclick={() => void performPull('rebase')}
           >
@@ -3291,7 +3477,7 @@
           </button>
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
             data-modal-primary
             disabled={gitState.isBusy('pull')}
             onclick={() => void performPull('merge')}
@@ -3303,16 +3489,66 @@
     </Modal>
   {/if}
 
+  <!-- Completing a resolved merge: optional title/description, auto-generated when skipped -->
+  {#if resolveMergeOpen}
+    <Modal
+      open
+      title="Resolve merge"
+      onClose={() => (resolveMergeOpen = false)}
+    >
+      <div class="space-y-2">
+        <p class="text-[0.6875rem] leading-relaxed text-muted">
+          All conflicts are resolved. Give the merge commit a title and description, or leave them
+          empty to generate one automatically. Resolving also pushes the result back to the pull
+          request, restores your previous branch, and removes the temporary conflict branch.
+        </p>
+        <input
+          class="h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          placeholder="Title (e.g. Merge branch '{status?.upstream ?? 'main'}')"
+          bind:value={mergeTitle}
+          disabled={resolveMergeBusy}
+        />
+        <textarea
+          class="min-h-16 w-full resize-y rounded-md border border-border bg-elevated px-2.5 py-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          placeholder="Description (optional)"
+          bind:value={mergeDescription}
+          disabled={resolveMergeBusy}
+        ></textarea>
+      </div>
+      {#snippet footer()}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            onclick={() => (resolveMergeOpen = false)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-foreground px-3 text-[0.6875rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+            data-modal-primary
+            disabled={resolveMergeBusy}
+            onclick={() => void confirmResolveMerge()}
+          >
+            {#if resolveMergeBusy}<Loader2 size={11} class="animate-spin" />{:else}<GitMerge size={11} />{/if}
+            Resolve
+          </button>
+        </div>
+      {/snippet}
+    </Modal>
+  {/if}
+
   <!--
     Fetch/pull/push act on the local working tree, so they only belong to the
     working-tree tabs. On the pull request tab they sat under a PR's own
     comment box implying they were part of reviewing it, which they are not.
   -->
-  {#if repoState === 'git' && status && remotes.length > 0 && activeTab !== 'pulls'}
+  {#if repoState === 'git' && status && remotes.length > 0 && activeTab !== 'pulls' && !mergePending}
     <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
       <button
         type="button"
-        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
         title="Fetch refs from the remote without changing the working tree"
         disabled={remotes.length === 0 || syncBusy}
         onclick={() => void gitState.fetch(projectId)}
@@ -3326,7 +3562,7 @@
       </button>
       <button
         type="button"
-        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
         title={status.behind > 0
           ? `Pull ${String(status.behind)} commit(s) from the remote`
           : 'Pull from the remote'}
@@ -3342,7 +3578,7 @@
       </button>
       <button
         type="button"
-        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
         title={status.ahead > 0
           ? `Push ${String(status.ahead)} commit(s) to the remote`
           : 'Push to the remote'}
@@ -3355,6 +3591,23 @@
           <ArrowUpFromLine size={11} />
         {/if}
         Push{status.ahead > 0 ? ` ${status.ahead}` : ''}
+      </button>
+    </div>
+  {:else if repoState === 'git' && status && mergePending}
+    <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
+      <button
+        type="button"
+        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-foreground text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+        title="Commit the resolved files to complete the merge"
+        disabled={resolveMergeBusy}
+        onclick={openResolveMerge}
+      >
+        {#if resolveMergeBusy}
+          <Loader2 size={11} class="animate-spin" />
+        {:else}
+          <GitMerge size={11} />
+        {/if}
+        Resolve merge
       </button>
     </div>
   {/if}
@@ -3380,24 +3633,24 @@
       <div class="space-y-2">
         {#if stashPaths}
           <div class="rounded-lg border border-border bg-elevated/50 px-3 py-2">
-            <p class="text-[10px] font-medium text-foreground">
+            <p class="text-[0.625rem] font-medium text-foreground">
               {stashPaths.length}
               {stashPaths.length === 1 ? 'file' : 'files'} to stash
             </p>
             <div class="mt-1 max-h-24 overflow-auto">
               {#each stashPaths as path (path)}
-                <p class="truncate font-mono text-[9px] text-dimmed">{path}</p>
+                <p class="truncate font-mono text-[0.5625rem] text-dimmed">{path}</p>
               {/each}
             </div>
           </div>
         {:else}
-          <p class="text-[11px] leading-relaxed text-muted">
+          <p class="text-[0.6875rem] leading-relaxed text-muted">
             Shelves your staged and unstaged changes so you can switch work. Restore them any time
             from the Stashes tab.
           </p>
         {/if}
         <input
-          class="h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Describe this stash (optional)"
           bind:value={stashMessage}
         />
@@ -3406,7 +3659,7 @@
         <div class="flex items-center justify-end gap-2">
           <button
             type="button"
-            class="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
             onclick={() => {
               showStashModal = false
               stashPaths = null
@@ -3416,7 +3669,7 @@
           </button>
           <button
             type="button"
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
             disabled={(status?.clean ?? true) || gitState.isBusy('stash')}
             onclick={() => void stashChanges()}
           >
@@ -3434,14 +3687,14 @@
     <Modal open title="Merge or rebase" onClose={() => (showIntegrateModal = false)}>
       <div class="space-y-2">
         <label
-          class="block text-[10px] font-semibold uppercase tracking-wide text-muted"
+          class="block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
           for="integrate-target"
         >
           Bring changes into {status?.branch ?? 'HEAD'} from
         </label>
         <select
           id="integrate-target"
-          class="h-8 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary"
+          class="h-8 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary"
           bind:value={mergeTarget}
         >
           <option value="" disabled>Select a branch…</option>
@@ -3451,7 +3704,7 @@
             {/if}
           {/each}
         </select>
-        <p class="text-[10px] leading-relaxed text-dimmed">
+        <p class="text-[0.625rem] leading-relaxed text-dimmed">
           Merge keeps both histories and adds a merge commit. Rebase replays your commits on top of
           the selected branch for a straight history.
         </p>
@@ -3460,14 +3713,14 @@
         <div class="flex items-center justify-end gap-2">
           <button
             type="button"
-            class="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
             onclick={() => (showIntegrateModal = false)}
           >
             Cancel
           </button>
           <button
             type="button"
-            class="h-8 rounded-lg border border-border px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
+            class="h-8 rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
             disabled={!mergeTarget || integrateBusy}
             onclick={() => requestMergeOrRebase('rebase')}
           >
@@ -3475,7 +3728,7 @@
           </button>
           <button
             type="button"
-            class="h-8 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
             disabled={!mergeTarget || integrateBusy}
             onclick={() => requestMergeOrRebase('merge')}
           >
@@ -3494,14 +3747,14 @@
       onClose={() => (pendingOperation = null)}
     >
       <div class="space-y-3">
-        <p class="text-[11px] leading-relaxed text-muted">
+        <p class="text-[0.6875rem] leading-relaxed text-muted">
           {operation.kind === 'merge'
             ? `Merge into ${status?.branch ?? 'HEAD'}.`
             : `Rebase ${status?.branch ?? 'HEAD'} onto the branch.`}
         </p>
         {#if atRiskFiles.length > 0}
           <div>
-            <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+            <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
               Affected files
             </p>
             <div class="max-h-40 overflow-auto rounded-lg border border-border bg-surface">
@@ -3510,7 +3763,7 @@
                   class="flex h-7 items-center gap-2 border-b border-border px-3 last:border-b-0"
                 >
                   <FileTypeIcon {path} size={12} class="shrink-0" />
-                  <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted"
+                  <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted"
                     >{path}</span
                   >
                 </div>
@@ -3518,18 +3771,18 @@
             </div>
           </div>
         {:else}
-          <p class="rounded-lg border border-border bg-surface px-3 py-1.5 text-[10px] text-muted">
+          <p class="rounded-lg border border-border bg-surface px-3 py-1.5 text-[0.625rem] text-muted">
             No local changes — should apply cleanly.
           </p>
         {/if}
         {#if agentTurnActive}
           <div class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
-            <p class="text-[10px] font-semibold text-warning">Agent turn in progress</p>
-            <p class="mt-0.5 text-[9px] leading-relaxed text-muted">
+            <p class="text-[0.625rem] font-semibold text-warning">Agent turn in progress</p>
+            <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-muted">
               Acknowledge to continue anyway.
             </p>
             <div class="mt-1.5 flex items-center justify-between gap-2">
-              <span class="text-[10px] text-muted">I understand the risk</span>
+              <span class="text-[0.625rem] text-muted">I understand the risk</span>
               <Switch
                 checked={acknowledgeActiveTurn}
                 onchange={(value) => (acknowledgeActiveTurn = value)}
@@ -3543,14 +3796,14 @@
         <div class="flex items-center justify-end gap-2">
           <button
             type="button"
-            class="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
             onclick={() => (pendingOperation = null)}
           >
             Cancel
           </button>
           <button
             type="button"
-            class="flex h-8 items-center rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            class="flex h-8 items-center rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
             disabled={integrateBusy || (agentTurnActive && !acknowledgeActiveTurn)}
             onclick={() => void confirmPendingOperation()}
           >
@@ -3568,13 +3821,13 @@
     {@const pendingReset = resetConfirm}
     <Modal open title="Reset branch" onClose={() => (resetConfirm = null)}>
       <div class="space-y-3">
-        <p class="text-[11px] leading-relaxed text-muted">
+        <p class="text-[0.6875rem] leading-relaxed text-muted">
           Reset <span class="font-mono text-foreground">{status?.branch ?? 'HEAD'}</span> to commit
           <span class="font-mono text-foreground"> {pendingReset.target.slice(0, 7)}</span>.
         </p>
 
         <div>
-          <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Mode</p>
+          <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Mode</p>
           <div class="grid grid-cols-3 gap-1.5">
             {#each resetOptions as option (option.mode)}
               <button
@@ -3589,13 +3842,13 @@
               >
                 <span
                   class={[
-                    'block text-[10px] font-semibold',
+                    'block text-[0.625rem] font-semibold',
                     pendingReset.mode === option.mode ? 'text-primary' : 'text-foreground'
                   ]}
                 >
                   {option.label}
                 </span>
-                <span class="block text-[8px] leading-snug text-dimmed">{option.hint}</span>
+                <span class="block text-[0.5rem] leading-snug text-dimmed">{option.hint}</span>
               </button>
             {/each}
           </div>
@@ -3603,8 +3856,8 @@
 
         {#if pendingReset.mode === 'hard'}
           <div class="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2">
-            <p class="text-[10px] font-semibold text-danger">Hard reset discards changes</p>
-            <p class="mt-0.5 text-[9px] leading-relaxed text-muted">
+            <p class="text-[0.625rem] font-semibold text-danger">Hard reset discards changes</p>
+            <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-muted">
               Staged and unstaged changes since this commit will be permanently lost. This cannot be
               undone.
             </p>
@@ -3613,7 +3866,7 @@
 
         {#if atRiskFiles.length > 0}
           <div>
-            <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+            <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
               Affected files
             </p>
             <div class="max-h-40 overflow-auto rounded-lg border border-border bg-surface">
@@ -3622,7 +3875,7 @@
                   class="flex h-7 items-center gap-2 border-b border-border px-3 last:border-b-0"
                 >
                   <FileTypeIcon {path} size={12} class="shrink-0" />
-                  <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted"
+                  <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted"
                     >{path}</span
                   >
                 </div>
@@ -3632,12 +3885,12 @@
         {/if}
         {#if agentTurnActive}
           <div class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
-            <p class="text-[10px] font-semibold text-warning">Agent turn in progress</p>
-            <p class="mt-0.5 text-[9px] leading-relaxed text-muted">
+            <p class="text-[0.625rem] font-semibold text-warning">Agent turn in progress</p>
+            <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-muted">
               Acknowledge to continue anyway.
             </p>
             <div class="mt-1.5 flex items-center justify-between gap-2">
-              <span class="text-[10px] text-muted">I understand the risk</span>
+              <span class="text-[0.625rem] text-muted">I understand the risk</span>
               <Switch
                 checked={acknowledgeActiveTurn}
                 onchange={(value) => (acknowledgeActiveTurn = value)}
@@ -3651,7 +3904,7 @@
         <div class="flex items-center justify-end gap-2">
           <button
             type="button"
-            class="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
             onclick={() => (resetConfirm = null)}
           >
             Cancel
@@ -3659,7 +3912,7 @@
           <button
             type="button"
             class={[
-              'flex h-8 items-center gap-1.5 rounded-lg px-3 text-[11px] font-medium text-on-primary transition-colors disabled:opacity-50',
+              'flex h-8 items-center gap-1.5 rounded-lg px-3 text-[0.6875rem] font-medium text-on-primary transition-colors disabled:opacity-50',
               pendingReset.mode === 'hard'
                 ? 'bg-danger hover:bg-danger/90'
                 : 'bg-primary hover:bg-primary-hover'
@@ -3841,6 +4094,105 @@
       </AlertDialog.Portal>
     </AlertDialog.Root>
   {/if}
+
+  <!-- Add / Replace Git Origin -->
+  {#if originModalOpen}
+    <Modal
+      open
+      title={originMode === 'replace' ? 'Replace Git Origin' : 'Add Git Origin'}
+      onClose={closeOriginModal}
+    >
+      <div class="space-y-3">
+        <p class="text-[0.6875rem] leading-relaxed text-muted">
+          {#if originMode === 'replace'}
+            Update the URL of the <span class="font-mono text-foreground">{originName}</span> remote.
+            This is the address the repository fetches from and pushes to.
+          {:else}
+            Add the <span class="font-mono text-foreground">{originName}</span> remote so you can pull
+            from and push to a hosted repository.
+          {/if}
+        </p>
+        <div>
+          <p class="mb-1.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
+            Remote URL
+          </p>
+          <input
+            class="w-full rounded-lg border border-border bg-elevated px-3 py-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+            placeholder="https://github.com/your-name/repo.git"
+            bind:value={originUrl}
+            onkeydown={(e: KeyboardEvent) => {
+              if (e.key === 'Enter' && !originBusy) requestSetOrigin()
+            }}
+          />
+        </div>
+        {#if gitState.error}
+          <p class="text-[0.625rem] leading-relaxed text-danger">{gitState.error}</p>
+        {/if}
+      </div>
+      {#snippet footer()}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            disabled={originBusy}
+            onclick={closeOriginModal}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-modal-primary
+            class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            disabled={originBusy || !originUrl.trim()}
+            onclick={requestSetOrigin}
+          >
+            {#if originBusy}
+              <Loader2 size={12} class="animate-spin" />
+            {/if}
+            {originMode === 'replace' ? 'Replace Origin' : 'Add Origin'}
+          </button>
+        </div>
+      {/snippet}
+    </Modal>
+  {/if}
+
+  {#if originReplaceConfirm}
+    <AlertDialog.Root open onOpenChange={() => (originReplaceConfirm = false)}>
+      <AlertDialog.Portal>
+        <AlertDialog.Content
+          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-danger/30 bg-surface p-5 shadow-xl"
+        >
+          <AlertDialog.Title class="text-sm font-semibold text-foreground">
+            Replace {originName}?
+          </AlertDialog.Title>
+          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+            Changing the <span class="font-mono text-foreground">{originName}</span> remote URL
+            permanently redirects future <strong class="font-medium text-foreground">pull</strong>
+            and <strong class="font-medium text-foreground">push</strong> operations to the new address.
+            Your local history is preserved, but the current remote target is replaced. This cannot be
+            undone automatically — make sure this is the repository you want to use.
+          </AlertDialog.Description>
+          <div class="mt-5 flex justify-end gap-2">
+            <AlertDialog.Cancel
+              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+            >
+              Cancel
+            </AlertDialog.Cancel>
+            <AlertDialog.Action
+              class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+              disabled={originBusy}
+              onclick={() => void runSetOrigin()}
+            >
+              {#if originBusy}
+                <Loader2 size={12} class="animate-spin" />
+              {/if}
+              Replace {originName}
+            </AlertDialog.Action>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
+  {/if}
 </div>
 
 {#if stashDropTarget}
@@ -3898,7 +4250,7 @@
             class="mt-3 max-h-24 overflow-auto rounded-lg border border-border bg-elevated/50 p-2"
           >
             {#each discardConfirm as path (path)}
-              <p class="truncate font-mono text-[9px] text-dimmed">{path}</p>
+              <p class="truncate font-mono text-[0.5625rem] text-dimmed">{path}</p>
             {/each}
           </div>
         {/if}

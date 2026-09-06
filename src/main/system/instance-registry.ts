@@ -14,6 +14,13 @@ import { getConfigRoot } from '../../lib/utils'
 
 const HEARTBEAT_MS = 30_000
 const CHECKPOINT_EVENT_STALE_MS = 120_000
+/**
+ * An entry whose heartbeat is older than this is dead regardless of what
+ * `process.kill(pid, 0)` says. PIDs get reused by unrelated processes, so a
+ * stale file must never make a fresh instance believe a phantom instance is
+ * still running (which would silently bypass the working-thread close gate).
+ */
+const HEARTBEAT_STALE_MS = HEARTBEAT_MS * 3
 
 type CheckpointUpdatedEvent = Extract<AgentEvent, { type: 'checkpoint.updated' }>
 
@@ -60,6 +67,11 @@ export class InstanceRegistry {
   start(): void {
     try {
       mkdirSync(this.dir, { recursive: true })
+      try {
+        this.pruneStaleEntries()
+      } catch {
+        // Pruning is hygiene only — never block startup over it.
+      }
       this.writeEntry()
       this.startWatcher()
       this.heartbeatTimer = setInterval(() => this.writeEntry(), HEARTBEAT_MS)
@@ -172,9 +184,23 @@ export class InstanceRegistry {
     for (const file of files) {
       const entry = this.readEntry(file)
       if (!entry) continue
+      if (Date.now() - entry.lastHeartbeat > HEARTBEAT_STALE_MS) continue
       if (this.isProcessAlive(entry.pid)) entries.push(entry)
     }
     return entries
+  }
+
+  /** Delete entry files whose heartbeat has gone stale (crashed instances). */
+  private pruneStaleEntries(): void {
+    const now = Date.now()
+    for (const file of readdirSync(this.dir)) {
+      if (!file.endsWith('.json')) continue
+      const entry = this.readEntry(file)
+      if (!entry) continue
+      if (now - entry.lastHeartbeat > HEARTBEAT_STALE_MS) {
+        rmSync(join(this.dir, file), { force: true })
+      }
+    }
   }
 
   private writeEntry(): void {

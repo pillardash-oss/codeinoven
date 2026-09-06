@@ -84,6 +84,23 @@ import { Type } from 'typebox'
 const CIO_PERMISSION_MARKER = 'cio-permission:'
 const CIO_QUESTION_MARKER = 'cio-question:'
 const CIO_SYSTEM_PROMPT_PATH = '__CIO_SYSTEM_PROMPT_PATH__'
+const CIO_ALLOWED_TOOLS_PATH = '__CIO_ALLOWED_TOOLS_PATH__'
+
+// The tools pi bundles itself. When the driver hands this session a tool
+// allowlist (File-System-OFF chat threads), every call to one of these that
+// the allowlist does not name is routed through the permission card so the
+// app's policy can auto-approve attached files and ask for everything else.
+// Custom tools (question, todo, gateway, spawn) are never restricted here.
+const CIO_PI_BUILTIN_TOOLS = new Set([
+  'read',
+  'write',
+  'edit',
+  'bash',
+  'grep',
+  'find',
+  'ls',
+  'powershell'
+])
 
 // Pi's own bundled system prompt opens with a "you are an assistant" framing
 // that pushes models toward generic chatbot hedging (permission-seeking,
@@ -114,6 +131,23 @@ function loadCioSystemPrompt() {
     return readFileSync(CIO_SYSTEM_PROMPT_PATH, 'utf8').trim()
   } catch {
     return ''
+  }
+}
+
+// The driver rewrites this file per turn with the session's allowed built-in
+// tool names (empty JSON array = unrestricted). Read at every tool call so a
+// File-System toggle takes effect without restarting the pi session.
+function loadCioAllowedTools() {
+  try {
+    const raw = readFileSync(CIO_ALLOWED_TOOLS_PATH, 'utf8').trim()
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(function (entry) {
+      return typeof entry === 'string'
+    })
+  } catch {
+    return []
   }
 }
 
@@ -319,8 +353,8 @@ export default function codeInOvenCoreToolsExtension(pi) {
         Type.Object({
           question: Type.String({ description: 'The question text.' }),
           header: Type.String({
-            description: 'Short header label (12 or fewer characters).',
-            maxLength: 12
+            description: 'Short header label (24 or fewer characters).',
+            maxLength: 24
           }),
           options: Type.Array(
             Type.Object({
@@ -437,21 +471,45 @@ export default function codeInOvenCoreToolsExtension(pi) {
       )
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const detail = params.message ? params.message : 'Type the file paths to share.'
-      const hint = Array.isArray(params.suggested_paths) && params.suggested_paths.length > 0
-        ? ' For example: ' + params.suggested_paths.join(', ')
-        : ''
-      const value = await ctx.ui.input(
-        'Share files with the agent',
-        detail + ' Separate multiple paths with commas.' + hint
+      const detail = params.message ? params.message : 'Share the files the agent needs.'
+      const suggested = Array.isArray(params.suggested_paths)
+        ? params.suggested_paths.filter((path) => typeof path === 'string' && path.trim())
+        : []
+      // Structured question envelope so the app renders a real file-share
+      // card: the agent's message as the prompt, suggested paths as
+      // selectable options, plus custom text and file attachment entry points.
+      const question = {
+        question: detail,
+        header: 'Share files',
+        fileRequest: true,
+        multiple: true,
+        options: suggested.map((suggestedPath) => ({
+          label: suggestedPath,
+          description: 'Suggested file'
+        }))
+      }
+      const value = await ctx.ui.select(
+        questionDialogTitle([question]),
+        question.options.map((option) => option.label)
       )
-      if (value === undefined) {
+      let requested = []
+      if (typeof value === 'string' && value.trim()) {
+        let parsed
+        try {
+          parsed = JSON.parse(value)
+        } catch {
+          parsed = null
+        }
+        if (Array.isArray(parsed)) {
+          requested = parsed
+            .flat()
+            .map((entry) => String(entry).trim())
+            .filter(Boolean)
+        }
+      }
+      if (requested.length === 0) {
         return textResult({ requested: false, message: 'The user dismissed the file request.' })
       }
-      const requested = value
-        .split(/[,\\n]/u)
-        .map((part) => part.trim())
-        .filter(Boolean)
       const files = requested.map((path) => {
         const absolutePath = isAbsolute(path) ? resolve(path) : resolve(ctx.cwd, path)
         return {
@@ -966,6 +1024,39 @@ export default function codeInOvenCoreToolsExtension(pi) {
       }
     }
     const hit = evaluateGate(event.toolName, input, ctx.cwd)
+    // File-System-OFF chat threads publish a tool allowlist; any pi built-in
+    // the allowlist does not name requires an explicit permission card. The
+    // app's policy auto-approves reads of files the user attached and asks
+    // for everything else, so attachment access keeps working while the
+    // broader file system stays gated.
+    const allowedTools = loadCioAllowedTools()
+    if (
+      !hit &&
+      allowedTools.length > 0 &&
+      CIO_PI_BUILTIN_TOOLS.has(event.toolName) &&
+      !allowedTools.includes(event.toolName)
+    ) {
+      const command = typeof input['command'] === 'string' ? input['command'] : undefined
+      const path = firstString(input['path'], input['file_path'], input['filePath'], input['filename'])
+      const payload = {
+        permission: command === undefined ? event.toolName : 'shell',
+        patterns: command === undefined && path !== undefined ? [path] : [],
+        tool: event.toolName,
+        ...(command === undefined ? {} : { command })
+      }
+      const approved = await ctx.ui.confirm(
+        'Permission needed: this chat has no file-system access — using ' + event.toolName + ' requires your approval',
+        CIO_PERMISSION_MARKER + JSON.stringify(payload)
+      )
+      if (approved) return undefined
+      return {
+        block: true,
+        reason:
+          'The user denied this action: this chat has no file-system access, so ' +
+          event.toolName +
+          ' is not available. Do not retry it as-is; work from the files the user attached, or ask the user to enable File System for this chat.'
+      }
+    }
     if (!hit) return undefined
     const payload = {
       permission: hit.permission,

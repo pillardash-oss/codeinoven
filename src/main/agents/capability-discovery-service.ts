@@ -1,7 +1,7 @@
-import { readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { readFile, readdir, rm, writeFile, lstat, realpath } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join, sep } from 'node:path'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import type {
   AgentCapabilityCatalog,
@@ -138,6 +138,11 @@ export class CapabilityDiscoveryService {
   async discover(projectPath: string, harnessId: string): Promise<DiscoveryResult> {
     const spec = HARNESS_SPECS[harnessId] ?? DEFAULT_SPEC
     const home = homedir()
+    // Harness-exclusive skills keep the shared layer honest: a skill installed
+    // in ~/.codex/skills must not resurface for other harnesses through a
+    // duplicate copy in the shared agents/skills folder.
+    const homeClaims = await this.homeSkillClaims()
+    const projectClaims = await this.projectSkillClaims(projectPath)
     const mcp: AgentCapabilityEntry[] = []
     const skill: AgentCapabilityEntry[] = []
 
@@ -150,20 +155,41 @@ export class CapabilityDiscoveryService {
       )
     }
 
-    const skillDirs: SkillLocation[] = [
+    const skillDirs: Array<SkillLocation & { layer: 'home' | 'project' }> = [
       ...spec.globalSkillDirs.map((dir) => ({
         path: join(home, dir),
-        origin: 'harness' as const
+        origin: 'harness' as const,
+        layer: 'home' as const
       })),
-      { path: join(home, SHARED_GLOBAL_SKILL_DIR), origin: 'global' as const },
+      {
+        path: join(home, SHARED_GLOBAL_SKILL_DIR),
+        origin: 'global' as const,
+        layer: 'home' as const
+      },
       ...spec.projectSkillDirs.map((dir) => ({
         path: join(projectPath, dir),
-        origin: 'harness' as const
+        origin: 'harness' as const,
+        layer: 'project' as const
       })),
-      { path: join(projectPath, SHARED_PROJECT_SKILL_DIR), origin: 'global' as const }
+      {
+        path: join(projectPath, SHARED_PROJECT_SKILL_DIR),
+        origin: 'global' as const,
+        layer: 'project' as const
+      }
     ]
-    for (const { path, origin } of skillDirs) {
-      skill.push(...(await this.scanSkillDir(path, origin)))
+    for (const { path, origin, layer } of skillDirs) {
+      const scanned = await this.scanSkillDir(path, origin)
+      // Shared-layer copies yield to harness-specific claims: if another
+      // harness owns this skill in its own directories, hide the shared copy
+      // here. The owning harness keeps seeing it (its own scan wins via
+      // dedupe); symlinks back into the shared folder never claim.
+      const claims = layer === 'home' ? homeClaims : projectClaims
+      skill.push(
+        ...scanned.filter((entry) => {
+          const claimants = claims.get(entry.name.toLowerCase())
+          return !claimants || claimants.has(harnessId)
+        })
+      )
     }
 
     return { mcp: dedupe(mcp), skill: dedupe(skill) }
@@ -223,16 +249,110 @@ export class CapabilityDiscoveryService {
       }
     }
 
-    skill.push(...(await this.scanSkillDir(join(home, SHARED_GLOBAL_SKILL_DIR), 'global')))
+    const homeClaims = await this.homeSkillClaims()
+    const sharedGlobal = await this.scanSkillDir(join(home, SHARED_GLOBAL_SKILL_DIR), 'global')
+    skill.push(...sharedGlobal.filter((entry) => !homeClaims.has(entry.name.toLowerCase())))
     for (const project of projects) {
-      skill.push(
-        ...(await this.scanSkillDir(join(project.path, SHARED_PROJECT_SKILL_DIR), 'global', {
-          projectId: project.id
-        }))
+      const projectClaims = await this.projectSkillClaims(project.path)
+      const sharedProject = await this.scanSkillDir(
+        join(project.path, SHARED_PROJECT_SKILL_DIR),
+        'global',
+        { projectId: project.id }
       )
+      skill.push(...sharedProject.filter((entry) => !projectClaims.has(entry.name.toLowerCase())))
     }
 
     return { mcp, skill }
+  }
+
+  /**
+   * Skill names installed in harness-specific directories (home and project
+   * level), mapped to the harnesses claiming them. Consumers use this to keep
+   * harness-exclusive skills out of other harnesses' command menus — a native
+   * driver may still report a shared-layer copy as a skill command even though
+   * the skill is owned by another harness.
+   */
+  async harnessSkillClaims(projectPath: string): Promise<Map<string, Set<string>>> {
+    const [home, project] = await Promise.all([
+      this.homeSkillClaims(),
+      this.projectSkillClaims(projectPath)
+    ])
+    const merged = new Map(home)
+    for (const [name, harnesses] of project) {
+      const claimants = merged.get(name)
+      if (claimants) {
+        for (const harnessId of harnesses) claimants.add(harnessId)
+      } else {
+        merged.set(name, harnesses)
+      }
+    }
+    return merged
+  }
+
+  /** Skill names claimed by harness-specific home-level directories. */
+  private async homeSkillClaims(): Promise<Map<string, Set<string>>> {
+    const home = homedir()
+    const claims = new Map<string, Set<string>>()
+    for (const spec of Object.values(HARNESS_SPECS)) {
+      for (const dir of spec.globalSkillDirs) {
+        await this.claimSkillNames(join(home, dir), spec.id, claims)
+      }
+    }
+    return claims
+  }
+
+  /** Skill names claimed by harness-specific project-level directories. */
+  private async projectSkillClaims(projectPath: string): Promise<Map<string, Set<string>>> {
+    const claims = new Map<string, Set<string>>()
+    for (const spec of Object.values(HARNESS_SPECS)) {
+      for (const dir of spec.projectSkillDirs) {
+        await this.claimSkillNames(join(projectPath, dir), spec.id, claims)
+      }
+    }
+    return claims
+  }
+
+  /** Record one directory's skills as claimed by `harnessId`. Symlinked skill
+   *  folders that resolve back into a shared skills layer are the same global
+   *  skill, not an exclusive claim, so they are ignored. */
+  private async claimSkillNames(
+    absolutePath: string,
+    harnessId: string,
+    claims: Map<string, Set<string>>
+  ): Promise<void> {
+    let entries: Dirent[]
+    try {
+      entries = await readdir(absolutePath, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
+      const skillPath = join(absolutePath, entry.name)
+      if (await this.isSharedLayerSymlink(skillPath)) continue
+      const markdown = await readTextFile(join(skillPath, 'SKILL.md'))
+      if (!markdown) continue
+      const name = parseSkillFrontmatter(markdown, entry.name).name.toLowerCase()
+      const claimants = claims.get(name)
+      if (claimants) claimants.add(harnessId)
+      else claims.set(name, new Set([harnessId]))
+    }
+  }
+
+  /** True when `skillPath` is a symlink whose target lives inside a shared
+   *  agents/skills layer (home or the containing tree's project root). */
+  private async isSharedLayerSymlink(skillPath: string): Promise<boolean> {
+    try {
+      const stat = await lstat(skillPath)
+      if (!stat.isSymbolicLink()) return false
+      const real = await realpath(skillPath)
+      const homeShared = join(homedir(), SHARED_GLOBAL_SKILL_DIR)
+      if (real.startsWith(homeShared + sep)) return true
+      const projectShared = join(dirname(dirname(dirname(skillPath))), SHARED_PROJECT_SKILL_DIR)
+      return real.startsWith(projectShared + sep)
+    } catch {
+      return false
+    }
   }
 
   async readSkill(source: AgentCapabilitySource): Promise<NativeSkillContent | null> {

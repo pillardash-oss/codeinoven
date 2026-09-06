@@ -6,7 +6,10 @@ function cloneSettings(settings: ThreadSettings): ThreadSettings {
   return {
     ...settings,
     ...(settings.loopAuditor ? { loopAuditor: { ...settings.loopAuditor } } : {}),
-    ...(settings.imageDescriptor ? { imageDescriptor: { ...settings.imageDescriptor } } : {})
+    ...(settings.imageDescriptor ? { imageDescriptor: { ...settings.imageDescriptor } } : {}),
+    ...(settings.imageDescriptorFallback
+      ? { imageDescriptorFallback: { ...settings.imageDescriptorFallback } }
+      : {})
   }
 }
 

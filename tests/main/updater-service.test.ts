@@ -53,6 +53,10 @@ const DEFERRED_POLL_MS = 5_000
 function defaultConfig(): AppConfig {
   return {
     theme: 'system',
+    fontFamily: 'jetbrains-mono',
+    appFontSize: 15,
+  fontWeight: 200,
+    zoomLevel: 1,
     onboardingCompleted: false,
     threadLimit: 70,
     questionTimeoutMs: 300_000,

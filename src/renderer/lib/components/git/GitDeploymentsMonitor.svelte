@@ -167,12 +167,12 @@
   {#if !githubConnected}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <Rocket size={22} class="text-dimmed" />
-      <p class="max-w-[34ch] text-[11px] leading-relaxed text-muted">
+      <p class="max-w-[34ch] text-[0.6875rem] leading-relaxed text-muted">
         Sign in to GitHub to monitor workflow runs and deployments.
       </p>
       <button
         type="button"
-        class="h-8 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+        class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
         onclick={onSignIn}
       >
         Sign in to GitHub
@@ -181,7 +181,7 @@
   {:else if !identity}
     <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
       <Rocket size={20} class="text-dimmed" />
-      <p class="max-w-[36ch] text-[11px] leading-relaxed text-muted">
+      <p class="max-w-[36ch] text-[0.6875rem] leading-relaxed text-muted">
         Add a GitHub origin remote to monitor deployments for this project.
       </p>
     </div>
@@ -203,7 +203,7 @@
         onAgentDiagnose={onAgentDiagnoseDeployment}
       />
     {:else if loading && !overview}
-      <div class="flex flex-1 items-center justify-center gap-2 text-[11px] text-dimmed">
+      <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
         <Loader2 size={13} class="animate-spin" />
         Loading deployment activity
       </div>
@@ -211,8 +211,8 @@
       <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
         <CircleX size={20} class="text-danger" />
         <div>
-          <p class="text-[11px] font-medium text-foreground">Deployment activity unavailable</p>
-          <p class="mt-1 max-w-[42ch] text-[10px] leading-relaxed text-dimmed">
+          <p class="text-[0.6875rem] font-medium text-foreground">Deployment activity unavailable</p>
+          <p class="mt-1 max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">
             {#if permissionMissing}
               Install CodeInOven on this repository and grant Actions, Deployments, and Environments
               read access.
@@ -224,7 +224,7 @@
         {#if permissionMissing}
           <button
             type="button"
-            class="h-8 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+            class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
             onclick={() =>
               void openInBrowser('https://github.com/apps/codeinoven/installations/new')}
           >
@@ -233,7 +233,7 @@
         {:else}
           <button
             type="button"
-            class="h-8 rounded-lg border border-border px-3 text-[11px] font-medium text-foreground hover:bg-elevated"
+            class="h-8 rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
             onclick={() => void load(true)}
           >
             Try again
@@ -245,10 +245,10 @@
         <section class="border-b border-border">
           <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
             <CircleDot size={11} class="text-dimmed" />
-            <h3 class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
               Workflow runs
             </h3>
-            <span class="ml-auto text-[9px] tabular-nums text-dimmed">
+            <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">
               {overview.workflowRuns.length}
             </span>
             <button
@@ -273,7 +273,7 @@
             </button>
           </div>
           {#if overview.workflowRuns.length === 0}
-            <p class="px-3 py-5 text-center text-[10px] text-dimmed">
+            <p class="px-3 py-5 text-center text-[0.625rem] text-dimmed">
               No workflow runs are available.
             </p>
           {:else}
@@ -295,19 +295,19 @@
                   {/if}
                   <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-2">
-                      <p class="truncate text-[11px] font-medium text-foreground">
+                      <p class="truncate text-[0.6875rem] font-medium text-foreground">
                         {run.displayTitle}
                       </p>
                       <span
                         class={[
-                          'shrink-0 rounded px-1.5 py-0.5 text-[8px] font-semibold uppercase',
+                          'shrink-0 rounded px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase',
                           runTone(run)
                         ]}
                       >
                         {runLabel(run)}
                       </span>
                     </div>
-                    <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                    <div class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
                       <span class="truncate">{run.name} #{run.runNumber}</span>
                       {#if run.branch}
                         <span>·</span>
@@ -327,15 +327,15 @@
         <section>
           <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
             <PackageCheck size={11} class="text-dimmed" />
-            <h3 class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
               Environments
             </h3>
-            <span class="ml-auto text-[9px] tabular-nums text-dimmed">
+            <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">
               {overview.deployments.length}
             </span>
           </div>
           {#if overview.deployments.length === 0}
-            <p class="px-3 py-5 text-center text-[10px] text-dimmed">
+            <p class="px-3 py-5 text-center text-[0.625rem] text-dimmed">
               No GitHub deployments are available.
             </p>
           {:else}
@@ -351,19 +351,19 @@
                   <Rocket size={13} class="mt-0.5 shrink-0 text-muted" />
                   <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-2">
-                      <p class="truncate text-[11px] font-medium text-foreground">
+                      <p class="truncate text-[0.6875rem] font-medium text-foreground">
                         {deployment.environment}
                       </p>
                       <span
                         class={[
-                          'shrink-0 rounded px-1.5 py-0.5 text-[8px] font-semibold uppercase',
+                          'shrink-0 rounded px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase',
                           deploymentTone(deployment)
                         ]}
                       >
                         {deployment.latestStatus?.state ?? 'created'}
                       </span>
                     </div>
-                    <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                    <div class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
                       <span class="max-w-32 truncate font-mono">{deployment.ref}</span>
                       <span>·</span>
                       <span class="font-mono">{deployment.sha.slice(0, 7)}</span>
@@ -371,7 +371,7 @@
                       <span>{relativeTime(deployment.updatedAt)}</span>
                     </div>
                     {#if deployment.latestStatus?.description}
-                      <p class="mt-1 truncate text-[9px] text-muted">
+                      <p class="mt-1 truncate text-[0.5625rem] text-muted">
                         {deployment.latestStatus.description}
                       </p>
                     {/if}

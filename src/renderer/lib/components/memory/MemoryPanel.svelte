@@ -474,7 +474,7 @@
 
 <div
   class="memory-panel flex h-full min-h-0 flex-col {variant === 'settings'
-    ? 'mx-auto w-full max-w-3xl p-6'
+    ? 'w-full p-6'
     : 'p-5'}"
 >
   <!-- Fixed header: title, Projects/Chats tabs, enable toggle, section tabs -->
@@ -482,7 +482,7 @@
     <div class="mb-4 flex items-start justify-between gap-4">
       <div>
         <h1 class="text-xl font-bold tracking-tight">Memory</h1>
-        <p class="mt-0.5 text-sm text-muted">{headerDescription}</p>
+        <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">{headerDescription}</p>
       </div>
 
       {#if variant === 'settings'}
@@ -585,7 +585,7 @@
             Inactive
             {#if inactiveCount > 0}
               <span
-                class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary"
+                class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-semibold tabular-nums text-primary"
               >
                 {inactiveCount}
               </span>
@@ -605,7 +605,7 @@
             Proposed
             {#if proposals.length > 0}
               <span
-                class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary"
+                class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-semibold tabular-nums text-primary"
               >
                 {proposals.length}
               </span>
@@ -680,7 +680,7 @@
                   <div class="min-w-0">
                     <p class="text-sm font-medium text-foreground">{row.proposal.label}</p>
                     <p class="mt-1 text-xs leading-relaxed text-muted">{row.proposal.content}</p>
-                    <p class="mt-1.5 text-[11px] capitalize text-dimmed">
+                    <p class="mt-1.5 text-[0.6875rem] capitalize text-dimmed">
                       {row.proposal.scope} · {categoryLabels[row.proposal.category]} · {row.proposal.priority}
                     </p>
                   </div>
@@ -750,7 +750,7 @@
           <select
             class="{variant === 'sidebar'
               ? 'w-full'
-              : 'w-36'} rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+              : 'w-36'} rounded-lg border bg-elevated px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none focus:border-primary"
             bind:value={filterCategory}
           >
             <option value="">All categories</option>
@@ -761,7 +761,7 @@
           <select
             class="{variant === 'sidebar'
               ? 'w-full'
-              : 'w-36'} rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+              : 'w-36'} rounded-lg border bg-elevated px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none focus:border-primary"
             bind:value={filterPriority}
           >
             <option value="">All priorities</option>

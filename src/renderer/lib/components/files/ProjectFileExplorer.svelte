@@ -23,6 +23,8 @@
   import { clampFileExplorerWidth } from '$lib/stores/file-explorer.svelte'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
+  import Switch from '../ui/Switch.svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
   import FolderTypeIcon from './FolderTypeIcon.svelte'
   import ProjectFileContextMenu from './ProjectFileContextMenu.svelte'
@@ -99,7 +101,8 @@
   let filterQuery = $state('')
   let filterOpen = $state(false)
   let revealedSearchPath = $state<string | null>(null)
-  let lastTurnOnly = $state(false)
+  /** Backed by the per-project files store so sidebar tab remounts keep it. */
+  let lastTurnOnly = $derived(projectState.lastTurnOnly)
   let autoFiltered = $state(false)
   let searchRequestId = 0
   /** Directories the user explicitly collapsed while a filter (search query or
@@ -233,30 +236,33 @@
     const checkpointId = activeCheckpointId
     if (checkpointId && checkpointId !== lastAppliedCheckpointId) {
       lastAppliedCheckpointId = checkpointId
-      lastTurnOnly = true
+      projectFilesWorkspace.setLastTurnOnly(projectId, true)
       autoFiltered = true
     } else if (!checkpointId && autoFiltered) {
       lastAppliedCheckpointId = null
-      lastTurnOnly = false
+      projectFilesWorkspace.setLastTurnOnly(projectId, false)
       autoFiltered = false
     }
   })
 
   $effect(() => {
     const query = filterQuery.trim()
+    const includeCio = cioSearchVisibility.includeCio
     const requestId = ++searchRequestId
 
     if (!query) return
 
     const timer = setTimeout(async () => {
       try {
-        const results = await invoke(
-          'projectFiles:search',
-          projectId,
-          query,
-          'all',
-          workspaceState.activeScopeBucketIdFor(projectId)
-        )
+        const results = (
+          await invoke(
+            'projectFiles:search',
+            projectId,
+            query,
+            'all',
+            workspaceState.activeScopeBucketIdFor(projectId)
+          )
+        ).filter((entry) => includeCio || !isCioScratchPath(entry.path))
         if (requestId !== searchRequestId) return
 
         const dirsToLoad = new SvelteSet<string>()
@@ -288,15 +294,29 @@
     return () => clearTimeout(timer)
   })
 
+  /** Re-scroll the currently active file into view after a filter toggle.
+   *  The reveal effect only fires on focus-request/path/entry changes, so
+   *  toggling "Last turn" or "Conflicts" would otherwise leave the viewport
+   *  wherever it was, even though the active row stayed selected. */
+  async function revealActivePathAfterFilterChange(): Promise<void> {
+    const path = revealedSearchPath ?? selectedPath ?? projectState.revealedPath
+    if (!path) return
+    await tick()
+    if (treeRowIndexByPath.has(path)) scrollTreePathIntoView(path)
+  }
+
   function toggleLastTurnFilter(): void {
-    lastTurnOnly = !lastTurnOnly
-    autoFiltered = false
+    const next = !lastTurnOnly
+    projectFilesWorkspace.setLastTurnOnly(projectId, next)
+    if (!next) autoFiltered = false
     clearCollapsedOverrides()
+    if (!next) void revealActivePathAfterFilterChange()
   }
 
   function toggleConflictsFilter(): void {
     onToggleConflicts?.()
     clearCollapsedOverrides()
+    void revealActivePathAfterFilterChange()
   }
 
   function clearSearchExpansions(): void {
@@ -1112,6 +1132,11 @@
     query: string,
     queryMatches: Record<string, boolean>
   ): boolean {
+    // While a search session is open with `.cio` excluded, hide every entry
+    // inside the scratch directory regardless of the query.
+    if (!cioSearchVisibility.includeCio && filterOpen && isCioScratchPath(entry.path)) {
+      return false
+    }
     const matchesLastTurn =
       !lastTurnOnly ||
       (entry.kind === 'file'
@@ -1208,14 +1233,14 @@
 {#snippet createTreeRow(row: CreateTreeRow)}
   {#if inlineEdit?.kind === 'create'}
     <div
-      class="flex h-7 items-center gap-1.5 pr-2 text-[11px] text-foreground"
+      class="flex h-7 items-center gap-1.5 pr-2 text-[0.6875rem] text-foreground"
       style:padding-left={`${22 + row.depth * 14}px`}
     >
       <FileTypeIcon path={inlineEdit.value} />
       <input
         bind:this={inlineInput}
         bind:value={inlineEdit.value}
-        class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[11px] text-foreground outline-none"
+        class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[0.6875rem] text-foreground outline-none"
         aria-label="New file name"
         placeholder="filename.ext"
         disabled={operationPending}
@@ -1226,14 +1251,14 @@
   {/if}
   {#if inlineEdit?.kind === 'create-directory' && inlineEdit.directory === row.directory}
     <div
-      class="flex h-7 items-center gap-1.5 pr-2 text-[11px] text-foreground"
+      class="flex h-7 items-center gap-1.5 pr-2 text-[0.6875rem] text-foreground"
       style:padding-left={`${22 + row.depth * 14}px`}
     >
       <FolderTypeIcon name={inlineEdit.value} size={13} />
       <input
         bind:this={inlineInput}
         bind:value={inlineEdit.value}
-        class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[11px] text-foreground outline-none"
+        class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[0.6875rem] text-foreground outline-none"
         aria-label="New folder name"
         placeholder="folder-name"
         disabled={operationPending}
@@ -1246,7 +1271,7 @@
 
 {#snippet errorTreeRow(row: ErrorTreeRow)}
   <div
-    class="flex h-7 items-center gap-2 pr-2 text-[10px] text-danger"
+    class="flex h-7 items-center gap-2 pr-2 text-[0.625rem] text-danger"
     style:padding-left={`${22 + row.depth * 14}px`}
   >
     <span class="min-w-0 flex-1 truncate">{row.message}</span>
@@ -1286,7 +1311,7 @@
   >
     {#if inlineEdit?.kind === 'rename' && inlineEdit.entry.path === entry.path}
       <div
-        class="flex h-7 items-center gap-1.5 pr-2 text-[11px] text-foreground"
+        class="flex h-7 items-center gap-1.5 pr-2 text-[0.6875rem] text-foreground"
         style:padding-left={`${22 + row.depth * 14}px`}
       >
         {#if inlineEdit.entry.kind === 'directory'}
@@ -1297,7 +1322,7 @@
         <input
           bind:this={inlineInput}
           bind:value={inlineEdit.value}
-          class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[11px] text-foreground outline-none"
+          class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[0.6875rem] text-foreground outline-none"
           aria-label={`Rename ${entry.name}`}
           disabled={operationPending}
           onkeydown={handleInlineKeydown}
@@ -1310,7 +1335,7 @@
         data-tree-path={entry.path}
         draggable="true"
         class={[
-          'relative flex h-7 w-full items-center gap-1.5 pr-2 text-left text-[11px] transition-colors hover:bg-elevated',
+          'relative flex h-7 w-full items-center gap-1.5 pr-2 text-left text-[0.6875rem] transition-colors hover:bg-elevated',
           isRowActive(entry.path) ? 'bg-overlay text-foreground' : 'text-muted',
           dropFolder === entry.path ? 'bg-primary/10' : ''
         ]}
@@ -1387,14 +1412,14 @@
       aria-hidden="true"
     >
       <span
-        class="mt-1.5 rounded-full bg-primary px-2.5 py-0.5 text-[10px] font-medium text-on-primary shadow-lg"
+        class="mt-1.5 rounded-full bg-primary px-2.5 py-0.5 text-[0.625rem] font-medium text-on-primary shadow-lg"
         >{dropFolder ? `Drop into ${dropFolder || ''}` : 'Drop to import'}</span
       >
     </div>
   {/if}
   <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2">
     <FolderOpen size={13} class="shrink-0 text-primary" />
-    <span class="min-w-0 flex-1 truncate text-[10px] font-semibold text-foreground">
+    <span class="min-w-0 flex-1 truncate text-[0.625rem] font-semibold text-foreground">
       {projectName}
     </span>
     <button
@@ -1438,29 +1463,41 @@
 
   {#if filterOpen}
     <div
-      class="absolute left-2 right-2 top-10 z-20 flex items-center gap-1 rounded-xl border border-border bg-surface p-1.5 shadow-xl"
+      class="absolute left-2 right-2 top-7 z-20 rounded-xl border border-border bg-surface shadow-xl"
       role="search"
       aria-label="Search project files"
     >
-      <Search size={13} class="shrink-0 text-dimmed" />
-      <input
-        bind:this={filterInput}
-        type="search"
-        class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[11px] text-foreground outline-none placeholder:text-dimmed"
-        placeholder="Search files and folders…"
-        value={filterQuery}
-        oninput={handleFilterInput}
-        onkeydown={(event: KeyboardEvent) => event.key === 'Escape' && closeFilter()}
-      />
-      <button
-        type="button"
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed hover:bg-elevated hover:text-foreground"
-        aria-label="Close file search"
-        title="Close file search (Escape)"
-        onclick={() => closeFilter()}
-      >
-        <X size={12} />
-      </button>
+      <div class="flex items-center border-b border-border px-2.5 py-1">
+        <Switch
+          checked={cioSearchVisibility.includeCio}
+          label="Toggle .cio visibility"
+          class="text-[0.625rem] font-semibold text-dimmed"
+          title="Include the .cio directory in search results"
+          aria-label="Include the .cio directory in search results"
+          onchange={(checked: boolean) => cioSearchVisibility.setIncludeCio(checked)}
+        />
+      </div>
+      <div class="flex items-center gap-1 p-1.5">
+        <Search size={13} class="shrink-0 text-dimmed" />
+        <input
+          bind:this={filterInput}
+          type="search"
+          class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
+          placeholder="Search files and folders…"
+          value={filterQuery}
+          oninput={handleFilterInput}
+          onkeydown={(event: KeyboardEvent) => event.key === 'Escape' && closeFilter()}
+        />
+        <button
+          type="button"
+          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed hover:bg-elevated hover:text-foreground"
+          aria-label="Close file search"
+          title="Close file search (Escape)"
+          onclick={() => closeFilter()}
+        >
+          <X size={12} />
+        </button>
+      </div>
     </div>
   {/if}
 
@@ -1468,7 +1505,7 @@
     <button
       type="button"
       class={[
-        'mt-1.5 flex h-7 w-full items-center gap-1.5 rounded border px-2 text-[10px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+        'mt-1.5 flex h-7 w-full items-center gap-1.5 rounded border px-2 text-[0.625rem] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40',
         lastTurnOnly
           ? 'border-primary/40 bg-primary/10 text-primary'
           : 'border-border text-muted hover:bg-elevated hover:text-foreground'
@@ -1487,7 +1524,7 @@
       <button
         type="button"
         class={[
-          'mt-1.5 flex h-7 w-full items-center gap-1.5 rounded border px-2 text-[10px] font-medium transition-colors',
+          'mt-1.5 flex h-7 w-full items-center gap-1.5 rounded border px-2 text-[0.625rem] font-medium transition-colors',
           conflictsOnly
             ? 'border-warning/40 bg-warning/10 text-warning'
             : 'border-border text-muted hover:bg-elevated hover:text-foreground'
@@ -1521,8 +1558,7 @@
   >
     <div
       {@attach attachTreeScroll}
-      class="min-h-0 flex-1 overflow-auto py-1 [&::-webkit-scrollbar]:hidden"
-      style:scrollbar-width="none"
+      class="min-h-0 flex-1 overflow-auto py-1"
       role="tree"
       tabindex="0"
       onclick={handleTreeContainerClick}
@@ -1531,19 +1567,19 @@
     >
       {#if projectState.directoryErrors['']}
         <div class="px-3 py-3">
-          <p class="text-[11px] leading-relaxed text-danger">{projectState.directoryErrors['']}</p>
+          <p class="text-[0.6875rem] leading-relaxed text-danger">{projectState.directoryErrors['']}</p>
           <button
             type="button"
-            class="mt-2 text-[11px] font-medium text-foreground hover:underline"
+            class="mt-2 text-[0.6875rem] font-medium text-foreground hover:underline"
             onclick={() => void projectFilesWorkspace.loadDirectory(projectId, '', true)}
           >
             Try again
           </button>
         </div>
       {:else if (projectState.entriesByDirectory[''] ?? []).length === 0 && !inlineEdit}
-        <p class="px-3 py-3 text-[11px] text-dimmed">This project directory is empty.</p>
+        <p class="px-3 py-3 text-[0.6875rem] text-dimmed">This project directory is empty.</p>
       {:else if visibleEntries('').length === 0 && !inlineEdit}
-        <p class="px-3 py-3 text-[11px] text-dimmed">
+        <p class="px-3 py-3 text-[0.6875rem] text-dimmed">
           {conflictsOnly
             ? 'No conflicted files match this filter.'
             : lastTurnOnly

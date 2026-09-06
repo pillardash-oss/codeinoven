@@ -120,6 +120,39 @@ export class TemporaryChatController implements ConversationController {
     this.#touch()
   }
 
+  /** Drop a message and everything after it — the editing backend for side
+   *  chats. Destroys the isolated harness session (its transcript still holds
+   *  the removed span) and commits the kept conversation into the cache. */
+  async truncateBefore(messageId: string): Promise<AgentMessage[]> {
+    return this.#deleteTemporaryMessages(messageId, 'down')
+  }
+
+  /** Delete history around a message inside a side chat. */
+  async removeAround(messageId: string, mode: 'down' | 'single' | 'up'): Promise<AgentMessage[]> {
+    return this.#deleteTemporaryMessages(messageId, mode)
+  }
+
+  async #deleteTemporaryMessages(
+    messageId: string,
+    mode: 'down' | 'single' | 'up'
+  ): Promise<AgentMessage[]> {
+    if (this.#tab.expired) return []
+    const kept = await invoke(
+      'agent:deleteTemporaryMessages',
+      this.#tab.projectId,
+      this.#tab.threadId,
+      this.#tab.temporaryChatId,
+      messageId,
+      mode
+    )
+    threadMessages.applyKept(this.projectId, this.conversationId, kept)
+    // The replacement session only comes up on the next send; drop the stale
+    // binding so its streamed events are not filtered against the dead one.
+    this.#tab.sessionId = null
+    this.#touch()
+    return kept
+  }
+
   mount(): void {
     if (this.#mounted) return
     this.#mounted = true

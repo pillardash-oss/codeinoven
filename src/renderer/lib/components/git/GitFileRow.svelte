@@ -156,25 +156,25 @@
               />
             </span>
           {/if}
-          <span class={['w-4 shrink-0 text-center font-mono text-[10px] font-semibold', color]}>
+          <span class={['w-4 shrink-0 text-center font-mono text-[0.625rem] font-semibold', color]}>
             {letter}
           </span>
           <FileTypeIcon path={change.path} size={13} />
-          <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted"
+          <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted"
             >{displayPath ?? change.path}</span
           >
           {#if change.oldPath}
-            <span class="shrink-0 text-[9px] text-dimmed">from {change.oldPath}</span>
+            <span class="shrink-0 text-[0.5625rem] text-dimmed">from {change.oldPath}</span>
           {/if}
           {#if diff && !diff.binary}
-            <span class="shrink-0 font-mono text-[10px] tabular-nums text-success">
+            <span class="shrink-0 font-mono text-[0.625rem] tabular-nums text-success">
               +{diff.additions}
             </span>
-            <span class="shrink-0 font-mono text-[10px] tabular-nums text-danger">
+            <span class="shrink-0 font-mono text-[0.625rem] tabular-nums text-danger">
               −{diff.deletions}
             </span>
           {:else if diff?.binary}
-            <span class="shrink-0 text-[9px] text-dimmed">binary</span>
+            <span class="shrink-0 text-[0.5625rem] text-dimmed">binary</span>
           {/if}
           {#if loadingDiff}
             <Loader2 size={11} class="shrink-0 animate-spin text-dimmed" />
@@ -188,7 +188,7 @@
           {#if change.status === 'conflicted' && onResolveConflict}
             <button
               type="button"
-              class="shrink-0 rounded px-2 py-1 text-[10px] font-medium text-warning transition-colors hover:bg-warning/10"
+              class="shrink-0 rounded px-2 py-1 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10"
               aria-label={`Resolve conflict in ${change.path}`}
               title={`Resolve conflict in ${change.path}`}
               onclick={() => onResolveConflict(change.path)}
@@ -199,7 +199,7 @@
             <button
               type="button"
               class={[
-                'shrink-0 rounded px-2 py-1 text-[10px] font-medium transition-colors disabled:opacity-40',
+                'shrink-0 rounded px-2 py-1 text-[0.625rem] font-medium transition-colors disabled:opacity-40',
                 change.staged
                   ? 'text-danger hover:bg-danger/10'
                   : 'text-muted hover:bg-elevated hover:text-foreground'
@@ -228,7 +228,7 @@
           {#if change.status === 'conflicted'}
             {#if onResolveConflict}
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => onResolveConflict?.(change.path)}
               >
                 <GitMerge size={12} class="text-warning" />
@@ -237,21 +237,21 @@
             {/if}
             {#if onOpenInEditor}
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => onOpenInEditor?.(change.path)}
               >
-                <span class="inline-block w-3 text-center text-[10px]">✎</span>
+                <span class="inline-block w-3 text-center text-[0.625rem]">✎</span>
                 Open in editor
               </ContextMenu.Item>
             {/if}
           {:else}
             {#if !readonly}
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => onToggleStage()}
               >
                 {#if change.staged}
-                  <span class="inline-block w-3 text-center text-[10px] text-danger">−</span>
+                  <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span>
                   Unstage file
                 {:else}
                   <Check size={12} class="text-success" />
@@ -262,36 +262,36 @@
             {#if onStash}
               <ContextMenu.Separator class="my-1 h-px bg-border" />
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => onStash?.(change.path)}
               >
-                <span class="inline-block w-3 text-center text-[10px]">↓</span>
+                <span class="inline-block w-3 text-center text-[0.625rem]">↓</span>
                 Stash file…
               </ContextMenu.Item>
             {/if}
             {#if onOpenInEditor}
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => onOpenInEditor?.(change.path)}
               >
-                <span class="inline-block w-3 text-center text-[10px]">✎</span>
+                <span class="inline-block w-3 text-center text-[0.625rem]">✎</span>
                 Open
               </ContextMenu.Item>
             {/if}
             {#if onRestore}
               <ContextMenu.Separator class="my-1 h-px bg-border" />
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => onRestore?.(change.path, 'staged')}
               >
-                <span class="inline-block w-3 text-center text-[10px]">↩</span>
+                <span class="inline-block w-3 text-center text-[0.625rem]">↩</span>
                 Restore to index
               </ContextMenu.Item>
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => onRestore?.(change.path, 'worktree')}
               >
-                <span class="inline-block w-3 text-center text-[10px]">↩</span>
+                <span class="inline-block w-3 text-center text-[0.625rem]">↩</span>
                 Restore to index + working tree
               </ContextMenu.Item>
             {/if}
@@ -299,19 +299,19 @@
               <ContextMenu.Separator class="my-1 h-px bg-border" />
               {#if onIgnore}
                 <ContextMenu.Item
-                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                   onSelect={() => onIgnore?.(change.path)}
                 >
-                  <span class="inline-block w-3 text-center text-[10px]">⊘</span>
+                  <span class="inline-block w-3 text-center text-[0.625rem]">⊘</span>
                   Add to gitignore
                 </ContextMenu.Item>
               {/if}
               {#if onDiscard}
                 <ContextMenu.Item
-                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated"
+                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
                   onSelect={() => onDiscard?.(change.path)}
                 >
-                  <span class="inline-block w-3 text-center text-[10px]">⌫</span>
+                  <span class="inline-block w-3 text-center text-[0.625rem]">⌫</span>
                   Discard changes
                 </ContextMenu.Item>
               {/if}
@@ -326,19 +326,19 @@
       {#if loadingDiff}
         <div class="flex items-center gap-2 px-3 py-4 text-dimmed">
           <Loader2 size={12} class="animate-spin" />
-          <span class="text-[10px]">Loading diff…</span>
+          <span class="text-[0.625rem]">Loading diff…</span>
         </div>
       {:else if error}
-        <p class="px-3 py-4 text-[10px] text-danger" role="alert">{error}</p>
+        <p class="px-3 py-4 text-[0.625rem] text-danger" role="alert">{error}</p>
       {:else if viewDiff}
         <FileDiffView diff={viewDiff} maxHeight="18rem" />
         {#if viewDiff.truncated}
-          <p class="border-t border-border px-3 py-1 text-[9px] text-dimmed">
+          <p class="border-t border-border px-3 py-1 text-[0.5625rem] text-dimmed">
             Diff truncated to a bounded preview
           </p>
         {/if}
       {:else}
-        <p class="px-3 py-4 text-[10px] text-dimmed">No diff available.</p>
+        <p class="px-3 py-4 text-[0.625rem] text-dimmed">No diff available.</p>
       {/if}
     </div>
   {/if}

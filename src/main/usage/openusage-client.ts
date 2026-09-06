@@ -10,6 +10,14 @@ const OPENUSAGE_API_BASE = 'http://127.0.0.1:6736/v1/limits'
 const OPENUSAGE_SCHEMA = 'openusage.limits.v1'
 const OPENUSAGE_TIMEOUT_MS = 8_000
 const OPENUSAGE_CACHE_MS = 30_000
+const OPENUSAGE_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
+  'github-copilot': 'copilot',
+  'google-gemini-cli': 'gemini_cli',
+  google: 'gemini_api',
+  'openai-codex': 'codex',
+  'x-ai': 'xai',
+  'z-ai': 'zai'
+}
 
 interface OpenUsageTelemetry {
   rateLimits: AgentRateLimitWindow[]
@@ -232,7 +240,26 @@ export class OpenUsageClient {
   private readonly cache = new Map<string, CachedTelemetry>()
   private readonly inflight = new Map<string, Promise<OpenUsageTelemetry | null>>()
 
-  async readProviderUsage(providerId: string): Promise<OpenUsageTelemetry | null> {
+  async readProviderUsage(
+    providerId: string,
+    fallbackProviderIds: readonly string[] = []
+  ): Promise<OpenUsageTelemetry | null> {
+    const candidates = [providerId, OPENUSAGE_PROVIDER_ALIASES[providerId], ...fallbackProviderIds]
+      .filter((candidate): candidate is string => Boolean(candidate))
+      .filter((candidate, index, all) => all.indexOf(candidate) === index)
+    let credits: AgentUsageCredits | undefined
+    for (const candidate of candidates) {
+      const telemetry = await this.readExactProviderUsage(candidate)
+      if (!telemetry) continue
+      credits ??= telemetry.credits
+      if (telemetry.rateLimits.length > 0) {
+        return { rateLimits: telemetry.rateLimits, ...(credits ? { credits } : {}) }
+      }
+    }
+    return credits ? { rateLimits: [], credits } : null
+  }
+
+  private async readExactProviderUsage(providerId: string): Promise<OpenUsageTelemetry | null> {
     const cached = this.cache.get(providerId)
     if (cached && cached.expiresAt > Date.now()) return cached.value
     const existing = this.inflight.get(providerId)

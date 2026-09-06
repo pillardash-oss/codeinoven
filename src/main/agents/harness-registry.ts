@@ -49,16 +49,19 @@ function manifest(behaviors: Record<HarnessManifestBehavior, boolean>): HarnessM
   return { schemaVersion: HARNESS_MANIFEST_SCHEMA_VERSION, behaviors }
 }
 
-/** The canonical ordered harness manifest. Cline is deliberately last. */
+/** The canonical ordered harness manifest. Pi first; Cline is deliberately last. */
 const HARNESSES: readonly HarnessDescriptor[] = [
   {
-    id: 'opencode',
-    name: 'OpenCode',
-    command: 'opencode',
+    id: 'pi',
+    name: 'Pi',
+    command: 'pi',
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: true,
-    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true })
+    // Pi has no native AGENTS.md/CLAUDE.md instruction loading; the app-level
+    // behavior prompt remains available for Engineering implementation turns.
+    // Manual compaction: `compact` RPC, idle-safe.
+    manifest: manifest({ loadsAgentsMd: false, manualCompaction: true })
   },
   {
     id: 'codex',
@@ -82,16 +85,13 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     manifest: manifest({ loadsAgentsMd: false, manualCompaction: true })
   },
   {
-    id: 'pi',
-    name: 'Pi',
-    command: 'pi',
+    id: 'opencode',
+    name: 'OpenCode',
+    command: 'opencode',
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: true,
-    // Pi has no native AGENTS.md/CLAUDE.md instruction loading; the app-level
-    // behavior prompt remains available for Engineering implementation turns.
-    // Manual compaction: `compact` RPC, idle-safe.
-    manifest: manifest({ loadsAgentsMd: false, manualCompaction: true })
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true })
   },
   {
     id: 'cline',

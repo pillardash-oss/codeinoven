@@ -9,6 +9,7 @@ export default defineConfig({
     include: ['tests/**/*.test.ts']
   },
   resolve: {
+    conditions: ['browser'],
     alias: {
       $lib: resolve(__dirname, 'src/renderer/lib'),
       $engines: resolve(__dirname, 'src/lib/engines'),

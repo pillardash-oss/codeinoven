@@ -2,6 +2,8 @@
   import { ChevronRight, ListTodo, Wrench } from '@lucide/svelte'
   import type { AssignmentTask, ProjectFileEntry } from '$shared/types'
   import { composerMentionKey, type ComposerMentionEntry } from './composer-mentions'
+  import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
+  import Switch from '../ui/Switch.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
 
@@ -10,9 +12,12 @@
     activeIndex: number
     query: string
     onSelect: (entry: ComposerMentionEntry) => void
+    /** Re-run the mention search after a visibility switch toggles, so
+     *  the open result list reflects the new state immediately. */
+    onFilterChange: () => void
   }
 
-  let { entries, activeIndex, query, onSelect }: Props = $props()
+  let { entries, activeIndex, query, onSelect, onFilterChange }: Props = $props()
   let listboxElement: HTMLDivElement
 
   $effect(() => {
@@ -39,13 +44,42 @@
 
 <div
   bind:this={listboxElement}
-  class="absolute bottom-full left-3 right-3 z-40 mb-1 max-h-56 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+  class="absolute bottom-full left-3 right-3 z-40 mb-1 flex max-h-56 flex-col rounded-lg border border-border bg-surface p-1 shadow-lg"
   role="listbox"
   aria-label="Composer references"
 >
-  <p class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-    {query ? `References matching “${query}”` : 'Built-in actions, files, and Assignment tasks'}
-  </p>
+  <div class="flex shrink-0 items-center justify-between gap-2 px-2 py-1">
+    <p class="min-w-0 truncate text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+      {query ? `References matching “${query}”` : 'Built-in actions, files, and Assignment tasks'}
+    </p>
+    <div class="flex shrink-0 items-center gap-2">
+      <Switch
+        checked={cioSearchVisibility.includeIgnored}
+        label="ignored"
+        class="text-[0.625rem] font-semibold text-dimmed"
+        title="Include git-ignored files in tag search"
+        aria-label="Include git-ignored files in tag search"
+        onmousedown={(event: MouseEvent) => event.preventDefault()}
+        onchange={(checked: boolean) => {
+          cioSearchVisibility.setIncludeIgnored(checked)
+          onFilterChange()
+        }}
+      />
+      <Switch
+        checked={cioSearchVisibility.includeCio}
+        label="cio files"
+        class="text-[0.625rem] font-semibold text-dimmed"
+        title="Include .cio files in tag search"
+        aria-label="Include .cio files in tag search"
+        onmousedown={(event: MouseEvent) => event.preventDefault()}
+        onchange={(checked: boolean) => {
+          cioSearchVisibility.setIncludeCio(checked)
+          onFilterChange()
+        }}
+      />
+    </div>
+  </div>
+  <div class="min-h-0 flex-1 overflow-y-auto">
   {#if entries.length === 0}
     <p class="px-2 py-2 text-xs text-dimmed">No matching references</p>
   {:else}
@@ -54,7 +88,8 @@
         type="button"
         class={[
           'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none',
-          index === activeIndex ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated'
+          index === activeIndex ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated',
+          mention.type === 'project' && mention.entry.ignored === true ? 'opacity-45' : ''
         ]}
         role="option"
         aria-selected={index === activeIndex}
@@ -78,15 +113,15 @@
         <span class="min-w-0 flex-1">
           {#if mention.type === 'utility'}
             <span class="block truncate">{mention.entry.name}</span>
-            <span class="block truncate text-[10px] text-dimmed"> Built-in utility setup </span>
+            <span class="block truncate text-[0.625rem] text-dimmed"> Built-in utility setup </span>
           {:else if mention.type === 'task'}
             <span class="block truncate">{mention.entry.title}</span>
-            <span class="block truncate text-[10px] capitalize text-dimmed">
+            <span class="block truncate text-[0.625rem] capitalize text-dimmed">
               Task · {mention.entry.status} · {taskWorker(mention.entry)}
             </span>
           {:else}
             <span class="block truncate">{mention.entry.name}</span>
-            <span class="block truncate text-[10px] text-dimmed">
+            <span class="block truncate text-[0.625rem] text-dimmed">
               {parentPath(mention.entry)}
             </span>
           {/if}
@@ -97,4 +132,5 @@
       </button>
     {/each}
   {/if}
+  </div>
 </div>

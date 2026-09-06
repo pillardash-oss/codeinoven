@@ -144,28 +144,28 @@
       </button>
 
       {#if copyError}
-        <p role="alert" class="text-center text-[10px] text-danger">{copyError}</p>
+        <p role="alert" class="text-center text-[0.625rem] text-danger">{copyError}</p>
       {/if}
 
       <div class="rounded-lg border border-border bg-surface px-3 py-2">
-        <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+        <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
           Verification page
         </p>
-        <p class="mt-0.5 truncate font-mono text-[11px] text-foreground">
+        <p class="mt-0.5 truncate font-mono text-[0.6875rem] text-foreground">
           {device.verificationUri}
         </p>
       </div>
 
       <button
         type="button"
-        class="flex h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-primary text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+        class="flex h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-primary text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
         onclick={() => void openGitHub()}
       >
         <ExternalLink size={13} />
         Open GitHub
       </button>
 
-      <p class="flex items-center justify-center gap-1.5 text-[10px] text-dimmed">
+      <p class="flex items-center justify-center gap-1.5 text-[0.625rem] text-dimmed">
         <Loader2 size={11} class="animate-spin" />
         {#if remaining > 0}
           Waiting for you to authorize… code expires in {countdown}
@@ -180,12 +180,12 @@
         <Check size={18} class="text-success" />
       </div>
       <p class="text-xs font-medium text-foreground">Signed in to GitHub</p>
-      <p class="mt-1 text-[10px] text-dimmed">
+      <p class="mt-1 text-[0.625rem] text-dimmed">
         Pull requests and sync now use your GitHub account.
       </p>
       <button
         type="button"
-        class="mt-4 h-8 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+        class="mt-4 h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
         onclick={onClose}
       >
         Done
@@ -197,12 +197,12 @@
         <TimerOff size={18} class="text-warning" />
       </div>
       <p class="text-xs font-medium text-foreground">Code expired</p>
-      <p class="mt-1 max-w-[30ch] text-[10px] leading-relaxed text-dimmed">
+      <p class="mt-1 max-w-[30ch] text-[0.625rem] leading-relaxed text-dimmed">
         The sign-in code expired before it was authorized. Try again with a fresh code.
       </p>
       <button
         type="button"
-        class="mt-4 h-8 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+        class="mt-4 h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
         onclick={() => void startFlow()}
       >
         Try again
@@ -212,11 +212,11 @@
     <div class="flex flex-col items-center justify-center py-8 text-center">
       <p class="text-xs font-medium text-danger">Sign-in failed</p>
       {#if message}
-        <p class="mt-1 max-w-[34ch] text-[10px] leading-relaxed text-dimmed">{message}</p>
+        <p class="mt-1 max-w-[34ch] text-[0.625rem] leading-relaxed text-dimmed">{message}</p>
       {/if}
       <button
         type="button"
-        class="mt-4 h-8 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+        class="mt-4 h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
         onclick={() => void startFlow()}
       >
         Try again

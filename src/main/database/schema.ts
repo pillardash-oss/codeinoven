@@ -112,6 +112,8 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   achievement_role     TEXT CHECK(achievement_role IN ('coordinator','auditor')),
   auditor_thread_id    TEXT,
   user_input_locked    INTEGER NOT NULL DEFAULT 0,
+  independent_audit    INTEGER NOT NULL DEFAULT 0,
+  independent_audit_initialized INTEGER NOT NULL DEFAULT 0,
   created_at           INTEGER NOT NULL,
   updated_at           INTEGER NOT NULL,
   last_activity        INTEGER NOT NULL,
@@ -245,45 +247,94 @@ export const HARNESS_USAGE_MODELS_COLUMNS_SQL = `
   PRIMARY KEY (thread_id, harness_id, provider_id, model_id, thinking_level)`
 
 /**
- * Column definitions for the canonical `turn_feedback` table. thread_id
- * deliberately does NOT cascade-delete: graded outcomes are the long-term
- * analytics record for "best model by feedback", so rows keep their own
- * attribution when the owning thread is deleted.
+ * Column definitions for the canonical `model_rankings` table — the permanent
+ * "best model" aggregate. One row per harness + provider + model + thinking
+ * level + rubric version combination; distinct attribution values never merge.
  *
- * Rows are captured pending when a turn answers a visible user message and are
- * graded exactly once by the cheap-model LLM judge. The captured texts,
- * project identity, and one due_at queue checkpoint survive restarts and
- * thread deletion without reloading harness sessions.
+ * Scores live as running sums and sample counts per shot category so averages
+ * are always recomputed as sum ÷ count (never averages of averages), and a
+ * future rubric change opens a fresh row under the new `rubric_version`
+ * instead of silently reinterpreting old sums. Processed snapshots are
+ * hard-deleted by design, so these aggregates are the only surviving record.
  */
-export const TURN_FEEDBACK_COLUMNS_SQL = `
+export const MODEL_RANKINGS_COLUMNS_SQL = `
+  id             TEXT PRIMARY KEY NOT NULL,
+  harness_id     TEXT NOT NULL,
+  provider_id    TEXT NOT NULL DEFAULT '',
+  model_id       TEXT NOT NULL,
+  thinking_level TEXT NOT NULL DEFAULT '',
+  one_shot_score_sum       REAL    NOT NULL DEFAULT 0 CHECK(one_shot_score_sum >= 0),
+  one_shot_samples         INTEGER NOT NULL DEFAULT 0 CHECK(one_shot_samples >= 0),
+  one_shot_duration_sum_ms INTEGER NOT NULL DEFAULT 0 CHECK(one_shot_duration_sum_ms >= 0),
+  one_shot_cost_usd        REAL    NOT NULL DEFAULT 0 CHECK(one_shot_cost_usd >= 0),
+  multi_shot_score_sum       REAL    NOT NULL DEFAULT 0 CHECK(multi_shot_score_sum >= 0),
+  multi_shot_samples         INTEGER NOT NULL DEFAULT 0 CHECK(multi_shot_samples >= 0),
+  multi_shot_duration_sum_ms INTEGER NOT NULL DEFAULT 0 CHECK(multi_shot_duration_sum_ms >= 0),
+  multi_shot_cost_usd        REAL    NOT NULL DEFAULT 0 CHECK(multi_shot_cost_usd >= 0),
+  rubric_version  TEXT NOT NULL,
+  calc_version    TEXT NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  UNIQUE (harness_id, provider_id, model_id, thinking_level, rubric_version)`
+
+/** Rubric version stamped on aggregates folded in from the legacy 1–5 ledger. */
+export const LEGACY_RUBRIC_VERSION = 'legacy-1to5-map-v1'
+
+/**
+ * Version tag of the aggregation arithmetic itself (running sum ÷ count).
+ * Bump when the incremental-math semantics change so mixed-version rows stay
+ * distinguishable in analytics.
+ */
+export const MODEL_RANKING_CALC_VERSION = 'sum-count-v1'
+
+export const MODEL_RANKING_INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS idx_model_rankings_updated
+  ON model_rankings(updated_at DESC);`
+
+export const MODEL_RANKING_SNAPSHOT_INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_due
+  ON model_ranking_snapshots(status, due_at_ms);
+
+CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_thread
+  ON model_ranking_snapshots(thread_id, closed_at_ms);
+
+CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_attribution
+  ON model_ranking_snapshots(harness_id, provider_id, model_id, thinking_level);`
+
+/**
+ * Column definitions for the canonical `model_ranking_snapshots` table — the
+ * transient grading queue. At most one open snapshot per conversation window
+ * (first user message + response, upgraded by one substantive follow-up).
+ *
+ * thread_id deliberately does NOT cascade-delete: thread deletion is the close
+ * signal, and the raw prompt/response payload must survive deletion long
+ * enough for the judge to score it. Once scored, the row is hard-deleted and
+ * only its contribution to `model_rankings` remains (agreed product decision,
+ * not data loss). Timing is captured as started_at/ended_at timestamps; no
+ * pre-rounded duration column is persisted.
+ */
+export const MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL = `
   id             TEXT PRIMARY KEY NOT NULL,
   thread_id      TEXT REFERENCES threads(id) ON DELETE SET NULL,
-  project_id     TEXT,
-  parent_turn_id TEXT NOT NULL UNIQUE,
-  session_id     TEXT,
-  created_at     INTEGER NOT NULL,
-  resolved_at    INTEGER,
-  status         TEXT NOT NULL CHECK(status IN ('pending','graded')),
-  basis          TEXT CHECK(basis IN ('deleted','general_timeout','read_timeout','draft_timeout')),
-  grade          INTEGER CHECK(grade IS NULL OR (grade BETWEEN 1 AND 5)),
-  feature        TEXT CHECK(feature IN ('main','audit','assignment')),
-  task_slug      TEXT,
-  harness_id     TEXT,
-  provider_id    TEXT,
-  model_id       TEXT,
-  thinking_level TEXT,
-  cost_usd       REAL,
-  cost_status    TEXT CHECK(cost_status IN ('known','estimated','unavailable')),
-  tokens_total   INTEGER,
+  project_id     TEXT NOT NULL,
+  shot_category  TEXT NOT NULL CHECK(shot_category IN ('first_shot','multi_shot')),
+  status         TEXT NOT NULL CHECK(status IN ('pending','processing','scored','failed')),
+  harness_id     TEXT NOT NULL,
+  provider_id    TEXT NOT NULL DEFAULT '',
+  model_id       TEXT NOT NULL,
+  thinking_level TEXT NOT NULL DEFAULT '',
+  started_at     INTEGER NOT NULL,
+  ended_at       INTEGER NOT NULL,
+  closed_at_ms   INTEGER,
+  due_at_ms      INTEGER NOT NULL,
   user_message_text     TEXT NOT NULL DEFAULT '',
   assistant_output_text TEXT NOT NULL DEFAULT '',
   follow_up_text        TEXT,
-  reading_deadline_ms   INTEGER,
-  draft_deadline_ms     INTEGER,
-  general_deadline_ms   INTEGER,
-  due_at_ms             INTEGER,
-  attempt_count         INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
-  last_attempt_at_ms    INTEGER`
+  cost_usd       REAL,
+  cost_status    TEXT CHECK(cost_status IN ('known','estimated','unavailable')),
+  attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+  last_attempt_at_ms  INTEGER,
+  claim_token         TEXT,
+  created_at     INTEGER NOT NULL`
 
 export const ATTACHMENT_GRANTS_SQL = `
 -- ─── Durable attachment grants ──────────────────────────────────────────
@@ -684,6 +735,58 @@ CREATE TABLE IF NOT EXISTS maintenance_meta (
   value TEXT NOT NULL
 );`
 
+export const USAGE_EVENTS_COLUMNS_SQL = `
+  id                    TEXT PRIMARY KEY NOT NULL,
+  thread_id             TEXT NOT NULL,
+  parent_turn_id        TEXT NOT NULL,
+  project_id            TEXT,
+  project_name          TEXT,
+  feature_call_id       TEXT NOT NULL,
+  attempt               INTEGER NOT NULL CHECK(attempt >= 1),
+  feature               TEXT NOT NULL CHECK(feature IN ('main','title','turn_grade','memory','image_descriptor','search_nudge','computer_use','web','audit','assignment')),
+  harness_id            TEXT,
+  provider_id           TEXT,
+  model_id              TEXT,
+  thinking_level        TEXT,
+  utility_id            TEXT,
+  raw_provider_usage_json TEXT NOT NULL DEFAULT '{}',
+  tokens_uncached_input INTEGER CHECK(tokens_uncached_input IS NULL OR tokens_uncached_input >= 0),
+  tokens_cached_input   INTEGER CHECK(tokens_cached_input IS NULL OR tokens_cached_input >= 0),
+  tokens_cache_write    INTEGER CHECK(tokens_cache_write IS NULL OR tokens_cache_write >= 0),
+  tokens_output         INTEGER CHECK(tokens_output IS NULL OR tokens_output >= 0),
+  tokens_reasoning      INTEGER CHECK(tokens_reasoning IS NULL OR tokens_reasoning >= 0),
+  tokens_total          INTEGER CHECK(tokens_total IS NULL OR tokens_total >= 0),
+  raw_total             INTEGER CHECK(raw_total IS NULL OR raw_total >= 0),
+  total_semantics       TEXT NOT NULL CHECK(total_semantics IN ('includes_cache','excludes_cache','categories_may_overlap','provider_defined','unavailable')),
+  cost_usd              REAL,
+  cost_status           TEXT NOT NULL CHECK(cost_status IN ('known','estimated','unavailable')),
+  pricing_provenance_json TEXT,
+  tool_fee_usd          REAL CHECK(tool_fee_usd IS NULL OR tool_fee_usd >= 0),
+  success               INTEGER NOT NULL CHECK(success IN (0, 1)),
+  retry_cause           TEXT,
+  duration_ms           INTEGER NOT NULL DEFAULT 0 CHECK(duration_ms >= 0),
+  created_at            INTEGER NOT NULL,
+  CHECK(
+    (cost_status = 'unavailable' AND cost_usd IS NULL AND pricing_provenance_json IS NULL)
+    OR
+    (cost_status IN ('known','estimated') AND cost_usd IS NOT NULL AND cost_usd >= 0 AND pricing_provenance_json IS NOT NULL)
+  ),
+  UNIQUE (parent_turn_id, feature, feature_call_id, attempt)
+`
+
+export const USAGE_EVENTS_INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS idx_usage_events_thread
+  ON usage_events(thread_id, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_parent_turn
+  ON usage_events(parent_turn_id, feature, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
+  ON usage_events(feature, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_analytics_range
+  ON usage_events(created_at, feature, harness_id, provider_id, model_id, thinking_level);`
+
 export const HARNESS_USAGE_SQL = `
 -- ─── Harness Usage Analytics ────────────────────────────────────────────
 -- Cumulative per-harness analytics for a thread's session. Rows are upserted
@@ -741,84 +844,37 @@ CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread
 CREATE INDEX IF NOT EXISTS idx_harness_usage_models_harness
   ON harness_usage_models(harness_id);
 
--- Event-level source of truth for model and utility usage. Every nullable token
--- category means "not reported" rather than zero. The caller-provided
--- feature_call_id separates distinct calls of the same feature, while attempt
--- keeps legitimate retries distinct and makes replayed writes idempotent.
-CREATE TABLE IF NOT EXISTS usage_events (
-  id                    TEXT PRIMARY KEY NOT NULL,
-  thread_id             TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  parent_turn_id        TEXT NOT NULL REFERENCES agent_messages(id) ON DELETE CASCADE,
-  feature_call_id       TEXT NOT NULL,
-  attempt               INTEGER NOT NULL CHECK(attempt >= 1),
-  feature               TEXT NOT NULL CHECK(feature IN ('main','title','memory','image_descriptor','computer_use','web','audit','assignment')),
-  harness_id            TEXT,
-  provider_id           TEXT,
-  model_id              TEXT,
-  thinking_level        TEXT,
-  utility_id            TEXT,
-  raw_provider_usage_json TEXT NOT NULL DEFAULT '{}',
-  tokens_uncached_input INTEGER CHECK(tokens_uncached_input IS NULL OR tokens_uncached_input >= 0),
-  tokens_cached_input   INTEGER CHECK(tokens_cached_input IS NULL OR tokens_cached_input >= 0),
-  tokens_cache_write    INTEGER CHECK(tokens_cache_write IS NULL OR tokens_cache_write >= 0),
-  tokens_output         INTEGER CHECK(tokens_output IS NULL OR tokens_output >= 0),
-  tokens_reasoning      INTEGER CHECK(tokens_reasoning IS NULL OR tokens_reasoning >= 0),
-  tokens_total          INTEGER CHECK(tokens_total IS NULL OR tokens_total >= 0),
-  raw_total             INTEGER CHECK(raw_total IS NULL OR raw_total >= 0),
-  total_semantics       TEXT NOT NULL CHECK(total_semantics IN ('includes_cache','excludes_cache','categories_may_overlap','provider_defined','unavailable')),
-  cost_usd              REAL,
-  cost_status           TEXT NOT NULL CHECK(cost_status IN ('known','estimated','unavailable')),
-  pricing_provenance_json TEXT,
-  tool_fee_usd          REAL CHECK(tool_fee_usd IS NULL OR tool_fee_usd >= 0),
-  success               INTEGER NOT NULL CHECK(success IN (0, 1)),
-  retry_cause           TEXT,
-  duration_ms           INTEGER NOT NULL DEFAULT 0 CHECK(duration_ms >= 0),
-  created_at            INTEGER NOT NULL,
-  CHECK(
-    (cost_status = 'unavailable' AND cost_usd IS NULL AND pricing_provenance_json IS NULL)
-    OR
-    (cost_status IN ('known','estimated') AND cost_usd IS NOT NULL AND cost_usd >= 0 AND pricing_provenance_json IS NOT NULL)
-  ),
-  UNIQUE (parent_turn_id, feature, feature_call_id, attempt)
-);
+-- Event-level source of truth for model and utility usage. Identity fields are
+-- immutable snapshots, not foreign keys. Thread, message, project, or provider
+-- deletion must never alter historical usage totals.
+CREATE TABLE IF NOT EXISTS usage_events (${USAGE_EVENTS_COLUMNS_SQL});
 
-CREATE INDEX IF NOT EXISTS idx_usage_events_thread
-  ON usage_events(thread_id, created_at, id);
+${USAGE_EVENTS_INDEXES_SQL}
 
-CREATE INDEX IF NOT EXISTS idx_usage_events_parent_turn
-  ON usage_events(parent_turn_id, feature, created_at);
+-- ─── Model ranking aggregates (LLM-judged 0–10 scoring) ────────────────
+-- Permanent "best model" analytics, keyed by harness/provider/model/
+-- thinking level + rubric version. Snapshot grading (below) adds exact
+-- score/duration/cost sums per shot category in one statement; averages are
+-- always sum ÷ count. Snapshots are transient and hard-deleted after scoring,
+-- so this table is the single surviving record of every graded conversation.
+CREATE TABLE IF NOT EXISTS model_rankings (${MODEL_RANKINGS_COLUMNS_SQL});
 
--- Profile utility-usage and efficiency-KPI scans filter feature + created_at.
-CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
-  ON usage_events(feature, created_at);
+${MODEL_RANKING_INDEXES_SQL}
 
--- Profile analytics always bound reads by event time. The covering identity
--- fields keep range/group queries on the dedicated ledger instead of scanning
--- the transcript table.
-CREATE INDEX IF NOT EXISTS idx_usage_events_analytics_range
-  ON usage_events(created_at, feature, harness_id, provider_id, model_id, thinking_level);
+-- ─── Model ranking snapshot queue (transient grading queue) ─────────────
+-- One row per bounded conversation window (first user message + response,
+-- upgraded to multi_shot by one substantive follow-up). Captured when the
+-- agent answers a visible substantive user message; closed for grading by
+-- thread deletion or the inactivity deadline. Greeting-only prompts never
+-- insert a row. The cheap-model judge scores the closed conversation 0–10,
+-- the aggregate is updated exactly once, and the row is hard-deleted.
+-- Judge failures retry with bounded backoff and remain as status='failed'
+-- for recovery — never deleted unscored. Each claim is tagged with a unique
+-- claim_token; score/delete/defer apply only to the current claim generation,
+-- so a stale in-flight judge result can never land on a re-claimed row.
+CREATE TABLE IF NOT EXISTS model_ranking_snapshots (${MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL});
 
--- ─── Turn outcome feedback (LLM-judged session scoring) ──────────────────
--- One row per completed user turn, opened "pending" with the captured grading
--- payload when an agent answer finishes, and graded exactly once (1–5) by the
--- cheap-model judge when a deadline fires: thread deletion, the post-read
--- window, draft window, or general fallback deadline. One durable due_at
--- checkpoint drives every trigger and survives restarts. Grades feed the "best model by feedback"
--- profile section, keyed by harness/provider/model/thinking level and task
--- kind. A follow-up message sent while pending is stored as extra context.
-CREATE TABLE IF NOT EXISTS turn_feedback (${TURN_FEEDBACK_COLUMNS_SQL});
-
-CREATE INDEX IF NOT EXISTS idx_turn_feedback_thread
-  ON turn_feedback(thread_id, created_at);
-
-CREATE INDEX IF NOT EXISTS idx_turn_feedback_pending
-  ON turn_feedback(status, created_at);
-
-CREATE INDEX IF NOT EXISTS idx_turn_feedback_deadline
-  ON turn_feedback(status, due_at_ms);
-
-CREATE INDEX IF NOT EXISTS idx_turn_feedback_attribution
-  ON turn_feedback(harness_id, provider_id, model_id, thinking_level, feature);`
+${MODEL_RANKING_SNAPSHOT_INDEXES_SQL}`
 
 /**
  * Private user-only notes attached to threads. The row cascade-deletes with

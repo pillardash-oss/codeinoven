@@ -131,7 +131,8 @@ const THREAD_SETTINGS_FIELDS = new Set([
   'loopMode',
   'fileSystemMode',
   'loopAuditor',
-  'imageDescriptor'
+  'imageDescriptor',
+  'imageDescriptorFallback'
 ])
 const AGENT_MODEL_SELECTION_FIELDS = new Set([
   'harnessId',
@@ -277,6 +278,16 @@ export function validateScopeLifecycleAction(
   value: unknown
 ): import('../../lib/types').ScopeLifecycleAction {
   return assertEnum(value, SCOPE_LIFECYCLE_ACTIONS, 'scope lifecycle action')
+}
+
+const SCOPE_MERGE_MODES = new Set<import('../../lib/types').ScopeMergeMode>([
+  'merge-delete',
+  'merge-keep',
+  'merge-move-to-default'
+])
+
+export function validateScopeMergeMode(value: unknown): import('../../lib/types').ScopeMergeMode {
+  return assertEnum(value, SCOPE_MERGE_MODES, 'scope merge mode')
 }
 
 /** Validate the renderer input for managed-worktree creation. */
@@ -819,13 +830,21 @@ export function validatePrResolveOptions(value: unknown): {
   remote: string
   pullNumber: number
   baseBranch: string
+  headBranch: string
+  returnBranch: string
 } {
   const input = assertRecord(value, 'PR resolve options')
-  rejectUnknownFields(input, new Set(['remote', 'pullNumber', 'baseBranch']), 'PR resolve options')
+  rejectUnknownFields(
+    input,
+    new Set(['remote', 'pullNumber', 'baseBranch', 'headBranch', 'returnBranch']),
+    'PR resolve options'
+  )
   return {
     remote: validateRemoteName(input.remote),
     pullNumber: validateBoundedInteger(input.pullNumber, 'Pull request number', 1, 1_000_000_000),
-    baseBranch: validateBranchName(input.baseBranch, 'PR base branch')
+    baseBranch: validateBranchName(input.baseBranch, 'PR base branch'),
+    headBranch: validateBranchName(input.headBranch, 'PR head branch'),
+    returnBranch: validateBranchName(input.returnBranch, 'Branch to return to')
   }
 }
 
@@ -1073,6 +1092,34 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
               descriptor.thinkingLevel,
               THINKING_LEVELS,
               'image descriptor thinking level'
+            )
+          })
+    }
+  }
+  if (input.imageDescriptorFallback !== undefined) {
+    const descriptor = assertRecord(input.imageDescriptorFallback, 'Image descriptor fallback')
+    rejectUnknownFields(descriptor, AGENT_MODEL_SELECTION_FIELDS, 'image descriptor fallback')
+    settings.imageDescriptorFallback = {
+      harnessId: validateEntityId(descriptor.harnessId, 'Image descriptor fallback harness ID'),
+      providerId: validateBoundedString(
+        descriptor.providerId,
+        'Image descriptor fallback provider ID',
+        1,
+        128
+      ),
+      modelId: validateBoundedString(
+        descriptor.modelId,
+        'Image descriptor fallback model ID',
+        1,
+        256
+      ),
+      ...(descriptor.thinkingLevel === undefined
+        ? {}
+        : {
+            thinkingLevel: assertEnum(
+              descriptor.thinkingLevel,
+              THINKING_LEVELS,
+              'image descriptor fallback thinking level'
             )
           })
     }

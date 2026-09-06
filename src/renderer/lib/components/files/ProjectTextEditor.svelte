@@ -36,7 +36,9 @@
   }: Props = $props()
 
   let host = $state<HTMLDivElement | null>(null)
-  let controller = $state<FileEditorController | null>(null)
+  // The controller is a class-like object with closures; deep reactivity would
+  // proxy it and break identity with the instance held by the editor module.
+  let controller = $state.raw<FileEditorController | null>(null)
   let handledFocusLineRequest = 0
 
   onMount(() => {

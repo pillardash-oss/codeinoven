@@ -64,7 +64,7 @@
   >
     <ListChecks size={14} class="shrink-0 text-info" />
     <span class="shrink-0 text-xs font-semibold text-foreground">Tasks</span>
-    <span class="shrink-0 text-[11px] tabular-nums text-dimmed">
+    <span class="shrink-0 text-[0.6875rem] tabular-nums text-dimmed">
       {progressLabel}
     </span>
     {#if !open && currentItem}

@@ -71,27 +71,27 @@
     {/if}
 
     <Bot size={13} class="shrink-0 text-info" />
-    <span class="shrink-0 text-[11px] font-semibold text-foreground">
+    <span class="shrink-0 text-[0.6875rem] font-semibold text-foreground">
       {part.activity.agent || 'Sub-agent'}
     </span>
-    <span class="min-w-0 flex-1 truncate text-[11px] text-muted">
+    <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted">
       {part.activity.description}
     </span>
     {#if part.activity.background}
       <span
-        class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[9px] text-dimmed"
+        class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.5625rem] text-dimmed"
       >
         <Layers3 size={9} />
         Background
       </span>
     {/if}
     {#if start}
-      <span class="shrink-0 tabular-nums text-[10px] text-dimmed">
+      <span class="shrink-0 tabular-nums text-[0.625rem] text-dimmed">
         {formatDuration(elapsed)}
       </span>
     {/if}
     <span
-      class="shrink-0 text-[10px] {part.activity.status === 'error'
+      class="shrink-0 text-[0.625rem] {part.activity.status === 'error'
         ? 'text-danger'
         : part.activity.status === 'running'
           ? 'text-info'

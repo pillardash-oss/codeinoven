@@ -179,7 +179,7 @@
   })
 </script>
 
-<div class="mx-auto max-w-2xl p-6 pb-24">
+<div class="p-6 pb-24">
   <div class="mb-6 flex items-start justify-between gap-4">
     <div>
       <h1 class="text-xl font-bold tracking-tight">Heartbeat</h1>
@@ -217,7 +217,7 @@
       <HeartPulse size={18} class="mx-auto mb-1.5 text-dimmed" />
       <p class="text-xs text-muted">No heartbeats configured yet.</p>
       {#if providers.length === 0 && !providersLoading}
-        <p class="mt-1 text-[11px] text-dimmed">Select a configured project first.</p>
+        <p class="mt-1 text-[0.6875rem] text-dimmed">Select a configured project first.</p>
       {:else}
         <button class="mt-2 text-xs font-medium text-primary hover:underline" onclick={openCreate}>
           Add the first heartbeat
@@ -236,7 +236,7 @@
               <p class="truncate text-sm font-semibold">{config.name}</p>
               {#if config.lastRun}
                 <span
-                  class="flex items-center gap-1 text-[10px] {config.lastRun.success
+                  class="flex items-center gap-1 text-[0.625rem] {config.lastRun.success
                     ? 'text-success'
                     : 'text-danger'}"
                   title={formatLastRun(config)}
@@ -249,10 +249,10 @@
                   {formatLastRun(config)}
                 </span>
               {:else}
-                <span class="text-[10px] text-dimmed">{formatLastRun(config)}</span>
+                <span class="text-[0.625rem] text-dimmed">{formatLastRun(config)}</span>
               {/if}
             </div>
-            <p class="mt-0.5 truncate text-[11px] text-dimmed">
+            <p class="mt-0.5 truncate text-[0.6875rem] text-dimmed">
               {providerName(config.harnessId)} · {modelName(
                 config.harnessId,
                 config.providerId,
@@ -262,7 +262,7 @@
             </p>
             <div class="mt-1.5 flex flex-wrap gap-1">
               {#each config.times as time (time)}
-                <span class="rounded-full bg-raised px-1.5 py-0.5 text-[10px] text-muted">
+                <span class="rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted">
                   {formatTime(time)}
                 </span>
               {/each}
@@ -356,6 +356,15 @@
           draftHarnessId = harnessId
           draftProviderId = providerId
           draftModelId = modelId
+          // Not every model supports thinking — drop a stale level the new
+          // model doesn't offer so saving never carries an invalid value.
+          const catalog = providers.find(
+            (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
+          )
+          const presets = catalog?.models.find((model) => model.id === modelId)?.thinkingPresets
+          if (!presets?.some((preset) => preset.id === draftThinkingLevel)) {
+            draftThinkingLevel = undefined
+          }
           rendererRecovery.addRecentModel(modelKey(harnessId, providerId, modelId))
         }}
         thinkingLevel={draftThinkingLevel}
@@ -384,7 +393,7 @@
         <div class="mt-2 flex flex-wrap gap-1.5">
           {#each draftTimes as time (time)}
             <span
-              class="flex items-center gap-1 rounded-full bg-raised px-2 py-1 text-[11px] text-muted"
+              class="flex items-center gap-1 rounded-full bg-raised px-2 py-1 text-[0.6875rem] text-muted"
             >
               {formatTime(time)}
               <button
@@ -399,7 +408,7 @@
           {/each}
         </div>
       {:else}
-        <p class="mt-1.5 text-[11px] text-dimmed">No times added yet.</p>
+        <p class="mt-1.5 text-[0.6875rem] text-dimmed">No times added yet.</p>
       {/if}
     </div>
   </div>

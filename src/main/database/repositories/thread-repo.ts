@@ -44,6 +44,8 @@ interface ThreadRow {
   achievement_role: string | null
   auditor_thread_id: string | null
   user_input_locked: number
+  independent_audit: number
+  independent_audit_initialized: number
   created_at: number
   updated_at: number
   last_activity: number
@@ -156,6 +158,8 @@ function rowToThread(row: ThreadRow): Thread {
     achievementRole: (row.achievement_role as Thread['achievementRole']) ?? undefined,
     auditorThreadId: row.auditor_thread_id ?? undefined,
     userInputLocked: row.user_input_locked === 1,
+    independentAudit: row.independent_audit === 1,
+    independentAuditInitialized: row.independent_audit_initialized === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastActivity: row.last_activity,
@@ -237,6 +241,13 @@ export interface ThreadCapacityCandidate {
   scopeBucketId?: string
 }
 
+/**
+ * Per-project recent-thread quotas for first-paint hydration. One busy project
+ * must never crowd the other projects' threads out of the initial sidebar
+ * slice, so the cap is applied per project instead of globally.
+ */
+export const RECENT_THREADS_PER_PROJECT = 10
+
 function buildOrderBy(options: ThreadListOptions): string {
   return options.order === 'activity'
     ? 'ORDER BY pinned DESC, pinned_at DESC, last_activity DESC'
@@ -274,8 +285,9 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   audit_state, loop_iteration, active_audit_id, active_audit_version,
   assignment_id, assignment_role, assignment_task_id,
   coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
+  independent_audit, independent_audit_initialized,
   created_at, updated_at, last_activity, working_directory
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -307,6 +319,8 @@ ON CONFLICT(id) DO UPDATE SET
   achievement_role=excluded.achievement_role,
   auditor_thread_id=excluded.auditor_thread_id,
   user_input_locked=excluded.user_input_locked,
+  independent_audit=excluded.independent_audit,
+  independent_audit_initialized=excluded.independent_audit_initialized,
   created_at=excluded.created_at,
   updated_at=excluded.updated_at,
   last_activity=excluded.last_activity,
@@ -346,6 +360,8 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.achievementRole ?? null,
     thread.auditorThreadId ?? null,
     thread.userInputLocked ? 1 : 0,
+    thread.independentAudit ? 1 : 0,
+    thread.independentAuditInitialized ? 1 : 0,
     thread.createdAt,
     thread.updatedAt,
     thread.lastActivity,
@@ -512,6 +528,24 @@ export class ThreadRepo {
     return this.hydrateThreads(rows)
   }
 
+  /** Worker-backed per-project list; the project filter precedes the limit so
+   *  paging reaches rows a global recent-slice would have evicted. */
+  async listByProjectViaWorker(
+    projectId: string,
+    options: ThreadListOptions = {}
+  ): Promise<Thread[]> {
+    const { where, params, limit } = buildListClauses(['project_id = ?'], [projectId], options)
+    const result = await this.db.queryViaWorker(
+      `SELECT * FROM threads ${where}
+       ${buildOrderBy(options)}${limit}`,
+      params,
+      0
+    )
+    if (!result.ok) return this.listByProject(projectId, options)
+    const rows = result.rows as unknown as ThreadRow[]
+    return this.hydrateThreadsViaWorker(rows)
+  }
+
   /**
    * Read only the fields needed to enforce per-project capacity on the worker.
    * Orchestration children do not count toward the user-visible thread bound.
@@ -581,6 +615,63 @@ export class ThreadRepo {
   /** Initial workspace rows omit optional usage metadata so first paint stays bounded. */
   listAllForHydrationViaWorker(options: ThreadListOptions = {}): Promise<Thread[]> {
     return this.listAllViaWorker(options, false)
+  }
+
+  /**
+   * Recent threads per project for bounded sidebar hydration: at most
+   * `quotaByProject(projectId)` unarchived, non-orchestration rows per project
+   * (newest activity first), fetched in a single window-function query so one
+   * high-traffic project cannot evict other projects' threads from the slice.
+   */
+  async listRecentPerProjectViaWorker(
+    quotaByProject: (projectId: string) => number,
+    hydrateUsage = false
+  ): Promise<Thread[]> {
+    const quotas = await this.projectQuotasViaWorker()
+    // Per-project quotas default to the callback value; the inbox project
+    // overrides it with its configured thread_limit (the Chats bucket size).
+    const cases = [...quotas.entries()]
+      .filter(([id]) => quotaByProject(id) === Number.MAX_SAFE_INTEGER)
+      .map(([id, quota]) => `WHEN project_id = '${id.replace(/'/g, "''")}' THEN ${quota}`)
+    const quotaExpr =
+      cases.length > 0
+        ? `CASE ${cases.join(' ')} ELSE ${quotaByProject('')} END`
+        : String(quotaByProject(''))
+    const result = await this.db.queryViaWorker(
+      `SELECT * FROM (
+         SELECT *, ROW_NUMBER() OVER (
+           PARTITION BY project_id
+           ORDER BY pinned DESC, pinned_at DESC, last_activity DESC, id ASC
+         ) AS rn
+         FROM threads
+         WHERE archived = 0
+           AND assignment_role IS NOT 'worker'
+           AND achievement_role IS NOT 'auditor'
+           AND coordinator_thread_id IS NULL
+           AND assignment_id IS NULL
+       ) WHERE rn <= ${quotaExpr}
+       ORDER BY pinned DESC, pinned_at DESC, last_activity DESC, id ASC`,
+      [],
+      0
+    )
+    if (!result.ok) return this.listAll({ includeArchived: false })
+    const rows = result.rows as unknown as ThreadRow[]
+    return hydrateUsage ? this.hydrateThreadsViaWorker(rows) : rows.map(rowToThread)
+  }
+
+  /** Per-project thread quotas: project rows are few, read them wholesale. */
+  private async projectQuotasViaWorker(): Promise<Map<string, number>> {
+    const result = await this.db.queryViaWorker(
+      'SELECT id, thread_limit FROM projects',
+      [],
+      0
+    )
+    const quotas = new Map<string, number>()
+    if (!result.ok) return quotas
+    for (const row of result.rows) {
+      quotas.set(String(row['id']), Number(row['thread_limit']))
+    }
+    return quotas
   }
 
   /** Load only non-archived threads that currently hold active agent work. */

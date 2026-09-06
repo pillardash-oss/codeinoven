@@ -83,12 +83,12 @@
       <p class="mt-1 text-xs text-muted">
         Review the findings, add annotations, and send required changes to the primary agent.
       </p>
-      <p class="mt-1 text-[11px] text-dimmed">
+      <p class="mt-1 text-[0.6875rem] text-dimmed">
         Audited by {report.provenance.providerId ?? 'provider'} /
         {report.provenance.modelId ?? 'model'}
       </p>
       {#if report.assignmentVersion !== undefined}
-        <p class="mt-1 text-[11px] font-medium text-muted">
+        <p class="mt-1 text-[0.6875rem] font-medium text-muted">
           Assignment v{report.assignmentVersion} · {report.reworkCycle
             ? `Rework ${report.reworkCycle}`
             : 'Initial implementation'}

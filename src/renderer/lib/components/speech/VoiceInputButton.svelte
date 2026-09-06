@@ -4,6 +4,7 @@
   import { toast } from 'svelte-sonner'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import RecordingIndicator from './RecordingIndicator.svelte'
+  import WaveBars from './WaveBars.svelte'
   import { speechSettingsStore } from '$lib/stores/speech.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { logRendererError } from '$lib/system/renderer-logger'
@@ -287,17 +288,9 @@
     {:else if action === 'retry'}
       <TriangleAlert size={14} aria-hidden="true" />
     {:else if action === 'wait'}
-      <span class="flex h-3 items-center gap-[2px]" aria-hidden="true">
-        <span class="wave-bar"></span>
-        <span class="wave-bar wave-bar-delay-1"></span>
-        <span class="wave-bar wave-bar-delay-2"></span>
-      </span>
+      <WaveBars decorative label="Transcribing voice recording" />
     {:else if transcribingHere}
-      <span class="flex h-3 items-center gap-[2px]" aria-hidden="true">
-        <span class="wave-bar wave-bar-transcribing"></span>
-        <span class="wave-bar wave-bar-transcribing wave-bar-delay-1"></span>
-        <span class="wave-bar wave-bar-transcribing wave-bar-delay-2"></span>
-      </span>
+      <WaveBars decorative label="Transcribing your last recording — click to start a new one" />
     {:else}
       <Mic size={14} aria-hidden="true" />
     {/if}
@@ -306,31 +299,3 @@
   <span class="sr-only" aria-live="polite">{action !== 'start' || transcribingHere ? label : ''}</span>
 {/if}
 
-<style>
-  @keyframes cio-wave-bar {
-    0%,
-    100% {
-      height: 3px;
-    }
-    50% {
-      height: 12px;
-    }
-  }
-  .wave-bar {
-    display: block;
-    width: 2px;
-    height: 6px;
-    border-radius: 1px;
-    background: var(--color-warning);
-    animation: cio-wave-bar 0.9s ease-in-out infinite;
-  }
-  .wave-bar-delay-1 {
-    animation-delay: 0.15s;
-  }
-  .wave-bar-delay-2 {
-    animation-delay: 0.3s;
-  }
-  .wave-bar-transcribing {
-    background: var(--color-info);
-  }
-</style>

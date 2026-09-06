@@ -228,6 +228,10 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
       )
     )
     child.emit('exit', 1, null)
+    // Wait for the async exit handler (including session persistence) to
+    // settle before the test returns, so afterEach's tmpdir cleanup never
+    // races an in-flight write and fails with ENOTEMPTY.
+    await vi.waitFor(() => expect(events.some((event) => event.type === 'session.idle')).toBe(true))
     expect(events.map((event) => event.type)).toContain('message.part.updated')
     expect(events.map((event) => event.type)).toContain('message.completed')
     expect(events).toContainEqual(

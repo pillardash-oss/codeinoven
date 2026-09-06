@@ -1,7 +1,25 @@
-import { signAsync } from '@electron/osx-sign'
+import { sign as signAsync } from '@electron/osx-sign'
+import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { retry } from 'builder-util'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+
+function execFileAsync(command, args) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { encoding: 'utf8' }, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout
+        error.stderr = stderr
+        reject(error)
+      } else {
+        resolve(stdout.trim())
+      }
+    })
+  })
+}
 
 /**
  * The app uses a custom native-splash launcher architecture:
@@ -41,7 +59,6 @@ export default async function macSign(configuration) {
   }
   const electronBinaryIdentifier = `${mainExecutable}-electron`
   const electronExecutable = join(appPath, 'Contents', 'MacOS', electronBinaryIdentifier)
-  configuration.binaries = [...new Set([...(configuration.binaries ?? []), electronExecutable])]
   let bundleIdentifier = ''
   try {
     const plist = await readFile(infoPlistPath, 'utf8')
@@ -63,20 +80,45 @@ export default async function macSign(configuration) {
     ? undefined
     : `=designated => (identifier "${bundleIdentifier}" or identifier "${electronBinaryIdentifier}") and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "${teamId}"`
 
+  // Both CodeInOven (launcher) and CodeInOven-electron (Electron runtime) live
+  // in Contents/MacOS/, so osx-sign's isBundleMainExecutable() matches both. They
+  // get the same signing rank, and osx-sign's stable sort keeps discovery order —
+  // launcher first alphabetically. The launcher is then signed first, which seals
+  // the bundle with the electron binary still unsigned. When the electron binary is
+  // signed second, it modifies the sealed bundle, and macOS 26's codesign --verify
+  // --strict rejects it with "nested code is modified or invalid".
+  //
+  // Fix: pre-sign the electron binary directly with codesign BEFORE osx-sign walks
+  // the bundle, then exclude it from osx-sign's discovery so it isn't double-signed.
+  const electronSignArgs = [
+    '--sign', configuration.identity,
+    '--force',
+    '--identifier', bundleIdentifier,
+    '--entitlements', join(__dirname, '../../node_modules/@electron/osx-sign/entitlements/default.darwin.plist'),
+    '--timestamp'
+  ]
+  if (bridgeRequirement) {
+    // Strip the leading '=' because codesign's -r flag expects '=designated ...'
+    // and osx-sign's per-file path pushes `-r${req}`, producing `-r=designated ...`.
+    electronSignArgs.push(`-r${bridgeRequirement.replace(/^=/, '')}`)
+  }
+  if (configuration.keychain) {
+    electronSignArgs.push('--keychain', configuration.keychain)
+  }
+  electronSignArgs.push(electronExecutable)
+  await execFileAsync('codesign', electronSignArgs)
+
+  // Exclude the pre-signed electron binary from osx-sign's walk so it isn't
+  // re-signed after the launcher seals the bundle.
+  const originalIgnore = configuration.ignore
+  configuration.ignore = [
+    ...(Array.isArray(originalIgnore) ? originalIgnore : originalIgnore ? [originalIgnore] : []),
+    (filePath) => filePath === electronExecutable
+  ]
+
   const originalOptionsForFile = configuration.optionsForFile
   configuration.optionsForFile = (filePath) => {
     const perFile = originalOptionsForFile ? originalOptionsForFile(filePath) : {}
-    if (filePath === electronExecutable) {
-      return {
-        ...perFile,
-        requirements: bridgeRequirement,
-        additionalArguments: [
-          ...(perFile.additionalArguments ?? []),
-          '--identifier',
-          bundleIdentifier
-        ]
-      }
-    }
     if (filePath === appPath) {
       return {
         ...perFile,

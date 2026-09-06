@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { GitFork, MessageCircleDashed, MessageCirclePlus, MessageSquareDashed } from '@lucide/svelte'
+  import {
+    GitFork,
+    MessageCircleDashed,
+    MessageCirclePlus,
+    MessageSquareDashed
+  } from '@lucide/svelte'
 
   interface Props {
     text: string
@@ -39,7 +44,7 @@
     onclick={onAdd}
   >
     <MessageCirclePlus size={13} />
-    Add to chat
+    Comment
   </button>
   {#if onElaborate}
     <button

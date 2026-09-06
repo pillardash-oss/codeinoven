@@ -117,7 +117,7 @@
     onkeydown={(event: KeyboardEvent) => void handleKeydown(event)}
   />
   {#if draft}
-    <span class="whitespace-nowrap text-[10px] text-dimmed tabular-nums">
+    <span class="whitespace-nowrap text-[0.625rem] text-dimmed tabular-nums">
       {matches > 0 ? `${activeIndex + 1}/${matches}` : '0/0'}
     </span>
     <button

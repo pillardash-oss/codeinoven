@@ -19,6 +19,7 @@
     type PrDockStatus
   } from '$lib/stores/pr-lifecycle.svelte'
   import { getProjectIcon } from '$lib/project-icons'
+  import { logRendererError } from '$lib/system/renderer-logger'
   import { DEFAULT_SCOPE_BUCKET_ID, isOrchestrationChildThread } from '$shared/types'
   import { DEFAULT_THINKING_LEVEL, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
@@ -42,6 +43,7 @@
     ExternalLink,
     Eye,
     GitPullRequest,
+    Info,
     Loader2,
     Sparkles,
     TriangleAlert
@@ -153,6 +155,13 @@
   let pushErrorDetails = $state('')
   /** A failed commit, push, or PR creation owned by this submission attempt. */
   let createError = $state('')
+  /**
+   * Set when the 422 above was GitHub having nothing to compare (`head`
+   * already merged into `base`) rather than a real validation failure — the
+   * displayed "ahead" count can go stale between compare and submit if
+   * another merge lands in between, e.g. an automated promotion PR.
+   */
+  let createErrorIsNoCommits = $state(false)
   /** Which recovery action is running ('merge' | 'rebase'), to disable buttons. */
   let recoverMode = $state<'merge' | 'rebase' | null>(null)
   /** True while a prepared divergence-resolution thread is being opened. */
@@ -369,6 +378,7 @@
     pushRejected = false
     pushErrorDetails = ''
     createError = ''
+    createErrorIsNoCommits = false
     if (sameBranch) {
       comparing = false
       return
@@ -421,29 +431,25 @@
     pushRejected = false
     pushErrorDetails = ''
     createError = ''
+    createErrorIsNoCommits = false
     submitting = true
     try {
-      // Decided up front: after the commit below, the refreshed status clears
-      // staged changes, which would make hasUnpushedHeadCommits flip to false.
-      const commitMade = willCreateCommit
-      const shouldPush =
-        pushLocalCommits && headInfo?.kind === 'local' && (commitMade || hasUnpushedHeadCommits)
-      // 1. Commit the current index plus untracked files, leaving unstaged edits alone.
+      // 1. Commit the current index plus untracked files, leaving unstaged edits
+      //    alone. Best-effort by design: a failed stage or commit never blocks
+      //    the push or the pull request itself — the user opted into the commit,
+      //    and the working tree stays exactly as it was for a manual retry.
+      let commitMade = willCreateCommit
       if (commitMade) {
         const untrackedPaths = pendingCommitChanges
           .filter((change) => change.status === 'untracked')
           .map((change) => change.path)
-        if (untrackedPaths.length > 0) {
-          await gitState.stage(projectId, [...new Set(untrackedPaths)])
-          if (gitState.error) {
-            createError = gitState.error
-            return
-          }
+        if (untrackedPaths.length > 0) await gitState.stage(projectId, [...new Set(untrackedPaths)])
+        if (!gitState.error) {
+          await gitState.commit(projectId, uncategorizedCommitMessage(new Date()))
         }
-        await gitState.commit(projectId, uncategorizedCommitMessage(new Date()))
         if (gitState.error) {
-          createError = gitState.error
-          return
+          logRendererError('Pre-PR commit failed; continuing without it', gitState.error)
+          commitMade = false
         }
       }
       // 2. Push local commits only when the head actually has something the
@@ -451,6 +457,8 @@
       //    local copy is behind it, e.g. a remote-to-remote PR), there is
       //    nothing to push and GitHub builds the PR from the remote refs, so
       //    skipping the push avoids a spurious non-fast-forward rejection.
+      const shouldPush =
+        pushLocalCommits && headInfo?.kind === 'local' && (commitMade || hasUnpushedHeadCommits)
       if (shouldPush) {
         const hasUpstream = headInfo?.kind === 'local' && headInfo.remote === 'origin'
         const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
@@ -485,7 +493,21 @@
       result = reference
       onCreated?.()
     } else if (!gitState.githubPermission) {
-      createError = gitState.error ?? 'GitHub did not create the pull request. Try again.'
+      const message = gitState.error ?? 'GitHub did not create the pull request. Try again.'
+      createError = message
+      if (/HTTP 422/u.test(message) && originIdentity) {
+        // GitHub's 422 for "nothing to merge" is indistinguishable from other
+        // validation failures by message text alone, so re-check for real.
+        const fresh = await gitState.comparePullRequests(
+          projectId,
+          originIdentity.owner,
+          originIdentity.repo,
+          base,
+          head
+        )
+        compare = fresh
+        createErrorIsNoCommits = fresh !== null && !fresh.hasChanges
+      }
     }
   }
 
@@ -499,6 +521,7 @@
     pushRejected = false
     pushErrorDetails = ''
     createError = ''
+    createErrorIsNoCommits = false
     recoverMode = mode
     try {
       await gitState.pullIntegrate(projectId, 'origin', head, mode)
@@ -717,13 +740,19 @@
 
   onDestroy(clearComposeTimers)
 
-  function initializeBranchSelection(): void {
+  async function initializeBranchSelection(): Promise<void> {
     if (!originIdentity || branches.length === 0) return
     if (!head || !branches.includes(head)) {
       head = branch && branches.includes(branch) ? branch : branches[0]
     }
     if (!base || !branches.includes(base)) {
-      base = branches.includes('main') ? 'main' : branches[0]
+      const remoteDefault = await gitState.getDefaultBranch(projectId)
+      base =
+        remoteDefault && branches.includes(remoteDefault)
+          ? remoteDefault
+          : branches.includes('main')
+            ? 'main'
+            : branches[0]
     }
     if (head && base && !initialCompareStarted) {
       initialCompareStarted = true
@@ -733,7 +762,7 @@
 
   onMount(() => {
     gitState.activate(projectId, scopeBucketId)
-    void loadOrigin().then(initializeBranchSelection)
+    void loadOrigin().then(() => void initializeBranchSelection())
   })
 </script>
 
@@ -762,7 +791,7 @@
         {:else}
           <GitPullRequest size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
         {/if}
-        <span class="truncate text-[10px] font-semibold text-foreground">{dockProjectName}</span>
+        <span class="truncate text-[0.625rem] font-semibold text-foreground">{dockProjectName}</span>
       </button>
     {/if}
   {/snippet}
@@ -778,36 +807,36 @@
       >
         {#if result}
           <span
-            class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold text-success"
+            class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-success"
           >
             <CheckCircle2 size={10} aria-hidden="true" />
             Created
           </span>
-          <span class="text-[11px] font-medium">PR #{result.number}</span>
+          <span class="text-[0.6875rem] font-medium">PR #{result.number}</span>
         {:else if composeWorking || creating || submitting}
           <Loader2 size={14} class="shrink-0 animate-spin text-info" />
-          <span class="text-[11px] font-medium">
+          <span class="text-[0.6875rem] font-medium">
             {composeWorking ? 'Composing pull request…' : 'Creating pull request…'}
           </span>
         {:else if dockHasIssue}
           <span
-            class="flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[9px] font-semibold text-warning"
+            class="flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-warning"
           >
             <TriangleAlert size={10} aria-hidden="true" />
             Needs attention
           </span>
-          <span class="text-[11px] font-medium">New pull request</span>
+          <span class="text-[0.6875rem] font-medium">New pull request</span>
         {:else if composeSucceeded}
           <span
-            class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold text-success"
+            class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-success"
           >
             <CircleCheck size={10} aria-hidden="true" />
             Composed
           </span>
-          <span class="text-[11px] font-medium">New pull request</span>
+          <span class="text-[0.6875rem] font-medium">New pull request</span>
         {:else}
           <GitPullRequest size={14} class="shrink-0 text-dimmed" />
-          <span class="text-[11px] font-medium">New pull request</span>
+          <span class="text-[0.6875rem] font-medium">New pull request</span>
         {/if}
       </button>
     {/if}
@@ -817,13 +846,13 @@
     {#if !result}
       {#if originError}
         <p
-          class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
+          class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
         >
           {originError}
         </p>
       {:else if !originIdentity}
         <p
-          class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-1.5 text-[10px] leading-relaxed text-warning"
+          class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-warning"
         >
           No GitHub remote (origin) is configured for this project. Add the repository remote in the
           app's project settings first.
@@ -834,7 +863,7 @@
         <div class="space-y-1.5">
           {#if composeError}
             <p
-              class="flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-[9px] leading-relaxed text-warning"
+              class="flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-[0.5625rem] leading-relaxed text-warning"
               role="alert"
             >
               <TriangleAlert size={11} class="mt-0.5 shrink-0" aria-hidden="true" />
@@ -842,10 +871,10 @@
             </p>
           {/if}
           <div class="flex items-center justify-between gap-2">
-            <p class="text-[10px] text-muted">Let the agent draft the PR for you.</p>
+            <p class="text-[0.625rem] text-muted">Let the agent draft the PR for you.</p>
             <DropdownMenu.Root bind:open={composeOpen}>
               <DropdownMenu.Trigger
-                class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+                class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
                 aria-label={prComposeAgentSettings.selection
                   ? 'Compose with agent'
                   : 'Choose a model for Compose PR'}
@@ -880,17 +909,9 @@
                   class="z-50 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
                 >
                   <div class="space-y-1.5">
-                    {#if !prComposeAgentSettings.selection}
-                      <p
-                        class="rounded-lg border border-border bg-elevated px-2.5 py-2 text-[10px] leading-relaxed text-muted"
-                      >
-                        Choose a model for Compose PR. This choice is kept separate from every
-                        thread and reused until you change it.
-                      </p>
-                    {/if}
                     <div>
                       <p
-                        class="mb-1 px-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted"
+                        class="mb-1 px-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted"
                       >
                         Compose model
                       </p>
@@ -917,7 +938,7 @@
                     </div>
                     <button
                       type="button"
-                      class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+                      class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
                       disabled={composePhase === 'working' || !prComposeAgentSettings.selection}
                       onclick={() => void runCompose()}
                     >
@@ -952,11 +973,11 @@
           <CheckCircle2 size={24} aria-hidden="true" />
         </div>
         <p class="mt-3 text-sm font-semibold text-success">Pull request #{pr.number} created</p>
-        <p class="mt-1 truncate text-[11px] text-muted">{pr.title}</p>
+        <p class="mt-1 truncate text-[0.6875rem] text-muted">{pr.title}</p>
         <div class="mt-5 flex items-center justify-center gap-2">
           <button
             type="button"
-            class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
             title="Open this pull request in the Git panel"
             onclick={() => {
               onClose()
@@ -968,7 +989,7 @@
           </button>
           <button
             type="button"
-            class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
+            class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated"
             title="Open this pull request on GitHub"
             onclick={() => void openInBrowser(pr.url)}
           >
@@ -983,14 +1004,14 @@
         <div class="flex items-end gap-2">
           <div class="min-w-0 flex-1">
             <label
-              class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+              class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
               for="pr-head"
             >
               Head (from)
             </label>
             <select
               id="pr-head"
-              class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
+              class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary disabled:opacity-50"
               value={head}
               disabled={branches.length === 0}
               onchange={changeHead}
@@ -1003,14 +1024,14 @@
           <ArrowRight size={14} class="mb-2.5 shrink-0 text-primary" />
           <div class="min-w-0 flex-1">
             <label
-              class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+              class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
               for="pr-base"
             >
               Base (into)
             </label>
             <select
               id="pr-base"
-              class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
+              class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary disabled:opacity-50"
               value={base}
               disabled={branches.length === 0}
               onchange={changeBase}
@@ -1021,7 +1042,7 @@
             </select>
           </div>
         </div>
-        <div class="mt-2 flex min-h-4 items-center gap-1.5 text-[10px]">
+        <div class="mt-2 flex min-h-4 items-center gap-1.5 text-[0.625rem]">
           {#if sameBranch}
             <CircleSlash size={12} class="shrink-0 text-dimmed" />
             <span class="text-dimmed"
@@ -1056,16 +1077,16 @@
             <div class="flex items-start gap-2">
               <TriangleAlert size={13} class="mt-0.5 shrink-0 text-warning" />
               <div class="min-w-0 flex-1">
-                <p class="text-[10px] font-medium text-warning">
+                <p class="text-[0.625rem] font-medium text-warning">
                   A pull request already exists for {head} into {base}
                 </p>
-                <p class="mt-0.5 text-[9px] leading-relaxed text-dimmed">
+                <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-dimmed">
                   #{existingPr.number} — {existingPr.title} GitHub won't allow a second open PR for the
                   same branches, so creation is disabled.
                 </p>
                 <button
                   type="button"
-                  class="mt-2 flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated"
+                  class="mt-2 flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated"
                   title="Open the existing pull request in the Git panel"
                   onclick={() => {
                     onClose()
@@ -1086,29 +1107,29 @@
           <div class="flex items-start gap-2">
             <TriangleAlert size={14} class="mt-0.5 shrink-0 text-warning" />
             <div class="min-w-0 flex-1">
-              <p class="text-[10px] font-semibold text-warning">
+              <p class="text-[0.625rem] font-semibold text-warning">
                 Push blocked — branch has diverged
               </p>
-              <p class="mt-0.5 text-[9px] leading-relaxed text-dimmed">
+              <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-dimmed">
                 The remote branch
                 <span class="font-mono text-foreground">{head}</span> has commits you don't have locally,
                 so Git won't let you push over them. Pull the remote changes in first — the pull request
                 is created automatically afterwards.
               </p>
               {#if pushErrorDetails}
-                <details class="mt-2 text-[9px] text-dimmed">
+                <details class="mt-2 text-[0.5625rem] text-dimmed">
                   <summary class="cursor-pointer select-none font-medium text-foreground">
                     Show Git error
                   </summary>
                   <pre
-                    class="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-elevated p-2 font-mono text-[9px] leading-relaxed text-danger">{pushErrorDetails}</pre>
+                    class="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-elevated p-2 font-mono text-[0.5625rem] leading-relaxed text-danger">{pushErrorDetails}</pre>
                 </details>
               {/if}
               {#if headIsCurrent}
                 <div class="mt-2 flex items-center gap-1.5">
                   <button
                     type="button"
-                    class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+                    class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
                     disabled={recoverMode !== null}
                     onclick={() => void recoverPush('rebase')}
                   >
@@ -1119,7 +1140,7 @@
                   </button>
                   <button
                     type="button"
-                    class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+                    class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
                     disabled={recoverMode !== null}
                     onclick={() => void recoverPush('merge')}
                   >
@@ -1130,7 +1151,7 @@
                   </button>
                 </div>
               {:else}
-                <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
+                <p class="mt-1 text-[0.5625rem] leading-relaxed text-dimmed">
                   Check out <span class="font-mono text-foreground">{head}</span> first, then use Pull
                   &amp; push to resolve this here.
                 </p>
@@ -1139,11 +1160,11 @@
           </div>
           <div class="mt-2 border-t border-warning/20 pt-2">
             {#if resolveThreadError}
-              <p class="mb-2 text-[9px] leading-relaxed text-danger">{resolveThreadError}</p>
+              <p class="mb-2 text-[0.5625rem] leading-relaxed text-danger">{resolveThreadError}</p>
             {/if}
             <button
               type="button"
-              class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-warning/40 bg-surface px-3 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+              class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-warning/40 bg-surface px-3 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
               title="Open a new thread with this branch-divergence issue prefilled"
               disabled={openingResolveThread}
               onclick={() => void resolveDivergenceWithAgent()}
@@ -1159,18 +1180,32 @@
         </div>
       {/if}
 
-      {#if createError}
+      {#if createError && createErrorIsNoCommits}
+        <div class="rounded-lg border border-border bg-elevated px-3 py-2.5" role="status">
+          <div class="flex items-start gap-2">
+            <Info size={14} class="mt-0.5 shrink-0 text-dimmed" />
+            <div class="min-w-0">
+              <p class="text-[0.625rem] font-semibold text-foreground">Nothing to merge</p>
+              <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-dimmed">
+                <span class="font-medium text-foreground">{head}</span> is already up to date with
+                <span class="font-medium text-foreground">{base}</span> — there are no commits left
+                to open a pull request for. It was likely merged elsewhere while this panel was open.
+              </p>
+            </div>
+          </div>
+        </div>
+      {:else if createError}
         <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2.5" role="alert">
           <div class="flex items-start gap-2">
             <TriangleAlert size={14} class="mt-0.5 shrink-0 text-danger" />
             <div class="min-w-0">
-              <p class="text-[10px] font-semibold text-danger">Pull request was not created</p>
+              <p class="text-[0.625rem] font-semibold text-danger">Pull request was not created</p>
               <p
-                class="mt-0.5 whitespace-pre-wrap break-words text-[9px] leading-relaxed text-danger"
+                class="mt-0.5 whitespace-pre-wrap break-words text-[0.5625rem] leading-relaxed text-danger"
               >
                 {createError}
               </p>
-              <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
+              <p class="mt-1 text-[0.5625rem] leading-relaxed text-dimmed">
                 Fix the Git error, then choose Create pull request to try again.
               </p>
             </div>
@@ -1180,14 +1215,14 @@
 
       <div>
         <label
-          class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+          class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
           for="pr-title"
         >
           Title
         </label>
         <input
           id="pr-title"
-          class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Summary of the change"
           bind:value={title}
           onkeydown={(event: KeyboardEvent) => {
@@ -1200,14 +1235,14 @@
       </div>
       <div>
         <label
-          class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+          class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
           for="pr-body"
         >
           Description
         </label>
         <textarea
           id="pr-body"
-          class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="What does this change do?"
           bind:value={body}
           onkeydown={(event: KeyboardEvent) => {
@@ -1221,8 +1256,8 @@
       <div class="space-y-3 rounded-lg border border-border bg-surface p-2.5">
         <div class="flex items-center justify-between gap-2">
           <div class="min-w-0">
-            <span class="text-[10px] text-muted">Push local commits</span>
-            <p class="text-[9px] leading-relaxed text-dimmed">
+            <span class="text-[0.625rem] text-muted">Push local commits</span>
+            <p class="text-[0.5625rem] leading-relaxed text-dimmed">
               Push unpublished commits on
               <span class="font-mono text-foreground">{head}</span> before creating the pull request.
             </p>
@@ -1235,26 +1270,25 @@
         </div>
         <div class="flex items-center justify-between gap-2">
           <div class="min-w-0">
-            <span class="text-[10px] text-muted">Commit staged and untracked files</span>
-            <p class="text-[9px] leading-relaxed text-dimmed">
+            <span class="text-[0.625rem] text-muted">Commit staged and untracked files</span>
+            <p class="text-[0.5625rem] leading-relaxed text-dimmed">
               {hasPendingCommitChanges
                 ? headIsCurrent
                   ? 'Create an uncategorized commit dated at submission time.'
                   : `Check out ${head} before committing files to it.`
-                : 'No staged or untracked files to commit right now.'}
+                : 'No staged or untracked files right now — nothing would be committed.'}
             </p>
           </div>
           <Switch
             checked={commitPendingFiles}
             onchange={(value) => (commitPendingFiles = value)}
-            disabled={!hasPendingCommitChanges || !headIsCurrent}
             aria-label="Commit staged and untracked files"
           />
         </div>
         <div class="flex items-center justify-between gap-2">
           <div class="min-w-0">
-            <span class="text-[10px] text-muted">Create as draft</span>
-            <p class="text-[9px] leading-relaxed text-dimmed">
+            <span class="text-[0.625rem] text-muted">Create as draft</span>
+            <p class="text-[0.5625rem] leading-relaxed text-dimmed">
               Drafts can't be merged until they're marked ready.
             </p>
           </div>
@@ -1269,7 +1303,7 @@
 
     {#if gitState.error && !result && !composeError && !createError}
       <p
-        class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
+        class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
       >
         {gitState.error}
       </p>
@@ -1280,14 +1314,14 @@
     {#if !result}
       <button
         type="button"
-        class="cursor-pointer rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+        class="cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
         onclick={onClose}
       >
         Cancel
       </button>
       <button
         type="button"
-        class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+        class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
         disabled={!canCreate}
         title={!canCreate && existingPr
           ? 'A pull request already exists for these branches'

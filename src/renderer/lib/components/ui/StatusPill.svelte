@@ -44,7 +44,7 @@
 </script>
 
 <span
-  class="inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide {tones[
+  class="inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide {tones[
     tone
   ]} {className}"
   {title}

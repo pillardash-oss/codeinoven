@@ -47,7 +47,7 @@
         collisionPadding={8}
         class="z-50 w-64 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
       >
-        <div class="px-2.5 pb-1 pt-2 text-[9px] font-semibold uppercase tracking-wide text-muted">
+        <div class="px-2.5 pb-1 pt-2 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
           Open in browser
         </div>
         {#each urls as url (url)}
@@ -56,7 +56,7 @@
             onSelect={() => void openInBrowser(url)}
           >
             <Globe size={13} class="shrink-0 text-muted" />
-            <span class="truncate font-mono text-[10px]">{linkLabel(url)}</span>
+            <span class="truncate font-mono text-[0.625rem]">{linkLabel(url)}</span>
           </DropdownMenu.Item>
         {/each}
       </DropdownMenu.Content>

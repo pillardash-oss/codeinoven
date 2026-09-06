@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { mkdir, readFile, readdir, rm, unlink, writeFile } from 'fs/promises'
+import { chmod, mkdir, readFile, readdir, rm, unlink, writeFile } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
 import type {
@@ -12,8 +12,12 @@ import type {
   ProviderModel,
   ThinkingPreset
 } from '../../lib/types'
-import { permissionPatterns } from '../../lib/agent-interactions'
-import { classifyProviderIssue } from '../../lib/provider-issue'
+import {
+  isQuestionToolName,
+  normalizeAgentQuestions,
+  permissionPatterns
+} from '../../lib/agent-interactions'
+import { classifyProviderIssue, parseUsageResetAt } from '../../lib/provider-issue'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -22,17 +26,19 @@ import type {
   TitleModelCandidate
 } from './persistent-cli-driver'
 import { PersistentCliDriver } from './persistent-cli-driver'
-import type {
-  GenerateTitleOptions,
-  GradeTurnOptions,
-  HarnessCapabilities,
-  SendPromptOptions,
-  UtilityRuntimeOverlay,
-  UtilityRuntimePreparationRequest
+import {
+  QuestionRequestGoneError,
+  type GenerateTitleOptions,
+  type GradeTurnOptions,
+  type HarnessCapabilities,
+  type SendPromptOptions,
+  type UtilityRuntimeOverlay,
+  type UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { PermissionPolicy, type PermissionRequest } from '../permissions/permission-policy'
 import { Logger } from '../system/logger'
 import { buildProcessEnvironment } from './cli-environment'
+import { attachmentTarget } from './attachment-reference'
 import { resolveHarnessRuntime, runHarnessCommand } from './harness-runtime'
 import { attachmentReferences } from './attachment-reference'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -411,6 +417,10 @@ interface ClineTurnState {
   messageId: string
   createdAt: number
   parts: AgentPart[]
+  /** Interaction request ids promoted from the live turn (used to suppress idle). */
+  questionRequestIds: Set<string>
+  /** Set when the driver deliberately stops the process at a question boundary. */
+  expectsProcessStop?: boolean
 }
 
 /**
@@ -427,6 +437,60 @@ interface ClineApprovalBridge {
   directory: string
   timer: ReturnType<typeof setInterval>
   handled: Set<string>
+}
+
+const CLINE_WEB_ONLY_TOOL_NAMES = new Set(['question', 'webfetch', 'websearch', 'gemini_quota'])
+
+function isClineWebOnlyTurn(allowedTools: readonly string[] | undefined): boolean {
+  return (
+    allowedTools !== undefined &&
+    allowedTools.some((tool) => tool === 'webfetch' || tool === 'websearch') &&
+    allowedTools.every((tool) => CLINE_WEB_ONLY_TOOL_NAMES.has(tool))
+  )
+}
+
+function clineWebOnlyHook(allowedAttachmentPaths: readonly string[]): string {
+  return `#!/usr/bin/env node
+import { readFileSync } from 'node:fs'
+import { isAbsolute, resolve } from 'node:path'
+
+const allowedPaths = new Set(${JSON.stringify(allowedAttachmentPaths)}.map((path) => resolve(path)))
+const payload = JSON.parse(readFileSync(0, 'utf8'))
+const request = payload.preToolUse ?? {}
+const tool = request.tool ?? request.toolName ?? ''
+const parameters = request.parameters ?? {}
+
+function values(value) {
+  if (typeof value === 'string') return [value]
+  if (Array.isArray(value)) return value.flatMap(values)
+  if (!value || typeof value !== 'object') return []
+  return Object.entries(value).flatMap(([key, nested]) =>
+    ['path', 'filePath', 'file_path', 'paths', 'files', 'file_paths'].includes(key)
+      ? values(nested)
+      : []
+  )
+}
+
+const webTools = new Set(['fetch_web_content', 'web_search', 'websearch', 'webfetch'])
+const neutralTools = new Set(['ask_question', 'submit_and_exit'])
+let allowed = webTools.has(tool) || neutralTools.has(tool)
+if (tool === 'read_files') {
+  const paths = values(parameters)
+  allowed = paths.length > 0 && paths.every((path) => {
+    if (!isAbsolute(path)) return false
+    return allowedPaths.has(resolve(path))
+  })
+}
+
+process.stdout.write(JSON.stringify(
+  allowed
+    ? { cancel: false }
+    : {
+        cancel: true,
+        errorMessage: 'This inbox chat can use the web and read files explicitly attached by the user, but it cannot access other local files or run local commands.'
+      }
+))
+`
 }
 
 /** Map Cline's tool names onto the app's provider-neutral permission names. */
@@ -565,10 +629,25 @@ function mapClineContentEvent(
       }
     }
     upsertPart(state, part)
-    return {
-      messages: [clineMessage(state)],
-      events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+    const events: SessionAgentEvent[] = [
+      { type: 'message.part.updated', sessionId: context.sessionId, part }
+    ]
+    // Cline's headless `ask_question` executor never blocks on stdin — it
+    // resolves immediately with the first option (`Promise.resolve(F[0])`).
+    // Promote the call into the shared interaction stream so the chat engine
+    // can pause the turn here and resume it with the user's answers; the
+    // question boundary is handled by the driver's `onJsonRecord` hook.
+    if (isQuestionToolName(toolName) && !state.questionRequestIds.has(callId)) {
+      state.questionRequestIds.add(callId)
+      events.push({
+        type: 'question.asked',
+        sessionId: context.sessionId,
+        requestId: callId,
+        questions: normalizeAgentQuestions(part.state.input),
+        tool: { messageID: messageId, callID: callId }
+      })
     }
+    return { messages: [clineMessage(state)], events }
   }
 
   return { events: [] }
@@ -589,6 +668,7 @@ function mapCurrentClineRecord(
     const error = stringValue(entry['message']) ?? stringValue(entry['error'])
     if (!error) return null
     const kind = classifyProviderIssue(error)
+    const retryAt = kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(error) : undefined
     return {
       events: [
         {
@@ -600,7 +680,8 @@ function mapCurrentClineRecord(
             message: error,
             rawError: error,
             harnessId: 'cline',
-            retryable: kind !== 'billing'
+            retryable: kind !== 'billing',
+            ...(retryAt === undefined ? {} : { retryAt })
           }
         }
       ]
@@ -781,42 +862,21 @@ function mapClineRecordToEvents(
     const questionType = ask ?? 'tool'
     const questionText = text || `Allow ${questionType}?`
 
-    if (questionType === 'tool') {
-      return {
-        events: [
-          {
-            type: 'message.part.updated',
-            sessionId,
-            part: {
-              type: 'tool',
-              id: partId,
-              messageID: messageId,
-              callID: partId,
-              tool: 'permission',
-              state: {
-                status: 'running',
-                input: { prompt: questionText, ask: questionType },
-                title: questionText
-              }
-            }
-          }
-        ]
-      }
-    }
-
     return {
       events: [
         {
           type: 'message.part.updated',
           sessionId,
           part: {
-            type: 'question',
+            type: 'tool',
             id: partId,
             messageID: messageId,
-            question: {
-              prompt: questionText,
-              multiple: false,
-              options: questionType === 'tool' ? ['Allow', 'Deny'] : ['Yes', 'No']
+            callID: partId,
+            tool: 'permission',
+            state: {
+              status: 'running',
+              input: { prompt: questionText, ask: questionType },
+              title: questionText
             }
           }
         }
@@ -900,6 +960,15 @@ export class ClineDriver extends PersistentCliDriver {
   private turnCounts = new Map<string, number>()
   /** Approval bridges keyed by CodeInOven session id; cleaned up on turn end. */
   private approvalBridges = new Map<string, ClineApprovalBridge>()
+  /** Web-only hook directories keyed by CodeInOven session id. */
+  private webOnlyHookDirectories = new Map<string, string>()
+  /**
+   * Options of the turn that raised a pending question, kept so the user's
+   * answer can resume the stateless turn as a continuation prompt.
+   */
+  private continuationOptions = new Map<string, SendPromptOptions>()
+  /** Sessions whose continuation prompt must stay out of the visible transcript. */
+  private hiddenContinuationSessions = new Set<string>()
 
   constructor(
     storage: StorageEngine,
@@ -1077,7 +1146,8 @@ export class ClineDriver extends PersistentCliDriver {
       iteration: 1,
       messageId: `cline:${session.id}:${turnIndex}:1`,
       createdAt: Date.now(),
-      parts: []
+      parts: [],
+      questionRequestIds: new Set()
     })
 
     const customProvider = await this.resolveCustomProvider(options.settings.providerId)
@@ -1119,11 +1189,17 @@ export class ClineDriver extends PersistentCliDriver {
     const thinking = CLINE_THINKING_LEVELS[options.settings.thinkingLevel]
     if (thinking) args.push('--thinking', thinking)
 
-    if (options.settings.permissionLevel === 'full_access') {
+    const webOnlyTurn = isClineWebOnlyTurn(options.allowedTools)
+    const webOnlyHookDirectory = webOnlyTurn
+      ? await this.prepareWebOnlyHook(session.id, options)
+      : undefined
+
+    if (options.settings.permissionLevel === 'full_access' || webOnlyTurn) {
       args.push('--auto-approve', 'true')
     } else {
       args.push('--auto-approve', 'false')
     }
+    if (webOnlyHookDirectory) args.push('--hooks-dir', webOnlyHookDirectory)
 
     args.push('-c', projectPath)
 
@@ -1147,7 +1223,7 @@ export class ClineDriver extends PersistentCliDriver {
     env['CLINE_SESSION_BACKEND_MODE'] = 'local'
 
     let onProcessExit: (() => void) | undefined
-    if (options.settings.permissionLevel !== 'full_access') {
+    if (options.settings.permissionLevel !== 'full_access' && !webOnlyTurn) {
       const bridge = await this.startApprovalBridge(
         session.id,
         projectPath,
@@ -1156,6 +1232,23 @@ export class ClineDriver extends PersistentCliDriver {
       env['CLINE_TOOL_APPROVAL_MODE'] = 'desktop'
       env['CLINE_TOOL_APPROVAL_DIR'] = bridge.directory
       onProcessExit = () => this.stopApprovalBridge(session.id)
+    } else if (webOnlyHookDirectory) {
+      onProcessExit = () => this.stopWebOnlyHook(session.id)
+    }
+
+    // Continuation support for headless questions: Cline's headless
+    // `ask_question` executor never blocks on stdin (it resolves with the
+    // first option immediately), so the only way to honor a user's answer is
+    // to stop the turn at the question boundary and resume it with the
+    // user's answers as a new turn. The durable CodeInOven transcript replays
+    // the conversation (`nativeResume: false`, `messageHistory: 'mirrored'`).
+    const turnState = this.turnStates.get(session.id)
+    if (turnState && turnState.questionRequestIds.size === 0) {
+      this.continuationOptions.set(session.id, {
+        ...options,
+        settings: { ...options.settings },
+        attachments: [...options.attachments]
+      })
     }
 
     return {
@@ -1163,8 +1256,54 @@ export class ClineDriver extends PersistentCliDriver {
       args,
       env,
       parseStderrJson: true,
+      onJsonRecord: (value) => {
+        // The question tool call just started (its `content_end` record carries
+        // the full input). Stop the process at this boundary: the turn result
+        // is otherwise meaningless because the executor auto-picked an option.
+        const envelope = record(value)
+        const event = record(envelope?.['event'])
+        if (
+          turnState &&
+          stringValue(envelope?.['type']) === 'agent_event' &&
+          stringValue(event?.['type']) === 'content_end' &&
+          stringValue(event?.['contentType']) === 'tool' &&
+          isQuestionToolName(stringValue(event?.['toolName']) ?? '')
+        ) {
+          turnState.expectsProcessStop = true
+          this.stopActiveProcess(session.id)
+        }
+      },
+      suppressIdle: () => turnState !== undefined && turnState.questionRequestIds.size > 0,
+      isExpectedExit: () => turnState?.expectsProcessStop === true,
       ...(onProcessExit ? { onProcessExit } : {})
     }
+  }
+
+  private async prepareWebOnlyHook(sessionId: string, options: SendPromptOptions): Promise<string> {
+    const safeSessionId = sessionId.replace(/[^a-zA-Z0-9._-]+/gu, '_')
+    const relativeDirectory = `drivers/cline/hooks/${safeSessionId}`
+    const relativeHookPath = `${relativeDirectory}/PreToolUse`
+    const attachmentPaths = (
+      await Promise.all(
+        options.attachments.map(async (attachment) => {
+          const target = await attachmentTarget(attachment)
+          return /^(?:data:|https?:\/\/)/u.test(target) ? null : target
+        })
+      )
+    ).filter((path): path is string => path !== null)
+    await this.storage.writeRaw(relativeHookPath, clineWebOnlyHook(attachmentPaths))
+    const hookPath = this.storage.resolve(relativeHookPath)
+    await chmod(hookPath, 0o700)
+    const directory = this.storage.resolve(relativeDirectory)
+    this.webOnlyHookDirectories.set(sessionId, directory)
+    return directory
+  }
+
+  private stopWebOnlyHook(sessionId: string): void {
+    const directory = this.webOnlyHookDirectories.get(sessionId)
+    if (!directory) return
+    this.webOnlyHookDirectories.delete(sessionId)
+    void rm(directory, { recursive: true, force: true }).catch(() => undefined)
   }
 
   private async startApprovalBridge(
@@ -1319,8 +1458,99 @@ export class ClineDriver extends PersistentCliDriver {
     return mapClineRecord(value, context)
   }
 
+  /**
+   * Resume a question-blocked Cline turn with the user's answers. Cline
+   * cannot receive interactive replies (headless `ask_question` resolves
+   * instantly), so the blocked turn is settled and restarted with the
+   * answers woven into a continuation prompt. Mirrors the Muse driver's
+   * interaction continuation contract.
+   */
+  override async replyToQuestion(
+    projectPath: string,
+    sessionId: string,
+    requestId: string,
+    answers: string[][]
+  ): Promise<void> {
+    const options = this.continuationOptions.get(sessionId)
+    if (!options) throw new QuestionRequestGoneError(sessionId, requestId, this.name)
+    const formatted = answers
+      .map((values, index) => `${index + 1}. ${values.join(', ')}`)
+      .join('\n')
+    await this.continueAfterQuestion(
+      projectPath,
+      sessionId,
+      `The user answered Cline's earlier ask_question prompt through CodeInOven:\n${formatted}\nContinue from these answers without asking the same question again.`
+    )
+  }
+
+  override async rejectQuestion(
+    projectPath: string,
+    sessionId: string,
+    requestId: string
+  ): Promise<void> {
+    const options = this.continuationOptions.get(sessionId)
+    if (!options) throw new QuestionRequestGoneError(sessionId, requestId, this.name)
+    await this.continueAfterQuestion(
+      projectPath,
+      sessionId,
+      "The user dismissed Cline's earlier ask_question prompt. Continue without that answer, or explain why the task cannot continue."
+    )
+  }
+
+  private async continueAfterQuestion(
+    projectPath: string,
+    sessionId: string,
+    text: string
+  ): Promise<void> {
+    const options = this.continuationOptions.get(sessionId)
+    if (!options) return
+    // Consume the continuation options immediately so a double resolution
+    // (answer racing dismiss) cannot dispatch two continuation turns.
+    this.continuationOptions.delete(sessionId)
+    const continuationText = [
+      'Continue this CodeInOven-managed task without relying on Cline session memory.',
+      `Active task context:\n${options.text}`,
+      `New interaction result:\n${text}`
+    ].join('\n\n')
+    this.hiddenContinuationSessions.add(sessionId)
+    try {
+      // The gated run was stopped at the question boundary. Await the process
+      // settlement so resuming never collides with the still-active turn
+      // ("A turn is already active") — same teardown contract steerPrompt
+      // relies on.
+      await this.settleActiveProcess(sessionId)
+      // Drop the stopped turn's state only after settlement; `sendPrompt`
+      // installs a fresh state for the continuation turn, and the old
+      // questionRequestIds must not leak into its suppressIdle check.
+      const previousState = this.turnStates.get(sessionId)
+      if (previousState?.expectsProcessStop) this.turnStates.delete(sessionId)
+      await this.sendPrompt(projectPath, {
+        ...options,
+        sessionId,
+        text: continuationText,
+        attachments: [...options.attachments]
+      })
+    } finally {
+      this.hiddenContinuationSessions.delete(sessionId)
+    }
+  }
+
+  protected override appendUserMessage(
+    session: PersistentCliSession,
+    options: Pick<SendPromptOptions, 'text' | 'attachments' | 'userMessageId'>
+  ): void {
+    super.appendUserMessage(session, options)
+    if (!this.hiddenContinuationSessions.has(session.id)) return
+    const message = session.messages.findLast((candidate) => candidate.role === 'user')
+    if (message) message.visibility = 'hidden'
+  }
+
   override async deleteSession(projectPath: string, sessionId: string): Promise<void> {
     this.stopApprovalBridge(sessionId)
+    this.stopWebOnlyHook(sessionId)
+    this.continuationOptions.delete(sessionId)
+    this.hiddenContinuationSessions.delete(sessionId)
+    this.turnStates.delete(sessionId)
     await super.deleteSession(projectPath, sessionId)
   }
 
@@ -1328,8 +1558,13 @@ export class ClineDriver extends PersistentCliDriver {
     for (const sessionId of [...this.approvalBridges.keys()]) {
       this.stopApprovalBridge(sessionId)
     }
+    for (const sessionId of [...this.webOnlyHookDirectories.keys()]) {
+      this.stopWebOnlyHook(sessionId)
+    }
     this.turnStates.clear()
     this.turnCounts.clear()
+    this.continuationOptions.clear()
+    this.hiddenContinuationSessions.clear()
     super.dispose()
   }
 }

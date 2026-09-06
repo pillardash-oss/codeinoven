@@ -45,7 +45,7 @@
 <div class="flex h-7 items-stretch overflow-hidden rounded border border-border bg-elevated">
   <button
     type="button"
-    class="flex min-w-0 items-center gap-1.5 px-2 text-[10px] font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+    class="flex min-w-0 items-center gap-1.5 px-2 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
     aria-label={`Open file in ${preferredName}`}
     title={`Open in ${preferredName}`}
     disabled={disabled || opening}
@@ -77,7 +77,7 @@
         sideOffset={6}
         class="z-50 w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
       >
-        <p class="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed">
+        <p class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed">
           Open file in
         </p>
         {#each availableEditors as editor (editor.id)}

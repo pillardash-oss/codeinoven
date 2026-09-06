@@ -183,6 +183,7 @@ function normalizeQuestion(value: unknown, index: number): AgentQuestion | null 
     ...(options.length > 0 ? { options } : {}),
     ...(richOptions.length > 0 ? { richOptions } : {}),
     ...(input['multiple'] === true || input['multiSelect'] === true ? { multiple: true } : {}),
+    ...(input['fileRequest'] === true ? { fileRequest: true } : {}),
     ...(input['custom'] === false || input['allowCustom'] === false ? { custom: false } : {}),
     rawInput: JSON.stringify({ index, ...input })
   }

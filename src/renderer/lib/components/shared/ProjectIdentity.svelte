@@ -17,7 +17,7 @@
     project,
     class: className = '',
     nameClass = 'text-xs font-medium text-foreground',
-    locationClass = 'text-[10px] text-dimmed',
+    locationClass = 'text-[0.625rem] text-dimmed',
     showLocation = false
   }: Props = $props()
 

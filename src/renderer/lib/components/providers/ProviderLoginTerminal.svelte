@@ -64,7 +64,7 @@
         cursorStyle: 'bar',
         fontSize: 13,
         fontFamily:
-          "'JetBrainsMono Nerd Font Mono', 'JetBrainsMono Nerd Font', ui-monospace, 'SFMono-Regular', Menlo, Monaco, 'Cascadia Code', 'Ubuntu Mono', monospace",
+          "'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', 'JetBrainsMono Nerd Font', ui-monospace, 'SFMono-Regular', Menlo, Monaco, 'Cascadia Code', 'Ubuntu Mono', monospace",
         scrollback: 5000,
         smoothScrollDuration: 80,
         theme: terminalTheme()

@@ -13,7 +13,12 @@ import { contextSidebarState, type FilesContextTab } from '$lib/stores/context-s
 import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import { gitState } from '$lib/stores/git.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
-import { isImageMime, isPdfMime, mimeFromPath } from '$lib/mime'
+import {
+  isDocumentPreviewMime,
+  isImageMime,
+  isPdfMime,
+  mimeFromPath
+} from '$lib/mime'
 
 /** How many levels of subfolders "Expand all" reveals below the project root,
  *  so the operation stays cheap even on very large trees. */
@@ -65,6 +70,10 @@ export interface ProjectFilesState {
   sessions: Record<string, ProjectFileSession>
   /** Scope bucket the cached listings were read from. */
   activeScope: string
+  /** Whether the "Last turn" filter is active in the file tree. Lives here
+   *  (per project) instead of local component state so panel remounts from
+   *  sidebar tab changes (e.g. previewing a file) do not reset it. */
+  lastTurnOnly: boolean
 }
 
 export interface ProjectFileClipboard {
@@ -98,7 +107,8 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     selectionAnchor: null,
     loadingPaths: {},
     sessions: {},
-    activeScope: DEFAULT_SCOPE_BUCKET_ID
+    activeScope: DEFAULT_SCOPE_BUCKET_ID,
+    lastTurnOnly: false
   }
 }
 
@@ -219,6 +229,10 @@ class ProjectFilesWorkspace {
       explorerVisible: state.explorerVisible,
       width: state.explorerWidth
     })
+  }
+
+  setLastTurnOnly(projectId: string, value: boolean): void {
+    this.ensureState(projectId).lastTurnOnly = value
   }
 
   async toggleDirectory(projectId: string, directory: string): Promise<void> {
@@ -623,7 +637,12 @@ class ProjectFilesWorkspace {
     tab.focusLineRequest += 1
     tab.error = null
     const nextMime = mimeFromPath(nextPath)
-    if (isPdfMime(nextMime) || isImageMime(nextMime)) tab.view = 'preview'
+    if (
+      isPdfMime(nextMime) ||
+      isImageMime(nextMime) ||
+      isDocumentPreviewMime(nextMime)
+    )
+      tab.view = 'preview'
     state.activeTabId = nextTabId
 
     this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, tab.preview)
@@ -658,7 +677,12 @@ class ProjectFilesWorkspace {
     tab.focusLineRequest += 1
     tab.error = null
     const nextMime = mimeFromPath(nextPath)
-    if (isPdfMime(nextMime) || isImageMime(nextMime)) tab.view = 'preview'
+    if (
+      isPdfMime(nextMime) ||
+      isImageMime(nextMime) ||
+      isDocumentPreviewMime(nextMime)
+    )
+      tab.view = 'preview'
     state.activeTabId = nextTabId
 
     if (state.sessions[nextPath]) return
@@ -845,6 +869,7 @@ class ProjectFilesWorkspace {
     state.loadingPaths[path] = true
     try {
       const source = await invoke('projectFiles:read', projectId, path, this.scopeFor(projectId))
+      if (!source) throw new Error('This file cannot be opened in the sidebar')
       state.sessions[path] = {
         source,
         draft: source.content,
@@ -889,7 +914,8 @@ class ProjectFilesWorkspace {
     focusLine?: number
   ): Promise<void> {
     const mime = mimeFromPath(path)
-    if (isPdfMime(mime) || isImageMime(mime)) preferredView = 'preview'
+    if (isPdfMime(mime) || isImageMime(mime) || isDocumentPreviewMime(mime))
+      preferredView = 'preview'
     const state = this.ensureState(projectId)
     const tabId = `working:${path}`
     let tab = state.tabs.find((candidate) => candidate.id === tabId)
@@ -959,7 +985,12 @@ class ProjectFilesWorkspace {
     tab.checkpointDiff = null
     tab.loadingDiff = false
     const nextMime = mimeFromPath(nextPath)
-    if (isPdfMime(nextMime) || isImageMime(nextMime)) tab.view = 'preview'
+    if (
+      isPdfMime(nextMime) ||
+      isImageMime(nextMime) ||
+      isDocumentPreviewMime(nextMime)
+    )
+      tab.view = 'preview'
     state.activeTabId = nextTabId
 
     this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, preview)
@@ -980,6 +1011,7 @@ class ProjectFilesWorkspace {
     state.loadingPaths[path] = true
     try {
       const source = await invoke('projectFiles:read', projectId, path, this.scopeFor(projectId))
+      if (!source) throw new Error('This file cannot be opened in the sidebar')
       state.sessions[path] = {
         source,
         draft: source.content,
@@ -1075,7 +1107,7 @@ class ProjectFilesWorkspace {
   }
 
   private isPreviewableBinary(mime: string): boolean {
-    return isPdfMime(mime) || isImageMime(mime)
+    return isPdfMime(mime) || isImageMime(mime) || isDocumentPreviewMime(mime)
   }
 
   /** Clear all explorer state for the given paths (files or folders) and their

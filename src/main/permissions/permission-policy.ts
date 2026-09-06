@@ -46,6 +46,13 @@ export interface PermissionPolicyOptions {
   mode: PermissionPolicyMode
   approvalTtlMs?: number
   protectedPathPatterns?: readonly string[]
+  /** Absolute paths the user explicitly provided for this turn (attachments).
+   *  These are always in scope regardless of location or protected status. */
+  allowedPaths?: readonly string[]
+  /** When true, only `allowedPaths` are permitted; every other path (even
+   *  inside the project root) requires explicit approval. Used by File-System-
+   *  OFF chats so the agent can only touch files the user attached. */
+  restrictToAllowed?: boolean
   now?: () => number
 }
 
@@ -101,6 +108,19 @@ const DEFAULT_PROTECTED_PATTERNS = [
   '.env.*',
   'secrets',
   'secret',
+  'credentials',
+  '.ssh',
+  '.aws',
+  '.config',
+  '.gnupg',
+  '.kube',
+  '.docker',
+  '.npmrc',
+  '.pypirc',
+  '.netrc',
+  '.gitconfig',
+  'id_rsa',
+  'id_ed25519',
   '*.lock',
   'package-lock.json',
   'pnpm-lock.yaml',
@@ -145,6 +165,8 @@ export class PermissionPolicy {
   private readonly projectRoot: string
   private readonly approvalTtlMs: number
   private readonly protectedPathPatterns: readonly string[]
+  private readonly allowedPaths: readonly string[]
+  private readonly restrictToAllowed: boolean
   private readonly now: () => number
 
   constructor(private readonly options: PermissionPolicyOptions) {
@@ -154,6 +176,8 @@ export class PermissionPolicy {
       ...DEFAULT_PROTECTED_PATTERNS,
       ...(options.protectedPathPatterns ?? [])
     ]
+    this.allowedPaths = (options.allowedPaths ?? []).map((path) => resolve(path))
+    this.restrictToAllowed = options.restrictToAllowed === true
     this.now = options.now ?? Date.now
   }
 
@@ -196,6 +220,37 @@ export class PermissionPolicy {
         false,
         `Recursive or destructive command requires explicit approval: ${destructiveCommand}`,
         'critical',
+        scope
+      )
+    }
+
+    // File-System-OFF chats only auto-approve reads confined to the attached
+    // files. Shell commands, writes, and reads elsewhere must ask — the agent
+    // must not reach the broader file system (or the shell) unprompted.
+    if (this.restrictToAllowed) {
+      const confinedRead =
+        commands.length === 0 &&
+        isSafeAutoPermission(permission) &&
+        paths.length > 0 &&
+        paths.every((path) => {
+          if (hasTraversal(path)) return false
+          const resolvedPath = isAbsolute(path) ? resolve(path) : resolve(this.projectRoot, path)
+          return this.isAllowedPath(resolvedPath)
+        })
+      if (!confinedRead) {
+        return this.createDecision(
+          'ask',
+          false,
+          'This chat is restricted to the files you attached; anything beyond that needs your approval.',
+          risk,
+          scope
+        )
+      }
+      return this.createDecision(
+        'auto_review',
+        true,
+        'Auto-approved: a read of a file the user attached to this chat.',
+        risk,
         scope
       )
     }
@@ -244,6 +299,16 @@ export class PermissionPolicy {
 
       const resolvedPath = isAbsolute(path) ? resolve(path) : resolve(this.projectRoot, path)
 
+      // Files the user explicitly attached are always in scope.
+      if (this.isAllowedPath(resolvedPath)) {
+        continue
+      }
+
+      // File-System-OFF chats are restricted to the provided attachments.
+      if (this.restrictToAllowed) {
+        return `This chat is restricted to the files you attached. Reading other local files requires your approval: ${path}`
+      }
+
       if (!isWithinDirectory(this.projectRoot, resolvedPath)) {
         if (isAllowedExternalPath(resolvedPath)) {
           continue
@@ -258,6 +323,15 @@ export class PermissionPolicy {
     }
 
     return undefined
+  }
+
+  /** Whether a resolved path is inside the attachment allowlist (or the allowlist
+   *  requirement does not apply). A matching path — or any path below a directory
+   *  that was attached — is always permitted. */
+  private isAllowedPath(path: string): boolean {
+    return this.allowedPaths.some((allowed) => {
+      return allowed === path || isWithinDirectory(allowed, path)
+    })
   }
 
   private isProtectedPath(path: string): boolean {

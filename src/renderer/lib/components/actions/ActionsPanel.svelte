@@ -1,17 +1,8 @@
 <script lang="ts">
-  import {
-    Copy,
-    FileTerminal,
-    Pencil,
-    Play,
-    Plus,
-    Square,
-    Trash2,
-    Variable,
-    X
-  } from '@lucide/svelte'
+  import { Copy, MonitorCog, Pencil, Play, Plus, Square, Trash2, Variable, X } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
+  import ColorSwatches from '$lib/components/shared/ColorSwatches.svelte'
   import ActionTerminal from './ActionTerminal.svelte'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import type {
@@ -22,15 +13,17 @@
 
   interface Props {
     projectId: string
+    threadId: string
     scopeBucketId?: string
   }
-  let { projectId, scopeBucketId }: Props = $props()
+  let { projectId, threadId, scopeBucketId }: Props = $props()
   let editorOpen = $state(false)
   let editing = $state<ProjectAction | null>(null)
   let name = $state('')
   let script = $state('')
   const SCRIPT_PLACEHOLDER = `bun install\ncd apps/mobile\nbun run deploy --message "$m"`
   let variables = $state<ProjectActionVariable[]>([])
+  let color = $state<string | null>(null)
   let runTarget = $state<ProjectAction | null>(null)
   let runValues = $state<Record<string, string>>({})
   let deleteTarget = $state<ProjectAction | null>(null)
@@ -47,6 +40,7 @@
     name = action?.name ?? ''
     script = action?.script ?? ''
     variables = action?.variables.map((variable) => ({ ...variable })) ?? []
+    color = action?.color ?? null
     error = null
     editorOpen = true
   }
@@ -65,7 +59,7 @@
     saving = true
     error = null
     try {
-      const input: ProjectActionInput = { name, script, variables }
+      const input: ProjectActionInput = { name, script, variables, color }
       await projectActionsState.save(projectId, editing?.id ?? null, input)
       editorOpen = false
     } catch (reason) {
@@ -88,11 +82,17 @@
     runTarget = null
   }
   function duplicate(action: ProjectAction): void {
-    void projectActionsState.save(projectId, null, {
-      name: action.name ? `${action.name} (copy)` : '',
-      script: action.script,
-      variables: action.variables.map((variable) => ({ ...variable }))
-    })
+    void projectActionsState.save(
+      projectId,
+      null,
+      {
+        name: action.name ? `${action.name} (copy)` : '',
+        script: action.script,
+        variables: action.variables.map((variable) => ({ ...variable })),
+        color: action.color ?? null
+      },
+      action.id
+    )
   }
   let draggingId = $state<string | null>(null)
   let dragStartOrder: string[] | null = null
@@ -148,7 +148,7 @@
 <section class="flex h-full min-h-0 flex-col bg-app" aria-label="Actions">
   <header class="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
     <div class="flex items-center gap-2">
-      <FileTerminal size={15} />
+      <MonitorCog size={15} />
       <h2 class="text-xs font-semibold">Actions</h2>
     </div>
     <button
@@ -162,7 +162,7 @@
   <div class="min-h-0 flex-1 overflow-y-auto p-2">
     {#if actions.length === 0}
       <div class="flex h-full min-h-48 flex-col items-center justify-center px-6 text-center">
-        <FileTerminal size={24} class="text-dimmed" />
+        <MonitorCog size={24} class="text-dimmed" />
         <p class="mt-3 text-sm font-semibold">No actions yet</p>
         <p class="mt-1 text-xs text-muted">
           Save a command you run often, then launch it without opening a terminal.
@@ -182,6 +182,7 @@
             action.id
               ? 'opacity-50'
               : ''}"
+            style={action.color ? `border-left: 3px solid ${action.color}` : undefined}
             draggable="true"
             ondragstart={(event) => dragStart(action, event)}
             ondragover={(event) => dragOver(action, event)}
@@ -214,7 +215,7 @@
                 <p class="truncate text-xs font-semibold text-foreground">
                   {action.name || action.script}
                 </p>
-                {#if action.name}<p class="truncate font-mono text-[10px] text-muted">
+                {#if action.name}<p class="truncate font-mono text-[0.625rem] text-muted">
                     {action.script}
                   </p>{/if}
               </div>
@@ -278,6 +279,7 @@
                 {#key run.terminalId}<ActionTerminal
                     terminalId={run.terminalId}
                     {projectId}
+                    {threadId}
                     {scopeBucketId}
                     script={run.script}
                     variables={run.variables}
@@ -295,6 +297,7 @@
   open={editorOpen}
   title={editing ? 'Edit action' : 'Add action'}
   size="lg"
+  footer={editorFooter}
   onClose={() => (editorOpen = false)}
 >
   <div class="space-y-4">
@@ -312,10 +315,31 @@
         placeholder={SCRIPT_PLACEHOLDER}></textarea></label
     >
     <div>
+      <p class="text-xs font-semibold">Label colour</p>
+      <div class="mt-2">
+        <ColorSwatches value={color} size="sm" oncolorchange={(next) => (color = next)} />
+      </div>
+      <div
+        class="mt-3 flex items-center gap-2 rounded-lg border border-border bg-surface px-2 py-1.5"
+        style={color ? `border-left: 3px solid ${color}` : ''}
+      >
+        <span class="h-2 w-2 shrink-0 rounded-full bg-raised"></span>
+        <span class="truncate text-xs font-semibold text-foreground"
+          >{name || 'Action preview'}</span
+        >
+        <span class="ml-auto shrink-0 font-mono text-[0.625rem] text-muted">
+          {color ?? 'no colour'}
+        </span>
+      </div>
+      <p class="mt-1.5 text-[0.6875rem] text-muted">
+        The colour shows as the entry's left border — group similar scripts together.
+      </p>
+    </div>
+    <div>
       <div class="flex items-center justify-between">
         <div>
           <p class="text-xs font-semibold">Variables</p>
-          <p class="text-[11px] text-muted">Values are exposed as environment variables.</p>
+          <p class="text-[0.6875rem] text-muted">Values are exposed as environment variables.</p>
         </div>
         <button
           type="button"
@@ -327,21 +351,21 @@
         {#each variables as variable, index (index)}<div
             class="grid grid-cols-[1fr_1fr_auto_auto] items-end gap-2 rounded-lg bg-elevated p-2"
           >
-            <label class="text-[10px] font-semibold text-muted"
+            <label class="text-[0.625rem] font-semibold text-muted"
               >Name<input
                 class="mt-1 h-8 w-full rounded-md border border-border bg-surface px-2 font-mono text-xs"
                 value={variable.name}
                 oninput={(event) => updateVariable(index, { name: event.currentTarget.value })}
                 placeholder="m"
               /></label
-            ><label class="text-[10px] font-semibold text-muted"
+            ><label class="text-[0.625rem] font-semibold text-muted"
               >Prompt label<input
                 class="mt-1 h-8 w-full rounded-md border border-border bg-surface px-2 text-xs"
                 value={variable.label}
                 oninput={(event) => updateVariable(index, { label: event.currentTarget.value })}
                 placeholder="Commit message"
               /></label
-            ><label class="flex h-8 items-center gap-2 text-[10px] font-semibold text-muted"
+            ><label class="flex h-8 items-center gap-2 text-[0.625rem] font-semibold text-muted"
               ><Switch
                 checked={variable.required}
                 onchange={(required) => updateVariable(index, { required })}
@@ -358,24 +382,13 @@
       </div>
     </div>
     {#if error}<p class="text-xs text-danger">{error}</p>{/if}
-    <div class="flex justify-end gap-2">
-      <button
-        type="button"
-        class="h-9 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-elevated"
-        onclick={() => (editorOpen = false)}>Cancel</button
-      ><button
-        type="button"
-        class="h-9 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary disabled:opacity-50"
-        disabled={!script.trim() || saving}
-        onclick={() => void save()}>{saving ? 'Saving…' : 'Save action'}</button
-      >
-    </div>
   </div>
 </Modal>
 
 <Modal
   open={runTarget !== null}
   title={`Run ${runTarget?.name || 'action'}`}
+  footer={runFooter}
   onClose={() => (runTarget = null)}
 >
   <div class="space-y-3">
@@ -389,28 +402,53 @@
           required={variable.required}
         /></label
       >{/each}
-    <div class="flex justify-end gap-2 pt-2">
-      <button
-        type="button"
-        class="h-9 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-elevated"
-        onclick={() => (runTarget = null)}>Cancel</button
-      ><button
-        type="button"
-        class="h-9 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary disabled:opacity-50"
-        disabled={(runTarget?.variables ?? []).some(
-          (variable) => variable.required && !runValues[variable.name]?.trim()
-        )}
-        onclick={startRun}>Run action</button
-      >
-    </div>
   </div>
 </Modal>
 
-<Modal open={deleteTarget !== null} title="Delete action?" onClose={() => (deleteTarget = null)}
+<Modal
+  open={deleteTarget !== null}
+  title="Delete action?"
+  onClose={() => (deleteTarget = null)}
+  footer={deleteFooter}
   ><p class="text-sm text-muted">
     This permanently removes "{deleteTarget?.name || deleteTarget?.script}".
-  </p>
-  <div class="mt-5 flex justify-end gap-2">
+  </p></Modal
+>
+
+{#snippet editorFooter()}
+  <div class="flex justify-end gap-2">
+    <button
+      type="button"
+      class="h-9 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-elevated"
+      onclick={() => (editorOpen = false)}>Cancel</button
+    ><button
+      type="button"
+      class="h-9 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary disabled:opacity-50"
+      disabled={!script.trim() || saving}
+      onclick={() => void save()}>{saving ? 'Saving…' : 'Save action'}</button
+    >
+  </div>
+{/snippet}
+
+{#snippet runFooter()}
+  <div class="flex justify-end gap-2">
+    <button
+      type="button"
+      class="h-9 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-elevated"
+      onclick={() => (runTarget = null)}>Cancel</button
+    ><button
+      type="button"
+      class="h-9 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary disabled:opacity-50"
+      disabled={(runTarget?.variables ?? []).some(
+        (variable) => variable.required && !runValues[variable.name]?.trim()
+      )}
+      onclick={startRun}>Run action</button
+    >
+  </div>
+{/snippet}
+
+{#snippet deleteFooter()}
+  <div class="flex justify-end gap-2">
     <button
       type="button"
       class="h-9 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-elevated"
@@ -423,5 +461,5 @@
         deleteTarget = null
       }}>Delete</button
     >
-  </div></Modal
->
+  </div>
+{/snippet}

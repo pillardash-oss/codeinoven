@@ -19,6 +19,7 @@
     MessageSquare,
     HardDrive,
     Zap,
+    Flame,
     ShieldAlert,
     Eye,
     Image as ImageIcon,
@@ -42,10 +43,7 @@
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
-  import {
-    getInlineFileTypeIconDataUri,
-    getInlineFolderTypeIconDataUri
-  } from '../files/file-type-icons'
+  import { getInlineFileTypeIconSvg, getInlineFolderTypeIconSvg } from '../files/file-type-icons'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { attachmentPreviewKind, fileUrlToPath, mimeFromPath, pathToFileUrl } from '$lib/mime'
@@ -56,6 +54,7 @@
   import Switch from '../ui/Switch.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
+  import { isEntryHiddenByVisibility } from '$lib/stores/cio-search-visibility.svelte'
   import {
     composerMentionQuery,
     normalizeComposerMessage,
@@ -70,7 +69,7 @@
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
-  import { getVendorIconDataUri } from '$lib/vendor-icons/registry'
+  import { getVendorIconSvg } from '$lib/vendor-icons/registry'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import type { SpeechEditorApplyResult, SpeechEditorTarget } from '../../speech/editor-target'
@@ -102,7 +101,7 @@
   type StartAfterSelection = Pick<Thread, 'id' | 'title'>
   const MAX_PROMPT_CHARACTERS = 200_000
   const LONG_PASTE_ATTACHMENT_CHARACTERS = 100_000
-  const codeInOvenIconUrl = getVendorIconDataUri(APP_NAME)
+  const codeInOvenIconSvg = getVendorIconSvg(APP_NAME)
 
   interface Props {
     /** Called with the trimmed message and attachments when the user sends.
@@ -133,6 +132,10 @@
     onActionSelect?: (selection: ActionSelection) => void | Promise<void>
     /** Executes an active-harness slash command with explicit arguments. */
     onSlashCommand?: (commandId: string, args: string) => void | Promise<void>
+    /** Id of the harness's native "switch to API usage credits" command, when
+     *  it exposes one. Present only when the harness driver reports it — this
+     *  is what shows the flame icon shortcut in the toolbar. */
+    usageCreditsCommandId?: string
     /** Available providers + models from the harness. */
     providers?: ProviderCatalog[]
     /** Id of the agent harness serving the models (shown on each model row). */
@@ -188,6 +191,15 @@
     ) => void | Promise<void>
     /** True on the Chats tab — surfaces the chat-only Engineering and File System toggles. */
     showChatModes?: boolean
+    /** Independent (spec-less) audit: the thread has work and the audit was never initialized. */
+    independentAuditAvailable?: boolean
+    /** Independent (spec-less) audit is currently enabled for this thread. */
+    independentAuditEnabled?: boolean
+    /** Called when the user toggles the independent audit switch. */
+    onIndependentAuditToggle?: (enabled: boolean) => void | Promise<void>
+    /** Engineering toolbox is hidden (Independent Audit staged or enabled —
+     *  the two controls are mutually exclusive before a send commits either). */
+    engineeringToolboxHidden?: boolean
     /** Hides the permission level selector and forces auto review — chats are
      *  for questions and research, so they always run with auto permissions. */
     hidePermissionSelector?: boolean
@@ -228,6 +240,8 @@
     canCompact?: boolean
     compacting?: boolean
     onCompact?: () => void
+    /** Opens the destructive confirmation dialog for redeeming a banked Codex reset. */
+    onActivateBankedReset?: () => void
     /** Previous user messages for terminal-like up-arrow history recall. */
     historyMessages?: string[]
     /** Global default vision model used to describe images for text-only models. */
@@ -257,6 +271,7 @@
     actions = [],
     onActionSelect,
     onSlashCommand,
+    usageCreditsCommandId,
     providers = [],
     harnessId = DEFAULT_HARNESS,
     projectContext,
@@ -287,6 +302,10 @@
     engineeringActive,
     onEngineeringLifecycleSelect,
     showChatModes = false,
+    independentAuditAvailable = false,
+    independentAuditEnabled = false,
+    onIndependentAuditToggle,
+    engineeringToolboxHidden = false,
     hidePermissionSelector = false,
     readOnlyMode = false,
     allowAttachments = false,
@@ -305,6 +324,7 @@
     canCompact = false,
     compacting = false,
     onCompact,
+    onActivateBankedReset,
     historyMessages = [],
     imageDescriptorDefault,
     imageDescriptorAskAgain = false,
@@ -368,8 +388,8 @@
           [
             projectReferenceToken(reference),
             reference.kind === 'directory'
-              ? await getInlineFolderTypeIconDataUri(reference.name)
-              : await getInlineFileTypeIconDataUri(reference.path)
+              ? await getInlineFolderTypeIconSvg(reference.name)
+              : await getInlineFileTypeIconSvg(reference.path)
           ] as const
       )
     ).then((entries) => {
@@ -384,7 +404,7 @@
     ...(value.includes('@cio-utility')
       ? [
           {
-            iconSrc: codeInOvenIconUrl,
+            iconSvg: codeInOvenIconSvg,
             label: 'utility',
             title: `${APP_NAME} utility`,
             value: '@cio-utility'
@@ -392,7 +412,7 @@
         ]
       : []),
     ...projectReferences.map((reference) => ({
-      iconSrc: projectReferenceIcons[projectReferenceToken(reference)],
+      iconSvg: projectReferenceIcons[projectReferenceToken(reference)],
       label: reference.name,
       title: `${reference.kind === 'directory' ? 'Directory' : 'File'}: ${reference.path}`,
       value: projectReferenceToken(reference)
@@ -619,6 +639,13 @@
     startAfterThreads = []
     closeStartAfterPopover()
     onStartAfterThreadsChange?.([])
+  }
+
+  /** Toggle the independent (spec-less) audit. Turning it on hands the thread
+   *  over to the audit coordinator in the context sidebar. */
+  async function toggleIndependentAudit(enabled: boolean): Promise<void> {
+    await onIndependentAuditToggle?.(enabled)
+    if (enabled) plusMenuOpen = false
   }
 
   function showModelMenu(): void {
@@ -890,6 +917,34 @@
     })
   }
 
+  /** Replace the composer draft with the given text and focus the caret at
+   *  the end — used by external surfaces such as suggested prompts that
+   *  should seed a draft instead of sending it. */
+  export function setComposerText(text: string): void {
+    value = text
+    handleComposerValueChange(text)
+    void tick().then(() => {
+      focusComposerAtEnd()
+    })
+  }
+
+  /** Focus the composer editor and place the caret at the start of the first
+   *  line — the fallback when no caret position was ever captured. */
+  export function focusComposerAtStart(): void {
+    void tick().then(() => {
+      const editor = document.getElementById(composerEditorId)
+      if (!(editor instanceof HTMLDivElement)) return
+      editor.focus()
+      const range = document.createRange()
+      range.setStart(editor, 0)
+      range.collapse(true)
+      const selection = window.getSelection()
+      if (!selection) return
+      selection.removeAllRanges()
+      selection.addRange(range)
+    })
+  }
+
   /** Focus the composer editor and restore the caret to the position the user
    *  last had inside it — published continuously by the rich editor via its
    *  selection tracking. Falls back to the end when no position is known.
@@ -1042,13 +1097,15 @@
         })
         .map((entry) => ({ type: 'task', entry }))
       const files = fileTagProjectId
-        ? await invoke(
-            'projectFiles:search',
-            fileTagProjectId,
-            query,
-            'all',
-            workspaceState.activeScopeBucketIdFor(fileTagProjectId)
-          )
+        ? (
+            await invoke(
+              'projectFiles:search',
+              fileTagProjectId,
+              query,
+              'all',
+              workspaceState.activeScopeBucketIdFor(fileTagProjectId)
+            )
+          ).filter((entry) => !isEntryHiddenByVisibility(entry.path, entry.ignored))
         : []
       const entries: ComposerMentionEntry[] = [
         ...utilityEntries,
@@ -1260,6 +1317,11 @@
     else threadSettingsStore.commit(updated)
   }
 
+  function runUsageCredits(): void {
+    if (!usageCreditsCommandId || !onSlashCommand) return
+    void onSlashCommand(usageCreditsCommandId, '')
+  }
+
   /** Loads the preview payload for one attachment: blob URLs for binary media,
    *  converted document HTML (DOCX, DOC, ODT, PPTX), or decoded text. Missing/
    *  undecodable files silently yield no preview so the chip falls back to the
@@ -1285,7 +1347,7 @@
         return
       }
       const bytes = await window.api.readFile(filePath)
-      if (kind === 'markdown' || kind === 'text' || kind === 'csv') {
+      if (kind === 'markdown' || kind === 'text') {
         if (previewTexts[file.url] !== undefined) return
         previewTexts = { ...previewTexts, [file.url]: new TextDecoder().decode(bytes) }
         return
@@ -1747,7 +1809,16 @@
         return
       }
     }
-    if (e.key === 'Tab' && e.shiftKey && isComposerFocused && showEngineeringMode) {
+    // Global-on-thread toggle: works regardless of what has focus (composer,
+    // toolbox panel, or elsewhere on the thread) — like the voice shortcut.
+    // The toolbox panel handles Cmd/Ctrl+E itself while open and prevents
+    // default, so this won't immediately re-open it.
+    if (
+      (e.metaKey || e.ctrlKey) &&
+      e.key.toLowerCase() === 'e' &&
+      !e.defaultPrevented &&
+      showEngineeringMode
+    ) {
       e.preventDefault()
       void engineeringToolbox?.openAndFocus()
       return
@@ -1897,7 +1968,7 @@
         </button>
       </div>
       {#if !gateVisionSelection}
-        <p class="mt-1.5 text-[11px] text-dimmed">
+        <p class="mt-1.5 text-[0.6875rem] text-dimmed">
           No vision model selected — Continue is disabled until you pick one.
         </p>
       {/if}
@@ -1948,11 +2019,11 @@
               project={projectContext}
               class="min-w-0 max-w-48"
               nameClass="text-xs font-medium text-foreground"
-              locationClass="text-[9px] text-dimmed"
+              locationClass="text-[0.5625rem] text-dimmed"
               showLocation={hasProjectNameCollision(projectContext, scopeState.projectRecords)}
             />
             <span
-              class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] text-muted"
+              class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
             >
               {#if projectContext.source === 'ssh'}
                 <Globe size={9} />
@@ -1963,7 +2034,7 @@
             </span>
             {#if projectContext.branch}
               <span
-                class="flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] text-muted"
+                class="flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
                 title={branchPillTitle}
               >
                 <GitBranch size={9} class="shrink-0" />
@@ -1976,7 +2047,7 @@
           <div class="flex flex-wrap items-center gap-1.5" aria-label="Active chat modes">
             {#if resolved.fileSystemMode}
               <span
-                class="flex shrink-0 items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[10px] text-info"
+                class="flex shrink-0 items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.625rem] text-info"
               >
                 <HardDrive size={9} class="shrink-0" />
                 <span>File System</span>
@@ -2002,7 +2073,7 @@
             onmouseleave={scheduleStartAfterPopoverClose}
           >
             <div
-              class="flex items-center rounded-lg border border-info/30 bg-info/10 text-[10px] font-medium text-info transition-colors hover:bg-info/15"
+              class="flex items-center rounded-lg border border-info/30 bg-info/10 text-[0.625rem] font-medium text-info transition-colors hover:bg-info/15"
             >
               <button
                 type="button"
@@ -2042,7 +2113,7 @@
                 onmouseleave={scheduleStartAfterPopoverClose}
               >
                 <div
-                  class="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                  class="px-2 pb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
                 >
                   Starts after thread{startAfterThreads.length === 1 ? '' : 's'}
                 </div>
@@ -2085,7 +2156,7 @@
           onmouseleave={scheduleSelectionPopoverClose}
         >
           <div
-            class="flex items-center rounded-lg border border-accent/30 bg-accent/10 text-[11px] font-medium text-foreground transition-colors hover:bg-accent/15"
+            class="flex items-center rounded-lg border border-accent/30 bg-accent/10 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-accent/15"
           >
             <button
               type="button"
@@ -2133,7 +2204,7 @@
           {#each attachments as file, i (file.url)}
             {@const previewKind = attachmentPreviewKind(file.mime, file.filename ?? '')}
             <div
-              class="flex items-stretch overflow-hidden rounded-lg border border-border bg-elevated text-[11px] text-muted transition-colors"
+              class="flex items-stretch overflow-hidden rounded-lg border border-border bg-elevated text-[0.6875rem] text-muted transition-colors"
             >
               {#if previewKind}
                 <button
@@ -2199,6 +2270,9 @@
         activeIndex={mentionIndex}
         query={mentionQuery}
         onSelect={selectMention}
+        onFilterChange={() => {
+          if (lastCaretText !== null) void updateFileMention(lastCaretText)
+        }}
       />
     {/if}
     <RichMarkdownEditor
@@ -2245,10 +2319,10 @@
             onclick={() => (plusMenuOpen = false)}
           ></button>
           <div
-            class="absolute bottom-9 left-0 z-40 w-52 rounded-xl border bg-surface p-1 shadow-lg"
+            class="absolute bottom-9 left-0 z-40 w-60 rounded-xl border bg-surface p-1 shadow-lg"
             role="menu"
           >
-            {#if showChatModes || showEngineeringMode}
+            {#if showChatModes || showEngineeringMode || independentAuditAvailable}
               {#if showChatModes}
                 <!-- File System toggle (chat view) -->
                 <Switch
@@ -2270,6 +2344,32 @@
                       class={resolved.fileSystemMode ? 'text-info' : 'text-dimmed'}
                     />
                     File System
+                  </span>
+                </Switch>
+              {/if}
+
+              {#if independentAuditAvailable && projectId && !readOnlyMode}
+                <!-- Independent audit (spec-less) -->
+                <Switch
+                  checked={independentAuditEnabled}
+                  onchange={(enabled) => void toggleIndependentAudit(enabled)}
+                  title="Independent audit that uses the context of the thread to bring up an auditor to audit the current work of the agent"
+                  aria-label={independentAuditEnabled
+                    ? 'Turn off Independent audit'
+                    : 'Turn on Independent audit'}
+                  activeClass="bg-info"
+                  class="w-full justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
+                >
+                  <span
+                    class="flex min-w-0 items-center gap-2 {independentAuditEnabled
+                      ? 'text-foreground'
+                      : 'text-muted'}"
+                  >
+                    <ShieldCheck
+                      size={13}
+                      class={independentAuditEnabled ? 'text-info' : 'text-dimmed'}
+                    />
+                    Independent Audit
                   </span>
                 </Switch>
               {/if}
@@ -2302,7 +2402,9 @@
                 {#if startAfterEnabled}
                   {#each startAfterThreads as startAfterThread (startAfterThread.id)}
                     <div class="flex items-center gap-1 px-1">
-                      <span class="min-w-0 flex-1 truncate px-1.5 py-0.5 text-[11px] text-info">
+                      <span
+                        class="min-w-0 flex-1 truncate px-1.5 py-0.5 text-[0.6875rem] text-info"
+                      >
                         {startAfterThread.title}
                       </span>
                       <button
@@ -2318,7 +2420,7 @@
                   {/each}
                   <button
                     type="button"
-                    class="flex w-full items-center rounded-lg px-2.5 py-1 text-left text-[11px] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                    class="flex w-full items-center rounded-lg px-2.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                     role="menuitem"
                     title="Add another thread to Start after"
                     onclick={openStartAfterPicker}
@@ -2355,20 +2457,24 @@
       </div>
     {/if}
 
-    {#if showEngineeringMode && onEngineeringLifecycleSelect}
+    {#if showEngineeringMode && onEngineeringLifecycleSelect && !engineeringToolboxHidden}
       <EngineeringToolbox
         bind:this={engineeringToolbox}
         lifecycleState={engineeringLifecycle}
         active={engineeringActive === true}
         disabled={readOnlyMode}
         onselect={onEngineeringLifecycleSelect}
+        onclose={() => {
+          if (richEditor?.caretBookmark()) focusComposerAtSavedCaret()
+          else focusComposerAtStart()
+        }}
       />
     {/if}
 
     <!-- Permission level selector -->
     {#if readOnlyMode}
       <span
-        class="flex items-center gap-1 rounded-lg bg-raised px-2 py-1.5 text-[11px] text-muted"
+        class="flex items-center gap-1 rounded-lg bg-raised px-2 py-1.5 text-[0.6875rem] text-muted"
         title="Temporary chats can inspect context but cannot modify files or run commands"
       >
         <Shield size={12} />
@@ -2378,7 +2484,7 @@
       <div class="relative">
         <button
           type="button"
-          class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] transition-colors hover:bg-elevated {resolved.permissionLevel ===
+          class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[0.6875rem] transition-colors hover:bg-elevated {resolved.permissionLevel ===
           'full_access'
             ? 'font-bold text-warning'
             : 'text-muted hover:text-foreground'}"
@@ -2411,7 +2517,7 @@
             class="absolute bottom-9 left-0 z-40 w-36 rounded-xl border bg-surface p-1 shadow-lg"
           >
             {#if working}
-              <p class="px-2 pb-1 pt-1 text-[9px] text-dimmed">Applies to the next turn</p>
+              <p class="px-2 pb-1 pt-1 text-[0.5625rem] text-dimmed">Applies to the next turn</p>
             {/if}
             {#each Object.entries(permissionLabels) as [level, label] (level)}
               <button
@@ -2510,13 +2616,27 @@
               >
                 <span class="flex flex-col">
                   <span>Fast</span>
-                  <span class="text-[10px] text-muted">~{fastVariant.multiplier}× usage</span>
+                  <span class="text-[0.625rem] text-muted">~{fastVariant.multiplier}× usage</span>
                 </span>
               </button>
             </div>
           </div>
         {/if}
       </div>
+    {/if}
+
+    <!-- API usage credits — native harness command to bill this session's
+         turns against pay-as-you-go API credits instead of a subscription. -->
+    {#if usageCreditsCommandId}
+      <button
+        type="button"
+        class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Switch to API usage credits"
+        title="Switch this session to pay-as-you-go API usage credits"
+        onclick={runUsageCredits}
+      >
+        <Flame size={13} />
+      </button>
     {/if}
 
     <span class="flex-1"></span>
@@ -2529,6 +2649,7 @@
         {canCompact}
         {compacting}
         {onCompact}
+        {onActivateBankedReset}
         onReveal={onRevealUsage}
         onHide={onHideUsage}
         refreshing={usageRefreshing}
@@ -2575,7 +2696,7 @@
         onclick={() => submit()}
       >
         {#if pendingStop}
-          <span class="pending-stop-label text-[9px] font-semibold">Stop?</span>
+          <span class="pending-stop-label text-[0.5625rem] font-semibold">Stop?</span>
           <span class="pending-stop-icon">
             <Square size={14} />
           </span>

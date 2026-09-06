@@ -470,7 +470,7 @@
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
       <FileWarning size={22} class="text-danger" />
       <p class="text-xs font-medium text-foreground">Could not prepare this conflict</p>
-      <p class="max-w-[48ch] text-[10px] leading-relaxed text-danger">{error}</p>
+      <p class="max-w-[48ch] text-[0.625rem] leading-relaxed text-danger">{error}</p>
     </div>
   {:else if !analysis}
     <div class="flex flex-1 items-center justify-center text-xs text-dimmed">
@@ -486,28 +486,28 @@
   {:else}
     <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
       <GitMerge size={13} class="text-warning" />
-      <span class="text-[10px] font-semibold text-foreground"
+      <span class="text-[0.625rem] font-semibold text-foreground"
         >Conflict {activeHunk + 1} of {analysis.hunks.length}</span
       >
-      <span class="font-mono text-[9px] tabular-nums text-dimmed"
+      <span class="font-mono text-[0.5625rem] tabular-nums text-dimmed"
         >{resolvedCount}/{analysis.hunks.length} resolved</span
       >
       <button
         type="button"
-        class="ml-1 h-6 rounded border border-accent/40 px-2 text-[9px] font-medium text-accent hover:bg-accent/10"
+        class="ml-1 h-6 rounded border border-accent/40 px-2 text-[0.5625rem] font-medium text-accent hover:bg-accent/10"
         title="Accept every incoming conflict block"
         onclick={() => acceptAll('incoming')}>Accept all incoming</button
       >
       <button
         type="button"
-        class="h-6 rounded border border-primary/40 px-2 text-[9px] font-medium text-primary hover:bg-primary/10"
+        class="h-6 rounded border border-primary/40 px-2 text-[0.5625rem] font-medium text-primary hover:bg-primary/10"
         title="Accept every current conflict block"
         onclick={() => acceptAll('current')}>Accept all current</button
       >
       <button
         type="button"
         class={[
-          'flex h-6 items-center gap-1 rounded px-2 text-[9px] font-medium transition-colors',
+          'flex h-6 items-center gap-1 rounded px-2 text-[0.5625rem] font-medium transition-colors',
           wrap ? 'bg-overlay text-foreground' : 'text-muted hover:bg-elevated hover:text-foreground'
         ]}
         aria-pressed={wrap}
@@ -517,7 +517,7 @@
       <span class="flex-1"></span>
       <button
         type="button"
-        class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[9px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+        class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[0.5625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
         disabled={!canSaveDraft || draftSaving || saving}
         title="Save resolved conflict progress to the scratch file"
         onclick={() => void saveDraft()}
@@ -555,7 +555,7 @@
           <button
             type="button"
             class={[
-              'flex h-6 shrink-0 items-center gap-1 rounded px-2 font-mono text-[9px] tabular-nums',
+              'flex h-6 shrink-0 items-center gap-1 rounded px-2 font-mono text-[0.5625rem] tabular-nums',
               state.index === activeHunk
                 ? 'bg-primary/15 text-primary'
                 : isResolved(state)
@@ -611,15 +611,15 @@
           <div
             class="flex h-9 shrink-0 items-center gap-2 border-b border-accent/30 bg-accent/10 px-2"
           >
-            <span class="rounded bg-accent/15 px-1.5 py-0.5 text-[9px] font-semibold text-accent"
+            <span class="rounded bg-accent/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-accent"
               >incoming</span
             >
-            <span class="min-w-0 flex-1 truncate font-mono text-[9px] text-dimmed"
+            <span class="min-w-0 flex-1 truncate font-mono text-[0.5625rem] text-dimmed"
               >{activeHunkData.theirsLabel}</span
             >
             <button
               type="button"
-              class="h-6 shrink-0 rounded bg-accent px-2 text-[9px] font-semibold text-on-primary disabled:opacity-40"
+              class="h-6 shrink-0 rounded bg-accent px-2 text-[0.5625rem] font-semibold text-on-primary disabled:opacity-40"
               disabled={activeState.acceptedIncoming}
               title="Accept this incoming block"
               onclick={() => acceptSide('incoming')}>Accept incoming</button
@@ -634,18 +634,18 @@
           <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface px-2">
             <span
               class={[
-                'rounded px-1.5 py-0.5 text-[9px] font-semibold',
+                'rounded px-1.5 py-0.5 text-[0.5625rem] font-semibold',
                 isResolved(activeState)
                   ? 'bg-success/15 text-success'
                   : 'bg-warning/15 text-warning'
               ]}>scratch</span
             >
-            <span class="min-w-0 flex-1 truncate font-mono text-[9px] text-dimmed"
+            <span class="min-w-0 flex-1 truncate font-mono text-[0.5625rem] text-dimmed"
               >{workFile?.scratchPath}</span
             >
             <button
               type="button"
-              class="h-6 shrink-0 rounded border border-border px-2 text-[9px] font-semibold text-foreground hover:bg-elevated disabled:opacity-40"
+              class="h-6 shrink-0 rounded border border-border px-2 text-[0.5625rem] font-semibold text-foreground hover:bg-elevated disabled:opacity-40"
               disabled={activeState.acceptedIncoming && activeState.acceptedCurrent}
               title="Merge incoming above current"
               onclick={mergeBoth}>Merge both</button
@@ -661,15 +661,15 @@
           <div
             class="flex h-9 shrink-0 items-center gap-2 border-b border-primary/30 bg-primary/10 px-2"
           >
-            <span class="rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold text-primary"
+            <span class="rounded bg-primary/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-primary"
               >current</span
             >
-            <span class="min-w-0 flex-1 truncate font-mono text-[9px] text-dimmed"
+            <span class="min-w-0 flex-1 truncate font-mono text-[0.5625rem] text-dimmed"
               >{activeHunkData.oursLabel}</span
             >
             <button
               type="button"
-              class="h-6 shrink-0 rounded bg-primary px-2 text-[9px] font-semibold text-on-primary disabled:opacity-40"
+              class="h-6 shrink-0 rounded bg-primary px-2 text-[0.5625rem] font-semibold text-on-primary disabled:opacity-40"
               disabled={activeState.acceptedCurrent}
               title="Accept this current block"
               onclick={() => acceptSide('current')}>Accept current</button

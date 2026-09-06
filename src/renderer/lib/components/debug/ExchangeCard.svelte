@@ -151,7 +151,7 @@
     <span class="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
       {ex.label}
     </span>
-    <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+    <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
       {timeLabel(ex.timestamp)}
     </span>
     <span class="shrink-0 text-dimmed">
@@ -168,7 +168,7 @@
     <div class="flex flex-wrap gap-1 px-3 pb-2.5">
       {#if ex.status === 'error' && ex.error}
         <span
-          class="flex items-center gap-1 rounded bg-danger/10 px-1.5 py-0.5 font-mono text-[9px] text-danger"
+          class="flex items-center gap-1 rounded bg-danger/10 px-1.5 py-0.5 font-mono text-[0.5625rem] text-danger"
         >
           <AlertTriangle size={9} />
           {ex.error}
@@ -176,7 +176,7 @@
       {/if}
       {#if ex.threadId}
         <span
-          class="rounded bg-elevated px-1.5 py-0.5 font-mono text-[9px] text-dimmed"
+          class="rounded bg-elevated px-1.5 py-0.5 font-mono text-[0.5625rem] text-dimmed"
           title="Thread"
         >
           {shortId(ex.threadId)}
@@ -184,7 +184,7 @@
       {/if}
       {#if ex.sessionId}
         <span
-          class="rounded bg-elevated px-1.5 py-0.5 font-mono text-[9px] text-dimmed"
+          class="rounded bg-elevated px-1.5 py-0.5 font-mono text-[0.5625rem] text-dimmed"
           title="Session"
         >
           S:{shortId(ex.sessionId)}
@@ -192,7 +192,7 @@
       {/if}
       {#if ex.events.length > 0}
         <span
-          class="flex items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[9px] text-dimmed"
+          class="flex items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-dimmed"
         >
           <List size={9} />
           {eventSummary(ex.events)}
@@ -208,12 +208,12 @@
       {#if ex.data}
         <details class="rounded-md border border-border">
           <summary
-            class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[10px] font-medium text-muted hover:bg-elevated"
+            class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[0.625rem] font-medium text-muted hover:bg-elevated"
           >
             Request
           </summary>
           <pre
-            class="max-h-48 overflow-auto whitespace-pre-wrap px-2 pb-2 font-mono text-[10px] leading-relaxed text-muted">{JSON.stringify(
+            class="max-h-48 overflow-auto whitespace-pre-wrap px-2 pb-2 font-mono text-[0.625rem] leading-relaxed text-muted">{JSON.stringify(
               ex.data,
               null,
               2
@@ -225,12 +225,12 @@
       {#if ex.response !== undefined}
         <details class="rounded-md border border-border">
           <summary
-            class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[10px] font-medium text-success hover:bg-elevated"
+            class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[0.625rem] font-medium text-success hover:bg-elevated"
           >
             Response
           </summary>
           <pre
-            class="max-h-48 overflow-auto whitespace-pre-wrap px-2 pb-2 font-mono text-[10px] leading-relaxed text-muted">{JSON.stringify(
+            class="max-h-48 overflow-auto whitespace-pre-wrap px-2 pb-2 font-mono text-[0.625rem] leading-relaxed text-muted">{JSON.stringify(
               ex.response,
               null,
               2
@@ -242,7 +242,7 @@
       {#if ex.events.length > 0}
         <details class="rounded-md border border-border" open>
           <summary
-            class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[10px] font-medium text-muted hover:bg-elevated"
+            class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[0.625rem] font-medium text-muted hover:bg-elevated"
           >
             Events ({ex.events.length})
           </summary>
@@ -250,7 +250,7 @@
             {#each ex.events as ev (ev.id)}
               <details class="rounded border border-border/50">
                 <summary
-                  class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1 text-[9px] {eventBadgeClass(
+                  class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1 text-[0.5625rem] {eventBadgeClass(
                     ev.type
                   )}"
                 >
@@ -258,7 +258,7 @@
                   <span class="font-medium">{eventLabel(ev)}</span>
                 </summary>
                 <pre
-                  class="max-h-32 overflow-auto whitespace-pre-wrap px-2 pb-1.5 font-mono text-[9px] leading-relaxed text-dimmed">{JSON.stringify(
+                  class="max-h-32 overflow-auto whitespace-pre-wrap px-2 pb-1.5 font-mono text-[0.5625rem] leading-relaxed text-dimmed">{JSON.stringify(
                     ev.data,
                     null,
                     2
@@ -268,13 +268,13 @@
           </div>
         </details>
       {:else}
-        <p class="text-[9px] text-dimmed italic">Waiting for events…</p>
+        <p class="text-[0.5625rem] text-dimmed italic">Waiting for events…</p>
       {/if}
 
       <!-- Copy -->
       <div class="flex items-center gap-2 pt-0.5">
         <button
-          class="flex items-center gap-1 text-[9px] text-dimmed hover:text-foreground"
+          class="flex items-center gap-1 text-[0.5625rem] text-dimmed hover:text-foreground"
           onclick={() => void copyExchange()}
         >
           {#if copiedId === ex.id}
@@ -286,7 +286,7 @@
           {/if}
         </button>
         {#if ex.status === 'error' && ex.error}
-          <span class="text-[9px] text-danger">{ex.error}</span>
+          <span class="text-[0.5625rem] text-danger">{ex.error}</span>
         {/if}
       </div>
     </div>

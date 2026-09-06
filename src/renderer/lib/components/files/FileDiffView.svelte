@@ -88,7 +88,7 @@
     tabindex="0"
     aria-expanded={!isFolded}
     title={isFolded ? 'Show this hunk' : 'Fold this hunk'}
-    class="flex h-8 cursor-pointer items-center gap-2 bg-elevated px-3 text-[10px]"
+    class="flex h-8 cursor-pointer items-center gap-2 bg-elevated px-3 text-[0.625rem]"
     onclick={() => toggleHunkFold(hunk.id)}
     onkeydown={(e: KeyboardEvent) => {
       if (e.key === 'Enter' || e.key === ' ') {
@@ -103,7 +103,7 @@
     {#if !isFolded && hidden > 0}
       <button
         type="button"
-        class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+        class="shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
         title={`Reveal ${Math.min(REVEAL_STEP, hidden)} more ${direction === 'above' ? 'lines above' : 'lines below'}`}
         onclick={(e: MouseEvent) => {
           e.stopPropagation()
@@ -131,7 +131,7 @@
     style={maxHeight ? `max-height:${maxHeight}` : undefined}
   >
     <div
-      class="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto py-1 font-mono text-[11px] leading-5"
+      class="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto py-1 font-mono text-[0.6875rem] leading-5"
     >
       {#if details.hunks.length === 0}
         <p class="px-3 py-4 text-center text-dimmed">No textual changes.</p>
@@ -147,7 +147,7 @@
             {@render foldBar(hunk, hunkAdditions, hunkDeletions, w.aboveHidden, 'above')}
             {#if !isFolded}
               {#if limitExceeded}
-                <div class="px-3 py-3 text-center font-sans text-[11px] text-muted" role="note">
+                <div class="px-3 py-3 text-center font-sans text-[0.6875rem] text-muted" role="note">
                   Maximum diff exceeded — this hunk changes {hunkChanged} lines (limit {maxDiffLines}).
                   The lines are hidden to keep the diff responsive.
                 </div>

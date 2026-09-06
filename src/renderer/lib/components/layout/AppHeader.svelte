@@ -36,7 +36,6 @@
     FileText,
     FolderKanban,
     GitBranch,
-    GitFork,
     GitMergeConflict,
     GitPullRequest,
     Globe,
@@ -44,14 +43,12 @@
     MessageSquare,
     SquareDashedKanban,
     Loader2,
-    Pencil,
-    Pin,
-    PinOff,
-    Timeline,
-    Trash2,
-    X
+    Timeline
   } from '@lucide/svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
+  import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
+  import Modal from '$lib/components/ui/Modal.svelte'
+  import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import ProjectInfoDropdown from '$lib/components/shared/ProjectInfoDropdown.svelte'
@@ -72,7 +69,7 @@
     type ScopeBucket
   } from '$shared/types'
   import { SvelteSet } from 'svelte/reactivity'
-  import { tick, type Component } from 'svelte'
+  import { type Component } from 'svelte'
 
   type View = MainView
 
@@ -270,6 +267,17 @@
   /** Find a thread by ID across all projects and open it, restoring the
    *  project context.  No-op if the thread no longer exists. */
   async function restoreThread(threadId: string): Promise<void> {
+    // Cache-first: restoring from the in-memory scope lists keeps openThread on
+    // the same synchronous tick as the navigation, so the target view never
+    // paints its empty state for a frame or two while IPC round-trips resolve.
+    const cached = scopeState.allScopeThreads.find((candidate) => candidate.id === threadId)
+    if (cached) {
+      const cachedProject =
+        scopeState.projectRecords.find((candidate) => candidate.id === cached.projectId) ?? null
+      workspaceState.openThread(cached, cachedProject)
+      void scopeState.ensureBoardLoaded(cached.projectId)
+      return
+    }
     const allThreads: Thread[] = await invoke('thread:listAll')
     const thread = allThreads.find((t) => t.id === threadId)
     if (!thread) return
@@ -493,28 +501,57 @@
 
   // ─── Thread actions (ellipsis dropdown) ──────────────────────────────────
 
-  let showThreadRename = $state(false)
-  let threadRenameValue = $state('')
-
-  let showThreadDeleteConfirm = $state(false)
-  /** Delete button inside the confirm modal — focused on open so Enter deletes. */
-  let deleteConfirmButton = $state<HTMLButtonElement>()
-
-  $effect(() => {
-    if (!showThreadDeleteConfirm) return
-    void tick().then(() => deleteConfirmButton?.focus())
+  const threadActionsMenu = createThreadActionsMenu({
+    getThread: () => workspaceState.selectedThread,
+    onRename: async (thread, newTitle) => {
+      const updated = await invoke('thread:update', thread.projectId, thread.id, {
+        title: newTitle,
+        titleSource: 'manual'
+      })
+      workspaceState.updateThread(updated)
+      scopeState.updateThread(updated)
+    },
+    onTogglePin: async (thread) => {
+      const updated = await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
+      workspaceState.updateThread(updated)
+      if (scopeState.allScopeThreads.some((t) => t.id === updated.id)) {
+        scopeState.updateThread(updated)
+      }
+    },
+    onFork: async (thread) => {
+      const project = workspaceState.activeProject
+      const forked = await invoke(
+        'thread:fork',
+        thread.projectId,
+        thread.id,
+        `${thread.title} (fork)`
+      )
+      workspaceState.openThread(forked, project)
+      scopeState.updateThread(forked)
+    },
+    onDelete: async (thread) => {
+      await invoke('thread:delete', thread.projectId, thread.id)
+      workspaceState.clearThread()
+      scopeState.removeThread(thread.id)
+    },
+    onDeleteError: (error) =>
+      toast.error(error instanceof Error ? error.message : 'Could not delete thread'),
+    showChangeScope: () => true,
+    showNotes: () => true,
+    showCopyId: () => true,
+    onOpenNotes: (thread) =>
+      contextSidebarState.openThreadNote(thread.projectId, thread.id, thread.title, {
+        edit: true,
+        focusEditor: true
+      })
   })
 
   /** Cmd/Ctrl+D deletes the actively opened thread through the normal confirm
-   *  flow; Escape cancels the confirm while it is open. Cmd/Ctrl+0-4 switch
+   *  flow (Escape cancels inside the shared ThreadDeleteConfirm dialog).
+   *  Cmd/Ctrl+0-4 switch
    *  primary views: 0 chats, 1 projects, 2 threads, 3 projects with scope state,
    *  4 scope. */
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape' && showThreadDeleteConfirm) {
-      event.preventDefault()
-      showThreadDeleteConfirm = false
-      return
-    }
     if (event.repeat || event.isComposing) return
     const modifier = event.metaKey || event.ctrlKey
     if (!modifier || event.altKey || event.shiftKey) return
@@ -522,7 +559,7 @@
     if (key === 'd') {
       if (!workspaceState.selectedThread) return
       event.preventDefault()
-      showThreadDeleteConfirm = true
+      threadActionsMenu.startDelete()
       return
     }
     if (key === '0' || key === '1' || key === '2' || key === '3' || key === '4') {
@@ -534,8 +571,6 @@
       else void navigateToView('scope')
     }
   }
-
-  let showChangeScope = $state(false)
 
   /** Title shown in the header — real title once generated, else a draft label. */
   let headerThreadTitle = $derived(
@@ -570,55 +605,7 @@
     void scopeState.ensureBoardLoaded(thread.projectId)
   })
 
-  async function toggleThreadPin(): Promise<void> {
-    const thread = workspaceState.selectedThread
-    if (!thread) return
-    const updated = await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
-    workspaceState.updateThread(updated)
-    if (scopeState.allScopeThreads.some((t) => t.id === updated.id)) {
-      scopeState.updateThread(updated)
-    }
-  }
 
-  async function forkThread(): Promise<void> {
-    const thread = workspaceState.selectedThread
-    if (!thread) return
-    const project = workspaceState.activeProject
-    const forked = await invoke(
-      'thread:fork',
-      thread.projectId,
-      thread.id,
-      `${thread.title} (fork)`
-    )
-    workspaceState.openThread(forked, project)
-    scopeState.updateThread(forked)
-  }
-
-  async function confirmThreadRename(e?: SubmitEvent): Promise<void> {
-    e?.preventDefault()
-    const thread = workspaceState.selectedThread
-    if (!thread || !threadRenameValue.trim()) return
-    const updated = await invoke('thread:update', thread.projectId, thread.id, {
-      title: threadRenameValue.trim(),
-      titleSource: 'manual'
-    })
-    workspaceState.updateThread(updated)
-    scopeState.updateThread(updated)
-    showThreadRename = false
-  }
-
-  async function confirmThreadDelete(): Promise<void> {
-    const thread = workspaceState.selectedThread
-    if (!thread) return
-    try {
-      await invoke('thread:delete', thread.projectId, thread.id)
-      workspaceState.clearThread()
-      scopeState.removeThread(thread.id)
-      showThreadDeleteConfirm = false
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not delete thread')
-    }
-  }
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} />
@@ -677,7 +664,7 @@
             onclick={() => void onPrimaryNavClick('scope')}
           >
             <Kanban size={14} strokeWidth={1.8} class={anyProjectWorking ? 'animate-pulse' : ''} />
-            <span class="header-control-label text-[11px] font-medium">Scope</span>
+            <span class="header-control-label text-[0.6875rem] font-medium">Scope</span>
           </button>
         {:else if projectViewMode === 'threads'}
           <button
@@ -698,7 +685,7 @@
               strokeWidth={1.8}
               class={anyProjectWorking ? 'animate-pulse' : ''}
             />
-            <span class="header-control-label text-[11px] font-medium">Threads</span>
+            <span class="header-control-label text-[0.6875rem] font-medium">Threads</span>
           </button>
         {:else}
           <button
@@ -719,7 +706,7 @@
               strokeWidth={1.8}
               class={anyProjectWorking ? 'animate-pulse' : ''}
             />
-            <span class="header-control-label text-[11px] font-medium">Projects</span>
+            <span class="header-control-label text-[0.6875rem] font-medium">Projects</span>
           </button>
           <div class="mx-0.5 h-4 w-px bg-border/40" aria-hidden="true"></div>
           <button
@@ -801,7 +788,7 @@
       onclick={() => void onPrimaryNavClick('chats')}
     >
       <MessageSquare size={14} strokeWidth={1.8} class={anyChatWorking ? 'animate-pulse' : ''} />
-      <span class="header-control-label text-[11px] font-medium">Chats</span>
+      <span class="header-control-label text-[0.6875rem] font-medium">Chats</span>
     </button>
   </nav>
 
@@ -849,7 +836,7 @@
                 {project}
                 class="max-w-36 text-left"
                 nameClass="text-xs font-medium"
-                locationClass="text-[9px] text-dimmed"
+                locationClass="text-[0.5625rem] text-dimmed"
                 showLocation={hasProjectNameCollision(project, scopeState.projects)}
               />
             </button>
@@ -878,7 +865,7 @@
     <div class="flex min-w-0 flex-1 items-center justify-center px-2">
       {#if onSettings}
         <div class="pointer-events-none">
-          <h1 class="text-[11px] font-semibold uppercase tracking-[0.16em] text-dimmed">
+          <h1 class="text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-dimmed">
             {settingsTitle}
           </h1>
         </div>
@@ -925,55 +912,15 @@
           {/if}
           <div class="flex min-w-0 items-center gap-1.5 overflow-hidden">
             <h1
-              class="max-w-52 truncate text-[13px] font-medium tracking-tight text-foreground"
+              class="truncate text-[0.6875rem] font-medium tracking-tight text-foreground"
               title={headerThreadTitle}
             >
               {headerThreadTitle}
             </h1>
-            <ThreadDropdown
-              items={[
-                {
-                  label: 'Rename',
-                  icon: Pencil,
-                  onClick: () => {
-                    threadRenameValue = thread.title
-                    showThreadRename = true
-                  }
-                },
-                {
-                  label: thread.pinned ? 'Unpin' : 'Pin',
-                  icon: thread.pinned ? PinOff : Pin,
-                  onClick: () => void toggleThreadPin()
-                },
-                {
-                  label: 'Fork',
-                  icon: GitFork,
-                  onClick: () => void forkThread()
-                },
-                {
-                  label: 'Change Scope',
-                  icon: Kanban,
-                  onClick: () => {
-                    const thread = workspaceState.selectedThread
-                    if (thread) void scopeState.ensureBoardLoaded(thread.projectId)
-                    showChangeScope = true
-                  }
-                },
-                { label: '', divider: true },
-                {
-                  label: 'Delete',
-                  icon: Trash2,
-                  onClick: () => {
-                    showThreadDeleteConfirm = true
-                  },
-                  danger: true
-                }
-              ]}
-              onOpen={() => {}}
-            />
+            <ThreadDropdown items={threadActionsMenu.items} onOpen={() => {}} />
             {#if isWorking}
               <span
-                class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] {isRetryPaused
+                class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.625rem] {isRetryPaused
                   ? 'bg-warning/10 text-warning'
                   : 'bg-info/10 text-info'}"
               >
@@ -1021,7 +968,7 @@
         </div>
       {:else}
         <div class="pointer-events-none">
-          <h1 class="text-[11px] font-semibold uppercase tracking-[0.16em] text-dimmed">
+          <h1 class="text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-dimmed">
             {viewLabels[activeView]}
           </h1>
         </div>
@@ -1030,115 +977,68 @@
   {/if}
 
   <!-- Thread Rename Modal -->
-  {#if showThreadRename}
-    <div class="fixed inset-0 z-50 flex items-center justify-center">
-      <button
-        class="absolute inset-0 bg-black/13"
-        aria-label="Close"
-        onclick={() => (showThreadRename = false)}
-      ></button>
-      <div class="relative w-full max-w-md border bg-surface p-6 shadow-xl">
-        <div class="mb-4 flex items-center justify-between">
-          <h2 class="text-base font-semibold">Rename Thread</h2>
-          <button
-            class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label="Close"
-            title="Close"
-            onclick={() => (showThreadRename = false)}
-          >
-            <X size={16} />
-          </button>
-        </div>
-        <form class="space-y-4" onsubmit={(e: SubmitEvent) => void confirmThreadRename(e)}>
-          <div>
-            <label class="mb-1 block text-xs font-medium text-muted" for="rename-input">Title</label
-            >
-            <input
-              id="rename-input"
-              type="text"
-              class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
-              bind:value={threadRenameValue}
-            />
-          </div>
-          <div class="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-              title="Cancel"
-              onclick={() => (showThreadRename = false)}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-              disabled={!threadRenameValue.trim()}
-              title="Save the new title"
-            >
-              Save
-            </button>
-          </div>
-        </form>
+  <Modal
+    open={threadActionsMenu.showRenameModal}
+    title="Rename Thread"
+    onClose={threadActionsMenu.cancelRename}
+  >
+    <form
+      id="header-thread-rename-form"
+      class="space-y-4"
+      onsubmit={(e: SubmitEvent) => {
+        e.preventDefault()
+        void threadActionsMenu.confirmRename()
+      }}
+    >
+      <div>
+        <label class="mb-1 block text-xs font-medium text-muted" for="rename-input">Title</label>
+        <input
+          id="rename-input"
+          type="text"
+          class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+          bind:value={threadActionsMenu.renameValue}
+        />
       </div>
-    </div>
-  {/if}
+    </form>
+
+    {#snippet footer()}
+      <button
+        type="button"
+        class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+        title="Cancel"
+        onclick={threadActionsMenu.cancelRename}
+      >
+        Cancel
+      </button>
+      <button
+        type="submit"
+        form="header-thread-rename-form"
+        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+        disabled={!threadActionsMenu.renameValue.trim()}
+        title="Save the new title"
+      >
+        Save
+      </button>
+    {/snippet}
+  </Modal>
 
   <!-- Thread Delete Confirmation -->
-  {#if showThreadDeleteConfirm}
-    {@const thread = workspaceState.selectedThread}
-    <div class="fixed inset-0 z-50 flex items-center justify-center">
-      <button
-        class="absolute inset-0 bg-black/13"
-        aria-label="Close"
-        onclick={() => (showThreadDeleteConfirm = false)}
-      ></button>
-      <div class="relative w-full max-w-md border bg-surface p-6 shadow-xl">
-        <div class="mb-4 flex items-center justify-between">
-          <h2 class="text-base font-semibold">Delete Thread</h2>
-          <button
-            class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label="Close"
-            title="Close"
-            onclick={() => (showThreadDeleteConfirm = false)}
-          >
-            <X size={16} />
-          </button>
-        </div>
-        <p class="text-sm leading-relaxed text-muted">
-          This will permanently delete
-          <span class="font-medium text-foreground">{thread?.title}</span>
-          and all of its history. This action cannot be undone.
-        </p>
-        <div class="flex justify-end gap-2 pt-4">
-          <button
-            type="button"
-            class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-            title="Cancel"
-            onclick={() => (showThreadDeleteConfirm = false)}
-          >
-            Cancel
-          </button>
-          <button
-            bind:this={deleteConfirmButton}
-            type="button"
-            class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90"
-            title="Permanently delete this thread"
-            onclick={() => void confirmThreadDelete()}
-          >
-            Delete
-          </button>
-        </div>
-      </div>
-    </div>
+  {#if workspaceState.selectedThread}
+    <ThreadDeleteConfirm
+      open={threadActionsMenu.showDeleteModal}
+      threadTitle={workspaceState.selectedThread.title}
+      onClose={threadActionsMenu.cancelDelete}
+      onConfirm={threadActionsMenu.confirmDelete}
+    />
   {/if}
 
   <!-- Change Scope Modal -->
-  {#if showChangeScope}
+  {#if threadActionsMenu.showChangeScopeModal}
     {@const thread = workspaceState.selectedThread}
     {@const currentBucketId = thread?.scopeBucketId ?? 'default'}
     <ChangeScopeModal
-      open={showChangeScope}
-      onClose={() => (showChangeScope = false)}
+      open={threadActionsMenu.showChangeScopeModal}
+      onClose={threadActionsMenu.cancelChangeScope}
       threadId={thread?.id ?? ''}
       projectId={thread?.projectId ?? ''}
       {currentBucketId}
@@ -1196,7 +1096,7 @@
             aria-label="Select default editor"
           >
             <p
-              class="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+              class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
             >
               Open projects in
             </p>
@@ -1254,7 +1154,7 @@
         {:else}
           <FileText size={15} />
         {/if}
-        <span class="header-control-label text-[11px] font-medium">
+        <span class="header-control-label text-[0.6875rem] font-medium">
           {workspaceState.specStudioBusy
             ? workspaceState.specStudioFormulating
               ? 'Formulating…'
@@ -1292,13 +1192,13 @@
           <GitBranch size={13} class="shrink-0" />
         {/if}
         {#if gitState.branch}
-          <span class="min-w-0 flex-1 truncate font-mono text-[10px] font-medium">
+          <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] font-medium">
             {gitState.branch}
           </span>
         {/if}
         {#if gitState.conflicted.length > 0}
           <span
-            class="shrink-0 rounded-full bg-warning px-1.5 text-[9px] font-semibold tabular-nums text-on-primary"
+            class="shrink-0 rounded-full bg-warning px-1.5 text-[0.5625rem] font-semibold tabular-nums text-on-primary"
           >
             {gitState.conflicted.length}
           </span>
@@ -1307,7 +1207,7 @@
         {/if}
         {#if gitState.activePrConflictCount > 0}
           <span
-            class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/15 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-danger"
+            class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-danger"
             title={`${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution`}
           >
             <GitPullRequest size={9} class="shrink-0" />
@@ -1316,7 +1216,7 @@
         {/if}
         {#if gitState.stashes.length > 0}
           <span
-            class="absolute -bottom-1.5 left-2 flex items-center gap-0.5 rounded-full bg-info/15 px-1.5 py-0.5 text-[8px] font-semibold tabular-nums text-info ring-1 ring-info/30"
+            class="absolute -bottom-1.5 left-2 flex items-center gap-0.5 rounded-full bg-info/15 px-1.5 py-0.5 text-[0.5rem] font-semibold tabular-nums text-info ring-1 ring-info/30"
             title={`${gitState.stashes.length} stashed change${gitState.stashes.length === 1 ? '' : 's'}`}
           >
             <Archive size={8} class="shrink-0" />

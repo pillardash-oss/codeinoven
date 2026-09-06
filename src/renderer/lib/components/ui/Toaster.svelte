@@ -2,6 +2,7 @@
   import { Toaster as Sonner, toast } from 'svelte-sonner'
   import { subscribe } from '$lib/ipc.svelte'
   import { onMount } from 'svelte'
+  import { CheckCircle2, AlertTriangle, XCircle, Info } from '@lucide/svelte'
   import MemoryToastComponent from './MemoryToast.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
@@ -63,17 +64,37 @@
   })
 </script>
 
+{#snippet successIcon()}
+  <CheckCircle2 size={15} stroke-width={2.25} />
+{/snippet}
+
+{#snippet warningIcon()}
+  <AlertTriangle size={15} stroke-width={2.25} />
+{/snippet}
+
+{#snippet errorIcon()}
+  <XCircle size={15} stroke-width={2.25} />
+{/snippet}
+
+{#snippet infoIcon()}
+  <Info size={15} stroke-width={2.25} />
+{/snippet}
+
 <Sonner
   position="top-right"
   {theme}
   closeButton
-  richColors
   pauseWhenPageIsHidden
   offset={{ top: '56px' }}
+  {successIcon}
+  {warningIcon}
+  {errorIcon}
+  {infoIcon}
   toastOptions={{
     classes: {
-      toast: 'group toast border shadow-lg rounded-lg',
-      description: 'group-[.toast]:text-muted',
+      toast: 'group toast shadow-lg rounded-lg font-[inherit]',
+      title: 'text-[0.8125rem] font-semibold tracking-tight',
+      description: 'group-[.toast]:text-muted text-xs',
       actionButton: 'group-[.toast]:bg-primary group-[.toast]:text-on-primary',
       cancelButton: 'group-[.toast]:bg-elevated group-[.toast]:text-muted'
     }
@@ -92,47 +113,142 @@
     pointer-events: none;
   }
 
+  /* ─── Layout: [icon] [title] header row, [description] full-width row,
+     [buttons] sharing the bottom row. Selectors match svelte-sonner's
+     internal [data-styled='true'] specificity and use !important because
+     the library's own stylesheet competes in the cascade. ─────────────── */
+  :global([data-sonner-toast]) {
+    flex-wrap: wrap !important;
+    align-items: flex-start !important;
+    gap: 6px !important;
+  }
+
+  /* Dissolve the content wrapper so title and description become direct
+     flex items and can sit on separate rows */
+  :global([data-sonner-toast][data-styled='true'] [data-content]) {
+    display: contents !important;
+  }
+
+  :global([data-sonner-toast][data-styled='true'] [data-title]) {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+  }
+
+  :global([data-sonner-toast][data-styled='true'] [data-description]) {
+    flex: 1 1 100% !important;
+  }
+
+  :global([data-sonner-toast][data-styled='true'] [data-button]) {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    margin-top: 4px !important;
+    justify-content: center !important;
+  }
+
+  /* ─── Normal toasts ─────────────────────────────────────────────────────── */
   :global([data-sonner-toaster][data-sonner-theme='light']) {
     --normal-bg: var(--color-surface) !important;
     --normal-border: var(--color-border) !important;
     --normal-text: var(--color-foreground) !important;
-    --success-bg: color-mix(in srgb, var(--color-success) 12%, var(--color-surface)) !important;
-    --success-border: var(--color-success) !important;
-    --success-text: var(--color-foreground) !important;
-    --error-bg: color-mix(in srgb, var(--color-danger) 12%, var(--color-surface)) !important;
-    --error-border: var(--color-danger) !important;
-    --error-text: var(--color-foreground) !important;
-    --info-bg: color-mix(in srgb, var(--color-info) 12%, var(--color-surface)) !important;
-    --info-border: var(--color-info) !important;
-    --info-text: var(--color-foreground) !important;
-    --warning-bg: color-mix(in srgb, var(--color-warning) 12%, var(--color-surface)) !important;
-    --warning-border: var(--color-warning) !important;
-    --warning-text: var(--color-foreground) !important;
   }
 
   :global([data-sonner-toaster][data-sonner-theme='dark']) {
     --normal-bg: var(--color-surface) !important;
     --normal-border: var(--color-border) !important;
     --normal-text: var(--color-foreground) !important;
-    --success-bg: color-mix(in srgb, var(--color-success) 15%, var(--color-app)) !important;
-    --success-border: color-mix(in srgb, var(--color-success) 35%, var(--color-border)) !important;
-    --success-text: color-mix(
-      in srgb,
-      var(--color-success) 55%,
-      var(--color-foreground)
-    ) !important;
-    --error-bg: color-mix(in srgb, var(--color-danger) 15%, var(--color-app)) !important;
-    --error-border: color-mix(in srgb, var(--color-danger) 35%, var(--color-border)) !important;
-    --error-text: color-mix(in srgb, var(--color-danger) 55%, var(--color-foreground)) !important;
-    --info-bg: color-mix(in srgb, var(--color-info) 12%, var(--color-app)) !important;
-    --info-border: color-mix(in srgb, var(--color-info) 35%, var(--color-border)) !important;
-    --info-text: color-mix(in srgb, var(--color-info) 55%, var(--color-foreground)) !important;
-    --warning-bg: color-mix(in srgb, var(--color-warning) 12%, var(--color-app)) !important;
-    --warning-border: color-mix(in srgb, var(--color-warning) 35%, var(--color-border)) !important;
-    --warning-text: color-mix(
-      in srgb,
-      var(--color-warning) 55%,
-      var(--color-foreground)
-    ) !important;
   }
+
+  /* ─── Branded status toasts ───────────────────────────────────────────────
+     Obsidian / Ivory / Auric system: each status toast keeps the ivory
+     surface but carries a status tint in the background wash, the hairline
+     border, the icon chip and a slim accent bar on the left edge. */
+  :global([data-sonner-toast][data-type='success']),
+  :global([data-sonner-toast][data-type='error']),
+  :global([data-sonner-toast][data-type='warning']),
+  :global([data-sonner-toast][data-type='info']) {
+    --status: transparent;
+    position: relative;
+  }
+
+  :global([data-sonner-toast][data-type='success']) {
+    --status: var(--color-success);
+  }
+
+  :global([data-sonner-toast][data-type='error']) {
+    --status: var(--color-danger);
+  }
+
+  :global([data-sonner-toast][data-type='warning']) {
+    --status: var(--color-warning);
+  }
+
+  :global([data-sonner-toast][data-type='info']) {
+    --status: var(--color-info);
+  }
+
+  :global(
+    [data-sonner-toast][data-type='success'],
+    [data-sonner-toast][data-type='error'],
+    [data-sonner-toast][data-type='warning'],
+    [data-sonner-toast][data-type='info']
+  ) {
+    background:
+      linear-gradient(
+        to right,
+        color-mix(in srgb, var(--status) 16%, transparent),
+        color-mix(in srgb, var(--status) 7%, transparent) 60%,
+        color-mix(in srgb, var(--status) 4%, transparent)
+      ),
+      var(--color-surface) !important;
+    border: 1px solid color-mix(in srgb, var(--status) 55%, var(--color-border)) !important;
+    /* Real border instead of a ::before bar — it can never detach or escape
+       the toast during drag, dismissal or scale transitions. */
+    border-left: 3px solid var(--status) !important;
+    box-shadow:
+      0 4px 16px -4px color-mix(in srgb, var(--status) 25%, transparent),
+      0 2px 8px -2px rgba(0, 0, 0, 0.12) !important;
+    color: var(--color-foreground) !important;
+  }
+
+  /* Status-colored title — the colour reads before the words do */
+  :global(
+    [data-sonner-toast][data-type='success'] [data-title],
+    [data-sonner-toast][data-type='error'] [data-title],
+    [data-sonner-toast][data-type='warning'] [data-title],
+    [data-sonner-toast][data-type='info'] [data-title]
+  ) {
+    color: color-mix(in srgb, var(--status) 78%, var(--color-foreground)) !important;
+  }
+
+  /* Status-colored close button for instant recognition */
+  :global(
+    [data-sonner-toast][data-type='success'] [data-close-button],
+    [data-sonner-toast][data-type='error'] [data-close-button],
+    [data-sonner-toast][data-type='warning'] [data-close-button],
+    [data-sonner-toast][data-type='info'] [data-close-button]
+  ) {
+    color: color-mix(in srgb, var(--status) 70%, var(--color-dimmed)) !important;
+    background: color-mix(in srgb, var(--status) 10%, transparent) !important;
+    border-radius: 999px !important;
+    width: 1.25rem !important;
+    height: 1.25rem !important;
+    display: grid !important;
+    place-items: center !important;
+  }
+
+  /* Icon chip: tinted circle behind the status icon */
+  :global([data-sonner-toast] [data-icon]) {
+    background: color-mix(in srgb, var(--status) 22%, transparent);
+    color: var(--status);
+    border-radius: 999px;
+    width: 1.75rem;
+    height: 1.75rem;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    align-self: flex-start;
+    margin-top: 1px;
+  }
+
+  /* Close button inherits the status colour subtly */
 </style>

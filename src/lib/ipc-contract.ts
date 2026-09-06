@@ -5,6 +5,7 @@ import type {
   AgentRole,
   AgentSessionStatus,
   AgentRunningProcess,
+  TaskManagerSnapshot,
   AssignmentModelSelection,
   AssignmentPlan,
   AssignmentPlanContent,
@@ -132,6 +133,9 @@ import type {
   ScopeCreateInput,
   ScopeLifecycleAction,
   ScopeLifecyclePreflight,
+  ScopeMergeMode,
+  ScopeMergeOutcome,
+  ScopeMergePreflight,
   ScopeTarget,
   ScopeWorktreeCreateInput,
   ScopeWorktreeDefaults,
@@ -151,6 +155,7 @@ import type {
   Thread,
   ThreadContextUsage,
   AgentAccountUsage,
+  AgentAccountUsageOverrides,
   AttachmentStorageScope,
   ThreadMessageCursor,
   ThreadMessagePage,
@@ -267,6 +272,15 @@ export interface BrowserPermissionRequest {
   permission: string
   mediaTypes: string[]
 }
+
+/**
+ * How the user answered a browser permission prompt.
+ * - `allow`: grant for this origin+permission for the app session (remembered).
+ * - `allow-once`: grant only the request at hand; the next request re-prompts.
+ * - `deny`: refuse and remember the denial so future requests auto-deny.
+ * - `dismiss`: refuse only this request (e.g. closing the modal) without remembering.
+ */
+export type BrowserPermissionDecision = 'allow' | 'allow-once' | 'deny' | 'dismiss'
 
 export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
 
@@ -784,6 +798,14 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, request: AuditGenerationRequest],
     AuditReport
   >
+  'agent:generateIndependentAudit': Contract<
+    [projectId: string, threadId: string, request: AuditGenerationRequest],
+    { report: AuditReport; auditorThread: Thread }
+  >
+  'agent:ensureIndependentAuditorThread': Contract<
+    [projectId: string, threadId: string, settings: ThreadSettings],
+    Thread
+  >
   'agent:ensureImplementationAuditorThread': Contract<
     [projectId: string, coordinatorThreadId: string, settings: ThreadSettings],
     Thread
@@ -862,7 +884,13 @@ export interface IpcInvokeContract {
   'agent:listProviders': Contract<[projectId: string], ProviderCatalog[]>
   'agent:listProviderSnapshot': Contract<[projectId: string], ProviderCatalog[]>
   'agent:refreshProviderCatalog': Contract<[projectId: string, force?: boolean], ProviderCatalog[]>
-  'agent:refreshAccountUsage': Contract<[projectId: string, threadId: string], AgentAccountUsage[]>
+  'agent:refreshAccountUsage': Contract<[overrides?: AgentAccountUsageOverrides], AgentAccountUsage[]>
+  /** Redeem one banked Codex rate-limit reset credit. Destructive: resets the
+   *  account's active usage windows and consumes one banked credit. */
+  'agent:activateBankedReset': Contract<
+    [projectId: string, threadId: string],
+    AgentAccountUsage | null
+  >
   'agent:getHarnessAuthStatus': Contract<[projectId: string, harnessId: string], boolean | null>
   'agent:listTools': Contract<
     [
@@ -882,6 +910,8 @@ export interface IpcInvokeContract {
   'agent:listProcesses': Contract<[projectId: string, threadId: string], AgentRunningProcess[]>
   'agent:killProcess': Contract<[projectId: string, threadId: string, pid: number], void>
   'agent:killThreadProcesses': Contract<[projectId: string, threadId: string], void>
+  'taskManager:list': Contract<[], TaskManagerSnapshot>
+  'taskManager:killProcess': Contract<[pid: number, force: boolean], void>
   'capabilities:readSkill': Contract<[source: AgentCapabilitySource], NativeSkillContent | null>
   'capabilities:updateSkill': Contract<
     [source: AgentCapabilitySource, instructions: string],
@@ -918,7 +948,8 @@ export interface IpcInvokeContract {
       threadId: string,
       requestId: string,
       action: ImageDescriptorReplyAction,
-      selection?: AgentModelSelection
+      selection?: AgentModelSelection,
+      imagePath?: string
     ],
     void
   >
@@ -1022,6 +1053,19 @@ export interface IpcInvokeContract {
    */
   'agent:deleteMessages': Contract<
     [projectId: string, threadId: string, messageId: string, mode: 'down' | 'single' | 'up'],
+    AgentMessage[]
+  >
+  /** Delete history around a message inside a temporary side chat. Same mode
+   *  semantics as `agent:deleteMessages`; the isolated harness session is
+   *  replaced so the removed span can never reappear. */
+  'agent:deleteTemporaryMessages': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      temporaryChatId: string,
+      messageId: string,
+      mode: 'down' | 'single' | 'up'
+    ],
     AgentMessage[]
   >
   'agent:discardSteer': Contract<[projectId: string, threadId: string, messageId: string], void>
@@ -1336,6 +1380,7 @@ export interface IpcInvokeContract {
   'git:commit': Contract<[projectId: string, message: string, scopeBucketId?: string], GitStatus>
   'git:init': Contract<[projectId: string, scopeBucketId?: string], GitStatus>
   'git:branches': Contract<[projectId: string, scopeBucketId?: string], GitBranchInfo[]>
+  'git:defaultBranch': Contract<[projectId: string, scopeBucketId?: string], string | null>
   'git:checkout': Contract<[projectId: string, branch: string, scopeBucketId?: string], GitStatus>
   'git:createBranch': Contract<[projectId: string, name: string, scopeBucketId?: string], GitStatus>
   'git:createTrackingBranch': Contract<
@@ -1383,6 +1428,10 @@ export interface IpcInvokeContract {
     [projectId: string, name: string, url: string, scopeBucketId?: string],
     GitRemoteInfo[]
   >
+  'git:setRemoteUrl': Contract<
+    [projectId: string, name: string, url: string, scopeBucketId?: string],
+    GitRemoteInfo[]
+  >
   'git:removeRemote': Contract<
     [projectId: string, name: string, scopeBucketId?: string],
     GitRemoteInfo[]
@@ -1419,6 +1468,10 @@ export interface IpcInvokeContract {
   'git:merge': Contract<[projectId: string, target: string, scopeBucketId?: string], MergeSummary>
   'git:rebase': Contract<[projectId: string, target: string, scopeBucketId?: string], MergeSummary>
   'git:preparePrResolve': Contract<
+    [projectId: string, options: PrResolveOptions, scopeBucketId?: string],
+    GitStatus
+  >
+  'git:finishPrResolve': Contract<
     [projectId: string, options: PrResolveOptions, scopeBucketId?: string],
     GitStatus
   >
@@ -1798,10 +1851,25 @@ export interface IpcInvokeContract {
     [target: ScopeTarget, confirmationId: string],
     void
   >
+  /** Fully delete a managed scope: worktree, bucket, and optionally branch. */
+  'scope:worktree:confirmDeleteScope': Contract<
+    [target: ScopeTarget, confirmationId: string, deleteBranch: boolean],
+    void
+  >
   /** Retry a failed/interrupted setup from its failed command. */
   'scope:worktree:retrySetup': Contract<
     [target: ScopeTarget, options: { runSetup: boolean }],
     ManagedWorktreeDescriptor
+  >
+  /** Preflight merging a managed scope into another scope and mint a token. */
+  'scope:worktree:mergePreflight': Contract<
+    [target: ScopeTarget, mergeTarget: ScopeTarget, mode: ScopeMergeMode],
+    ScopeMergePreflight
+  >
+  /** Consume a merge token to merge a scope and apply its post-merge mode. */
+  'scope:worktree:confirmMerge': Contract<
+    [target: ScopeTarget, mergeTarget: ScopeTarget, mode: ScopeMergeMode, confirmationId: string],
+    ScopeMergeOutcome
   >
   /** Update project-level managed-worktree defaults. */
   'scope:setWorktreeDefaults': Contract<
@@ -1910,7 +1978,8 @@ export interface IpcInvokeContract {
   >
   'projectFiles:read': Contract<
     [projectId: string, relativePath: string, scopeBucketId?: string],
-    ProjectTextFile
+    /** null when the file cannot be read as text (binary, too large, missing). */
+    ProjectTextFile | null
   >
   'projectFiles:rename': Contract<
     [projectId: string, relativePath: string, name: string, scopeBucketId?: string],
@@ -2034,7 +2103,14 @@ export interface IpcInvokeContract {
   'computerUse:pipBringToFront': Contract<[], void>
   'computerUse:pipDismiss': Contract<[], void>
   'pty:create': Contract<
-    [id: string, projectId: string, columns: number, rows: number, scopeBucketId?: string],
+    [
+      id: string,
+      projectId: string,
+      threadId: string,
+      columns: number,
+      rows: number,
+      scopeBucketId?: string
+    ],
     { id: string; pid: number }
   >
   'pty:createCommand': Contract<
@@ -2045,6 +2121,7 @@ export interface IpcInvokeContract {
     [
       id: string,
       projectId: string,
+      threadId: string,
       script: string,
       variables: Record<string, string>,
       columns: number,
@@ -2059,7 +2136,8 @@ export interface IpcInvokeContract {
     [
       projectId: string,
       actionId: string | null,
-      input: import('./project-actions').ProjectActionInput
+      input: import('./project-actions').ProjectActionInput,
+      insertAfterId?: string | null
     ],
     import('./project-actions').ProjectAction
   >
@@ -2098,7 +2176,10 @@ export interface IpcInvokeContract {
   'browser:getConsole': Contract<[tabId: string], BrowserConsoleEntry[]>
   'browser:clearConsole': Contract<[tabId: string], void>
   'browser:clearData': Contract<[projectId: string], void>
-  'browser:resolvePermission': Contract<[requestId: string, granted: boolean], void>
+  'browser:resolvePermission': Contract<
+    [requestId: string, decision: BrowserPermissionDecision],
+    void
+  >
   'browser:destroy': Contract<[tabId: string], void>
   'browser:destroyThread': Contract<[projectId: string, threadId: string], void>
   'browser:destroyProject': Contract<[projectId: string], void>
@@ -2284,6 +2365,7 @@ export interface IpcInvokeContract {
     AuditReport
   >
   'audit:complete': Contract<[projectId: string, threadId: string], Thread>
+  'audit:dismiss': Contract<[projectId: string, threadId: string], Thread>
   'audit:beginRework': Contract<[projectId: string, threadId: string], Thread>
   'audit:returnToOffer': Contract<[projectId: string, threadId: string], AssignmentPlan>
   'audit:openInEditor': Contract<
@@ -2335,6 +2417,20 @@ export interface IpcInvokeContract {
   /** Paged history for an explicit older-task request. */
   'thread:listHistoryPage': Contract<
     [options: { projectId?: string; limit?: number; offset?: number }],
+    Thread[]
+  >
+  /**
+   * Bounded per-project recent threads for first-paint hydration: at most
+   * `RECENT_THREADS_PER_PROJECT` per project, with the inbox (Chats) project
+   * capped at its configured thread_limit instead.
+   */
+  'thread:listRecentPerProject': Contract<[], Thread[]>
+  /**
+   * Paged threads for one project; the project filter is applied in SQL
+   * before the limit so "load more" reaches older rows reliably.
+   */
+  'thread:listProjectPage': Contract<
+    [options: { projectId: string; limit?: number; offset?: number }],
     Thread[]
   >
   'thread:reorder': Contract<[projectId: string, orderedIds: string[]], Thread[]>
@@ -2401,6 +2497,11 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, settings: ThreadSettings],
     Thread
   >
+  /** Enable/disable the independent (spec-less) audit; never inherited by forks. */
+  'thread:setIndependentAudit': Contract<
+    [projectId: string, threadId: string, enabled: boolean],
+    Thread
+  >
   'updater:check': Contract<[explicit?: boolean], UpdaterStatus>
   'updater:getStatus': Contract<[], UpdaterStatus>
   'updater:download': Contract<[], void>
@@ -2438,6 +2539,10 @@ export interface IpcInvokeContract {
 export interface ThreadClickedPayload {
   projectId: string
   threadId: string
+  /** Present when the click came from a temporary (side) chat notification, so
+   *  the renderer can focus the side-chat panel after opening the parent
+   *  thread. Omitted for regular thread notifications. */
+  temporaryChatId?: string
 }
 
 /** One thread still being worked on, blocking the close. */
@@ -2592,6 +2697,7 @@ export interface IpcEventContract {
   /** Emitted after browser sign-in changes the shared desktop account. */
   'account:profileChanged': [state: import('./types').AccountProfileState]
   'agent:processesChanged': [projectId: string, threadId: string]
+  'taskManager:processesChanged': []
   'agent:temporaryChatExpired': [temporaryChatId: string]
   'thread:deleted': [projectId: string, threadId: string]
   /** Note presence changed for a thread (saved or deleted). */
@@ -2622,6 +2728,17 @@ export interface IpcEventContract {
    * panel — right sidebar or bottom dock, whichever is active.
    */
   'window:newTerminalShortcut': []
+  /**
+   * Emitted when the user presses the mouse's back side button. Windows and
+   * Linux surface it as the `browser-backward` app command in the main process;
+   * the main process forwards it here so the renderer can walk its own
+   * in-app navigation history (the window has no native browser history).
+   * On macOS the renderer instead sees a raw `mousedown`/`auxclick` with
+   * button 3 — handled directly in App.svelte.
+   */
+  'window:historyBack': []
+  /** Emitted when the user presses the mouse's forward side button. */
+  'window:historyForward': []
   'updater:status': [status: UpdaterStatus]
   'updater:waiting-for-threads': [activeCount: number]
   'computerUse:pipFrame': [frame: ComputerUsePipFrame]

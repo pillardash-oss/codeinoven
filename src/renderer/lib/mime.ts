@@ -135,12 +135,12 @@ const CSV_EXTENSION_PATTERN = /\.(?:csv|tsv)$/iu
 
 /** The kind of inline preview a chat attachment supports, or `null` when the
  *  file type has no renderer (images render as `<img>`, PDF and converted
- *  document content (DOCX, DOC, ODT, PPTX) in isolated frames, video/audio via
- *  the native media elements, markdown via `MarkdownView`, plain text raw, CSV
- *  as a table). Filename extensions provide a fallback for files whose reported
- *  mime is `application/octet-stream` or empty. */
+ *  document content (DOCX, DOC, ODT, PPTX, XLSX, XLS, ODS, CSV/TSV) in
+ *  isolated frames, video/audio via the native media elements, markdown via
+ *  `MarkdownView`, plain text raw). Filename extensions provide a fallback for
+ *  files whose reported mime is `application/octet-stream` or empty. */
 export type AttachmentPreviewKind =
-  'image' | 'pdf' | 'document' | 'video' | 'audio' | 'markdown' | 'text' | 'csv'
+  'image' | 'pdf' | 'document' | 'video' | 'audio' | 'markdown' | 'text'
 
 export function attachmentPreviewKind(
   mime: string,
@@ -155,7 +155,10 @@ export function attachmentPreviewKind(
     mime === 'application/msword' ||
     mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
     mime === 'application/vnd.oasis.opendocument.text' ||
-    /\.(?:docx|doc|odt|pptx)$/iu.test(filename)
+    mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mime === 'application/vnd.ms-excel' ||
+    mime === 'application/vnd.oasis.opendocument.spreadsheet' ||
+    /\.(?:docx|doc|odt|pptx|xlsx|xls|ods)$/iu.test(filename)
   ) {
     return 'document'
   }
@@ -164,7 +167,7 @@ export function attachmentPreviewKind(
     mime === 'text/tab-separated-values' ||
     CSV_EXTENSION_PATTERN.test(filename)
   ) {
-    return 'csv'
+    return 'document'
   }
   if (isMarkdownMime(mime) || /\.(?:md|mdown|markdown)$/iu.test(filename)) return 'markdown'
   if (isPlainTextMime(mime) || TEXT_EXTENSION_PATTERN.test(filename)) return 'text'
@@ -176,4 +179,29 @@ export function isDocMime(mime: string): boolean {
     mime.startsWith('application/vnd.openxmlformats-officedocument') ||
     mime === 'application/msword'
   )
+}
+
+const DOCUMENT_PREVIEW_EXTENSION_PATTERN = /\.(?:docx|doc|odt|pptx|xlsx|xls|ods|csv|tsv)$/iu
+
+/** True when the mime is one of the converted-document preview types (Office
+ *  documents and delimited data). Such files must never be loaded as text. */
+export function isDocumentPreviewMime(mime: string): boolean {
+  return (
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mime === 'application/msword' ||
+    mime === 'application/vnd.oasis.opendocument.text' ||
+    mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+    mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mime === 'application/vnd.ms-excel' ||
+    mime === 'application/vnd.oasis.opendocument.spreadsheet' ||
+    mime === 'text/csv' ||
+    mime === 'text/tab-separated-values'
+  )
+}
+
+/** True when the project-relative path can be rendered as converted document
+ *  HTML in the files panel (Office documents and delimited data). Conversion
+ *  runs in the main process via `file:readDocumentPreview`. */
+export function isDocumentPreviewPath(path: string): boolean {
+  return DOCUMENT_PREVIEW_EXTENSION_PATTERN.test(path)
 }

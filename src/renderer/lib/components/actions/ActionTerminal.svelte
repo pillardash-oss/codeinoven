@@ -5,12 +5,13 @@
   interface Props {
     terminalId: string
     projectId: string
+    threadId: string
     script: string
     variables: Record<string, string>
     scopeBucketId?: string
   }
 
-  let { terminalId, projectId, script, variables, scopeBucketId }: Props = $props()
+  let { terminalId, projectId, threadId, script, variables, scopeBucketId }: Props = $props()
   let error = $state<string | null>(null)
 
   const attachTerminal: Attachment<HTMLDivElement> = (container) => {
@@ -22,6 +23,7 @@
           session,
           container,
           projectId,
+          threadId,
           script,
           variables,
           scopeBucketId

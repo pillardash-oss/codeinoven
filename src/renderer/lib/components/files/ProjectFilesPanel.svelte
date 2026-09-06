@@ -9,12 +9,14 @@
     Code2,
     Eye,
     FileDiff,
+    FileQuestion,
     FolderTree,
     FolderOpen,
     Loader2,
     Minimize2,
     Save
   } from '@lucide/svelte'
+  import { documentPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
@@ -23,7 +25,14 @@
     ConflictResolutionStatus
   } from './conflict-resolution'
   import { motionDuration } from '$lib/motion'
-  import { isAudioMime, isImageMime, isSvgMime, isVideoMime, mimeFromPath } from '$lib/mime'
+  import {
+    isAudioMime,
+    isImageMime,
+    isSvgMime,
+    isVideoMime,
+    mimeFromPath,
+    isDocumentPreviewPath
+  } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -46,6 +55,7 @@
   import ProjectFileViewerMenu from './ProjectFileViewerMenu.svelte'
   import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
   import type { ProjectTextFile } from '$shared/types'
+  import type { ProjectFileInfo } from '$lib/types'
 
   interface Props {
     projectId: string
@@ -126,8 +136,8 @@
       activeTab.path,
       workspaceState.activeScopeBucketIdFor(projectId)
     )
-      .then((source: ProjectTextFile) => {
-        if (cancelled) return
+      .then((source: ProjectTextFile | null) => {
+        if (cancelled || !source) return
         const url = URL.createObjectURL(new Blob([source.content], { type: 'image/svg+xml' }))
         svgPreviewUrl = url
       })
@@ -146,6 +156,96 @@
   })
   let imagePreviewSrc = $derived(svg ? svgPreviewUrl : previewUrl)
   let imagePreviewFailed = $derived(svg ? svgPreviewFailed : false)
+  /** Office/CSV documents render as sanitized converted HTML (no PDF path). */
+  let documentPreview = $derived(activeTab ? isDocumentPreviewPath(activeTab.path) : false)
+  let documentHtml = $state<string | null>(null)
+  let documentLoading = $state(false)
+  let documentFailed = $state(false)
+  /** Human-readable reason when a preview fails — surfaced in the pane. */
+  let documentError = $state<string | null>(null)
+  /** Path whose HTML is currently loaded — guards against tab swaps. */
+  let documentHtmlPath = $state<string | null>(null)
+  /** Path whose HTML is currently being fetched — guards against effect
+   *  re-runs (driven by `activeTab` reference churn) starting duplicate IPC
+   *  chains that would otherwise cancel or pile on top of each other.
+   *  Deliberately NOT `$state`: the effect both reads and writes it, so a
+   *  reactive variable here would re-trigger the effect on its own write
+   *  (effect_update_depth_exceeded) — same reason the previous run token was
+   *  a plain `let`. Only the async callbacks consult it after each run. */
+  let documentInFlightPath: string | null = null
+  /** Monotonic ownership token, incremented only when a new chain actually
+   *  starts. Lets stale callbacks tell themselves apart from the current
+   *  chain without participating in reactivity. */
+  let documentEffectToken = 0
+  /** Scope bucket is read as a derived value OUTSIDE the effect: the getter
+   *  touches `workspaceState.selectedThread`, which is reassigned on every
+   *  thread update. Reading it inside the effect would re-run (and cancel)
+   *  the preview load on each thread churn, leaving `documentLoading` stuck
+   *  true — the infinite spinner. */
+  let documentScopeBucketId = $derived(workspaceState.activeScopeBucketIdFor(projectId))
+  $effect(() => {
+    if (!activeTab || !documentPreview || activeTab.view !== 'preview') {
+      documentHtml = null
+      documentHtmlPath = null
+      documentInFlightPath = null
+      documentFailed = false
+      documentError = null
+      documentLoading = false
+      return
+    }
+    const path = activeTab.path
+    // Bail if this path is already loaded OR already being fetched — the
+    // in-flight chain settles its own state. Without the in-flight guard,
+    // every `activeTab` reference change restarts the chain and the previous
+    // one never gets to clear `documentLoading` — the infinite spinner.
+    if (documentHtmlPath === path || documentInFlightPath === path) return
+    documentInFlightPath = path
+    const token = ++documentEffectToken
+    documentLoading = true
+    documentFailed = false
+    documentError = null
+    // `file:readDocumentPreview` requires an absolute path, but the tab only
+    // carries a project-relative path (which may live inside a managed worktree
+    // scope). Resolve the authoritative absolute path through main first.
+    const scopeBucketId = documentScopeBucketId
+    // Hard cap: a hung IPC chain must never leave the spinner spinning forever.
+    const timeout = setTimeout(() => {
+      if (token !== documentEffectToken) return
+      documentHtml = null
+      documentHtmlPath = path
+      documentInFlightPath = null
+      documentFailed = true
+      documentError = 'Document preview timed out'
+      documentLoading = false
+    }, 15000)
+    void invoke('projectFiles:info', projectId, path, scopeBucketId)
+      .then((info: ProjectFileInfo) => invoke('file:readDocumentPreview', info.absolutePath))
+      .then((html: string | null) => {
+        if (token !== documentEffectToken) return
+        // documentPreviewFrame sanitizes and wraps the raw converter HTML in
+        // a styled page (white "paper" surface) so the preview matches the
+        // chat-attachment document preview instead of rendering transparent.
+        documentHtml = html ? documentPreviewFrame(html) : null
+        documentHtmlPath = path
+        documentInFlightPath = null
+        documentFailed = html === null
+        documentError = html === null ? 'The document could not be converted for preview' : null
+      })
+      .catch((error: unknown) => {
+        if (token !== documentEffectToken) return
+        documentHtml = null
+        documentHtmlPath = path
+        documentInFlightPath = null
+        documentFailed = true
+        documentError = error instanceof Error ? error.message : String(error)
+      })
+      .finally(() => {
+        clearTimeout(timeout)
+        // Only the current chain may settle the spinner; a stale chain that
+        // lands after a newer load started must leave it alone.
+        if (token === documentEffectToken) documentLoading = false
+      })
+  })
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')
   let visibleContent = $derived(
     deletedAtCheckpoint ? historicalContent : (activeSession?.draft ?? historicalContent)
@@ -462,7 +562,7 @@
     >
       <div class="flex h-10 shrink-0 items-center gap-1 border-b border-border px-2">
         <div
-          class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto text-[10px] text-muted"
+          class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto text-[0.625rem] text-muted"
           aria-label={activeTab ? `Path ${activeTab.path}` : 'No file selected'}
         >
           <button
@@ -533,7 +633,7 @@
           >
             <FileDiff size={12} />
           </button>
-          {#if markdown || pdf || image || video || audio}
+          {#if markdown || pdf || image || video || audio || documentPreview}
             <button
               type="button"
               class={[
@@ -548,9 +648,11 @@
                   ? 'Preview video'
                   : audio
                     ? 'Preview audio'
-                    : image
-                      ? 'Preview image'
-                      : 'Preview Markdown'}
+                    : documentPreview
+                      ? 'Preview document'
+                      : image
+                        ? 'Preview image'
+                        : 'Preview Markdown'}
               aria-pressed={activeTab.view === 'preview'}
               title={pdf
                 ? 'PDF preview'
@@ -558,9 +660,11 @@
                   ? 'Video preview'
                   : audio
                     ? 'Audio preview'
-                    : image
-                      ? 'Image preview'
-                      : 'Markdown preview'}
+                    : documentPreview
+                      ? 'Document preview'
+                      : image
+                        ? 'Image preview'
+                        : 'Markdown preview'}
               onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'preview')}
             >
               <Eye size={12} />
@@ -582,18 +686,19 @@
             <Code2 size={12} />
           </button>
           {#if deletedAtCheckpoint}
-            <span class="ml-1 text-[9px] font-medium text-danger">Deleted · read-only</span>
+            <span class="ml-1 text-[0.5625rem] font-medium text-danger">Deleted · read-only</span>
           {/if}
           {#if diffStats}
             <span
-              class="ml-1 font-mono text-[10px] tabular-nums text-success"
+              class="ml-1 font-mono text-[0.625rem] tabular-nums text-success"
               aria-label="Added lines">+{diffStats.additions}</span
             >
-            <span class="font-mono text-[10px] tabular-nums text-danger" aria-label="Deleted lines"
-              >−{diffStats.deletions}</span
+            <span
+              class="font-mono text-[0.625rem] tabular-nums text-danger"
+              aria-label="Deleted lines">−{diffStats.deletions}</span
             >
             {#if checkpointDiff?.truncated}
-              <span class="text-[9px] text-warning" title="Preview truncated at 64 KiB"
+              <span class="text-[0.5625rem] text-warning" title="Preview truncated at 64 KiB"
                 >Truncated</span
               >
             {/if}
@@ -619,7 +724,7 @@
           {#if activeTab.view !== 'diff'}
             <button
               type="button"
-              class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+              class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
               disabled={deletedAtCheckpoint ||
                 (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
                 (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
@@ -641,7 +746,7 @@
 
       {#if activeSession?.error}
         <div
-          class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-2 text-[10px] leading-relaxed text-danger"
+          class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-2 text-[0.625rem] leading-relaxed text-danger"
         >
           {activeSession.error}
         </div>
@@ -675,11 +780,11 @@
           <div class="text-center">
             <FolderOpen size={24} class="mx-auto mb-2 text-dimmed" />
             <p class="text-xs font-medium text-foreground">Open file</p>
-            <p class="mt-1 text-[10px] text-dimmed">Select a file from the workspace tree.</p>
+            <p class="mt-1 text-[0.625rem] text-dimmed">Select a file from the workspace tree.</p>
             {#if !projectState.explorerVisible}
               <button
                 type="button"
-                class="mt-3 rounded border border-border bg-elevated px-3 py-1.5 text-[10px] font-medium text-foreground hover:bg-overlay"
+                class="mt-3 rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-foreground hover:bg-overlay"
                 onclick={() => projectFilesWorkspace.toggleExplorer(projectId)}
               >
                 Show explorer
@@ -691,12 +796,12 @@
         <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6">
           <div class="max-w-sm text-center">
             <p class="text-xs font-medium text-danger">The diff could not be loaded</p>
-            <p class="mt-1 text-[10px] leading-4 text-dimmed">{activeTab.error}</p>
+            <p class="mt-1 text-[0.625rem] leading-4 text-dimmed">{activeTab.error}</p>
           </div>
           {#if activeTab.checkpointId}
             <button
               type="button"
-              class="rounded border border-border bg-elevated px-3 py-1.5 text-[10px] font-medium text-muted hover:bg-overlay hover:text-foreground"
+              class="rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
               onclick={() =>
                 activeTab?.checkpointId &&
                 void projectFilesWorkspace.openCheckpointFile(
@@ -711,7 +816,7 @@
           {/if}
         </div>
       {:else if activeTab.loadingDiff && !checkpointDiff}
-        <div class="flex flex-1 items-center justify-center gap-2 text-[11px] text-dimmed">
+        <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
           <Loader2 size={13} class="animate-spin" />
           Loading diff
         </div>
@@ -731,12 +836,41 @@
             ></iframe>
           {/if}
         </div>
+      {:else if activeTab.view === 'preview' && documentPreview}
+        <div class="min-h-0 flex-1 overflow-auto bg-surface">
+          {#if documentLoading}
+            <div class="flex h-full items-center justify-center gap-2 text-dimmed" role="status">
+              <Loader2 size={16} class="animate-spin" />
+              <span class="sr-only">Loading document preview</span>
+            </div>
+          {:else if documentHtml}
+            <iframe
+              srcdoc={documentHtml}
+              sandbox=""
+              class="h-full w-full border-0"
+              title={`Preview ${activeTab.path}`}
+            ></iframe>
+          {:else if documentFailed}
+            <div
+              class="flex h-full flex-col items-center justify-center gap-2 text-dimmed"
+              role="status"
+            >
+              <FileQuestion size={24} />
+              <span class="text-xs">This document could not be previewed</span>
+              {#if documentError}
+                <span class="max-w-md text-center text-[0.625rem] break-words text-danger">
+                  {documentError}
+                </span>
+              {/if}
+            </div>
+          {/if}
+        </div>
       {:else if activeTab.view === 'preview' && image}
         <FileImagePreview src={imagePreviewSrc} alt={activeTab.path} failed={imagePreviewFailed} />
       {:else if activeTab.view === 'preview' && (video || audio)}
         <FileMediaPreview src={previewUrl} alt={activeTab.path} kind={video ? 'video' : 'audio'} />
       {:else if projectState.loadingPaths[activeTab.path] && !activeSession && !deletedAtCheckpoint}
-        <div class="flex flex-1 items-center justify-center gap-2 text-[11px] text-dimmed">
+        <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
           <Loader2 size={13} class="animate-spin" />
           Loading file
         </div>
@@ -757,11 +891,11 @@
           <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6">
             <div class="text-center">
               <p class="text-xs font-medium text-dimmed">This file cannot be viewed here</p>
-              <p class="mt-1 text-[10px] text-dimmed">You can open it with your editor.</p>
+              <p class="mt-1 text-[0.625rem] text-dimmed">You can open it with your editor.</p>
             </div>
             <button
               type="button"
-              class="rounded border border-border bg-elevated px-3 py-1.5 text-[10px] font-medium text-muted hover:text-foreground"
+              class="rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted hover:text-foreground"
               onclick={openSelectedInEditor}
             >
               Open in editor
@@ -843,7 +977,7 @@
         {#if activeTab?.view !== 'diff'}
           <button
             type="button"
-            class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+            class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
             disabled={deletedAtCheckpoint ||
               (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
               (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
@@ -901,7 +1035,7 @@
           >
             <FileDiff size={12} />
           </button>
-          {#if markdown || pdf || image || video || audio}
+          {#if markdown || pdf || image || video || audio || documentPreview}
             <button
               type="button"
               class={[
@@ -916,9 +1050,11 @@
                   ? 'Preview video'
                   : audio
                     ? 'Preview audio'
-                    : image
-                      ? 'Preview image'
-                      : 'Preview Markdown'}
+                    : documentPreview
+                      ? 'Preview document'
+                      : image
+                        ? 'Preview image'
+                        : 'Preview Markdown'}
               aria-pressed={activeTab.view === 'preview'}
               title={pdf
                 ? 'PDF preview'
@@ -926,9 +1062,11 @@
                   ? 'Video preview'
                   : audio
                     ? 'Audio preview'
-                    : image
-                      ? 'Image preview'
-                      : 'Markdown preview'}
+                    : documentPreview
+                      ? 'Document preview'
+                      : image
+                        ? 'Image preview'
+                        : 'Markdown preview'}
               onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'preview')}
             >
               <Eye size={12} />
@@ -950,18 +1088,19 @@
             <Code2 size={12} />
           </button>
           {#if deletedAtCheckpoint}
-            <span class="ml-1 text-[9px] font-medium text-danger">Deleted · read-only</span>
+            <span class="ml-1 text-[0.5625rem] font-medium text-danger">Deleted · read-only</span>
           {/if}
           {#if diffStats}
             <span
-              class="ml-1 font-mono text-[10px] tabular-nums text-success"
+              class="ml-1 font-mono text-[0.625rem] tabular-nums text-success"
               aria-label="Added lines">+{diffStats.additions}</span
             >
-            <span class="font-mono text-[10px] tabular-nums text-danger" aria-label="Deleted lines"
-              >−{diffStats.deletions}</span
+            <span
+              class="font-mono text-[0.625rem] tabular-nums text-danger"
+              aria-label="Deleted lines">−{diffStats.deletions}</span
             >
             {#if checkpointDiff?.truncated}
-              <span class="text-[9px] text-warning" title="Preview truncated at 64 KiB"
+              <span class="text-[0.5625rem] text-warning" title="Preview truncated at 64 KiB"
                 >Truncated</span
               >
             {/if}
@@ -1029,6 +1168,33 @@
                   class="h-full w-full border-0"
                   title={`Preview ${activeTab.path}`}
                 ></iframe>
+              {/if}
+            </div>
+          {:else if activeTab?.view === 'preview' && documentPreview}
+            <div class="min-h-0 flex-1 overflow-auto bg-surface">
+              {#if documentLoading}
+                <div
+                  class="flex h-full items-center justify-center gap-2 text-dimmed"
+                  role="status"
+                >
+                  <Loader2 size={16} class="animate-spin" />
+                  <span class="sr-only">Loading document preview</span>
+                </div>
+              {:else if documentHtml}
+                <iframe
+                  srcdoc={documentHtml}
+                  sandbox=""
+                  class="h-full w-full border-0"
+                  title={`Preview ${activeTab.path}`}
+                ></iframe>
+              {:else if documentFailed}
+                <div
+                  class="flex h-full flex-col items-center justify-center gap-2 text-dimmed"
+                  role="status"
+                >
+                  <FileQuestion size={24} />
+                  <span class="text-xs">This document could not be previewed</span>
+                </div>
               {/if}
             </div>
           {:else if activeTab?.view === 'preview' && image}

@@ -306,10 +306,10 @@
   )
   let modelButtonClasses = $derived(
     variant === 'field'
-      ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-sm text-muted transition-colors hover:text-foreground'
+      ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-[0.6875rem] text-muted transition-colors hover:text-foreground'
       : variant === 'action'
         ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-xs font-semibold text-muted transition-colors hover:text-foreground'
-        : 'flex min-w-0 flex-1 items-center gap-1 px-2 py-1.5 text-[11px] text-muted transition-colors hover:text-foreground'
+        : 'flex min-w-0 flex-1 items-center gap-1 px-2 py-1.5 text-[0.6875rem] text-muted transition-colors hover:text-foreground'
   )
 
   type ModelEntry = { provider: ProviderCatalog; model: ProviderModel }
@@ -877,7 +877,7 @@
         <span class="min-w-0 flex-1 truncate text-left">{selectedLabelDisplay}</span>
         {#if selectedPeak}
           <span
-            class={`shrink-0 rounded-sm px-1 py-px text-[7px] font-semibold uppercase leading-none ${
+            class={`shrink-0 rounded-sm px-1 py-px text-[0.4375rem] font-semibold uppercase leading-none ${
               selectedPeak.state === 'peak'
                 ? 'bg-amber-500/15 text-amber-500'
                 : 'bg-green-500/15 text-green-500'
@@ -900,7 +900,7 @@
       {#if supportsThinking}
         <DropdownMenu.Root bind:open={thinkingMenuOpen}>
           <DropdownMenu.Trigger
-            class="ml-0.5 mr-1.5 flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            class="ml-0.5 mr-1.5 flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
             aria-label={`Thinking level: ${currentThinkingLabel}`}
             title="Thinking level"
             {disabled}
@@ -936,7 +936,7 @@
                   <span class="flex flex-col">
                     <span class="capitalize">{preset.label}</span>
                     {#if preset.description}
-                      <span class="text-[10px] font-normal text-muted">{preset.description}</span>
+                      <span class="text-[0.625rem] font-normal text-muted">{preset.description}</span>
                     {/if}
                   </span>
                 </DropdownMenu.Item>
@@ -1035,7 +1035,7 @@
             <div class="flex items-center gap-1.5">
               <button
                 type="button"
-                class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
                 aria-expanded={harnessFilterOpen}
                 aria-haspopup="true"
                 title={harnessFilterOpen
@@ -1046,7 +1046,7 @@
                 <ListFilter size={11} class="shrink-0 text-dimmed" />
                 <span class="truncate">{harnessFilterLabel}</span>
                 {#if harnessFilterActive}
-                  <span class="ml-auto shrink-0 text-[9px] text-primary">Filtered</span>
+                  <span class="ml-auto shrink-0 text-[0.5625rem] text-primary">Filtered</span>
                 {/if}
               </button>
               {#if harnessFilterActive}
@@ -1069,7 +1069,7 @@
               >
                 <button
                   type="button"
-                  class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {!harnessFilterActive
+                  class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
                     ? 'border-primary bg-primary text-on-primary'
                     : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
                   aria-pressed={!harnessFilterActive}
@@ -1081,7 +1081,7 @@
                 {#each harnessOptions as option (option.id)}
                   <button
                     type="button"
-                    class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {isHarnessSelected(
+                    class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {isHarnessSelected(
                       option.id
                     )
                       ? 'border-primary bg-primary text-on-primary'
@@ -1111,9 +1111,9 @@
           class="max-h-60 overflow-y-auto p-1"
         >
           {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}
-            <p class="px-2 py-2 text-[11px] text-dimmed">No providers connected</p>
+            <p class="px-2 py-2 text-[0.6875rem] text-dimmed">No providers connected</p>
           {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && recentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
-            <p class="px-2 py-2 text-[11px] text-dimmed">
+            <p class="px-2 py-2 text-[0.6875rem] text-dimmed">
               {search
                 ? `No models match “${search}”${harnessFilterActive ? ' in the selected harnesses' : ''}`
                 : visionOnly
@@ -1139,12 +1139,12 @@
         </div>
         {#if multiSelect}
           <div class="flex items-center justify-between gap-2 border-t px-2.5 py-1.5">
-            <span class="text-[10px] text-dimmed">
+            <span class="text-[0.625rem] text-dimmed">
               {selectedModelKeys.length} selected · choose one or more
             </span>
             <button
               type="button"
-              class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+              class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
               title="Finish selecting models"
               onclick={close}
             >
@@ -1192,8 +1192,8 @@
       class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
     />
     <Icon size={10} class={iconClass} />
-    <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">{text}</span>
-    <span class="ml-auto text-[9px] text-dimmed">{count}</span>
+    <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">{text}</span>
+    <span class="ml-auto text-[0.5625rem] text-dimmed">{count}</span>
   </button>
 {/snippet}
 
@@ -1215,13 +1215,13 @@
       class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
     />
     <VendorIcon name={provider.name} id={provider.id} size={14} />
-    <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+    <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
       {provider.name}
     </span>
     {#if provider.catalogStatus === 'unavailable'}
-      <span class="ml-auto text-[9px] font-medium text-dimmed">Unavailable</span>
+      <span class="ml-auto text-[0.5625rem] font-medium text-dimmed">Unavailable</span>
     {:else}
-      <span class="ml-auto text-[9px] text-dimmed">{provider.models.length}</span>
+      <span class="ml-auto text-[0.5625rem] text-dimmed">{provider.models.length}</span>
     {/if}
   </button>
 {/snippet}
@@ -1234,7 +1234,7 @@
   {:else if item.kind === 'provider-header'}
     {@render providerHeader(item.provider)}
   {:else if item.kind === 'provider-message'}
-    <p class="px-2 py-1.5 text-[10px] leading-relaxed text-dimmed">
+    <p class="px-2 py-1.5 text-[0.625rem] leading-relaxed text-dimmed">
       {item.provider.catalogMessage ?? 'The harness model catalog is unavailable.'}
     </p>
   {:else if item.kind === 'unavailable-model'}
@@ -1242,7 +1242,7 @@
       <span class="min-w-0 flex-1">
         <span class="block truncate text-xs">{item.favorite.modelId}</span>
         {#if item.favorite.providerId}
-          <span class="block truncate text-[10px]">{item.favorite.providerId}</span>
+          <span class="block truncate text-[0.625rem]">{item.favorite.providerId}</span>
         {/if}
       </span>
       {#if onToggleFavorite}
@@ -1384,7 +1384,7 @@
       </span>
       {#if peak}
         <span
-          class={`shrink-0 rounded-sm px-1 py-px text-[7px] font-semibold uppercase leading-none ${
+          class={`shrink-0 rounded-sm px-1 py-px text-[0.4375rem] font-semibold uppercase leading-none ${
             peak.state === 'peak'
               ? 'bg-amber-500/15 text-amber-500'
               : 'bg-green-500/15 text-green-500'
@@ -1395,7 +1395,7 @@
           {peak.label}
         </span>
       {/if}
-      <span class="ml-auto flex shrink-0 items-center gap-1 text-[9px] text-dimmed">
+      <span class="ml-auto flex shrink-0 items-center gap-1 text-[0.5625rem] text-dimmed">
         {#if multiSelect && isSelectedModel(entry)}
           <Check size={11} class="text-primary" aria-label="Selected" />
         {/if}
@@ -1446,7 +1446,7 @@
         {/if}
       </span>
     </span>
-    <span class="flex items-center gap-1 truncate text-[10px] text-dimmed">
+    <span class="flex items-center gap-1 truncate text-[0.625rem] text-dimmed">
       {@render modelVendorIcons(entry.provider.harnessId, entry.provider.name, entry.provider.id)}
       <span class="truncate">{entry.provider.name}</span>
     </span>

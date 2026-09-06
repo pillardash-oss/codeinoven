@@ -30,6 +30,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { messageId } from '$shared/id'
   import { isTodoToolPart } from '$lib/agent-todos'
+  import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { copyText } from '$lib/copy-text'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -686,7 +687,7 @@
       const kind = attachmentPreviewKind(part.mime, filename)
       closeAttachmentPreview()
       previewAttachment = { mime: part.mime, url: part.url, filename }
-      if (kind === 'markdown' || kind === 'text' || kind === 'csv') {
+      if (kind === 'markdown' || kind === 'text') {
         previewText = new TextDecoder().decode(bytes)
       } else {
         previewSrc = URL.createObjectURL(
@@ -1122,14 +1123,7 @@
 
   /** Full-transcript context for a temporary chat, matching desktop. */
   function temporaryConversationContext(): string {
-    return messages
-      .map((message) => {
-        const text = textFor(message).trim()
-        return text ? `${message.role.toUpperCase()}: ${text}` : ''
-      })
-      .filter(Boolean)
-      .join('\n\n')
-      .slice(-80_000)
+    return temporaryChatContext(messages, textFor)
   }
 
   function openTemporarySelectionChat(mode: 'elaborate' | 'quick'): void {
@@ -1165,7 +1159,7 @@
       {:else if messages.length === 0}
         <div class="flex flex-col items-center gap-2 px-2 py-12 text-center">
           <p class="text-sm text-muted">No messages yet</p>
-          <p class="max-w-64 text-[13px] leading-relaxed text-dimmed">
+          <p class="max-w-64 text-[0.8125rem] leading-relaxed text-dimmed">
             Send a message to get started with this {chatMode ? 'chat' : 'thread'}.
           </p>
         </div>
@@ -1186,7 +1180,7 @@
                       {#each files as part (part.id)}
                         <button
                           type="button"
-                          class="flex h-8 max-w-full cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 text-[11px] text-muted transition-colors active:bg-overlay active:text-foreground disabled:cursor-wait disabled:opacity-60"
+                          class="flex h-8 max-w-full cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 text-[0.6875rem] text-muted transition-colors active:bg-overlay active:text-foreground disabled:cursor-wait disabled:opacity-60"
                           title={`Open ${attachmentName(part)}`}
                           aria-label={`Open attachment ${attachmentName(part)}`}
                           disabled={openingAttachmentId !== null}
@@ -1296,7 +1290,7 @@
                     {#each assistantFiles as part (part.id)}
                       <button
                         type="button"
-                        class="flex h-8 max-w-full cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 text-[11px] text-muted transition-colors active:bg-overlay active:text-foreground disabled:cursor-wait disabled:opacity-60"
+                        class="flex h-8 max-w-full cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 text-[0.6875rem] text-muted transition-colors active:bg-overlay active:text-foreground disabled:cursor-wait disabled:opacity-60"
                         title={`Open ${attachmentName(part)}`}
                         aria-label={`Open attachment ${attachmentName(part)}`}
                         disabled={openingAttachmentId !== null}
@@ -1354,7 +1348,7 @@
                         <GitFork size={14} />
                       {/if}
                     </button>
-                    <span class="ml-1 flex min-w-0 items-center gap-1 truncate text-[10px]">
+                    <span class="ml-1 flex min-w-0 items-center gap-1 truncate text-[0.625rem]">
                       <span class="truncate">
                         {harnessName(attribution)}{#if providerName(attribution)}
                           · {providerName(attribution)}{/if}{#if model}
@@ -1362,7 +1356,7 @@
                       </span>
                       {#if thinking}
                         <span
-                          class="flex shrink-0 items-center gap-0.5 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                          class="flex shrink-0 items-center gap-0.5 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] capitalize text-muted"
                           title={`Thinking level: ${thinking}`}
                           aria-label={`Thinking level: ${thinking}`}
                         >
@@ -1392,7 +1386,7 @@
       {/if}
 
       {#if queuedMessage}
-        <p class="rounded-xl border border-border bg-elevated px-3 py-2 text-[12px] text-dimmed">
+        <p class="rounded-xl border border-border bg-elevated px-3 py-2 text-[0.75rem] text-dimmed">
           Queued — will send once {queuedMessage.startAfterThreads.length === 1
             ? 'the selected thread finishes'
             : 'the selected threads finish'}.
@@ -1431,7 +1425,7 @@
       <div class="flex flex-wrap gap-1.5 px-1 pb-1.5">
         {#each selectionReferences as reference (reference.id)}
           <span
-            class="flex max-w-full items-center gap-1 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted"
+            class="flex max-w-full items-center gap-1 rounded-lg bg-elevated px-2 py-1 text-[0.6875rem] text-muted"
             title={reference.text}
           >
             <MessageSquareDashed size={11} class="shrink-0" />

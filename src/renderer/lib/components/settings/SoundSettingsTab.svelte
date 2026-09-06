@@ -10,7 +10,8 @@
     ClipboardPaste,
     X,
     Check,
-    Star
+    Star,
+    Search
   } from '@lucide/svelte'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
   import { parseModelIdentityFromPath } from '../../../../lib/speech/model-path-validation'
@@ -56,6 +57,40 @@
   let importing = $state(false)
   let pasteOpen = $state(false)
   let runtimeFilter = $state<'all' | import('../../../../lib/speech/types').SpeechRuntime>('all')
+  let searchQuery = $state('')
+
+  const normalizedQuery = $derived(searchQuery.trim().toLowerCase())
+
+  const filteredHistory = $derived.by(() => {
+    if (!normalizedQuery) return speech.history.items
+    return speech.history.items.filter((attempt) => {
+      const haystack = [
+        attempt.finalTranscript,
+        attempt.rawTranscript,
+        attempt.cleanedTranscript,
+        ...attempt.errors.map((e) => e.error.message)
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      return haystack.includes(normalizedQuery)
+    })
+  })
+
+  const filteredLessons = $derived.by(() => {
+    if (!normalizedQuery) return speech.lessons
+    return speech.lessons.filter((lesson) => {
+      const haystack = [
+        lesson.instruction,
+        lesson.kind,
+        ...lesson.examples.flatMap((ex) => [ex.from, ex.to])
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      return haystack.includes(normalizedQuery)
+    })
+  })
 
   const tabs: ReadonlyArray<{ id: SoundTab; label: string }> = [
     { id: 'models', label: 'Models' },
@@ -305,7 +340,7 @@
   }
 </script>
 
-<div class="mx-auto max-w-3xl p-6">
+<div class="p-6">
   <div class="mb-6 flex items-start justify-between gap-4">
     <div>
       <h1 class="text-xl font-bold tracking-tight">Sound</h1>
@@ -345,12 +380,44 @@
         tab.id
           ? 'bg-elevated text-foreground'
           : 'text-muted hover:text-foreground'}"
-        onclick={() => (activeTab = tab.id)}
+        onclick={() => {
+          activeTab = tab.id
+          searchQuery = ''
+        }}
       >
         {tab.label}
       </button>
     {/each}
   </div>
+
+  {#if activeTab === 'history' || activeTab === 'learning'}
+    <label class="relative block">
+      <span class="sr-only">Search {activeTab === 'history' ? 'recording history' : 'learned lessons'}</span>
+      <Search
+        size={15}
+        class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
+        aria-hidden="true"
+      />
+      <input
+        type="search"
+        bind:value={searchQuery}
+        placeholder={activeTab === 'history'
+          ? 'Search recording history…'
+          : 'Search learned lessons…'}
+        class="w-full rounded-lg border bg-surface py-2 pl-9 pr-8 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary"
+      />
+      {#if searchQuery}
+        <button
+          type="button"
+          class="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-dimmed hover:bg-overlay hover:text-foreground"
+          title="Clear search"
+          aria-label="Clear search"
+          onclick={() => (searchQuery = '')}
+          ><X size={13} aria-hidden="true" /></button
+        >
+      {/if}
+    </label>
+  {/if}
 
   <div class="space-y-4">
     {#if activeTab === 'models'}
@@ -375,7 +442,7 @@
             }}
           >
             <span class="block text-sm font-semibold leading-none">{sub.label}</span>
-            <span class="block text-[10px] font-normal leading-none opacity-70">{sub.hint}</span>
+            <span class="block text-[0.625rem] font-normal leading-none opacity-70">{sub.hint}</span>
           </button>
         {/each}
       </div>
@@ -470,14 +537,14 @@
                       {parsedImp.displayName}
                     </p>
                     <span
-                      class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium {runtimeBadgeClass(
+                      class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-medium {runtimeBadgeClass(
                         artifact.runtime
                       )}">{runtimeBadge(artifact.runtime)}</span
                     >
-                    <span class="text-[10px] text-dimmed">· external</span>
+                    <span class="text-[0.625rem] text-dimmed">· external</span>
                     {#if !artifact.available}
                       <span
-                        class="inline-flex items-center gap-1 rounded-full bg-danger px-2 py-0.5 text-[10px] font-semibold text-white"
+                        class="inline-flex items-center gap-1 rounded-full bg-danger px-2 py-0.5 text-[0.625rem] font-semibold text-white"
                         title={artifact.unavailableReason ??
                           'The imported model path no longer exists.'}
                         ><X size={10} aria-hidden="true" /> Not found</span
@@ -485,20 +552,20 @@
                     {/if}
                     {#if isActiveImported(artifact.artifactId, activeModelSubTab)}
                       <span
-                        class="inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[10px] font-semibold text-white"
+                        class="inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[0.625rem] font-semibold text-white"
                         ><Check size={10} aria-hidden="true" /> Active</span
                       >
                     {/if}
                   </div>
                   <p
-                    class="mt-1 truncate font-mono text-[11px] leading-none text-dimmed"
+                    class="mt-1 truncate font-mono text-[0.6875rem] leading-none text-dimmed"
                     title={artifact.importPath}
                   >
                     {artifact.importPath}
                   </p>
                   {#if impDetails.length}
                     <p
-                      class="mt-1.5 flex flex-wrap items-center gap-x-1 text-[11px] leading-none text-muted"
+                      class="mt-1.5 flex flex-wrap items-center gap-x-1 text-[0.6875rem] leading-none text-muted"
                     >
                       {#each impDetails as d, i (d.label)}
                         <span class="font-medium">{d.value}</span
@@ -508,22 +575,22 @@
                     </p>
                   {/if}
                   {#if parsedImp.tokens.length}
-                    <p class="mt-1 font-mono text-[10px] leading-none text-dimmed/80">
+                    <p class="mt-1 font-mono text-[0.625rem] leading-none text-dimmed/80">
                       {parsedImp.tokens.join(' · ')}
                     </p>
                   {/if}
                 {:else}
                   <p class="truncate text-sm font-medium">{artifact.importPath}</p>
-                  <p class="mt-1 inline-flex items-center gap-1.5 text-[10px] text-dimmed">
+                  <p class="mt-1 inline-flex items-center gap-1.5 text-[0.625rem] text-dimmed">
                     <span
-                      class="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium {runtimeBadgeClass(
+                      class="inline-flex rounded-full border px-2 py-0.5 text-[0.625rem] font-medium {runtimeBadgeClass(
                         artifact.runtime
                       )}">{runtimeBadge(artifact.runtime)}</span
                     >
                     <span>· external</span>
                     {#if !artifact.available}
                       <span
-                        class="inline-flex items-center gap-1 rounded-full bg-danger px-2 py-0.5 text-[10px] font-semibold text-white"
+                        class="inline-flex items-center gap-1 rounded-full bg-danger px-2 py-0.5 text-[0.625rem] font-semibold text-white"
                         title={artifact.unavailableReason ??
                           'The imported model path no longer exists.'}
                         ><X size={10} aria-hidden="true" /> Not found</span
@@ -559,10 +626,10 @@
 
       <!-- Runtime filter -->
       <div class="flex flex-wrap items-center gap-1.5">
-        <span class="text-[11px] font-medium text-muted">Filter:</span>
+        <span class="text-[0.6875rem] font-medium text-muted">Filter:</span>
         <button
           type="button"
-          class="rounded-full border px-2.5 py-1 text-[11px] font-medium {runtimeFilter === 'all'
+          class="rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter === 'all'
             ? 'bg-primary text-on-primary border-primary'
             : 'bg-elevated text-muted border-border hover:text-foreground'}"
           onclick={() => (runtimeFilter = 'all')}>All</button
@@ -570,7 +637,7 @@
         {#each runtimesForSubTab(activeModelSubTab) as rt (rt)}
           <button
             type="button"
-            class="rounded-full border px-2.5 py-1 text-[11px] font-medium {runtimeFilter === rt
+            class="rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter === rt
               ? 'bg-primary text-on-primary border-primary'
               : 'bg-elevated text-muted border-border hover:text-foreground'}"
             onclick={() => (runtimeFilter = rt)}>{runtimeBadge(rt)}</button
@@ -604,30 +671,30 @@
                 <div class="flex flex-wrap items-center gap-1.5">
                   <p class="truncate text-sm font-semibold">{artifact.label}</p>
                   <span
-                    class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium {runtimeBadgeClass(
+                    class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-medium {runtimeBadgeClass(
                       artifact.runtime
                     )}">{runtimeBadge(artifact.runtime)}</span
                   >
                   {#if badge}
                     <span
-                      class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold {badge.cls}"
+                      class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.625rem] font-semibold {badge.cls}"
                       >{badge.label}</span
                     >
                   {/if}
                   {#if active}
                     <span
-                      class="inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[10px] font-semibold text-white border-success"
+                      class="inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[0.625rem] font-semibold text-white border-success"
                       ><Check size={10} aria-hidden="true" /> Active</span
                     >
                   {:else if selectedUnavailable}
                     <span
-                      class="inline-flex items-center rounded-full border border-amber-600/30 bg-amber-600/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600"
+                      class="inline-flex items-center rounded-full border border-amber-600/30 bg-amber-600/10 px-2 py-0.5 text-[0.625rem] font-semibold text-amber-600"
                       >Selected · unavailable</span
                     >
                   {/if}
                 </div>
                 <p class="mt-1 text-xs leading-relaxed text-muted">{artifact.description}</p>
-                <p class="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-dimmed">
+                <p class="mt-1.5 flex flex-wrap items-center gap-2 text-[0.6875rem] text-dimmed">
                   <span>{(artifact.byteSize / 1_048_576).toFixed(0)} MB</span>
                   <span class="opacity-40">·</span>
                   <span>{artifact.license}</span>
@@ -643,7 +710,7 @@
                   {/if}
                 </p>
                 {#if installed && !installed.available}
-                  <p class="mt-1 text-[11px] text-amber-600">
+                  <p class="mt-1 text-[0.6875rem] text-amber-600">
                     {installed.unavailableReason ?? 'The model runtime is unavailable.'}
                   </p>
                 {/if}
@@ -651,7 +718,7 @@
                   href={artifact.sourcePageUrl}
                   target="_blank"
                   rel="noreferrer"
-                  class="mt-1 inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
+                  class="mt-1 inline-flex items-center gap-1 text-[0.6875rem] text-primary hover:underline"
                 >
                   Hugging Face <ExternalLink size={10} aria-hidden="true" />
                 </a>
@@ -729,18 +796,18 @@
               <div
                 class="mt-3 flex items-start justify-between gap-2 rounded-lg border border-danger/20 bg-danger/5 px-3 py-2"
               >
-                <p class="text-[11px] leading-snug text-danger">
+                <p class="text-[0.6875rem] leading-snug text-danger">
                   Download failed{download.error?.message ? `: ${download.error.message}` : '.'}
                 </p>
                 <button
                   type="button"
-                  class="shrink-0 rounded-md border bg-elevated px-2 py-1 text-[11px] font-medium text-foreground hover:bg-surface"
+                  class="shrink-0 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] font-medium text-foreground hover:bg-surface"
                   onclick={() => void speech.download(artifact.id)}>Retry</button
                 >
               </div>
             {/if}
             {#if download?.state === 'cancelled'}
-              <p class="mt-3 rounded-lg border bg-muted/10 px-3 py-2 text-[11px] text-muted">
+              <p class="mt-3 rounded-lg border bg-muted/10 px-3 py-2 text-[0.6875rem] text-muted">
                 Download cancelled.
               </p>
             {/if}
@@ -748,14 +815,14 @@
               {#if installed}
                 {#if isActiveCatalog(artifact.id, activeModelSubTab)}
                   <span
-                    class="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-semibold text-success border border-success/20"
+                    class="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[0.6875rem] font-semibold text-success border border-success/20"
                   >
                     <Check size={11} aria-hidden="true" /> Active
                   </span>
                 {:else}
                   <button
                     type="button"
-                    class="inline-flex items-center gap-1 rounded-md border bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/15"
+                    class="inline-flex items-center gap-1 rounded-md border bg-primary/10 px-2 py-1 text-[0.6875rem] font-medium text-primary hover:bg-primary/15"
                     title="Make {artifact.label} active"
                     aria-label="Make {artifact.label} active"
                     onclick={() => setActive(activeModelSubTab, artifact.id)}
@@ -766,7 +833,7 @@
               {/if}
               <button
                 type="button"
-                class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[11px] text-muted hover:text-foreground disabled:opacity-50"
+                class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[0.6875rem] text-muted hover:text-foreground disabled:opacity-50"
                 title="Import a local model file for this family"
                 aria-label="Import for {artifact.label}"
                 disabled={importing}
@@ -776,7 +843,7 @@
               </button>
               <button
                 type="button"
-                class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[11px] text-muted hover:text-foreground"
+                class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[0.6875rem] text-muted hover:text-foreground"
                 title="Paste a filesystem path for this family"
                 aria-label="Paste path for {artifact.label}"
                 onclick={() => (pasteOpen = true)}
@@ -799,7 +866,7 @@
             <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">
               Recording history
             </h2>
-            <p class="mt-1 text-[11px] text-dimmed">
+            <p class="mt-1 text-[0.6875rem] text-dimmed">
               Every success and failure counts toward retention. Audio, raw transcript, and cleaned
               transcript are kept per attempt. Oldest attempts are evicted first at the limit.
             </p>
@@ -817,20 +884,20 @@
           >
         </div>
         <div class="max-h-[60dvh] divide-y divide-border overflow-y-auto">
-          {#each speech.history.items as attempt (attempt.id)}
+          {#each filteredHistory as attempt (attempt.id)}
             <div class="py-3">
               <div class="flex items-start gap-3">
                 <div class="min-w-0 flex-1">
                   <p class="text-xs font-medium">
                     {new Date(attempt.createdAt).toLocaleString()} · {attempt.stage}
                   </p>
-                  <p class="mt-0.5 line-clamp-2 text-[11px] text-dimmed">
+                  <p class="mt-0.5 line-clamp-2 text-[0.6875rem] text-dimmed">
                     {attempt.finalTranscript ??
                       attempt.rawTranscript ??
                       attempt.errors.at(-1)?.error.message ??
                       'No transcript'}
                   </p>
-                  <p class="mt-1 text-[10px] text-dimmed">
+                  <p class="mt-1 text-[0.625rem] text-dimmed">
                     {(attempt.byteSize / 1024).toFixed(1)} KB{attempt.runtime
                       ? ` · ${attempt.runtime}`
                       : ''}{attempt.rawTranscript ? ' · raw + cleaned' : ''}{attempt.retries.length
@@ -882,6 +949,11 @@
             </div>
           {/each}
         </div>
+        {#if normalizedQuery && filteredHistory.length === 0}
+          <p class="py-6 text-center text-sm text-dimmed">
+            No history entries match “{searchQuery.trim()}”.
+          </p>
+        {/if}
         {#if speech.history.total > 0}<button
             type="button"
             class="mt-3 text-xs text-danger hover:underline"
@@ -910,16 +982,16 @@
             No lessons learned yet. Edit a dictation before sending and the model will learn from
             the difference.
           </p>{/if}
-        {#each speech.lessons as lesson (lesson.id)}
+        {#each filteredLessons as lesson (lesson.id)}
           <div class="flex items-center gap-3 border-t py-2 first:border-0">
             <div class="min-w-0 flex-1">
               <p class="truncate text-xs">{lesson.instruction}</p>
-              <p class="text-[10px] text-dimmed">
+              <p class="text-[0.625rem] text-dimmed">
                 {lesson.kind} · {lesson.scope.kind} · {Math.round(lesson.confidence * 100)}% ·
                 {lesson.evidenceCount} observations
               </p>
               {#if lesson.examples.length > 0}
-                <p class="truncate text-[10px] text-dimmed">
+                <p class="truncate text-[0.625rem] text-dimmed">
                   e.g. “{lesson.examples[0].from}” → “{lesson.examples[0].to}”
                 </p>
               {/if}
@@ -942,6 +1014,11 @@
             >
           </div>
         {/each}
+        {#if normalizedQuery && filteredLessons.length === 0}
+          <p class="py-6 text-center text-sm text-dimmed">
+            No lessons match “{searchQuery.trim()}”.
+          </p>
+        {/if}
       </section>
     {/if}
 

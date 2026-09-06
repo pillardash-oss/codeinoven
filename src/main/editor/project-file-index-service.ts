@@ -50,6 +50,8 @@ const GIT_EXCLUDED_DIRECTORY_PATHS = INDEX_EXCLUDED_DIRECTORY_NAMES.flatMap((dir
 ])
 
 interface IndexedProjectEntry {
+  /** Whether the entry is git-ignored (a directory when all its files are). */
+  ignored: boolean
   entry: ProjectFileEntry
   normalizedPath: string
   normalizedName: string
@@ -151,7 +153,12 @@ export class ProjectFileIndexService {
       })
     }
 
-    return matches.map(({ name, path, kind }) => ({ name, path, kind }))
+    return matches.map(({ name, path, kind, ignored }) => ({
+      name,
+      path,
+      kind,
+      ...(ignored ? { ignored: true } : {})
+    }))
   }
 
   /** Build the index for a project in the background and keep it fresh by
@@ -244,14 +251,25 @@ export class ProjectFileIndexService {
 
   private async buildProjectIndex(root: string): Promise<ProjectFileIndex> {
     const gitPaths = await this.readGitProjectPaths(root)
-    const entries =
-      gitPaths === null ? await this.walkProjectEntries(root) : this.entriesFromGitPaths(gitPaths)
+    if (gitPaths === null) {
+      return this.indexFromEntries(root, await this.walkProjectEntries(root))
+    }
+    // A second listing that respects .gitignore narrows which untracked paths
+    // are merely untracked instead of ignored. Ignored = all paths minus the
+    // visible ones (tracked files are in both listings).
+    const visiblePaths = await this.readGitVisiblePaths(root)
+    const visibleSet = new Set(visiblePaths)
+    const ignoredPaths = new Set(gitPaths.filter((path) => !visibleSet.has(path)))
+    return this.indexFromEntries(root, this.entriesFromGitPaths(gitPaths, ignoredPaths))
+  }
 
+  private indexFromEntries(root: string, entries: ProjectFileEntry[]): ProjectFileIndex {
     const entriesByPath = new Map<string, IndexedProjectEntry>()
     for (const entry of entries) {
       const normalizedPath = entry.path.toLocaleLowerCase()
       entriesByPath.set(entry.path, {
         entry,
+        ignored: entry.ignored === true,
         normalizedPath,
         normalizedName: entry.name.toLocaleLowerCase(),
         ruleScore: entry.kind === 'file' ? this.rulePathScore(normalizedPath) : 0
@@ -271,26 +289,34 @@ export class ProjectFileIndexService {
    * NUL parsing preserves newlines.
    */
   private readGitProjectPaths(root: string): Promise<string[] | null> {
+    return this.runGitLsFiles(root, false)
+  }
+
+  /** The same listing but with `--exclude-standard`, so gitignore rules hide
+   *  ignored untracked paths. Used to derive which indexed entries are ignored. */
+  private async readGitVisiblePaths(root: string): Promise<string[]> {
+    return (await this.runGitLsFiles(root, true)) ?? []
+  }
+
+  private runGitLsFiles(root: string, excludeStandard: boolean): Promise<string[] | null> {
     return new Promise((resolvePaths, rejectPaths) => {
-      const child = spawn(
-        'git',
-        [
-          '-C',
-          root,
-          'ls-files',
-          '--cached',
-          '--others',
-          '-z',
-          '--',
-          '.',
-          ...GIT_EXCLUDED_DIRECTORY_PATHS
-        ],
-        {
-          windowsHide: true,
-          env: buildProcessEnvironment(),
-          stdio: ['ignore', 'pipe', 'pipe']
-        }
-      )
+      const args = [
+        '-C',
+        root,
+        'ls-files',
+        '--cached',
+        '--others',
+        ...(excludeStandard ? ['--exclude-standard'] : []),
+        '-z',
+        '--',
+        '.',
+        ...GIT_EXCLUDED_DIRECTORY_PATHS
+      ]
+      const child = spawn('git', args, {
+        windowsHide: true,
+        env: buildProcessEnvironment(),
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
       const decoder = new StringDecoder('utf8')
       const paths: string[] = []
       let pending = ''
@@ -368,14 +394,24 @@ export class ProjectFileIndexService {
     })
   }
 
-  private entriesFromGitPaths(paths: string[]): ProjectFileEntry[] {
+  private entriesFromGitPaths(paths: string[], ignoredPaths: Set<string>): ProjectFileEntry[] {
     const entries = new Map<string, ProjectFileEntry>()
+    /** Per ancestor directory: total files below it vs ignored files below it.
+     *  A directory is ignored only when every file below it is ignored. */
+    const fileCounts = new Map<string, { total: number; ignored: number }>()
     for (const rawPath of paths) {
       const path = rawPath.replace(/^\.\//u, '')
       if (!path || path.length > 4_096 || path.includes('\\')) continue
       const segments = path.split('/')
       if (segments.some((segment) => !segment || segment === '.' || segment === '..')) continue
 
+      const isIgnored = ignoredPaths.has(path)
+      entries.set(path, {
+        name: segments.at(-1) ?? path,
+        path,
+        kind: 'file',
+        ...(isIgnored ? { ignored: true } : {})
+      })
       let directoryPath = ''
       for (const segment of segments.slice(0, -1)) {
         directoryPath = directoryPath ? `${directoryPath}/${segment}` : segment
@@ -384,17 +420,22 @@ export class ProjectFileIndexService {
           path: directoryPath,
           kind: 'directory'
         })
+        const counts = fileCounts.get(directoryPath) ?? { total: 0, ignored: 0 }
+        counts.total += 1
+        if (isIgnored) counts.ignored += 1
+        fileCounts.set(directoryPath, counts)
       }
-      entries.set(path, {
-        name: segments.at(-1) ?? path,
-        path,
-        kind: 'file'
-      })
       if (entries.size > MAX_INDEX_ENTRIES) {
         throw new Error(
           `Project index exceeds the ${MAX_INDEX_ENTRIES.toLocaleString()}-entry safety limit`
         )
       }
+    }
+    // Propagate the ignored flag up to fully-ignored directories.
+    for (const [directoryPath, counts] of fileCounts) {
+      if (counts.total === 0 || counts.ignored < counts.total) continue
+      const directoryEntry = entries.get(directoryPath)
+      if (directoryEntry && directoryEntry.kind === 'directory') directoryEntry.ignored = true
     }
     return [...entries.values()]
   }
@@ -566,6 +607,9 @@ export class ProjectFileIndexService {
     const normalizedPath = path.toLocaleLowerCase()
     index.entries.set(path, {
       entry: { name, path, kind },
+      // Best-effort: a watcher-discovered path's ignored state is unknown
+      // until the index rebuilds; new paths default to not ignored.
+      ignored: existing?.ignored === true && existing.entry.kind === kind,
       normalizedPath,
       normalizedName: name.toLocaleLowerCase(),
       ruleScore: kind === 'file' ? this.rulePathScore(normalizedPath) : 0
@@ -579,6 +623,7 @@ export class ProjectFileIndexService {
       const directoryPath = directory.toLocaleLowerCase()
       index.entries.set(directory, {
         entry: { name: segment, path: directory, kind: 'directory' },
+        ignored: false,
         normalizedPath: directoryPath,
         normalizedName: segment.toLocaleLowerCase(),
         ruleScore: 0

@@ -40,6 +40,10 @@ import type {
 import { Logger } from '../system/logger'
 import { parseWorktreePorcelain } from './scope-worktree-service'
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolveTimeout) => setTimeout(resolveTimeout, ms))
+}
+
 /** Upper bound on a single diff payload so the IPC contract never floods. */
 const MAX_DIFF_BYTES = 500 * 1024
 
@@ -154,13 +158,75 @@ export class GitService {
     })
   }
 
+  /**
+   * Backoff schedule for retries after an `index.lock` contention failure. The
+   * agent's own git CLI and this service are separate processes with no shared
+   * queue, so concurrent `git add`/`commit`/`status` writes race the same lock;
+   * the loser fails immediately with "index.lock: File exists". A short retry
+   * almost always wins once the other side finishes its write.
+   */
+  private static readonly INDEX_LOCK_RETRY_DELAYS_MS = [100, 250, 500, 1000] as const
+  /** A lock file older than this is debris from a crashed or killed git process. */
+  private static readonly STALE_INDEX_LOCK_AGE_MS = 10_000
+
+  private static isIndexLockError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false
+    const causeMessage =
+      error.cause instanceof Error ? error.cause.message : String(error.cause ?? '')
+    return `${error.message}\n${causeMessage}`.includes('index.lock')
+  }
+
+  /**
+   * Remove an abandoned `.git/index.lock` so a crashed git process cannot wedge
+   * every later command forever. Only locks older than the staleness window are
+   * removed — a fresh lock belongs to a live concurrent git write.
+   * `rev-parse --git-path` resolves the correct location even inside worktrees.
+   */
+  private async breakStaleIndexLock(directory: string): Promise<void> {
+    try {
+      const lockPath = (
+        await this.client(directory).raw(['rev-parse', '--git-path', 'index.lock'])
+      ).trim()
+      if (!lockPath) return
+      const absolute = resolve(directory, lockPath)
+      const metadata = await stat(absolute).catch(() => null)
+      if (!metadata || metadata.isDirectory()) return
+      if (Date.now() - metadata.mtimeMs <= GitService.STALE_INDEX_LOCK_AGE_MS) return
+      await rm(absolute, { force: true })
+      Logger.dev(`Removed stale git index lock: ${absolute}`)
+    } catch {
+      // Best effort — the retry loop re-reports the underlying git failure.
+    }
+  }
+
+  /**
+   * Run a git task, retrying with backoff when it loses an `index.lock` race.
+   * A stale lock (left by a crashed git process) is broken before each retry.
+   */
+  private async withIndexLockRetry<T>(directory: string, task: () => Promise<T>): Promise<T> {
+    let attempt = 0
+    for (;;) {
+      try {
+        return await task()
+      } catch (error) {
+        if (
+          attempt >= GitService.INDEX_LOCK_RETRY_DELAYS_MS.length ||
+          !GitService.isIndexLockError(error)
+        )
+          throw error
+        await this.breakStaleIndexLock(directory)
+        await sleep(GitService.INDEX_LOCK_RETRY_DELAYS_MS[attempt++])
+      }
+    }
+  }
+
   private async wrapError<T>(
     projectId: string,
     kind: CommandKind,
     task: () => Promise<T>
   ): Promise<T> {
     try {
-      return await task()
+      return await this.withIndexLockRetry(projectId, task)
     } catch (failure) {
       const error = failure as GitCommandError
       const message = error.gitError ?? error.message ?? 'Unknown git error'
@@ -597,6 +663,28 @@ export class GitService {
     })
   }
 
+  /**
+   * The remote's actual default branch (e.g. "nightly" instead of "main"),
+   * resolved from origin/HEAD rather than guessed from branch names.
+   */
+  async getDefaultBranch(projectPath: string): Promise<string | null> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      return this.wrapError(projectPath, 'read', async () => {
+        const git = this.client(directory)
+        try {
+          const ref = await git.raw(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
+          const name = String(ref).trim()
+          const prefix = 'origin/'
+          if (name.startsWith(prefix)) return name.slice(prefix.length)
+          return name || null
+        } catch {
+          return null
+        }
+      })
+    })
+  }
+
   async checkout(projectPath: string, branch: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
@@ -643,8 +731,15 @@ export class GitService {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
         const git = this.client(directory)
-        await this.removeWorktreesForBranch(git, name)
-        await git.deleteLocalBranch(name, force)
+        // Tolerate git's ambiguous short spelling: when a tag shares the branch
+        // name, `refname:short` renders `heads/<name>` and `git branch -d` on
+        // that spelling fails with "branch not found".
+        const resolves = await git
+          .raw(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])
+          .then(() => true, () => false)
+        const branchName = resolves || !name.startsWith('heads/') ? name : name.slice('heads/'.length)
+        await this.removeWorktreesForBranch(git, branchName)
+        await git.deleteLocalBranch(branchName, force)
       })
       return this.readStatus(directory)
     })
@@ -899,6 +994,17 @@ export class GitService {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
         await this.client(directory).addRemote(name, url)
+      })
+      return this.readRemotes(directory)
+    })
+  }
+
+  /** `git remote set-url <name> <url>` — update an existing remote's URL. */
+  async setRemoteUrl(projectPath: string, name: string, url: string): Promise<GitRemoteInfo[]> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await this.client(directory).remote(['set-url', name, url])
       })
       return this.readRemotes(directory)
     })
@@ -1272,6 +1378,30 @@ export class GitService {
         // A conflicted merge rejects; the refreshed status below still reports
         // the conflict state, so this is expected and swallowed.
         await git.merge([baseRef]).catch(() => {})
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /**
+   * Finish a PR conflict resolution in one shot: push the resolved merge commit
+   * from the temporary `pr-<n>` branch back to the PR's head branch (which
+   * updates the PR), check the user's original branch back out, and delete the
+   * now-useless temporary branch. The temporary branch exists only to stage
+   * the conflict resolution, so nothing is left for the user to do by hand.
+   */
+  async finishPrResolve(
+    projectPath: string,
+    options: { remote: string; pullNumber: number; headBranch: string; returnBranch: string }
+  ): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const git = this.client(directory)
+      const localBranch = `pr-${options.pullNumber}`
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await git.raw(['push', options.remote, `${localBranch}:${options.headBranch}`])
+        await git.checkout(options.returnBranch)
+        await git.deleteLocalBranch(localBranch, true)
       })
       return this.readStatus(directory)
     })
@@ -1733,32 +1863,40 @@ export class GitService {
     remoteNames: string[],
     worktreePaths: ReadonlyMap<string, string>
   ): GitBranchInfo[] {
+    // `refname:short` disambiguates when a tag shares the branch's name (e.g. a
+    // `nightly` tag and `nightly` branch render as `heads/nightly`), so the
+    // operational branch `name` must be derived from the full ref instead —
+    // `git branch -d heads/nightly` fails with "branch not found".
+    const localRefPrefix = 'refs/heads/'
+    const remoteRefPrefix = 'refs/remotes/'
     const namesBySpecificity = [...remoteNames].sort((left, right) => right.length - left.length)
     const branches: GitBranchInfo[] = []
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue
       const [fullRef, ref, head, upstream, remoteName, drift, symbolicTarget] = line.split('\t')
       if (!fullRef || !ref) continue
-      if (fullRef.startsWith('refs/heads/')) {
+      if (fullRef.startsWith(localRefPrefix)) {
         const ahead = /ahead (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
         const behind = /behind (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
+        const name = fullRef.slice(localRefPrefix.length)
         branches.push({
           kind: 'local',
-          name: ref,
+          name,
           ref,
           current: head?.trim() === '*',
           remote: remoteName || null,
           upstream: upstream || null,
           ahead: Number.parseInt(ahead, 10) || 0,
           behind: Number.parseInt(behind, 10) || 0,
-          worktreePath: worktreePaths.get(ref) ?? null
+          worktreePath: worktreePaths.get(name) ?? null
         })
         continue
       }
-      if (!fullRef.startsWith('refs/remotes/') || symbolicTarget) continue
-      const remote = namesBySpecificity.find((name) => ref.startsWith(`${name}/`))
+      if (!fullRef.startsWith(remoteRefPrefix) || symbolicTarget) continue
+      const relativeRef = fullRef.slice(remoteRefPrefix.length)
+      const remote = namesBySpecificity.find((name) => relativeRef.startsWith(`${name}/`))
       if (!remote) continue
-      const name = ref.slice(remote.length + 1)
+      const name = relativeRef.slice(remote.length + 1)
       if (!name || name === 'HEAD') continue
       branches.push({
         kind: 'remote',

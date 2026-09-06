@@ -44,11 +44,17 @@ function pwaManifestVersionPlugin(): Plugin {
   }
 }
 
+// Nightly CI resolves the full prerelease semver (e.g. 0.5.53-nightly.4) before
+// packaging and passes it here so the splash/about surfaces show the exact
+// build instead of the bare package.json version electron-builder would
+// otherwise fall back to.
+const resolvedAppVersion = process.env['CODEINOVEN_BUILD_VERSION'] || packageJson.version
+
 /** Renderer root/aliases/plugins, shared with scripts/dev-remote-pwa.ts so a
  *  standalone Vite dev server for the phone PWA stays in sync with the real
  *  electron-vite renderer config instead of drifting out of a duplicate. */
 export const rendererDefine = {
-  __CODEINOVEN_APP_VERSION__: JSON.stringify(packageJson.version)
+  __CODEINOVEN_APP_VERSION__: JSON.stringify(resolvedAppVersion)
 }
 export const rendererRoot = resolve(__dirname, 'src/renderer')
 export const rendererPublicDir = resolve(__dirname, 'src/renderer/static')
@@ -58,6 +64,16 @@ export const rendererAlias = {
   $adapters: resolve(__dirname, 'src/lib/adapters'),
   $shared: resolve(__dirname, 'src/lib')
 }
+export const rendererDedupe = [
+  '@codemirror/state',
+  '@codemirror/view',
+  '@codemirror/language',
+  '@codemirror/language-data',
+  '@codemirror/commands',
+  '@lezer/highlight',
+  '@lezer/common',
+  '@lezer/lr'
+]
 export function rendererPlugins(): PluginOption[] {
   return [
     pwaManifestVersionPlugin(),
@@ -85,8 +101,8 @@ export default defineConfig(({ mode }) => {
     main: {
       define: {
         // Keep the splash copy tied to the package version used to build the
-        // Electron bundle.
-        __CODEINOVEN_APP_VERSION__: JSON.stringify(packageJson.version),
+        // Electron bundle (or the CI-resolved nightly prerelease version).
+        __CODEINOVEN_APP_VERSION__: JSON.stringify(resolvedAppVersion),
         // Bake the GitHub App client ID into the main bundle at build time.
         // The identifier is replaced by Vite's `define` from the shared
         // CODEINOVEN_GITHUB_CLIENT_ID value. Public by design — never a secret.
@@ -114,12 +130,15 @@ export default defineConfig(({ mode }) => {
         outDir: 'out/main',
         rollupOptions: {
           // better-sqlite3 is a native module — it must remain external to preserve binding paths.
+          // @anthropic-ai/claude-agent-sdk is bundled (not external) so it can
+          // live in devDependencies: it's a pure-JS control-protocol client
+          // with no native bindings, so inlining it avoids shipping the whole
+          // package inside node_modules in the packaged app.
           external: [
             'electron',
             'node-pty',
             'better-sqlite3',
             'electron-updater',
-            '@anthropic-ai/claude-agent-sdk',
             'werift'
           ],
           input: {
@@ -153,7 +172,24 @@ export default defineConfig(({ mode }) => {
       publicDir: rendererPublicDir,
       plugins: rendererPlugins(),
       resolve: {
-        alias: rendererAlias
+        alias: rendererAlias,
+        // CodeMirror's instanceof-based extension checks break if any chunk
+        // ends up with a private copy of @codemirror/state (e.g. a stale
+        // optimizeDeps snapshot taken while nested 6.7.1 copies existed).
+        // Deduping here forces every importer onto the single hoisted copy.
+        dedupe: rendererDedupe
+      },
+      optimizeDeps: {
+        // Bundle the CodeMirror core packages as shared pre-bundled deps so
+        // the dynamic imports in codemirror-file-editor.ts and every language
+        // package resolve to one instance instead of separate chunks.
+        include: [
+          '@codemirror/state',
+          '@codemirror/view',
+          '@codemirror/commands',
+          '@codemirror/language',
+          '@codemirror/language-data'
+        ]
       },
       // Pin the dev origin. The renderer's persisted state (recovery snapshot,
       // thread visits, UI preferences) lives in localStorage keyed by origin,

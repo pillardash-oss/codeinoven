@@ -91,7 +91,7 @@
     <Smartphone size={15} class="text-primary" />
     <h2 class="text-sm font-semibold text-foreground">Connected devices</h2>
     {#if devices.length > 0}
-      <span class="rounded-md bg-info/10 px-1.5 py-0.5 text-[10px] font-medium text-info"
+      <span class="rounded-md bg-info/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-info"
         >{devices.length}</span
       >
     {/if}
@@ -140,18 +140,18 @@
                 {device.name}
                 {#if device.connected}
                   <span
-                    class="shrink-0 rounded-full bg-success/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-success"
+                    class="shrink-0 rounded-full bg-success/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-success"
                     >Live</span
                   >
                 {/if}
                 {#if device.revokedAt !== null}
                   <span
-                    class="shrink-0 rounded-full bg-danger/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-danger"
+                    class="shrink-0 rounded-full bg-danger/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-danger"
                     >Revoked</span
                   >
                 {/if}
               </p>
-              <p class="mt-0.5 text-[11px] text-dimmed">
+              <p class="mt-0.5 text-[0.6875rem] text-dimmed">
                 {deviceTransportLabel(device.transport)}
                 {#if device.lastUsedAt}
                   · last used {formatRelative(device.lastUsedAt)}
@@ -162,7 +162,7 @@
               </p>
               {#if device.scopes.length > 0}
                 <p
-                  class="mt-0.5 flex items-center gap-1 text-[10px] text-muted"
+                  class="mt-0.5 flex items-center gap-1 text-[0.625rem] text-muted"
                   title={device.scopes.join(', ')}
                 >
                   <KeyRound size={9} class="shrink-0" />
@@ -170,7 +170,7 @@
                 </p>
               {/if}
               {#if device.fingerprint}
-                <p class="mt-0.5 font-mono text-[9px] text-dimmed">
+                <p class="mt-0.5 font-mono text-[0.5625rem] text-dimmed">
                   {fingerprintShort(device.fingerprint)}…
                 </p>
               {/if}

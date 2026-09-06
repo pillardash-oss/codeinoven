@@ -9,6 +9,9 @@
     label?: string
     /** Custom tooltip text (handled by the global tooltip system). */
     title?: string
+    /** Optional mousedown handler forwarded to the toggle button — lets
+     *  call sites (e.g. composer overlays) keep focus on the surrounding UI. */
+    onmousedown?: (event: MouseEvent) => void
     role?: string
     class?: string
     /** Track colour when checked. Defaults to the primary brand colour. */
@@ -25,6 +28,7 @@
     disabled = false,
     label,
     title,
+    onmousedown,
     role = 'switch',
     class: className = '',
     activeClass = 'bg-primary',
@@ -49,6 +53,7 @@
   aria-checked={checked}
   {disabled}
   {title}
+  {onmousedown}
   aria-label={ariaLabel}
   aria-describedby={ariaDescribedBy}
   class="flex shrink-0 items-center gap-2 text-left text-xs disabled:opacity-50 {className}"

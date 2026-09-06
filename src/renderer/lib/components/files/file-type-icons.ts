@@ -65,6 +65,12 @@ export async function getInlineFileTypeIconDataUri(path: string): Promise<string
   return icon
 }
 
+/** Inline-SVG variant of `getInlineFileTypeIconDataUri` for badge renderers
+ *  that must inject raw markup (e.g. theme-aware inline SVG icons). */
+export async function getInlineFileTypeIconSvg(path: string): Promise<string> {
+  return dataUriToSvg(await getInlineFileTypeIconDataUri(path))
+}
+
 /** Resolve the complete colored folder icon used by compact inline badges. */
 export async function getInlineFolderTypeIconDataUri(name: string): Promise<string> {
   if (name.toLowerCase() === '.cio') return CIO_FOLDER_ICON_CLOSED
@@ -74,4 +80,19 @@ export async function getInlineFolderTypeIconDataUri(name: string): Promise<stri
   const icon = getVSIFolderIcon(name)
   inlineFolderCache.set(name, icon)
   return icon
+}
+
+/** Inline-SVG variant of `getInlineFolderTypeIconDataUri`. */
+export async function getInlineFolderTypeIconSvg(name: string): Promise<string> {
+  return dataUriToSvg(await getInlineFolderTypeIconDataUri(name))
+}
+
+/** Decode a base64 `data:image/svg+xml` URI (the icon library's format) back
+ *  to raw SVG markup, tolerating already-raw input by returning it as-is. */
+function dataUriToSvg(icon: string): string {
+  const base64Prefix = 'data:image/svg+xml;base64,'
+  if (!icon.startsWith(base64Prefix)) return icon
+  return new TextDecoder().decode(Uint8Array.from(atob(icon.slice(base64Prefix.length)), (c) =>
+    c.charCodeAt(0)
+  ))
 }

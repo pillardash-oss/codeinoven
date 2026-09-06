@@ -66,7 +66,13 @@ export function broadcastThreadUpdate(thread: Thread): void {
  */
 export function broadcastThreadBranchUpdated(thread: Thread): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    sendToRenderer(win.webContents, 'thread:branchUpdated', thread.projectId, thread.id, thread.branch)
+    sendToRenderer(
+      win.webContents,
+      'thread:branchUpdated',
+      thread.projectId,
+      thread.id,
+      thread.branch
+    )
   }
 }
 
@@ -109,6 +115,14 @@ export function broadcastAgentProcessesChanged(projectId: string, threadId: stri
     sendToRenderer(win.webContents, 'agent:processesChanged', projectId, threadId)
   }
   forwardRemoteEvent('agent:processesChanged', [projectId, threadId])
+  broadcastTaskManagerProcessesChanged()
+}
+
+/** Notify renderers that the app-wide task manager process list changed. */
+export function broadcastTaskManagerProcessesChanged(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'taskManager:processesChanged')
+  }
 }
 
 /** Deliver another process's persisted checkpoint invalidation locally. */

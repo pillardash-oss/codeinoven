@@ -30,7 +30,7 @@
     Download,
     FileDown,
     FileDiff,
-    FileTerminal,
+    MonitorCog,
     FolderTree,
     Globe2,
     History,
@@ -44,6 +44,7 @@
     StickyNote
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
+  import WelcomeStart from './WelcomeStart.svelte'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
   import ProjectIdentity from '../shared/ProjectIdentity.svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
@@ -131,6 +132,7 @@
   import { threadSortState } from '$lib/stores/thread-sort.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
   import { scopeState, STAGE_LABELS, STAGE_COLORS, STAGE_ORDER } from '$lib/stores/scope.svelte'
   import {
     coordinatorHasActiveDelegates,
@@ -149,9 +151,14 @@
     PromptAttachment,
     ScopeBucket,
     Thread,
-    ThreadSearchResult
+    ThreadSearchResult,
+    AgentHarnessUsage
   } from '$shared/types'
-  import type { BrowserDownload, BrowserPermissionRequest } from '$shared/ipc-contract'
+  import type {
+    BrowserDownload,
+    BrowserPermissionDecision,
+    BrowserPermissionRequest
+  } from '$shared/ipc-contract'
 
   interface Props {
     /** Which sidebar the shell shows — the main content stays mounted across modes. */
@@ -176,8 +183,10 @@
     updateConfig
   }: Props = $props()
 
-  const INITIAL_THREAD_LIMIT = 100
   const HISTORY_PAGE_LIMIT = 50
+  /** Threads fetched from the DB per project when a list is expanded past its
+   *  initial per-project hydration slice. */
+  const PROJECT_PAGE_LIMIT = 50
 
   let projects = $state<Project[]>([])
   let allThreads = $state<Thread[]>([])
@@ -185,8 +194,20 @@
   let historyOffset = $state(0)
   let historyLoading = $state(false)
   let hasMoreHistory = $state(true)
+  /** Per-project DB paging state for "Show more" beyond the hydrated slice:
+   *  how many rows were fetched so far, and whether the project has more. */
+  const projectPageOffsets = new SvelteMap<string, number>()
+  const projectExhausted = new SvelteSet<string>()
+  let projectPageLoading = $state<string | null>(null)
   /** Remounts the empty-state chats composer to restore a failed first send. */
   let chatsComposerRestoreKey = $state(0)
+  let chatsComposer: ChatComposer | undefined = $state(undefined)
+
+  const chatSuggestedPrompts = [
+    'Research a question using my device',
+    'Run a task for me on this computer',
+    'Brainstorm ideas with me'
+  ]
 
   // ─── Sidebar focus-follow ────────────────────────────────────────────────
   // While a thread is selected, the sidebar keeps its row (and thus its
@@ -403,6 +424,29 @@
   /** Effective chat settings — the chat's own model when one has been picked,
    *  else the last project model so a fresh chat starts on the model in use. */
   let chatComposerSettings = $derived(chatEffectiveSettings())
+
+  /** Live account quota for the not-yet-created "Start a new chat" composer —
+   *  the exact same provider-level hover-fetch cache the thread battery uses. */
+  const newChatUsage = createAccountUsageCache()
+  function revealNewChatUsage(): void {
+    if (newChatUsage.isStale()) {
+      void newChatUsage.refresh({
+        harnessId: chatComposerSettings.harnessId,
+        providerId: chatComposerSettings.providerId
+      })
+    }
+  }
+  const newChatHarnessUsage = $derived.by(
+    (): AgentHarnessUsage[] =>
+      newChatUsage.usage.map((usage) => ({
+        harnessId: usage.harnessId,
+        providerId: usage.providerId,
+        costUsd: 0,
+        rateLimits: usage.rateLimits,
+        ...(usage.credits ? { credits: usage.credits } : {}),
+        ...(usage.bankedResets ? { bankedResets: usage.bankedResets } : {})
+      }))
+  )
   $effect(() => {
     if (mode !== 'chats') return
     let alive = true
@@ -421,6 +465,8 @@
   })
 
   let projectCreateTrigger = $state(0)
+  /** Which add-project flow the next trigger should start. */
+  let projectCreateTriggerKind = $state<'local' | 'git-clone'>('local')
   let prevCreateThreadCount = 0
   let prevAddProjectCount = 0
   let prevNewChatCount = 0
@@ -915,13 +961,13 @@
     }
   }
 
-  function resolveBrowserPermission(granted: boolean): void {
+  function resolveBrowserPermission(decision: BrowserPermissionDecision): void {
     const request = activeBrowserPermission
     if (!request) return
     browserPermissionRequests = browserPermissionRequests.filter(
       (candidate) => candidate.id !== request.id
     )
-    void invoke('browser:resolvePermission', request.id, granted).catch((error: unknown) => {
+    void invoke('browser:resolvePermission', request.id, decision).catch((error: unknown) => {
       reportError(error, 'The browser permission response could not be applied.')
     })
   }
@@ -1081,7 +1127,7 @@
       workspaceTools.push({
         id: 'actions',
         label: runningActions > 0 ? `Actions (${runningActions} running)` : 'Actions',
-        icon: FileTerminal,
+        icon: MonitorCog,
         active: dockKindActive('actions'),
         countBadge: runningActions > 0 ? String(runningActions) : undefined,
         countBadgeTone: runningActions > 0 ? 'working' : undefined,
@@ -1942,16 +1988,13 @@
     try {
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
-        invoke('thread:listRecent', {
-          projectId: rendererRecovery.selectedProjectId ?? undefined,
-          limit: INITIAL_THREAD_LIMIT
-        })
+        invoke('thread:listRecentPerProject')
       ])
       projects = projectList
       const uniqueThreads = uniqueThreadList(threadList)
       allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
-      historyOffset = threadList.length
-      hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
+      historyOffset = uniqueThreadList(threadList).length
+      hasMoreHistory = false
       notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
       // Publish the workspace with deterministic fallback icons immediately.
@@ -2020,7 +2063,7 @@
           const targets = scopeState.activeProjectId
             ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
             : [INBOX_PROJECT_ID]
-          void providerCatalog.init(targets, { refresh: false })
+          void providerCatalog.init(targets, { refresh: true })
           void providerStore.init()
         })
       })
@@ -2070,16 +2113,13 @@
     try {
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
-        invoke('thread:listRecent', {
-          projectId: workspaceState.activeProject?.id ?? undefined,
-          limit: INITIAL_THREAD_LIMIT
-        })
+        invoke('thread:listRecentPerProject')
       ])
       projects = projectList
       const uniqueThreads = uniqueThreadList(threadList)
       allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
-      historyOffset = threadList.length
-      hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
+      historyOffset = uniqueThreadList(threadList).length
+      hasMoreHistory = false
       notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
@@ -2142,6 +2182,42 @@
     } finally {
       historyLoading = false
     }
+  }
+
+  /**
+   * Fetch a project's older threads from the DB when its sidebar list is
+   * expanded past the per-project hydration slice. Results accumulate in
+   * `allThreads`, so subsequent renders are served from the in-memory cache.
+   */
+  async function loadProjectThreadsPage(projectId: string): Promise<void> {
+    if (projectPageLoading === projectId) return
+    projectPageLoading = projectId
+    try {
+      const offset = projectPageOffsets.get(projectId) ?? 0
+      const page = await invoke('thread:listProjectPage', {
+        projectId,
+        limit: PROJECT_PAGE_LIMIT,
+        offset
+      })
+      projectPageOffsets.set(projectId, offset + page.length)
+      if (page.length < PROJECT_PAGE_LIMIT) projectExhausted.add(projectId)
+      const additions = page
+        .filter((t) => !isOrchestrationChildThread(t))
+        .filter((t) => !allThreads.some((existing) => existing.id === t.id))
+      if (additions.length > 0) {
+        allThreads = [...allThreads, ...additions]
+        for (const thread of additions) {
+          if (!thread.archived) scopeState.updateThread(thread)
+        }
+      }
+    } finally {
+      projectPageLoading = null
+    }
+  }
+
+  /** Whether a project's sidebar list still has unfetched older rows in the DB. */
+  function projectHasMoreInDb(projectId: string): boolean {
+    return !projectExhausted.has(projectId)
   }
 
   // ─── Folder interactions ─────────────────────────────────────────────────
@@ -2958,7 +3034,7 @@
     >
       {#snippet header()}
         {#if workspaceState.specStudioOpen}
-          <span class="text-[10px] tabular-nums text-dimmed">
+          <span class="text-[0.625rem] tabular-nums text-dimmed">
             {workspaceState.specAgentResponses.length}
           </span>
         {:else if mode === 'chats'}
@@ -3058,6 +3134,7 @@
               onProjectCreated={handleProjectCreated}
               onExisting={handleExistingProject}
               triggerAddProject={projectCreateTrigger}
+              triggerKind={projectCreateTriggerKind}
             />
           </div>
         {/if}
@@ -3105,7 +3182,7 @@
                 project={scopeProject}
                 class="min-w-0 flex-1"
                 nameClass="text-xs font-semibold text-foreground"
-                locationClass="text-[9px] text-dimmed"
+                locationClass="text-[0.5625rem] text-dimmed"
                 showLocation={hasProjectNameCollision(scopeProject, visibleProjects)}
               />
             {:else}
@@ -3273,7 +3350,7 @@
                   <StatusBadge stage={scopeContext.stage} size="md" />
                   <span class="text-xs font-semibold">{STAGE_LABELS[scopeContext.stage]}</span>
                   {#if scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length > 0}
-                    <span class="tabular-nums text-[10px] text-dimmed"
+                    <span class="tabular-nums text-[0.625rem] text-dimmed"
                       >{scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage)
                         .length}</span
                     >
@@ -3311,7 +3388,7 @@
           {#if pinnedInboxThreads.length > 0}
             <div class="mb-3">
               <p
-                class="px-2 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                class="px-2 pt-1 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
               >
                 Pinned
               </p>
@@ -3381,7 +3458,7 @@
             {#if pinnedTimelineThreads.length > 0}
               <div class="mb-3 pb-3 border-b">
                 <div class="flex items-center gap-1.5 px-2 py-1.5">
-                  <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                  <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
                     >Pinned</span
                   >
                 </div>
@@ -3424,7 +3501,7 @@
             </div>
             {#if hasMoreHistory}
               <button
-                class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+                class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
                 disabled={historyLoading}
                 onclick={() => void loadHistoryPage()}
               >
@@ -3454,7 +3531,7 @@
           {#if pinnedProjects.length > 0}
             <div class="mb-1 pb-2 border-b">
               <p
-                class="px-2 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                class="px-2 pt-1 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
               >
                 Pinned
               </p>
@@ -3530,9 +3607,9 @@
                           : filterThreadsByQuery(folderThreads, '')}
                         <div class="ml-2">
                           {#if isSearching && projectSearching.has(project.id) && searchResults.length === 0}
-                            <p class="px-2 py-1.5 text-[11px] text-dimmed">Searching…</p>
+                            <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
                           {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}
-                            <p class="px-2 py-1.5 text-[11px] text-dimmed">
+                            <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">
                               {searchQ.trim() ? 'No matching threads' : 'No threads yet'}
                             </p>
                           {:else if isSearching}
@@ -3566,15 +3643,28 @@
                             </div>
                             {#if filteredThreads.length > getVisibleCount(project.id)}
                               <button
-                                class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-dimmed transition-colors hover:text-foreground"
+                                class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                                 onclick={() => showMoreThreads(project.id, filteredThreads.length)}
                               >
                                 Show {filteredThreads.length - getVisibleCount(project.id)} more
                               </button>
+                            {:else if
+                              getVisibleCount(project.id) >= filteredThreads.length &&
+                              filteredThreads.length > 0 &&
+                              projectHasMoreInDb(project.id)}
+                              <button
+                                class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+                                disabled={projectPageLoading === project.id}
+                                onclick={() => void loadProjectThreadsPage(project.id)}
+                              >
+                                {projectPageLoading === project.id
+                                  ? 'Loading…'
+                                  : 'Load older threads'}
+                              </button>
                             {/if}
                             {#if getVisibleCount(project.id) > THREADS_PER_PAGE}
                               <button
-                                class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-dimmed transition-colors hover:text-foreground"
+                                class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                                 onclick={() => showLessThreads(project.id)}
                               >
                                 Show less
@@ -3732,9 +3822,9 @@
                         : filterThreadsByQuery(folderThreads, '')}
                       <div class="ml-2">
                         {#if isSearching && projectSearching.has(project.id) && searchResults.length === 0}
-                          <p class="px-2 py-1.5 text-[11px] text-dimmed">Searching…</p>
+                          <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
                         {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}
-                          <p class="px-2 py-1.5 text-[11px] text-dimmed">
+                          <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">
                             {searchQ.trim() ? 'No matching threads' : 'No threads yet'}
                           </p>
                         {:else if isSearching}
@@ -3768,15 +3858,26 @@
                           </div>
                           {#if filteredThreads.length > getVisibleCount(project.id)}
                             <button
-                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-dimmed transition-colors hover:text-foreground"
+                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                               onclick={() => showMoreThreads(project.id, filteredThreads.length)}
                             >
                               Show {filteredThreads.length - getVisibleCount(project.id)} more
                             </button>
+                          {:else if
+                            getVisibleCount(project.id) >= filteredThreads.length &&
+                            filteredThreads.length > 0 &&
+                            projectHasMoreInDb(project.id)}
+                            <button
+                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+                              disabled={projectPageLoading === project.id}
+                              onclick={() => void loadProjectThreadsPage(project.id)}
+                            >
+                              {projectPageLoading === project.id ? 'Loading…' : 'Load older threads'}
+                            </button>
                           {/if}
                           {#if getVisibleCount(project.id) > THREADS_PER_PAGE}
                             <button
-                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-dimmed transition-colors hover:text-foreground"
+                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                               onclick={() => showLessThreads(project.id)}
                             >
                               Show less
@@ -3875,6 +3976,9 @@
                 <ThreadView
                   thread={selectedThread}
                   chatMode={mode === 'chats'}
+                  allowCenteredComposer={mode === 'chats' ||
+                    ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 &&
+                      !workspaceState.headStartUsedThreadIds.has(selectedThread.id))}
                   onForked={handleForkedThread}
                   projects={visibleProjects}
                   {projectIcons}
@@ -3907,80 +4011,99 @@
             {/key}
           </div>
         {:else if mode === 'chats'}
-          <!-- Empty state — greeting centered, composer anchored at the bottom -->
-          <div class="flex h-full flex-col">
-            <div class="flex flex-1 items-center justify-center px-6">
-              <div class="text-center">
-                <MessageSquare size={32} class="mx-auto mb-3 text-dimmed" />
-                <h1 class="text-lg font-semibold tracking-tight">Start a new chat</h1>
-                <p class="mt-1 text-sm text-dimmed">Send a message to begin — no project needed</p>
-              </div>
+          <!-- Empty state — greeting, composer, and suggested prompts centered -->
+          <div class="flex h-full flex-col items-center justify-center px-6">
+            <div class="mb-6 text-center">
+              <h1 class="text-[1.375rem] font-semibold tracking-tight">Start a new chat</h1>
+              <p class="mt-1 text-[0.875rem] text-muted">
+                Send a message to begin — no project needed
+              </p>
             </div>
-            <div class="shrink-0 px-6 pb-6">
-              <div class="mx-auto w-full max-w-2xl">
-                {#key chatsComposerRestoreKey}
-                  <ChatComposer
-                    placeholder="What do you want to work on?"
-                    autofocus
-                    showEngineeringMode={false}
-                    showChatModes
-                    hidePermissionSelector
-                    settings={chatComposerSettings}
-                    onSettingsChange={(settings) => chatSettings.commit(settings)}
-                    providers={chatProviders}
-                    projectId={chatInboxId}
-                    attachmentStorage={{
-                      kind: 'chat',
-                      projectId: INBOX_PROJECT_ID,
-                      threadId: 'new-chat'
-                    }}
-                    harnessId={chatComposerSettings.harnessId}
-                    favoriteModels={rendererRecovery.chatFavoriteModels}
-                    onToggleFavorite={(providerId, modelId, harnessId) =>
-                      rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
-                    onReorderFavorite={(draggedKey, targetKey, position) =>
-                      rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
-                    recentModels={rendererRecovery.chatRecentModels}
-                    onRemoveRecent={(key) => rendererRecovery.removeChatRecentModel(key)}
-                    onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
-                    imageDescriptorDefault={config?.agentDefaults.imageDescriptor}
-                    imageDescriptorAskAgain={config?.imageDescriptorAskAgain === true}
-                    onImageDescriptorDefaultChange={(selection) =>
-                      void updateConfig?.({
-                        agentDefaults: {
-                          ...(config?.agentDefaults ?? { syncFromThreadChanges: false }),
-                          imageDescriptor: selection
-                        }
-                      })}
-                    onImageDescriptorAskAgainChange={(value) =>
-                      void updateConfig?.({ imageDescriptorAskAgain: value })}
-                    initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
-                    onValueChange={(value) =>
-                      rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)}
-                    initialAttachments={rendererRecovery.attachmentsFor(
+            <div class="w-full max-w-4xl">
+              {#key chatsComposerRestoreKey}
+                <ChatComposer
+                  bind:this={chatsComposer}
+                  placeholder="What do you want to work on?"
+                  autofocus
+                  showEngineeringMode={false}
+                  showChatModes
+                  hidePermissionSelector
+                  settings={chatComposerSettings}
+                  onSettingsChange={(settings) => chatSettings.commit(settings)}
+                  providers={chatProviders}
+                  projectId={chatInboxId}
+                  attachmentStorage={{
+                    kind: 'chat',
+                    projectId: INBOX_PROJECT_ID,
+                    threadId: 'new-chat'
+                  }}
+                  harnessId={chatComposerSettings.harnessId}
+                  favoriteModels={rendererRecovery.chatFavoriteModels}
+                  onToggleFavorite={(providerId, modelId, harnessId) =>
+                    rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
+                  onReorderFavorite={(draggedKey, targetKey, position) =>
+                    rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
+                  recentModels={rendererRecovery.chatRecentModels}
+                  onRemoveRecent={(key) => rendererRecovery.removeChatRecentModel(key)}
+                  onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
+                  imageDescriptorDefault={config?.agentDefaults.imageDescriptor}
+                  imageDescriptorAskAgain={config?.imageDescriptorAskAgain === true}
+                  onImageDescriptorDefaultChange={(selection) =>
+                    void updateConfig?.({
+                      agentDefaults: {
+                        ...(config?.agentDefaults ?? { syncFromThreadChanges: false }),
+                        imageDescriptor: selection
+                      }
+                    })}
+                  onImageDescriptorAskAgainChange={(value) =>
+                    void updateConfig?.({ imageDescriptorAskAgain: value })}
+                  initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
+                  onValueChange={(value) =>
+                    rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)}
+                  initialAttachments={rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')}
+                  onAttachmentsChange={(files) =>
+                    rendererRecovery.setDraft(
                       INBOX_PROJECT_ID,
-                      'new-chat'
+                      'new-chat',
+                      rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
+                      files
                     )}
-                    onAttachmentsChange={(files) =>
-                      rendererRecovery.setDraft(
-                        INBOX_PROJECT_ID,
-                        'new-chat',
-                        rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
-                        files
-                      )}
-                    onSend={(msg, files) => void createStandaloneChat(msg, files)}
-                  />
-                {/key}
-              </div>
+                  onSend={(msg, files) => void createStandaloneChat(msg, files)}
+                  onRevealUsage={revealNewChatUsage}
+                  onHideUsage={() => newChatUsage.markStale()}
+                  usageRefreshing={newChatUsage.refreshing}
+                  harnessUsage={newChatHarnessUsage}
+                />
+                <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
+                  {#each chatSuggestedPrompts as prompt (prompt)}
+                    <button
+                      type="button"
+                      class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      onclick={() => chatsComposer?.setComposerText(prompt)}
+                    >
+                      {prompt}
+                    </button>
+                  {/each}
+                </div>
+              {/key}
             </div>
           </div>
         {:else}
-          <div class="flex h-full items-center justify-center">
-            <div class="text-center">
-              <MessageSquare size={28} class="mx-auto mb-2 text-dimmed" />
-              <p class="text-sm text-dimmed">Select a thread or create one to get started</p>
-            </div>
-          </div>
+          <WelcomeStart
+            onNewChat={() => navigate('chats')}
+            onAddProject={() => {
+              navigate('projects')
+              projectCreateTriggerKind = 'local'
+              workspaceState.requestAddProject()
+            }}
+            onCloneRepo={() => {
+              navigate('projects')
+              projectCreateTriggerKind = 'git-clone'
+              workspaceState.requestAddProject()
+            }}
+            onOpenSettings={() => navigate('settings')}
+            onShowTour={() => workspaceState.requestOnboarding()}
+          />
         {/if}
       </div>
 
@@ -4032,6 +4155,7 @@
                   <TerminalPanel
                     terminalId={activeContextTab.terminalId}
                     projectId={activeContextTab.projectId}
+                    threadId={activeContextTab.threadId}
                     scopeBucketId={workspaceState.activeScopeBucketIdFor(
                       activeContextTab.projectId
                     )}
@@ -4040,6 +4164,7 @@
               {:else if activeContextTab.kind === 'actions'}
                 <ActionsPanel
                   projectId={activeContextTab.projectId}
+                  threadId={activeContextTab.threadId}
                   scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
                 />
               {:else if activeContextTab.kind === 'browser'}
@@ -4143,6 +4268,7 @@
                 <TerminalPanel
                   terminalId={activeDockTab.terminalId}
                   projectId={activeDockTab.projectId}
+                  threadId={activeDockTab.threadId}
                   scopeBucketId={workspaceState.activeScopeBucketIdFor(activeDockTab.projectId)}
                 />
               {/key}
@@ -4242,7 +4368,7 @@
       <span>Manage downloads</span>
       {#if activeDownloadCount > 0}
         <span
-          class="ml-auto rounded-full bg-elevated px-1.5 text-[10px] font-semibold tabular-nums text-muted"
+          class="ml-auto rounded-full bg-elevated px-1.5 text-[0.625rem] font-semibold tabular-nums text-muted"
         >
           {activeDownloadCount}
         </span>
@@ -4308,7 +4434,7 @@
 <Modal
   open={activeBrowserPermission !== null}
   title="Allow browser permission?"
-  onClose={() => resolveBrowserPermission(false)}
+  onClose={() => resolveBrowserPermission('dismiss')}
   closeOnBackdrop={false}
 >
   {#if activeBrowserPermission}
@@ -4337,16 +4463,24 @@
     <button
       type="button"
       class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      title="Deny browser permission"
-      onclick={() => resolveBrowserPermission(false)}
+      title="Refuse and stop asking for this permission on this site"
+      onclick={() => resolveBrowserPermission('deny')}
     >
-      Deny
+      Don&apos;t allow
+    </button>
+    <button
+      type="button"
+      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      title="Allow only this one request; ask again next time"
+      onclick={() => resolveBrowserPermission('allow-once')}
+    >
+      Allow once
     </button>
     <button
       type="button"
       class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-      title="Allow browser permission for this app session"
-      onclick={() => resolveBrowserPermission(true)}
+      title="Allow this permission for the site for this app session"
+      onclick={() => resolveBrowserPermission('allow')}
     >
       Allow
     </button>
@@ -4365,7 +4499,7 @@
     <div class="flex flex-col items-center justify-center gap-2 py-12 text-center text-dimmed">
       <Download size={20} strokeWidth={1.5} />
       <p class="text-xs">No downloads for this project yet.</p>
-      <p class="text-[11px]">Files download to the location you pick in the save dialog.</p>
+      <p class="text-[0.6875rem]">Files download to the location you pick in the save dialog.</p>
     </div>
   {:else}
     <ul class="space-y-2">
@@ -4390,14 +4524,14 @@
                   {browserDownloadStateLabel(download)}
                 </StatusPill>
               </div>
-              <p class="mt-0.5 truncate text-[11px] text-muted" title={download.url}>
+              <p class="mt-0.5 truncate text-[0.6875rem] text-muted" title={download.url}>
                 {browserDownloadHost(download.url)} · {browserDownloadBytes(download.receivedBytes)}
                 {progressing && download.totalBytes > 0
                   ? ` of ${browserDownloadBytes(download.totalBytes)}`
                   : ''}
               </p>
               {#if progressing && download.speedBytes > 0}
-                <p class="mt-0.5 text-[11px] tabular-nums text-dimmed">
+                <p class="mt-0.5 text-[0.6875rem] tabular-nums text-dimmed">
                   {browserDownloadBytes(download.speedBytes)}/s
                 </p>
               {/if}
@@ -4475,13 +4609,13 @@
                   style={`width: ${percent}%`}
                 ></div>
               </div>
-              <span class="w-9 shrink-0 text-right text-[10px] tabular-nums text-dimmed">
+              <span class="w-9 shrink-0 text-right text-[0.625rem] tabular-nums text-dimmed">
                 {Math.round(percent)}%
               </span>
             </div>
           {/if}
           {#if download.error}
-            <p class="mt-2 text-[11px] text-danger" role="alert">{download.error}</p>
+            <p class="mt-2 text-[0.6875rem] text-danger" role="alert">{download.error}</p>
           {/if}
         </li>
       {/each}
@@ -4766,6 +4900,7 @@
         <TerminalPanel
           terminalId={terminalTab.terminalId}
           projectId={terminalTab.projectId}
+          threadId={terminalTab.threadId}
           scopeBucketId={workspaceState.activeScopeBucketIdFor(terminalTab.projectId)}
         />
       {/key}

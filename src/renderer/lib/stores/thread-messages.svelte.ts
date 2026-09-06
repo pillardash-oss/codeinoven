@@ -39,9 +39,10 @@ interface ThreadMessagesEntry {
   heldSteerIds: Set<string>
 }
 
-/** Bounded window warmed on hover, matching the ThreadView history window so a
- *  preloaded thread opens to the same recent-message tail it would load live. */
-export const THREAD_MESSAGE_PRELOAD_WINDOW = 40
+/** Bounded latest-message window warmed for navigation. Keeping this smaller
+ * than a history page lets a selected thread mount once without blocking the
+ * renderer or growing the conversation across several visible frames. */
+export const THREAD_MESSAGE_PRELOAD_WINDOW = 12
 
 const EMPTY_MESSAGES: AgentMessage[] = []
 const STREAM_NOTIFICATION_DELAY_MS = 50
@@ -55,6 +56,27 @@ const LOAD_REVEAL_INTERVAL_MS = 16
 /** Bounded navigation pages should land atomically; reveal only large explicit
  * transcript loads where spreading the work across frames is worthwhile. */
 const LOAD_REVEAL_THRESHOLD = 80
+
+/** Extra older pages a bounded load may fetch to reach the newest turn's
+ *  prompt. A long working trace spans many rows, so the raw tail window can
+ *  start mid-trace — the user's message must never be cut off by the cache. */
+const MAX_TURN_ALIGNMENT_PAGES = 4
+
+/** Whether the newest turn's user prompt is inside this page. Activity-only
+ *  envelopes (compaction notices, sub-agent reports) ride the user role
+ *  mid-turn and do not count as the turn's prompt. */
+function containsNewestTurnPrompt(messages: AgentMessage[]): boolean {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (!message) return false
+    if (message.role !== 'user') continue
+    const activityOnly =
+      message.parts.length > 0 &&
+      message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
+    if (!activityOnly) return true
+  }
+  return false
+}
 
 function threadKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
@@ -336,6 +358,36 @@ class ThreadMessagesStore {
         // must use load() without a limit.
         serverMessages = page.messages
         entry.hasOlder = page.hasOlder
+        // Turn-aligned tail: a bounded tail window that starts mid-turn cuts
+        // the user's message out of the cached page — the view would begin at
+        // the working trace with the prompt missing until "Load earlier
+        // messages" was clicked. Extend the fetch just far enough to include
+        // the newest turn's prompt, bounded so a pathological mega-turn cannot
+        // turn navigation into an unbounded read.
+        let alignmentPages = 0
+        while (
+          serverMessages.length > 0 &&
+          entry.hasOlder &&
+          !containsNewestTurnPrompt(serverMessages) &&
+          alignmentPages < MAX_TURN_ALIGNMENT_PAGES
+        ) {
+          const oldest = serverMessages[0]
+          if (!oldest) break
+          const older = await invoke(
+            'thread:loadMessages',
+            projectId,
+            threadId,
+            { createdAt: oldest.createdAt, id: oldest.id },
+            recentLimit
+          )
+          if (older.messages.length === 0) {
+            entry.hasOlder = false
+            break
+          }
+          serverMessages = [...older.messages, ...serverMessages]
+          entry.hasOlder = older.hasOlder
+          alignmentPages++
+        }
       }
       this.reconcile(projectId, threadId, serverMessages)
       entry.loaded = true
@@ -680,6 +732,13 @@ class ThreadMessagesStore {
       projectReferences,
       presentation
     )
+    // Point the busy run at the steered message immediately. Without this the
+    // run keeps the original turn's user message id until the first post-steer
+    // part event arrives, so the steered message dangles under a still-live
+    // working trace instead of opening its own fresh trace shell right away.
+    // This mirrors the regular send path, where the harness 'started' update
+    // rebinds the run to the new user message as soon as the turn opens.
+    agentRuns.setBusy(projectId, threadId, true, messageId)
     try {
       const confirmed = await invoke(
         'agent:steerPrompt',
@@ -727,8 +786,14 @@ class ThreadMessagesStore {
       userMessageId?: string
     }
   ): Promise<void> {
-    const { text, transportText, attachments = [], references, initialContext, userMessageId } =
-      options
+    const {
+      text,
+      transportText,
+      attachments = [],
+      references,
+      initialContext,
+      userMessageId
+    } = options
     this.setRunIssue(projectId, conversationId, null)
     const { entry, messageId } = this.appendOptimistic(
       projectId,
@@ -875,7 +940,8 @@ class ThreadMessagesStore {
     contextUsed?: number,
     contextEstimated?: boolean,
     rateLimits?: AgentMessage['rateLimits'],
-    credits?: AgentMessage['credits']
+    credits?: AgentMessage['credits'],
+    bankedResets?: AgentMessage['bankedResets']
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
     this.#flushReveal(threadKey(projectId, threadId))
@@ -891,6 +957,7 @@ class ThreadMessagesStore {
     if (contextEstimated !== undefined) doneMsg.contextEstimated = contextEstimated
     if (rateLimits) doneMsg.rateLimits = rateLimits
     if (credits) doneMsg.credits = credits
+    if (bankedResets) doneMsg.bankedResets = bankedResets
     if (compaction) {
       doneMsg.parts = doneMsg.parts.map((part): AgentPart =>
         part.type === 'text'
@@ -939,7 +1006,8 @@ class ThreadMessagesStore {
     contextEstimated?: boolean,
     cost?: number,
     rateLimits?: AgentMessage['rateLimits'],
-    credits?: AgentMessage['credits']
+    credits?: AgentMessage['credits'],
+    bankedResets?: AgentMessage['bankedResets']
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
     this.#flushReveal(threadKey(projectId, threadId))
@@ -953,6 +1021,7 @@ class ThreadMessagesStore {
     if (cost !== undefined) message.cost = cost
     if (rateLimits) message.rateLimits = rateLimits
     if (credits) message.credits = credits
+    if (bankedResets) message.bankedResets = bankedResets
     entry.messages = [...entry.messages]
     this.#notifyStreaming(projectId, threadId)
   }
@@ -962,6 +1031,12 @@ class ThreadMessagesStore {
     const kept = await invoke('agent:truncateMessages', projectId, threadId, messageId)
     this.#applyRemoval(projectId, threadId, kept)
     return kept
+  }
+
+  /** Replace the cached messages of a conversation with the kept set returned
+   *  by a temporary-chat history deletion. */
+  applyKept(projectId: string, threadId: string, kept: AgentMessage[]): void {
+    this.#applyRemoval(projectId, threadId, kept)
   }
 
   /**
@@ -1098,9 +1173,7 @@ class ThreadMessagesStore {
           if (event.type === 'steer.discarded') {
             // The steer never reached the harness — remove the optimistic
             // message so the conversation looks untouched.
-            entry.messages = entry.messages.filter(
-              (message) => message.id !== event.userMessageId
-            )
+            entry.messages = entry.messages.filter((message) => message.id !== event.userMessageId)
           }
         }
         this.#notify(projectId, threadId)
@@ -1133,7 +1206,8 @@ class ThreadMessagesStore {
           event.contextUsed,
           event.contextEstimated,
           event.rateLimits,
-          event.credits
+          event.credits,
+          event.bankedResets
         )
         break
       case 'usage.updated':
@@ -1148,7 +1222,8 @@ class ThreadMessagesStore {
           event.contextEstimated,
           event.cost,
           event.rateLimits,
-          event.credits
+          event.credits,
+          event.bankedResets
         )
         break
       case 'session.status':

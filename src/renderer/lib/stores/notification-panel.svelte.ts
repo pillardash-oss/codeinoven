@@ -18,6 +18,9 @@ export interface InAppNotification {
   projectId: string
   threadId: string
   source: NotificationSource
+  /** Set for temporary-chat notifications: the side chat to focus after the
+   *  parent thread opens. */
+  temporaryChatId?: string
   projectName: string
   projectColor?: string
   timestamp: number

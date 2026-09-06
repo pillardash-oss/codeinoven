@@ -440,7 +440,7 @@
 {#snippet emptyState(Icon: typeof Bot, text: string)}
   <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
     <Icon size={18} class="text-dimmed" />
-    <p class="text-[11px] leading-relaxed text-dimmed">{text}</p>
+    <p class="text-[0.6875rem] leading-relaxed text-dimmed">{text}</p>
   </div>
 {/snippet}
 
@@ -454,10 +454,10 @@
         onclick={() => (expandedFile = expandedFile === fileKey ? null : fileKey)}
       >
         <FileDiff size={12} class="shrink-0 text-dimmed" />
-        <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-foreground">
+        <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-foreground">
           {file.path}
         </span>
-        <span class="shrink-0 text-[9px] tabular-nums">
+        <span class="shrink-0 text-[0.5625rem] tabular-nums">
           <span class="text-success">+{file.additions}</span>
           <span class="text-danger">−{file.deletions}</span>
         </span>
@@ -465,12 +465,12 @@
       {#if expandedFile === fileKey}
         {#if file.patch}
           <pre
-            class="overflow-x-auto bg-elevated/40 px-3 py-1.5 font-mono text-[9px] leading-relaxed"><!--
+            class="overflow-x-auto bg-elevated/40 px-3 py-1.5 font-mono text-[0.5625rem] leading-relaxed"><!--
          -->{#each file.patch.split('\n') as line, index (index)}<span
                 class="block {patchLineClass(line)}">{line || ' '}</span
               >{/each}</pre>
         {:else}
-          <p class="px-3 py-2 text-[10px] text-dimmed">
+          <p class="px-3 py-2 text-[0.625rem] text-dimmed">
             No inline diff for this file (binary or too large).
           </p>
         {/if}
@@ -492,9 +492,9 @@
       >
         <ArrowLeft size={13} />
       </button>
-      <span class="font-mono text-[10px] text-dimmed">#{number}</span>
+      <span class="font-mono text-[0.625rem] text-dimmed">#{number}</span>
       <span
-        class="rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide {stateBadgeClass(
+        class="rounded px-1.5 py-0.5 text-[0.5625rem] font-medium uppercase tracking-wide {stateBadgeClass(
           detail?.state ?? summary.state
         )}"
       >
@@ -503,7 +503,7 @@
       {#if checks && checks.state !== 'none'}
         <button
           type="button"
-          class="flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors {checksBadgeClass(
+          class="flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium transition-colors {checksBadgeClass(
             checks.state
           )}"
           title="View check results"
@@ -538,14 +538,14 @@
         <ExternalLink size={13} />
       </button>
     </div>
-    <p class="mt-1.5 text-[12px] font-medium leading-snug text-foreground">{summary.title}</p>
-    <p class="mt-1 truncate font-mono text-[9px] text-dimmed">
+    <p class="mt-1.5 text-[0.75rem] font-medium leading-snug text-foreground">{summary.title}</p>
+    <p class="mt-1 truncate font-mono text-[0.5625rem] text-dimmed">
       {summary.headRef} → {summary.baseRef} · {summary.authorLogin} · {relativeTime(
         summary.updatedAt
       )}
     </p>
     {#if detail}
-      <p class="mt-1.5 flex items-center gap-2 text-[9px] tabular-nums text-dimmed">
+      <p class="mt-1.5 flex items-center gap-2 text-[0.5625rem] tabular-nums text-dimmed">
         <span class="text-success">+{detail.additions}</span>
         <span class="text-danger">−{detail.deletions}</span>
         <span>{detail.changedFiles} files</span>
@@ -562,7 +562,7 @@
 
   {#if notice}
     <p
-      class="flex shrink-0 items-center gap-1 border-b border-border px-3 py-1 text-[10px] text-success"
+      class="flex shrink-0 items-center gap-1 border-b border-border px-3 py-1 text-[0.625rem] text-success"
     >
       <Check size={12} />
       {notice}
@@ -571,7 +571,7 @@
 
   {#if gitState.error}
     <p
-      class="flex shrink-0 items-center gap-1 border-b border-danger/30 bg-danger/10 px-3 py-1 text-[10px] text-danger"
+      class="flex shrink-0 items-center gap-1 border-b border-danger/30 bg-danger/10 px-3 py-1 text-[0.625rem] text-danger"
       title={gitState.error}
       aria-label={gitState.error}
     >
@@ -588,7 +588,7 @@
       {@const Icon = entry.icon}
       <button
         type="button"
-        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[10px] font-medium transition-colors {tab ===
+        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium transition-colors {tab ===
         entry.id
           ? 'bg-elevated text-foreground'
           : 'text-muted hover:text-foreground'}"
@@ -603,7 +603,7 @@
 
   <div class="min-h-0 flex-1 overflow-y-auto">
     {#if loading}
-      <div class="flex items-center justify-center gap-2 py-10 text-[11px] text-dimmed">
+      <div class="flex items-center justify-center gap-2 py-10 text-[0.6875rem] text-dimmed">
         <Loader2 size={13} class="animate-spin" />
         Loading pull request…
       </div>
@@ -623,16 +623,16 @@
                 class="flex items-center gap-1.5 border-b border-border/60 bg-elevated/50 px-2.5 py-1.5"
               >
                 <span
-                  class="flex size-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold uppercase {avatarClass(
+                  class="flex size-5 shrink-0 items-center justify-center rounded-full text-[0.5625rem] font-semibold uppercase {avatarClass(
                     entry.author
                   )}"
                   aria-hidden="true"
                 >
                   {entry.author.slice(0, 1)}
                 </span>
-                <span class="truncate text-[11px] font-medium text-foreground">{entry.author}</span>
+                <span class="truncate text-[0.6875rem] font-medium text-foreground">{entry.author}</span>
                 <span
-                  class="shrink-0 rounded px-1.5 py-px text-[9px] font-medium {kindClass(
+                  class="shrink-0 rounded px-1.5 py-px text-[0.5625rem] font-medium {kindClass(
                     entry.kind,
                     entry.meta
                   )}"
@@ -640,11 +640,11 @@
                   {kindLabel(entry.kind, entry.meta)}
                 </span>
                 <span class="flex-1"></span>
-                <span class="shrink-0 text-[9px] text-dimmed">{relativeTime(entry.at)}</span>
+                <span class="shrink-0 text-[0.5625rem] text-dimmed">{relativeTime(entry.at)}</span>
               </header>
               {#if entry.kind === 'inline' && entry.meta}
                 <p
-                  class="truncate border-b border-border/40 bg-elevated/20 px-2.5 py-1 font-mono text-[9px] text-dimmed"
+                  class="truncate border-b border-border/40 bg-elevated/20 px-2.5 py-1 font-mono text-[0.5625rem] text-dimmed"
                 >
                   {entry.meta}
                 </p>
@@ -654,7 +654,7 @@
                   <!-- GitHub's dialect includes HTML, so PR prose needs it to
                        read correctly; the sanitizer still strips anything
                        executable. Agent-authored text elsewhere keeps it off. -->
-                  <MarkdownView text={entry.body} class="text-[11px] leading-relaxed" allowHtml />
+                  <MarkdownView text={entry.body} class="text-[0.6875rem] leading-relaxed" allowHtml />
                 </div>
               {/if}
             </article>
@@ -675,8 +675,8 @@
             >
               <GitCommitHorizontal size={12} class="mt-0.5 shrink-0 text-dimmed" />
               <div class="min-w-0 flex-1">
-                <p class="truncate text-[11px] text-foreground">{commit.message}</p>
-                <p class="truncate text-[9px] text-dimmed">
+                <p class="truncate text-[0.6875rem] text-foreground">{commit.message}</p>
+                <p class="truncate text-[0.5625rem] text-dimmed">
                   <span class="font-mono">{commit.shortSha}</span>
                   · {commit.authorName} · {relativeTime(commit.date)}
                 </p>
@@ -688,7 +688,7 @@
             {#if expandedCommit === commit.sha}
               {@const files = commitFiles[commit.sha] ?? []}
               {#if files.length === 0 && loadingCommit !== commit.sha}
-                <p class="px-3 py-2 text-[10px] text-dimmed">No files in this commit.</p>
+                <p class="px-3 py-2 text-[0.625rem] text-dimmed">No files in this commit.</p>
               {:else}
                 <div class="border-t border-border/50 bg-elevated/20">
                   {@render fileList(files, commit.sha)}
@@ -720,17 +720,17 @@
                 onclick={() => onOpenWorkflowRun(workflowRunId)}
               >
                 <Icon size={12} class="shrink-0 {checkClass(check)}" />
-                <span class="min-w-0 flex-1 truncate text-[11px] text-foreground">
+                <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-foreground">
                   {check.name}
                 </span>
-                <span class="shrink-0 text-[9px] text-dimmed">
+                <span class="shrink-0 text-[0.5625rem] text-dimmed">
                   {check.status === 'completed' ? (check.conclusion ?? 'done') : check.status}
                 </span>
               </button>
             {:else}
               <Icon size={12} class="shrink-0 {checkClass(check)}" />
-              <span class="min-w-0 flex-1 truncate text-[11px] text-foreground">{check.name}</span>
-              <span class="shrink-0 text-[9px] text-dimmed">
+              <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-foreground">{check.name}</span>
+              <span class="shrink-0 text-[0.5625rem] text-dimmed">
                 {check.status === 'completed' ? (check.conclusion ?? 'done') : check.status}
               </span>
             {/if}
@@ -751,13 +751,13 @@
     {:else if agentReport?.content.trim()}
       <div class="px-3 py-2">
         <div class="mb-2 flex items-center gap-2">
-          <p class="flex-1 truncate text-[9px] text-dimmed">
+          <p class="flex-1 truncate text-[0.5625rem] text-dimmed">
             {agentReport.path} · {relativeTime(agentReport.updatedAt)}
           </p>
           {#if agentReport.threadId}
             <button
               type="button"
-              class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
               title="Open the thread that produced this review"
               onclick={() => onOpenThread(agentReport?.threadId ?? '')}
             >
@@ -767,7 +767,7 @@
           {/if}
           <button
             type="button"
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
             title="Post this report as a comment on the pull request"
             disabled={posting}
             onclick={() => void postAgentReport()}
@@ -776,12 +776,12 @@
             Post to PR
           </button>
         </div>
-        <MarkdownView text={agentReport.content} class="text-[11px] leading-relaxed" />
+        <MarkdownView text={agentReport.content} class="text-[0.6875rem] leading-relaxed" />
       </div>
     {:else}
       <div class="flex flex-col items-center gap-3 px-6 py-10 text-center">
         <Bot size={18} class="text-dimmed" />
-        <p class="text-[11px] leading-relaxed text-muted">
+        <p class="text-[0.6875rem] leading-relaxed text-muted">
           No agent review yet. "Agent review" opens a thread where an agent checks this PR out in a
           worktree and writes its findings to <span class="font-mono"
             >.cio/git/pr/{number}/review.md</span
@@ -791,7 +791,7 @@
           {#if agentReport?.threadId}
             <button
               type="button"
-              class="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-border px-3 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+              class="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
               title="Open the review thread already running for this pull request"
               onclick={() => onOpenThread(agentReport?.threadId ?? '')}
             >
@@ -801,7 +801,7 @@
           {/if}
           <button
             type="button"
-            class="flex h-7 cursor-pointer items-center gap-1 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+            class="flex h-7 cursor-pointer items-center gap-1 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
             onclick={() => onAgentReview(summary)}
           >
             <Bot size={12} />
@@ -828,7 +828,7 @@
           bind:value={commentBody}
           placeholder="Leave a comment, or write the feedback for a review…"
           ariaLabel="Pull request comment"
-          class="max-h-40 min-h-[52px] w-full overflow-y-auto px-2 py-1.5 text-[11px] leading-relaxed text-foreground outline-none"
+          class="max-h-40 min-h-[52px] w-full overflow-y-auto px-2 py-1.5 text-[0.6875rem] leading-relaxed text-foreground outline-none"
         />
       </div>
     </div>
@@ -841,7 +841,7 @@
       <div class="flex h-8 items-stretch overflow-hidden rounded-lg border border-border">
         <button
           type="button"
-          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
           title={hasBody ? 'Post this as a comment' : 'Write something first'}
           disabled={posting || !hasBody}
           onclick={() => void postComment()}
@@ -855,7 +855,7 @@
         </button>
         <button
           type="button"
-          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[10px] font-medium text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
+          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[0.625rem] font-medium text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
           title={open
             ? 'Approve this pull request (a comment is optional)'
             : 'This pull request is no longer open'}
@@ -867,7 +867,7 @@
         </button>
         <button
           type="button"
-          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[10px] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
+          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
           title={!open
             ? 'This pull request is no longer open'
             : hasBody
@@ -881,7 +881,7 @@
         </button>
       </div>
       {#if open && !hasBody}
-        <p class="mt-1.5 text-[9px] leading-relaxed text-dimmed">
+        <p class="mt-1.5 text-[0.5625rem] leading-relaxed text-dimmed">
           Requesting changes needs a comment saying what to change. Approving does not.
         </p>
       {/if}
@@ -899,18 +899,18 @@
         <div class="mb-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5">
           <div class="flex items-center gap-1.5">
             <TriangleAlert size={13} class="shrink-0 text-warning" />
-            <p class="text-[10px] font-semibold text-warning">
+            <p class="text-[0.625rem] font-semibold text-warning">
               This pull request has merge conflicts
             </p>
           </div>
-          <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
+          <p class="mt-1 text-[0.5625rem] leading-relaxed text-dimmed">
             {summary.baseRef} has changes that conflict with {summary.headRef}. Resolve them and
             push, or have the agent fix them for you.
           </p>
           <div class="mt-2 flex items-center gap-1.5">
             <button
               type="button"
-              class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-warning/40 bg-warning/10 px-2.5 text-[10px] font-medium text-warning transition-colors hover:bg-warning/20 disabled:cursor-default disabled:opacity-40"
+              class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-warning/40 bg-warning/10 px-2.5 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/20 disabled:cursor-default disabled:opacity-40"
               title="Check out this branch locally, merge the base in, and resolve the conflicts in your editor"
               disabled={resolving}
               onclick={() => (resolveConfirm = true)}
@@ -924,7 +924,7 @@
             </button>
             <button
               type="button"
-              class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated"
+              class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated"
               title="Have an agent resolve the conflicts and push the fix"
               onclick={() => onResolveWithAgent?.(summary)}
             >
@@ -937,12 +937,12 @@
       {#if open}
         <div class="flex items-center justify-end gap-1.5">
           {#if draft}
-            <span class="mr-auto flex min-w-0 items-center gap-1 text-[9px] text-warning">
+            <span class="mr-auto flex min-w-0 items-center gap-1 text-[0.5625rem] text-warning">
               <CircleDot size={10} class="shrink-0" />
               <span class="truncate">Draft pull request</span>
             </span>
           {:else if mergeBlocker}
-            <span class="mr-auto flex min-w-0 items-center gap-1 text-[9px] text-warning">
+            <span class="mr-auto flex min-w-0 items-center gap-1 text-[0.5625rem] text-warning">
               <TriangleAlert size={10} class="shrink-0" />
               <span class="truncate">{mergeBlocker}</span>
             </span>
@@ -981,7 +981,7 @@
           {#if draft}
             <button
               type="button"
-              class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+              class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
               title="Mark this draft pull request ready for review before merging"
               disabled={markingReady}
               onclick={() => void markReadyForReview()}
@@ -997,7 +997,7 @@
             <div class="flex h-7 shrink-0 items-stretch overflow-hidden rounded-md">
               <button
                 type="button"
-                class="flex cursor-pointer items-center gap-1 bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+                class="flex cursor-pointer items-center gap-1 bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
                 title={`Merge this pull request into ${summary.baseRef} using ${method}`}
                 disabled={merging}
                 onclick={openMergeConfirm}
@@ -1026,7 +1026,7 @@
                     class="z-50 w-40 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
                   >
                     <p
-                      class="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+                      class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
                     >
                       Merge method
                     </p>
@@ -1049,14 +1049,14 @@
         </div>
       {:else if prState === 'closed'}
         <div class="flex items-center gap-1.5">
-          <span class="flex min-w-0 items-center gap-1 text-[9px] text-dimmed">
+          <span class="flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
             <CircleSlash size={10} class="shrink-0" />
             <span class="truncate">Closed without merging</span>
           </span>
           <span class="flex-1"></span>
           <button
             type="button"
-            class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+            class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
             title="Reopen this pull request"
             disabled={reopening}
             onclick={() => void reopen()}
@@ -1070,7 +1070,7 @@
           </button>
         </div>
       {:else if prState === 'merged'}
-        <span class="flex min-w-0 items-center gap-1 text-[9px] text-dimmed">
+        <span class="flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
           <Merge size={10} class="shrink-0" />
           <span class="truncate">Merged — nothing more to do</span>
         </span>
@@ -1100,7 +1100,7 @@
 
       {#if method === 'rebase'}
         <p
-          class="mt-3 rounded-lg border border-border bg-surface px-3 py-2 text-[10px] leading-relaxed text-dimmed"
+          class="mt-3 rounded-lg border border-border bg-surface px-3 py-2 text-[0.625rem] leading-relaxed text-dimmed"
         >
           Rebase preserves the original commits, so there's no custom commit message to add.
         </p>
@@ -1108,14 +1108,14 @@
         <div class="mt-3 space-y-2">
           <div>
             <label
-              class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+              class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
               for="merge-commit-title"
             >
               Commit title
             </label>
             <input
               id="merge-commit-title"
-              class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+              class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
               placeholder={method === 'merge'
                 ? `Merge pull request #${number} from ${summary.headRef}`
                 : 'Title of the squashed commit'}
@@ -1124,14 +1124,14 @@
           </div>
           <div>
             <label
-              class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+              class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
               for="merge-commit-message"
             >
               Commit message
             </label>
             <textarea
               id="merge-commit-message"
-              class="min-h-16 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+              class="min-h-16 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
               placeholder={method === 'merge'
                 ? 'Describe the merge (optional)'
                 : 'Commit message for the squashed changes'}

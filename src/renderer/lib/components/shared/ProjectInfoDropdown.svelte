@@ -120,7 +120,7 @@
               </span>
               {#if branch}
                 <span
-                  class="flex shrink-0 items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-muted"
+                  class="flex shrink-0 items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
                   title={branch}
                 >
                   <GitBranch size={10} class="shrink-0" />

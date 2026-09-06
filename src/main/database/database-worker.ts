@@ -20,7 +20,7 @@ import createDatabaseWorkerThread from './database-worker-thread.ts?nodeWorker'
 import type { Worker, WorkerOptions } from 'worker_threads'
 import { dirname, join } from 'path'
 import { Logger } from '../system/logger'
-import type { AgentMessage } from '../../lib/types'
+import type { AgentMessage, UserMessageSummary } from '../../lib/types'
 import type { ProviderDeltaSyncResult } from './repositories/agent-message-repo'
 
 /** Spawns the worker thread. Production uses the electron-vite `?nodeWorker` factory. */
@@ -58,6 +58,14 @@ export type DatabaseWorkerRequest =
   | { kind: 'recover-to'; targetPath: string }
   | { kind: 'health' }
   | { kind: 'query'; sql: string; params: unknown[]; maxRows: number }
+  | {
+      kind: 'query-messages'
+      sql: string
+      params: unknown[]
+      maxRows: number
+      includeTransport: boolean
+    }
+  | { kind: 'query-user-messages'; sql: string; params: unknown[]; maxRows: number }
   | { kind: 'execute'; sql: string; params: unknown[] }
   | { kind: 'transaction'; statements: Array<{ sql: string; params: unknown[] }> }
   | {
@@ -174,6 +182,20 @@ export type DatabaseWorkerResult =
       kind: 'query'
       ok: boolean
       rows?: Record<string, unknown>[]
+      truncated?: boolean
+      error?: string
+    }
+  | {
+      kind: 'query-messages'
+      ok: boolean
+      messages?: AgentMessage[]
+      truncated?: boolean
+      error?: string
+    }
+  | {
+      kind: 'query-user-messages'
+      ok: boolean
+      messages?: UserMessageSummary[]
       truncated?: boolean
       error?: string
     }
@@ -376,6 +398,29 @@ export class DatabaseWorker {
    */
   async query(sql: string, params: unknown[], maxRows: number): Promise<ResultForRequest<'query'>> {
     return this.request({ kind: 'query', sql, params, maxRows })
+  }
+
+  /**
+   * Bounded read decoded straight to `AgentMessage[]` on the worker thread —
+   * the `parts` JSON (and its legacy oversized tool outputs) is parsed and
+   * capped there, so a multi-megabyte string never crosses the worker port.
+   */
+  async queryMessages(
+    sql: string,
+    params: unknown[],
+    maxRows: number,
+    includeTransport = false
+  ): Promise<ResultForRequest<'query-messages'>> {
+    return this.request({ kind: 'query-messages', sql, params, maxRows, includeTransport })
+  }
+
+  /** Bounded read decoded straight to `UserMessageSummary[]` on the worker thread. */
+  async queryUserMessages(
+    sql: string,
+    params: unknown[],
+    maxRows: number
+  ): Promise<ResultForRequest<'query-user-messages'>> {
+    return this.request({ kind: 'query-user-messages', sql, params, maxRows })
   }
 
   /** Single write statement on the worker's connection (serialized). */

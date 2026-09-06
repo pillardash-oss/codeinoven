@@ -81,3 +81,47 @@ export function clearLifecycleIntent(projectId: string, threadId: string): void 
     // sees in the toolbox, never apply it silently.
   }
 }
+
+const AUDIT_INTENT_KEY_PREFIX = `${APP_SLUG}.independentAuditIntent.`
+
+function auditIntentStorageKey(projectId: string, threadId: string): string {
+  return `${AUDIT_INTENT_KEY_PREFIX}${projectId}.${threadId}`
+}
+
+/** Load the staged (not-yet-sent) Independent Audit intent, or null when none is staged. */
+export function loadIndependentAuditIntent(projectId: string, threadId: string): boolean | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(auditIntentStorageKey(projectId, threadId))
+    if (raw === null) return null
+    return JSON.parse(raw) === true
+  } catch {
+    return null
+  }
+}
+
+/** Persist the staged Independent Audit intent for a thread (survives restarts). */
+export function saveIndependentAuditIntent(
+  projectId: string,
+  threadId: string,
+  enabled: boolean
+): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(auditIntentStorageKey(projectId, threadId), JSON.stringify(enabled))
+  } catch {
+    // Storage unavailable (private mode, quota) — non-fatal; the intent still
+    // lives in view state for this session.
+  }
+}
+
+/** Drop the staged Independent Audit intent once it has been committed or discarded. */
+export function clearIndependentAuditIntent(projectId: string, threadId: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(auditIntentStorageKey(projectId, threadId))
+  } catch {
+    // Non-fatal: a stale intent can only re-stage a toggle the user still
+    // sees in the plus menu, never apply it silently.
+  }
+}

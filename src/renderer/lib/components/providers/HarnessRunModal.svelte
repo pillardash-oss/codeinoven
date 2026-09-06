@@ -63,6 +63,17 @@
     return 'Harness tasks'
   }
 
+  /** Max pictograms shown in the dock before the rest collapse into a +N badge. */
+  const MAX_DOCK_ICONS = 3
+
+  const visibleRuns = $derived(store.runs.slice(0, MAX_DOCK_ICONS))
+  const overflowCount = $derived(Math.max(0, store.runs.length - MAX_DOCK_ICONS))
+
+  function overflowTitle(count: number): string {
+    const noun = count === 1 ? 'task' : 'tasks'
+    return `${count} more harness ${noun}`
+  }
+
   function dockLabel(): string {
     const kinds = new Set(store.runs.map((run) => run.kind))
     if (kinds.size === 1 && kinds.has('uninstall')) return 'Uninstalls'
@@ -89,7 +100,7 @@
   {#snippet dock()}
     <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
       <button
-        class="rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="rounded-lg px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Show all harness tasks"
         title="Show all harness tasks"
         onclick={() => store.expandAll()}
@@ -97,7 +108,7 @@
         {dockLabel()}
       </button>
       <span class="h-5 w-px bg-border"></span>
-      {#each store.runs as run (run.terminalId)}
+      {#each visibleRuns as run (run.terminalId)}
         <button
           class="relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-elevated"
           title={dockTitle(run)}
@@ -125,6 +136,15 @@
           {/if}
         </button>
       {/each}
+      {#if overflowCount > 0}
+        <span
+          class="flex h-6 min-w-6 items-center justify-center rounded-full bg-elevated px-1.5 font-mono text-[0.625rem] font-semibold text-muted"
+          title={overflowTitle(overflowCount)}
+          aria-label={overflowTitle(overflowCount)}
+        >
+          +{overflowCount}
+        </span>
+      {/if}
       {#if store.hasFinished}
         <span class="h-5 w-px bg-border"></span>
         <button
@@ -156,23 +176,23 @@
             <div class="flex min-w-0 items-center gap-2">
               <AgentIcon agentId={run.harnessId} label={run.harnessName} size={14} />
               <span class="truncate text-xs font-medium">{run.harnessName}</span>
-              <code class="truncate font-mono text-[10px] text-dimmed">
+              <code class="truncate font-mono text-[0.625rem] text-dimmed">
                 $ {run.handoff.command}
                 {run.handoff.args.join(' ')}
               </code>
             </div>
             {#if run.exitCode === undefined}
-              <span class="flex shrink-0 items-center gap-1 text-[10px] font-medium text-info">
+              <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-info">
                 <Loader2 size={11} class="animate-spin" />
                 {activeLabel(run.kind)}
               </span>
             {:else if run.exitCode === 0}
-              <span class="flex shrink-0 items-center gap-1 text-[10px] font-medium text-success">
+              <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-success">
                 <CheckCircle2 size={11} />
                 {finishedLabel(run.kind)}
               </span>
             {:else}
-              <span class="flex shrink-0 items-center gap-1 text-[10px] font-medium text-danger">
+              <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-danger">
                 <XCircle size={11} /> Exited with code {run.exitCode}
               </span>
             {/if}
@@ -187,7 +207,7 @@
           </div>
         </div>
       {/each}
-      <p class="text-[11px] text-dimmed">{footerNote()}</p>
+      <p class="text-[0.6875rem] text-dimmed">{footerNote()}</p>
     </div>
   {/if}
 </DockableModal>

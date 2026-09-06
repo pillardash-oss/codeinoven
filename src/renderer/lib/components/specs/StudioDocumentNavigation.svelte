@@ -54,7 +54,7 @@
     onclick={onBack}
   >
     <ArrowLeft size={13} class="shrink-0" />
-    <span class="max-md:hidden">Conversation</span>
+    <span class="conversation-text max-md:hidden">Conversation</span>
   </button>
   <!-- Show/hide the studio's own section rail. On a phone it stands in for the
        agent-messages button below, whose rail lives in the desktop sidebar that
@@ -83,7 +83,7 @@
   >
     <MessageSquareText size={13} />
   </button>
-  <div class="flex min-w-0 overflow-x-auto rounded-lg bg-raised p-0.5" aria-label="Studio document">
+  <div class="studio-tabs flex min-w-0 overflow-x-auto rounded-lg bg-raised p-0.5" aria-label="Studio document">
     {#if brainstormAvailable && onOpenBrainstorm}
       <button
         class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active ===
@@ -148,3 +148,24 @@
     {/if}
   </div>
 </div>
+
+<style>
+  /* Inside the compact studio header (e.g. coordinator panel open), the back
+     control collapses to the arrow icon alone so the document tabs keep room. */
+  @container studio-header (max-width: 1100px) {
+    .conversation-text {
+      display: none;
+    }
+  }
+
+  /* Compact header: tighten tab padding (desktop only) so every document tab
+     stays visible instead of spilling into a scroll region. */
+  @media (min-width: 48rem) {
+    @container studio-header (max-width: 1100px) {
+      .studio-tabs button {
+        padding-left: 0.375rem;
+        padding-right: 0.375rem;
+      }
+    }
+  }
+</style>

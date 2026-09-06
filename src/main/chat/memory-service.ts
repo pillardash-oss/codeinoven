@@ -3,6 +3,7 @@ import { join } from 'path'
 import type {
   AppConfig,
   MemoryCategory,
+  DeferredMemoryExtraction,
   MemoryConfig,
   MemoryEntry,
   MemoryExportFile,
@@ -20,6 +21,7 @@ import { StorageEngine } from '../storage/storage-engine'
 
 const MEMORY_FILENAME = 'memory.md'
 const PROPOSALS_FILENAME = 'memory-proposals.json'
+const DEFERRED_EXTRACTIONS_FILENAME = 'memory-deferred-extractions.json'
 const ENTRY_MARKER = '<!-- codeinoven-memory-entry -->'
 const MEMORY_DIR = 'memory'
 const MEMORY_PROJECTS_DIR = join(MEMORY_DIR, 'projects')
@@ -33,6 +35,13 @@ export const MEMORY_LIMITS = {
   maxAggregateCharacters: 24_576,
   maxProposals: 20,
   proposalExpiryMs: 7 * 24 * 60 * 60 * 1000
+} as const
+
+/** Bounds for the deferred-extraction retry queue so it can never grow unbounded. */
+export const MEMORY_DEFERRED_EXTRACTION_LIMITS = {
+  maxEntries: 20,
+  maxAttempts: 5,
+  expiryMs: 7 * 24 * 60 * 60 * 1000
 } as const
 
 /**
@@ -1079,6 +1088,116 @@ export class MemoryService {
     return config.entries
       .filter((e) => e.enabled && (e.priority === 'critical' || e.priority === 'high'))
       .map((e) => `[${e.priority.toUpperCase()}] ${e.label}: ${e.content}`)
+  }
+
+  // ─── Deferred extraction retry queue ──────────────────────────────────
+
+  private getDeferredPath(projectId?: string): string {
+    return join(this.proposalsDirectory(projectId), DEFERRED_EXTRACTIONS_FILENAME)
+  }
+
+  private async readDeferred(projectId?: string): Promise<DeferredMemoryExtraction[]> {
+    try {
+      const parsed = await this.storage.read<unknown>(this.getDeferredPath(projectId))
+      if (!Array.isArray(parsed)) return []
+      return parsed.filter(
+        (d): d is DeferredMemoryExtraction =>
+          isRecord(d) &&
+          typeof d.id === 'string' &&
+          typeof d.userMessage === 'string' &&
+          typeof d.assistantResponse === 'string' &&
+          typeof d.createdAt === 'number' &&
+          typeof d.attempts === 'number'
+      )
+    } catch {
+      return []
+    }
+  }
+
+  private async writeDeferred(
+    items: DeferredMemoryExtraction[],
+    projectId?: string
+  ): Promise<void> {
+    if (items.length === 0) {
+      await this.storage.remove(this.getDeferredPath(projectId))
+      return
+    }
+    await this.storage.write(this.getDeferredPath(projectId), items)
+  }
+
+  /**
+   * Persist a gated memory candidate whose model extraction failed so it can
+   * be retried on a later completed turn instead of being lost. Deduplicates
+   * by normalized user material and enforces the count/expiry limits.
+   */
+  async deferMemoryExtraction(input: {
+    userMessage: string
+    assistantResponse: string
+    reason: string
+    projectId?: string
+    threadId?: string
+  }): Promise<void> {
+    const items = await this.readDeferred(input.projectId)
+    const now = Date.now()
+    const normalized = normalizeText(input.userMessage)
+    if (items.some((item) => normalizeText(item.userMessage) === normalized)) return
+    const entry: DeferredMemoryExtraction = {
+      id: `deferred-${now}-${createHash('sha256').update(normalized).digest('hex').slice(0, 8)}`,
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+      userMessage: input.userMessage,
+      assistantResponse: input.assistantResponse,
+      reason: capText(input.reason, 200),
+      createdAt: now,
+      attempts: 0
+    }
+    items.push(entry)
+    const live = items
+      .filter((item) => now - item.createdAt < MEMORY_DEFERRED_EXTRACTION_LIMITS.expiryMs)
+      .slice(-MEMORY_DEFERRED_EXTRACTION_LIMITS.maxEntries)
+    await this.writeDeferred(live, input.projectId)
+  }
+
+  /** Live deferred extractions for a scope, with expired and over-attempt entries pruned. */
+  async readDeferredExtractions(projectId?: string): Promise<DeferredMemoryExtraction[]> {
+    const items = await this.readDeferred(projectId)
+    const now = Date.now()
+    const live = items.filter(
+      (item) =>
+        now - item.createdAt < MEMORY_DEFERRED_EXTRACTION_LIMITS.expiryMs &&
+        item.attempts < MEMORY_DEFERRED_EXTRACTION_LIMITS.maxAttempts
+    )
+    if (live.length !== items.length) await this.writeDeferred(live, projectId)
+    return live
+  }
+
+  /** Remove a deferred extraction after its retry succeeded or was decided. */
+  async removeDeferredExtraction(id: string, projectId?: string): Promise<void> {
+    const items = await this.readDeferred(projectId)
+    const remaining = items.filter((item) => item.id !== id)
+    if (remaining.length !== items.length) await this.writeDeferred(remaining, projectId)
+  }
+
+  /** Record a failed retry attempt; drops the entry once attempts are exhausted. */
+  async recordDeferredExtractionFailure(id: string, error: string, projectId?: string): Promise<void> {
+    const items = await this.readDeferred(projectId)
+    const entry = items.find((item) => item.id === id)
+    if (!entry) return
+    if (entry.attempts + 1 >= MEMORY_DEFERRED_EXTRACTION_LIMITS.maxAttempts) {
+      await this.removeDeferredExtraction(id, projectId)
+      return
+    }
+    const updated = items.map((item) =>
+      item.id === id
+        ? {
+            ...item,
+            attempts: item.attempts + 1,
+            lastError: capText(error, 200),
+            lastAttemptAt: Date.now()
+          }
+        : item
+    )
+    await this.writeDeferred(updated, projectId)
   }
 
   // ─── Deterministic extraction gate (A-06) ───────────────────────────────

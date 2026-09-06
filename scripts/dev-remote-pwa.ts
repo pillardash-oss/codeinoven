@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url'
 import { createServer, type ViteDevServer } from 'vite'
 import {
   rendererAlias,
+  rendererDedupe,
   rendererDefine,
   rendererPlugins,
   rendererPublicDir,
@@ -92,7 +93,7 @@ async function main(): Promise<void> {
     root: rendererRoot,
     publicDir: rendererPublicDir,
     plugins: rendererPlugins(),
-    resolve: { alias: rendererAlias },
+    resolve: { alias: rendererAlias, dedupe: rendererDedupe },
     server: {
       host: true,
       port,

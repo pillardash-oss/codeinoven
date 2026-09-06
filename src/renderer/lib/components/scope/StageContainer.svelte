@@ -83,14 +83,14 @@
     >
       {#if collapsed}
         <ChevronRight size={13} class="shrink-0 text-dimmed" />
-        <span class="text-[10px] tabular-nums text-dimmed">{threads.length}</span>
+        <span class="text-[0.625rem] tabular-nums text-dimmed">{threads.length}</span>
         <span class="sr-only">{STAGE_LABELS[stage]}</span>
       {:else}
         <ChevronDown size={13} class="shrink-0 text-dimmed" />
-        <span class="text-[11px] font-semibold uppercase tracking-wide text-foreground">
+        <span class="text-[0.6875rem] font-semibold uppercase tracking-wide text-foreground">
           {STAGE_LABELS[stage]}
         </span>
-        <span class="ml-auto text-[10px] tabular-nums text-dimmed">{threads.length}</span>
+        <span class="ml-auto text-[0.625rem] tabular-nums text-dimmed">{threads.length}</span>
       {/if}
     </button>
   </div>
@@ -112,7 +112,7 @@
           />
         </div>
       {:else}
-        <p class="px-3 py-4 text-center text-[11px] text-dimmed">No threads</p>
+        <p class="px-3 py-4 text-center text-[0.6875rem] text-dimmed">No threads</p>
       {/each}
     </div>
   {/if}

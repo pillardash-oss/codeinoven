@@ -67,7 +67,8 @@ export class LlamaServerSpeechBackend implements SpeechBackend {
    */
   constructor(
     private readonly registerChild?: (pid: number, command: string, cwd: string) => void,
-    private readonly unregisterChild?: (pid: number) => void
+    private readonly unregisterChild?: (pid: number) => void,
+    private readonly trackChild?: (pid: number, command: string, cwd: string) => void
   ) {}
 
   async capabilities(): Promise<SpeechCapability[]> {
@@ -184,6 +185,7 @@ export class LlamaServerSpeechBackend implements SpeechBackend {
     this.child = child
     this.currentModelFile = modelFile
     this.registerChild?.(child.pid ?? 0, executable, process.cwd())
+    this.trackChild?.(child.pid ?? 0, executable, process.cwd())
     const pid = child.pid ?? 0
     child.once('exit', () => this.unregisterChild?.(pid))
     let buffered = ''

@@ -13,13 +13,7 @@
 
   /** Persists each thread's scroll position across component remounts. */
   const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
-  /** Messages mounted on the very first frame after a thread switch — only the
-   *  newest tail; the rest of the loaded page reveals across the next frames. */
-  const TAIL_RENDER_INITIAL_LIMIT = 12
-  /** Delay between tail-window growth steps — one frame lets each batch paint. */
-  const TAIL_RENDER_GROW_DELAY_MS = 16
   const HISTORY_WINDOW_SIZE = 40
-  const HISTORY_PRELOAD_THRESHOLD = 240
 
   import {
     AudioLines,
@@ -49,6 +43,7 @@
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { normalizeComposerMessage, spaceOutProjectReferences } from '../chats/composer-mentions'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
@@ -67,8 +62,10 @@
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
   import TranscriptExportModal from './TranscriptExportModal.svelte'
   import Modal from '../ui/Modal.svelte'
+  import CodexBankedResetConfirm from '../ui/CodexBankedResetConfirm.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
   import AgentTodoCard from './AgentTodoCard.svelte'
   import AgentQuestionCard from './AgentQuestionCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
@@ -85,6 +82,7 @@
   import AssignmentReadyCard from './AssignmentReadyCard.svelte'
   import AssignmentCoordinatorPanel from './AssignmentCoordinatorPanel.svelte'
   import AchievementCoordinatorPanel from './AchievementCoordinatorPanel.svelte'
+  import IndependentAuditCoordinatorPanel from './IndependentAuditCoordinatorPanel.svelte'
   import AuditOfferCard from './AuditOfferCard.svelte'
   import AuditReadyCard from './AuditReadyCard.svelte'
   import AuditGeneratedCard from './AuditGeneratedCard.svelte'
@@ -112,7 +110,11 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { isUsageResetWaitIssue } from '$shared/provider-issue'
+  import {
+    classifyProviderIssue,
+    isUsageResetWaitIssue,
+    rateLimitWindowFromProviderIssue
+  } from '$shared/provider-issue'
   import { copyText } from '$lib/copy-text'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
@@ -121,7 +123,10 @@
   import {
     loadLifecycleIntent,
     saveLifecycleIntent,
-    clearLifecycleIntent
+    clearLifecycleIntent,
+    loadIndependentAuditIntent,
+    saveIndependentAuditIntent,
+    clearIndependentAuditIntent
   } from '$lib/stores/lifecycle-intent'
   import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
   import {
@@ -142,7 +147,7 @@
     type StartAfterThreadReference
   } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey, parseModelKey } from '$lib/model-keys'
-  import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -159,11 +164,14 @@
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import { DEFAULT_SCOPE_BUCKET_ID, DEFAULT_THREAD_TITLE } from '$shared/types'
+  import {
+    DEFAULT_SCOPE_BUCKET_ID,
+    DEFAULT_THREAD_TITLE,
+    isOrchestrationChildThread
+  } from '$shared/types'
   import type {
     Thread,
     ThreadMessageCursor,
-    ThreadMessagePage,
     ThreadSettings,
     ThreadContextUsage,
     ThinkingLevel,
@@ -174,8 +182,8 @@
     AgentPart,
     AgentEvent,
     AgentContextUsage,
+    AgentRateLimitWindow,
     AgentHarnessUsage,
-    AgentAccountUsage,
     AgentProviderIssue,
     AgentSessionStatus,
     AgentDefaultsConfig,
@@ -218,6 +226,7 @@
     PendingAgentQuestionRequest,
     ImageDescriptorErrorRequest,
     ImageDescriptorReplyAction,
+    AttachmentStorageScope,
     UserMessagePresentation,
     UserMessageSummary,
     UsageEfficiencyKpis,
@@ -231,6 +240,7 @@
     representativeLifecycleSelection
   } from '$shared/engines/engineering-lifecycle-engine'
   import { APP_NAME } from '$shared/brand'
+  import { getVendorIconSvg } from '$lib/vendor-icons/registry'
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
@@ -271,6 +281,10 @@
      *  the scrollable message list. Used by surfaces such as temporary chats to
      *  expose their own header actions without duplicating ThreadView internals. */
     headerSnippet?: Snippet
+    /** Whether the centered composer head start may show on an empty
+     *  conversation. Workspace gates this: always true in chat mode, and in
+     *  project mode only for a project's sole, untouched thread. */
+    allowCenteredComposer?: boolean
   }
 
   let {
@@ -283,7 +297,8 @@
     onProjectCreated,
     onContinueInThread,
     controller,
-    headerSnippet
+    headerSnippet,
+    allowCenteredComposer = true
   }: Props = $props()
 
   // Workspace clears its selected-thread state before this keyed view's
@@ -301,6 +316,7 @@
   let messages = $derived(
     controller?.messages ?? threadMessages.messages(thread.projectId, thread.id)
   )
+  let loaded = $derived(controller?.loaded ?? threadMessages.loaded(thread.projectId, thread.id))
   /** The conversation identity for held-steer tracking: temporary chats use
    *  their own id, threads use the thread id. */
   let conversationId = $derived(controller?.conversationId ?? thread.id)
@@ -308,37 +324,141 @@
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
   let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
-  // The store already keeps the loaded history bounded to one page and grows
-  // it only when the user reaches the top. Render that page as one continuous
-  // scroll surface so the user can always scroll back down to the latest turn.
+  /** Minimum first paint: only the newest few messages mount on the first
+   *  frame, so a long thread paints instantly on switch. */
+  const INITIAL_PAINT_MESSAGES = 4
+  /** Messages mounted per frame while the window auto-fills after mount. */
+  const INITIAL_REVEAL_BATCH = 12
+  let mountedCount = $state(
+    Math.min(
+      threadMessages.messages(mountedThread.projectId, mountedThread.id).length,
+      INITIAL_PAINT_MESSAGES
+    )
+  )
+  let initialPaintRevealFrame = 0
+  /** Id of the first mounted message while the reader is scrolled up. With an
+   *  anchor pinned, the window runs from what the reader is reading all the
+   *  way to the live tail and GROWS with the stream instead of sliding with
+   *  it — a working turn appending trace entries can never unmount the
+   *  message and trace the reader is steering against. Null = follow the
+   *  tail with the newest `mountedCount` messages. */
+  let windowStartId = $state<string | null>(null)
+  /** Absolute index of the first mounted message. If the anchored message
+   *  left the store (truncated/deleted), fall back without touching state —
+   *  deriveds must stay pure. A minimum of TWO pages is always mounted: the
+   *  current working page ([prompt][trace][output]) and the previous page,
+   *  even when it sits out of the viewport. */
+  let mountedStartIndex = $derived.by(() => {
+    if (hasController) return 0
+    if (windowStartId) {
+      const anchorIndex = messages.findIndex((message) => message.id === windowStartId)
+      if (anchorIndex >= 0) return anchorIndex
+    }
+    const countStart = Math.max(0, messages.length - mountedCount)
+    const turnStart = latestTurnInfo.startIndex
+    if (turnStart < 0) {
+      // A fresh thread has an optimistic prompt before it has an assistant
+      // message, so it is not a complete turn yet. Keep that prompt mounted
+      // instead of treating it as history hidden behind the load button.
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index]
+        if (message?.role !== 'user' || isActivityOnlyUserMessage(message)) continue
+        return Math.min(countStart, index)
+      }
+      return countStart
+    }
+    const covered = promptPagesBefore(turnStart, 2)
+    return Math.min(countStart, covered === -1 ? 0 : covered)
+  })
+  /** The mounted window: everything from the reader's anchor (or the newest
+   *  `mountedCount` messages) to the live tail. The message store may hold
+   *  hundreds of merged pages, but only this window mounts — remounting a
+   *  whole multi-megabyte transcript on every thread switch was the
+   *  switch-back delay. History beyond the window mounts only when the
+   *  reader scrolls up (or jumps to it), never automatically. The window
+   *  always extends to the tail, so streaming trace entries render the
+   *  moment they land — never staged, never evicted from below the reader. */
+  let visibleMessages = $derived(hasController ? messages : messages.slice(mountedStartIndex))
 
-  /** Frame one mounts only the newest tail — enough markdown to block the
-   *  composer for seconds if flushed all at once — then the window completes
-   *  across the next frames. Once complete it never shrinks or re-mounts:
-   *  scrolling is a pure snapshot scroll with zero runtime work. */
-  let renderLimit = $state(TAIL_RENDER_INITIAL_LIMIT)
-
-  let visibleMessages = $derived(
-    renderLimit >= messages.length ? messages : messages.slice(-renderLimit)
+  /** True when the thread has no conversation yet — the composer is centered
+   *  with suggested prompts instead of docked at the bottom. */
+  /** Resolved icon for the centered head-start header — same pipeline as the
+   *  project sidebar: stored image, SVG icon type, then initials fallback. */
+  const centeredProjectIconUrl = $derived(
+    project && !chatMode ? getProjectIcon(project, projectIconUrl ?? undefined) : null
+  )
+  /** Display name of the thread's selected model, or null when none is set. */
+  const centeredModelName = $derived.by(() => {
+    if (!settings.modelId) return null
+    const model =
+      allModels.find(
+        (m) =>
+          m.id === settings.modelId &&
+          (!settings.providerId || m.providerId === settings.providerId)
+      ) ?? allModels.find((m) => m.id === settings.modelId)
+    return model?.name ?? settings.modelId
+  })
+  let emptyConversation = $derived(
+    loaded &&
+      visibleMessages.length === 0 &&
+      !busy &&
+      !failureRetryVisible &&
+      pendingPermissions.length === 0 &&
+      pendingQuestionRequests.length === 0
   )
 
-  /** Complete the mount on the frame after first paint, in one step, so the
-   *  list is static for the lifetime of the view. */
-  $effect(() => {
-    if (renderLimit >= messages.length) return
-    let raf = 0
-    const timer = setTimeout(() => {
-      raf = requestAnimationFrame(() => {
-        raf = requestAnimationFrame(() => {
-          renderLimit = messages.length
-        })
-      })
-    }, TAIL_RENDER_GROW_DELAY_MS)
-    return () => {
-      clearTimeout(timer)
-      cancelAnimationFrame(raf)
+  /** Centered composer head start: empty conversation AND the workspace
+   *  allows it (sole untouched thread in project mode, always in chat mode). */
+  let centeredComposer = $derived(emptyConversation && allowCenteredComposer)
+
+  const projectSuggestedPrompts = [
+    'Summarize this project: architecture, key modules, and entry points',
+    'Review the codebase and list the top improvement opportunities',
+    'Find and fix a bug — explain the root cause as you go'
+  ]
+
+  const chatSuggestedPrompts = [
+    'Research a question using my device',
+    'Run a task for me on this computer',
+    'Brainstorm ideas with me'
+  ]
+
+  const suggestedPrompts = $derived(chatMode ? chatSuggestedPrompts : projectSuggestedPrompts)
+
+  /** Auto-fill the mounted window up to HISTORY_WINDOW_SIZE after the first
+   *  paint, one batch per frame. Batches mount above the viewport only, so
+   *  content-visibility keeps them layout-free and a reader at the bottom
+   *  never sees a step. This is the only automatic fill-in — nothing beyond
+   *  the window mounts without the reader scrolling up. */
+  function beginInitialPaintReveal(): void {
+    if (!alive || hasController) return
+    if (mountedCount === 0 && messages.length > 0) {
+      mountedCount = Math.min(messages.length, INITIAL_PAINT_MESSAGES)
     }
-  })
+    scheduleInitialReveal()
+  }
+
+  function scheduleInitialReveal(): void {
+    if (!alive) return
+    if (mountedCount >= Math.min(messages.length, HISTORY_WINDOW_SIZE)) return
+    initialPaintRevealFrame = requestAnimationFrame(() => {
+      if (!alive) return
+      const fillTarget = Math.min(messages.length, HISTORY_WINDOW_SIZE)
+      if (mountedCount >= fillTarget) return
+      const el = scrollEl
+      const previousTop = el?.scrollTop ?? 0
+      const previousHeight = el?.scrollHeight ?? 0
+      mountedCount = Math.min(fillTarget, mountedCount + INITIAL_REVEAL_BATCH)
+      // The batch mounted above the viewport. A reader at the bottom is
+      // re-anchored by the tail-follow ResizeObserver; a reader away from the
+      // bottom keeps their exact viewport across the off-screen mount.
+      if (el && userScrolledAway) {
+        const grown = el.scrollHeight - previousHeight
+        if (grown > 0) el.scrollTop = previousTop + grown
+      }
+      scheduleInitialReveal()
+    })
+  }
   /** The latest turn that already has an assistant message. A newly submitted
    *  user follow-up is handled separately until its first assistant message is
    *  mirrored, so it can never lend live state to the preceding trace. */
@@ -369,14 +489,15 @@
   let fullUserMessageHistory = $state<UserMessageSummary[]>([])
   let userMessageHistoryLoaded = false
   let userMessageHistoryLoading: Promise<void> | null = null
-  let hasOlderMessages = $derived(controller?.hasOlder ?? olderMessagesAvailable)
+  let hasOlderMessages = $derived(
+    controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
+  )
   let userMessageTexts = $derived(
     messages
       .filter((msg) => msg.role === 'user')
       .map((msg) => messageText(msg))
       .filter((text) => text.trim().length > 0)
   )
-  let loaded = $derived(controller?.loaded ?? threadMessages.loaded(thread.projectId, thread.id))
   let busy = $derived(controller?.busy ?? agentRuns.isBusy(thread.projectId, thread.id))
   let conversationBusy = $derived(
     (controller?.busy ?? false) || agentRuns.isConversationBusy(thread.projectId, thread.id)
@@ -481,6 +602,11 @@
 
   let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
   let pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
+  /** Staged (intent-only) Independent Audit toggle: turning the switch on
+   *  stages the choice and docks the audit coordinator immediately. `null`
+   *  means nothing is staged; `true`/`false` is the staged switch position.
+   *  Clicking "Run audit" in the coordinator is what commits it durably. */
+  let pendingIndependentAudit = $state<boolean | null>(null)
   let lifecycleCancelModalOpen = $state(false)
   /** True while the Engineering lifecycle retry from the failure card is running. */
   let engineeringLifecycleRetrying = $state(false)
@@ -722,9 +848,12 @@
   let providers = $derived(providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached())
 
   /** Chats are for questions and research: they never inject the Engineering
-   *  workflow and always run with auto permission review. */
+   *  workflow and stay pinned to auto permission review while File System is
+   *  off. Once File System is enabled the permission picker unlocks up to Full
+   *  Access, so the user's chosen level is carried through instead of being
+   *  clobbered back to auto review. */
   function normalizeChatSettings(next: ThreadSettings): ThreadSettings {
-    return { ...next, permissionLevel: 'auto_review' }
+    return next.fileSystemMode === true ? next : { ...next, permissionLevel: 'auto_review' }
   }
 
   /** Commit to the chat-scoped last-used store on the Chats tab, and to the
@@ -759,6 +888,10 @@
   }
 
   let commands = $state<ScopedHarnessCommand[]>([])
+  /** Native "switch to API usage credits" command, when the active harness's
+   *  driver exposes one (Claude Code today) — drives the composer's dedicated
+   *  flame-icon shortcut instead of only being reachable via the slash menu. */
+  let usageCreditsCommand = $derived(commands.find((command) => command.name === 'usage-credits'))
   /** Skills visible to the thread's active harness: harness-native, global-layer,
    *  and CodeInOven-registered (Utilities) skills. Rendered as slash actions. */
   let capabilitySkills = $state<AgentCapabilityEntry[]>([])
@@ -815,7 +948,7 @@
       return {
         state: 'error',
         issue: {
-          kind: 'unknown',
+          kind: classifyProviderIssue(controller.error),
           message: controller.error,
           harnessId: settings.harnessId,
           retryable: true
@@ -829,7 +962,7 @@
     return {
       state: 'error',
       issue: {
-        kind: 'unknown',
+        kind: classifyProviderIssue(errorMessage),
         message: errorMessage,
         harnessId: settings.harnessId,
         retryable: true
@@ -843,6 +976,33 @@
       visibleProviderStatus.issue === proactiveAuthIssue
   )
   const providerName = $derived(harnessDisplayName(settings.harnessId))
+  const providerIssueRateLimits = $derived.by(() => {
+    const issue = visibleProviderStatus?.issue
+    if (!issue) return []
+    const limit = rateLimitWindowFromProviderIssue(issue)
+    return limit ? [limit] : []
+  })
+  function mergeRateLimitWindows(
+    reported: readonly AgentRateLimitWindow[],
+    authoritative: readonly AgentRateLimitWindow[]
+  ): AgentRateLimitWindow[] {
+    const merged = [...reported]
+    for (const incoming of authoritative) {
+      const match = merged.findIndex(
+        (candidate) =>
+          (incoming.windowMinutes !== undefined &&
+            candidate.windowMinutes === incoming.windowMinutes) ||
+          candidate.label.toLowerCase() === incoming.label.toLowerCase()
+      )
+      if (match === -1) {
+        merged.push(incoming)
+      } else {
+        const current = merged[match]
+        if (current) merged[match] = { ...current, ...incoming, id: current.id }
+      }
+    }
+    return merged
+  }
   /** Harness that actually produced the visible provider issue. When it differs
    *  from the thread's current harness (e.g. a Codex usage-limit card still on
    *  screen while the user already switched the thread to OpenCode), the badge
@@ -1023,7 +1183,10 @@
       })
     }
 
-    if (!chatMode) {
+    // Orchestration child threads (workers, auditors) are driven by their
+    // coordinator — they can never enable engineering mode themselves, so the
+    // stage toggles and Auto Pilot are not offered to them.
+    if (!chatMode && !orchestrationChild) {
       // Engineering is a set of lifecycle stages, not one switch: expose every
       // stage as its own toggle so "turn engineering on/off" is never ambiguous.
       // Each action stages the selection exactly like the Engineering Toolbox —
@@ -1184,6 +1347,19 @@
       // unknown provenance are intentionally excluded from the live meter.
       if (message.harnessId !== settings.harnessId || message.providerId !== settings.providerId)
         continue
+      // A compaction summary rewrites the harness's context: occupancy and
+      // token totals reported by earlier messages no longer describe the
+      // session. Drop them here so the meter never shows a stale
+      // pre-compaction reading (e.g. a stuck "≈100%") — the next reported
+      // or estimated turn re-seeds the signal from the compacted context.
+      if (
+        message.origin === 'compaction' ||
+        message.parts.some((part) => part.type === 'compaction-summary')
+      ) {
+        latestContextUsed = undefined
+        latestContextEstimated = false
+        latestTokens = undefined
+      }
       latestMessage = message
       const stepCost = message.parts.reduce(
         (total, part) => total + (part.type === 'step-finish' ? (part.cost ?? 0) : 0),
@@ -1249,6 +1425,7 @@
       contextUsed === undefined &&
       latestTokens === undefined &&
       latestRateLimits === undefined &&
+      providerIssueRateLimits.length === 0 &&
       latestCredits === undefined &&
       costUsd <= 0
     ) {
@@ -1263,7 +1440,7 @@
         : {}),
       costUsd,
       ...(latestTokens ? { tokens: latestTokens } : {}),
-      rateLimits: latestRateLimits ?? [],
+      rateLimits: mergeRateLimitWindows(latestRateLimits ?? [], providerIssueRateLimits),
       ...(latestCredits ? { credits: latestCredits } : {})
     }
   })
@@ -1336,6 +1513,7 @@
         entry.costUsd += message.cost ?? stepCost
         if (message.rateLimits?.length) entry.rateLimits = message.rateLimits
         if (message.credits) entry.credits = message.credits
+        if (message.bankedResets) entry.bankedResets = message.bankedResets
         if (message.modelId) entry.modelId = message.modelId
         continue
       }
@@ -1345,7 +1523,8 @@
         ...(message.modelId ? { modelId: message.modelId } : {}),
         costUsd: message.cost ?? stepCost,
         rateLimits: message.rateLimits ?? [],
-        ...(message.credits ? { credits: message.credits } : {})
+        ...(message.credits ? { credits: message.credits } : {}),
+        ...(message.bankedResets ? { bankedResets: message.bankedResets } : {})
       }
     }
     // Merge the whole-thread cumulative analytics from the harness_usage table
@@ -1391,18 +1570,34 @@
     }
     // Layer the live account quota over the matching harness so the battery
     // shows current windows/credits even for old threads with no message data.
-    for (const usage of liveAccountUsage ?? []) {
+    for (const usage of accountUsageCache.usage) {
       const entry = byHarness[usage.harnessId]
       if (entry) {
         if (usage.rateLimits.length) entry.rateLimits = usage.rateLimits
         if (usage.credits) entry.credits = usage.credits
+        if (usage.bankedResets) entry.bankedResets = usage.bankedResets
       } else {
         byHarness[usage.harnessId] = {
           harnessId: usage.harnessId,
           providerId: usage.providerId,
           costUsd: 0,
           rateLimits: usage.rateLimits,
-          ...(usage.credits ? { credits: usage.credits } : {})
+          ...(usage.credits ? { credits: usage.credits } : {}),
+          ...(usage.bankedResets ? { bankedResets: usage.bankedResets } : {})
+        }
+      }
+    }
+    if (providerIssueRateLimits.length > 0 && visibleProviderStatus) {
+      const harnessId = visibleProviderStatus.issue.harnessId ?? settings.harnessId
+      const entry = byHarness[harnessId]
+      if (entry) {
+        entry.rateLimits = mergeRateLimitWindows(entry.rateLimits, providerIssueRateLimits)
+      } else {
+        byHarness[harnessId] = {
+          harnessId,
+          providerId: settings.providerId,
+          costUsd: 0,
+          rateLimits: providerIssueRateLimits
         }
       }
     }
@@ -1410,6 +1605,7 @@
       (entry) =>
         entry.rateLimits.length > 0 ||
         entry.credits ||
+        entry.bankedResets ||
         entry.costUsd > 0 ||
         (entry.tokens?.total ?? 0) > 0 ||
         (entry.messageCount ?? 0) > 0 ||
@@ -1474,6 +1670,11 @@
         ? { credits: incoming.credits }
         : previous.credits
           ? { credits: previous.credits }
+          : {}),
+      ...(incoming.bankedResets
+        ? { bankedResets: incoming.bankedResets }
+        : previous.bankedResets
+          ? { bankedResets: previous.bankedResets }
           : {})
     }
   }
@@ -1496,88 +1697,58 @@
    *  threads (or threads whose turns predate quota capture) still show current
    *  rate-limit windows and credits in the battery popover. One entry per
    *  harness used on the thread. */
-  let liveAccountUsage = $state<AgentAccountUsage[]>([])
-  let refreshingAccountUsage = $state(false)
-  /** Quota is fetched on battery hover and cached briefly so rapid re-hovers
-   *  don't hammer the harness CLIs. */
-  let accountUsageFetchedAt = 0
-  const ACCOUNT_USAGE_CACHE_MS = 5000
-  /** Fast drivers (pi answers over an in-memory RPC session in a few ms)
-   *  would make the loading bar flash imperceptibly, reading as "nothing
-   *  happened". Hold the fetching state briefly so the hover always gives
-   *  the same visible feedback the slower harness CLIs produce naturally. */
-  const ACCOUNT_USAGE_MIN_LOADING_MS = 800
-
-  function delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms))
-  }
+  const accountUsageCache = createAccountUsageCache()
 
   function revealContextUsage(): void {
     if (contextUsage) commitContextUsage(contextUsage)
     void refreshEfficiencyKpis()
     // Fetch live quota only when the battery is revealed (hover), and only if
     // the cached copy is stale — never on thread open.
-    const stale =
-      liveAccountUsage.length === 0 ||
-      accountUsageFetchedAt === 0 ||
-      Date.now() - accountUsageFetchedAt > ACCOUNT_USAGE_CACHE_MS
-    if (stale) void refreshAccountUsageOnDemand()
+    if (accountUsageCache.isStale()) void refreshAccountUsageOnDemand()
   }
 
   /** Called when the user stops hovering the usage indicator. Resets the quota
    *  cache so the *next* hover always fetches fresh data — while the user keeps
    *  hovering, no further fetch is scheduled. */
   function hideContextUsage(): void {
-    accountUsageFetchedAt = 0
+    accountUsageCache.markStale()
   }
 
-  async function refreshAccountUsageOnDemand(refreshKey?: string): Promise<void> {
-    if (refreshingAccountUsage) return
-    refreshingAccountUsage = true
-    try {
-      const usageList = await invoke('agent:refreshAccountUsage', thread.projectId, thread.id)
-      // Guard against a stale/partial main process resolving the call with a
-      // non-array; an undefined `liveAccountUsage` crashes the battery derived
-      // on every render flush and freezes the thread view.
-      if (!Array.isArray(usageList)) return
-      // Drop a response for a harness selection the user already moved away
-      // from — an out-of-order resolve must not clobber the current selection.
-      if (refreshKey && refreshKey !== `${settings.harnessId}:${settings.providerId}`) return
-      liveAccountUsage = usageList
-      accountUsageFetchedAt = Date.now()
-      const currentUsage = usageList.find(
-        (usage) =>
-          usage.harnessId === settings.harnessId && usage.providerId === settings.providerId
-      )
-      if (currentUsage) {
-        // Fold the fresh quota over whatever the meter already shows so an empty
-        // rate-limit list or missing credits can never erase the bars the user is
-        // viewing — it can only replace them with newer, richer data.
-        const merged = mergeContextUsage(contextUsageDisplay, {
-          ...(contextUsageDisplay ?? {
-            costUsd: 0,
-            rateLimits: []
-          }),
-          rateLimits: currentUsage.rateLimits,
-          ...(currentUsage.contextWindow !== undefined
-            ? { contextWindow: currentUsage.contextWindow }
-            : {}),
-          ...(currentUsage.contextUsed !== undefined
-            ? { contextUsed: currentUsage.contextUsed }
-            : {}),
-          ...(currentUsage.credits ? { credits: currentUsage.credits } : {})
-        })
-        // Persist the fresh quota with the current context snapshot so it
-        // restores on the next mount without another harness round-trip.
-        commitContextUsage(merged)
-      }
-    } catch {
-      // Best-effort quota refresh — never surface a transient harness failure.
-    } finally {
-      const elapsed = Date.now() - accountUsageFetchedAt
-      const wait = Math.max(0, ACCOUNT_USAGE_MIN_LOADING_MS - elapsed)
-      if (wait > 0) await delay(wait)
-      refreshingAccountUsage = false
+  async function refreshAccountUsageOnDemand(): Promise<void> {
+    // Drop a response for a harness selection the user already moved away
+    // from — an out-of-order resolve must not clobber the current selection.
+    const refreshKey = `${settings.harnessId}:${settings.providerId}`
+    const usageList = await accountUsageCache.refresh(
+      {
+        harnessId: settings.harnessId,
+        providerId: settings.providerId
+      },
+      () => refreshKey !== `${settings.harnessId}:${settings.providerId}`
+    )
+    const currentUsage = usageList.find(
+      (usage) => usage.harnessId === settings.harnessId && usage.providerId === settings.providerId
+    )
+    if (currentUsage) {
+      // Fold the fresh quota over whatever the meter already shows so an empty
+      // rate-limit list or missing credits can never erase the bars the user is
+      // viewing — it can only replace them with newer, richer data.
+      const merged = mergeContextUsage(contextUsageDisplay, {
+        ...(contextUsageDisplay ?? {
+          costUsd: 0,
+          rateLimits: []
+        }),
+        rateLimits: currentUsage.rateLimits,
+        ...(currentUsage.contextWindow !== undefined
+          ? { contextWindow: currentUsage.contextWindow }
+          : {}),
+        ...(currentUsage.contextUsed !== undefined
+          ? { contextUsed: currentUsage.contextUsed }
+          : {}),
+        ...(currentUsage.credits ? { credits: currentUsage.credits } : {})
+      })
+      // Persist the fresh quota with the current context snapshot so it
+      // restores on the next mount without another harness round-trip.
+      commitContextUsage(merged)
     }
   }
 
@@ -1973,6 +2144,9 @@
     const promptContext = [responseReferenceContext(), taskContext].filter(Boolean).join('\n\n')
     const promptReferences = [...responseReferences]
     clearResponseReferences()
+    // The centered head start must never return for this thread once a real
+    // message was sent — even if the messages are deleted right after.
+    if (!chatMode) workspaceState.markThreadHeadStartUsed(thread.id)
     void (async () => {
       const staged = pendingLifecycleSelection
       if (staged) {
@@ -2027,14 +2201,7 @@
   }
 
   function temporaryConversationContext(): string {
-    return messages
-      .map((message) => {
-        const text = messageText(message).trim()
-        return text ? `${message.role.toUpperCase()}: ${text}` : ''
-      })
-      .filter(Boolean)
-      .join('\n\n')
-      .slice(-80_000)
+    return temporaryChatContext(messages, messageText)
   }
 
   function openTemporarySelectionChat(mode: 'elaborate' | 'quick'): void {
@@ -2320,6 +2487,10 @@
       thread.assignmentRole === undefined) ||
       thread.achievementRole === 'auditor'
   )
+  /** Workers and auditors are orchestration internals driven by their
+   *  coordinator: identical view, but they never enable engineering mode
+   *  themselves, so the composer hides the toolbox and lifecycle actions. */
+  let orchestrationChild = $derived(isOrchestrationChildThread(thread))
   let achievementOnly = $derived(settings.loopMode === true && settings.assignmentMode !== true)
   let studioOnlyAuditWorkflow = $derived(
     settings.assignmentMode !== true &&
@@ -2359,10 +2530,36 @@
   /** Sticky: Achievement coordination remains once the flow has ever run. */
   let achievementTriggered = $derived(achievementOnly || thread.achievementRole === 'coordinator')
 
+  /** Independent (spec-less) audit state. Never inherited by forks or new threads. */
+  let independentAuditEnabled = $derived(thread.independentAudit === true)
+  let independentAuditInitialized = $derived(thread.independentAuditInitialized === true)
+  /** A staged toggle wins over the committed state, mirroring the Toolbox. */
+  let independentAuditDisplayEnabled = $derived(
+    pendingIndependentAudit !== null ? pendingIndependentAudit : independentAuditEnabled
+  )
+  let independentAuditRunning = $derived(independentAuditEnabled && auditBusy)
+  /** The switch only exists once the thread has work and no Engineering mode
+   *  is on — a staged (intent-only) Toolbox selection counts as on, so the
+   *  two controls can never be lit at the same time before a send commits
+   *  either choice. Fresh threads and empty drafts never show it. */
+  let independentAuditAvailable = $derived(
+    !chatMode &&
+      !orchestrationChild &&
+      !independentAuditInitialized &&
+      !engineeringOn &&
+      (thread.sessionId !== undefined ||
+        (threadMessages.loaded(thread.projectId, thread.id) &&
+          threadMessages.messages(thread.projectId, thread.id).length > 0))
+  )
+
   /** Which coordinator, if any, this thread publishes to the context dock. */
   let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | 'audit' | null => {
     if (isAssignmentAuditorThread) return null
     if (assignment && assignment.status !== 'draft') return 'assignment'
+    // A staged (not-yet-run) Independent Audit already docks its coordinator:
+    // the sidebar appears the moment the switch is turned on, and clicking
+    // "Run audit" there is what commits the choice durably.
+    if (independentAuditDisplayEnabled) return 'audit'
     if (achievementTriggered && spec) return 'achievement'
     if (plainEngineeringAuditAvailable && spec) return 'audit'
     return null
@@ -2402,6 +2599,22 @@
       contextSidebarState.openCoordinator(thread.projectId, thread.id, label)
     }
     return dispose
+  })
+
+  /** Turning the Independent Audit switch off undocks the coordinator AND
+   *  closes the sidebar shell that the switch opened. Tracked per thread so a
+   *  thread switch never closes another thread's coordinator tab. */
+  let independentCoordinatorThreadId = $state<string | null>(null)
+  $effect(() => {
+    const threadId = thread.id
+    if (independentAuditDisplayEnabled) {
+      independentCoordinatorThreadId = threadId
+      return
+    }
+    if (independentCoordinatorThreadId === threadId) {
+      independentCoordinatorThreadId = null
+      contextSidebarState.closeCoordinator(thread.projectId, threadId)
+    }
   })
 
   type AssignmentAuditDisplayState = Thread['auditState'] | 'failed'
@@ -2693,6 +2906,12 @@
     if (jumpLoading) return
     const cachedIndex = messages.findIndex((message) => message.id === id)
     if (cachedIndex >= 0) {
+      // The store holds the target but the mounted window may not — move the
+      // anchor back to cover it (plus context) before scrolling.
+      if (!hasController && mountedStartIndex > cachedIndex) {
+        windowStartId = messages[Math.max(0, cachedIndex - 8)]?.id ?? null
+        await tick()
+      }
       document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       return
     }
@@ -2710,6 +2929,9 @@
       const targetIndex = messages.findIndex((message) => message.id === id)
       if (targetIndex >= 0) {
         olderMessagesAvailable = page.hasOlder
+        if (!hasController && mountedStartIndex > targetIndex) {
+          windowStartId = messages[Math.max(0, targetIndex - 8)]?.id ?? null
+        }
         await tick()
         document
           .getElementById(`msg-${id}`)
@@ -2749,6 +2971,9 @@
         const targetIndex = messages.findIndex((message) => message.id === messageId)
         if (targetIndex < 0) return
         olderMessagesAvailable = page.hasOlder
+        if (!hasController && mountedStartIndex > targetIndex) {
+          windowStartId = messages[Math.max(0, targetIndex - 8)]?.id ?? null
+        }
         await tick()
         if (page.hasNewer) {
           const newest = page.messages[page.messages.length - 1]
@@ -2826,7 +3051,10 @@
   })
 
   // Feed the header count and Sources sidebar from the persisted conversation.
+  // Controller-driven views (temporary chats) are embedded panels, never the
+  // primary conversation surface — they must not publish global header state.
   $effect(() => {
+    if (hasController) return
     workspaceState.sources = sources
   })
 
@@ -2862,12 +3090,15 @@
         content,
         ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
       }))
+    if (hasController) return
     workspaceState.messageCount = userMessages.length
     workspaceState.userMessages = userMessages
   })
 
   // Expose fork/delete to the history side panel; identity-safe cleanup below.
+  // Controller-driven views (temporary chats) never publish history actions.
   $effect(() => {
+    if (hasController) return
     const actions: HistoryMessageActions = {
       fork: (id) => void forkFromHistoryMessage(id),
       requestDelete: requestHistoryMessageDelete,
@@ -2880,7 +3111,10 @@
     }
   })
 
+  // Controller-driven views (temporary chats) never feed the spec-conversation
+  // sidebar: their responses belong to the side chat, not the studio thread.
   $effect(() => {
+    if (hasController) return
     workspaceState.specAgentResponses = messages
       .filter((message) => message.role === 'assistant')
       .map((message) => ({
@@ -2904,7 +3138,11 @@
   // A persisted studio document remains available from the header. A missing
   // specification is only retryable after the current agent turn has produced
   // a final response and the generation path has reported an error.
+  // Controller-driven views (temporary chats) must not touch spec-studio state:
+  // their own showSpecStudio is always false, so publishing from them would
+  // close the studio and pop the project sidebar open while the studio is up.
   $effect(() => {
+    if (hasController) return
     const hasStudioDocument =
       brainstorm !== null ||
       prd !== null ||
@@ -2929,7 +3167,9 @@
   })
 
   // Register the header's Spec toggle; cleared when the thread view unmounts.
+  // Controller-driven views (temporary chats) never register workspace state.
   $effect(() => {
+    if (hasController) return
     workspaceState.toggleSpecStudio = () => {
       if (showSpecStudio) {
         closeSpecStudio()
@@ -2976,23 +3216,32 @@
 
   function onScroll(): void {
     if (!scrollEl) return
-    userScrolledAway = !isAtBottom(scrollEl)
+    const away = !isAtBottom(scrollEl)
+    // Pin the window to what the reader is reading the moment they leave the
+    // tail, and release it back to the tail-relative window when they return.
+    // While pinned, a streaming turn grows the window instead of sliding it —
+    // the message and trace under the reader can never be unmounted by new
+    // entries arriving at the tail.
+    if (away && !userScrolledAway) {
+      windowStartId = visibleMessages[0]?.id ?? null
+    } else if (!away && userScrolledAway) {
+      windowStartId = null
+    }
+    userScrolledAway = away
+    // Self-heal: the mounted window must never sit at zero while the store
+    // holds messages — a windowed view that collapsed to nothing would leave
+    // the reader staring at a blank transcript.
+    if (!hasController && mountedCount === 0 && messages.length > 0) {
+      mountedCount = Math.min(messages.length, HISTORY_WINDOW_SIZE)
+    }
     threadScrollPositions.set(thread.id, {
       top: scrollEl.scrollTop,
       awayFromBottom: userScrolledAway
     })
     scheduleResponseBubbleUpdate()
-    if (nearHistoryEdge(scrollEl)) void loadOlderMessages()
-  }
-
-  /** Whether the viewport is close enough to the loaded-history boundary that
-   *  an older page should already be streaming in. Scales with the transcript:
-   *  a fixed pixel threshold only triggers once the user has exhausted every
-   *  row in the current batch, so keep up to ~a quarter of the transcript (max
-   *  2400px) buffered ahead of them. */
-  function nearHistoryEdge(el: HTMLDivElement): boolean {
-    const trigger = Math.max(HISTORY_PRELOAD_THRESHOLD, Math.min(el.scrollHeight * 0.25, 2400))
-    return el.scrollTop <= trigger
+    // History is button-driven by design: scrolling to the top of the
+    // conversation never auto-loads older pages. The "Load earlier messages"
+    // button is the only trigger for the conversation-level history fetch.
   }
 
   /** Release the tail-follow lock synchronously when the user starts scrolling up. */
@@ -3001,6 +3250,29 @@
   }
 
   let loadingOlderMessages = $state(false)
+
+  /** Walk back `pages` user-prompt page starts from `fromIndex`. Returns the
+   *  index of the prompt that begins the `pages`-th older page, or -1 when
+   *  the store does not hold that many complete pages. Every prompt found in
+   *  the store defines a complete page: the store is contiguous, and a
+   *  prompt is by definition the first message of its turn. */
+  function promptPagesBefore(fromIndex: number, pages: number): number {
+    let cursor = fromIndex
+    for (let page = 0; page < pages; page++) {
+      let found = -1
+      for (let i = cursor - 1; i >= 0; i--) {
+        const message = messages[i]
+        if (!message) return -1
+        if (message.role !== 'user') continue
+        if (isActivityOnlyUserMessage(message)) continue
+        found = i
+        break
+      }
+      if (found === -1) return -1
+      cursor = found
+    }
+    return cursor
+  }
 
   async function loadOlderMessages(): Promise<void> {
     if (!scrollEl || loadingOlderMessages || !hasOlderMessages) return
@@ -3011,23 +3283,24 @@
     loadingOlderMessages = true
     // Loading history is an explicit request to inspect the past.
     userScrolledAway = true
+    // Pin the window before anything prepends — with an anchor pinned, the
+    // mounted content cannot change no matter what merges behind it, so the
+    // fetch loop needs no scroll compensation at all.
+    windowStartId ??= messages[Math.max(0, messages.length - mountedCount)]?.id ?? null
     try {
-      // Backfill ahead of the reader: keep fetching bounded batches until
-      // roughly two viewports of transcript sit above the fold, so scrolling
-      // up never lands on the boundary of the currently loaded batch.
-      for (let pageCount = 0; pageCount < 6; pageCount++) {
+      // One click loads THREE turn-aligned pages: the store usually already
+      // holds some of them, so fetch only while it does not — each fetch is a
+      // bounded 40-message page and turns that span more than one page keep
+      // it fetching until three deduped turn starts exist before the anchor.
+      for (let attempt = 0; attempt < 30; attempt++) {
+        if (turnStartPromptsBefore(mountedStartIndex, 3).length === 3) break
         const el = scrollEl
         if (!el || !olderMessagesAvailable) break
-        const stillNearEdge =
-          nearHistoryEdge(el) || el.scrollHeight < el.clientHeight * 2 + el.scrollTop
-        if (pageCount > 0 && !stillNearEdge) break
         const oldest = messages[0]
         if (!oldest) {
           olderMessagesAvailable = false
           break
         }
-        const previousHeight = el.scrollHeight
-        const previousTop = el.scrollTop
         const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
         const page = await invoke(
           'thread:loadMessages',
@@ -3038,12 +3311,95 @@
         )
         if (!alive) return
         olderMessagesAvailable = page.hasOlder
-        if (page.messages.length === 0) break
+        if (page.messages.length === 0) {
+          olderMessagesAvailable = false
+          break
+        }
         threadMessages.mergePage(thread.projectId, thread.id, page.messages)
+        mountedCount += page.messages.length
+        await tick()
+      }
+      // Turn-align the store's oldest boundary: a raw 40-row page can end
+      // mid-turn, cutting that turn's prompt out of the cache entirely — the
+      // loaded page would then begin at a working trace with its prompt
+      // missing above it. Extend the fetch until the oldest row is a turn's
+      // prompt (or the thread truly has nothing older).
+      for (let align = 0; align < 4; align++) {
+        const oldest = messages[0]
+        if (!oldest) break
+        if (oldest.role === 'user' && !isActivityOnlyUserMessage(oldest)) break
+        if (!olderMessagesAvailable) break
+        const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
+        const page = await invoke(
+          'thread:loadMessages',
+          thread.projectId,
+          thread.id,
+          before,
+          HISTORY_WINDOW_SIZE
+        )
+        if (!alive) return
+        olderMessagesAvailable = page.hasOlder
+        if (page.messages.length === 0) {
+          olderMessagesAvailable = false
+          break
+        }
+        threadMessages.mergePage(thread.projectId, thread.id, page.messages)
+        mountedCount += page.messages.length
+        await tick()
+      }
+      // Move the anchor back three pages — or to the thread's very beginning
+      // when fewer complete pages exist — then keep the reader's viewport
+      // stable across the mount. The restore is anchored to the first on-screen
+      // message element, not a height delta: a height-delta write drifts
+      // whenever the newly mounted pages' real laid-out height differs from
+      // the height measured at tick time, and the taller the loaded pages the
+      // further that drift throws the reader (all the way to the bottom).
+      const el = scrollEl
+      const firstVisibleId = visibleMessages[0]?.id
+      const firstVisibleEl = firstVisibleId
+        ? document.getElementById(`msg-${firstVisibleId}`)
+        : undefined
+      const viewportOffset =
+        el && firstVisibleEl
+          ? firstVisibleEl.getBoundingClientRect().top - el.getBoundingClientRect().top
+          : undefined
+      const previousHeight = el?.scrollHeight ?? 0
+      const previousTop = el?.scrollTop ?? 0
+      // The anchor must be the start of a turn — a user prompt — never a
+      // trace row. Landing on a trace presented the loaded page cut off at
+      // its beginning, with the turn's prompt missing above it.
+      const starts = turnStartPromptsBefore(mountedStartIndex, 3)
+      let target = starts.length === 3 ? starts[starts.length - 1] : 0
+      const isRealPrompt = (index: number): boolean => {
+        const message = messages[index]
+        return !!message && message.role === 'user' && !isActivityOnlyUserMessage(message)
+      }
+      while (target < mountedStartIndex && !isRealPrompt(target)) target += 1
+      if (target < mountedStartIndex) {
+        windowStartId = messages[target]?.id ?? null
+        // Keep the tail-relative count in sync so releasing the anchor at
+        // the bottom never shrinks the window below what is mounted.
+        mountedCount = Math.max(mountedCount, messages.length - target)
         await tick()
         const after = scrollEl
         if (after) {
-          after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
+          const afterEl = firstVisibleId
+            ? document.getElementById(`msg-${firstVisibleId}`)
+            : undefined
+          if (afterEl && viewportOffset !== undefined) {
+            // Position of the anchor message within the scroll content, then
+            // place it back at the exact viewport offset it had before the
+            // prepended pages mounted above it.
+            const contentOffset =
+              afterEl.getBoundingClientRect().top -
+              after.getBoundingClientRect().top +
+              after.scrollTop
+            after.scrollTop = Math.max(0, contentOffset - viewportOffset)
+          } else {
+            // Element anchor unavailable — fall back to the height-delta
+            // compensation rather than leaving the viewport unmoved.
+            after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
+          }
           threadScrollPositions.set(thread.id, {
             top: after.scrollTop,
             awayFromBottom: userScrolledAway
@@ -3052,7 +3408,7 @@
       }
     } catch {
       // A transient page failure leaves the current window intact; the next
-      // scroll or button press can retry from the same cursor.
+      // button press can retry from the same cursor.
     } finally {
       loadingOlderMessages = false
     }
@@ -3112,6 +3468,7 @@
     // lock synchronously and re-anchoring a tick later keeps the tail engaged
     // even if the bottom grew between the click and this snap's scroll event.
     userScrolledAway = false
+    windowStartId = null
     scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
     void tick().then(() => {
       if (!scrollEl || userScrolledAway) return
@@ -3222,15 +3579,17 @@
     // project boundary through the now-null live prop.
     const mountedProjectId = thread.projectId
     const mountedThreadId = thread.id
-    workspaceState.jumpToMessage = jumpToMessage
-    workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+    if (!controller) {
+      workspaceState.jumpToMessage = jumpToMessage
+      workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+    }
 
     const onResize = (): void => scheduleResponseBubbleUpdate()
     window.addEventListener('resize', onResize)
 
     if (controller) {
       controller.mount()
-      void controller.load()
+      void Promise.resolve(controller.load()).then(() => beginInitialPaintReveal())
       localReady = Promise.resolve()
       sessionReady = Promise.resolve('')
       void refreshCommands()
@@ -3247,13 +3606,19 @@
         }
         window.removeEventListener('resize', onResize)
         clearTimeout(copyResetTimer)
-        workspaceState.sources = []
-        workspaceState.jumpToMessage = null
-        if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
-          workspaceState.loadUserMessageHistory = null
+        cancelAnimationFrame(initialPaintRevealFrame)
+        // Controller-driven views never published the global state below, so
+        // their teardown must not clear it either — clearing would clobber the
+        // values published by the primary conversation view behind the panel.
+        if (!controller) {
+          workspaceState.sources = []
+          workspaceState.jumpToMessage = null
+          if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
+            workspaceState.loadUserMessageHistory = null
+          }
+          workspaceState.messageCount = 0
+          workspaceState.userMessages = []
         }
-        workspaceState.messageCount = 0
-        workspaceState.userMessages = []
         controller.unmount()
       }
     }
@@ -3270,6 +3635,9 @@
       // session or thread switch so the switches keep the user's last choice.
       const stagedIntent = loadLifecycleIntent(mountedProjectId, mountedThreadId)
       if (stagedIntent) pendingLifecycleSelection = stagedIntent
+      // Same for a staged (not-yet-sent) Independent Audit toggle.
+      const stagedAuditIntent = loadIndependentAuditIntent(mountedProjectId, mountedThreadId)
+      if (stagedAuditIntent !== null) pendingIndependentAudit = stagedAuditIntent
     }
     // A sibling thread may inherit its Engineering lifecycle after this view
     // already hydrated (the inheritance write is async). Re-read once the
@@ -3337,6 +3705,14 @@
     })
     // Task mount restores app-owned state only. Native harness transport stays
     // cold until user sends a message.
+    // Warm cache: the bounded window is already in memory (hover preloads or a
+    // recent visit), so the staged first paint can start with zero IPC waits.
+    if (
+      threadMessages.loaded(mountedProjectId, mountedThreadId) &&
+      threadMessages.messages(mountedProjectId, mountedThreadId).length > 0
+    ) {
+      beginInitialPaintReveal()
+    }
     void connectSession()
     localReady = loadLocal().then(() => {
       if (!alive) return
@@ -3349,7 +3725,6 @@
         void sendMessage(draft, files, undefined, undefined, undefined, [], [], undefined, [], true)
       }
     })
-
     return () => {
       alive = false
       queuedMessageDispatcher.markUnmounted(mountedProjectId, mountedThreadId)
@@ -3365,6 +3740,7 @@
       unsubscribeLifecycleInheritance?.()
       window.removeEventListener('resize', onResize)
       clearTimeout(copyResetTimer)
+      cancelAnimationFrame(initialPaintRevealFrame)
       workspaceState.sources = []
       workspaceState.jumpToMessage = null
       if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
@@ -3545,15 +3921,18 @@
       return
     }
     try {
-      const [threadData, page, config] = await Promise.all([
+      const [threadData, , config] = await Promise.all([
         invoke('thread:get', projectId, id),
         threadMessages.loaded(projectId, id)
-          ? Promise.resolve<ThreadMessagePage | null>(null)
-          : invoke('thread:loadMessages', projectId, id, undefined, HISTORY_WINDOW_SIZE),
+          ? Promise.resolve()
+          : threadMessages.load(projectId, id, THREAD_MESSAGE_PRELOAD_WINDOW),
         invoke('config:get')
       ])
       if (!alive) return
-      olderMessagesAvailable = page?.hasOlder ?? threadMessages.hasOlder(projectId, id)
+      olderMessagesAvailable = threadMessages.hasOlder(projectId, id)
+      // Cold cache: the bounded preload just landed — stage the first paint
+      // around the newest tail now. No-op when the warm path already revealed.
+      beginInitialPaintReveal()
       if (threadData?.settings) {
         settings = chatMode
           ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
@@ -3563,9 +3942,6 @@
       imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
       autoRetryAfterReset = config.autoRetryAfterReset === true
       auditSettings = auditSettingsForThread()
-      // Merge the newest mirror page with optimistic messages and any older
-      // pages already loaded for this thread.
-      if (page) threadMessages.mergePage(projectId, id, page.messages)
       // Re-bind the thread's persisted session so its live events keep routing
       // to this cache (and the background queue dispatcher) even when the
       // renderer never sent a message on this mount.
@@ -4325,17 +4701,43 @@
   async function replyImageDescriptor(
     requestId: string,
     action: ImageDescriptorReplyAction,
-    selection?: AgentModelSelection
+    selection?: AgentModelSelection,
+    imagePath?: string
   ): Promise<void> {
     const { projectId, id } = thread
     try {
-      await invoke('agent:replyImageDescriptor', projectId, id, requestId, action, selection)
+      await invoke(
+        'agent:replyImageDescriptor',
+        projectId,
+        id,
+        requestId,
+        action,
+        selection,
+        imagePath
+      )
       pendingImageDescriptorError = null
     } catch (error) {
       errorMessage =
         error instanceof Error ? error.message : 'The image descriptor could not be retried.'
       throw error
     }
+  }
+
+  /** Open the file picker for a replacement image on the vision error card and
+   *  hand the chosen path to the descriptor, which retries the failed image
+   *  with it. The picked file is retained in the thread's attachment scratch
+   *  (project tmp for project threads), the same stable spot pasted images
+   *  come from. */
+  async function pickImageDescriptorReplacement(requestId: string): Promise<void> {
+    const { projectId, id } = thread
+    const scope: AttachmentStorageScope = {
+      kind: chatMode ? 'chat' : 'project',
+      projectId,
+      threadId: id
+    }
+    const picked = await invoke('dialog:pickFile', scope)
+    if (!picked) return
+    await replyImageDescriptor(requestId, 'pick_image', undefined, picked)
   }
 
   /** Record the model executing the turn as vision-capable (the descriptor ran
@@ -4647,7 +5049,6 @@
       // screen while the new turn runs — the same rule the thread path follows
       // by clearing cached error state at send time.
       controller.clearError()
-      userScrolledAway = false
       idleAttentionHandled = false
       // Snapshot the selection this turn starts with before anything else can
       // change it — identical to the thread path, so mid-turn composer edits
@@ -4818,15 +5219,17 @@
 
     recordModelUse()
 
-    // Snap scroll to bottom — the user just sent something, they want to see it
-    userScrolledAway = false
+    // Follow the new message only when the reader is already at the tail. A
+    // reader scrolled up into history keeps their position: the optimistic
+    // message lands at the tail off-screen, and on-screen messages must never
+    // unmount — releasing the tail lock here would re-window and hide them.
     idleAttentionHandled = false
 
-    // Persist settings as last-used. On the Chats tab a project-model fallback
-    // must not lock itself in as the chat's own choice — explicit chat model
-    // changes are already persisted by updateSettings.
+    // Persist settings as last-used. On the Chats tab this seeds the chat's own
+    // store, so the next chat inherits this chat's model, thinking level, and
+    // File System state — never the project view's configuration.
     if (chatMode) {
-      if (chatSettings.lastUsed.modelId) chatSettings.commit(settings)
+      chatSettings.commit(settings)
     } else {
       threadSettings.commit(settings)
     }
@@ -4860,9 +5263,11 @@
         presentation,
         taskReferences
       )
-      // Wait for the DOM to reflect the optimistic message, then scroll to it.
+      // Wait for the DOM to reflect the optimistic message, then scroll to it
+      // — but only when the reader stayed at the tail. A detached reader is
+      // never yanked; their on-screen messages must stay mounted.
       await tick()
-      if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
+      if (scrollEl && !userScrolledAway) scrollEl.scrollTop = scrollEl.scrollHeight
       await sendPromise
       if (engineeringOn) {
         await reconcileReadySpec()
@@ -4932,6 +5337,31 @@
     }
   }
 
+  let showBankedResetConfirm = $state(false)
+
+  async function activateBankedReset(): Promise<void> {
+    const { projectId, id } = thread
+    const result = await invoke('agent:activateBankedReset', projectId, id)
+    if (!result) return
+    accountUsageCache.replaceUsage(
+      accountUsageCache.usage.map((usage) =>
+        usage.harnessId === result.harnessId && usage.providerId === result.providerId
+          ? result
+          : usage
+      )
+    )
+    if (result.harnessId === settings.harnessId && result.providerId === settings.providerId) {
+      commitContextUsage(
+        mergeContextUsage(contextUsageDisplay, {
+          ...(contextUsageDisplay ?? { costUsd: 0, rateLimits: [] }),
+          rateLimits: result.rateLimits,
+          credits: result.credits,
+          bankedResets: result.bankedResets
+        })
+      )
+    }
+  }
+
   async function compactWork(): Promise<void> {
     if (compacting || busy) return
     const { projectId, id } = thread
@@ -4961,7 +5391,9 @@
     if (!skill) return
     const request = args.trim()
     sendComposerMessage(
-      request ? `${request}\n\n(Use the "${skill.name}" skill for this.)` : `Use the "${skill.name}" skill.`,
+      request
+        ? `${request}\n\n(Use the "${skill.name}" skill for this.)`
+        : `Use the "${skill.name}" skill.`,
       []
     )
   }
@@ -4987,6 +5419,8 @@
       await invoke('agent:runCommand', projectId, id, command.id, args)
       if (command.name === 'config' || command.name === 'settings') {
         toast.success(`${providerName} settings updated`)
+      } else if (command.name === 'usage-credits') {
+        toast.success('Requested API usage credits for this session')
       }
     } catch (error) {
       errorMessage =
@@ -5124,7 +5558,6 @@
     if (controller) {
       clearQueuedState()
       showQueueMenu = false
-      userScrolledAway = false
       errorMessage = ''
       const payload: SendPayload = {
         text: msg,
@@ -5145,8 +5578,10 @@
     // turn the steer is interrupting, and a steered continuation keeps the
     // old turn's stream anchor, so it must never feed the new trace.
     clearStreamParts()
-    // Snap to bottom — the steer message just appeared
-    userScrolledAway = false
+    // The steered message lands at the tail. A reader scrolled up into the
+    // running turn keeps their position and their mounted messages — releasing
+    // the tail lock here would re-window the conversation and hide on-screen
+    // history mid-read. Tail-follow stays engaged only when already at the tail.
     errorMessage = ''
 
     const { projectId, id } = thread
@@ -5167,7 +5602,7 @@
         taskReferences
       )
       await tick()
-      if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
+      if (scrollEl && !userScrolledAway) scrollEl.scrollTop = scrollEl.scrollHeight
       await sendPromise
     } catch (error) {
       if (!queuedMessage && !queuedHasContent) {
@@ -5787,7 +6222,7 @@
     assignmentError = ''
     if (previousHarnessId !== updated.harnessId || previousProviderId !== updated.providerId) {
       contextUsageDisplay = undefined
-      accountUsageFetchedAt = 0
+      accountUsageCache.markStale()
     }
     syncAgentRole('seniorEngineer', selection)
     commitSettings(updated)
@@ -7224,6 +7659,79 @@
     }
   }
 
+  /** Run an independent (spec-less) audit from the audit coordinator. The
+   *  report joins the thread's existing report versions in Spec Studio.
+   *  Clicking "Run audit" is the commit: the staged switch becomes durable
+   *  here, which is what locks Engineering out for the thread's lifetime. */
+  async function generateIndependentAudit(selected: ThreadSettings): Promise<void> {
+    auditBusy = true
+    auditError = ''
+    errorMessage = ''
+    auditSettings = selected
+    rendererRecovery.addRecentModel(
+      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    )
+    try {
+      if (!independentAuditEnabled) {
+        await invoke('thread:setIndependentAudit', thread.projectId, thread.id, true)
+        pendingIndependentAudit = null
+        clearIndependentAuditIntent(thread.projectId, thread.id)
+      }
+      durableAuditThread = await invoke(
+        'agent:ensureIndependentAuditorThread',
+        thread.projectId,
+        thread.id,
+        selected
+      )
+      coordinatorDockState.setAutoOpen(true)
+      contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
+      const result = await invoke('agent:generateIndependentAudit', thread.projectId, thread.id, {
+        settings: selected
+      })
+      auditReport = result.report
+      durableAuditThread = result.auditorThread
+      auditVersions = await invoke(
+        'audit:listVersions',
+        thread.projectId,
+        thread.id,
+        auditReport.id
+      )
+    } catch (error) {
+      const rawError = error instanceof Error ? error.message : 'The independent audit failed.'
+      errorMessage = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+      auditError = errorMessage
+    } finally {
+      auditBusy = false
+    }
+  }
+
+  /** Toggle the independent audit. Enabling is permanent once the first run
+   *  starts, and excludes engineering modes for this thread's lifetime. */
+  /** Toggle the Independent Audit. Turning it on stages the choice: the
+   *  Engineering Toolbox disappears and the audit coordinator docks into the
+   *  sidebar right away. Turning it off discards the staging (or disables a
+   *  committed audit that has not started its first run), which brings the
+   *  Toolbox back. Clicking "Run audit" in the coordinator commits. */
+  async function toggleIndependentAudit(enabled: boolean): Promise<void> {
+    if (independentAuditInitialized) return
+    if (enabled) {
+      pendingIndependentAudit = true
+      saveIndependentAuditIntent(thread.projectId, thread.id, true)
+      return
+    }
+    if (independentAuditEnabled && pendingIndependentAudit === null) {
+      // Committed (pre-init) audit: disable durably so Engineering unlocks.
+      try {
+        await invoke('thread:setIndependentAudit', thread.projectId, thread.id, false)
+      } catch (error) {
+        reportError(error, 'The independent audit could not be changed.')
+        return
+      }
+    }
+    pendingIndependentAudit = null
+    clearIndependentAuditIntent(thread.projectId, thread.id)
+  }
+
   async function generateDurableAssignmentAudit(
     selected: ThreadSettings,
     coordinatorThreadId = thread.id
@@ -7418,31 +7926,39 @@
     updateSettings({ ...settings, ...normalized })
   }
 
-  async function completeAudit(): Promise<void> {
+  /** `complete` accepts the audit cycle (thread lands on Done); `dismiss`
+   *  cancels the offer/report card without ending the audit cycle. */
+  async function completeAudit(outcome: 'complete' | 'dismiss' = 'complete'): Promise<void> {
     auditBusy = true
     try {
-      const updatedThread = await invoke('audit:complete', thread.projectId, thread.id)
+      const updatedThread = await invoke(
+        outcome === 'dismiss' ? 'audit:dismiss' : 'audit:complete',
+        thread.projectId,
+        thread.id
+      )
       scopeState.updateThread(updatedThread)
-      if (assignment) {
-        const coordinatorThreadId = auditWorkflowThreadId()
-        const refreshedAssignment = await invoke(
-          'assignment:getActive',
-          thread.projectId,
-          coordinatorThreadId
-        ).catch(() => null)
-        if (refreshedAssignment) assignment = refreshedAssignment
+      if (outcome === 'complete') {
+        if (assignment) {
+          const coordinatorThreadId = auditWorkflowThreadId()
+          const refreshedAssignment = await invoke(
+            'assignment:getActive',
+            thread.projectId,
+            coordinatorThreadId
+          ).catch(() => null)
+          if (refreshedAssignment) assignment = refreshedAssignment
+        }
+        if (engineeringLifecycle?.activeStage === 'achievement') {
+          engineeringLifecycle = await invoke(
+            'engineeringLifecycle:complete',
+            thread.projectId,
+            thread.id,
+            'achievement'
+          )
+        }
+        settings = { ...settings, loopMode: false }
+        commitSettings(settings)
+        await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
       }
-      if (engineeringLifecycle?.activeStage === 'achievement') {
-        engineeringLifecycle = await invoke(
-          'engineeringLifecycle:complete',
-          thread.projectId,
-          thread.id,
-          'achievement'
-        )
-      }
-      settings = { ...settings, loopMode: false }
-      commitSettings(settings)
-      await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
       auditState = undefined
       await reconcileReadySpec()
       showSpecStudio = false
@@ -8222,7 +8738,7 @@
       // stays visible and refreshes on the next hover. Force that hover to
       // refetch so the newly selected harness's quota is current.
       contextUsageDisplay = undefined
-      accountUsageFetchedAt = 0
+      accountUsageCache.markStale()
       // A provider card produced by the previous harness no longer applies once
       // the user switches to another harness — otherwise the stale issue's
       // message and links (e.g. a Codex usage-limit URL) linger under the badge
@@ -8383,18 +8899,36 @@
       reference.kind === 'directory'
         ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z"/></svg>'
         : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
-    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[11px] leading-none align-baseline" title="${safeTitle}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
+    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
+  }
+
+  function inlineUtilityChipHtml(): string {
+    // Inline SVG (not an `<img>` data URI) so the icon's embedded `.dark`
+    // selector can see the theme class on `<html>` — the mark's ink follows
+    // the active theme (black on light, white on dark). The chip's
+    // `text-[0.75rem]` sets the em box the 1em-sized SVG scales into.
+    const icon = getVendorIconSvg(APP_NAME)
+    const safeTitle = escapeHtmlForChip(`${APP_NAME} utility`)
+    const iconHtml = icon
+      ? `<span class="inline-flex shrink-0 text-[0.75rem] leading-none" aria-hidden="true">${icon}</span>`
+      : ''
+    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-utility-chip="cio-utility">${iconHtml}<span class="max-w-48 truncate font-medium">utility</span></span>`
   }
 
   function inlineFileTagsForMessage(msg: AgentMessage): Array<{ token: string; html: string }> {
-    if (!msg.projectReferences?.length) return []
     const text = messageText(msg)
+    const tags: Array<{ token: string; html: string }> = []
+    // The `@cio-utility` tag renders as a badge on the conversation screen too,
+    // mirroring the composer badge for the same token.
+    if (text.includes('@cio-utility')) {
+      tags.push({ token: '@cio-utility', html: inlineUtilityChipHtml() })
+    }
+    if (!msg.projectReferences?.length) return tags
     // Only inline references that actually appear as `@path` in the stored text;
     // remaining references will still render as the legacy top pills so no tag
     // is lost. Longest paths first prevents a parent directory token from
     // swallowing the prefix of a longer child path.
     const ordered = [...msg.projectReferences].sort((a, b) => b.path.length - a.path.length)
-    const tags: Array<{ token: string; html: string }> = []
     for (const reference of ordered) {
       const token = `@${reference.path}`
       if (!token || !text.includes(token)) continue
@@ -8648,12 +9182,18 @@
       // Deletion drops the chosen span and the harness session. The next send
       // rebinds a fresh session via prepareSessionForSend, which replays the
       // remaining mirrored transcript as context.
-      await threadMessages.remove(thread.projectId, thread.id, pending.id, pending.mode)
-      // The persisted user-message history changed — force a reload so the
-      // history panel never shows deleted messages.
-      userMessageHistoryLoaded = false
-      fullUserMessageHistory = []
-      void refreshUserMessageHistory()
+      if (controller?.removeAround) {
+        // Controller-driven conversations (temporary chats) own their backend
+        // deletion — the thread mirror must never be touched for them.
+        await controller.removeAround(pending.id, pending.mode)
+      } else {
+        await threadMessages.remove(thread.projectId, thread.id, pending.id, pending.mode)
+        // The persisted user-message history changed — force a reload so the
+        // history panel never shows deleted messages.
+        userMessageHistoryLoaded = false
+        fullUserMessageHistory = []
+        void refreshUserMessageHistory()
+      }
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The message could not be deleted.'
     } finally {
@@ -8670,10 +9210,16 @@
     if (!text || busy) return
     errorMessage = ''
     try {
-      await threadMessages.truncate(thread.projectId, thread.id, msg.id)
-      // Truncation discarded the harness session — bind to the fresh one so
-      // the resend's streamed events are not filtered out.
-      await prepareSessionForSend()
+      if (controller?.truncateBefore) {
+        // Controller-driven conversations (temporary chats) truncate against
+        // their own backend; the thread mirror does not know them.
+        await controller.truncateBefore(msg.id)
+      } else {
+        await threadMessages.truncate(thread.projectId, thread.id, msg.id)
+        // Truncation discarded the harness session — bind to the fresh one so
+        // the resend's streamed events are not filtered out.
+        await prepareSessionForSend()
+      }
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The message could not be edited.'
       return
@@ -8975,6 +9521,23 @@
       message.parts.length > 0 &&
       message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
     )
+  }
+
+  /** Deduped turn-start prompt indices before `fromIndex`, newest-first.
+   *  Every persisted turn carries the prompt twice (the display row and the
+   *  harness echo under its own id); counting both corrupts the "three pages"
+   *  anchor math, so adjacent prompt copies count as one turn start. */
+  function turnStartPromptsBefore(fromIndex: number, count: number): number[] {
+    const starts: number[] = []
+    for (let index = fromIndex - 1; index >= 0 && starts.length < count; index--) {
+      const message = messages[index]
+      if (!message) break
+      if (message.role !== 'user' || isActivityOnlyUserMessage(message)) continue
+      const previous = messages[index - 1]
+      if (previous?.role === 'user' && !isActivityOnlyUserMessage(previous)) continue
+      starts.push(index)
+    }
+    return starts
   }
 
   /** Activity-only user messages (compaction notices, sub-agent envelopes) ride
@@ -9662,7 +10225,9 @@
     <!-- Scrollable conversation area -->
     <div
       bind:this={scrollEl}
-      class="conversation-scroll conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20"
+      class="conversation-scroll conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20 {centeredComposer
+        ? 'hidden'
+        : ''}"
       onscroll={onScroll}
       onwheel={onWheel}
       onpointerup={captureResponseSelection}
@@ -9691,9 +10256,10 @@
           {/if}
           <!-- Messages -->
           {#each visibleMessages as msg, msgIndex (msg.id)}
+            {@const absIndex = msgIndex + (messages.length - visibleMessages.length)}
             {#if msg.role === 'user'}
               {#if !isAssignmentAuditorThread && !isActivityOnlyUserMessage(msg)}
-                <div id={`msg-${msg.id}`} class="group flex min-w-0 flex-col">
+                <div id={`msg-${msg.id}`} class="message-block group flex min-w-0 flex-col">
                   {#if editingMessageId === msg.id}
                     <RichMarkdownEditor
                       bind:this={messageEditEditor}
@@ -9730,10 +10296,12 @@
                       </button>
                     </div>
                   {:else}
-                    {@const previousTurnAudit = getPreviousTurnAudit(msgIndex)}
+                    {@const previousTurnAudit = getPreviousTurnAudit(absIndex)}
                     {@const explicitPresentation = explicitMessagePresentation(msg)}
                     {#if previousTurnAudit}
-                      <div class="mb-1 flex items-center gap-1.5 self-end text-[10px] text-dimmed">
+                      <div
+                        class="mb-1 flex items-center gap-1.5 self-end text-[0.625rem] text-dimmed"
+                      >
                         <span>Previous turn completed</span>
                         <span>·</span>
                         <span class="tabular-nums"
@@ -9756,7 +10324,7 @@
                         <div class="mb-2 flex flex-wrap gap-1.5">
                           {#each leftoverReferences as reference (reference.id)}
                             <span
-                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-elevated px-2 py-1 text-[11px]"
+                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-elevated px-2 py-1 text-[0.75rem]"
                               title="Tagged {reference.kind}: {reference.name}"
                             >
                               {#if reference.kind === 'directory'}
@@ -9775,7 +10343,7 @@
                         <div class="mb-2 flex flex-wrap gap-1.5">
                           {#each msg.references as reference (reference.id)}
                             <span
-                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[11px]"
+                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
                               title={reference.comment
                                 ? `${reference.comment}\n\n${reference.text}`
                                 : reference.text}
@@ -9853,7 +10421,7 @@
                                       class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30"
                                     >
                                       <span
-                                        class="text-[10px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100"
+                                        class="text-[0.625rem] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100"
                                       >
                                         Preview
                                       </span>
@@ -9867,7 +10435,7 @@
                                 >
                                   <button
                                     type="button"
-                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
                                     title="Preview {part.filename ?? mediaKind}"
                                     aria-label="Preview {part.filename ?? mediaKind}"
                                     onclick={() =>
@@ -9894,7 +10462,7 @@
                                 >
                                   <button
                                     type="button"
-                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
                                     title={`Open ${part.filename ?? part.url.split('/').pop() ?? 'file'}`}
                                     onclick={() => openFilePart(part.url)}
                                   >
@@ -9960,17 +10528,17 @@
                           </button>
                         {/if}
                       </div>
-                      <span class="text-[10px] text-dimmed">·</span>
-                      <span class="text-[10px] text-dimmed">{formatTime(msg.createdAt)}</span>
+                      <span class="text-[0.625rem] text-dimmed">·</span>
+                      <span class="text-[0.625rem] text-dimmed">{formatTime(msg.createdAt)}</span>
                     </div>
                   {/if}
                 </div>
               {/if}
             {:else}
               <!-- Assistant message — single WorkTrace per turn containing ALL parts -->
-              {@const isTurnStart = isTurnStartIndex(msgIndex)}
-              {@const isTurnEnd = isTurnEndIndex(msgIndex)}
-              {@const isLatestTurn = msgIndex === latestTurnInfo.startIndex}
+              {@const isTurnStart = isTurnStartIndex(absIndex)}
+              {@const isTurnEnd = isTurnEndIndex(absIndex)}
+              {@const isLatestTurn = absIndex === latestTurnInfo.startIndex}
               {@const provider = messageProvider(msg)}
               {@const modelLabel = messageModelLabel(msg)}
               {@const msgThinking = messageThinkingLevel(msg)}
@@ -9978,28 +10546,28 @@
               {@const harnessId = messageHarnessId(msg)}
               {@const harnessName = messageHarnessName(msg)}
               {@const useLiveAttribution = isLatestTurn && liveBusy}
-              {@const isLatest = msgIndex === messages.length - 1}
+              {@const isLatest = absIndex === messages.length - 1}
               {@const questionParts = msg.parts.filter(
                 (p): p is Extract<AgentPart, { type: 'question' }> => p.type === 'question'
               )}
-              {@const turnDuration = getCurrentTurnDuration(msgIndex)}
-              {@const turnCheckpoint = checkpointForTurn(msgIndex)}
+              {@const turnDuration = getCurrentTurnDuration(absIndex)}
+              {@const turnCheckpoint = checkpointForTurn(absIndex)}
               {@const turnAuditReport =
-                isAssignmentAuditorThread && isTurnEnd ? auditReportForTurn(msgIndex) : null}
+                isAssignmentAuditorThread && isTurnEnd ? auditReportForTurn(absIndex) : null}
 
               {#if isTurnStart || questionParts.length > 0 || isTurnEnd}
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
-                    {@const turnDone = isTurnCompleted(msgIndex)}
+                    {@const turnDone = isTurnCompleted(absIndex)}
                     {@const isCurrentAssistantTurn = isLatestTurn && !pendingLiveTurn}
                     {@const traceIsLive =
                       threadWorking && isCurrentAssistantTurn && !brainstormReportRefreshing}
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
-                    {@const accumulatedTurnParts = getTurnWorkingParts(msgIndex, traceIsLive)}
+                    {@const accumulatedTurnParts = getTurnWorkingParts(absIndex, traceIsLive)}
                     {@const durableTurnParts = pendingLiveTurn
                       ? []
-                      : streamWorkingPartsForTurn(msgIndex)}
+                      : streamWorkingPartsForTurn(absIndex)}
                     {@const collectedTurnParts =
                       streamParts.length > 0 && isCurrentAssistantTurn
                         ? traceIsRestored
@@ -10020,8 +10588,8 @@
                         done={turnDone}
                         rehydrated={traceIsRestored}
                         startTime={isLatestTurn
-                          ? (getTurnStartTime(msgIndex) ?? activeTurnStartTime)
-                          : getTurnStartTime(msgIndex)}
+                          ? (getTurnStartTime(absIndex) ?? activeTurnStartTime)
+                          : getTurnStartTime(absIndex)}
                         modelLabel={useLiveAttribution
                           ? currentWorkingTraceAttribution.modelLabel
                           : modelLabel}
@@ -10089,7 +10657,7 @@
                         {/if}
                       {/if}
                     {:else}
-                      {@const turnFinalText = getTurnFinalText(msgIndex)}
+                      {@const turnFinalText = getTurnFinalText(absIndex)}
                       {@const finalAnswerReady =
                         turnFinalText?.type === 'text' &&
                         turnFinalText.text.trim().length > 0 &&
@@ -10108,7 +10676,7 @@
                           speechController.readingOverlayActive}
                         <div
                           id={`msg-${msg.id}`}
-                          class="min-w-0 w-full text-sm text-foreground"
+                          class="message-block min-w-0 w-full text-[0.8125rem] text-foreground"
                           data-assistant-response
                           data-conversation-searchable
                           data-message-id={msg.id}
@@ -10150,7 +10718,7 @@
                         </div>
                       {/if}
 
-                      {#if turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(msgIndex, turnCheckpoint)}
+                      {#if turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(absIndex, turnCheckpoint)}
                         <div class="mt-3">
                           <RunChangesCard
                             checkpoint={turnCheckpoint}
@@ -10243,13 +10811,13 @@
                             <div
                               class="pointer-events-none flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                             >
-                              <span class="flex items-center gap-1 text-[10px] text-dimmed">
+                              <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
                                 <AgentIcon agentId={messageHarnessId(msg)} size={14} />
                                 {messageHarnessName(msg)}
                               </span>
                               {#if modelLabel}
-                                <span class="text-[10px] text-dimmed">·</span>
-                                <span class="flex items-center gap-1 text-[10px] text-dimmed">
+                                <span class="text-[0.625rem] text-dimmed">·</span>
+                                <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
                                   <VendorIcon
                                     name={provider?.name ?? modelLabel}
                                     id={provider?.id}
@@ -10268,7 +10836,7 @@
                                 </span>
                                 {#if msgThinking}
                                   <span
-                                    class="flex items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                                    class="flex items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] capitalize text-muted"
                                     title={`Thinking level: ${msgThinking}`}
                                     aria-label={`Thinking level: ${msgThinking}`}
                                   >
@@ -10277,15 +10845,15 @@
                                   </span>
                                 {/if}
                               {/if}
-                              <span class="text-[10px] text-dimmed"
+                              <span class="text-[0.625rem] text-dimmed"
                                 >· {formatTime(msg.completedAt ?? msg.createdAt)}</span
                               >
                               {#if turnDuration !== null}
-                                <span class="text-[10px] text-dimmed tabular-nums"
+                                <span class="text-[0.625rem] text-dimmed tabular-nums"
                                   >· {formatDuration(turnDuration)}</span
                                 >
                               {:else if msg.completedAt && msg.createdAt}
-                                <span class="text-[10px] text-dimmed tabular-nums"
+                                <span class="text-[0.625rem] text-dimmed tabular-nums"
                                   >· {formatDuration(msg.completedAt - msg.createdAt)}</span
                                 >
                               {/if}
@@ -10359,7 +10927,7 @@
                     ? delegatedActivityLabel
                     : activityLabel}
               </span>
-              <span class="text-[11px]">…</span>
+              <span class="text-[0.75rem]">…</span>
             </div>
           {/if}
         {/if}
@@ -10370,7 +10938,11 @@
          the window edge lives here so the scroll-to-latest button can float at
          the top of the whole stack: straddling an error card when one is shown
          and dropping back to its normal spot above the composer otherwise. -->
-    <div class="bottom-chrome relative shrink-0">
+    <div
+      class="bottom-chrome relative {centeredComposer
+        ? 'flex min-h-0 flex-1 flex-col justify-center'
+        : 'shrink-0'}"
+    >
       {#if userScrolledAway}
         <button
           type="button"
@@ -10508,7 +11080,7 @@
             <div class="mx-auto max-w-3xl">
               <div class="rounded-t-xl border border-border bg-surface shadow-sm">
                 <div class="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
-                  <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                  <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
                     >{queuedCount > 1
                       ? `Queued · ${queuedCount}`
                       : queuedStartAfterThreads.length > 0
@@ -10526,7 +11098,7 @@
                       <Plus size={13} />
                     </button>
                     <button
-                      class="rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
+                      class="rounded-md px-2 py-0.5 text-[0.75rem] font-medium text-foreground transition-colors hover:bg-elevated"
                       title={`Steer — ${steerModifierLabel}Enter — send this message to the agent now`}
                       onclick={() => void steerQueuedMessage()}
                     >
@@ -10593,7 +11165,7 @@
                   <div class="flex flex-wrap gap-1.5 px-3 pb-2">
                     {#each queuedPromptReferences as reference (reference.id)}
                       <span
-                        class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[11px]"
+                        class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
                         title={reference.comment
                           ? `${reference.comment}\n\n${reference.text}`
                           : reference.text}
@@ -10621,7 +11193,7 @@
                         <Clock size={12} class="shrink-0 text-info" />
                         <button
                           type="button"
-                          class="min-w-0 flex-1 truncate text-left text-[11px] text-info"
+                          class="min-w-0 flex-1 truncate text-left text-[0.75rem] text-info"
                           title={`Open ${dependency.title}`}
                           aria-label={`Open ${dependency.title}`}
                           onclick={() => void openStartAfterThread(dependency.id)}
@@ -10652,25 +11224,25 @@
                 {/if}
                 {#if queuedPresentation}
                   <div class="px-3 pb-2.5">
-                    <p class="text-[11px] italic text-dimmed">{queuedPresentation.action}</p>
+                    <p class="text-[0.75rem] italic text-dimmed">{queuedPresentation.action}</p>
                     {#if queuedPresentation.body}
-                      <p class="mt-1 text-[12px] text-muted line-clamp-3">
+                      <p class="mt-1 text-[0.75rem] text-muted line-clamp-3">
                         {queuedPresentation.body}
                       </p>
                     {/if}
                   </div>
                 {:else}
-                  <p class="px-3 pb-2.5 text-[12px] text-muted line-clamp-3">{queuedMessage}</p>
+                  <p class="px-3 pb-2.5 text-[0.75rem] text-muted line-clamp-3">{queuedMessage}</p>
                 {/if}
                 {#if queuedCount > 1}
                   <div class="border-t px-3 pb-2.5 pt-2">
-                    <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+                    <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
                       Next up
                     </p>
                     {#each rendererRecovery
                       .queuedMessagesFor(thread.projectId, thread.id)
                       .slice(1) as next (next.text)}
-                      <p class="line-clamp-2 pt-1 text-[12px] text-muted">{next.text}</p>
+                      <p class="line-clamp-2 pt-1 text-[0.75rem] text-muted">{next.text}</p>
                     {/each}
                   </div>
                 {/if}
@@ -10682,7 +11254,29 @@
         <!-- Composer — always anchored at the bottom. Blocking permission and question
        tools replace it until the user responds. -->
         <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
-          <div class="mx-auto w-full max-w-3xl">
+          <div class="mx-auto w-full {centeredComposer ? 'max-w-4xl' : 'max-w-3xl'}">
+            {#if centeredComposer}
+              <div class="mb-5 text-center">
+                <h1
+                  class="flex items-center justify-center gap-2.5 text-[1.375rem] font-semibold tracking-tight text-foreground"
+                >
+                  {#if centeredProjectIconUrl}
+                    <img
+                      src={centeredProjectIconUrl}
+                      alt=""
+                      aria-hidden="true"
+                      class="size-7 rounded-[0.375rem] object-cover"
+                    />
+                  {/if}
+                  {project?.name ?? 'New thread'}
+                </h1>
+                <p class="mt-1 text-[0.875rem] text-muted">
+                  {centeredModelName
+                    ? `What should ${centeredModelName} work on?`
+                    : 'How can CIO serve you today?'}
+                </p>
+              </div>
+            {/if}
             {#if pendingImageDescriptorError && !achievementAutonomous}
               {#key pendingImageDescriptorError.id}
                 <ImageDescriptorErrorCard
@@ -10704,6 +11298,7 @@
                     await replyImageDescriptor(requestId, 'retry', selection)
                   }}
                   onIgnore={(requestId) => replyImageDescriptor(requestId, 'ignore')}
+                  onPickImage={(requestId) => pickImageDescriptorReplacement(requestId)}
                   onFalsePositive={(requestId) => reportImageDescriptorFalsePositive(requestId)}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
@@ -10906,7 +11501,7 @@
                 recentModels={rendererRecovery.recentModels}
                 onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={auditBusy}
-                onCancel={completeAudit}
+                onCancel={() => void completeAudit('dismiss')}
                 onAudit={generateAudit}
                 onModelChange={changeAuditModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -10926,7 +11521,7 @@
                 busy={auditBusy}
                 onViewReport={openAuditStudio}
                 onComplete={completeAudit}
-                onCancel={completeAudit}
+                onCancel={() => void completeAudit('dismiss')}
                 onReaudit={reaudit}
                 onModelChange={changeAuditModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -11047,10 +11642,14 @@
                     working={busy}
                     onStop={abortRun}
                     autofocus
-                    showEngineeringMode={!chatMode}
+                    showEngineeringMode={!chatMode && !orchestrationChild}
                     engineeringLifecycle={pendingLifecycleDisplay}
                     engineeringActive={engineeringOn}
                     onEngineeringLifecycleSelect={selectEngineeringLifecycle}
+                    {independentAuditAvailable}
+                    independentAuditEnabled={independentAuditDisplayEnabled}
+                    onIndependentAuditToggle={toggleIndependentAudit}
+                    engineeringToolboxHidden={independentAuditDisplayEnabled}
                     showChatModes={chatMode}
                     {settings}
                     onSettingsChange={updateSettings}
@@ -11059,11 +11658,12 @@
                     actions={activeActions}
                     onActionSelect={handleActionSelection}
                     onSlashCommand={executeHarnessCommand}
+                    usageCreditsCommandId={usageCreditsCommand?.id}
                     contextUsage={contextUsageDisplay}
                     efficiencyKpis={storedEfficiencyKpis}
                     onRevealUsage={revealContextUsage}
                     onHideUsage={hideContextUsage}
-                    usageRefreshing={refreshingAccountUsage}
+                    usageRefreshing={accountUsageCache.refreshing}
                     {harnessUsage}
                     canCompact={supportsManualCompaction(
                       settings.harnessId,
@@ -11071,6 +11671,9 @@
                     ) && !busy}
                     {compacting}
                     onCompact={() => void compactWork()}
+                    onActivateBankedReset={() => {
+                      showBankedResetConfirm = true
+                    }}
                     projectContext={composerProject}
                     projectId={thread.projectId}
                     threadId={thread.id}
@@ -11201,6 +11804,19 @@
                     onImageDescriptorDefaultChange={setImageDescriptorDefault}
                     onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
                   />
+                  {#if centeredComposer}
+                    <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
+                      {#each suggestedPrompts as prompt (prompt)}
+                        <button
+                          type="button"
+                          class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                          onclick={() => composer?.setComposerText(prompt)}
+                        >
+                          {prompt}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
                 {/key}
               {/if}
             {/if}
@@ -11270,7 +11886,28 @@
 {/snippet}
 
 {#snippet auditCoordinatorPanel()}
-  {#if spec}
+  {#if independentAuditDisplayEnabled}
+    <IndependentAuditCoordinatorPanel
+      running={independentAuditRunning}
+      auditThread={durableAuditThread}
+      reportAvailable={auditReport !== null}
+      selectedThreadId={thread.id}
+      auditorSettings={auditSettings}
+      {providers}
+      projectId={thread.projectId}
+      favoriteModels={rendererRecovery.favoriteModels}
+      recentModels={rendererRecovery.recentModels}
+      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+      onOpenAudit={() => void generateIndependentAudit(auditSettings)}
+      onViewReport={openAuditStudio}
+      onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
+      onModelChange={changeAuditModel}
+      onToggleFavorite={(providerId, modelId, harnessId) =>
+        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+      onReorderFavorite={(draggedKey, targetKey, position) =>
+        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+    />
+  {:else if spec}
     <AchievementCoordinatorPanel
       mode="audit"
       specTitle={thread.title}
@@ -11316,6 +11953,19 @@
   {chatMode}
   onClose={() => (transcriptExportOpen = false)}
   onExport={(includeTrace) => exportTranscript(includeTrace)}
+/>
+
+<CodexBankedResetConfirm
+  open={showBankedResetConfirm}
+  usedPercent={contextUsageDisplay?.rateLimits
+    .map((window) => window.usedPercent)
+    .filter((percent): percent is number => percent !== undefined)
+    .reduce((max, percent) => Math.max(max, percent), 0)}
+  onClose={() => (showBankedResetConfirm = false)}
+  onConfirm={async () => {
+    await activateBankedReset()
+    showBankedResetConfirm = false
+  }}
 />
 
 <StartAfterThreadPicker

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import {
+    applyCodeFenceOnEnter,
+    applyEmptyPairCodeRule,
     applyMarkdownInputRule,
     formatRichSelection,
     insertMarkdownLineBreak,
@@ -462,7 +464,7 @@
     return inlineBadges
       .map(
         (badge) =>
-          `${badge.value}\u0000${badge.label}\u0000${badge.title}\u0000${badge.iconSrc ?? ''}`
+          `${badge.value}\u0000${badge.label}\u0000${badge.title}\u0000${badge.iconSvg ?? ''}`
       )
       .join('\u0001')
   }
@@ -496,6 +498,35 @@
     onValueChange?.(markdown)
   }
 
+  const BLOCK_BOUNDARY_SELECTOR =
+    'p, div, li, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, pre, table, tr'
+
+  /**
+   * Flattens editor content up to the caret, inserting '\n' at block
+   * boundaries and `<br>`s. `Range.toString()` only concatenates text nodes,
+   * so without this the first line gets glued to the second and the
+   * `(^|\s)`-anchored slash/mention patterns stop matching off the first line.
+   */
+  function flattenWithNewlines(node: Node): string {
+    if (node instanceof Text) return node.data
+    if (node instanceof Element && node.tagName === 'BR') return '\n'
+    let text = ''
+    for (const child of node.childNodes) {
+      const childText = flattenWithNewlines(child)
+      if (
+        childText !== '' &&
+        text !== '' &&
+        !text.endsWith('\n') &&
+        child instanceof Element &&
+        child.matches(BLOCK_BOUNDARY_SELECTOR)
+      ) {
+        text += '\n'
+      }
+      text += childText
+    }
+    return text
+  }
+
   function publishCaretText(): void {
     if (!editor || !onCaretTextChange) return
     const selection = window.getSelection()
@@ -517,7 +548,7 @@
     const range = document.createRange()
     range.selectNodeContents(editor)
     range.setEnd(selection.anchorNode, selection.anchorOffset)
-    onCaretTextChange(range.toString(), supportsCommands)
+    onCaretTextChange(flattenWithNewlines(range.cloneContents()), supportsCommands)
   }
 
   export function replaceTextBeforeCaret(
@@ -557,6 +588,18 @@
     publishCaretText()
   }
 
+  /** Rewrites macOS smart-punctuation substitutions back to the literal
+   *  ASCII characters the user typed. A dev workspace needs real characters,
+   *  not typographic ones. */
+  function demoteSmartPunctuation(text: string): string {
+    return text
+      .replaceAll('…', '...')
+      .replaceAll(/[\u2018\u2019\u201b]/gu, "'")
+      .replaceAll(/[\u201c\u201d\u201f]/gu, '"')
+      .replaceAll('\u2013', '-')
+      .replaceAll('\u2014', '--')
+  }
+
   function handleBeforeInput(event: Event): void {
     const inputEvent = event as InputEvent
     if (inputEvent.inputType === 'historyUndo' || inputEvent.inputType === 'historyRedo') {
@@ -565,7 +608,45 @@
       else redo()
       return
     }
+    // macOS smart substitution rewrites what the user typed before it reaches
+    // the editable surface. Plain typing arrives as `insertText` with `data`,
+    // but OS-level text replacements arrive as `insertReplacementText` where
+    // `data` is null and the substituted text rides in `dataTransfer`. Catch
+    // both and insert the raw literal sequence instead.
+    const incomingText =
+      inputEvent.inputType === 'insertText'
+        ? inputEvent.data
+        : inputEvent.inputType === 'insertReplacementText'
+          ? (inputEvent.dataTransfer?.getData('text/plain') ?? null)
+          : null
+    if (incomingText !== null) {
+      const text = demoteSmartPunctuation(incomingText)
+      if (text !== incomingText) {
+        inputEvent.preventDefault()
+        insertRawAtSelection(text)
+        return
+      }
+    }
     pendingHistory = captureHistoryEntry()
+  }
+
+  /** Inserts `text` verbatim at the caret (replacing any selection), recording
+   *  it in undo history. Used to override smart substitution. */
+  function insertRawAtSelection(text: string): void {
+    const historyEntry = captureHistoryEntry()
+    const selection = window.getSelection()
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0)
+      range.deleteContents()
+      const node = document.createTextNode(text)
+      range.insertNode(node)
+      range.setStartAfter(node)
+      range.collapse(true)
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
+    emitEditorValue()
+    commitHistory(historyEntry, 'insertText')
   }
 
   const INLINE_BOUNDARY_TAGS = new Set(['CODE', 'STRONG', 'B', 'EM', 'I', 'DEL', 'S', 'STRIKE'])
@@ -663,6 +744,27 @@
       event.preventDefault()
       redo()
       return
+    }
+
+    // A backtick typed at the end of an inline code span closes it: the caret
+    // moves after the span instead of the backtick nesting inside the code.
+    // Only for a collapsed caret sitting at the span's very end — mid-span and
+    // multi-selection typing stays literal.
+    if (event.key === '`') {
+      const selection = window.getSelection()
+      const codeEl = selection?.anchorNode?.parentElement?.closest?.('code')
+      if (
+        selection?.isCollapsed &&
+        codeEl &&
+        codeEl.parentElement?.tagName !== 'PRE' &&
+        editor.contains(codeEl) &&
+        isCursorAtBoundary(codeEl, false)
+      ) {
+        event.preventDefault()
+        moveCaretOutOfInlineElement(false, codeEl)
+        publishCaretText()
+        return
+      }
     }
 
     if (modifier && (key === 'b' || key === 'i' || key === 'e')) {
@@ -804,6 +906,19 @@
         return
       }
 
+      // ``` fences materialize on Enter, not while typing: a block whose text is
+      // ```lang, ```content``` or ```lang\ncontent``` becomes a code block here.
+      if (!event.shiftKey) {
+        const historyEntry = captureHistoryEntry()
+        if (applyCodeFenceOnEnter(editor)) {
+          event.preventDefault()
+          emitEditorValue(true)
+          commitHistory(historyEntry)
+          publishCaretText()
+          return
+        }
+      }
+
       const blockTag = selectedBlockTag(editor)
 
       // Shift+Enter always inserts a soft line break (never a new list item,
@@ -940,6 +1055,9 @@
     const pasteEndsAtEditorEnd = isCursorAtBoundary(editor, false)
     event.preventDefault()
     insertPlainText(editor, text)
+    // Pasting content right after a fresh `` pair opens an inline code span,
+    // exactly like typing the first character there would.
+    applyEmptyPairCodeRule(editor)
     const insideCodeBlock = Boolean(
       window.getSelection()?.anchorNode?.parentElement?.closest?.('[data-editor-codeblock]')
     )
@@ -1052,6 +1170,7 @@
     aria-disabled={disabled}
     tabindex={disabled ? -1 : 0}
     spellcheck="true"
+    {...{ autocorrect: 'off' }}
     onbeforeinput={handleBeforeInput}
     oninput={handleInput}
     onkeydown={handleKeydown}

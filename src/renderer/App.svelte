@@ -48,9 +48,11 @@
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
@@ -106,6 +108,10 @@
 
   const defaultConfig: AppConfig = {
     theme: 'system',
+    fontFamily: 'jetbrains-mono',
+    appFontSize: 15,
+    fontWeight: 200,
+    zoomLevel: 1,
     onboardingCompleted: false,
     threadLimit: 70,
     questionTimeoutMs: 300_000,
@@ -464,6 +470,14 @@
     document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
   }
 
+  /** Welcome screen (and other surfaces) can request the getting-started tour. */
+  $effect(() => {
+    if (workspaceState.consumeOnboardingRequest()) {
+      onboardingStep = 0
+      onboardingOpen = true
+    }
+  })
+
   async function loadConfig(): Promise<void> {
     try {
       config = await invoke('config:get')
@@ -665,8 +679,8 @@
       navigate(isSettingsSection(tab) ? settingsViewForSection(tab) : 'settings')
     }
     workspaceState.navigateToContent = () => navigate(lastContentView)
-    workspaceState.openThreadFromNotification = (thread, project) =>
-      openThreadFromNotification(thread, project)
+    workspaceState.openThreadFromNotification = (thread, project, temporaryChatId) =>
+      openThreadFromNotification(thread, project, temporaryChatId)
     return () => {
       workspaceState.navigateToSettings = null
       workspaceState.navigateToContent = null
@@ -1084,14 +1098,12 @@
       const icons = await loadProjectIcons(projectList)
       scopeState.setScopesFromProjects(projectList, icons, preferredProjectId)
 
-      // 2. Tasks — recent rows only, via the bounded hydration query. The full
-      //    task history never crosses IPC at startup; older rows page in on
-      //    demand through the workspace/scope views. The selected project is
-      //    ordered first so its visible threads render immediately.
-      const threadList = await invoke('thread:listRecent', {
-        projectId: scopeState.activeProjectId ?? undefined,
-        limit: 200
-      })
+      // 2. Tasks — recent rows only, via the bounded per-project hydration
+      //    query. Each project contributes its own recent slice (inbox gets its
+      //    configured bucket size), so one busy project can never evict other
+      //    projects' threads from the initial paint. Older rows page in on
+      //    demand through the workspace/scope views.
+      const threadList = await invoke('thread:listRecentPerProject')
       const visibleThreads = threadList.filter((thread) => !thread.archived)
       scopeState.setThreads(visibleThreads)
       notificationPanelState.hydrateFromThreads(visibleThreads, projectList)
@@ -1111,10 +1123,10 @@
           const targets = scopeState.activeProjectId
             ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
             : [INBOX_PROJECT_ID]
-          // Seed model pickers from local snapshots without triggering harness probes.
-          // Live discovery is deferred until the model picker opens or the user
-          // explicitly refreshes, so startup can focus on first paint.
-          void providerCatalog.init(targets, { refresh: false })
+          // Seed model pickers from local snapshots, then kick off a background
+          // harness probe automatically (after first paint) so the picker always
+          // has live data ready instead of fetching lazily on open.
+          void providerCatalog.init(targets, { refresh: true })
           // Canonical-ordered harness list (registry order) — the model picker's
           // harness filter sorts against this so its chip order never depends on
           // catalog insertion order.
@@ -1223,7 +1235,8 @@
    */
   async function openThreadFromNotification(
     thread: Thread,
-    project: Project | null
+    project: Project | null,
+    temporaryChatId?: string
   ): Promise<void> {
     const isChat = thread.projectId === INBOX_PROJECT_ID
     const inScopeState =
@@ -1253,12 +1266,20 @@
     const updated = await invoke('thread:markRead', thread.projectId, thread.id)
     scopeState.updateThread(updated)
     workspaceState.updateThread(updated)
+
+    if (temporaryChatId) {
+      // A temporary (side) chat notification: opening the parent thread alone
+      // is not enough — reveal the sidebar and focus the side chat that has
+      // the unread response. When its tab no longer exists the badge would
+      // never clear, so drop it here instead.
+      if (!contextSidebarState.focusTemporaryChat(thread.projectId, thread.id, temporaryChatId)) {
+        temporaryChatUnread.clear(thread.projectId, thread.id, temporaryChatId)
+      }
+    }
   }
 
-  async function openNotificationThread({
-    projectId,
-    threadId
-  }: ThreadClickedPayload): Promise<void> {
+  async function openNotificationThread(payload: ThreadClickedPayload): Promise<void> {
+    const { projectId, threadId } = payload
     notificationPanelState.dismissForThread(projectId, threadId)
     try {
       const [project, thread] = await Promise.all([
@@ -1266,17 +1287,28 @@
         invoke('thread:get', projectId, threadId)
       ])
       if (!project || !thread) return
-      await openThreadFromNotification(thread, project)
+      await openThreadFromNotification(thread, project, payload.temporaryChatId)
     } catch {
       // The project or thread may have been deleted before the notification was clicked.
     }
   }
 
   function showAgentNotification(payload: AgentNotificationPayload): void {
-    if (
+    const onSelectedThread =
       workspaceState.selectedThread?.id === payload.threadId &&
       workspaceState.selectedThread?.projectId === payload.projectId
+    if (
+      !onSelectedThread &&
+      payload.source === 'temporary-chat' &&
+      payload.kind === 'chat-completed' &&
+      payload.temporaryChatId
     ) {
+      // The side chat finished while the user is away from its thread: flag
+      // the parent thread's row so the response is discoverable from the
+      // thread list. Cleared when the side-chat panel is focused.
+      temporaryChatUnread.markUnread(payload.projectId, payload.threadId, payload.temporaryChatId)
+    }
+    if (onSelectedThread) {
       return
     }
     notificationPanelState.add(payload)
@@ -1389,6 +1421,7 @@
     const unsubscribeThreadDeleted = subscribe('thread:deleted', (projectId, threadId) => {
       scopeState.removeThread(threadId)
       notificationPanelState.dismissForThread(projectId, threadId)
+      temporaryChatUnread.clearThread(projectId, threadId)
       if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
     })
     const unsubscribeCloseShortcut = subscribe('window:closeShortcut', () => {
@@ -1396,6 +1429,12 @@
     })
     const unsubscribeNewTerminalShortcut = subscribe('window:newTerminalShortcut', () => {
       handleNewTerminalShortcut()
+    })
+    const unsubscribeHistoryBack = subscribe('window:historyBack', () => {
+      void goBack()
+    })
+    const unsubscribeHistoryForward = subscribe('window:historyForward', () => {
+      void goForward()
     })
     updaterState.init()
     // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
@@ -1413,6 +1452,8 @@
       unsubscribeThreadDeleted()
       unsubscribeCloseShortcut()
       unsubscribeNewTerminalShortcut()
+      unsubscribeHistoryBack()
+      unsubscribeHistoryForward()
       updaterState.destroy()
     }
   }
@@ -1494,16 +1535,21 @@
       findNavState.focusFileTreeFilter++
       return
     }
-    if (
-      active?.closest('[data-region="git-panel"]') ||
-      (active?.closest('[data-region="context-sidebar"]') &&
-        document.querySelector('[data-region="git-panel"]'))
-    ) {
-      findNavState.openGitFind()
-      return
-    }
     if (active?.closest('[data-region="editor"]')) {
       findNavState.openEditorFind()
+      return
+    }
+    // The sidebar keeps GitStatusPanel mounted but display:none for every
+    // context tab, so only treat the git panel as the target when it is
+    // actually visible (offsetParent is null while hidden).
+    const visibleGitPanel = Array.from(document.querySelectorAll('[data-region="git-panel"]')).some(
+      (el) => (el instanceof HTMLElement ? el.offsetParent : null) !== null
+    )
+    if (
+      active?.closest('[data-region="git-panel"]') ||
+      (active?.closest('[data-region="context-sidebar"]') && visibleGitPanel)
+    ) {
+      findNavState.openGitFind()
       return
     }
     if (active?.closest('[data-region="spec-studio"]')) {
@@ -1556,6 +1602,21 @@
       handleFind()
       return
     }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+      // On the plain workspace (no studio, no dirty file tab) the Cmd/Ctrl+S
+      // save chord is otherwise unused, so it folds/unfolds the left sidebar.
+      // Anywhere a save binding owns the chord (a Spec/Assignment/Brainstorm
+      // studio, or a file tab with unsaved changes) it keeps priority: we return
+      // without preventDefault so that handler saves instead of toggling.
+      if (e.repeat) return
+      const leftSidebarViews = ['projects', 'chats', 'threads']
+      const studioOpen = Boolean(document.querySelector('[data-region="spec-studio"]'))
+      const dirtyFiles = projectFilesWorkspace.getUnsavedFiles().length > 0
+      if (!leftSidebarViews.includes(activeView) || studioOpen || dirtyFiles) return
+      e.preventDefault()
+      sidebarState.toggle()
+      return
+    }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault()
       if (e.repeat) return
@@ -1565,6 +1626,18 @@
     if ((e.metaKey || e.ctrlKey) && e.key === ',') {
       e.preventDefault()
       navigate('settings')
+    }
+    // Keyboard fallback for back/forward: Cmd+[ / Cmd+] is the convention
+    // third-party mouse utilities (Logi Options+, SteerMouse, Mac Mouse Fix)
+    // remap side buttons to on macOS, since there's no native OS-level
+    // back/forward gesture API for non-Apple mice. Alt+Left/Alt+Right mirrors
+    // the same convention on Windows/Linux.
+    if ((isMac && e.metaKey && (e.key === '[' || e.key === ']')) ||
+      (!isMac && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))) {
+      e.preventDefault()
+      if (e.repeat) return
+      if (e.key === '[' || e.key === 'ArrowLeft') void goBack()
+      else void goForward()
     }
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
       e.preventDefault()
@@ -1612,6 +1685,25 @@
 
   navigationHistoryState.init(rendererRecovery.activeView, rendererRecovery.selectedThread)
 
+  /**
+   * Timestamp of the last mouse side-button navigation. Windows/Linux deliver
+   * a side press both as an app command (forwarded over IPC) and — through
+   * Chromium — as a renderer mouse event; macOS only delivers the raw event.
+   * A short dedupe window keeps one physical press from navigating twice.
+   */
+  let lastMouseHistoryNavAt = 0
+
+  /** Mouse back/forward buttons (button 3 = back, 4 = forward) — macOS path. */
+  function onMouseHistoryButton(e: MouseEvent): void {
+    if (e.button !== 3 && e.button !== 4) return
+    const now = Date.now()
+    if (now - lastMouseHistoryNavAt < 150) return
+    lastMouseHistoryNavAt = now
+    e.preventDefault()
+    if (e.button === 3) void goBack()
+    else void goForward()
+  }
+
   onMount(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
     systemDark = mq.matches
@@ -1622,6 +1714,8 @@
     }
     mq.addEventListener('change', onColorSchemeChange)
     window.addEventListener('keydown', onKeydown)
+    window.addEventListener('mousedown', onMouseHistoryButton)
+    window.addEventListener('auxclick', onMouseHistoryButton)
     const uninstallVoiceShortcut = initVoiceShortcutListener()
 
     const restoreWorkspaceCallbacks = installWorkspaceCallbacks()
@@ -1650,6 +1744,8 @@
     return () => {
       mq.removeEventListener('change', onColorSchemeChange)
       window.removeEventListener('keydown', onKeydown)
+      window.removeEventListener('mousedown', onMouseHistoryButton)
+      window.removeEventListener('auxclick', onMouseHistoryButton)
       uninstallVoiceShortcut()
       restoreWorkspaceCallbacks()
       unsubscribeIpc()

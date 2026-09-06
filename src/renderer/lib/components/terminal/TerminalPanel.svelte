@@ -5,12 +5,13 @@
   interface Props {
     terminalId: string
     projectId: string
+    threadId: string
     /** Active scope bucket so the shell starts inside the worktree when one
      *  is active for the project. */
     scopeBucketId?: string
   }
 
-  let { terminalId, projectId, scopeBucketId }: Props = $props()
+  let { terminalId, projectId, threadId, scopeBucketId }: Props = $props()
 
   let terminalError: string | undefined = $state(undefined)
   let loading = $state(true)
@@ -23,6 +24,7 @@
   function attachTerminal(
     currentTerminalId: string,
     currentProjectId: string,
+    currentThreadId: string,
     currentScopeBucketId: string | undefined,
     retry: number
   ): Attachment<HTMLDivElement> {
@@ -36,7 +38,13 @@
         .getOrCreate(currentTerminalId)
         .then(async (session: TerminalSession) => {
           if (cancelled) return
-          await terminalSessions.attach(session, container, currentProjectId, currentScopeBucketId)
+          await terminalSessions.attach(
+            session,
+            container,
+            currentProjectId,
+            currentThreadId,
+            currentScopeBucketId
+          )
           if (!cancelled) loading = false
         })
         .catch((error: unknown) => {
@@ -60,7 +68,7 @@
 >
   <div
     class="h-full w-full overflow-hidden py-1 pl-2"
-    {@attach attachTerminal(terminalId, projectId, scopeBucketId, retrySequence)}
+    {@attach attachTerminal(terminalId, projectId, threadId, scopeBucketId, retrySequence)}
   ></div>
   {#if loading}
     <div class="absolute inset-0 flex items-center justify-center bg-app text-xs text-muted">

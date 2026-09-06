@@ -19,7 +19,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import type { PromptAttachment } from '$shared/types'
   import { attachmentPreviewKind } from '$lib/mime'
-  import DOMPurify from 'dompurify'
+  import { documentPreviewFrame } from '$lib/document-preview-frame'
 
   interface Props {
     attachment: PromptAttachment
@@ -48,20 +48,18 @@
 
   const filename = $derived(attachment.filename ?? 'file')
   const kind = $derived(attachmentPreviewKind(attachment.mime, filename))
-  /** PPTX decks render with images and layout via pptx-preview instead of the
-   *  text-only main-process HTML (kept as fallback). */
-  const isPptx = $derived(
-    kind === 'document' &&
-      (attachment.mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
-        /\.pptx$/iu.test(filename))
-  )
   const editableText = $derived(
     (kind === 'markdown' || kind === 'text') && onSaveText !== undefined
   )
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive('attachment-editor', editableText)
-  })
-  const csvRows = $derived(kind === 'csv' && text !== undefined ? parseCsv(text) : [])
+  /** Register the attachment-editor full-window surface while the fullscreen
+   *  editor is mounted, clearing it on teardown so native surfaces are never
+   *  suppressed after the editor closes. */
+  function editorSurfaceAttachment(_node: HTMLElement): () => void {
+    contextSidebarState.setFullscreenSurfaceActive('attachment-editor', true)
+    return () => {
+      contextSidebarState.setFullscreenSurfaceActive('attachment-editor', false)
+    }
+  }
   // The preview is created anew for each selected attachment, so this is the
   // editor's intentional local draft rather than a live mirror of the prop.
   // svelte-ignore state_referenced_locally
@@ -74,57 +72,23 @@
     kind === 'document' && documentHtml ? documentPreviewFrame(documentHtml) : undefined
   )
 
-  // ─── PPTX slide rendering (pptx-preview) ───
-  let pptxContainer = $state<HTMLDivElement>()
-  let pptxRendered = $state(false)
-  /** URL of the attachment whose JS render failed — empty enables a retry for
-   *  any other file since the modal instance is reused across selections. */
-  let pptxFailedUrl = $state<string | null>(null)
-  const pptxFailed = $derived(pptxFailedUrl === attachment.url)
-  const showPptxRenderer = $derived(isPptx && src !== undefined && !pptxFailed)
-
-  $effect(() => {
-    if (!showPptxRenderer || !pptxContainer || !src) return
-    const container = pptxContainer
-    const objectUrl = src
-    const failedUrl = attachment.url
-    let disposed = false
-    let previewer: { destroy(): void; preview(bytes: ArrayBuffer): Promise<unknown> } | undefined
-    void (async () => {
-      try {
-        const { init } = await import('pptx-preview')
-        const response = await fetch(objectUrl)
-        const bytes = await response.arrayBuffer()
-        if (disposed) return
-        container.innerHTML = ''
-        const width = Math.max(480, Math.min(container.clientWidth - 32 || 1024, 1600))
-        previewer = init(container, { width, mode: 'list' })
-        await previewer.preview(bytes)
-        if (disposed) {
-          previewer.destroy()
-          return
-        }
-        pptxRendered = true
-      } catch {
-        if (!disposed) pptxFailedUrl = failedUrl
-      }
-    })()
-    return () => {
-      disposed = true
-      previewer?.destroy()
-      pptxRendered = false
-    }
-  })
-
   const panZoom = new PanZoom()
   let imageViewport = $state<HTMLDivElement>()
+  const imageViewportAttachment = (node: HTMLDivElement): (() => void) => {
+    imageViewport = node
+    return () => {
+      if (imageViewport === node) imageViewport = undefined
+    }
+  }
 
   // The component instance is reused if the caller swaps `attachment`
   // without unmounting (same `{#if previewFile}` block) — reset zoom/pan so
   // it doesn't carry over onto the next image.
   $effect(() => {
     void attachment.url
-    panZoom.reset()
+    panZoom.zoom = 1
+    panZoom.panX = 0
+    panZoom.panY = 0
   })
   const wrapTitle = $derived(wrapToggleLabel(wrapTextState.wrapped))
 
@@ -137,31 +101,8 @@
     link.remove()
   }
 
-  function documentPreviewFrame(html: string): string {
-    const sanitized = DOMPurify.sanitize(html)
-    return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-      :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      body { box-sizing: border-box; max-width: 52rem; min-height: calc(100vh - 4rem); margin: 2rem auto; padding: 3.5rem 4rem; color: #202124; background: #fff; box-shadow: 0 8px 30px rgb(0 0 0 / 14%); line-height: 1.55; }
-      h1, h2, h3, h4, h5, h6 { line-height: 1.25; }
-      img { max-width: 100%; height: auto; }
-      table { width: 100%; border-collapse: collapse; }
-      th, td { border: 1px solid #d5d7da; padding: .45rem .6rem; vertical-align: top; }
-      li + li { margin-top: .35rem; }
-      a { color: #0969da; }
-      @media (max-width: 700px) { body { margin: 0; padding: 1.5rem; box-shadow: none; } }
-    </style>
-  </head>
-  <body>${sanitized}</body>
-</html>`
-  }
-
   function handleDownload(): void {
-    if (kind === 'markdown' || kind === 'text' || kind === 'csv') {
+    if (kind === 'markdown' || kind === 'text') {
       if (text === undefined) return
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
       triggerDownload(URL.createObjectURL(blob), filename)
@@ -200,46 +141,6 @@
       saving = false
     }
   }
-
-  /** Parse delimited text (CSV or TSV) into rows of cells, honouring quoted
-   *  fields with escaped quotes and discarding blank rows. */
-  function parseCsv(raw: string, delimiter = ','): string[][] {
-    const rows: string[][] = []
-    let row: string[] = []
-    let field = ''
-    let inQuotes = false
-    for (let i = 0; i < raw.length; i++) {
-      const char = raw[i]
-      if (inQuotes) {
-        if (char === '"') {
-          if (raw[i + 1] === '"') {
-            field += '"'
-            i++
-          } else {
-            inQuotes = false
-          }
-        } else {
-          field += char
-        }
-      } else if (char === '"') {
-        inQuotes = true
-      } else if (char === delimiter) {
-        row.push(field)
-        field = ''
-      } else if (char === '\n' || char === '\r') {
-        if (char === '\r' && raw[i + 1] === '\n') i++
-        row.push(field)
-        field = ''
-        if (row.some((cell) => cell.trim() !== '')) rows.push(row)
-        row = []
-      } else {
-        field += char
-      }
-    }
-    row.push(field)
-    if (row.some((cell) => cell.trim() !== '')) rows.push(row)
-    return rows
-  }
 </script>
 
 <svelte:window
@@ -253,7 +154,10 @@
 />
 
 {#if editableText}
-  <div class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl">
+  <div
+    {@attach editorSurfaceAttachment}
+    class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl"
+  >
     <div
       class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
       style={trafficLightInsetStyle()}
@@ -262,11 +166,11 @@
         {filename}
       </span>
       {#if saveError}
-        <span class="max-w-80 truncate text-[10px] text-danger" role="status">{saveError}</span>
+        <span class="max-w-80 truncate text-[0.625rem] text-danger" role="status">{saveError}</span>
       {/if}
       <button
         type="button"
-        class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+        class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
         disabled={!dirty || saving}
         title="Save attachment (Cmd/Ctrl+S)"
         onclick={() => void saveText()}
@@ -337,7 +241,7 @@
     >
       {#if kind === 'image' && src}
         <div
-          bind:this={imageViewport}
+          {@attach imageViewportAttachment}
           role="group"
           class={[
             'flex touch-none items-center justify-center overflow-hidden',
@@ -372,7 +276,7 @@
           >
             <ZoomOut size={14} />
           </button>
-          <span class="w-10 text-center font-mono text-[10px] text-dimmed">
+          <span class="w-10 text-center font-mono text-[0.625rem] text-dimmed">
             {Math.round(panZoom.zoom * 100)}%
           </span>
           <button
@@ -414,18 +318,6 @@
           class="h-full w-full rounded-lg border-0 shadow-2xl"
           title={`Preview ${filename}`}
         ></iframe>
-      {:else if kind === 'document' && showPptxRenderer}
-        <div
-          bind:this={pptxContainer}
-          class="flex h-full w-full items-start justify-center overflow-auto rounded-lg bg-raised p-4 shadow-2xl"
-        >
-          {#if !pptxRendered}
-            <div class="flex h-full items-center justify-center text-muted" role="status">
-              <Loader2 size={24} class="animate-spin" />
-              <span class="sr-only">Loading presentation preview</span>
-            </div>
-          {/if}
-        </div>
       {:else if kind === 'document' && documentSrcdoc}
         <iframe
           srcdoc={documentSrcdoc}
@@ -450,38 +342,6 @@
       {:else if kind === 'text' && text !== undefined}
         <pre
           class="min-h-0 w-full flex-1 overflow-auto whitespace-pre-wrap rounded-lg bg-surface p-4 font-mono text-xs leading-relaxed text-foreground shadow-2xl break-words">{text}</pre>
-      {:else if kind === 'csv' && csvRows.length > 0}
-        <div
-          class="flex min-h-0 w-full flex-1 flex-col overflow-auto rounded-lg bg-surface shadow-2xl"
-        >
-          <table class="w-full border-collapse text-xs" aria-label={`${filename} data table`}>
-            <thead>
-              <tr class="bg-elevated">
-                {#each csvRows[0] as cell, c (c)}
-                  <th
-                    scope="col"
-                    class="border-r border-border px-3 py-1.5 text-left align-top font-semibold break-words whitespace-pre-wrap"
-                  >
-                    {cell}
-                  </th>
-                {/each}
-              </tr>
-            </thead>
-            <tbody>
-              {#each csvRows.slice(1) as cells, r (r)}
-                <tr class="border-t border-border">
-                  {#each cells as cell, c (c)}
-                    <td
-                      class="border-r border-border px-3 py-1.5 align-top break-words whitespace-pre-wrap"
-                    >
-                      {cell}
-                    </td>
-                  {/each}
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
       {:else}
         <div
           class="flex h-full w-full flex-col items-center justify-center gap-2 rounded-lg bg-surface text-muted shadow-2xl"

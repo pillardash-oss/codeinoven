@@ -230,6 +230,19 @@ export class RendererRecoveryStore {
     return this.entryFor(projectId, threadId).startAfterThreads
   }
 
+  /**
+   * Whether the thread carries an unsent message that is scheduled to start
+   * only once other thread(s) reach a terminal state — a queued message whose
+   * start-after dependency list is non-empty. This is what separates a real
+   * "scheduled/pending" thread (empty composer, agent will start later) from a
+   * plain draft being typed.
+   */
+  hasStartAfterPending(projectId: string, threadId: string): boolean {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return false
+    const queue = this.queuedMessages[recoveryDraftKey(projectId, threadId)]
+    return (queue ?? []).some((message) => message.startAfterThreads.length > 0)
+  }
+
   setDraft(
     projectId: string,
     threadId: string,

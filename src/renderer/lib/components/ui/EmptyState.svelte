@@ -24,9 +24,9 @@
       <Icon size={18} class="text-dimmed" />
     </div>
   {/if}
-  <p class="text-[11px] font-semibold text-foreground">{title}</p>
+  <p class="text-[0.6875rem] font-semibold text-foreground">{title}</p>
   {#if description}
-    <p class="max-w-[36ch] text-[10px] leading-relaxed text-muted">{description}</p>
+    <p class="max-w-[36ch] text-[0.625rem] leading-relaxed text-muted">{description}</p>
   {/if}
   {#if action}
     <div class="mt-1">{@render action()}</div>

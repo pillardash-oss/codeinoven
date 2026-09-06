@@ -64,10 +64,10 @@
   aria-label="Slash actions"
 >
   <div class="flex items-center justify-between px-2 py-1">
-    <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+    <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
       {query ? `Actions matching “${query}”` : 'Available actions'}
     </p>
-    <span class="text-[10px] tabular-nums text-dimmed">{visibleActions.length}</span>
+    <span class="text-[0.625rem] tabular-nums text-dimmed">{visibleActions.length}</span>
   </div>
 
   {#if visibleActions.length === 0}
@@ -75,7 +75,7 @@
   {:else}
     {#each groups as group (group.category)}
       <div role="group" aria-label={categoryLabel(group.category)}>
-        <p class="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+        <p class="px-2 pb-1 pt-2 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
           {categoryLabel(group.category)}
         </p>
 
@@ -103,30 +103,30 @@
               <span class="flex min-w-0 items-center gap-1.5">
                 <span class="truncate text-xs font-medium">{entry.action.title}</span>
                 <span
-                  class="shrink-0 rounded-md border border-border bg-raised px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-dimmed"
+                  class="shrink-0 rounded-md border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
                 >
                   {categoryLabel(entry.action.category)}
                 </span>
                 <span
-                  class="min-w-0 truncate rounded-md border border-border px-1.5 py-0.5 text-[9px] font-medium text-dimmed"
+                  class="min-w-0 truncate rounded-md border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-dimmed"
                 >
                   {entry.action.source.label}
                 </span>
               </span>
 
               {#if entry.action.disabledReason}
-                <span class="mt-0.5 block truncate text-[10px] text-danger">
+                <span class="mt-0.5 block truncate text-[0.625rem] text-danger">
                   {entry.action.disabledReason}
                 </span>
               {:else if entry.action.description}
-                <span class="mt-0.5 block truncate text-[10px] text-dimmed">
+                <span class="mt-0.5 block truncate text-[0.625rem] text-dimmed">
                   {entry.action.description}
                 </span>
               {/if}
             </span>
 
             {#if entry.index === activeIndex && !entry.action.disabledReason}
-              <span class="shrink-0 text-[10px] font-medium text-dimmed">Enter</span>
+              <span class="shrink-0 text-[0.625rem] font-medium text-dimmed">Enter</span>
             {/if}
           </button>
         {/each}

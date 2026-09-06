@@ -36,6 +36,7 @@ interface NormalizedBaseUrlProvider {
   headers?: Record<string, string>
   models: BaseUrlProviderModel[]
   usagePath?: string
+  modelsPath?: string
   enabled: boolean
 }
 
@@ -170,6 +171,10 @@ export class BaseUrlProviderService {
         ...(patch.usagePath === undefined
           ? { usagePath: current.usagePath ?? '' }
           : { usagePath: patch.usagePath }),
+        // An explicit empty string clears the route; undefined keeps it.
+        ...(patch.modelsPath === undefined
+          ? { modelsPath: current.modelsPath ?? '' }
+          : { modelsPath: patch.modelsPath }),
         enabled: patch.enabled ?? current.enabled
       }
 
@@ -306,6 +311,7 @@ function normalizeCreateInput(
   const headers = normalizeHeaders(input.headers)
   const models = normalizeModels(input.models, id)
   const usagePath = normalizeUsagePath(input.usagePath)
+  const modelsPath = normalizeUsagePath(input.modelsPath)
   const enabled = typeof input.enabled === 'boolean' ? input.enabled : true
   return {
     harnessId,
@@ -315,6 +321,7 @@ function normalizeCreateInput(
     headers,
     models,
     ...(usagePath ? { usagePath } : {}),
+    ...(modelsPath ? { modelsPath } : {}),
     enabled
   }
 }
@@ -343,6 +350,15 @@ export function normalizeUsagePath(value: string | undefined): string | undefine
     throw new TypeError('Usage route must be at most 2048 characters')
   }
   return trimmed
+}
+
+/**
+ * Validate the optional model-list route. Same shape rules as the usage route:
+ * an absolute `http(s)` URL or a root-relative path (`/models`, `/v1/models`);
+ * an empty/undefined value falls back to the `/models` default.
+ */
+export function normalizeModelsPath(value: string | undefined): string | undefined {
+  return normalizeUsagePath(value)
 }
 
 function normalizeHeaders(
@@ -486,6 +502,11 @@ function parseProvider(value: unknown): BaseUrlProvider {
   const apiKeyEnvVar = optionalStringMatching(raw['apiKeyEnvVar'], ENV_VAR, 'API key env var')
   const headers = parseHeaders(raw['headers'])
   const models = parseModels(raw['models'], id)
+  const modelsPath = optionalStringMatching(
+    raw['modelsPath'],
+    /^\/?[a-zA-Z0-9._~:/?#[\]@!$&'()*+,;=%-]*$/u,
+    'Model list route'
+  )
   return {
     id,
     harnessId,
@@ -498,6 +519,7 @@ function parseProvider(value: unknown): BaseUrlProvider {
     ...(apiKeyRef === undefined ? {} : { apiKeyRef }),
     ...(apiKeyEnvVar === undefined ? {} : { apiKeyEnvVar }),
     ...(headers === undefined ? {} : { headers }),
+    ...(modelsPath ? { modelsPath } : {}),
     models
   }
 }

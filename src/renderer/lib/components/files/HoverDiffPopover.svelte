@@ -150,9 +150,9 @@
   >
     <div class="max-w-full overflow-auto py-1" style="max-height: {maxHeight};">
       {#if loading}
-        <p class="px-3 py-4 text-[10px] text-dimmed">Loading diff…</p>
+        <p class="px-3 py-4 text-[0.625rem] text-dimmed">Loading diff…</p>
       {:else if error}
-        <p class="px-3 py-4 text-[10px] text-danger" role="alert">{error}</p>
+        <p class="px-3 py-4 text-[0.625rem] text-danger" role="alert">{error}</p>
       {:else if diff}
         <FileDiffView {diff} />
       {/if}

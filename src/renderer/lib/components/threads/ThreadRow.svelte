@@ -1,28 +1,20 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import type { Component } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import {
-    Check,
-    Copy,
-    Pin,
-    PinOff,
-    Pencil,
-    Trash2,
-    GitFork,
-    Kanban,
-    StickyNote
-  } from '@lucide/svelte'
+  import { Check, Clock, Pin, StickyNote } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
-  import { toast } from 'svelte-sonner'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
-  import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
+  import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
@@ -35,6 +27,7 @@
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
+  import WaveBars from '$lib/components/speech/WaveBars.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import {
@@ -47,7 +40,6 @@
   } from '$shared/types'
   import type { Thread } from '$shared/types'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
-  import { copyText } from '$lib/copy-text'
 
   interface Props {
     thread: Thread
@@ -255,71 +247,28 @@
     }
   }
 
-  let showRenameModal = $state(false)
-  let renameValue = $state('')
-  let showDeleteModal = $state(false)
-  let showChangeScopeModal = $state(false)
-  let actionError = $state<string | null>(null)
-
-  let menuItems = $derived<MenuItem[]>([
-    {
-      label: 'Rename',
-      icon: Pencil,
-      onClick: () => {
-        renameValue = thread.title
-        showRenameModal = true
-      }
+  const actionsMenu = createThreadActionsMenu({
+    getThread: () => thread,
+    onRename: (t, newName) => onRename(t, newName),
+    onTogglePin: (t) => onTogglePin(t),
+    onFork: (t) => onFork(t),
+    onDelete: (t) => onDelete(t),
+    onDeleteError: (error) =>
+      reportError(error, 'Could not delete thread', {
+        projectId: thread.projectId,
+        threadId: thread.id
+      }),
+    onOpenNotes: (t) => {
+      onOpen(t)
+      contextSidebarState.openThreadNote(t.projectId, t.id, t.title, {
+        edit: true,
+        focusEditor: true
+      })
     },
-    {
-      label: effectivePinned ? 'Unpin' : 'Pin',
-      icon: effectivePinned ? PinOff : Pin,
-      onClick: () => onTogglePin(thread)
-    },
-    {
-      label: 'Fork',
-      icon: GitFork,
-      onClick: () => onFork(thread)
-    },
-    ...(showChangeScope
-      ? [
-          {
-            label: 'Change Scope',
-            icon: Kanban,
-            onClick: () => {
-              void scopeState.ensureBoardLoaded(thread.projectId)
-              showChangeScopeModal = true
-            }
-          }
-        ]
-      : []),
-    {
-      label: 'Notes',
-      icon: StickyNote,
-      onClick: () => {
-        onOpen(thread)
-        contextSidebarState.openThreadNote(thread.projectId, thread.id, thread.title, {
-          edit: true,
-          focusEditor: true
-        })
-      }
-    },
-    {
-      label: 'Copy thread id',
-      icon: Copy,
-      onClick: () => {
-        void copyThreadId()
-      }
-    },
-    { label: '', divider: true },
-    {
-      label: 'Delete',
-      icon: Trash2,
-      onClick: () => {
-        showDeleteModal = true
-      },
-      danger: true
-    }
-  ] as MenuItem[])
+    showChangeScope: () => showChangeScope,
+    showNotes: () => true,
+    showCopyId: () => true
+  })
 
   const POPOVER_WIDTH = 256
   const POPOVER_ESTIMATED_HEIGHT = 290
@@ -346,6 +295,7 @@
     | 'spec'
     | 'approval'
     | 'error'
+    | 'scheduled'
 
   /** Threads with any unsent composer content read as "todo" (filled gray dot).
    *  Live dictation counts too: from the first mic press through transcription
@@ -356,8 +306,22 @@
       speechController.isCapturingThread(thread.id)
   )
 
+  /** A thread with an unsent message scheduled behind other thread(s) — its
+   *  agent has not started yet. Reads as pending/draft state, but gets a timer
+   *  badge in the working colour instead of the plain draft dot. */
+  let hasStartAfterPending = $derived(
+    rendererRecovery.hasStartAfterPending(thread.projectId, thread.id)
+  )
+
   /** Orchestration worker/auditor threads stay silent: never presented as unread. */
   let effectiveRead = $derived(isOrchestrationChildThread(thread) || thread.read)
+
+  /** A finished temporary (side) chat on this thread is still unread — the
+   *  parent thread's own `read` flag never changes for side chats, so the
+   *  badge comes from the side-chat store instead. */
+  let hasTemporaryChatUnread = $derived(
+    temporaryChatUnread.hasUnread(thread.projectId, thread.id)
+  )
 
   /** Aggregate child activity onto the Sr. Engineer row — the public source of truth. */
   let delegatedWorkActive = $derived(
@@ -381,7 +345,15 @@
   )
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
   /** TTS playing on this thread — shares the recorder's indicator slot. */
+  // Last action wins between ASR and TTS: recording start cancels playback, so
+  // a transcription can only overlap a TTS that began after it — in that case
+  // the newer TTS takes the slot; otherwise the transcription waveform shows.
   let isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(thread.id))
+  /** The mic has closed but the transcript has not landed yet — same indicator
+   *  slot, distinct label, shown only when neither recording nor speaking. */
+  let isTranscribing = $derived(
+    !isRecording && !isSpeaking && speechController.isTranscribingThread(thread.id)
+  )
 
   /**
    * Sending clears the draft, which would otherwise flash the badge back to the
@@ -414,6 +386,14 @@
     if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
     if (thread.status === 'spec') return 'spec'
+    // An unread side chat must surface even while the parent thread itself is
+    // still working: the row keeps pulsing (the busy indicator is independent
+    // of the badge) but shows the unread dot instead of swallowing it.
+    if (hasTemporaryChatUnread) return 'unread'
+    // A scheduled message (queued behind other threads) reads as pending work
+    // and shows the timer badge — it is a draft in the sorting/pinning sense but
+    // not something still being typed.
+    if (hasStartAfterPending) return 'scheduled'
     // Drafting (or the brief post-send grace) shows the todo dot.
     if (holdingDraft) return 'todo'
     if (isDraft) return 'todo'
@@ -474,7 +454,8 @@
       stage?: 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done' | 'pinned'
       tone?: 'todo' | 'working' | 'working-paused' | 'attention' | 'spec' | 'done' | 'error'
       kind?: 'completed' | 'attention' | 'error'
-      variant?: 'dot' | 'spinner'
+      variant?: 'dot' | 'spinner' | 'icon'
+      icon?: Component | null
       animated?: boolean
     } | null => {
       switch (threadState) {
@@ -484,6 +465,8 @@
           return { stage: 'todo' }
         case 'working':
           return { variant: 'spinner', stage: 'working' }
+        case 'scheduled':
+          return { variant: 'icon', stage: 'working', icon: Clock }
         case 'working-paused':
           return { variant: 'spinner', tone: 'working-paused' }
         case 'spec':
@@ -598,42 +581,7 @@
     showMenu = true
   }
 
-  function errorMessage(error: unknown, fallback: string): string {
-    return error instanceof Error ? error.message : fallback
-  }
 
-  async function copyThreadId(): Promise<void> {
-    try {
-      await copyText(thread.id)
-      toast.success('Thread ID copied.')
-    } catch {
-      toast.error('The thread ID could not be copied.')
-    }
-  }
-
-  async function confirmRename(): Promise<void> {
-    if (!renameValue.trim()) return
-    try {
-      actionError = null
-      await onRename(thread, renameValue.trim())
-      showRenameModal = false
-    } catch (error) {
-      actionError = errorMessage(error, 'Could not rename thread')
-    }
-  }
-
-  async function confirmDelete(): Promise<void> {
-    try {
-      actionError = null
-      await onDelete(thread)
-      showDeleteModal = false
-    } catch (error) {
-      reportError(error, 'Could not delete thread', {
-        projectId: thread.projectId,
-        threadId: thread.id
-      })
-    }
-  }
 </script>
 
 {#if picker}
@@ -658,6 +606,7 @@
             tone={badgeProps.tone}
             kind={badgeProps.kind}
             variant={badgeProps.variant ?? 'dot'}
+            icon={badgeProps.icon}
             animated={badgeProps.animated}
             size="md"
             title={isRetryPaused
@@ -666,7 +615,9 @@
                 ? stageLabel
                 : thread.status === 'spec'
                   ? 'Spec ready'
-                  : threadState}
+                  : threadState === 'scheduled'
+                    ? 'Scheduled'
+                    : threadState}
           />
         {:else}
           <span
@@ -677,7 +628,7 @@
         {/if}
       </span>
       <span
-        class="min-w-0 flex-1 truncate text-[13px] {threadState === 'approval'
+        class="min-w-0 flex-1 truncate text-[0.75rem] {threadState === 'approval'
           ? 'font-medium text-warning'
           : threadState === 'unread'
             ? 'font-medium text-foreground'
@@ -690,6 +641,8 @@
           <RecordingIndicator label="Listening" />
         {:else if isSpeaking}
           <RecordingIndicator label="Speaking" tone="speech" />
+        {:else if isTranscribing}
+          <WaveBars label="Transcribing" />
         {:else if isBusyIndicator && currentModelProviderName}
           <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
             <VendorIcon
@@ -699,8 +652,8 @@
             />
           </span>
         {:else}
-          <span class="whitespace-nowrap text-[10px] text-dimmed">
-            {relativeTime(thread.createdAt)}
+          <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
+            {relativeTime(thread.lastActivity)}
           </span>
         {/if}
       {:else if currentModelProviderName}
@@ -725,7 +678,7 @@
               <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
             {/each}
             {#if harnessIds.length > 3}
-              <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+              <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
                 +{harnessIds.length - 3}
               </span>
             {/if}
@@ -734,7 +687,7 @@
 
         {#if scopeBucket}
           <span
-            class="relative flex min-w-0 items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            class="relative flex min-w-0 items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[0.5625rem] text-muted"
             title={scopeBucket.name}
             style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
           >
@@ -763,9 +716,11 @@
             <RecordingIndicator label="Listening" />
           {:else if isSpeaking}
             <RecordingIndicator label="Speaking" tone="speech" />
+          {:else if isTranscribing}
+            <WaveBars label="Transcribing" />
           {:else}
-            <span class="whitespace-nowrap text-[10px] text-dimmed">
-              {relativeTime(thread.createdAt)}
+            <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
+              {relativeTime(thread.lastActivity)}
             </span>
           {/if}
         </span>
@@ -847,6 +802,7 @@
               tone={badgeProps.tone}
               kind={badgeProps.kind}
               variant={badgeProps.variant ?? 'dot'}
+              icon={badgeProps.icon}
               animated={badgeProps.animated}
               size="md"
               title={isRetryPaused
@@ -855,7 +811,9 @@
                   ? stageLabel
                   : thread.status === 'spec'
                     ? 'Spec ready'
-                    : threadState}
+                    : threadState === 'scheduled'
+                      ? 'Scheduled'
+                      : threadState}
             />
           {:else}
             <span
@@ -891,7 +849,7 @@
 
       <!-- Title -->
       <span
-        class="min-w-0 flex-1 truncate text-[13px] {threadState === 'approval'
+        class="min-w-0 flex-1 truncate text-[0.75rem] {threadState === 'approval'
           ? 'font-medium text-warning'
           : threadState === 'unread'
             ? 'font-medium text-foreground'
@@ -907,6 +865,8 @@
           <RecordingIndicator label="Listening" />
         {:else if isSpeaking}
           <RecordingIndicator label="Speaking" tone="speech" />
+        {:else if isTranscribing}
+          <WaveBars label="Transcribing" />
         {:else if isBusyIndicator && currentModelProviderName}
           <span
             class="flex shrink-0 items-center transition-opacity duration-150 {hovered
@@ -923,12 +883,12 @@
           </span>
         {:else}
           <span
-            class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+            class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
               ? 'opacity-0'
               : 'opacity-100'}"
             aria-hidden={hovered}
           >
-            {relativeTime(thread.createdAt)}
+            {relativeTime(thread.lastActivity)}
           </span>
         {/if}
       {:else}
@@ -967,7 +927,7 @@
               <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
             {/each}
             {#if visibleHarnessCount < harnessIds.length}
-              <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+              <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
                 +{harnessIds.length - visibleHarnessCount}
               </span>
             {/if}
@@ -976,7 +936,7 @@
 
         {#if scopeBucket && !hideScope}
           <span
-            class="relative col-start-2 flex min-w-0 max-w-[7rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            class="relative col-start-2 flex min-w-0 max-w-[7rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[0.5625rem] text-muted"
             title={scopeBucket.name}
             style="border-bottom-color: color-mix(in srgb, {scopeColor} 20%, var(--color-muted));"
           >
@@ -1005,14 +965,16 @@
             <RecordingIndicator label="Listening" />
           {:else if isSpeaking}
             <RecordingIndicator label="Speaking" tone="speech" />
+          {:else if isTranscribing}
+            <WaveBars label="Transcribing" />
           {:else}
             <span
-              class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+              class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
                 ? 'opacity-0'
                 : 'opacity-100'}"
               aria-hidden={hovered}
             >
-              {relativeTime(thread.createdAt)}
+              {relativeTime(thread.lastActivity)}
             </span>
           {/if}
         </span>
@@ -1028,7 +990,7 @@
     >
       <ThreadDropdown
         bind:open={showMenu}
-        items={menuItems}
+        items={actionsMenu.items}
         vertical={showBottomRow}
         onOpen={() => {
           showPopover = false
@@ -1057,21 +1019,25 @@
   {/if}
 </div>
 
-{#if actionError}
+{#if actionsMenu.renameError}
   <div
     class="fixed bottom-4 right-4 z-60 rounded-lg bg-danger px-4 py-2 text-sm text-white shadow-lg"
   >
-    {actionError}
+    {actionsMenu.renameError}
   </div>
 {/if}
 
-<Modal open={showRenameModal} title="Rename Thread" onClose={() => (showRenameModal = false)}>
+<Modal
+  open={actionsMenu.showRenameModal}
+  title="Rename Thread"
+  onClose={actionsMenu.cancelRename}
+>
   <form
     id={renameThreadFormId}
     class="space-y-4"
     onsubmit={(e: SubmitEvent) => {
       e.preventDefault()
-      void confirmRename()
+      void actionsMenu.confirmRename()
     }}
   >
     <div>
@@ -1082,7 +1048,7 @@
         id="thread-rename-input"
         type="text"
         class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
-        bind:value={renameValue}
+        bind:value={actionsMenu.renameValue}
         oninput={() => onRenameInputChange?.(thread)}
       />
     </div>
@@ -1092,7 +1058,7 @@
     <button
       type="button"
       class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      onclick={() => (showRenameModal = false)}
+      onclick={actionsMenu.cancelRename}
     >
       Cancel
     </button>
@@ -1100,42 +1066,24 @@
       type="submit"
       form={renameThreadFormId}
       class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-      disabled={!renameValue.trim()}
+      disabled={!actionsMenu.renameValue.trim()}
     >
       Save
     </button>
   {/snippet}
 </Modal>
 
-<Modal open={showDeleteModal} title="Delete Thread" onClose={() => (showDeleteModal = false)}>
-  <p class="text-sm leading-relaxed text-muted">
-    This will permanently delete
-    <span class="font-medium text-foreground">{thread.title}</span>
-    and all of its history. This action cannot be undone.
-  </p>
+<ThreadDeleteConfirm
+  open={actionsMenu.showDeleteModal}
+  threadTitle={thread.title}
+  onClose={actionsMenu.cancelDelete}
+  onConfirm={actionsMenu.confirmDelete}
+/>
 
-  {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      onclick={() => (showDeleteModal = false)}
-    >
-      Cancel
-    </button>
-    <button
-      type="button"
-      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90"
-      onclick={() => void confirmDelete()}
-    >
-      Delete
-    </button>
-  {/snippet}
-</Modal>
-
-{#if showChangeScopeModal && !picker}
+{#if actionsMenu.showChangeScopeModal && !picker}
   <ChangeScopeModal
-    open={showChangeScopeModal}
-    onClose={() => (showChangeScopeModal = false)}
+    open={actionsMenu.showChangeScopeModal}
+    onClose={actionsMenu.cancelChangeScope}
     threadId={thread.id}
     projectId={thread.projectId}
     currentBucketId={thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID}

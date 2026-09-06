@@ -17,24 +17,31 @@ const cache = new Map<string, CacheEntry>()
 function cacheKey(
   baseURL: string,
   apiKey: string | undefined,
-  headers: Record<string, string> | undefined
+  headers: Record<string, string> | undefined,
+  modelsPath: string | undefined
 ): string {
-  return JSON.stringify([baseURL, apiKey ?? '', headers ?? {}])
+  return JSON.stringify([baseURL, apiKey ?? '', headers ?? {}, modelsPath ?? ''])
 }
 
-/** Fetches `${baseURL}/models`, parsing the OpenAI `{ data: [{ id, ... }] }` shape.
- *  Set `force` to bypass the 24h cache (used by the model picker's refresh action). */
+/** Fetches the provider's model-list route (default `${baseURL}/models`), parsing
+ *  the OpenAI `{ data: [{ id, ... }] }` shape. Set `force` to bypass the 24h
+ *  cache (used by the model picker's refresh action). */
 export async function discoverBaseUrlModels(
   baseURL: string,
-  options: { apiKey?: string; headers?: Record<string, string>; force?: boolean } = {}
+  options: {
+    apiKey?: string
+    headers?: Record<string, string>
+    modelsPath?: string
+    force?: boolean
+  } = {}
 ): Promise<DiscoveredBaseUrlModel[]> {
-  const key = cacheKey(baseURL, options.apiKey, options.headers)
+  const key = cacheKey(baseURL, options.apiKey, options.headers, options.modelsPath)
   const cached = cache.get(key)
   if (!options.force && cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
     return cached.models
   }
 
-  const url = `${baseURL.replace(/\/+$/u, '')}/models`
+  const url = resolveModelsUrl(baseURL, options.modelsPath)
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
   try {
@@ -95,4 +102,14 @@ function positiveInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined
+}
+
+/** Resolve the model-list endpoint: an absolute URL wins, otherwise the route is
+ *  joined onto the base URL (defaulting to `/models` when unset). */
+function resolveModelsUrl(baseURL: string, modelsPath: string | undefined): string {
+  const base = baseURL.replace(/\/+$/u, '')
+  const route = modelsPath?.trim()
+  if (!route) return `${base}/models`
+  if (/^https?:\/\//iu.test(route)) return route
+  return `${base}${route.startsWith('/') ? route : `/${route}`}`
 }

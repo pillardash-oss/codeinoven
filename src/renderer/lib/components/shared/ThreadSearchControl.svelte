@@ -203,13 +203,13 @@
                   <span class="min-w-0 flex-1 truncate text-sm text-foreground">
                     {thread.title}
                   </span>
-                  <span class="shrink-0 text-[10px] capitalize text-dimmed">
+                  <span class="shrink-0 text-[0.625rem] capitalize text-dimmed">
                     {thread.status.replace('_', ' ')}
                   </span>
                 </span>
                 {#if result.kind === 'message' && result.snippet}
-                  <span class="line-clamp-2 text-[11px] leading-snug text-dimmed">
-                    <span class="text-[10px] uppercase tracking-wide text-dimmed/80">
+                  <span class="line-clamp-2 text-[0.6875rem] leading-snug text-dimmed">
+                    <span class="text-[0.625rem] uppercase tracking-wide text-dimmed/80">
                       {result.role === 'assistant' ? 'Agent' : 'You'}
                     </span>
                     <span aria-hidden="true"> · </span>

@@ -2,6 +2,7 @@
   import { FolderInput, Loader2, TriangleAlert } from '@lucide/svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
+  import { invoke } from '$lib/ipc.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import type { AdoptableWorktreeInfo } from '$shared/types'
 
@@ -27,6 +28,14 @@
   let error = $state<string | null>(null)
 
   let canSubmit = $derived(preview?.adoptable === true && !busy)
+
+  /** Open the OS file picker and prefill + inspect the chosen folder. */
+  async function pickFolder(): Promise<void> {
+    const folder = await invoke('dialog:pickFolder')
+    if (!folder) return
+    sourcePath = folder
+    await detect()
+  }
 
   /** Preview what adoption would do before anything is moved. */
   async function detect(): Promise<void> {
@@ -104,16 +113,11 @@
         />
         <button
           type="button"
-          class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs text-muted hover:bg-overlay disabled:opacity-50"
-          disabled={!sourcePath.trim() || detecting}
-          onclick={() => void detect()}
+          class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs text-muted hover:bg-overlay"
+          onclick={() => void pickFolder()}
         >
-          {#if detecting}
-            <Loader2 size={12} class="animate-spin" />
-          {:else}
-            <FolderInput size={12} />
-          {/if}
-          Check
+          <FolderInput size={12} />
+          Pick folder
         </button>
       </div>
     </div>
@@ -149,10 +153,21 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
+      class="mr-auto rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
       onclick={close}
     >
       Cancel
+    </button>
+    <button
+      type="button"
+      class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-sm text-muted hover:bg-overlay disabled:opacity-50"
+      disabled={!sourcePath.trim() || detecting || busy}
+      onclick={() => void detect()}
+    >
+      {#if detecting}
+        <Loader2 size={13} class="animate-spin" />
+      {/if}
+      Check
     </button>
     <button
       type="submit"

@@ -1,4 +1,5 @@
 import type {
+  AgentBankedResets,
   AgentEvent,
   AgentMessage,
   AgentQuestionRequest,
@@ -243,14 +244,14 @@ export interface GenerateTitleOptions {
   parentSessionId?: string
 }
 
-/** Captured grading payload judged 1–5 by a disposable cheap-model completion. */
+/** Captured conversation payload judged 0–10 by a disposable cheap-model completion. */
 export interface GradeTurnOptions {
   settings: ThreadSettings
-  /** The initiating visible user message of the scored turn. */
+  /** The initiating visible user message of the closed conversation window. */
   userMessage: string
-  /** The agent's final output text for the scored turn. */
+  /** The agent's final output text for the conversation window. */
   assistantOutput: string
-  /** Follow-up the user sent while the grade was pending, when one exists. */
+  /** The conversation's follow-up exchange, when one exists. */
   followUp?: string | null
   /** Parent turn whose authenticated transport permits a safe auxiliary grading process. */
   parentSessionId?: string
@@ -380,6 +381,12 @@ export interface HarnessDriver {
    * "not busy" to keep the legacy behavior.
    */
   isSessionBusy?(projectPath: string, sessionId: string): Promise<boolean>
+
+  /** Whether the driver still has a registered live turn for this session.
+   *  When absent, callers must assume a turn may exist. Used by the engine's
+   *  watchdog to distinguish a driver that lost its turn registration (e.g.
+   *  pi's auto-compaction gap) from one still streaming. */
+  hasActiveTurn?(sessionId: string): boolean
 
   /** Load the full message history for a session. */
   loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]>
@@ -521,8 +528,21 @@ export interface HarnessDriver {
   readAccountUsage?(projectPath: string, providerId?: string): Promise<{
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits
+    bankedResets?: AgentBankedResets
     contextWindow?: number
     contextUsed?: number
+  } | null>
+
+  /**
+   * Redeem one banked rate-limit reset credit, when the harness supports
+   * banking (currently Codex). This is destructive and irreversible — it
+   * resets the account's active usage windows and consumes one banked
+   * credit. Returns the refreshed quota telemetry, or null if unsupported.
+   */
+  activateBankedReset?(projectPath: string): Promise<{
+    rateLimits: AgentRateLimitWindow[]
+    credits?: AgentUsageCredits
+    bankedResets?: AgentBankedResets
   } | null>
 
   /** Build, but do not execute, an interactive login handoff. */

@@ -8,7 +8,7 @@
   }, 0)
 </script>
 
-<div class="mx-auto max-w-3xl p-6 pb-24">
+<div class="p-6 pb-24">
   <div class="mb-6">
     <h1 class="flex items-center gap-2 text-xl font-bold tracking-tight">
       <Keyboard size={18} class="text-muted" />
@@ -35,17 +35,17 @@
             <div class="min-w-0 flex-1">
               <p class="text-sm font-medium text-foreground">{shortcut.label}</p>
               <p class="mt-0.5 text-xs leading-relaxed text-muted">{shortcut.description}</p>
-              <p class="mt-1 text-[11px] text-dimmed">When: {shortcut.scenario}</p>
+              <p class="mt-1 text-[0.6875rem] text-dimmed">When: {shortcut.scenario}</p>
             </div>
             <div class="flex shrink-0 items-center gap-1 pt-0.5">
               {#each shortcut.keys as key, index (index)}
                 <kbd
-                  class="inline-flex h-6 min-w-6 items-center justify-center rounded-md border border-border bg-elevated px-1.5 font-mono text-[11px] leading-none text-foreground shadow-sm"
+                  class="inline-flex h-6 min-w-6 items-center justify-center rounded-md border border-border bg-elevated px-1.5 font-mono text-[0.6875rem] leading-none text-foreground shadow-sm"
                 >
                   {keyTokenLabel(key, isMac)}
                 </kbd>
                 {#if index < shortcut.keys.length - 1}
-                  <span class="text-[10px] text-dimmed">+</span>
+                  <span class="text-[0.625rem] text-dimmed">+</span>
                 {/if}
               {/each}
             </div>

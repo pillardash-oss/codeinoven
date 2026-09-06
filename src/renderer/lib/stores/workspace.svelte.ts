@@ -4,6 +4,7 @@
  * through view components.
  */
 import type { Project, Thread } from '$shared/types'
+import { SvelteSet } from 'svelte/reactivity'
 import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
 import type { AgentSource } from '$lib/agent-sources'
 import { contextSidebarState } from './context-sidebar.svelte'
@@ -123,7 +124,8 @@ class WorkspaceState {
    * regular project view stays, scope state stays, threads view stays, and
    * chat notifications switch to the chats view.  Registered by App.svelte.
    */
-  openThreadFromNotification: ((thread: Thread, project: Project) => Promise<void>) | null = null
+  openThreadFromNotification:
+    ((thread: Thread, project: Project, temporaryChatId?: string) => Promise<void>) | null = null
 
   // ─── Sources (fed by ThreadView) ───────────────────────────────────────
   sources: AgentSource[] = $state([])
@@ -323,6 +325,30 @@ class WorkspaceState {
     return true
   }
 
+  /** Incremented to signal the app shell to open the getting-started tour. */
+  requestOnboardingCount = $state(0)
+  private consumedOnboardingRequestCount = 0
+
+  requestOnboarding(): void {
+    this.requestOnboardingCount++
+  }
+
+  consumeOnboardingRequest(): boolean {
+    if (this.consumedOnboardingRequestCount === this.requestOnboardingCount) return false
+    this.consumedOnboardingRequestCount = this.requestOnboardingCount
+    return true
+  }
+
+  /** Thread ids that had a user message this session. The centered composer
+   *  head start never returns for these — even if the messages are deleted —
+   *  so it never interrupts a user mid-thought. Session-scoped by design:
+   *  after a restart an empty thread is a fresh start again. */
+  headStartUsedThreadIds: SvelteSet<string> = new SvelteSet<string>()
+
+  markThreadHeadStartUsed(threadId: string): void {
+    this.headStartUsedThreadIds.add(threadId)
+  }
+
   /** A project added externally (e.g. from Scope view) that Workspace needs to pick up. */
   pendingAddedProject: Project | null = $state(null)
 
@@ -456,12 +482,11 @@ export function findEmptyNewThread(
     const thisBucket = t.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
     const targetBucket = scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
     if (thisBucket !== targetBucket) return false
-    const draft = rendererRecovery.draftFor(projectId, t.id)
-    if (draft.length > 0) return false
-    const attachments = rendererRecovery.attachmentsFor(projectId, t.id)
-    if (attachments.length > 0) return false
-    const refs = rendererRecovery.projectReferencesFor(projectId, t.id)
-    if (refs.length > 0) return false
+    // A thread is only "empty" when it holds no draft, staged, or queued
+    // content. A brand-new thread with a message scheduled behind other
+    // threads (start-after) must not be reused as a blank New Thread — it
+    // needs to stay put so the user can start a fresh one.
+    if (rendererRecovery.hasDraftContent(projectId, t.id)) return false
     return true
   })
 }

@@ -38,6 +38,15 @@ class CitationPathsState {
   /** Reactive version — bumped whenever a resolution changes the known set. */
   private refreshKey = $state(0)
 
+  /** Reactive revision of the resolved-citation state. Callers whose memoized
+   *  output depends on `isValidPath`/`isKnownExternalPath` must read this in
+   *  their reactive context AND fold it into their cache key — otherwise a
+   *  memo hit after a resolution bump returns stale, un-linkified output
+   *  forever (the linkify-after-mount bug). */
+  get revision(): number {
+    return this.refreshKey
+  }
+
   private cacheFor(projectId: string): CitationPathsCache {
     let cache = this.projects.get(projectId)
     if (!cache) {
