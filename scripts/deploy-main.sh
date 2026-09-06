@@ -4,18 +4,22 @@
 #
 # Requires that `nightly` was already promoted by `deploy:nightly`, so that a
 # published `v<version>-nightly.<N>` prerelease exists for the version being
-# promoted (the release workflow refuses to promote without it). `main` is then
-# merged to match `nightly` content and pushed. Pushing to `main` triggers
-# `.github/workflows/release.yml`, which builds and publishes the `v<version>`
-# stable release with the GitHub tag created automatically by the workflow.
+# promoted (the release workflow refuses to promote without it).
+#
+# The `main` branch is protected by the "Protect stable promotion" GitHub
+# ruleset (PR required, no bypass), so this script opens a `nightly` -> `main`
+# pull request and enables auto-merge rather than pushing directly. Once the
+# required checks pass, GitHub merges it automatically, which triggers
+# `.github/workflows/release.yml` to build and publish the `v<version>` stable
+# release with the GitHub tag created automatically by the workflow.
 #
 # Safety net:
 #   - Requires a clean working tree.
 #   - Verifies (via `gh`) that a matching nightly prerelease is already public.
 #   - Enforces the version gate (main version must increase; must equal nightly).
-#   - Merges nightly into main (never force-pushes, never rewrites history),
-#     resolving file content in favor of the incoming nightly branch. If main
-#     has work not contained in nightly, review it before confirming.
+#   - All remote state is resolved from `origin/*` refs; no local branch checkout
+#     or pull of `nightly`/`main` is performed, so stale local branches cannot
+#     break the run.
 #
 # Usage: bun run deploy:main
 
@@ -28,6 +32,9 @@ if [[ "${1:-}" == "--dry-run" ]]; then
   DRY_RUN=1
 else
   DRY_RUN=0
+fi
+if [[ "$DRY_RUN" -eq 0 && -z "$(command -v gh)" ]]; then
+  die "The 'gh' CLI is required to verify the nightly prerelease and open the stable-promotion pull request (run: brew install gh / gh auth login)."
 fi
 
 C_RED=$'\033[31m'
@@ -50,23 +57,11 @@ pkg_version() {
 if [[ "$DRY_RUN" -eq 0 && -n "$(git status --porcelain)" ]]; then
   die "Working tree is not clean. Commit or stash your changes before promoting."
 fi
-if [[ "$DRY_RUN" -eq 0 && -z "$(command -v gh)" ]]; then
-  die "The 'gh' CLI is required to verify the nightly prerelease (run: brew install gh / gh auth login)."
-fi
 
 say "${C_BOLD}Resolving latest remote state...${C_RESET}"
 git fetch origin
 
-# --- 1. ensure we're on a clean, up-to-date nightly --------------------------
-if [[ "$(git branch --show-current)" != "nightly" && "$DRY_RUN" -eq 0 ]]; then
-  say "Checking out nightly..."
-  git checkout nightly
-fi
-if [[ "$DRY_RUN" -eq 0 ]]; then
-  git pull --ff-only origin nightly
-else
-  say "(dry-run) git pull --ff-only origin nightly"
-fi
+NIGHTLY_SHA="$(git rev-parse origin/nightly)"
 
 NIGHTLY_VERSION="$(pkg_version origin/nightly)"
 MAIN_VERSION="$(pkg_version origin/main)"
@@ -101,27 +96,36 @@ else
 fi
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
-  say ""
-  read -r -p "Merge nightly -> main and push? This triggers the stable release build. [y/N] " answer
-  if [[ "${answer,,}" != "y" && "${answer,,}" != "yes" ]]; then
-    die "Aborted by user."
+  EXISTING_PR="$(gh pr list --base main --head nightly --state open --json number --jq '.[0].number' 2>/dev/null || true)"
+  if [[ -n "$EXISTING_PR" ]]; then
+    say "Reusing existing nightly -> main PR #$EXISTING_PR."
+  else
+    say "Opening nightly -> main pull request..."
+    PR_URL="$(gh pr create \
+      --base main \
+      --head nightly \
+      --title "Release: promote v$NIGHTLY_VERSION from nightly to main" \
+      --body "Automated stable promotion of nightly v$NIGHTLY_VERSION by deploy:main.
+
+- Nightly prerelease for v$NIGHTLY_VERSION verified published.
+- Version gate passed: main $MAIN_VERSION -> stable $NIGHTLY_VERSION.
+
+Merging triggers .github/workflows/release.yml to build and publish the v$NIGHTLY_VERSION stable release.")" || die "Failed to open the nightly -> main pull request."
+    ok "Opened $PR_URL"
+    EXISTING_PR="$(gh pr list --base main --head nightly --state open --json number --jq '.[0].number')"
   fi
-
-  say "Merging nightly into main (favoring nightly content)..."
-  git checkout main
-  git pull --ff-only origin main
-  git merge --no-ff origin/nightly -X theirs -m "Release: promote v$NIGHTLY_VERSION from nightly to main"
-  # Nightly already carries next stable (e.g. stable 0.5.51 -> nightly 0.5.52-nightly-1 -> stable 0.5.52)
-  # No bump needed - main version equals nightly version
-
-  say "Pushing main..."
-  git push origin main
-  ok "Pushed main at $(git rev-parse --short main)."
+  say "Enabling auto-merge (merge commit) once required checks pass..."
+  if gh pr merge "$EXISTING_PR" --auto --merge 2>/dev/null; then
+    ok "Auto-merge armed. The stable release workflow will run once the PR merges."
+  else
+    warn "Could not enable auto-merge (repo setting or permissions). Merge the PR manually once checks pass:"
+    warn "  gh pr list --base main --head nightly --state open"
+  fi
 else
-  say "(dry-run) git checkout main && git pull --ff-only origin main"
-  say "(dry-run) git merge --no-ff origin/nightly -X theirs -m \"Release: promote v$NIGHTLY_VERSION from nightly to main\""
+  say "(dry-run) gh pr create --base main --head nightly --title \"Release: promote v$NIGHTLY_VERSION from nightly to main\""
+  say "(dry-run) gh pr merge --auto --merge <pr>"
 fi
 
 say ""
-say "${C_BOLD}Done.${C_RESET} The release workflow is building; verify the stable release "
+say "${C_BOLD}Done.${C_RESET} Once the nightly -> main PR merges, the release workflow is building; verify the stable release "
 say "v${NIGHTLY_VERSION} appears on GitHub."
