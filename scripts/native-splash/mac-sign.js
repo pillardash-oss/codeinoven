@@ -78,7 +78,7 @@ export default async function macSign(configuration) {
   }
   const bridgeRequirement = isAdHocSigning
     ? undefined
-    : `=designated => (identifier "${bundleIdentifier}" or identifier "${electronBinaryIdentifier}") and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "${teamId}"`
+    : `designated => (identifier "${bundleIdentifier}" or identifier "${electronBinaryIdentifier}") and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = ${teamId}`
 
   // Both CodeInOven (launcher) and CodeInOven-electron (Electron runtime) live
   // in Contents/MacOS/, so osx-sign's isBundleMainExecutable() matches both. They
@@ -98,9 +98,10 @@ export default async function macSign(configuration) {
     '--timestamp'
   ]
   if (bridgeRequirement) {
-    // Strip the leading '=' because codesign's -r flag expects '=designated ...'
-    // and osx-sign's per-file path pushes `-r${req}`, producing `-r=designated ...`.
-    electronSignArgs.push(`-r${bridgeRequirement.replace(/^=/, '')}`)
+    // codesign's -r flag expects the requirement as `=<requirements source>`,
+    // e.g. `-r=designated => ...`. The bridge requirement is stored without a
+    // leading '=' so we join it as `-r=` + requirement here.
+    electronSignArgs.push(`-r=${bridgeRequirement}`)
   }
   if (configuration.keychain) {
     electronSignArgs.push('--keychain', configuration.keychain)
