@@ -114,7 +114,15 @@ export default async function macSign(configuration) {
   const originalIgnore = configuration.ignore
   configuration.ignore = [
     ...(Array.isArray(originalIgnore) ? originalIgnore : originalIgnore ? [originalIgnore] : []),
-    (filePath) => filePath === electronExecutable
+    // osx-sign may pass ignore-callback paths in a normalized or relative
+    // form, so match the Electron runtime by path suffix instead of strict
+    // equality — a missed match means it gets re-signed after the launcher
+    // seals the bundle, and macOS 26's strict verify rejects the bundle with
+    // "nested code is modified or invalid".
+    (filePath) => {
+      const normalized = String(filePath).replace(/^\.\//, '')
+      return normalized.endsWith(`/${electronBinaryIdentifier}`) || normalized === electronExecutable
+    }
   ]
 
   const originalOptionsForFile = configuration.optionsForFile
