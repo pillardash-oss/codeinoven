@@ -165,10 +165,6 @@ jobs:
             sleep 10
             exit_code=0
           done
-          if [ "$exit_code" -ne 0 ] && [ "${{ matrix.target }}" = "win" ]; then
-            echo "::warning::Windows startup smoke failed with exit $exit_code (known flaky, not blocking release)"
-            exit 0
-          fi
           exit "$exit_code"
 
       - name: Upload build artifacts

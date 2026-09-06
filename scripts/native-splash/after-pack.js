@@ -125,15 +125,22 @@ function compileWindows(output, includeDirectory, arch, temporaryDirectory) {
   run('cmd.exe', ['/d', '/s', '/c', batchPath])
 }
 
-async function hardenElectron(electronExecutable) {
+async function hardenElectron(electronExecutable, platform) {
+  // Embedded ASAR integrity validation requires the Electron binary to be
+  // Authenticode-signed on Windows: the integrity data is embedded in the
+  // Authenticode signature by the packer's signing pass. Our Windows builds are
+  // unsigned, so enabling the fuse there makes the child abort instantly at
+  // startup (native splash flashes black and closes). macOS signs the bundle,
+  // so the fuse stays on there.
+  const enableAsarIntegrity = platform !== 'win32'
   await flipFuses(electronExecutable, {
     version: FuseVersion.V1,
     [FuseV1Options.RunAsNode]: true,
     [FuseV1Options.EnableCookieEncryption]: true,
     [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
     [FuseV1Options.EnableNodeCliInspectArguments]: false,
-    [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
-    [FuseV1Options.OnlyLoadAppFromAsar]: true,
+    [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: enableAsarIntegrity,
+    [FuseV1Options.OnlyLoadAppFromAsar]: enableAsarIntegrity,
     [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot]: false,
     [FuseV1Options.GrantFileProtocolExtraPrivileges]: true
   })
@@ -175,7 +182,7 @@ export default async function installNativeSplash(context) {
   // Fuses belong to Electron, not the tiny public launcher. Apply them while
   // the original binary still has its standard packaged location, then rename
   // it and let electron-builder sign both executables in its normal sign pass.
-  await hardenElectron(publicExecutable)
+  await hardenElectron(publicExecutable, platform)
   renameSync(publicExecutable, electronExecutable)
   copyFileSync(launcherExecutable, publicExecutable)
   chmodSync(publicExecutable, 0o755)
