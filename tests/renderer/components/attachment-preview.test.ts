@@ -8,6 +8,7 @@ function readRepoFile(relativePath: string): string {
 }
 
 const componentSource = readRepoFile('src/renderer/lib/components/chats/AttachmentPreview.svelte')
+const documentPreviewFrameSource = readRepoFile('src/renderer/lib/document-preview-frame.ts')
 const lockfile = readRepoFile('bun.lock')
 const packageJson = JSON.parse(readRepoFile('package.json')) as {
   dependencies?: Record<string, string>
@@ -24,7 +25,8 @@ describe('AttachmentPreview SEC-01 presentation containment', () => {
   })
 
   it('keeps the sanitized, sandboxed document preview that PPTX documents fall back to', () => {
-    expect(componentSource).toMatch(/DOMPurify\.sanitize/)
+    expect(documentPreviewFrameSource).toMatch(/DOMPurify\.sanitize/)
+    expect(componentSource).toMatch(/documentPreviewFrame\(/)
     expect(componentSource).toMatch(/sandbox=""/)
     expect(componentSource).toMatch(/srcdoc=\{documentSrcdoc\}/)
   })
