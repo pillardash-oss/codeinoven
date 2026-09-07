@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { lstat, readdir } from 'node:fs/promises'
+import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { watch, type FSWatcher } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
@@ -440,11 +440,30 @@ export class ProjectFileIndexService {
     return [...entries.values()]
   }
 
+  /** Whether a symlinked directory's target stays inside the project after
+   *  resolving symlinks in both the link and the root. Prevents traversal of
+   *  links that escape the project. */
+  private async isInsideRoot(root: string, linkPath: string): Promise<boolean> {
+    try {
+      const [rootReal, linkReal] = await Promise.all([realpath(root), realpath(linkPath)])
+      const rel = relative(rootReal, linkReal)
+      return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+    } catch {
+      return false
+    }
+  }
+
   private async walkProjectEntries(root: string): Promise<ProjectFileEntry[]> {
     const entries: ProjectFileEntry[] = []
     const pending: Array<{ absolutePath: string; relativePath: string }> = [
       { absolutePath: root, relativePath: '' }
     ]
+    const visitedRealDirectories = new Set<string>()
+    try {
+      visitedRealDirectories.add(await realpath(root))
+    } catch {
+      // Root is not resolvable; the walk below will fail anyway.
+    }
     let pendingIndex = 0
 
     while (pendingIndex < pending.length) {
@@ -453,21 +472,53 @@ export class ProjectFileIndexService {
       if (!directory) break
       const children = await readdir(directory.absolutePath, { withFileTypes: true })
       for (const child of children) {
-        if (child.isSymbolicLink()) continue
-        if (child.isDirectory() && INDEX_EXCLUDED_DIRECTORIES.has(child.name)) continue
-        if (!child.isDirectory() && !child.isFile()) continue
+        // Symlinks need their target resolved: readdir dirents report lstat-like
+        // info, so a link is neither file nor directory on its own. Symlinked
+        // files are followed and indexed; symlinked directories are traversed
+        // only when their target resolves inside the project root, so cycles
+        // and links escaping the project cannot recurse forever.
+        let isDirectory = child.isDirectory()
+        let isFile = child.isFile()
+        if (child.isSymbolicLink()) {
+          let target
+          try {
+            target = await stat(join(directory.absolutePath, child.name))
+          } catch {
+            // Broken symlink: no target to index.
+            continue
+          }
+          isDirectory = target.isDirectory()
+          isFile = target.isFile()
+          if (isDirectory && !(await this.isInsideRoot(root, join(directory.absolutePath, child.name)))) {
+            isDirectory = false
+            isFile = false
+          }
+        }
+        if (isDirectory) {
+          // A link may point back up the tree (a → b → a); track real paths so
+          // such cycles are traversed at most once per directory.
+          try {
+            const realPath = await realpath(join(directory.absolutePath, child.name))
+            if (visitedRealDirectories.has(realPath)) continue
+            visitedRealDirectories.add(realPath)
+          } catch {
+            continue
+          }
+        }
+        if (isDirectory && INDEX_EXCLUDED_DIRECTORIES.has(child.name)) continue
+        if (!isDirectory && !isFile) continue
         const path = directory.relativePath ? `${directory.relativePath}/${child.name}` : child.name
         entries.push({
           name: child.name,
           path,
-          kind: child.isDirectory() ? 'directory' : 'file'
+          kind: isDirectory ? 'directory' : 'file'
         })
         if (entries.length > MAX_INDEX_ENTRIES) {
           throw new Error(
             `Project index exceeds the ${MAX_INDEX_ENTRIES.toLocaleString()}-entry safety limit`
           )
         }
-        if (child.isDirectory()) {
+        if (isDirectory) {
           pending.push({
             absolutePath: join(directory.absolutePath, child.name),
             relativePath: path
