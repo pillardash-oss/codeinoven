@@ -14,6 +14,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { APP_NAME } from '$shared/brand'
   import type { ChangeTrackingMode, Project, RepositoryPreflightResult } from '$shared/types'
+  import { folderBaseName } from '$lib/project-location'
 
   interface Props {
     projects: Project[]
@@ -97,7 +98,7 @@
     folder: string,
     changeTrackingMode: ChangeTrackingMode
   ): Promise<void> {
-    const name = folder.split('/').filter(Boolean).pop() ?? folder
+    const name = folderBaseName(folder)
     const project = await invoke('project:create', {
       name,
       path: folder,
