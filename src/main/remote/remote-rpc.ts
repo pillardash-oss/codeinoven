@@ -724,7 +724,6 @@ export class RemoteRpcDispatcher {
         }
         return undefined
       case 'thread:fork': {
-        await chatEngine.loadMessages(this.string(args[0]), this.string(args[1]))
         return this.threadManager.forkThread(
           this.string(args[0]),
           this.string(args[1]),

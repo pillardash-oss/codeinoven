@@ -22666,6 +22666,8 @@ export function formatHistoryRecap(
         : earliest,
     Infinity
   )
+  const retainedBoundary =
+    messages.findLast((message) => message.createdAt <= retainedAt)?.createdAt ?? retainedAt
   const relevantMessages =
     latestCompactionIndex === -1 || unresolvedBoundary
       ? messages
@@ -22673,7 +22675,7 @@ export function formatHistoryRecap(
         ? [
             compactionMessage,
             ...messages.filter(
-              (message) => message !== compactionMessage && message.createdAt >= retainedAt
+              (message) => message !== compactionMessage && message.createdAt >= retainedBoundary
             )
           ]
         : messages.slice(latestCompactionIndex)

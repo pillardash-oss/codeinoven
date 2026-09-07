@@ -2536,6 +2536,9 @@ export type AgentPart =
       overflow?: boolean
       /** Completed compaction output, attached by the presentation layer. */
       summary?: string
+      /** Pi retains recent context before the compaction record. */
+      firstKeptEntryId?: string
+      firstKeptCreatedAt?: number
     }
   | {
       type: 'compaction-summary'

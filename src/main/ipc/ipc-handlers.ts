@@ -5095,7 +5095,9 @@ export function registerIpcHandlers(
         return await projectFilesService.readText(
           validateEntityId(projectId, 'Project ID'),
           requireString(relativePath, 'Project file path'),
-          scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
         )
       } catch {
         return null
@@ -5210,21 +5212,25 @@ export function registerIpcHandlers(
       if (!/^[a-f0-9]{64}$/u.test(revision)) {
         throw new TypeError('Project file revision must be a SHA-256 digest')
       }
-      return projectFilesService.writeText(
-        validateEntityId(projectId, 'Project ID'),
-        requireString(relativePath, 'Project file path'),
-        requireString(content, 'Project file content', true),
-        revision,
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
-      ).then((result) => {
-        // The user saved this file themselves — record it so a concurrent
-        // agent turn's file-changes card never claims their edit.
-        chatEngine?.recordUserFileSave(
+      return projectFilesService
+        .writeText(
           validateEntityId(projectId, 'Project ID'),
-          requireString(relativePath, 'Project file path')
+          requireString(relativePath, 'Project file path'),
+          requireString(content, 'Project file content', true),
+          revision,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
         )
-        return result
-      })
+        .then((result) => {
+          // The user saved this file themselves — record it so a concurrent
+          // agent turn's file-changes card never claims their edit.
+          chatEngine?.recordUserFileSave(
+            validateEntityId(projectId, 'Project ID'),
+            requireString(relativePath, 'Project file path')
+          )
+          return result
+        })
     }
   )
   ipcMain.handle(
@@ -7727,7 +7733,6 @@ export function registerIpcHandlers(
         targetProjectId === undefined
           ? undefined
           : validateEntityId(targetProjectId, 'Target project ID')
-      await chatEngine?.loadMessages(safeProjectId, safeThreadId)
       const forked = await threadManager.forkThread(
         safeProjectId,
         safeThreadId,

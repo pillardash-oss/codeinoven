@@ -2673,15 +2673,21 @@ export class PiDriver extends PersistentCliDriver {
           try {
             const file = await findNativePiSessionFile(projectPath, session.nativeSessionId)
             if (file) {
-              const lines = createInterface({ input: createReadStream(file), crlfDelay: Infinity })
-              for await (const line of lines) {
-                const entry = parseRecord(line)
-                if (entry?.['id'] === keptId) {
-                  const message = parseRecord(entry['message'])
-                  if (message) record['firstKeptCreatedAt'] = messageTimestamp(message)
-                  break
+              const input = createReadStream(file)
+              const lines = createInterface({ input, crlfDelay: Infinity })
+              try {
+                for await (const line of lines) {
+                  const entry = parseRecord(line)
+                  if (entry?.['id'] === keptId) {
+                    const message = parseRecord(entry['message'])
+                    if (message) record['firstKeptCreatedAt'] = messageTimestamp(message)
+                    break
+                  }
+                  await new Promise<void>((resolve) => setImmediate(resolve))
                 }
-                await new Promise<void>((resolve) => setImmediate(resolve))
+              } finally {
+                lines.close()
+                input.destroy()
               }
             }
           } catch (error) {
