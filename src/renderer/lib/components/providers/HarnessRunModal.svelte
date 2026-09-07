@@ -202,6 +202,7 @@
               terminalId={run.terminalId}
               command={run.handoff.command}
               args={run.handoff.args}
+              idleTimeoutMs={run.kind === 'update' ? 60_000 : undefined}
               onExit={(exitCode) => void store.handleRunExit(run.harnessId, exitCode)}
             />
           </div>

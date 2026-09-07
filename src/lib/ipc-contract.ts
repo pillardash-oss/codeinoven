@@ -2114,7 +2114,15 @@ export interface IpcInvokeContract {
     { id: string; pid: number }
   >
   'pty:createCommand': Contract<
-    [id: string, command: string, args: string[], columns: number, rows: number],
+    [
+      id: string,
+      command: string,
+      args: string[],
+      columns: number,
+      rows: number,
+      /** Kill the session after this many ms of zero output/input (e.g. hung updates). */
+      idleTimeoutMs?: number
+    ],
     { id: string; pid: number }
   >
   'pty:createAction': Contract<

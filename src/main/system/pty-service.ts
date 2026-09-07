@@ -20,7 +20,13 @@ interface PtySession {
   shell: string
   createdAt: number
   process: pty.IPty
+  /** When set, the session is killed after this long with zero output or input. */
+  idleTimeoutMs?: number
+  lastActivityAt: number
 }
+
+/** How often the watchdog sweeps for idle sessions. */
+const IDLE_WATCHDOG_INTERVAL_MS = 5_000
 
 /** Called when the user types into a project terminal, so concurrent agent
  *  turns can exclude the user's own shell-driven edits from their cards. */
@@ -83,6 +89,7 @@ function resolveShellArgs(shell: string): string[] {
  */
 export class PtyService {
   private sessions = new Map<string, PtySession>()
+  private idleWatchdog: ReturnType<typeof setInterval> | null = null
   private sender: WebContents | null = null
   private projectManager: ProjectManager
   private scopeRoots
@@ -107,6 +114,7 @@ export class PtyService {
   }
 
   register(): void {
+    this.ensureIdleWatchdog()
     ipcMain.handle(
       'pty:create',
       (
@@ -251,7 +259,8 @@ export class PtyService {
     command: string,
     args: string[],
     cols: number,
-    rows: number
+    rows: number,
+    idleTimeoutMs?: number
   ): Promise<{ id: string; pid: number }> {
     const allowed = new Set([
       'opencode',
@@ -290,6 +299,8 @@ export class PtyService {
     })
 
     proc.onData((data) => {
+      const session = this.sessions.get(id)
+      if (session) session.lastActivityAt = Date.now()
       sendToRenderer(this.sender, `pty:data:${id}`, data)
     })
 
@@ -313,7 +324,9 @@ export class PtyService {
       projectId: '',
       cwd,
       shell: command,
-      createdAt
+      createdAt,
+      idleTimeoutMs: idleTimeoutMs && idleTimeoutMs > 0 ? idleTimeoutMs : undefined,
+      lastActivityAt: createdAt
     })
     await this.recordEvent({
       type: 'create',
@@ -325,6 +338,36 @@ export class PtyService {
       timestamp: createdAt
     })
     return { id, pid: proc.pid }
+  }
+
+  /**
+   * Kill single-command sessions (harness self-updates, logins) that have been
+   * completely silent — no output and no input — past their idle timeout, so a
+   * hung update never pins the terminal until the app is restarted.
+   */
+  private ensureIdleWatchdog(): void {
+    if (this.idleWatchdog) return
+    this.idleWatchdog = setInterval(() => {
+      const now = Date.now()
+      for (const session of this.sessions.values()) {
+        if (!session.idleTimeoutMs) continue
+        if (now - session.lastActivityAt < session.idleTimeoutMs) continue
+        Logger.warn(
+          `[pty] Session ${session.id} (${session.shell}) idle for ${Math.round(
+            (now - session.lastActivityAt) / 1000
+          )}s — killing hung process`
+        )
+        session.process.write(
+          `\r\n\x1b[33m[${APP_NAME}] No activity for ${Math.round(
+            session.idleTimeoutMs / 1000
+          )}s — the process appears hung and was stopped automatically.\x1b[0m\r\n`
+        )
+        // Give the notice a moment to flush before the PTY goes away.
+        setTimeout(() => this.destroy(session.id), 300)
+      }
+    }, IDLE_WATCHDOG_INTERVAL_MS)
+    // Never keep the Electron main process alive just for the watchdog.
+    this.idleWatchdog.unref()
   }
 
   private async createAction(
@@ -409,6 +452,7 @@ export class PtyService {
   private write(id: string, data: string): void {
     const session = this.sessions.get(id)
     if (!session) return
+    if (session.idleTimeoutMs) session.lastActivityAt = Date.now()
     // Any user keystroke (including pastes) keeps the user-activity window
     // open so their commands' file writes are never claimed by an agent turn.
     if (data.length > 0 && this.onUserInput) {
@@ -439,6 +483,10 @@ export class PtyService {
 
   destroyAll(): void {
     this.sender = null
+    if (this.idleWatchdog) {
+      clearInterval(this.idleWatchdog)
+      this.idleWatchdog = null
+    }
     for (const id of this.sessions.keys()) {
       this.destroy(id)
     }

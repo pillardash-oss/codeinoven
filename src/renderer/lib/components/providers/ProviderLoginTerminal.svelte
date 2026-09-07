@@ -10,11 +10,13 @@
     terminalId: string
     command: string
     args: string[]
+    /** Kill the process after this many ms of complete silence (used for hung updates). */
+    idleTimeoutMs?: number
     /** Invoked once the login process exits. */
     onExit: (exitCode: number) => void
   }
 
-  let { terminalId, command, args, onExit }: Props = $props()
+  let { terminalId, command, args, idleTimeoutMs, onExit }: Props = $props()
 
   let error = $state('')
   let started = $state(false)
@@ -113,7 +115,15 @@
       })
       unsubs.push(() => resizeDisposable.dispose())
 
-      await invoke('pty:createCommand', terminalId, command, args, terminal.cols, terminal.rows)
+      await invoke(
+        'pty:createCommand',
+        terminalId,
+        command,
+        args,
+        terminal.cols,
+        terminal.rows,
+        idleTimeoutMs
+      )
       started = true
       terminal.focus()
     } catch (initError) {
