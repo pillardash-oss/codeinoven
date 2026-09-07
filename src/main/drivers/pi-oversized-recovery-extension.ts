@@ -56,7 +56,7 @@ function readArmed(): boolean {
     const raw = readFileSync(FLAG_PATH, 'utf-8')
     const parsed: unknown = JSON.parse(raw)
     cachedArmed =
-      typeof parsed === 'object' && parsed !== null && (parsed as Record<string, unknown>)[ARMED_KEY] === true
+      typeof parsed === 'object' && parsed !== null && (parsed as Record<string, unknown>)['armed'] === true
     return cachedArmed
   } catch {
     return false
