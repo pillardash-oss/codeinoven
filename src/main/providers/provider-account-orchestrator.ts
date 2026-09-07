@@ -807,7 +807,7 @@ export class ProviderAccountOrchestrator {
     try {
       catalog = await listPiCatalogProviders()
     } catch (catalogError) {
-      Logger.warn(
+      Logger.info(
         '[provider-accounts] Pi catalog unavailable — falling back to configured accounts:',
         catalogError
       )

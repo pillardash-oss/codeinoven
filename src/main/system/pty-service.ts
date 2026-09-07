@@ -365,7 +365,7 @@ function normalizedCommandName(command: string): string {
       for (const session of this.sessions.values()) {
         if (!session.idleTimeoutMs) continue
         if (now - session.lastActivityAt < session.idleTimeoutMs) continue
-        Logger.warn(
+        Logger.info(
           `[pty] Session ${session.id} (${session.shell}) idle for ${Math.round(
             (now - session.lastActivityAt) / 1000
           )}s — killing hung process`
