@@ -368,6 +368,11 @@ const TOOL_CATALOG_TTL_MS = 30 * 1000
  * auto-resume — see scheduleAutomaticRetry.
  */
 const USAGE_RESET_FALLBACK_RETRY_MS = 60 * 60 * 1000
+/** Grace added to every provider-reported reset before the auto-resume fires.
+ *  Firing on the exact reset second races the provider's own window rollover:
+ *  the resumed turn re-fails while the limit is still active and the thread
+ *  drops straight back into the wait (observed with Codex on 2026-09-07). */
+const RETRY_FIRE_GRACE_MS = 90 * 1000
 
 interface PersistedProviderCatalog {
   schemaVersion: 3
@@ -19079,6 +19084,7 @@ export class ChatEngine {
     const driver = this.drivers.get(info.driverId)
     if (!driver) return false
     let retryAt = issue.retryAt
+    if (retryAt !== undefined) retryAt += RETRY_FIRE_GRACE_MS
     if (retryAt === undefined && driver.readAccountUsage) {
       // Some harnesses surface a usage reset without attaching it to the error
       // (e.g. Codex reports windows via account/rateLimits/read) — ask the

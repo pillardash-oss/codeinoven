@@ -2107,6 +2107,12 @@ function codexRetryIssue(
  *  a time-only variant for same-day resets ("…or try again at 9:30 AM.");
  *  that form resolves to the next occurrence of the time (today, or tomorrow
  *  once the time has already passed) so automatic retry stays schedulable. */
+/** How recently a time-only reset may have expired and still count as
+ *  propagation lag rather than a genuine next-day window (30 minutes). */
+const USAGE_LIMIT_PROPAGATION_WINDOW_MS = 30 * 60 * 1000
+/** Short cooldown used when a time-only reset expired within the lag window. */
+const USAGE_LIMIT_PROPAGATION_COOLDOWN_MS = 5 * 60 * 1000
+
 function codexUsageLimitResetAt(message: string, now = Date.now()): number | undefined {
   const timeOnly = message.match(
     /\btry again at\s+(\d{1,2})[:.](\d{2})\s*(a\.?m\.?|p\.?m\.?)\b/iu
@@ -2118,8 +2124,19 @@ function codexUsageLimitResetAt(message: string, now = Date.now()): number | und
     const hour = (hour12 % 12) + (timeOnly[3].toLowerCase().startsWith('p') ? 12 : 0)
     const from = new Date(now)
     const reset = new Date(from.getFullYear(), from.getMonth(), from.getDate(), hour, minute, 0, 0)
-    // The time already passed today means the window resets tomorrow.
-    if (reset.getTime() <= now) reset.setDate(reset.getDate() + 1)
+    if (reset.getTime() <= now) {
+      // A reset that expired only moments ago is provider propagation lag, not
+      // tomorrow's window: the auto-resume fires right at the reset second, the
+      // still-limited provider re-reports the same time, and naively rolling to
+      // tomorrow would park the thread a full day out (observed 2026-09-07:
+      // resume at 2:30:02 PM re-failed at 2:30:10 PM). Retry after a short
+      // cooldown instead; only a genuinely stale time rolls to tomorrow.
+      if (now - reset.getTime() <= USAGE_LIMIT_PROPAGATION_WINDOW_MS) {
+        return now + USAGE_LIMIT_PROPAGATION_COOLDOWN_MS
+      }
+      // The time already passed today means the window resets tomorrow.
+      reset.setDate(reset.getDate() + 1)
+    }
     return reset.getTime()
   }
   const match = message.match(

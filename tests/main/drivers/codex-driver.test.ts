@@ -616,6 +616,47 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     )
   })
 
+  it('retries after a short cooldown when the time-only reset just passed', async () => {
+    // Right after an auto-resume fires, the still-limited provider re-reports
+    // the same reset time a few seconds in the past. That is propagation lag,
+    // not tomorrow's window — the retry must land in minutes, not a day out.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 7, 19, 9, 32, 0, 0))
+    const driver = new CodexDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    child.emitPayload({
+      method: 'turn/completed',
+      params: {
+        threadId: 'native-1',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: {
+            message:
+              "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 9:30 AM."
+          }
+        }
+      }
+    })
+    await vi.waitFor(() => {
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: 'session.error', sessionId })
+      )
+    })
+    const errorEvent = events.find(
+      (event) => event.type === 'session.error' && event.sessionId === sessionId
+    )
+    const retryAt = errorEvent && 'issue' in errorEvent ? errorEvent.issue?.retryAt : undefined
+    expect(retryAt).toBeDefined()
+    expect(retryAt).toBeGreaterThan(Date.now())
+    expect(retryAt! - Date.now()).toBeLessThanOrEqual(5 * 60 * 1000)
+  })
+
   it('rolls the time-only usage-limit reset to tomorrow when the time has passed', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(2026, 7, 19, 12, 0, 0))
