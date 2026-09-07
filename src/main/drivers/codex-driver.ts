@@ -1228,7 +1228,7 @@ export class CodexDriver extends PersistentCliDriver {
       }
       const content = body?.['content']
       const contentItems = Array.isArray(content)
-        ? content.map<Record<string, string>>((item: unknown) => {
+        ? content.map<Record<string, unknown>>((item: unknown) => {
             const entry = recordValue(item)
             if (entry?.['type'] === 'image' && typeof entry['data'] === 'string') {
               return {

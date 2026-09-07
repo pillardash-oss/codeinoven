@@ -1912,6 +1912,7 @@ export class ChatEngine {
       runtime?: PreparedUtilityRuntime
       gateway: UtilityTurnGateway
       threadId: string
+      cleanupPromise?: Promise<void>
     }
   >()
 
@@ -3074,7 +3075,6 @@ export class ChatEngine {
     budgetContext: UtilityTurnBudgetContext,
     threadTitle: string,
     skipRuntime = false,
-    directGateway = false,
     allowManagement = false
   ): Promise<string> {
     // A new agent turn begins here — re-enable a user-dismissed PiP so it may
@@ -3096,13 +3096,10 @@ export class ChatEngine {
     // `driver` to `HarnessDriver | OpenCodeDriver` afterwards, and the union
     // hides this optional method.
     const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
-    // Shared or extension-backed harnesses cannot safely receive a fresh
-    // per-turn MCP launch overlay. Keep all app-managed utilities, including
-    // Cua, behind the turn-scoped gateway even when a specialized caller does
-    // not pass the direct-gateway flag explicitly.
-    const gatewayOnlyHarness =
-      driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
-    const useDirectGateway = directGateway || gatewayOnlyHarness
+    // A native bridge owns credentials internally. Other harnesses use their
+    // existing MCP runtime; prompt prose is never a transport fallback.
+    const useDirectGateway = Boolean(publishUtilityEndpoint)
+    await this.cleanupTurnUtilities(sessionId)
     let gateway: UtilityTurnGateway | undefined
     let runtime: PreparedUtilityRuntime | undefined
     try {
@@ -3205,39 +3202,31 @@ export class ChatEngine {
     }
   }
 
-  private async cleanupTurnUtilities(sessionId: string): Promise<void> {
+  private async cleanupTurnUtilities(sessionId: string, expectedGatewayId?: string): Promise<void> {
     const turn = this.utilityTurns.get(sessionId)
-    if (!turn) return
-    this.computerUsePip?.notifyTurnEnded(turn.threadId)
-    // Supersession guard: if a newer utility turn re-armed for this session
-    // while this cleanup was in flight (e.g. a held steer was delivered as the
-    // next turn), the shared per-session artifacts now belong to the new turn.
-    // Clearing them here would wipe the new turn's live credentials — only the
-    // replaced turn's own gateway is torn down; the new turn cleans itself up
-    // when it ends.
-    if (this.utilityTurns.get(sessionId) === turn) {
-      this.utilityTurns.delete(sessionId)
+    if (!turn || (expectedGatewayId !== undefined && turn.gateway.id !== expectedGatewayId)) return
+    turn.cleanupPromise ??= (async () => {
+      this.computerUsePip?.notifyTurnEnded(turn.threadId)
       try {
-        if (turn.driver.publishUtilityGatewayEndpoint) {
-          await turn.driver.publishUtilityGatewayEndpoint(turn.projectPath, sessionId, null)
-        }
+        await turn.driver.publishUtilityGatewayEndpoint?.(turn.projectPath, sessionId, null)
         await turn.driver.applyPreparedUtilityRuntime?.(turn.projectPath, null, sessionId)
       } catch (error) {
-        await turn.runtime?.cleanup()
         Logger.error('Harness utility runtime cleanup failed:', error)
+      } finally {
+        await Promise.allSettled([turn.runtime?.cleanup(), turn.gateway.cleanup()])
+        if (this.utilityTurns.get(sessionId) === turn) this.utilityTurns.delete(sessionId)
       }
-    }
-    await turn.gateway.cleanup()
+    })()
+    await turn.cleanupPromise
   }
 
   /**
    * Re-arm the turn-scoped utility gateway for a steered turn. Steers skip
-   * prepareTurnUtilities (no prompt recomposition happens), but pi's gateway
+   * prepareTurnUtilities (no prompt recomposition happens), but native gateway
    * tools are registered at process spawn and work from the handoff file
    * alone — so a steer that lands after the previous turn's cleanup only
    * needs a fresh utility turn + endpoint publish to keep the tools alive.
-   * Shell-gateway harnesses gain nothing here: their credentials live in
-   * per-turn prompt prose a steer never recomposes.
+   * MCP runtime harnesses keep their live overlay until turn completion.
    */
   private async rearmSteerUtilities(
     driver: HarnessDriver,
@@ -3247,7 +3236,8 @@ export class ChatEngine {
     projectPath: string,
     settings: ThreadSettings
   ): Promise<void> {
-    if (driver.id !== 'pi') return
+    const previous = this.utilityTurns.get(sessionId)
+    if (previous?.cleanupPromise) await previous.cleanupPromise
     if (this.utilityTurns.has(sessionId)) return
     const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
     if (!publishUtilityEndpoint) return
@@ -3260,8 +3250,9 @@ export class ChatEngine {
       composedTurnTokens: 0,
       parentTurnId: sessionId
     }
+    let gateway: UtilityTurnGateway | undefined
     try {
-      const gateway = await this.utilityOrchestration.startTurn({
+      gateway = await this.utilityOrchestration.startTurn({
         harnessId: driver.id,
         projectId,
         threadId,
@@ -3281,8 +3272,9 @@ export class ChatEngine {
       }
       this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
     } catch (error) {
-      // Steer delivery must never fail because utilities could not re-arm.
+      await gateway?.cleanup()
       Logger.error('Steer utility re-arm failed:', error)
+      throw error
     }
   }
 
@@ -4957,12 +4949,10 @@ export class ChatEngine {
       return
     }
     const window = {
-      fingerprint: this.checkpointManager
-        .fingerprint(projectId, projectPath)
-        .catch((error) => {
-          Logger.error('user-terminal fingerprint failed:', error)
-          return null
-        }),
+      fingerprint: this.checkpointManager.fingerprint(projectId, projectPath).catch((error) => {
+        Logger.error('user-terminal fingerprint failed:', error)
+        return null
+      }),
       lastInput: Date.now(),
       timer: setTimeout(() => undefined, 0)
     }
@@ -7084,10 +7074,6 @@ export class ChatEngine {
         !chatFileSystemEnabled &&
         !utilitySetupRequested &&
         (driverHasNativeWebSearch || !driverCanPublishGateway),
-      // OpenCode sessions use the shared project server. The app gateway is
-      // session-scoped by its capability token, so utilities do not justify a
-      // second `opencode serve` process or listening port for any normal turn.
-      driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id),
       utilitySetupRequested
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
@@ -7784,7 +7770,6 @@ export class ChatEngine {
             },
             title,
             false,
-            true,
             true
           )
         : ''
@@ -15129,9 +15114,7 @@ export class ChatEngine {
             projectPath,
             auditorSettings,
             auditUtilityBudgetContext,
-            auditorThread.title,
-            false,
-            driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
+            auditorThread.title
           )
           utilityRuntimeAvailable = Boolean(utilityInstructions)
         } catch (error) {
@@ -17757,6 +17740,28 @@ export class ChatEngine {
     ) {
       return
     }
+    if (
+      eventOwner &&
+      !eventOwner.ephemeral &&
+      event.type === 'message.part.updated' &&
+      event.part.type === 'compaction' &&
+      event.part.summary?.trim()
+    ) {
+      // Make completed summaries available to database-only forks immediately,
+      // including compactions that finish after the outer turn has settled.
+      void this.threadManager
+        .upsertMessages(eventOwner.projectId, eventOwner.threadId, [
+          {
+            id: event.part.messageID,
+            role: 'assistant',
+            origin: 'compaction',
+            visibility: 'working_trace',
+            createdAt: Date.now(),
+            parts: [event.part]
+          }
+        ])
+        .catch((error) => Logger.error('Compaction summary persistence failed:', error))
+    }
     void this.recordDriverEvent(driverId, event)
     // Durably persist the working-trace part stream to the thread's SSE log so a
     // mid-turn/restart reopen can rehydrate the full trace (tools, reasoning,
@@ -19626,6 +19631,7 @@ export class ChatEngine {
     const info = this.sessionRegistry.get(sessionId)
     if (!info) return
     if (info.ephemeral) return
+    const completedGatewayId = this.utilityTurns.get(sessionId)?.gateway.id
     const pendingMemory = this.pendingMemoryDecisions.get(sessionId)
     this.pendingMemoryDecisions.delete(sessionId)
     let assistantResponse = ''
@@ -19848,7 +19854,7 @@ export class ChatEngine {
           'failed',
           mermaidValidationFailureMessage(mermaidFailures)
         )
-        await this.cleanupTurnUtilities(sessionId)
+        await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
         turnUtilitiesCleaned = true
         if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
         try {
@@ -19903,7 +19909,7 @@ export class ChatEngine {
         if (searchExposed && !alreadySearched && claimedUnavailable) {
           this.searchNudgeAttempts.set(sessionId, 1)
           await this.finishCheckpoint(sessionId, info, 'completed')
-          await this.cleanupTurnUtilities(sessionId)
+          await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
           turnUtilitiesCleaned = true
           if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
           try {
@@ -19939,7 +19945,7 @@ export class ChatEngine {
       if (missingFinalResponse && !failure && !resetWaitActiveForRecovery && thread?.settings) {
         this.incompleteTurnRecoveryAttempts.set(sessionId, 1)
         await this.finishCheckpoint(sessionId, info, 'failed', INCOMPLETE_TURN_MESSAGE)
-        await this.cleanupTurnUtilities(sessionId)
+        await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
         turnUtilitiesCleaned = true
         if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
         try {
@@ -19971,7 +19977,7 @@ export class ChatEngine {
           'interrupted',
           'The approved specification contract is incomplete; continuing implementation.'
         )
-        await this.cleanupTurnUtilities(sessionId)
+        await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
         turnUtilitiesCleaned = true
         if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
         try {
@@ -20227,7 +20233,8 @@ export class ChatEngine {
     } finally {
       info.activeTurnUserMessageId = undefined
       info.estimatedContextUsed = undefined
-      if (!turnUtilitiesCleaned) await this.cleanupTurnUtilities(sessionId)
+      if (!turnUtilitiesCleaned)
+        await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
       // The abort marker only needs to survive until the session's idle
       // finalization has run; after that the session is on a fresh turn.
       this.userAbortedSessions.delete(sessionId)
@@ -21575,11 +21582,14 @@ export class ChatEngine {
       (await this.probeSessionLiveness(watchdogDriver, info, sessionId)) === 'idle' &&
       !this.hasInFlightWork(sessionId, info)
     ) {
-      Logger.info('Session settled without driver finalization (compaction/retry gap) — reconciling to idle', {
-        sessionId,
-        projectId: info.projectId,
-        threadId: info.threadId
-      })
+      Logger.info(
+        'Session settled without driver finalization (compaction/retry gap) — reconciling to idle',
+        {
+          sessionId,
+          projectId: info.projectId,
+          threadId: info.threadId
+        }
+      )
       this.clearSessionWatchdog(sessionId)
       // Route through the driver-event pipeline so every idle consumer
       // (status broadcast, thread finalization, notifications) sees the same
@@ -22641,8 +22651,32 @@ export function formatHistoryRecap(
           part.summary.trim().length > 0)
     )
   )
+  const compactionMessage = messages[latestCompactionIndex]
+  const retainedParts =
+    compactionMessage?.parts.filter(
+      (part) => part.type === 'compaction' && part.firstKeptEntryId
+    ) ?? []
+  const unresolvedBoundary = retainedParts.some(
+    (part) => part.type === 'compaction' && part.firstKeptCreatedAt === undefined
+  )
+  const retainedAt = retainedParts.reduce(
+    (earliest, part) =>
+      part.type === 'compaction' && part.firstKeptCreatedAt !== undefined
+        ? Math.min(earliest, part.firstKeptCreatedAt)
+        : earliest,
+    Infinity
+  )
   const relevantMessages =
-    latestCompactionIndex === -1 ? messages : messages.slice(latestCompactionIndex)
+    latestCompactionIndex === -1 || unresolvedBoundary
+      ? messages
+      : Number.isFinite(retainedAt)
+        ? [
+            compactionMessage,
+            ...messages.filter(
+              (message) => message !== compactionMessage && message.createdAt >= retainedAt
+            )
+          ]
+        : messages.slice(latestCompactionIndex)
   const transcript = formatConversationTranscript(relevantMessages, { includeHidden: true })
   if (!transcript) return ''
   // Character-bound callers (temporary chats) still get a generous token

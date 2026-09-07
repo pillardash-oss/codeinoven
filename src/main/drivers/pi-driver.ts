@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, createReadStream } from 'node:fs'
+import { createInterface } from 'node:readline'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { readFile } from 'node:fs/promises'
@@ -993,21 +994,54 @@ export function mapPiRecord(
     return { events }
   }
 
-  if (type === 'compaction_start' || type === 'compaction_end') {
-    const messageId =
-      turnState.assistantMessageId ?? `pi-${context.sessionId}-${turnState.turnIndex}`
-    return {
-      events: [
-        {
-          type: 'message.part.updated',
-          sessionId: context.sessionId,
-          part: {
-            type: 'compaction',
-            id: `${messageId}:compaction`,
-            messageID: messageId,
-            auto: type === 'compaction_end'
+  if (
+    type === 'compaction_start' ||
+    type === 'compaction_end' ||
+    type === 'auto_compaction_start' ||
+    type === 'auto_compaction_end'
+  ) {
+    const result = record(entry['result'])
+    const summary =
+      type.endsWith('_end') && entry['aborted'] !== true
+        ? stringValue(result?.['summary'])
+        : undefined
+    const messageId = `pi-${context.sessionId}-compaction-${turnState.turnIndex}`
+    const part: AgentPart = {
+      type: 'compaction',
+      id: `${messageId}:compaction`,
+      messageID: messageId,
+      auto: type.startsWith('auto_'),
+      ...(summary?.trim()
+        ? {
+            summary,
+            firstKeptEntryId: stringValue(result?.['firstKeptEntryId']),
+            firstKeptCreatedAt: numberValue(entry['firstKeptCreatedAt'])
           }
+        : {})
+    }
+    return {
+      messages: [
+        {
+          id: messageId,
+          role: 'assistant',
+          origin: 'compaction',
+          visibility: 'working_trace',
+          createdAt: Date.now(),
+          parts: [part]
         }
+      ],
+      events: [
+        { type: 'message.part.updated', sessionId: context.sessionId, part },
+        ...(type.endsWith('_end')
+          ? [
+              {
+                type: 'message.completed' as const,
+                sessionId: context.sessionId,
+                messageId,
+                compaction: true
+              }
+            ]
+          : [])
       ]
     }
   }
@@ -1289,11 +1323,12 @@ function prefillTranscriptEntries(
  * persisted by pi's own SessionManager rather than mirrored through RPC.
  */
 async function parseNativePiSession(file: string, sessionId: string): Promise<AgentMessage[]> {
-  const content = await readFile(file, 'utf8')
+  const lines = createInterface({ input: createReadStream(file), crlfDelay: Infinity })
   const messages: AgentMessage[] = []
+  const entryTimes = new Map<string, number>()
   let turnIndex = 0
   let userIndex = 0
-  for (const line of content.split('\n')) {
+  for await (const line of lines) {
     if (!line.trim()) continue
     let entry: Record<string, unknown> | undefined
     try {
@@ -1301,7 +1336,39 @@ async function parseNativePiSession(file: string, sessionId: string): Promise<Ag
     } catch {
       continue
     }
-    if (!entry || entry['type'] !== 'message') continue
+    if (!entry) continue
+    if (entry['type'] === 'compaction') {
+      const summary = stringValue(entry['summary'])
+      const firstKeptEntryId = stringValue(entry['firstKeptEntryId'])
+      if (summary?.trim()) {
+        const id = `pi-${sessionId}-compaction-${turnIndex}`
+        messages.push({
+          id,
+          role: 'assistant',
+          origin: 'compaction',
+          visibility: 'working_trace',
+          createdAt: Date.parse(String(entry['timestamp'])) || Date.now(),
+          parts: [
+            {
+              type: 'compaction',
+              id: `${id}:compaction`,
+              messageID: id,
+              auto: true,
+              summary,
+              firstKeptEntryId,
+              firstKeptCreatedAt: firstKeptEntryId ? entryTimes.get(firstKeptEntryId) : undefined
+            }
+          ]
+        })
+      }
+      continue
+    }
+    if (entry['type'] !== 'message') continue
+    const nativeMessage = record(entry['message'])
+    if (typeof entry['id'] === 'string' && nativeMessage) {
+      entryTimes.set(entry['id'], messageTimestamp(nativeMessage))
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve))
     const message = record(entry['message'])
     if (!message) continue
     const role = stringValue(message['role'])
@@ -1808,7 +1875,8 @@ export class PiDriver extends PersistentCliDriver {
     })
     this.activeTurns.add(sessionId)
     try {
-      await client.compact()
+      const result = await client.compact()
+      await this.handleRpcEvent({ type: 'compaction_end', result }, sessionId, projectPath)
     } finally {
       this.activeTurns.delete(sessionId)
       const state = this.turnStates.get(sessionId)
@@ -1966,10 +2034,7 @@ export class PiDriver extends PersistentCliDriver {
       }
       const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
       const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
-      this.appendUserMessage(
-        await this.requireSession(projectPath, options.sessionId),
-        options
-      )
+      this.appendUserMessage(await this.requireSession(projectPath, options.sessionId), options)
       await client.followUp(message, images)
       return
     }
@@ -2092,8 +2157,8 @@ export class PiDriver extends PersistentCliDriver {
    * extension. Pi sessions are persistent RPC processes whose extensions load
    * at spawn, so the per-turn URL+token reach the extension through a
    * session-keyed handoff file the driver rewrites per turn; clearing it on
-   * turn end makes stale tokens unusable. A failed write is logged and swallowed
-   * — the prose curl fallback stays fully functional without the extension.
+   * turn end makes stale tokens unusable. Publishing must succeed before the
+   * model starts; there is no model-facing shell fallback.
    */
   async publishUtilityGatewayEndpoint(
     _projectPath: string,
@@ -2121,7 +2186,7 @@ export class PiDriver extends PersistentCliDriver {
         await this.storage.writeRaw(handoffPath, JSON.stringify(endpoint))
       }
     } catch (error) {
-      Logger.dev('Pi utility gateway handoff update failed:', error)
+      throw new Error('Pi utility gateway handoff update failed', { cause: error })
     }
   }
 
@@ -2594,9 +2659,35 @@ export class PiDriver extends PersistentCliDriver {
     record: Record<string, unknown>,
     sessionId: string,
     projectPath: string
-  ): void {
-    this.requireSession(projectPath, sessionId)
-      .then((session) => {
+  ): Promise<void> {
+    return this.requireSession(projectPath, sessionId)
+      .then(async (session) => {
+        // Resolve the retained context at compaction time, never while forking.
+        const compaction = parseRecord(record['result'])
+        const keptId = compaction?.['firstKeptEntryId']
+        if (
+          (record['type'] === 'auto_compaction_end' || record['type'] === 'compaction_end') &&
+          typeof keptId === 'string' &&
+          session.nativeSessionId
+        ) {
+          try {
+            const file = await findNativePiSessionFile(projectPath, session.nativeSessionId)
+            if (file) {
+              const lines = createInterface({ input: createReadStream(file), crlfDelay: Infinity })
+              for await (const line of lines) {
+                const entry = parseRecord(line)
+                if (entry?.['id'] === keptId) {
+                  const message = parseRecord(entry['message'])
+                  if (message) record['firstKeptCreatedAt'] = messageTimestamp(message)
+                  break
+                }
+                await new Promise<void>((resolve) => setImmediate(resolve))
+              }
+            }
+          } catch (error) {
+            Logger.dev('Pi compaction retained boundary unavailable:', error)
+          }
+        }
         const result = this.parseJsonLine(record, { session, sessionId, projectPath })
         if (!result) return
         if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
