@@ -346,13 +346,26 @@ export class NotificationService {
   }
 
   /**
+   * Whether any app window currently has OS focus. While the app is in the
+   * background the renderer can still mark a thread read (e.g. the thread that
+   * happens to be selected auto-marks itself read when a live update arrives),
+   * which would otherwise close an OS notification the user has not even seen
+   * yet — leaving only the alert sound with no card.
+   */
+  private appFocused(): boolean {
+    return BrowserWindow.getAllWindows().some((window) => window.isFocused())
+  }
+
+  /**
    * Dismiss every delivered notification for a thread — closes its OS
    * notifications (including side-chat notifications piped through it) and
    * drops the thread from the app-icon badge. Called whenever the thread is
    * marked read or deleted so the OS notification center stays in sync with
-   * in-app state.
+   * in-app state. Skipped entirely while the app is unfocused: a background
+   * auto-mark-read must never retract a notification the user has not seen.
    */
   dismissForThread(projectId: string, threadId: string): void {
+    if (!this.appFocused()) return
     const threadKey = `${projectId}:${threadId}`
     for (const [key, notification] of this.activeNotifications) {
       if (key === threadKey || key.startsWith(`${threadKey}:temp:`)) {
@@ -501,7 +514,7 @@ export class NotificationService {
       .send(payload)
       .catch((error) => Logger.dev('Remote Web Push notification failed:', error))
 
-    if (windows.some((window) => window.isFocused())) return
+    if (this.appFocused()) return
     this.dispatchNotificationSound(windows)
     const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
@@ -597,7 +610,7 @@ export class NotificationService {
       .send(payload)
       .catch((error) => Logger.dev('Remote Web Push notification failed:', error))
 
-    if (windows.some((window) => window.isFocused())) return
+    if (this.appFocused()) return
     this.dispatchNotificationSound(windows)
     const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
