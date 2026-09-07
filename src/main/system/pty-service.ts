@@ -262,22 +262,35 @@ export class PtyService {
     rows: number,
     idleTimeoutMs?: number
   ): Promise<{ id: string; pid: number }> {
-    const allowed = new Set([
-      'opencode',
-      'claude',
-      'codex',
-      'cline',
-      'pi',
-      'agy',
-      'muse',
-      'npm',
-      'bun',
-      'brew',
-      'winget',
-      'rm',
-      'git'
-    ])
-    if (!allowed.has(basename(command))) {
+/**
+ * Harness binaries allowed to run as single-command PTY sessions. Compared
+ * against the resolved executable's name with any Windows extension
+ * (`.exe`/`.cmd`/`.bat`/`.ps1`) stripped, so `pi.exe` on Windows matches `pi`.
+ */
+const ALLOWED_COMMANDS = new Set([
+  'opencode',
+  'claude',
+  'codex',
+  'cline',
+  'pi',
+  'agy',
+  'muse',
+  'npm',
+  'bun',
+  'brew',
+  'winget',
+  'rm',
+  'git',
+  'wsl'
+])
+
+/** Normalize a command path to a comparable executable name. */
+function normalizedCommandName(command: string): string {
+  return basename(command)
+    .replace(/\.(?:exe|cmd|bat|ps1)$/iu, '')
+    .toLowerCase()
+}
+    if (!ALLOWED_COMMANDS.has(normalizedCommandName(command))) {
       throw new Error(`Refusing to start unknown harness command: ${command}`)
     }
 
