@@ -103,6 +103,13 @@ export class NotificationService {
     this.threadRepo = new ThreadRepo(db)
     this.assignmentRepo = new AssignmentRepo(db)
     this.onThreadClicked = onThreadClicked
+
+    // Register IPC handlers eagerly: the renderer's settings panel can query
+    // the permission status on mount before start() runs (start is deferred
+    // until after first paint, but the renderer may boot faster).
+    ipcMain.handle('notification:test', () => this.sendTestNotification())
+    ipcMain.handle('notification:getPermissionStatus', () => this.getVerifiedPermissionStatus())
+    ipcMain.handle('notification:openSettings', () => this.openSettings())
   }
 
   start(): void {
@@ -110,9 +117,6 @@ export class NotificationService {
     this.started = true
     void this.hydrateBadge()
     void this.hydratePermissionStatus()
-    ipcMain.handle('notification:test', () => this.sendTestNotification())
-    ipcMain.handle('notification:getPermissionStatus', () => this.getVerifiedPermissionStatus())
-    ipcMain.handle('notification:openSettings', () => this.openSettings())
   }
 
   stop(): void {
