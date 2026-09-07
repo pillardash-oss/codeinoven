@@ -4807,7 +4807,7 @@ export class ChatEngine {
     return this.generatedArtifactService.artifactsFor(thread, projectPath, messages)
   }
 
-  /** Running processes owned by a thread (and app-scoped pooled harness shares). */
+  /** Running subprocesses owned exclusively by the requested thread. */
   listProcesses(projectId: string, threadId: string): Promise<AgentRunningProcess[]> {
     return this.agentProcesses.list(
       validateEntityId(projectId, 'Project ID'),

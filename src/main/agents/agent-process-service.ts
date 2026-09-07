@@ -200,24 +200,14 @@ export class AgentProcessService implements AgentProcessObserver {
         }
       }
     }
-    // App-scoped processes (descendants of a shared/pooled harness like the
-    // opencode server) are surfaced alongside the thread's own processes so the
-    // user can see and kill them, but always labeled `app` so it is clear they
-    // are NOT tied to this thread alone.
-    for (const process of this.tracked.get(APP_SCOPE)?.values() ?? []) {
-      unique.set(process.pid, {
-        pid: process.pid,
-        parentPid: process.parentPid,
-        command: process.command,
-        startedAt: process.startedAt,
-        scope: 'app'
-      })
-    }
     return [...unique.values()].sort((left, right) => left.startedAt - right.startedAt)
   }
 
   async killProcess(projectId: string, threadId: string, pid: number): Promise<void> {
-    if (!this.ownsProcess(pid)) throw new Error(`Process ${pid} is not owned by this app`)
+    const processes = await this.list(projectId, threadId)
+    if (!processes.some((entry) => entry.pid === pid)) {
+      throw new Error(`Process ${pid} is not owned by this thread`)
+    }
     await this.killTree(pid, false)
     await this.scan()
   }
@@ -407,14 +397,9 @@ export class AgentProcessService implements AgentProcessObserver {
   async killThread(projectId: string, threadId: string): Promise<void> {
     const sessionIds = this.sessionsForThread(projectId, threadId)
     const pids = new Set<number>()
-    const appScopedPids = new Set<number>()
     for (const sessionId of sessionIds) {
       for (const process of this.tracked.get(sessionId)?.values() ?? []) pids.add(process.pid)
       for (const root of this.roots.get(sessionId)?.values() ?? []) pids.add(root.pid)
-    }
-    for (const process of this.tracked.get(APP_SCOPE)?.values() ?? []) {
-      appScopedPids.add(process.pid)
-      pids.add(process.pid)
     }
     await Promise.all([...pids].map((pid) => this.killTree(pid)))
     for (const sessionId of sessionIds) {
@@ -424,20 +409,7 @@ export class AgentProcessService implements AgentProcessObserver {
       }
       this.roots.delete(sessionId)
     }
-    const appProcesses = this.tracked.get(APP_SCOPE)
-    for (const pid of appScopedPids) appProcesses?.delete(pid)
-    if (appProcesses?.size === 0) this.tracked.delete(APP_SCOPE)
-
-    const changedOwners = new Map<string, ProcessOwner>()
-    changedOwners.set(`${projectId}:${threadId}`, { projectId, threadId })
-    if (appScopedPids.size > 0) {
-      for (const owner of this.owners.values()) {
-        changedOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
-      }
-    }
-    for (const owner of changedOwners.values()) {
-      broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
-    }
+    broadcastAgentProcessesChanged(projectId, threadId)
   }
 
   async releaseThread(projectId: string, threadId: string): Promise<void> {
@@ -610,7 +582,6 @@ export class AgentProcessService implements AgentProcessObserver {
       }
 
       const changedOwners = new Map<string, ProcessOwner>()
-      let appScopeChanged = false
       const sessionIds = new Set([...this.roots.keys(), ...this.tracked.keys()])
       for (const sessionId of sessionIds) {
         const isAppScope = sessionId === APP_SCOPE
@@ -654,18 +625,6 @@ export class AgentProcessService implements AgentProcessObserver {
         if (sessionProcesses.size === 0) this.tracked.delete(sessionId)
         const owner = this.owners.get(sessionId)
         if (changed && owner) changedOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
-        if (changed && isAppScope) appScopeChanged = true
-      }
-      if (appScopeChanged) {
-        // App-scoped processes are shared across every thread, so refresh every
-        // thread's Processes tab whenever the shared server's descendants change.
-        const allOwners = new Map<string, ProcessOwner>()
-        for (const owner of this.owners.values()) {
-          allOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
-        }
-        for (const owner of allOwners.values()) {
-          broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
-        }
       }
       for (const owner of changedOwners.values()) {
         broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
