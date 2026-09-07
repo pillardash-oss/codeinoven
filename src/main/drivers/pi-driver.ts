@@ -62,6 +62,7 @@ import {
   CIO_SUBAGENT_MARKER
 } from './pi-core-tools-extension'
 import { piCioCoreToolsExtension } from './pi-cio-core-tools-extension'
+import { PI_COMPACTION_EXTENSION_KEY } from './pi-compaction-extension'
 import {
   PI_STATUS_COMPACTING,
   PI_STATUS_EXTENSION_KEY,
@@ -1028,7 +1029,10 @@ export function mapPiRecord(
       type: 'compaction',
       id: `${messageId}:compaction`,
       messageID: messageId,
-      auto: type.startsWith('auto_'),
+      auto:
+        type.startsWith('auto_') ||
+        entry['reason'] === 'threshold' ||
+        entry['reason'] === 'overflow',
       ...(summary?.trim()
         ? {
             summary,
@@ -1518,6 +1522,8 @@ interface ProviderOverlay {
  * and keeps one persistent Pi process per active CodeInOven session.
  */
 export class PiDriver extends PersistentCliDriver {
+  /** Tickets prevent duplicate compactions and continuation after user cancellation. */
+  private readonly pageCompactions = new Map<string, { resume: boolean }>()
   readonly id = 'pi'
   readonly name = 'Pi'
   readonly capabilities: HarnessCapabilities = {
@@ -2083,6 +2089,8 @@ export class PiDriver extends PersistentCliDriver {
     text: string,
     attachments: SendPromptOptions['attachments']
   ): Promise<void> {
+    const checkpoint = this.pageCompactions.get(sessionId)
+    if (checkpoint) checkpoint.resume = true
     const client = this.rpcClients.get(sessionId)
     if (!client) {
       throw new Error(`No active Pi turn is available to steer for session ${sessionId}`)
@@ -2093,6 +2101,11 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   override async abort(projectPath: string, sessionId: string): Promise<void> {
+    if (this.pageCompactions.has(sessionId)) {
+      const turn = this.turnStates.get(sessionId)
+      if (turn) this.turnStates.set(sessionId, { ...turn, compacting: false })
+    }
+    this.pageCompactions.delete(sessionId)
     await this.requireSession(projectPath, sessionId)
     const client = this.rpcClients.get(sessionId)
     if (!client) return
@@ -2700,9 +2713,17 @@ export class PiDriver extends PersistentCliDriver {
         // Resolve the retained context at compaction time, never while forking.
         const compaction = parseRecord(record['result'])
         const keptId = compaction?.['firstKeptEntryId']
+        const details = parseRecord(compaction?.['details'])
+        const trace = parseRecord(details?.['lastWorkingTrace'])
+        const retainedAt =
+          details?.['kind'] === 'cio-page-checkpoint' && trace?.['firstKeptEntryId'] === keptId
+            ? numberValue(trace?.['firstKeptCreatedAt'])
+            : undefined
+        if (retainedAt !== undefined) record['firstKeptCreatedAt'] = retainedAt
         if (
           (record['type'] === 'auto_compaction_end' || record['type'] === 'compaction_end') &&
           typeof keptId === 'string' &&
+          retainedAt === undefined &&
           session.nativeSessionId
         ) {
           try {
@@ -2879,7 +2900,10 @@ export class PiDriver extends PersistentCliDriver {
     const turnState = this.turnStates.get(session.id)
     this.turnStates.set(session.id, {
       assistantMessageId: turnState?.assistantMessageId ?? null,
-      turnIndex: Math.max(turnState?.turnIndex ?? 0, latestPiTurnIndex(session.messages, session.id)),
+      turnIndex: Math.max(
+        turnState?.turnIndex ?? 0,
+        latestPiTurnIndex(session.messages, session.id)
+      ),
       compacting: true
     })
     try {
@@ -2890,10 +2914,7 @@ export class PiDriver extends PersistentCliDriver {
         ...(this.turnStates.get(session.id) ?? { assistantMessageId: null, turnIndex: 0 }),
         compacting: false
       })
-      this.failSilentContinue(
-        session,
-        error instanceof Error ? error.message : state.lastError
-      )
+      this.failSilentContinue(session, error instanceof Error ? error.message : state.lastError)
       return
     }
     // Clear the compacting flag before starting the continuation so the
@@ -2919,10 +2940,7 @@ export class PiDriver extends PersistentCliDriver {
       await client.prompt('Continue.')
     } catch (error) {
       await this.publishOversizedRecovery(session.id, false)
-      this.failSilentContinue(
-        session,
-        error instanceof Error ? error.message : state.lastError
-      )
+      this.failSilentContinue(session, error instanceof Error ? error.message : state.lastError)
     }
   }
 
@@ -2986,14 +3004,76 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
-  /**
-   * Map the app-owned status extension's `setStatus` records into
-   * authoritative `session.status` events. The extension reports
-   * `cio:working` on `agent_start` (and after compaction), `cio:idle` on
-   * `agent_settled`, and `cio:compacting` during auto-compaction — the same
-   * lifecycle visibility codex/claude-code/opencode drivers provide.
-   */
+  /** Preserve the logical turn while the 85% checkpoint aborts, compacts, and resumes Pi. */
+  private async compactPageCheckpoint(sessionId: string, resume: boolean): Promise<void> {
+    const client = this.rpcClients.get(sessionId)
+    const projectPath = this.sessionProjects.get(sessionId)
+    const turn = this.turnStates.get(sessionId)
+    if (
+      !client ||
+      !projectPath ||
+      !turn ||
+      turn.compacting ||
+      this.pageCompactions.has(sessionId)
+    ) {
+      return
+    }
+    const ticket = { resume }
+    this.pageCompactions.set(sessionId, ticket)
+    this.turnStates.set(sessionId, { ...turn, compacting: true })
+    this.activeTurns.add(sessionId)
+    const current = () => this.pageCompactions.get(sessionId) === ticket
+    try {
+      // Native overflow recovery may already own the session. Let it finish
+      // through the same page hook instead of interrupting its checkpoint.
+      const state = record(await client.getState())
+      if (!current() || state?.['isCompacting'] === true) return
+      const result = await client.compact()
+      if (!current()) return
+      await this.handleRpcEvent(
+        { type: 'compaction_end', result, reason: 'threshold' },
+        sessionId,
+        projectPath
+      )
+      if (!current()) return
+      const after = record(await client.getState())
+      if (!current()) return
+      const latest = this.turnStates.get(sessionId)
+      if (latest) this.turnStates.set(sessionId, { ...latest, compacting: false })
+      if (after?.['isStreaming'] === true) return
+      if (ticket.resume || (numberValue(after?.['pendingMessageCount']) ?? 0) > 0) {
+        await client.prompt(
+          'Continue from the Last working trace in the checkpoint. Complete the current step, then the next unfinished step.'
+        )
+      } else {
+        const session = await this.requireSession(projectPath, sessionId)
+        this.activeTurns.delete(sessionId)
+        await this.refreshSessionUsage(session)
+        await this.finishTurn(session)
+      }
+    } catch (error) {
+      if (!current()) return
+      const session = await this.requireSession(projectPath, sessionId)
+      if (!current()) return
+      this.failSilentContinue(session, error instanceof Error ? error.message : String(error))
+    } finally {
+      if (current()) {
+        this.pageCompactions.delete(sessionId)
+        const latest = this.turnStates.get(sessionId)
+        if (latest) this.turnStates.set(sessionId, { ...latest, compacting: false })
+      }
+    }
+  }
+
+  /** Route app-owned extension status records and compaction requests. */
   private handleExtensionStatus(record: Record<string, unknown>, sessionId: string): void {
+    if (stringValue(record['statusKey']) === PI_COMPACTION_EXTENSION_KEY) {
+      const request = parseRecord(record['statusText'])
+      if (request?.['type'] === 'threshold') {
+        void this.compactPageCheckpoint(sessionId, request['resume'] === true)
+      }
+      return
+    }
     if (stringValue(record['statusKey']) === PI_USAGE_EXTENSION_KEY) {
       void this.handleUsageStatus(record, sessionId)
       return
@@ -3442,6 +3522,7 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   private disposeRpcClient(sessionId: string): void {
+    this.pageCompactions.delete(sessionId)
     const client = this.rpcClients.get(sessionId)
     if (client) {
       client.dispose()

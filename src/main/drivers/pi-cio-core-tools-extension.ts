@@ -14,8 +14,8 @@
  * generated module is split into imports + body, the body is wrapped in a
  * scoped factory (module-level constants become factory locals, so identical
  * names across extensions cannot collide), `export default function` becomes
- * the factory's `return`, and the merged module's default export invokes all
- * four factories in order. A generator that grows a new import is picked up
+ * the factory's `return`, and the merged module's default export invokes the
+ * factories in order. A generator that grows a new import is picked up
  * automatically by the import parser — a source that stops parsing fails
  * materialization loudly instead of silently dropping behavior.
  *
@@ -30,6 +30,7 @@
  */
 
 import { piCoreToolsExtension } from './pi-core-tools-extension'
+import { piCompactionExtension } from './pi-compaction-extension'
 import { piOversizedRecoveryExtension } from './pi-oversized-recovery-extension'
 import { piStatusExtension } from './pi-status-extension'
 import { piUsageExtension } from './pi-usage-extension'
@@ -144,13 +145,14 @@ function scopedExtensionFactory(factoryName: string, body: string): string {
   return `const ${factoryName} = (): ((pi: ExtensionAPI) => void) => {\n${rewritten}}\n`
 }
 
-/** Compose the four app-owned extensions into one self-contained module source. */
+/** Compose the app-owned extensions into one self-contained module source. */
 export function piCioCoreToolsExtension(options: CioCoreToolsExtensionOptions): string {
   const sources = [
     { factory: '__cioStatusExtension', source: piStatusExtension() },
     { factory: '__cioUsageExtension', source: piUsageExtension() },
     { factory: '__cioGatewayExtension', source: piUtilityGatewayExtension() },
     { factory: '__cioCoreToolsExtension', source: piCoreToolsExtension() },
+    { factory: '__cioCompactionExtension', source: piCompactionExtension() },
     { factory: '__cioOversizedRecoveryExtension', source: piOversizedRecoveryExtension() }
   ]
   const parsed = sources.map((entry) => {
@@ -174,6 +176,7 @@ export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void 
   __cioUsageExtension()(pi)
   __cioGatewayExtension()(pi)
   __cioCoreToolsExtension()(pi)
+  __cioCompactionExtension()(pi)
   __cioOversizedRecoveryExtension()(pi)
 }
 `
