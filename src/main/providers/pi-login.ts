@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { bundledPiVendorDir } from '../drivers/harness-runtime'
+import { Logger } from '../system/logger'
 
 /**
  * Headless sign-in for any provider in Pi's built-in registry, running the
@@ -67,26 +68,39 @@ interface RegistryModule {
 let registryModulePromise: Promise<RegistryModule> | null = null
 
 async function registryModule(): Promise<RegistryModule> {
-  registryModulePromise ??= (async () => {
-    const require = createRequire(import.meta.url)
-    const candidates: string[] = []
-    try {
-      candidates.push(require.resolve('@earendil-works/pi-ai/dist/providers/all.js'))
-    } catch {
-      // Not installed in this context — fall through to the vendored copy.
-    }
-    const vendor = bundledPiVendorDir()
-    if (vendor) {
-      const vendored = join(vendor, 'pi-ai/dist/providers/all.js')
-      if (existsSync(vendored)) candidates.push(vendored)
-    }
-    const resolved = candidates[0]
-    if (!resolved) {
-      throw new Error('Pi sign-in flows are unavailable in this installation.')
-    }
+  // A failed import must never be cached — see pi-catalog.ts for the rationale.
+  registryModulePromise ??= loadRegistryModule()
+  try {
+    return await registryModulePromise
+  } catch (error) {
+    registryModulePromise = null
+    throw error
+  }
+}
+
+async function loadRegistryModule(): Promise<RegistryModule> {
+  const require = createRequire(import.meta.url)
+  const candidates: string[] = []
+  try {
+    candidates.push(require.resolve('@earendil-works/pi-ai/dist/providers/all.js'))
+  } catch {
+    // Not installed in this context — fall through to the vendored copy.
+  }
+  const vendor = bundledPiVendorDir()
+  if (vendor) {
+    const vendored = join(vendor, 'pi-ai/dist/providers/all.js')
+    if (existsSync(vendored)) candidates.push(vendored)
+  }
+  const resolved = candidates[0]
+  if (!resolved) {
+    throw new Error('Pi sign-in flows are unavailable in this installation.')
+  }
+  try {
     return (await import(pathToFileURL(resolved).href)) as RegistryModule
-  })()
-  return registryModulePromise
+  } catch (error) {
+    Logger.error(`[pi-login] Failed to load the Pi provider registry from ${resolved}:`, error)
+    throw error instanceof Error ? error : new Error(String(error))
+  }
 }
 
 /** Which sign-in methods Pi defines for a catalog provider. */

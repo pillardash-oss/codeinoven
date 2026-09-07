@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { OfferedProvider } from '../../lib/types'
 import { bundledPiVendorDir } from '../drivers/harness-runtime'
+import { Logger } from '../system/logger'
 
 /**
  * Enumerate every provider in Pi's built-in model registry — the full catalog
@@ -26,26 +27,41 @@ interface RegistryModule {
 let registryModulePromise: Promise<RegistryModule> | null = null
 
 async function registryModule(): Promise<RegistryModule> {
-  registryModulePromise ??= (async () => {
-    const require = createRequire(import.meta.url)
-    const candidates: string[] = []
-    try {
-      candidates.push(require.resolve('@earendil-works/pi-ai/dist/providers/all.js'))
-    } catch {
-      // Not installed in this context — fall through to the vendored copy.
-    }
-    const vendor = bundledPiVendorDir()
-    if (vendor) {
-      const vendored = join(vendor, 'pi-ai/dist/providers/all.js')
-      if (existsSync(vendored)) candidates.push(vendored)
-    }
-    const resolved = candidates[0]
-    if (!resolved) {
-      throw new Error('The Pi provider catalog is unavailable in this installation.')
-    }
+  // A failed import must never be cached: one transient failure (file lock,
+  // antivirus scan, first-launch timing) would otherwise disable the whole
+  // provider catalog until the app is restarted.
+  registryModulePromise ??= loadRegistryModule()
+  try {
+    return await registryModulePromise
+  } catch (error) {
+    registryModulePromise = null
+    throw error
+  }
+}
+
+async function loadRegistryModule(): Promise<RegistryModule> {
+  const require = createRequire(import.meta.url)
+  const candidates: string[] = []
+  try {
+    candidates.push(require.resolve('@earendil-works/pi-ai/dist/providers/all.js'))
+  } catch {
+    // Not installed in this context — fall through to the vendored copy.
+  }
+  const vendor = bundledPiVendorDir()
+  if (vendor) {
+    const vendored = join(vendor, 'pi-ai/dist/providers/all.js')
+    if (existsSync(vendored)) candidates.push(vendored)
+  }
+  const resolved = candidates[0]
+  if (!resolved) {
+    throw new Error('The Pi provider catalog is unavailable in this installation.')
+  }
+  try {
     return (await import(pathToFileURL(resolved).href)) as RegistryModule
-  })()
-  return registryModulePromise
+  } catch (error) {
+    Logger.error(`[pi-catalog] Failed to load the Pi provider registry from ${resolved}:`, error)
+    throw error instanceof Error ? error : new Error(String(error))
+  }
 }
 
 export async function listPiCatalogProviders(_projectPath?: string): Promise<OfferedProvider[]> {

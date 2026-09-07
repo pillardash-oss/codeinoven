@@ -25,6 +25,7 @@ import { runPiLogin, listPiProviderAuthInfo } from './pi-login'
 import { BrowserWindow } from 'electron'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
+import { Logger } from '../system/logger'
 
 /** Shared headless store for harnesses whose credentials live in files (Pi). */
 const fileBackedAuth = new PiAuthConfigService(undefined, piAuthFileIo)
@@ -291,11 +292,15 @@ async function readClineStatus(projectPath?: string): Promise<HarnessAuthStatus>
 async function readPiStatus(projectPath?: string): Promise<HarnessAuthStatus> {
   const credentialIds = await fileBackedAuth.credentialIds()
   let stored: Record<string, unknown> = {}
+  let configReadable = false
   try {
     const wslRaw = await readHarnessHomeFile('pi', '.pi/agent/models.json', projectPath)
     const raw =
       wslRaw === undefined ? await readFile(join(PI_AGENT_DIR, 'models.json'), 'utf8') : wslRaw
-    if (raw !== null) stored = JSON.parse(raw) as Record<string, unknown>
+    if (raw !== null) {
+      stored = JSON.parse(raw) as Record<string, unknown>
+      configReadable = true
+    }
   } catch {
     stored = {}
   }
@@ -327,8 +332,17 @@ async function readPiStatus(projectPath?: string): Promise<HarnessAuthStatus> {
     })
     signedIn += 1
   }
+  // A fresh install with nothing configured is honestly "unauthenticated" —
+  // reporting `unknown` here made the status pill look permanently stuck and
+  // the re-check button appear dead. `unknown` is reserved for installs where
+  // Pi's config file could not be read at all.
   return {
-    state: signedIn > 0 ? 'authenticated' : accounts.length > 0 ? 'unauthenticated' : 'unknown',
+    state:
+      signedIn > 0
+        ? 'authenticated'
+        : accounts.length > 0 || configReadable
+          ? 'unauthenticated'
+          : 'unknown',
     accounts
   }
 }
@@ -792,7 +806,11 @@ export class ProviderAccountOrchestrator {
     let catalog: OfferedProvider[]
     try {
       catalog = await listPiCatalogProviders()
-    } catch {
+    } catch (catalogError) {
+      Logger.warn(
+        '[provider-accounts] Pi catalog unavailable — falling back to configured accounts:',
+        catalogError
+      )
       return native.accounts.map((account) => ({
         id: account.label,
         name: account.label,
