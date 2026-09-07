@@ -1,10 +1,12 @@
-/** App-owned page checkpoints, executed in Pi's subprocess. */
+/** Page checkpoints and request-size recovery, executed together in Pi's subprocess. */
 export const PI_COMPACTION_EXTENSION_KEY = 'codeinoven-compaction'
 
 export function piCompactionExtension(): string {
   return String.raw`import type { ExtensionAPI, SessionEntry, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { convertToLlm, serializeConversation } from '@earendil-works/pi-coding-agent'
 import { randomUUID } from 'node:crypto'
+import { readFile, stat } from 'node:fs/promises'
+import type { TextContent } from '@earendil-works/pi-ai'
 
 interface Page {
   entries: SessionEntry[]
@@ -13,6 +15,34 @@ interface Page {
 
 const KEY = '${PI_COMPACTION_EXTENSION_KEY}'
 const yieldBatch = () => new Promise<void>((resolve) => setImmediate(resolve))
+const FLAG_PATH = '__CIO_OVERSIZED_FLAG_PATH__'
+const MAX_TEXT_BYTES = 384_000
+let cachedArmed = false
+let cachedMtimeMs = -1
+
+async function readArmed(): Promise<boolean> {
+  try {
+    const info = await stat(FLAG_PATH)
+    if (info.mtimeMs === cachedMtimeMs) return cachedArmed
+    const parsed: unknown = JSON.parse(await readFile(FLAG_PATH, 'utf8'))
+    cachedArmed = typeof parsed === 'object' && parsed !== null && 'armed' in parsed && parsed.armed === true
+    cachedMtimeMs = info.mtimeMs
+    return cachedArmed
+  } catch {
+    cachedMtimeMs = -1
+    return false
+  }
+}
+
+function recoverPart<T extends { type: string; text?: string }>(part: T): T | TextContent {
+  if (part.type === 'image') return { type: 'text', text: '[image removed from the provider request to fit its size limit; the original image is preserved in the session transcript]' }
+  if (part.type === 'text' && part.text && Buffer.byteLength(part.text, 'utf8') > MAX_TEXT_BYTES) {
+    // Encode only a bounded prefix, including when the original is a huge log.
+    const prefix = Buffer.from(part.text.slice(0, MAX_TEXT_BYTES), 'utf8').subarray(0, MAX_TEXT_BYTES).toString('utf8')
+    return { type: 'text', text: prefix + '\n[truncated from the provider request to fit its size limit; the full output is preserved in the session transcript]' }
+  }
+  return part
+}
 
 function artifactReferences(value: unknown): string {
   const pending: Array<{ value: unknown; depth: number; key: string }> = [{ value, depth: 0, key: '' }]
@@ -110,10 +140,33 @@ export default function (pi: ExtensionAPI): void {
     if (event.message.role !== 'assistant' || (event.message.stopReason !== 'stop' && event.message.stopReason !== 'toolUse')) return
     await reportThreshold(ctx, event.message.stopReason !== 'stop' || ctx.hasPendingMessages())
   })
-  pi.on('context', async (_event, ctx) => { await reportThreshold(ctx, true) })
+  pi.on('context', async (event, ctx) => {
+    if (!await readArmed()) {
+      await reportThreshold(ctx, true)
+      return
+    }
+    // Only the request copy changes. The same module owns page preservation
+    // and recovery, so recovery never triggers a competing threshold compact.
+    const messages: typeof event.messages = []
+    for (let index = 0; index < event.messages.length; index++) {
+      if (index % 32 === 0) await yieldBatch()
+      const message = event.messages[index]
+      if (message.role === 'assistant') messages.push({ ...message, content: message.content.map(recoverPart) })
+      else if (message.role === 'user' || message.role === 'toolResult' || message.role === 'custom') {
+        const content = typeof message.content === 'string' ? recoverPart({ type: 'text', text: message.content }).text ?? '' : message.content.map(recoverPart)
+        if (message.role === 'toolResult') messages.push({ ...message, content: typeof content === 'string' ? [{ type: 'text', text: content }] : content })
+        else messages.push({ ...message, content })
+      } else messages.push(message)
+    }
+    return { messages }
+  })
   pi.on('session_compact', () => { compacting = false; requestedAt = null })
   pi.on('session_compact_failed', () => { compacting = false })
-  pi.on('session_start', () => { compacting = false; requestedAt = null })
+  pi.on('session_start', (_event, ctx) => {
+    compacting = false
+    requestedAt = null
+    ctx.ui.setStatus(KEY, JSON.stringify({ type: 'ready' }))
+  })
 
   pi.on('session_before_compact', async (event, ctx) => {
     // Pi may reach its fixed reserve before our percentage threshold.
@@ -230,7 +283,12 @@ export default function (pi: ExtensionAPI): void {
         details: { version: 1, kind: 'cio-page-checkpoint', previousCheckpointId: previous?.id, sourceSession, relatedPages, pageCount: pages.length, pageIndex, lastWorkingTrace: { firstKeptEntryId, firstKeptCreatedAt, userEntryIds: current.users.map((entry) => entry.id) } }
       } }
     } catch (error) {
-      if (!event.signal.aborted) ctx.ui.notify(error instanceof Error ? error.message : String(error), 'warning')
+      try {
+        if (!event.signal.aborted) ctx.ui.notify(error instanceof Error ? error.message : String(error), 'warning')
+      } catch {
+        // Notification failure must not escape the hook: Pi catches thrown
+        // extension errors and would fall back to its default summarizer.
+      }
       return { cancel: true }
     } finally {
       compacting = false

@@ -63,7 +63,12 @@ const rpcMock = vi.hoisted(() => {
         onUiRequest?: (record: Record<string, unknown>) => void
         onExtensionStatus?: (record: Record<string, unknown>) => void
       }) {
-        this.newSession = vi.fn(async () => undefined)
+        this.newSession = vi.fn(async () => {
+          this.onExtensionStatus({
+            statusKey: 'codeinoven-compaction',
+            statusText: JSON.stringify({ type: 'ready' })
+          })
+        })
         this.prompt = vi.fn(async () => undefined)
         this.steer = vi.fn(async () => undefined)
         this.followUp = vi.fn(async () => undefined)
@@ -381,9 +386,7 @@ describe('PiDriver', () => {
       expect(client.prompt).toHaveBeenCalledWith('Continue.')
     })
     // The driver claims the failure: no session.error reaches the engine.
-    expect(events).not.toContainEqual(
-      expect.objectContaining({ type: 'session.error', sessionId })
-    )
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'session.error', sessionId }))
   })
 
   it('arms oversized-recovery stripping during recovery and disarms on success', async () => {
@@ -404,12 +407,7 @@ describe('PiDriver', () => {
       }
     })
     client.emit({ type: 'agent_settled' })
-    const flagPath = join(
-      'runtime',
-      'cio-core-tools',
-      sessionId,
-      'oversized-recovery.json'
-    )
+    const flagPath = join('runtime', 'cio-core-tools', sessionId, 'oversized-recovery.json')
     await vi.waitFor(async () => {
       const flag = JSON.parse(String(await engine.readRaw(flagPath))) as { armed: boolean }
       expect(flag.armed).toBe(true)

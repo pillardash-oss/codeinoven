@@ -1,9 +1,8 @@
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { piOversizedRecoveryExtension } from '../../../src/main/drivers/pi-oversized-recovery-extension'
+import { piCompactionExtension } from '../../../src/main/drivers/pi-compaction-extension'
 
 const roots: string[] = []
 
@@ -18,34 +17,47 @@ interface ContextMessage {
 
 /** Load the generated extension with a stub ExtensionAPI and flag file. */
 async function loadExtension(armed: boolean): Promise<{
-  context: (event: { messages: ContextMessage[] }) => Promise<{ messages: ContextMessage[] } | undefined>
+  context: (event: {
+    messages: ContextMessage[]
+  }) => Promise<{ messages: ContextMessage[] } | undefined>
 }> {
-  const root = await mkdtemp(join(tmpdir(), 'codeinoven-pi-oversized-'))
+  const scratch = join(process.cwd(), '.cio', 'tmp')
+  await mkdir(scratch, { recursive: true })
+  const root = await mkdtemp(join(scratch, 'pi-compaction-recovery-'))
   roots.push(root)
   await mkdir(root, { recursive: true })
   await writeFile(join(root, 'flag.json'), JSON.stringify({ armed }))
-  const source = piOversizedRecoveryExtension().replace(
-    '__CIO_OVERSIZED_FLAG_PATH__',
-    join(root, 'flag.json')
-  )
+  // Pi injects its extension API module. Load only the two real helpers here:
+  // importing the package root outside Pi also loads its optional server SDK.
+  const sdk = join(process.cwd(), 'node_modules/@earendil-works/pi-coding-agent/dist/core')
+  const source = piCompactionExtension()
+    .replace('__CIO_OVERSIZED_FLAG_PATH__', join(root, 'flag.json'))
+    .replace(
+      "import { convertToLlm, serializeConversation } from '@earendil-works/pi-coding-agent'",
+      `import { convertToLlm } from '${pathToFileURL(join(sdk, 'messages.js')).href}'\nimport { serializeConversation } from '${pathToFileURL(join(sdk, 'compaction/utils.js')).href}'`
+    )
   await writeFile(join(root, 'ext.ts'), source)
-  const handlers: Record<string, Array<(event: never) => Promise<unknown>>> = {}
+  type ContextHook = (
+    event: { messages: ContextMessage[] },
+    ctx: { getContextUsage(): undefined }
+  ) => Promise<{ messages: ContextMessage[] } | undefined>
+  const handlers: Record<string, ContextHook[]> = {}
   const module = await import(pathToFileURL(join(root, 'ext.ts')).href)
   module.default({
-    on: (name: string, fn: (event: never) => Promise<unknown>) => {
+    on: (name: string, fn: ContextHook) => {
       ;(handlers[name] ??= []).push(fn)
     }
   })
   const context = handlers['context']?.[0]
   if (!context) throw new Error('Generated extension registered no context hook')
-  return { context: context as (event: { messages: ContextMessage[] }) => Promise<{ messages: ContextMessage[] } | undefined> }
+  return { context: (event) => context(event, { getContextUsage: () => undefined }) }
 }
 
-describe('piOversizedRecoveryExtension', () => {
+describe('piCompactionExtension', () => {
   const messages: ContextMessage[] = [
     { role: 'user', content: [{ type: 'text', text: 'hi' }] },
     {
-      role: 'tool',
+      role: 'toolResult',
       content: [
         { type: 'text', text: 'ok' },
         { type: 'image', data: 'QUFBQQ==', mimeType: 'image/png' }
@@ -77,8 +89,7 @@ describe('piOversizedRecoveryExtension', () => {
     const result = await context({
       messages: [{ role: 'user', content: [{ type: 'text', text: huge }] }]
     })
-    const text = (result?.messages[0]?.content as Array<{ type: string; text?: string }>)[0]
-      ?.text
+    const text = (result?.messages[0]?.content as Array<{ type: string; text?: string }>)[0]?.text
     expect(text?.length ?? 0).toBeLessThan(huge.length)
     expect(text).toContain('truncated from the provider request')
   })

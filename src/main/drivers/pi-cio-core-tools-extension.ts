@@ -31,7 +31,6 @@
 
 import { piCoreToolsExtension } from './pi-core-tools-extension'
 import { piCompactionExtension } from './pi-compaction-extension'
-import { piOversizedRecoveryExtension } from './pi-oversized-recovery-extension'
 import { piStatusExtension } from './pi-status-extension'
 import { piUsageExtension } from './pi-usage-extension'
 import { piUtilityGatewayExtension } from './pi-utility-gateway-extension'
@@ -152,8 +151,7 @@ export function piCioCoreToolsExtension(options: CioCoreToolsExtensionOptions): 
     { factory: '__cioUsageExtension', source: piUsageExtension() },
     { factory: '__cioGatewayExtension', source: piUtilityGatewayExtension() },
     { factory: '__cioCoreToolsExtension', source: piCoreToolsExtension() },
-    { factory: '__cioCompactionExtension', source: piCompactionExtension() },
-    { factory: '__cioOversizedRecoveryExtension', source: piOversizedRecoveryExtension() }
+    { factory: '__cioCompactionExtension', source: piCompactionExtension() }
   ]
   const parsed = sources.map((entry) => {
     const split = splitGeneratedModule(entry.source)
@@ -177,7 +175,6 @@ export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void 
   __cioGatewayExtension()(pi)
   __cioCoreToolsExtension()(pi)
   __cioCompactionExtension()(pi)
-  __cioOversizedRecoveryExtension()(pi)
 }
 `
     .replace('__HANDOFF_PATH__', JSON.stringify(options.gatewayHandoffPath).slice(1, -1))

@@ -1524,6 +1524,7 @@ interface ProviderOverlay {
 export class PiDriver extends PersistentCliDriver {
   /** Tickets prevent duplicate compactions and continuation after user cancellation. */
   private readonly pageCompactions = new Map<string, { resume: boolean }>()
+  private readonly compactionReadySessions = new Set<string>()
   readonly id = 'pi'
   readonly name = 'Pi'
   readonly capabilities: HarnessCapabilities = {
@@ -1623,7 +1624,6 @@ export class PiDriver extends PersistentCliDriver {
    *  extension module (status + usage + gateway + core tools composed), passed
    *  to `--extension`. */
   private cioCoreToolsExtensionPaths = new Map<string, string>()
-  private cioCoreToolsFailed = false
   /** WSL-aware read view of Pi's own credential store (`~/.pi/agent/auth.json`). */
   private readonly authConfig = new PiAuthConfigService(undefined, piAuthFileIo)
 
@@ -2341,7 +2341,6 @@ export class PiDriver extends PersistentCliDriver {
     this.gatewayHandoffPaths.clear()
     this.pendingGatewayEndpoints.clear()
     this.cioCoreToolsExtensionPaths.clear()
-    this.cioCoreToolsFailed = false
     this.cioSystemPromptPaths.clear()
     super.dispose()
   }
@@ -2403,12 +2402,14 @@ export class PiDriver extends PersistentCliDriver {
     // The single app-owned "cio-core-tools" extension composes status, usage,
     // utility gateway, and core tools into ONE module loaded through ONE
     // `--extension` flag, so pi's process boot pays a single extension load
-    // instead of four. A materialization failure must never block the turn —
-    // pi then simply runs without the app affordances.
+    // instead of four. The checkpoint policy is required for every session.
     const cioCoreToolsExtensionPath = await this.materializeCioCoreToolsExtension(sessionId)
-    const extensionArgs = cioCoreToolsExtensionPath
-      ? ['--extension', cioCoreToolsExtensionPath]
-      : []
+    if (!cioCoreToolsExtensionPath) {
+      throw new Error(
+        'Cannot start Pi without the CodeInOven compaction extension. Retry after resolving the extension materialization error.'
+      )
+    }
+    const extensionArgs = ['--extension', cioCoreToolsExtensionPath]
     const invocation = await prepareHarnessInvocation(
       'pi',
       ['--mode', 'rpc', ...extensionArgs, ...args],
@@ -2441,7 +2442,13 @@ export class PiDriver extends PersistentCliDriver {
     // so it appears in the task manager and is covered by orphan reaping.
     this.observeHarnessProcess(sessionId, client.process, invocation.command, projectPath)
     try {
+      this.compactionReadySessions.delete(sessionId)
       await client.newSession()
+      if (!this.compactionReadySessions.has(sessionId)) {
+        throw new Error(
+          'The CodeInOven compaction extension did not load. Pi was stopped to prevent fallback to its default compaction.'
+        )
+      }
       // Resume the persisted native transcript BEFORE syncing the native
       // session id: `switch_session` makes the resumed session current, so the
       // sync below then records the same id the thread was already bound to.
@@ -3069,6 +3076,7 @@ export class PiDriver extends PersistentCliDriver {
   private handleExtensionStatus(record: Record<string, unknown>, sessionId: string): void {
     if (stringValue(record['statusKey']) === PI_COMPACTION_EXTENSION_KEY) {
       const request = parseRecord(record['statusText'])
+      if (request?.['type'] === 'ready') this.compactionReadySessions.add(sessionId)
       if (request?.['type'] === 'threshold') {
         void this.compactPageCheckpoint(sessionId, request['resume'] === true)
       }
@@ -3432,13 +3440,12 @@ export class PiDriver extends PersistentCliDriver {
    * loads one extension instead of four. The gateway handoff file and the
    * per-turn system-prompt handoff file live beside the module; their
    * storage-relative paths feed the existing publish/remove flows unchanged.
-   * A failed materialization must never block the turn — pi then runs without
-   * the app affordances (same contract as the previous per-extension paths).
+   * Startup rejects a failed materialization: running without this module
+   * would silently restore Pi's default compaction policy.
    */
   private async materializeCioCoreToolsExtension(sessionId: string): Promise<string | null> {
     const existing = this.cioCoreToolsExtensionPaths.get(sessionId)
     if (existing) return existing
-    if (this.cioCoreToolsFailed) return null
     try {
       const directory = join('runtime', 'cio-core-tools', sessionId)
       const handoffRelative = join(directory, 'gateway-handoff.json')
@@ -3483,7 +3490,6 @@ export class PiDriver extends PersistentCliDriver {
       }
       return extensionAbsolute
     } catch (error) {
-      this.cioCoreToolsFailed = true
       Logger.dev('Pi cio-core-tools extension materialization failed:', error)
       return null
     }
@@ -3522,6 +3528,7 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   private disposeRpcClient(sessionId: string): void {
+    this.compactionReadySessions.delete(sessionId)
     this.pageCompactions.delete(sessionId)
     const client = this.rpcClients.get(sessionId)
     if (client) {
