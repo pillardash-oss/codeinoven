@@ -310,6 +310,39 @@ describe('PiDriver', () => {
     )
   })
 
+  it('stays silent on oversized agent_settled errors while recovery claims them', async () => {
+    const context = sessionContext('s-1', [
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        parts: [{ type: 'text', id: 'assistant-1:text', messageID: 'assistant-1', text: '' }],
+        createdAt: Date.now(),
+        harnessId: 'pi',
+        error:
+          'Error from provider (Console Go): Upstream request failed: [invalid_request_error] Request body exceeds the 4.5 MiB limit.'
+      }
+    ])
+    const state = { assistantMessageId: null, turnIndex: 1 }
+    const result = mapPiRecord({ type: 'agent_settled' }, context, state)
+    expect(result?.events ?? []).toHaveLength(0)
+  })
+
+  it('stays silent on oversized auto_retry_end failures while recovery claims them', () => {
+    const state = { assistantMessageId: null, turnIndex: 1 }
+    const result = mapPiRecord(
+      {
+        type: 'auto_retry_end',
+        success: false,
+        attempt: 2,
+        finalError:
+          'Error from provider (Console Go): Upstream request failed: [invalid_request_error] Request body exceeds the 4.5 MiB limit.'
+      },
+      sessionContext('s-1'),
+      state
+    )
+    expect(result?.events ?? []).toHaveLength(0)
+  })
+
   it('is neutral to agent_end while an auto-retry may still follow', () => {
     const state = { assistantMessageId: null, turnIndex: 1 }
     const result = mapPiRecord(

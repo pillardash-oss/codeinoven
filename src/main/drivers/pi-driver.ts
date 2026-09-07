@@ -1105,6 +1105,12 @@ export function mapPiRecord(
     }
     const finalError =
       stringValue(entry['finalError']) ?? stringValue(entry['errorMessage']) ?? 'Pi retries failed'
+    // An oversized request body is claimed by the driver's compact-and-continue
+    // recovery (armed stripping + re-prompt) — surfacing it here would flash an
+    // error card on every recovery attempt before the turn resumes. The
+    // terminal failure after the recovery cap still surfaces via the claimed
+    // message.completed error, so nothing is hidden permanently.
+    if (isOversizedRequestError(finalError)) return { events: [] }
     // When the retries were exhausted against a usage window, the final error
     // still classifies as a reset wait — surface it with a concrete retryAt so
     // the engine converts it into the will-retry card and auto-resumes later,
@@ -1141,6 +1147,12 @@ export function mapPiRecord(
       return message.role === 'assistant'
     })
     if (lastAssistant?.error) {
+      // Oversized request bodies are driver-recoverable (silent compact,
+      // arm stripping, re-prompt); surfacing them here would flash an error
+      // card after every compaction before the turn resumes. The recovery-cap
+      // terminal failure still surfaces through the claimed message.completed
+      // error, so a permanently oversized request is never hidden.
+      if (isOversizedRequestError(lastAssistant.error)) return { events: [] }
       const kind = classifyProviderIssue(lastAssistant.error)
       const message = extractProviderErrorEnvelope(lastAssistant.error).message
       const retryAt =
