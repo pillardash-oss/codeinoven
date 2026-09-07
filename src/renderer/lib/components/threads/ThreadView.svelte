@@ -1627,11 +1627,6 @@
     if (snapshot.harnessId !== settings.harnessId || snapshot.providerId !== settings.providerId) {
       return
     }
-    // A snapshot from a different model carries that model's context window;
-    // seeding it would misjudge occupancy (e.g. a 1M-token window reading shown
-    // against a 256k-token model). Legacy snapshots without a modelId predate
-    // the stamp and are still admitted on harness/provider match.
-    if (snapshot.modelId !== undefined && snapshot.modelId !== settings.modelId) return
     contextUsageDisplay = snapshot
   }
 
