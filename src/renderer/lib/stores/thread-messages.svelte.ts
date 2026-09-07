@@ -9,6 +9,10 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageId as createMessageId } from '$shared/id'
+import {
+  classifyProviderIssue,
+  parseUsageResetAt
+} from '$shared/provider-issue'
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type {
   AgentEvent,
@@ -651,6 +655,36 @@ class ThreadMessagesStore {
   }
 
   /**
+   * Settle a temporary chat turn whose backend invoke rejected (e.g. a
+   * pre-dispatch usage-limit failure). Regular threads recover through
+   * `session.idle`/`session.error` broadcast events, but a rejection that
+   * happens before the harness session streams anything never produces those
+   * events — so the busy flag set optimistically must be cleared here, and the
+   * failure classified into the same provider-issue card pipeline regular
+   * threads use (quota kind, retry countdown from the reset time).
+   */
+  #settleFailedTemporaryTurn(
+    projectId: string,
+    conversationId: string,
+    harnessId: string,
+    error: unknown
+  ): void {
+    const raw = error instanceof Error ? error.message : 'Message failed to send.'
+    const message = raw.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+    const kind = classifyProviderIssue(message)
+    const retryAt = kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
+    this.setRunIssue(projectId, conversationId, {
+      kind,
+      message,
+      rawError: raw,
+      harnessId: harnessId || 'unknown',
+      retryable: true,
+      ...(retryAt === undefined ? {} : { retryAt })
+    })
+    agentRuns.setIdle(projectId, conversationId)
+  }
+
+  /**
    * Send a user message. Inserts an optimistic message immediately, persists it
    * on the server, and reconciles the optimistic ID with the confirmed ID.
    * Returns the message ID so callers can synchronously act on the optimistic
@@ -822,6 +856,7 @@ class ThreadMessagesStore {
       // through the same never-downgrade snapshot path a thread's mirror uses.
       if (response) this.mergePage(projectId, conversationId, [response])
     } catch (error) {
+      this.#settleFailedTemporaryTurn(projectId, conversationId, settings.harnessId, error)
       this.rejectOptimistic(projectId, conversationId, entry, messageId, error)
       throw error
     }
@@ -861,6 +896,7 @@ class ThreadMessagesStore {
         text
       )
     } catch (error) {
+      this.#settleFailedTemporaryTurn(projectId, conversationId, settings.harnessId, error)
       this.rejectOptimistic(projectId, conversationId, entry, messageId, error)
       throw error
     }

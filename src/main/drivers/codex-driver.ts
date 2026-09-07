@@ -29,6 +29,7 @@ import { classifyProviderIssue } from '../../lib/provider-issue'
 import { resolveFastModelId } from '../../lib/fast-inference'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
+import { GATEWAY_TOOLS } from '../../lib/gateway-tools'
 import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment } from './cli-environment'
@@ -279,6 +280,7 @@ export class CodexDriver extends PersistentCliDriver {
     nativeUtilities: ['web_search', 'web_fetch']
   }
   private activeTurns = new Map<string, CodexAppServerTurn>()
+  private utilityEndpoints = new Map<string, { url: string; token: string }>()
   private modelsWithoutReasoningSummaries = new Set<string>()
   private compactionsByThreadId = new Map<string, CodexCompactionRun>()
   private contextUsageByThreadId = new Map<string, CodexContextUsageWaiter>()
@@ -458,6 +460,15 @@ export class CodexDriver extends PersistentCliDriver {
     return this.cheapestCandidate(projectPath)
   }
 
+  async publishUtilityGatewayEndpoint(
+    _projectPath: string,
+    sessionId: string,
+    endpoint: { url: string; token: string } | null
+  ): Promise<void> {
+    if (endpoint) this.utilityEndpoints.set(sessionId, endpoint)
+    else this.utilityEndpoints.delete(sessionId)
+  }
+
   /** Start a Codex turn through app-server so the same native turn can be steered. */
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
@@ -486,13 +497,22 @@ export class CodexDriver extends PersistentCliDriver {
     this.appendUserMessage(session, options)
 
     try {
+      const dynamicTools = this.utilityEndpoints.has(session.id)
+        ? GATEWAY_TOOLS.map(({ name, description, inputSchema }) => ({
+            name,
+            description,
+            inputSchema
+          }))
+        : []
       const threadResult = session.nativeSessionId
         ? await this.appServerRequest(host, 'thread/resume', {
             threadId: session.nativeSessionId,
+            dynamicTools,
             developerInstructions: options.systemPrompt ?? null
           })
         : await this.appServerRequest(host, 'thread/start', {
             cwd: projectPath,
+            dynamicTools,
             developerInstructions: options.systemPrompt ?? null,
             model: options.settings.modelId,
             approvalPolicy: codexApprovalPolicy(
@@ -683,6 +703,7 @@ export class CodexDriver extends PersistentCliDriver {
       active.finished = true
     }
     this.activeTurns.clear()
+    this.utilityEndpoints.clear()
     for (const compaction of this.compactionsByThreadId.values()) {
       clearTimeout(compaction.timer)
       compaction.reject(new Error('Codex driver disposed'))
@@ -1110,6 +1131,20 @@ export class CodexDriver extends PersistentCliDriver {
       this.respondToUnsupportedAppServerRequest(host, id, method)
       return
     }
+    if (method === 'item/tool/call') {
+      if (
+        active.host !== host ||
+        params['threadId'] !== active.nativeThreadId ||
+        params['turnId'] !== active.turnId
+      ) {
+        this.respondToUnsupportedAppServerRequest(host, id, method)
+        return
+      }
+      void this.callUtilityTool(active, params).then((result) => {
+        host.child.stdin?.write(`${JSON.stringify({ id, result })}\n`)
+      })
+      return
+    }
     if (isCodexPermissionRequest(method)) {
       const request: CodexServerRequest = {
         id,
@@ -1164,6 +1199,58 @@ export class CodexDriver extends PersistentCliDriver {
 
   private writeServerResponse(request: CodexServerRequest, result: Record<string, unknown>): void {
     request.host.child.stdin?.write(`${JSON.stringify({ id: request.id, result })}\n`)
+  }
+
+  /** Resolve credentials from the owning session on every structured tool call. */
+  private async callUtilityTool(
+    active: CodexAppServerTurn,
+    params: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    try {
+      const tool = GATEWAY_TOOLS.find(({ name }) => name === params['tool'])
+      const endpoint = this.utilityEndpoints.get(active.session.id)
+      if (!tool || !endpoint || active.finished) {
+        throw new Error('The utility tool is not active for this turn')
+      }
+      const response = await fetch(`${endpoint.url}${tool.route}`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${endpoint.token}`,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify(recordValue(params['arguments']) ?? {}),
+        signal: AbortSignal.timeout(120_000)
+      })
+      const result: unknown = await response.json()
+      const body = recordValue(result)
+      if (!response.ok) {
+        throw new Error(stringValue(body?.['error']) ?? 'Utility tool call failed')
+      }
+      const content = body?.['content']
+      const contentItems = Array.isArray(content)
+        ? content.map<Record<string, string>>((item: unknown) => {
+            const entry = recordValue(item)
+            if (entry?.['type'] === 'image' && typeof entry['data'] === 'string') {
+              return {
+                type: 'inputImage',
+                imageUrl: `data:${stringValue(entry['mimeType']) ?? 'image/png'};base64,${entry['data']}`
+              }
+            }
+            return { type: 'inputText', text: stringValue(entry?.['text']) ?? JSON.stringify(item) }
+          })
+        : [{ type: 'inputText', text: JSON.stringify(result) }]
+      return { success: body?.['isError'] !== true, contentItems }
+    } catch (error) {
+      return {
+        success: false,
+        contentItems: [
+          {
+            type: 'inputText',
+            text: error instanceof Error ? error.message : 'Utility tool call failed'
+          }
+        ]
+      }
+    }
   }
 
   private async retryWithoutReasoningSummary(active: CodexAppServerTurn): Promise<void> {
@@ -1304,7 +1391,10 @@ export class CodexDriver extends PersistentCliDriver {
         const finalMessage = [...active.session.messages]
           .reverse()
           .find((message) => message.role === 'assistant')
-        if ((telemetry.rateLimits.length > 0 || telemetry.credits || telemetry.bankedResets) && finalMessage) {
+        if (
+          (telemetry.rateLimits.length > 0 || telemetry.credits || telemetry.bankedResets) &&
+          finalMessage
+        ) {
           const event: AgentEvent = {
             type: 'usage.updated',
             sessionId: active.session.id,
@@ -2013,8 +2103,25 @@ function codexRetryIssue(
  *  leading weekday ("…try again at Monday, Sep 7th, 2026 12:40 PM.") and
  *  "a.m./p.m." with periods, since a stricter match here silently falls
  *  through to a farther, unrelated reset window (see `scheduleAutomaticRetry`)
- *  instead of trusting the date the provider itself reported. */
+ *  instead of trusting the date the provider itself reported. Codex also emits
+ *  a time-only variant for same-day resets ("…or try again at 9:30 AM.");
+ *  that form resolves to the next occurrence of the time (today, or tomorrow
+ *  once the time has already passed) so automatic retry stays schedulable. */
 function codexUsageLimitResetAt(message: string, now = Date.now()): number | undefined {
+  const timeOnly = message.match(
+    /\btry again at\s+(\d{1,2})[:.](\d{2})\s*(a\.?m\.?|p\.?m\.?)\b/iu
+  )
+  if (timeOnly) {
+    const hour12 = Number(timeOnly[1])
+    const minute = Number(timeOnly[2])
+    if (hour12 < 1 || hour12 > 12 || minute < 0 || minute > 59) return undefined
+    const hour = (hour12 % 12) + (timeOnly[3].toLowerCase().startsWith('p') ? 12 : 0)
+    const from = new Date(now)
+    const reset = new Date(from.getFullYear(), from.getMonth(), from.getDate(), hour, minute, 0, 0)
+    // The time already passed today means the window resets tomorrow.
+    if (reset.getTime() <= now) reset.setDate(reset.getDate() + 1)
+    return reset.getTime()
+  }
   const match = message.match(
     /\btry again at\s+(?:[a-z]+,\s+)?([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+(\d{1,2})[:.](\d{2})\s*(a\.?m\.?|p\.?m\.?)\b/iu
   )
