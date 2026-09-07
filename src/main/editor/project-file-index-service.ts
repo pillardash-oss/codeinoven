@@ -70,6 +70,55 @@ interface RankedProjectEntry extends ProjectFileEntry {
   score: number
 }
 
+interface ParsedQueryWord {
+  /** The word as typed, for the free-form substring fallback. */
+  raw: string
+  /** The word with any trailing "/", "/*", or "*" glob stripped. */
+  base: string
+  /** Whether the word must match a directory on the entry's path, so that
+   *  "settings/" and "settings/*" mean "inside (or at) a settings folder"
+   *  instead of a raw substring test. */
+  requireDirectory: boolean
+}
+
+/** Split a query word into its matched form. Trailing glob syntax ("/", "/*",
+ *  "*") narrows the word to directory-scope matching; everything else matches
+ *  file or directory names on path-segment boundaries. */
+function parseQueryWord(word: string): ParsedQueryWord {
+  const base = word.replace(/\/+\*?$/u, '').replace(/\*+$/u, '')
+  return { raw: word, base, requireDirectory: base !== word }
+}
+
+/** Directory segments relevant to matching: every ancestor segment of the
+ *  entry, plus the entry's own name when the entry is itself a directory. */
+function directorySegmentsOf(path: string, kind: ProjectFileEntry['kind']): string[] {
+  const segments = path.split('/')
+  if (kind === 'directory') return segments
+  segments.pop()
+  return segments
+}
+
+/** Score one parsed word against an entry: highest when the entry's own name
+ *  matches, then when a directory on its path matches. Zero when the word does
+ *  not match the entry's intent (for directory-scoped words the entry's name
+ *  alone never satisfies the match). */
+function scoreWordMatch(word: ParsedQueryWord, normalizedName: string, dirSegments: string[]): number {
+  if (!word.base) return 0
+  if (!word.requireDirectory) {
+    if (normalizedName === word.base) return 12
+    if (normalizedName.startsWith(word.base)) return 8
+    if (normalizedName.includes(word.base)) return 4
+  }
+  let best = 0
+  for (const segment of dirSegments) {
+    if (segment === word.base) best = Math.max(best, 6)
+    else if (segment.startsWith(word.base)) best = Math.max(best, 3)
+    else if (segment.includes(word.base)) best = Math.max(best, 1)
+    if (best === 6) break
+  }
+  return best
+}
+
 interface ProjectWatcher {
   watcher: FSWatcher
   root: string
@@ -119,7 +168,12 @@ export class ProjectFileIndexService {
     category: 'all' | 'rules',
     projectName?: string
   ): Promise<ProjectFileEntry[]> {
-    const words = query.trim().toLocaleLowerCase().split(/\s+/u).filter(Boolean)
+    const words = query
+      .trim()
+      .toLocaleLowerCase()
+      .split(/\s+/u)
+      .filter(Boolean)
+      .map(parseQueryWord)
     // A query term may match the project name too (e.g. "app.html codeinoven"),
     // so results surface across a project whose display name the user typed.
     const projectHaystack = projectName ? `${projectName.toLocaleLowerCase()} ` : ''
@@ -127,29 +181,32 @@ export class ProjectFileIndexService {
     const matches: RankedProjectEntry[] = []
 
     for (const indexed of index.entries.values()) {
-      if (category === 'rules' && indexed.ruleScore === 0) continue
-      if (!words.every((word) => `${projectHaystack}${indexed.normalizedPath}`.includes(word))) {
-        continue
+      const entry = indexed.entry
+      const dirSegments = directorySegmentsOf(entry.path, entry.kind)
+      let allWordsMatch = true
+      let queryScore = 0
+      for (const word of words) {
+        const score = scoreWordMatch(word, indexed.normalizedName, dirSegments)
+        if (score > 0) {
+          queryScore += score
+          continue
+        }
+        // Fallback for free-form queries that do not align with path segments
+        // (partial segments, project-name matches): keep the old substring rule
+        // so existing behavior never regresses.
+        if (`${projectHaystack}${indexed.normalizedPath}`.includes(word.raw)) {
+          queryScore += 1
+          continue
+        }
+        allWordsMatch = false
+        break
       }
-
-      const queryScore = words.reduce(
-        (score, word) =>
-          score +
-          (indexed.normalizedName === word
-            ? 12
-            : indexed.normalizedName.startsWith(word)
-              ? 8
-              : indexed.normalizedName.includes(word)
-                ? 4
-                : 1),
-        0
-      )
+      if (!allWordsMatch) continue
+      if (category === 'rules' && indexed.ruleScore === 0) continue
       this.insertRankedResult(matches, {
-        ...indexed.entry,
+        ...entry,
         score:
-          indexed.ruleScore +
-          queryScore +
-          (indexed.entry.kind === 'directory' && words.length > 0 ? 2 : 0)
+          indexed.ruleScore + queryScore + (entry.kind === 'directory' && words.length > 0 ? 2 : 0)
       })
     }
 
