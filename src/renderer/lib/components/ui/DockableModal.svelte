@@ -4,6 +4,11 @@
   import { APP_SLUG } from '$shared/brand'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
+  import {
+    registerModalPrimaryAction,
+    findPanelPrimaryAction,
+    focusOwnsEnter
+  } from '$lib/modal-primary-action.svelte'
 
   interface Props {
     open: boolean
@@ -214,6 +219,22 @@
       }
     })
   })
+
+  let panelEl = $state<HTMLElement | null>(null)
+
+  // ⌘/Ctrl+Enter runs this panel's primary action through the shared LIFO
+  // pipeline while the panel is open and expanded (a minimized panel is not in
+  // focus, so its resolver yields).
+  $effect(() => {
+    if (!open || minimized) return
+    return registerModalPrimaryAction(() => {
+      if (!panelEl || focusOwnsEnter(panelEl)) return false
+      const action = findPanelPrimaryAction(panelEl)
+      if (!action) return false
+      action.click()
+      return true
+    })
+  })
 </script>
 
 <svelte:window
@@ -240,6 +261,7 @@
       ? 'invisible pointer-events-none'
       : ''}"
     style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;"
+    bind:this={panelEl}
     role="dialog"
     aria-label={title}
   >
@@ -286,7 +308,10 @@
     <div class="min-h-0 flex-1 overflow-y-auto p-4">{@render children()}</div>
 
     {#if footer}
-      <div class="flex shrink-0 items-center justify-end gap-2 border-t bg-surface px-4 py-3">
+      <div
+        class="flex shrink-0 items-center justify-end gap-2 border-t bg-surface px-4 py-3"
+        data-modal-footer
+      >
         {@render footer()}
       </div>
     {/if}

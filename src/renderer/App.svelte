@@ -33,6 +33,7 @@
   import { SvelteMap } from 'svelte/reactivity'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
+  import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import {
     rendererRecovery,
     isSettingsSection,
@@ -1582,6 +1583,16 @@
   /** Global application shortcuts. */
   function onKeydown(e: KeyboardEvent): void {
     const isMac = window.api?.windowInfo?.platform === 'darwin'
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      // ⌘/Ctrl+Enter runs the topmost open modal's primary action. The shared
+      // LIFO registry (modal-primary-action.svelte.ts) resolves which modal is
+      // in focus; when no modal claims the chord, composers (chat send, git
+      // commit, PR sheet) keep their existing focused-element behavior.
+      if (activateTopModalPrimaryAction()) {
+        e.preventDefault()
+        return
+      }
+    }
     if (e.key.toLowerCase() === 'w' && (isMac ? e.metaKey : e.ctrlKey)) {
       // Primary path is the main process `before-input-event` → the
       // `window:closeShortcut` event. This is a fallback for platforms where
