@@ -20,6 +20,7 @@ const rpcMock = vi.hoisted(() => {
     newSession: ReturnType<typeof vi.fn>
     prompt: ReturnType<typeof vi.fn>
     steer: ReturnType<typeof vi.fn>
+    followUp: ReturnType<typeof vi.fn>
     abort: ReturnType<typeof vi.fn>
     setModel: ReturnType<typeof vi.fn>
     setThinkingLevel: ReturnType<typeof vi.fn>
@@ -44,6 +45,7 @@ const rpcMock = vi.hoisted(() => {
       newSession: ReturnType<typeof vi.fn>
       prompt: ReturnType<typeof vi.fn>
       steer: ReturnType<typeof vi.fn>
+      followUp: ReturnType<typeof vi.fn>
       abort: ReturnType<typeof vi.fn>
       setModel: ReturnType<typeof vi.fn>
       setThinkingLevel: ReturnType<typeof vi.fn>
@@ -64,6 +66,7 @@ const rpcMock = vi.hoisted(() => {
         this.newSession = vi.fn(async () => undefined)
         this.prompt = vi.fn(async () => undefined)
         this.steer = vi.fn(async () => undefined)
+        this.followUp = vi.fn(async () => undefined)
         this.abort = vi.fn(async () => undefined)
         this.setModel = vi.fn(async () => undefined)
         this.setThinkingLevel = vi.fn(async () => undefined)
@@ -319,6 +322,131 @@ describe('PiDriver', () => {
       state
     )
     expect(result?.events ?? []).toHaveLength(0)
+  })
+
+  it('claims an oversized-request failure as a compact-and-continue recovery', async () => {
+    const driver = new PiDriver(await storage())
+    const events: SessionAgentEvent[] = []
+    driver.onEvent((event) => events.push(event as SessionAgentEvent))
+    const sessionId = await driver.createSession('/project', 'Pi')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.client
+    const oversizedError =
+      'Error from provider (Console Go): Upstream request failed: [invalid_request_error] Request body exceeds the 4.5 MiB limit.'
+    client.emit({
+      type: 'turn_end',
+      message: {
+        id: 'assistant-1',
+        role: 'assistant',
+        stopReason: 'error',
+        errorMessage: oversizedError
+      }
+    })
+    client.emit({ type: 'agent_settled' })
+    await vi.waitFor(() => {
+      expect(client.compact).toHaveBeenCalled()
+      expect(client.prompt).toHaveBeenCalledWith('Continue.')
+    })
+    // The driver claims the failure: no session.error reaches the engine.
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: 'session.error', sessionId })
+    )
+  })
+
+  it('arms oversized-recovery stripping during recovery and disarms on success', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+    const sessionId = await driver.createSession('/project', 'Pi')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.client
+    const oversizedError =
+      'Error from provider (Console Go): Upstream request failed: [invalid_request_error] Request body exceeds the 4.5 MiB limit.'
+    client.emit({
+      type: 'turn_end',
+      message: {
+        id: 'assistant-1',
+        role: 'assistant',
+        stopReason: 'error',
+        errorMessage: oversizedError
+      }
+    })
+    client.emit({ type: 'agent_settled' })
+    const flagPath = join(
+      'runtime',
+      'cio-core-tools',
+      sessionId,
+      'oversized-recovery.json'
+    )
+    await vi.waitFor(async () => {
+      const flag = JSON.parse(String(await engine.readRaw(flagPath))) as { armed: boolean }
+      expect(flag.armed).toBe(true)
+    })
+    // A successful provider completion stands the stripping back down.
+    client.emit({
+      type: 'turn_end',
+      message: {
+        id: 'assistant-2',
+        role: 'assistant',
+        stopReason: 'stop',
+        content: [{ type: 'text', text: 'done' }]
+      }
+    })
+    client.emit({ type: 'agent_settled' })
+    await vi.waitFor(async () => {
+      const flag = JSON.parse(String(await engine.readRaw(flagPath))) as { armed: boolean }
+      expect(flag.armed).toBe(false)
+    })
+  })
+
+  it('embeds the oversized-recovery flag path in the composed extension module', async () => {
+    const source = await storage()
+    const driver = new PiDriver(source)
+    const sessionId = await driver.createSession('/project', 'Pi')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const moduleSource = String(
+      await source.readRaw(join('runtime', 'cio-core-tools', sessionId, 'cio-core-tools.ts'))
+    )
+    expect(moduleSource).toContain("pi.on('context'")
+    expect(moduleSource).toContain('oversized-recovery.json')
+  })
+
+  it('surfaces the failure after the oversized-recovery cap is exhausted', async () => {
+    const driver = new PiDriver(await storage())
+    const events: SessionAgentEvent[] = []
+    driver.onEvent((event) => events.push(event as SessionAgentEvent))
+    const sessionId = await driver.createSession('/project', 'Pi')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.client
+    const oversizedError =
+      'Error from provider (Console Go): Upstream request failed: [invalid_request_error] Request body exceeds the 4.5 MiB limit.'
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      client.emit({
+        type: 'turn_end',
+        message: {
+          id: `assistant-${attempt}`,
+          role: 'assistant',
+          stopReason: 'error',
+          errorMessage: oversizedError
+        }
+      })
+      client.emit({ type: 'agent_settled' })
+      if (attempt < 3) {
+        await vi.waitFor(() => {
+          expect(client.compact).toHaveBeenCalledTimes(attempt + 1)
+        })
+      }
+    }
+    expect(client.compact).toHaveBeenCalledTimes(3)
+    expect(client.prompt).toHaveBeenCalledTimes(4)
+    await vi.waitFor(() => {
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'message.completed',
+          sessionId,
+          error: oversizedError
+        })
+      )
+    })
   })
 
   it('falls back to the bundled catalog when model discovery is empty', async () => {

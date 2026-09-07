@@ -30,6 +30,7 @@
  */
 
 import { piCoreToolsExtension } from './pi-core-tools-extension'
+import { piOversizedRecoveryExtension } from './pi-oversized-recovery-extension'
 import { piStatusExtension } from './pi-status-extension'
 import { piUsageExtension } from './pi-usage-extension'
 import { piUtilityGatewayExtension } from './pi-utility-gateway-extension'
@@ -60,6 +61,9 @@ export interface CioCoreToolsExtensionOptions {
    *  resolver has not been materialized yet; the gateway tools then skip
    *  host-level recovery. */
   retrieveScriptPath: string
+  /** Absolute path of the per-session oversized-request recovery arm/disarm
+   *  flag file the driver rewrites during oversized-body error recovery. */
+  oversizedFlagPath: string
 }
 
 /** Split a generated extension module into its import statements and body. */
@@ -146,7 +150,8 @@ export function piCioCoreToolsExtension(options: CioCoreToolsExtensionOptions): 
     { factory: '__cioStatusExtension', source: piStatusExtension() },
     { factory: '__cioUsageExtension', source: piUsageExtension() },
     { factory: '__cioGatewayExtension', source: piUtilityGatewayExtension() },
-    { factory: '__cioCoreToolsExtension', source: piCoreToolsExtension() }
+    { factory: '__cioCoreToolsExtension', source: piCoreToolsExtension() },
+    { factory: '__cioOversizedRecoveryExtension', source: piOversizedRecoveryExtension() }
   ]
   const parsed = sources.map((entry) => {
     const split = splitGeneratedModule(entry.source)
@@ -169,6 +174,7 @@ export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void 
   __cioUsageExtension()(pi)
   __cioGatewayExtension()(pi)
   __cioCoreToolsExtension()(pi)
+  __cioOversizedRecoveryExtension()(pi)
 }
 `
     .replace('__HANDOFF_PATH__', JSON.stringify(options.gatewayHandoffPath).slice(1, -1))
@@ -176,4 +182,5 @@ export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void 
     .replace('__CIO_ALLOWED_TOOLS_PATH__', JSON.stringify(options.allowedToolsPath).slice(1, -1))
     .replace('__CIO_SESSION_ID__', JSON.stringify(options.sessionId).slice(1, -1))
     .replace('__CIO_RETRIEVE_SCRIPT__', JSON.stringify(options.retrieveScriptPath).slice(1, -1))
+    .replace('__CIO_OVERSIZED_FLAG_PATH__', JSON.stringify(options.oversizedFlagPath).slice(1, -1))
 }

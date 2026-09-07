@@ -373,6 +373,18 @@ export function isContinuableFinishReasonError(error: string): boolean {
   return match !== null && match[1] !== 'content_filter'
 }
 
+/**
+ * True when a provider rejected the request because the serialized body exceeds
+ * a hard byte limit (e.g. "Upstream request failed: [invalid_request_error]
+ * Request body exceeds the 4.5 MiB limit."). Token-based auto-compaction never
+ * sees this coming — images and large tool results blow the byte budget long
+ * before the token window fills — so the driver recovers by compacting the
+ * transcript (which replaces bulky history with a summary) and re-prompting.
+ */
+export function isOversizedRequestError(error: string): boolean {
+  return /request body exceeds[\w\s.]*limit/iu.test(error)
+}
+
 /** The extension tool whose calls render as sub-agent activity cards. */
 const CIO_SPAWN_TOOL = CIO_SPAWN_AGENT_TOOL_NAME
 
@@ -689,10 +701,15 @@ interface PiSilentContinueState {
   attempts: number
   owed: boolean
   lastError: string
+  /** The failure was an oversized request body — compact before continuing. */
+  compactFirst?: boolean
 }
 
 /** Silent continues per turn before the failure is surfaced as a real error. */
 const SILENT_CONTINUE_MAX_ATTEMPTS = 10
+
+/** Compact-and-continue recoveries per turn for oversized request bodies. */
+const OVERSIZED_COMPACT_MAX_ATTEMPTS = 3
 
 /** Map one documented Pi JSON print-mode record into CodeInOven's stable shapes. */
 export function mapPiRecord(
@@ -977,7 +994,8 @@ export function mapPiRecord(
     const cost = mapPiCost(message['usage'])
     const rawError = errorText(message)
     const continuable =
-      message['stopReason'] === 'error' && isContinuableFinishReasonError(rawError)
+      message['stopReason'] === 'error' &&
+      (isContinuableFinishReasonError(rawError) || isOversizedRequestError(rawError))
     const failed =
       (message['stopReason'] === 'error' && !continuable) || message['stopReason'] === 'aborted'
     const completed: SessionAgentEvent = {
@@ -1193,7 +1211,10 @@ function buildAssistantMessage(
   const cost = mapPiCost(message['usage'])
   const rawError = errorText(message)
   const continuableError =
-    message['stopReason'] === 'error' && isContinuableFinishReasonError(rawError) ? rawError : null
+    message['stopReason'] === 'error' &&
+    (isContinuableFinishReasonError(rawError) || isOversizedRequestError(rawError))
+      ? rawError
+      : null
   const failed =
     (message['stopReason'] === 'error' && continuableError === null) ||
     message['stopReason'] === 'aborted'
@@ -1578,6 +1599,8 @@ export class PiDriver extends PersistentCliDriver {
   /** Storage-relative allowed-tools handoff file per session, rewritten per turn
    *  so the extension's tool gate reflects the current File-System setting. */
   private cioAllowedToolsPaths = new Map<string, string>()
+  /** Storage-relative arm/disarm flag files for oversized-request recovery. */
+  private cioOversizedFlagPaths = new Map<string, string>()
   /** Session-keyed absolute paths to the materialized single "cio-core-tools"
    *  extension module (status + usage + gateway + core tools composed), passed
    *  to `--extension`. */
@@ -2713,6 +2736,9 @@ export class PiDriver extends PersistentCliDriver {
               state.attempts = 0
               this.silentContinues.set(session.id, state)
             }
+            // The provider accepted a request again — stand the oversized
+            // recovery context stripping down so future turns send full media.
+            void this.publishOversizedRecovery(session.id, false)
           }
           // A continuable finish-reason flake is claimed by the driver: strip
           // the marker and never let the errored completion reach the engine,
@@ -2720,6 +2746,7 @@ export class PiDriver extends PersistentCliDriver {
           // recover from. The empty assistant message is dropped from the
           // mirror so the user never sees a blank failed turn.
           if (event.type === 'message.completed' && event.silentContinue) {
+            const compactFirst = isOversizedRequestError(event.silentContinue.error)
             const state = this.silentContinues.get(session.id) ?? {
               attempts: 0,
               owed: false,
@@ -2728,9 +2755,13 @@ export class PiDriver extends PersistentCliDriver {
             state.lastError = event.silentContinue.error
             const { silentContinue, ...clean } = event
             void silentContinue
-            if (state.attempts < SILENT_CONTINUE_MAX_ATTEMPTS) {
+            const maxAttempts = compactFirst
+              ? OVERSIZED_COMPACT_MAX_ATTEMPTS
+              : SILENT_CONTINUE_MAX_ATTEMPTS
+            if (state.attempts < maxAttempts) {
               state.owed = true
               state.attempts += 1
+              state.compactFirst = compactFirst
               this.silentContinues.set(session.id, state)
               // Mark the flaked message complete (without the error) so the
               // mirror stays consistent; content-bearing messages are kept.
@@ -2806,10 +2837,94 @@ export class PiDriver extends PersistentCliDriver {
       this.failSilentContinue(session, state.lastError)
       return true
     }
+    if (state.compactFirst) {
+      void this.compactAndContinue(session, client, state)
+      return true
+    }
     void client.prompt('Continue.').catch((error: unknown) => {
       this.failSilentContinue(session, error instanceof Error ? error.message : state.lastError)
     })
     return true
+  }
+
+  /**
+   * Recover an oversized-request-body failure: compact the transcript so the
+   * replayed history collapses into a summary and the next request fits the
+   * provider's byte limit, then re-prompt. The turn stays active throughout —
+   * the compaction run's own `agent_settled` is swallowed by the `compacting`
+   * turn-state flag, and the continuation run finalizes the turn normally.
+   */
+  private async compactAndContinue(
+    session: PersistentCliSession,
+    client: PiRpcClient,
+    state: PiSilentContinueState
+  ): Promise<void> {
+    const projectPath = this.sessionProjects.get(session.id)
+    if (!projectPath) {
+      this.failSilentContinue(session, state.lastError)
+      return
+    }
+    const turnState = this.turnStates.get(session.id)
+    this.turnStates.set(session.id, {
+      assistantMessageId: turnState?.assistantMessageId ?? null,
+      turnIndex: Math.max(turnState?.turnIndex ?? 0, latestPiTurnIndex(session.messages, session.id)),
+      compacting: true
+    })
+    try {
+      const result = await client.compact()
+      await this.handleRpcEvent({ type: 'compaction_end', result }, session.id, projectPath)
+    } catch (error) {
+      this.turnStates.set(session.id, {
+        ...(this.turnStates.get(session.id) ?? { assistantMessageId: null, turnIndex: 0 }),
+        compacting: false
+      })
+      this.failSilentContinue(
+        session,
+        error instanceof Error ? error.message : state.lastError
+      )
+      return
+    }
+    // Clear the compacting flag before starting the continuation so the
+    // compaction run's `agent_settled` (if any) finalizes cleanly and the
+    // continuation run owns the turn from there.
+    const settled = this.turnStates.get(session.id)
+    if (settled) this.turnStates.set(session.id, { ...settled, compacting: false })
+    // `prompt` — not `followUp` — is the only correct continuation here. pi's
+    // `compact` RPC aborts the run and settles to idle before summarizing, and
+    // queued follow-ups are drained exclusively at the end of an active run,
+    // so a follow-up queued into an idle session is never delivered (the turn
+    // silently stalls — pi's own TUI re-prompts after compaction for the same
+    // reason). A fresh prompt starts the new run when idle.
+    // Arm the oversized-recovery extension before the continuation: the
+    // compaction kept the recent transcript tail intact, and that tail is
+    // exactly where multi-hundred-KB base64 image tool results live —
+    // compaction alone cannot bring the request body under the provider's
+    // byte limit. While armed, the extension's `context` hook strips image
+    // parts and oversized text from the REQUEST copy only; the transcript
+    // keeps the originals. Disarmed again on the first successful completion.
+    await this.publishOversizedRecovery(session.id, true)
+    try {
+      await client.prompt('Continue.')
+    } catch (error) {
+      await this.publishOversizedRecovery(session.id, false)
+      this.failSilentContinue(
+        session,
+        error instanceof Error ? error.message : state.lastError
+      )
+    }
+  }
+
+  /** Rewrite the session's oversized-recovery arm/disarm flag file. A missing
+   *  materialized path (extension failed to load) means the next provider
+   *  request goes out unmodified — never blocks the turn. */
+  private async publishOversizedRecovery(sessionId: string, armed: boolean): Promise<void> {
+    const path = this.cioOversizedFlagPaths.get(sessionId)
+    if (!path) return
+    try {
+      await this.storage.writeRaw(path, JSON.stringify({ armed }))
+    } catch (error) {
+      Logger.dev('Pi core-tools oversized-recovery flag update failed:', error)
+    }
   }
 
   /** Remove a session's gateway handoff file and forget its path. */
@@ -3237,18 +3352,21 @@ export class PiDriver extends PersistentCliDriver {
       const handoffRelative = join(directory, 'gateway-handoff.json')
       const systemPromptRelative = join(directory, 'system-prompt.txt')
       const allowedToolsRelative = join(directory, 'allowed-tools.json')
+      const oversizedFlagRelative = join(directory, 'oversized-recovery.json')
       const extensionRelative = join(directory, 'cio-core-tools.ts')
       // Empty endpoint values: the gateway tools surface a clear gateway-inactive
       // error until the first direct-gateway turn publishes the real { url, token }.
       await this.storage.writeRaw(handoffRelative, JSON.stringify({ url: '', token: '' }))
       await this.storage.writeRaw(systemPromptRelative, '')
       await this.storage.writeRaw(allowedToolsRelative, '[]')
+      await this.storage.writeRaw(oversizedFlagRelative, JSON.stringify({ armed: false }))
       await this.storage.writeRaw(
         extensionRelative,
         piCioCoreToolsExtension({
           gatewayHandoffPath: this.storage.resolve(handoffRelative),
           systemPromptPath: this.storage.resolve(systemPromptRelative),
           allowedToolsPath: this.storage.resolve(allowedToolsRelative),
+          oversizedFlagPath: this.storage.resolve(oversizedFlagRelative),
           sessionId,
           // Same durable resolver the orchestration service publishes for the
           // prose recovery path; the gateway tools use it for host-level
@@ -3261,6 +3379,7 @@ export class PiDriver extends PersistentCliDriver {
       this.gatewayHandoffPaths.set(sessionId, handoffRelative)
       this.cioSystemPromptPaths.set(sessionId, systemPromptRelative)
       this.cioAllowedToolsPaths.set(sessionId, allowedToolsRelative)
+      this.cioOversizedFlagPaths.set(sessionId, oversizedFlagRelative)
       const extensionAbsolute = this.storage.resolve(extensionRelative)
       this.cioCoreToolsExtensionPaths.set(sessionId, extensionAbsolute)
       // Flush an endpoint that arrived before this materialization (first turn
