@@ -1,4 +1,6 @@
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
+import { app } from 'electron'
+import { isAbsolute, relative } from 'node:path'
 import type { HarnessUpdateHandoff, HarnessUpdateStatus } from '../../lib/types'
 import { findHarness, listHarnesses } from './harness-registry'
 import type { ProviderConnectionService } from '../providers/provider-connection'
@@ -56,6 +58,24 @@ const UPDATE_ARGS: Record<string, string[]> = {
 }
 
 const VERSION_PATTERN = /\b(v?\d+\.\d+\.\d+)/u
+
+/**
+ * Whether a resolved harness binary belongs to the CodeInOven application
+ * itself rather than a user install — e.g. `node_modules/.bin/pi.exe` inside
+ * a dev checkout. App-owned copies update with the app, so self-update must
+ * never be offered (it would mutate the app's own dependencies).
+ */
+function isAppOwnedInstall(resolvedPath: string | undefined): boolean {
+  if (!resolvedPath) return false
+  const appRoot = app.getAppPath()
+  const relativePath = relative(appRoot, resolvedPath)
+  const inside = relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))
+  if (inside || process.platform !== 'win32') return inside
+  // Windows is case-insensitive; a differing drive-letter casing would
+  // otherwise report an app-owned path as user-owned.
+  const lowerRelative = relative(appRoot.toLowerCase(), resolvedPath.toLowerCase())
+  return lowerRelative === '' || (!lowerRelative.startsWith('..') && !isAbsolute(lowerRelative))
+}
 
 /** Pull the first `major.minor.patch` sequence out of a `--version` line. */
 function extractVersion(output: string): string | undefined {
@@ -198,7 +218,10 @@ export class HarnessUpdateService {
     }
 
     const currentVersion = provider.version ? extractVersion(provider.version) : undefined
-    if (provider.executionTarget?.kind === 'bundled') {
+    if (
+      provider.executionTarget?.kind === 'bundled' ||
+      isAppOwnedInstall(provider.resolvedPath)
+    ) {
       return this.settle(harnessId, {
         ...base,
         currentVersion,
@@ -258,7 +281,10 @@ export class HarnessUpdateService {
       throw new Error(`No self-update command is configured for harness: ${harnessId}`)
     }
     const provider = this.providers.getAll().find((candidate) => candidate.id === harnessId)
-    if (provider?.executionTarget?.kind === 'bundled') {
+    if (
+      provider?.executionTarget?.kind === 'bundled' ||
+      isAppOwnedInstall(provider?.resolvedPath)
+    ) {
       throw new Error(`${definition.name} is bundled with CodeInOven — it updates with the app.`)
     }
     const prepared =
