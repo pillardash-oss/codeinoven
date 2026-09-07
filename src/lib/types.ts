@@ -2113,6 +2113,10 @@ export interface CustomProviderUsage {
 export interface ThreadContextUsage extends AgentContextUsage {
   harnessId: string
   providerId: string
+  /** Model the usage was reported under. A snapshot from a different model
+   *  carries that model's context window, so it must never seed a meter (or
+   *  drive an auto-compaction decision) for the newly selected model. */
+  modelId?: string
 }
 
 /** One row of cumulative per-harness analytics keyed by (thread, harness, provider). */

@@ -1098,9 +1098,22 @@ export class ThreadManager {
 
     const loopWasEnabled = existing.settings?.loopMode === true
     const loopIsEnabled = settings.loopMode === true
+    const previous = existing.settings
+    // The persisted usage snapshot describes the previous harness/provider AND
+    // model: its context window and occupancy belong to that model's window.
+    // Carrying it across a selection change would seed the meter (and any
+    // auto-compaction decision) with a foreign context window — e.g. a 1M-token
+    // reading judging a 256k-token model. Evacuate it on any selection change;
+    // the next reported turn re-seeds it under the new selection.
+    const selectionChanged =
+      previous !== undefined &&
+      (previous.harnessId !== settings.harnessId ||
+        previous.providerId !== settings.providerId ||
+        previous.modelId !== settings.modelId)
     const updated: Thread = {
       ...existing,
       settings,
+      ...(selectionChanged ? { contextUsage: undefined } : {}),
       loopIteration: loopIsEnabled
         ? loopWasEnabled
           ? (existing.loopIteration ?? 0)
