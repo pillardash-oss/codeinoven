@@ -173,6 +173,13 @@ Release builds are available for:
 ### Troubleshooting
 
 - **Windows on ARM:** if `bun install` fails with `ffmpeg-static install failed: No binary found for architecture`, see [Windows on ARM: ffmpeg install note](#windows-on-arm-ffmpeg-install-note) — set `FFMPEG_BIN` to an x64 ffmpeg and run `bun install --ignore-scripts`.
+- **Windows on ARM (native build):** `better-sqlite3` has no prebuilt win32-arm64 binary, so `bun install` rebuilds it from source and requires the Visual Studio C++ toolset. If you get `error MSB8020: The build tools for v145 cannot be found`, install the C++ BuildTools workload:
+
+  ```powershell
+  winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+  ```
+
+  Make sure **MSVC build tools** and a **Windows SDK** are selected in the installer, then re-run `bun install`.
 - If a harness is not detected, verify the CLI is on `PATH` and authenticated.
 - Use exported diagnostics when reporting issues.
 - Thread recovery handles interrupted work on restart.
