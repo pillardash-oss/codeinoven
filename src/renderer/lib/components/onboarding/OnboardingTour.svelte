@@ -97,6 +97,7 @@
   let calloutTop = $state(0)
   let calloutLeft = $state(0)
   let nextButton = $state<HTMLButtonElement | undefined>(undefined)
+  let calloutEl = $state<HTMLDivElement | undefined>(undefined)
   let installOpened = $state(false)
   let installBusy = $state(false)
   let installError = $state('')
@@ -128,7 +129,7 @@
     }
 
     const cardWidth = 340
-    const cardHeight = step === 4 ? 270 : 220
+    const cardHeight = calloutEl?.offsetHeight ?? (step === 4 ? 270 : 220)
     const gap = 16
     const below = targetRect.top + targetRect.height + gap
     const above = targetRect.top - cardHeight - gap
@@ -143,6 +144,17 @@
       Math.max(16, window.innerWidth - cardWidth - 16)
     )
   }
+
+  /** Re-position once the callout has rendered — the initial placement uses a
+   *  height estimate, the real card can be taller and must not overflow. */
+  $effect(() => {
+    if (!activeSpotlight) return
+    void tick().then(() => {
+      if (calloutEl && Math.abs(calloutEl.offsetHeight - (step === 4 ? 270 : 220)) > 1) {
+        measureTarget()
+      }
+    })
+  })
 
   function nextStep(): void {
     onStepChange(step < 5 ? step + 1 : 6)
@@ -281,7 +293,8 @@
       {/if}
 
       <div
-        class="fixed w-[340px] rounded-2xl border bg-surface p-5 shadow-xl"
+        bind:this={calloutEl}
+        class="fixed max-h-[calc(100vh-2rem)] w-[340px] overflow-y-auto rounded-2xl border bg-surface p-5 shadow-xl"
         style:top={`${calloutTop}px`}
         style:left={`${calloutLeft}px`}
         role="dialog"
