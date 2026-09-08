@@ -70,6 +70,8 @@
   } from '$shared/types'
   import { SvelteSet } from 'svelte/reactivity'
   import { type Component } from 'svelte'
+  import { shortcutHint } from '$lib/shortcut-hint'
+  import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
 
   type View = MainView
 
@@ -655,6 +657,7 @@
             class="flex h-full items-center gap-1.5 px-2.5 transition-colors duration-150 {projectViewActive
               ? 'text-app'
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
+            use:shortcutHint={{ keys: ['mod', '4'] }}
             aria-label={projectViewActive ? 'Exit scope view' : 'Open scope view'}
             title="Scope"
             onmouseenter={() => {
@@ -676,6 +679,7 @@
                 ? 'Show Threads sidebar'
                 : 'Hide Threads sidebar'
               : 'Open Threads'}
+            use:shortcutHint={{ keys: ['mod', '2'] }}
             title="Threads"
             onmouseenter={() => preloadNavigationThreads('projects')}
             onclick={() => void onPrimaryNavClick('threads')}
@@ -697,6 +701,7 @@
                 ? 'Show Projects sidebar'
                 : 'Hide Projects sidebar'
               : 'Open Projects'}
+            use:shortcutHint={{ keys: ['mod', '1'] }}
             title="Projects"
             onmouseenter={() => preloadNavigationThreads('projects')}
             onclick={() => void onPrimaryNavClick('projects')}
@@ -714,6 +719,7 @@
               ? 'text-app'
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
             aria-label={scopeState.sidebarContext ? 'Exit scope state' : 'Show scope state'}
+            use:shortcutHint={{ keys: ['mod', '3'] }}
             title="Scope state"
             onmouseenter={() => preloadNavigationThreads('projects')}
             onclick={() => void toggleProjectScopeState()}
@@ -758,6 +764,13 @@
                 >
                   <Icon size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
                   <span class="flex-1 truncate">{option.label}</span>
+                  {#if option.id === 'projects'}
+                    <ShortcutHint keys={['mod', '1']} />
+                  {:else if option.id === 'threads'}
+                    <ShortcutHint keys={['mod', '2']} />
+                  {:else if option.id === 'scope'}
+                    <ShortcutHint keys={['mod', '4']} />
+                  {/if}
                   {#if isSelected}
                     <Check size={14} class="text-primary" />
                   {/if}
@@ -783,6 +796,7 @@
           ? 'Show Chats sidebar'
           : 'Hide Chats sidebar'
         : 'Open Chats'}
+      use:shortcutHint={{ keys: ['mod', '0'] }}
       title="Chats"
       onmouseenter={() => preloadNavigationThreads('chats')}
       onclick={() => void onPrimaryNavClick('chats')}
