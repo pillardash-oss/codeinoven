@@ -140,7 +140,7 @@
     bind:this={menuEl}
     bind:clientWidth={menuWidth}
     bind:clientHeight={menuHeight}
-    class="fixed z-50 min-w-44 rounded-lg border border-border bg-popover p-1 shadow-xl"
+    class="fixed z-50 min-w-44 rounded-lg border border-border bg-surface p-1 shadow-xl"
     style={positionStyle}
     role="menu"
   >
