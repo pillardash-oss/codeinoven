@@ -2584,6 +2584,8 @@ export interface CloseConfirmationPayload {
 }
 
 export type AgentNotificationKind = 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
+/** Which bundled alert the renderer should play for a notification. */
+export type NotificationSoundKind = 'default' | 'attention'
 
 /** Where a notification originated: a project thread, the global chat (inbox),
  *  or a temporary (side) chat piped through a parent thread. */
@@ -2710,7 +2712,7 @@ export interface IpcEventContract {
   'thread:deleted': [projectId: string, threadId: string]
   /** Note presence changed for a thread (saved or deleted). */
   'note:changed': [projectId: string, threadId: string, hasNote: boolean]
-  'notification:playSound': []
+  'notification:playSound': [kind: NotificationSoundKind]
   'notification:show': [payload: AgentNotificationPayload]
   'notification:threadClicked': [payload: ThreadClickedPayload]
   /** macOS notification authorization changed (delivery outcome or re-verification). */

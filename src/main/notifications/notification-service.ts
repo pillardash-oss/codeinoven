@@ -21,6 +21,7 @@ import { THREAD_STATUSES, threadStatusPolicy } from '../../lib/thread-status-pol
 import type {
   AgentNotificationKind,
   AgentNotificationPayload,
+  NotificationSoundKind,
   NotificationSource,
   SystemNotificationPermissionStatus,
   SystemNotificationTestResult,
@@ -534,7 +535,7 @@ export class NotificationService {
       .catch((error) => Logger.dev('Remote Web Push notification failed:', error))
 
     if (this.appFocused()) return
-    this.dispatchNotificationSound(windows)
+    this.dispatchNotificationSound(payload.kind === 'attention' ? 'attention' : 'default', windows)
     const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
       if (!this.unsupportedLogged) {
@@ -630,7 +631,7 @@ export class NotificationService {
       .catch((error) => Logger.dev('Remote Web Push notification failed:', error))
 
     if (this.appFocused()) return
-    this.dispatchNotificationSound(windows)
+    this.dispatchNotificationSound(payload.kind === 'attention' ? 'attention' : 'default', windows)
     const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
       if (!this.unsupportedLogged) {
@@ -830,7 +831,10 @@ export class NotificationService {
    * the decision is deterministic and the first sound is dispatched the moment
    * its notification arrives, instead of seconds after the OS card appears.
    */
-  private dispatchNotificationSound(windows = BrowserWindow.getAllWindows()): boolean {
+  private dispatchNotificationSound(
+    sound: NotificationSoundKind = 'default',
+    windows = BrowserWindow.getAllWindows()
+  ): boolean {
     const soundWindow = windows.find(
       (window) => !window.isDestroyed() && !window.webContents.isDestroyed()
     )
@@ -840,7 +844,7 @@ export class NotificationService {
     if (now - this.lastNotificationSoundPlayedAt < NOTIFICATION_SOUND_DEDUP_MS) return false
     this.lastNotificationSoundPlayedAt = now
 
-    return sendToRenderer(soundWindow.webContents, 'notification:playSound')
+    return sendToRenderer(soundWindow.webContents, 'notification:playSound', sound)
   }
 
   private retainNotification(key: string, notification: Notification): void {
