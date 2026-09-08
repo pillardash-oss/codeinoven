@@ -46,6 +46,11 @@ interface GeneratedImport {
 }
 
 export interface CioCoreToolsExtensionOptions {
+  /** One-shot sessions (title generation, grading, lessons) run pure text
+   *  prompts: the extension then registers no gateway or interactive tools
+   *  and skips the permission gate entirely, so the model request carries
+   *  only pi's own built-ins plus the status/usage/compaction plumbing. */
+  oneShot?: boolean
   /** Absolute path of the per-session utility-gateway handoff file. */
   gatewayHandoffPath: string
   /** Absolute path of the per-session system-prompt handoff file. */
@@ -172,8 +177,8 @@ export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void 
   // introduced and this invocation fixed).
   __cioStatusExtension()(pi)
   __cioUsageExtension()(pi)
-  __cioGatewayExtension()(pi)
-  __cioCoreToolsExtension()(pi)
+__CIO_INTERACTIVE_TOOLS__  __cioGatewayExtension()(pi)
+__CIO_INTERACTIVE_TOOLS__  __cioCoreToolsExtension()(pi)
   __cioCompactionExtension()(pi)
 }
 `
@@ -183,4 +188,10 @@ export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void 
     .replace('__CIO_SESSION_ID__', JSON.stringify(options.sessionId).slice(1, -1))
     .replace('__CIO_RETRIEVE_SCRIPT__', JSON.stringify(options.retrieveScriptPath).slice(1, -1))
     .replace('__CIO_OVERSIZED_FLAG_PATH__', JSON.stringify(options.oversizedFlagPath).slice(1, -1))
+    // One-shot sessions strip the interactive tool factories at generation
+    // time (not runtime), so the materialized module never even imports them.
+    .replaceAll(
+      '__CIO_INTERACTIVE_TOOLS__',
+      options.oneShot === true ? '// ' : ''
+    )
 }

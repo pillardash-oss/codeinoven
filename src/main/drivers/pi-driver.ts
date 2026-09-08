@@ -3462,6 +3462,11 @@ export class PiDriver extends PersistentCliDriver {
       await this.storage.writeRaw(
         extensionRelative,
         piCioCoreToolsExtension({
+          // One-shot sessions (title, grading, lessons) are pure text turns:
+          // they never publish a gateway endpoint, so the gateway/interactive
+          // tools would only bloat the model request and invite spurious
+          // tool calls. Status/usage/compaction stay for every session.
+          oneShot: this.isTitleSession(sessionId),
           gatewayHandoffPath: this.storage.resolve(handoffRelative),
           systemPromptPath: this.storage.resolve(systemPromptRelative),
           allowedToolsPath: this.storage.resolve(allowedToolsRelative),
