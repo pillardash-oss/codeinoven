@@ -17942,8 +17942,9 @@ export class ChatEngine {
           // re-open the just-completed checkpoint so the late work is captured
           // in the same turn's card instead of vanishing.
           const latePaths = changedPathsFromTool(session.projectPath, part)
-          if (latePaths.length > 0 || UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
-            void this.reopenSettledTurnForLateClaim(session, latePaths)
+          const unboundedLate = UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))
+          if (latePaths.length > 0 || unboundedLate) {
+            void this.reopenSettledTurnForLateClaim(session, latePaths, unboundedLate)
           }
         }
         if (session?.activeTurnId) {
@@ -18209,7 +18210,8 @@ export class ChatEngine {
    *  cannot race two reopens of the same row. */
   private reopenSettledTurnForLateClaim(
     session: SessionInfo,
-    claimedPaths: readonly string[]
+    claimedPaths: readonly string[],
+    unboundedClaim = false
   ): Promise<void> {
     const run = async (): Promise<void> => {
       if (session.activeTurnId) return
@@ -18228,6 +18230,26 @@ export class ChatEngine {
       session.unboundedWindowStart = undefined
       session.pendingWindowScans = undefined
       for (const path of claimedPaths) session.changedPaths.add(path)
+      if (unboundedClaim) {
+        // A shell-like tool exposes no target paths, so its mutations must be
+        // read off the workspace instead. Diff the current content against the
+        // reopened checkpoint's turn-start snapshot — precisely the files this
+        // turn's late shell commands wrote. Foreign-thread claims are still
+        // excluded later at completion; the user's own edits are excluded here.
+        try {
+          const shellPaths = await this.checkpointManager.changedPathsSince(
+            session.projectId,
+            session.projectPath,
+            checkpoint.before
+          )
+          for (const path of shellPaths) {
+            if (session.userTouchedPaths?.has(path)) continue
+            session.changedPaths.add(path)
+          }
+        } catch (error) {
+          Logger.dev('late-claim shell attribution failed:', error)
+        }
+      }
     }
     const pending = (session.pendingReopen ?? Promise.resolve())
       .then(run)

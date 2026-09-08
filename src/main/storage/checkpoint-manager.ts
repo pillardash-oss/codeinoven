@@ -214,6 +214,23 @@ export class CheckpointManager {
     })
   }
 
+  /** Paths whose current content differs from a checkpoint's before-snapshot.
+   *  Used to attribute shell-command mutations that arrived as a late claim
+   *  after their turn already settled — the workspace baseline is the turn's
+   *  own before-snapshot, so only this turn's real mutations are returned. */
+  async changedPathsSince(
+    projectId: string,
+    projectPath: string,
+    before: ProjectCheckpoint
+  ): Promise<string[]> {
+    assertId(projectId)
+    const tracker = this.tracker(projectId)
+    const after = await tracker.snapshot(projectPath, {
+      includeGitMetadata: before.git !== undefined
+    })
+    return tracker.calculateChanges(before, after).map((change) => change.path)
+  }
+
   /** Stat-only project scan used to attribute shell-command mutations to their run window. */
   fingerprint(projectId: string, projectPath: string): Promise<ProjectFingerprint> {
     assertId(projectId)
