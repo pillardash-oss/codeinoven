@@ -16,6 +16,22 @@ export function generatedTokens(tokens?: AgentTokenUsage | null): number {
   return Math.max(0, tokens.output ?? 0) + Math.max(0, tokens.reasoning ?? 0)
 }
 
+/** Rough tokens-per-character divisor for streamed-text estimation. */
+const CHARS_PER_TOKEN = 4
+
+/**
+ * Estimates generated tokens from streamed text/reasoning parts while the
+ * harness reports no usage during a turn. Approximate (~4 chars/token) — it
+ * only powers the live indicator until a real usage report arrives.
+ */
+export function estimateGeneratedTokens(parts: readonly { type: string; text?: string }[]): number {
+  let chars = 0
+  for (const part of parts) {
+    if ((part.type === 'text' || part.type === 'reasoning') && part.text) chars += part.text.length
+  }
+  return Math.round(chars / CHARS_PER_TOKEN)
+}
+
 /** Formats a generation rate as e.g. `40 tok/s` (grouped: `1,234 tok/s`). */
 export function formatTokenRate(tokensPerSecond: number): string {
   return `${Math.max(1, Math.round(tokensPerSecond)).toLocaleString()} tok/s`
@@ -32,21 +48,35 @@ export class LiveTokenRate {
   #tokens = $state(0)
   #startedAt = $state(0)
   #now = $state(0)
+  /** True while the window's token counts are stream-derived estimates rather
+   *  than harness-reported usage. Real reports always take precedence. */
+  #estimated = $state(false)
   #timer: ReturnType<typeof setInterval> | null = null
 
   get messageId(): string | null {
     return this.#messageId
   }
 
-  /** Feed one cumulative token report for the message currently streaming. */
-  observe(messageId: string, tokens?: AgentTokenUsage | null): void {
-    const generated = generatedTokens(tokens)
+  /** Feed one cumulative generated-token count for the message currently
+   *  streaming. Estimated counts (derived from streamed text while the
+   *  harness reports no usage) never override a real report. */
+  observe(messageId: string, generated: number, estimated = false): void {
     if (generated <= 0) return
     if (this.#messageId !== messageId) {
       this.#messageId = messageId
       this.#tokens = generated
       this.#startedAt = Date.now()
+      this.#estimated = estimated
     } else {
+      if (estimated && !this.#estimated) return
+      if (!estimated && this.#estimated) {
+        // A real report replaces the estimate wholesale: estimation bases and
+        // reported bases are not comparable.
+        this.#tokens = generated
+        this.#estimated = false
+        this.#now = Date.now()
+        return
+      }
       // Token counters are cumulative per turn; never regress on a reordered
       // or partial report.
       this.#tokens = Math.max(this.#tokens, generated)
@@ -75,6 +105,7 @@ export class LiveTokenRate {
     this.#tokens = 0
     this.#startedAt = 0
     this.#now = 0
+    this.#estimated = false
   }
 
   /** Current live rate, or `null` before the first token report. Reactive:

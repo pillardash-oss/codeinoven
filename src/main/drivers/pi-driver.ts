@@ -3375,14 +3375,12 @@ export class PiDriver extends PersistentCliDriver {
     try {
       const stats = record(await client.getSessionStats())
       const contextUsage = record(stats?.['contextUsage'])
-      const tokens = mapPiUsage(stats?.['tokens'])
       const cost =
         typeof stats?.['cost'] === 'number' ? (stats['cost'] as number) : mapPiCost(stats)
       const contextWindow = numberValue(contextUsage?.['contextWindow'])
       const contextUsed = numberValue(contextUsage?.['tokens'])
       const rateLimits = this.latestRateLimits.get(session.id)?.windows ?? []
       if (
-        tokens === undefined &&
         cost === undefined &&
         contextWindow === undefined &&
         contextUsed === undefined &&
@@ -3394,7 +3392,11 @@ export class PiDriver extends PersistentCliDriver {
         type: 'usage.updated',
         sessionId: session.id,
         messageId: lastAssistant.id,
-        ...(tokens ? { tokens } : {}),
+        // Session stats are CUMULATIVE across the whole session — attaching
+        // them as the message's `tokens` made per-message output counts (and
+        // any derived tokens/second rate) wildly inflated. Per-message usage
+        // was already reported by the message.completed event; this refresh
+        // only contributes cost, context occupancy, and rate-limit windows.
         ...(cost !== undefined ? { cost } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(contextUsed !== undefined ? { contextUsed } : {}),

@@ -244,7 +244,7 @@
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
-  import { LiveTokenRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
+  import { LiveTokenRate, estimateGeneratedTokens, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
@@ -591,9 +591,10 @@
   const liveTokenRate = new LiveTokenRate()
   /** Finalized per-message rates, recorded when a live turn settles. */
   let finalizedTokenRates = $state<Record<string, number>>({})
-  // Feed the live rate tracker from message-level token updates as well: some
-  // harnesses (OpenCode) attach cumulative tokens to message updates instead
-  // of emitting dedicated usage events. Cleared when the turn settles.
+  // Feed the live rate tracker: real usage reports take precedence; while the
+  // harness reports no usage during the turn, estimate generated tokens from
+  // the streamed text/reasoning parts so the live indicator works for every
+  // harness. Cleared when the turn settles.
   $effect(() => {
     if (!busy) return
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -601,8 +602,18 @@
       if (message.role !== 'assistant') continue
       // Only stream-observe an unfinished message so restored history can never
       // restart the clock for an old turn.
-      if (message.tokens && !message.completedAt) liveTokenRate.observe(message.id, message.tokens)
+      if (message.tokens && !message.completedAt) {
+        liveTokenRate.observe(message.id, generatedTokens(message.tokens), false)
+      }
       break
+    }
+    // The in-flight message streams through `streamParts` before its record is
+    // cached; estimate from those parts until a real token report lands.
+    if (streamParts.length > 0) {
+      const messageId = streamParts[streamParts.length - 1]?.messageID
+      if (messageId) {
+        liveTokenRate.observe(messageId, estimateGeneratedTokens(streamParts), true)
+      }
     }
   })
   // Intentional initial-value capture — the view is remounted (keyed) per thread.
@@ -4447,7 +4458,7 @@
       }
       case 'usage.updated': {
         if (event.sessionId !== sessionId) return
-        liveTokenRate.observe(event.messageId, event.tokens)
+        liveTokenRate.observe(event.messageId, generatedTokens(event.tokens), false)
         break
       }
       case 'session.idle': {
