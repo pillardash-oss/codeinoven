@@ -55,6 +55,12 @@ import {
 import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../../lib/prompt-budget'
 import { Logger } from '../system/logger'
 import { instanceRegistry } from '../system/instance-registry'
+import {
+  BRAINSTORM_ALIGNMENT_UTILITY_ID,
+  BRAINSTORM_ALIGNMENT_OPERATIONS,
+  BRAINSTORM_ALIGNMENT_NOTE_LIMIT,
+  brainstormAlignmentUtility
+} from '../../lib/brainstorm/brainstorm-alignment'
 
 const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 const RETRIEVE_MCP_HOST_ROUTE = '/retrieve-mcp-host'
@@ -111,6 +117,8 @@ export interface UtilityTurnRequest {
   executingModelVisionCapable?: boolean
   /** Explicit user intent grants the setup-only utility management operation. */
   allowManagement?: boolean
+  /** Present only for an active interview; the callback owns the exact note path/version. */
+  saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -338,6 +346,13 @@ export class UtilityOrchestrationService {
     })
     // Host recovery belongs to the transport, never to model-facing skills.
     eligible = eligible.filter(({ utility }) => utility.id !== APP_RETRIEVE_MCP_HOST_UTILITY_ID)
+    // This capability is bound to the live interview, never installed globally.
+    eligible = eligible.filter(({ utility }) => utility.id !== BRAINSTORM_ALIGNMENT_UTILITY_ID)
+    if (request.saveBrainstormNotes) {
+      eligible.push(
+        brainstormAlignmentUtility(request.harnessId, request.projectId, request.threadId)
+      )
+    }
     const hasNativeComputerUse = request.nativeCapabilities
       .map(normalizeCapability)
       .includes('computer_use')
@@ -766,7 +781,9 @@ export class UtilityOrchestrationService {
     state.activated.set(utilityId, resolved)
 
     let capability: unknown
-    if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
+    if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
+      capability = { tools: BRAINSTORM_ALIGNMENT_OPERATIONS }
+    } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       if (!this.browserExecutor) throw new Error('The in-app browser is unavailable')
       capability = { tools: BROWSER_UTILITY_TOOLS }
     } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
@@ -826,7 +843,17 @@ export class UtilityOrchestrationService {
     if (!resolved) throw new Error('Activate this utility before invoking it')
 
     let result: unknown
-    if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
+    if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
+      if (operation !== 'save_notes' || !state.request.saveBrainstormNotes) {
+        throw new Error('Alignment notes are only available during an active Brainstorm interview')
+      }
+      const markdown = requiredString(
+        operationInput['markdown'],
+        'markdown',
+        BRAINSTORM_ALIGNMENT_NOTE_LIMIT
+      )
+      result = await state.request.saveBrainstormNotes(markdown)
+    } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')
       result = await executor(operation, operationInput, {

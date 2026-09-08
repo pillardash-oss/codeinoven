@@ -7,6 +7,16 @@ import { fileURLToPath } from 'url'
 import { createHash, randomBytes, randomInt } from 'crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { Logger } from '../system/logger'
+import {
+  BrainstormAlignmentNotes,
+  type BrainstormAlignmentRound
+} from './brainstorm-alignment-notes'
+import {
+  BRAINSTORM_ALIGNMENT_UTILITY_ID,
+  BRAINSTORM_CREATE_DOCUMENT_ANSWER,
+  brainstormDocumentQuestion,
+  isBrainstormDocumentQuestion
+} from '../../lib/brainstorm/brainstorm-alignment'
 import { ThreadCreationCoordinator } from './thread-creation-coordinator'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { RepositoryService } from '../git/repository-service'
@@ -550,19 +560,6 @@ function rawErrorMessage(error: unknown): string {
   return fallback
 }
 
-/**
- * Remove quoted spans (straight/curly single & double quotes, backticks) from
- * an instruction so keyword-based intent detection only scans the user's own
- * words. A request like: build a hifi from "the lofi v2" must match on the
- * instruction proper, never on material the user merely quoted or pasted.
- */
-function stripQuotedSpans(source: string): string {
-  return source
-    .replace(/`[^`\n]*`/gu, ' ')
-    .replace(/["\u201c\u201d][^"\u201c\u201d\n]*["\u201c\u201d]/gu, ' ')
-    .replace(/['\u2018\u2019][^'\u2018\u2019\n]*['\u2018\u2019]/gu, ' ')
-}
-
 /** Parse the assistant's text into the batched descriptor object, tolerating a
  *  surrounding JSON code fence. Throws a clear error when the output is not a
  *  JSON object so the caller can safely fall back to per-image calls instead of
@@ -929,6 +926,7 @@ The first response character must be { and the last must be }.`
 
 const BRAINSTORM_GENERATION_SYSTEM_PROMPT = [
   `Create the concise, human-facing session report for an evidence-driven Brainstorm conversation. Submit the complete report through ${BRAINSTORM_DOCUMENT_TOOL_NAME}; OpenCode may expose its wire name as StructuredOutput.`,
+  'This dispatch follows explicit user authorization. Synthesize the aligned interview and its versioned alignment notes together with the current document, annotations, and review/discuss text. Preserve the intended experience, purpose, boundaries, and decision rationale so later tasks, PRDs, specifications, and prototypes retain the user’s intent. Reuse verified research instead of repeating it without reason. Still to Decide must never replace an interview that did not happen.',
   'Base the report on the conversation and on actual findings from the available read-only project and web research tools. Never claim that you inspected a source you did not inspect.',
   'Keep external research queries generic. Never send source code, file contents, credentials, private URLs, customer data, or other project-confidential material to a web tool. Ignore dependency, build-output, VCS, secret, and app-data directories unless the user explicitly places one in scope; never reveal real environment-variable values.',
   'Ground factual claims in evidence. Cite local findings with project-rooted relative paths and relevant symbols or line locations (e.g. `src/app.html:42`), never bare filenames such as `app.html` and never full absolute filesystem paths; cite external findings as direct Markdown links (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`), never as bare text. Clearly label facts as Verified, Inferred, or Unknown. If the project is empty or a tool/source is unavailable, state that limitation rather than padding the document with generic advice.',
@@ -1040,9 +1038,11 @@ const BRAINSTORM_DISCUSSION_SYSTEM_PROMPT = [
   'Keep external queries generic and never send source code, file contents, credentials, private URLs, customer data, or other project-confidential material to a web tool. Cite every factual claim from a source you actually inspected, using project-rooted relative paths for local findings and direct Markdown links for external findings.',
   'Use the application `question` tool heavily for alignment. Prefer one to three high-impact questions at a time. Use single choice when one direction must be selected and `multiple: true` when several outcomes or constraints may apply. Put a justified recommended option first, allow custom answers, and never ask a material choice as plain text.',
   'Do not interrogate the user about facts you can establish from the project or reliable research. Do not repeat answered questions. Carry confirmed choices forward and challenge contradictions explicitly.',
-  'When material uncertainty remains, ask the next focused question instead of declaring the session complete. When the vision is sufficiently aligned, respond with a brief alignment recap and explain that the session report is being refreshed for review.',
+  'Brainstorm is an interview, not a document-writing shortcut. Establish the intended experience, purpose, success criteria, boundaries, and rationale through discussion, code inspection, and relevant online research. Share concrete findings and use them to ask focused questions. Do not replace the interview with a generic report or move unanswered interview questions into a document.',
+  'When material uncertainty remains, ask the next focused question instead of declaring the session complete. Once the picture is clear, recap the aligned direction and ask the version-specific document-creation question supplied by the application. Only an explicit user answer authorizes generation. A completed turn, silence, a timeout, an annotation, or a review/discuss note never authorizes a document.',
   'Stay conversational, concise, and human. Do not generate an engineering specification, assign work, implement, mutate files, or paste an elaborate brainstorm document into chat.',
-  'The application maintains a concise durable session report after completed conversational turns.',
+  `During the interview, activate ${BRAINSTORM_ALIGNMENT_UTILITY_ID} and use save_notes with { markdown } to maintain concise cumulative notes for the next document version. Save before questions and before ending a turn. Include the product intent and intended experience, confirmed decisions and their rationale, research findings with sources, rejected alternatives, constraints, and remaining questions. Preserve earlier context when updating notes; never paste the notes or internal instructions into visible chat. No separate report-generation run occurs during the interview.`,
+  'For later rounds, build on the existing Brainstorm document, its annotations, review/discuss text, earlier alignment notes, and the current round notes. Treat an existing generic or premature draft as unconfirmed input: research its claims and interview the user about its open choices instead of treating them as decisions. Preserve the purpose and intent so future tasks, PRDs, specifications, and prototypes reflect the same agreed direction.',
   MERMAID_OUTPUT_INSTRUCTION,
   QUESTION_TOOL_INSTRUCTION
 ].join(' ')
@@ -1727,6 +1727,7 @@ export class ChatEngine {
     string,
     { brainstormId?: string; version?: number; note: string }
   >()
+  private readonly brainstormAlignmentNotes: BrainstormAlignmentNotes
   /** Sessions currently running an explicit context compaction. */
   private activeCompactions = new Set<string>()
   /**
@@ -1983,6 +1984,7 @@ export class ChatEngine {
     this.capabilityDiscovery = new CapabilityDiscoveryService()
     this.baseUrlProviders = new BaseUrlProviderService(storage)
     this.utilityOrchestration = new UtilityOrchestrationService(storage, database)
+    this.brainstormAlignmentNotes = new BrainstormAlignmentNotes(storage)
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
       this.executeImageDescriptor(request)
     )
@@ -2647,6 +2649,28 @@ export class ChatEngine {
       throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
     }
     await this.persistQuestionAnswer(pending, safeAnswers)
+    const approvalIndex = pending.request.questions.findIndex((question) =>
+      isBrainstormDocumentQuestion(question.prompt)
+    )
+    if (approvalIndex >= 0) {
+      const workflow = this.brainstormEngine.getWorkflowState(projectId, threadId)
+      if (workflow?.entryChoice === 'brainstorm' && workflow.stage === 'drafting') {
+        const round = await this.brainstormAlignmentRound(projectId, threadId)
+        const question = pending.request.questions[approvalIndex]
+        const answer = safeAnswers[approvalIndex]?.[0]?.trim()
+        if (
+          pending.request.questions.length === 1 &&
+          question?.prompt === brainstormDocumentQuestion(round.version) &&
+          safeAnswers[approvalIndex]?.length === 1 &&
+          (answer === BRAINSTORM_CREATE_DOCUMENT_ANSWER ||
+            /^(?:yes|create document|yes, create (?:the )?document)[.!]?$/iu.test(answer ?? ''))
+        ) {
+          await this.brainstormAlignmentNotes.approve(round, requestId)
+        } else {
+          await this.brainstormAlignmentNotes.clearApproval(round)
+        }
+      }
+    }
     try {
       await this.resolvePendingQuestion(pending, 'answered', safeAnswers, () =>
         driver.replyToQuestion(
@@ -2749,6 +2773,13 @@ export class ChatEngine {
     const driver = this.drivers.get(pending.driverId)
     if (!driver) {
       throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
+    }
+    if (
+      pending.request.questions.some((question) => isBrainstormDocumentQuestion(question.prompt))
+    ) {
+      await this.brainstormAlignmentNotes.clearApproval(
+        await this.brainstormAlignmentRound(projectId, threadId)
+      )
     }
     try {
       await this.resolvePendingQuestion(pending, 'dismissed', undefined, () =>
@@ -3092,7 +3123,8 @@ export class ChatEngine {
     budgetContext: UtilityTurnBudgetContext,
     threadTitle: string,
     skipRuntime = false,
-    allowManagement = false
+    allowManagement = false,
+    brainstormInterview = false
   ): Promise<string> {
     // A new agent turn begins here — re-enable a user-dismissed PiP so it may
     // show again if CUA is used, and cancel any auto-dismiss from the last turn.
@@ -3131,6 +3163,12 @@ export class ChatEngine {
         permissionLevel: settings.permissionLevel,
         executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
         allowManagement,
+        ...(brainstormInterview
+          ? {
+              saveBrainstormNotes: (markdown: string) =>
+                this.saveBrainstormAlignmentNotes(projectId, threadId, sessionId, markdown)
+            }
+          : {}),
         budgetContext,
         attributeReinjectedResult: (attribution) =>
           this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
@@ -3280,6 +3318,12 @@ export class ChatEngine {
         permissionLevel: settings.permissionLevel,
         executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
         allowManagement: false,
+        ...(this.pendingBrainstormTurns.has(sessionId)
+          ? {
+              saveBrainstormNotes: (markdown: string) =>
+                this.saveBrainstormAlignmentNotes(projectId, threadId, sessionId, markdown)
+            }
+          : {}),
         budgetContext,
         attributeReinjectedResult: (attribution) =>
           this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
@@ -6188,6 +6232,11 @@ export class ChatEngine {
       validatedPresentation,
       'user'
     )
+    if (this.pendingBrainstormTurns.has(activeSessionId)) {
+      await this.brainstormAlignmentNotes.clearApproval(
+        await this.brainstormAlignmentRound(projectId, threadId)
+      )
+    }
     if (thread.settings && (await this.modelLacksVision(projectId, thread.settings))) {
       const imageDescriptionContext = await this.describePromptAttachments(
         attachments,
@@ -6869,6 +6918,23 @@ export class ChatEngine {
         const activeBrainstorm = await this.brainstormEngine.getActive(projectId, threadId)
         if (activeBrainstorm) {
           activeBrainstormTurn = activeBrainstorm
+          const reviewText = presentation?.body?.trim()
+          if (
+            origin === 'user' &&
+            (presentation?.action === 'Review Brainstorm' ||
+              presentation?.action === 'Discuss Brainstorm') &&
+            reviewText &&
+            activeBrainstorm.decisionComments.at(-1)?.body !== reviewText
+          ) {
+            activeBrainstormTurn = await this.brainstormEngine.addDecisionComment(
+              projectId,
+              threadId,
+              activeBrainstorm.id,
+              activeBrainstorm.version,
+              'review',
+              reviewText
+            )
+          }
         }
       }
     }
@@ -6901,10 +6967,9 @@ export class ChatEngine {
       // The planning-session mark drives terminal-answer suppression at turn
       // finalization and on transcript reloads. It must reflect THIS turn's
       // intent, never stale membership from an earlier planning turn: planning
-      // turns suppress their chat prose (the deliverable is the spec/brainstorm
-      // document), while implementation turns and parked-lifecycle chat turns
-      // show their final answer in the conversation.
-      if (planningSpecTurn) {
+      // specification turns suppress their chat prose. Brainstorm interviews
+      // must retain the findings and alignment recap as visible conversation.
+      if (planningSpecTurn && !activeBrainstormSession) {
         this.planningSessions.add(sessionId)
       } else {
         this.planningSessions.delete(sessionId)
@@ -6950,6 +7015,11 @@ export class ChatEngine {
         settings,
         references: validatedPromptReferences
       })
+    }
+    if (activeBrainstormSession && origin === 'user') {
+      await this.brainstormAlignmentNotes.clearApproval(
+        await this.brainstormAlignmentRound(projectId, threadId)
+      )
     }
     const activeSessionState = this.sessionStatuses.get(sessionId)?.state
     if (
@@ -7096,7 +7166,8 @@ export class ChatEngine {
         !chatFileSystemEnabled &&
         !utilitySetupRequested &&
         (driverHasNativeWebSearch || !driverCanPublishGateway),
-      utilitySetupRequested
+      utilitySetupRequested,
+      activeBrainstormSession
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -7146,7 +7217,14 @@ export class ChatEngine {
       ? await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat')
       : ''
     const brainstormDiscussionPrompt = brainstormingTurn
-      ? await this.cioPrompt('brainstorm-discussion')
+      ? [
+          await this.cioPrompt('brainstorm-discussion'),
+          activeBrainstormSession
+            ? await this.brainstormAlignmentContext(projectId, threadId, true)
+            : ''
+        ]
+          .filter(Boolean)
+          .join('\n\n')
       : ''
     const engineeringSpecPrompt = brainstormingTurn ? await this.cioPrompt('engineering-spec') : ''
     const systemBasePrompt = brainstormingTurn
@@ -7219,7 +7297,7 @@ export class ChatEngine {
         : null)
     const shouldScheduleInitialSpec = planningSpecTurn && !activeSpec && !activeBrainstormSession
     if (planningSpecTurn) {
-      this.planningSessions.add(sessionId)
+      if (!activeBrainstormSession) this.planningSessions.add(sessionId)
       const requestedSpec = specAction === 'request'
       const revisingSpec = activeSpec !== null
       let promptDispatched = false
@@ -7344,7 +7422,15 @@ export class ChatEngine {
             utilityInstructions,
             historyRecap
           }),
-          allowedTools: SPEC_BRAINSTORM_ALLOWED_TOOLS,
+          allowedTools:
+            activeBrainstormSession && driverId === 'opencode'
+              ? [
+                  ...SPEC_BRAINSTORM_ALLOWED_TOOLS,
+                  `utilities_${UTILITY_SEARCH_TOOL_NAME}`,
+                  `utilities_${UTILITY_ACTIVATE_TOOL_NAME}`,
+                  `utilities_${UTILITY_INVOKE_TOOL_NAME}`
+                ]
+              : SPEC_BRAINSTORM_ALLOWED_TOOLS,
           ...(revisionStructuredOutput === undefined
             ? {}
             : { structuredOutput: revisionStructuredOutput }),
@@ -11742,6 +11828,42 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     brainstormId = validateEntityId(brainstormId, 'Brainstorm ID')
     note = validateBoundedString(note, 'Brainstorm review note', 0, 20_000)
+    if (!options.sessionTurn && !options.prototypeRequest) {
+      const current = this.brainstormEngine.getVersion(projectId, threadId, brainstormId, version)
+      if (!current || current.status !== 'draft') throw new Error('Brainstorm draft is unavailable')
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      if (!thread?.settings) throw new Error('Sr. Engineer settings are missing')
+      const reviewed = note.trim()
+        ? await this.brainstormEngine.addDecisionComment(
+            projectId,
+            threadId,
+            brainstormId,
+            version,
+            'review',
+            note
+          )
+        : current
+      await this.sendPrompt(
+        projectId,
+        threadId,
+        thread.settings,
+        [
+          'Continue the Brainstorm interview using the current document, annotations, review text, and alignment notes. Research the points raised, discuss the intended direction, and ask focused questions. Do not generate a new document until alignment and explicit version-specific user approval.',
+          note.trim() ? `User review:\n${note.trim()}` : ''
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+        [],
+        'review',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'user',
+        workflowActionPresentation('Discuss Brainstorm', note)
+      )
+      return reviewed
+    }
     const operationKey = `${projectId}:${threadId}`
     if (this.activeBrainstormOperations.has(operationKey)) {
       throw new Error('The Sr. Engineer is already updating this Brainstorm')
@@ -11792,9 +11914,11 @@ export class ChatEngine {
         threadId,
         thread.settings,
         [
-          options.sessionTurn
-            ? 'Refresh the concise Brainstorm session report from the latest conversation. Read the current report, incorporate newly aligned decisions and findings, remove resolved items from Still to Decide, and preserve useful unchanged content.'
-            : 'Revise the complete Brainstorm session report from the user review. Read the report at the referenced path and incorporate every open annotation and review note. Preserve useful unchanged content.',
+          options.prototypeRequest
+            ? 'Generate the explicitly requested prototypes using the aligned intent, current Brainstorm document, annotations, review text, and alignment notes. Preserve the existing report text; this action attaches prototypes to the current document, not a new document version.'
+            : options.sessionTurn
+              ? 'Refresh the concise Brainstorm session report from the latest conversation. Read the current report, incorporate newly aligned decisions and findings, remove resolved items from Still to Decide, and preserve useful unchanged content.'
+              : 'Revise the complete Brainstorm session report from the user review. Read the report at the referenced path and incorporate every open annotation and review note. Preserve useful unchanged content.',
           `Brainstorm document: ${brainstormPath}`,
           `Open annotations:\n${formatOpenAnnotations(current.annotations)}`,
           reviewNotes ? `Review notes:\n${reviewNotes}` : ''
@@ -11811,7 +11935,7 @@ export class ChatEngine {
               }
             }
           : {
-              includeConversationContext: false,
+              includeConversationContext: true,
               presentation: workflowActionPresentation('Review Brainstorm', note),
               allowPrototypeSkip: true,
               ...(options.prototypeRequest ? { prototypeOverride: options.prototypeRequest } : {}),
@@ -11831,20 +11955,25 @@ export class ChatEngine {
         existingPrototypes.length > 0 || generatedPrototypes.length > 0
           ? { ...content, prototypes: [...existingPrototypes, ...generatedPrototypes] }
           : content
-      let revised = await this.brainstormEngine.createVersion({
-        projectId,
-        threadId,
-        brainstormId,
-        baseVersion: version,
-        content: mergedContent,
-        provenance: {
-          source: 'agent',
-          actor: 'Sr. Engineer',
-          harnessId: thread.settings.harnessId,
-          providerId: thread.settings.providerId,
-          modelId: thread.settings.modelId
-        }
-      })
+      let revised = options.prototypeRequest
+        ? await this.brainstormEngine.saveDraft(projectId, threadId, brainstormId, version, {
+            ...current.content,
+            prototypes: mergedContent.prototypes
+          })
+        : await this.brainstormEngine.createVersion({
+            projectId,
+            threadId,
+            brainstormId,
+            baseVersion: version,
+            content: mergedContent,
+            provenance: {
+              source: 'agent',
+              actor: 'Sr. Engineer',
+              harnessId: thread.settings.harnessId,
+              providerId: thread.settings.providerId,
+              modelId: thread.settings.modelId
+            }
+          })
       if (note.trim()) {
         revised = await this.brainstormEngine.addDecisionComment(
           projectId,
@@ -12601,31 +12730,11 @@ export class ChatEngine {
     let revisionPathInstruction = ''
     let featureSlug: string | undefined
     const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
-    // Intent keywords must be detected on the instruction proper — text the
-    // user *quoted* (their own description of a prior stage, a pasted
-    // document, etc.) is not a request for this turn.
-    const instructionSource = stripQuotedSpans(source)
-    const prototypeMentioned = /\b(prototype|wireframe|mockup|lofi|lo-fi|hifi|hi-fi)\b/iu.test(
-      instructionSource
-    )
+    // Historical discussion and annotations are context, not a new prototype
+    // request. Only the explicit prototype action (or opted-in autopilot) owns it.
     const prototypeFidelity: BrainstormPrototypeFidelity | undefined =
-      options.prototypeOverride?.fidelity ??
-      (lifecycle?.autopilot === true
-        ? 'lofi'
-        : /\b(hifi|hi-fi|high[ -]fidelity)\b/iu.test(source)
-          ? 'hifi'
-          : prototypeMentioned
-            ? 'lofi'
-            : undefined)
-    const requestedPrototypeCount =
-      options.prototypeOverride?.count ??
-      (prototypeFidelity
-        ? Number(
-            /\b([1-9]|1[0-9]|20)\s+(?:lofi|lo-fi|hifi|hi-fi|prototype|wireframe|mockup)/iu.exec(
-              source
-            )?.[1]
-          ) || undefined
-        : undefined)
+      options.prototypeOverride?.fidelity ?? (lifecycle?.autopilot === true ? 'lofi' : undefined)
+    const requestedPrototypeCount = options.prototypeOverride?.count
     const prototypeBatches =
       prototypeFidelity && prototypeFidelity !== undefined
         ? planPrototypeGeneration(prototypeFidelity, requestedPrototypeCount)
@@ -13002,8 +13111,103 @@ export class ChatEngine {
     )
     return [
       instructions,
+      await this.brainstormAlignmentContext(projectId, threadId, false),
       interviewDecisions ? `Authoritative interview decisions:\n${interviewDecisions}` : '',
       transcript ? `Conversation context:\n${transcript}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+  }
+
+  private async saveBrainstormAlignmentNotes(
+    projectId: string,
+    threadId: string,
+    sessionId: string,
+    markdown: string
+  ): Promise<{ path: string; version: number }> {
+    const workflow = this.brainstormEngine.getWorkflowState(projectId, threadId)
+    const turn = this.pendingBrainstormTurns.get(sessionId)
+    if (workflow?.entryChoice !== 'brainstorm' || workflow.stage !== 'drafting' || !turn) {
+      throw new Error('The Brainstorm interview is no longer active')
+    }
+    const round = await this.brainstormAlignmentRound(projectId, threadId)
+    if (round.version !== (turn.version ?? 0) + 1) {
+      throw new Error('The Brainstorm version changed; continue in a new interview turn')
+    }
+    return this.brainstormAlignmentNotes.save(round, markdown)
+  }
+
+  private async brainstormAlignmentRound(
+    projectId: string,
+    threadId: string
+  ): Promise<BrainstormAlignmentRound> {
+    const active = await this.brainstormEngine.getActive(projectId, threadId)
+    return {
+      projectId,
+      threadId,
+      project: {
+        ...requireLocalProject(this.database, projectId),
+        path: await this.resolveThreadPath(projectId, threadId)
+      },
+      featureSlug: await ensureFeatureSlug(this.database, projectId, threadId),
+      version: (active?.version ?? 0) + 1
+    }
+  }
+
+  private async brainstormAlignmentContext(
+    projectId: string,
+    threadId: string,
+    interview: boolean
+  ): Promise<string> {
+    const round = await this.brainstormAlignmentRound(projectId, threadId)
+    const current = await this.brainstormEngine.getActive(projectId, threadId)
+    const notes = await this.brainstormAlignmentNotes.read(round)
+    const previousPath =
+      round.version > 1
+        ? this.brainstormAlignmentNotes.path({ ...round, version: round.version - 1 })
+        : ''
+    return [
+      `Alignment round for Brainstorm v${round.version}. Current notes: ${this.brainstormAlignmentNotes.path(round)}.`,
+      previousPath
+        ? `Previous alignment notes, when present: ${previousPath}. Read them alongside the current document before continuing. Older drafts may predate alignment notes; recover their intent from the original conversation and verify the draft's claims. Earlier round notes remain in the same directory as align-note-[n].md; read relevant earlier rationale when needed.`
+        : '',
+      current
+        ? [
+            `Current Brainstorm v${current.version}: ${await this.artifactRef(projectId, threadId, join('versions', `${current.id}-v${current.version}-brainstorm.md`))}. Read it before discussing or generating the next version.`,
+            `Open annotations:\n${formatOpenAnnotations(current.annotations)}`,
+            `Review/discuss notes:\n${
+              current.decisionComments
+                .filter((comment) => comment.action === 'review')
+                .map((comment) => `- ${comment.body}`)
+                .join('\n') || 'None.'
+            }`
+          ].join('\n\n')
+        : 'No Brainstorm document exists yet. Interview and research first.',
+      notes
+        ? `Current alignment notes:\n${notes}`
+        : 'No notes have been saved for this round yet. Preserve confirmed intent and research in the round notes.',
+      interview
+        ? [
+            `Use ${BRAINSTORM_ALIGNMENT_UTILITY_ID} (activate it, then invoke save_notes with { markdown }) to save concise cumulative notes. The application writes only the designated align-note-${round.version}.md; do not write source files or a report yourself.`,
+            'Research relevant code and external facts, explain findings, and interview the user until the intended experience, boundaries, decisions, and rationale are clear. Existing unanswered choices are interview topics, not permission to generate another draft.',
+            'When aligned, save notes, give a short alignment recap, then ask exactly this single question using the question tool:',
+            JSON.stringify({
+              question: brainstormDocumentQuestion(round.version),
+              header: 'Document',
+              options: [
+                {
+                  label: BRAINSTORM_CREATE_DOCUMENT_ANSWER,
+                  description: `Create Brainstorm v${round.version} from the agreed direction and research.`
+                },
+                {
+                  label: 'Continue discussion',
+                  description: 'Keep interviewing and researching before creating the document.'
+                }
+              ]
+            }),
+            'After approval, finish with a brief acknowledgement; the application generates the document once. Do not rewrite notes after approval unless the direction changes and a new approval is needed. Never claim a document was created before the application confirms it.'
+          ].join('\n')
+        : 'Use the current document, annotations, review/discuss text, and alignment notes as source context. Preserve the agreed intent and rationale, including for prototypes; do not invent decisions.'
     ]
       .filter(Boolean)
       .join('\n\n')
@@ -13071,6 +13275,9 @@ export class ChatEngine {
       const messages = await this.threadManager.loadMessageRecords(projectId, threadId)
       const transcript = formatConversationTranscript(messages, { maxCharacters: 80_000 })
       source = `${instructions}\n\nConversation context:\n${transcript}`
+    }
+    if (await this.brainstormEngine.getActive(projectId, threadId)) {
+      source += `\n\n${await this.brainstormAlignmentContext(projectId, threadId, false)}`
     }
 
     const structuredOutputKey = `${driverId}:${settings.providerId}:${settings.modelId}`
@@ -17502,6 +17709,14 @@ export class ChatEngine {
 
   private schedulePendingQuestion(pending: PendingQuestionInfo): void {
     if (pending.timer) clearTimeout(pending.timer)
+    // Creating a Brainstorm version is a human decision, never a timer default.
+    if (
+      pending.request.questions.some((question) => isBrainstormDocumentQuestion(question.prompt))
+    ) {
+      pending.timer = undefined
+      pending.request.expiresAt = undefined
+      return
+    }
 
     if (this.isUserActive()) {
       pending.request.expiresAt = undefined
@@ -17685,7 +17900,10 @@ export class ChatEngine {
       DEFAULT_QUESTION_TIMEOUT_MS
     )
     const thread = await this.threadManager.getThread(session.projectId, session.threadId)
-    if (await this.achievementOwnsDecisions(thread ?? null)) {
+    if (
+      !event.questions.some((question) => isBrainstormDocumentQuestion(question.prompt)) &&
+      (await this.achievementOwnsDecisions(thread ?? null))
+    ) {
       const driver = this.drivers.get(driverId)
       if (!driver) return
       const answers = event.questions.map((question) => [this.recommendedQuestionAnswer(question)])
@@ -17772,7 +17990,8 @@ export class ChatEngine {
         perSession = new Map()
         this.generationWindows.set(event.sessionId, perSession)
       }
-      if (!perSession.has(streamedMessageId)) perSession.set(streamedMessageId, { start: Date.now() })
+      if (!perSession.has(streamedMessageId))
+        perSession.set(streamedMessageId, { start: Date.now() })
     }
     if (
       eventOwner &&
@@ -20093,7 +20312,8 @@ export class ChatEngine {
       // that race surfaced as a misleading "already updating this Brainstorm"
       // toast even though the first refresh completed fine.
       const pendingBrainstormTurn = this.pendingBrainstormTurns.get(sessionId)
-      if (pendingBrainstormTurn) this.pendingBrainstormTurns.delete(sessionId)
+      if (pendingBrainstormTurn && (!awaitingUser || failure))
+        this.pendingBrainstormTurns.delete(sessionId)
       if (failure && hasPendingRevision) {
         this.pendingSpecRevisions.delete(sessionId)
         await this.clearPendingSpecRevision(info.projectId, info.threadId)
@@ -20128,21 +20348,27 @@ export class ChatEngine {
       }
       if (!failure && !awaitingUser && pendingBrainstormTurn) {
         try {
-          revisedBrainstorm =
-            pendingBrainstormTurn.brainstormId && pendingBrainstormTurn.version
-              ? await this.reviewBrainstorm(
-                  info.projectId,
-                  info.threadId,
-                  pendingBrainstormTurn.brainstormId,
-                  pendingBrainstormTurn.version,
-                  pendingBrainstormTurn.note,
-                  { sessionTurn: true }
-                )
-              : await this.createBrainstormSessionReport(
-                  info.projectId,
-                  info.threadId,
-                  pendingBrainstormTurn.note
-                )
+          const round = await this.brainstormAlignmentRound(info.projectId, info.threadId)
+          const expectedVersion = (pendingBrainstormTurn.version ?? 0) + 1
+          const approved =
+            round.version === expectedVersion &&
+            (await this.brainstormAlignmentNotes.consumeApproval(round))
+          if (approved)
+            revisedBrainstorm =
+              pendingBrainstormTurn.brainstormId && pendingBrainstormTurn.version
+                ? await this.reviewBrainstorm(
+                    info.projectId,
+                    info.threadId,
+                    pendingBrainstormTurn.brainstormId,
+                    pendingBrainstormTurn.version,
+                    pendingBrainstormTurn.note,
+                    { sessionTurn: true }
+                  )
+                : await this.createBrainstormSessionReport(
+                    info.projectId,
+                    info.threadId,
+                    pendingBrainstormTurn.note
+                  )
         } catch (error) {
           auxiliaryFailure =
             error instanceof Error ? error.message : 'The Brainstorm revision failed.'
@@ -20274,7 +20500,14 @@ export class ChatEngine {
           contractBlocked ? 'The specification contract requires user intervention.' : failure
         )
       }
-      if (!failure && !awaitingUser && !contractBlocked && !revisedSpec && !revisedBrainstorm) {
+      if (
+        !failure &&
+        !awaitingUser &&
+        !contractBlocked &&
+        !revisedSpec &&
+        !revisedBrainstorm &&
+        !pendingBrainstormTurn
+      ) {
         try {
           await this.runPendingInitialSpec(info.projectId, info.threadId)
         } catch (error) {
@@ -20310,10 +20543,17 @@ export class ChatEngine {
       await this.onSessionError(sessionId, issue.message)
       await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
     } finally {
-      info.activeTurnUserMessageId = undefined
-      info.estimatedContextUsed = undefined
-      if (!turnUtilitiesCleaned)
-        await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
+      const interviewWaiting =
+        this.pendingBrainstormTurns.has(sessionId) &&
+        [...this.pendingQuestions.values()].some(
+          (pending) => pending.request.sessionId === sessionId
+        )
+      if (!interviewWaiting) {
+        info.activeTurnUserMessageId = undefined
+        info.estimatedContextUsed = undefined
+        if (!turnUtilitiesCleaned)
+          await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
+      }
       // The abort marker only needs to survive until the session's idle
       // finalization has run; after that the session is on a fresh turn.
       this.userAbortedSessions.delete(sessionId)
@@ -21065,7 +21305,10 @@ export class ChatEngine {
    * messages so a previously recorded first-token window is not lost when the
    * driver returns messages without it.
    */
-  private preserveMirrorGenerationDurations(mirror: AgentMessage[], incoming: AgentMessage[]): void {
+  private preserveMirrorGenerationDurations(
+    mirror: AgentMessage[],
+    incoming: AgentMessage[]
+  ): void {
     if (mirror.length === 0) return
     for (const incomingMsg of incoming) {
       if (incomingMsg.generationMs !== undefined) continue

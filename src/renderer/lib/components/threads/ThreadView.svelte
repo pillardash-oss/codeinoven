@@ -2850,7 +2850,7 @@
   let loopAuditing = $derived(settings.loopMode === true && auditState === 'running')
   let activityLabel = $derived.by((): string => {
     if (loopAuditing) return 'Auditing'
-    if (activePlanningEntry === 'brainstorm') return 'Formulating brainstorm'
+    if (activePlanningEntry === 'brainstorm') return 'Researching and discussing'
     if (activePlanningEntry === 'spec') {
       return providerStatus?.state === 'working'
         ? (providerStatus.activity?.label ?? 'Formulating specification')
@@ -7039,7 +7039,7 @@
 
     return [
       'Continue the interactive Brainstorm discussion about this session report.',
-      'Treat the review feedback as discussion input, not as instructions for a one-pass rewrite. Address what is already clear. When any material intent, tradeoff, or requested change remains ambiguous, use the question tool and continue the back-and-forth until alignment is reached. Do not generate or rewrite the session report in this response. The application refreshes it after the discussion turn is complete.',
+      'Treat the review feedback as interview input. Build on the document, annotations, review text, and versioned alignment notes. Research relevant code and online sources, share concrete findings, and ask focused questions until the intended direction is clear. Save cumulative notes for the next Brainstorm version through the alignment-note utility. Once aligned, recap the direction and ask the application-supplied document-creation question. Only explicit user approval authorizes a new document; completing this discussion turn does not.',
       'The review manifest is authoritative for the report identity and content hash. Resolve annotations using their exact quote, range, and surrounding text together. If those anchors disagree, ask the reviewer instead of guessing. The edits are compact diffs from the agent-generated baseline. Do not ask for or reconstruct the full report when fullReportFallback is absent.',
       `<brainstorm-review-manifest>\n${JSON.stringify(manifest)}\n</brainstorm-review-manifest>`
     ].join('\n\n')
@@ -11684,7 +11684,7 @@
                   <ChatComposer
                     bind:this={composer}
                     placeholder={activePlanningEntry === 'brainstorm'
-                      ? 'Sr. Engineer is preparing the Brainstorm…'
+                      ? 'Add details to the Brainstorm discussion…'
                       : activePlanningEntry === 'spec'
                         ? 'Sr. Engineer is preparing the specification…'
                         : assignmentFormulating
