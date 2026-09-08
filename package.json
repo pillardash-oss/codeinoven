@@ -58,7 +58,7 @@
     "package": "bun run harness:build-pi && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun run build:production && electron-builder --dir -c.forceCodeSigning=false -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false",
     "package:mac": "bun run harness:build-pi && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun run build:production && electron-builder --mac -c.forceCodeSigning=false -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false",
     "package:linux": "bun run harness:build-pi && bun run build:production && electron-builder --linux -c.forceCodeSigning=false",
-    "package:win": "bun run harness:build-pi && bun run build:production && electron-builder --win -c.forceCodeSigning=false",
+    "package:win": "bun run harness:build-pi && bun run build:production && electron-builder --win --x64 -c.forceCodeSigning=false -c.npmRebuild=false",
     "release:mac": "bun run harness:build-pi && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun run verify:release && electron-builder --mac",
     "deploy:nightly": "bash scripts/deploy-nightly.sh",
     "deploy:main": "bash scripts/deploy-main.sh"

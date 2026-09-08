@@ -118,9 +118,12 @@ function compileWindows(output, includeDirectory, arch, temporaryDirectory) {
   const vcvars = join(findVisualStudio(), 'VC/Auxiliary/Build/vcvarsall.bat')
   const batchPath = join(temporaryDirectory, 'compile-native-splash.cmd')
   const quote = (value) => `"${value.replaceAll('"', '""')}"`
+  // The default vcvarsall toolset tracks the newest VS release (currently v145),
+  // which may not be installed. Fall back to the widely-available v143 (14.51)
+  // toolchain so the trivial launcher still compiles on machines without v145.
   writeFileSync(
     batchPath,
-    `@echo off\r\ncall ${quote(vcvars)} ${vcArchitecture} >nul\r\nif errorlevel 1 exit /b %errorlevel%\r\ncl.exe /nologo /EHsc /Os /MT /DUNICODE /D_UNICODE /I${quote(includeDirectory)} ${quote(join(sourceDirectory, 'launcher.cpp'))} /Fe:${quote(output)} /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib gdiplus.lib ole32.lib shell32.lib bcrypt.lib\r\n`
+    `@echo off\r\ncall ${quote(vcvars)} ${vcArchitecture} >nul\r\nwhere cl.exe >nul 2>nul\r\nif not errorlevel 1 goto :compile\r\ncall ${quote(vcvars)} ${vcArchitecture} -vcvars_ver=14.51 >nul\r\nif errorlevel 1 exit /b %errorlevel%\r\n:compile\r\ncl.exe /nologo /EHsc /Os /MT /DUNICODE /D_UNICODE /I${quote(includeDirectory)} ${quote(join(sourceDirectory, 'launcher.cpp'))} /Fe:${quote(output)} /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib gdiplus.lib ole32.lib shell32.lib bcrypt.lib\r\n`
   )
   run('cmd.exe', ['/d', '/s', '/c', batchPath])
 }

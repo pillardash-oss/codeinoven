@@ -76,7 +76,7 @@ mac:
     - '!node_modules/better-sqlite3/prebuilds/linux*'
     - '!node_modules/better-sqlite3/prebuilds/win32*'
 win:
-  icon: src/renderer/static/icon.png
+  icon: build/icon.ico
   target:
     - nsis
   artifactName: ${name}-${version}-setup.${ext}
