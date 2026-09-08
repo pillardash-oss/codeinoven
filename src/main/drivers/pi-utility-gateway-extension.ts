@@ -326,13 +326,18 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
         Type.Literal('lookup_thread'),
         Type.Literal('search_threads'),
         Type.Literal('read_messages'),
-        Type.Literal('read_log')
+        Type.Literal('read_log'),
+        Type.Literal('list_schema'),
+        Type.Literal('query_sql')
       ]),
       query: Type.Optional(Type.String()),
       thread_id: Type.Optional(Type.String()),
       limit: Type.Optional(Type.Number()),
       level: Type.Optional(Type.String()),
-      file: Type.Optional(Type.String())
+      file: Type.Optional(Type.String()),
+      table: Type.Optional(Type.String()),
+      sql: Type.Optional(Type.String()),
+      params: Type.Optional(Type.Array(Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()])))
     }),
     async execute(_toolCallId, params) {
       const body = { action: params.action }
@@ -341,6 +346,9 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       if (params.limit !== undefined) body.limit = params.limit
       if (params.level !== undefined) body.level = params.level
       if (params.file !== undefined) body.file = params.file
+      if (params.table !== undefined) body.table = params.table
+      if (params.sql !== undefined) body.sql = params.sql
+      if (params.params !== undefined) body.params = params.params
       const result = await callGateway(${JSON.stringify(diagnosticsTool.route)}, body)
       return textResult(result)
     }

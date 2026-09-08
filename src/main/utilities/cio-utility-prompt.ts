@@ -63,6 +63,23 @@ Diagnostics role - ${UTILITY_DIAGNOSTICS_TOOL_NAME} actions:
 - read_log: {"action":"read_log","file":"logs/error.log","level":"error","limit":100}
   Allowed files: logs/main.jsonl, logs/error.log, logs/permission-events.jsonl.
   Returns bounded, redacted recent entries. Start with error.log, then main.jsonl.
+- list_schema: {"action":"list_schema"} or {"action":"list_schema","table":"threads"}
+  Lists app SQLite tables with their columns, types, and primary keys. Pass
+  table to narrow the report by exact name or substring.
+- query_sql: {"action":"query_sql","sql":"SELECT id, status FROM threads WHERE project_id = ?","params":["<project id>"]}
+  Read-only SQL escape hatch for evidence the structured actions cannot reach.
+  Rules: one statement only (no ";"), SELECT/WITH/EXPLAIN or a schema PRAGMA
+  (table_info, table_list, index_list, foreign_key_list, database_list, ...);
+  INSERT/UPDATE/DELETE/DDL/ATTACH and load_extension are rejected. Results are
+  capped (200 rows, values truncated), redacted, and returned as
+  {columns, rows, rowCount, truncated}. Call list_schema first when you do not
+  know the schema, always filter with WHERE, and prefer a narrow projection
+  over SELECT *. Use params for values instead of string interpolation.
+
+Prefer the structured actions (lookup_thread, search_threads, read_messages,
+read_log) first; reach for list_schema and query_sql only when they cannot
+answer the question. Never use them to change data - a rejected write means
+report the need to the user instead of retrying with different SQL.
 
 Diagnostics are read-only and cross-project by explicit user intent. Do not
 attempt to modify, delete, or reconfigure anything through them.

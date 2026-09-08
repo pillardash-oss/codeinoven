@@ -430,7 +430,7 @@ export class UtilityOrchestrationService {
       ...(request.allowManagement
         ? [
             `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values; the user adds those through Utilities.`,
-            `App diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (read-only: lookup_thread, search_threads, read_messages, read_log).`
+            `App diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (read-only: lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql).`
           ]
         : [])
     ].join('\n')
@@ -565,6 +565,15 @@ export class UtilityOrchestrationService {
       const level = typeof input['level'] === 'string' ? input['level'] : undefined
       const limit = typeof input['limit'] === 'number' ? input['limit'] : 100
       return diagnostics.readLog(file, { level, limit })
+    }
+    if (action === 'list_schema') {
+      const table = typeof input['table'] === 'string' ? input['table'] : undefined
+      return diagnostics.listSchema(table)
+    }
+    if (action === 'query_sql') {
+      const sql = requiredString(input['sql'], 'sql', 4_000)
+      const params = Array.isArray(input['params']) ? input['params'] : []
+      return diagnostics.runQuery(sql, params)
     }
     throw new TypeError('Diagnostics action is invalid')
   }
