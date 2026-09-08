@@ -737,11 +737,20 @@
           Loading Git…
         </div>
       {:then { default: GitStatusPanel }}
-        <GitStatusPanel
-          projectId={mobileState.selectedThread?.projectId ?? ''}
-          threadId={mobileState.selectedThread?.id ?? ''}
-          scopeBucketId={mobileState.selectedThread?.scopeBucketId}
-        />
+        {#if mobileState.selectedThread}
+          <GitStatusPanel
+            projectId={mobileState.selectedThread.projectId}
+            threadId={mobileState.selectedThread.id}
+            scopeBucketId={mobileState.selectedThread.scopeBucketId}
+          />
+        {:else}
+          <div
+            class="flex h-full items-center justify-center px-6 text-center text-sm text-dimmed"
+            role="status"
+          >
+            Open a thread to view its Git panel.
+          </div>
+        {/if}
       {:catch}
         {@render chunkFailure()}
       {/await}
