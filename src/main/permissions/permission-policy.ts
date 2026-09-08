@@ -184,8 +184,9 @@ export class PermissionPolicy {
   evaluate(request: PermissionRequest): PermissionDecisionResult {
     const permission = normalizePermissionName(request.permission)
     const risk = classifyPermissionRisk(permission)
-    const paths =
+    const rawPaths =
       request.path === undefined ? (request.paths ?? []) : [request.path, ...(request.paths ?? [])]
+    const paths = rawPaths.map(normalizeNativePath)
     const scope = this.createScope(paths)
 
     if (!permission) {
@@ -376,6 +377,18 @@ export class PermissionPolicy {
 
     return { decision, approved, reason, risk, scope, approval, ledger }
   }
+}
+
+/** Rewrite POSIX/MSYS-style Windows drive paths ("/C/Users/...") into native
+ *  Windows form ("C:\\Users\\..."). Tools running under the agent harness on
+ *  Windows report such paths; resolving them verbatim anchors them to the
+ *  current drive's root ("C:\\C\\Users\\..."), which makes in-project files
+ *  look like external paths and triggers spurious permission prompts. */
+export function normalizeNativePath(path: string): string {
+  if (process.platform !== 'win32') return path
+  const match = /^\/([A-Za-z])(?=\/|$)/u.exec(path)
+  if (match === null) return path
+  return `${match[1]!.toUpperCase()}:\\${path.slice(match[0].length).replaceAll('/', '\\')}`
 }
 
 function containsTerm(terms: readonly string[], candidates: readonly string[]): boolean {
