@@ -179,7 +179,12 @@ export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void 
   __cioUsageExtension()(pi)
 __CIO_INTERACTIVE_TOOLS__  __cioGatewayExtension()(pi)
 __CIO_INTERACTIVE_TOOLS__  __cioCoreToolsExtension()(pi)
-__CIO_STRIP_BUILTINS__  pi.setActiveTools([])
+__CIO_STRIP_BUILTINS__  // Strip built-in tools after load: setActiveTools is an action
+__CIO_STRIP_BUILTINS__  // method and throws during extension loading, so it is deferred
+__CIO_STRIP_BUILTINS__  // to before_agent_start where the runtime is already bound.
+__CIO_STRIP_BUILTINS__  pi.on('before_agent_start', () => {
+__CIO_STRIP_BUILTINS__    pi.setActiveTools([])
+__CIO_STRIP_BUILTINS__  })
   __cioCompactionExtension()(pi)
 }
 `
