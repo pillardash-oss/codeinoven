@@ -87,7 +87,10 @@ function parseEnvelope<T>(text: string, kind: string, dataKey: string): T {
     throw new TypeError('The clipboard does not contain a copied item.')
   }
   const envelope = parsed as Record<string, unknown>
-  if (envelope['codeinoven'] !== kind || envelope['version'] !== CLIPBOARD_VERSION) {
+  // The serializer writes the kind under the `cio` key; `codeinoven` is the
+  // pre-release spelling kept for clipboards copied by older builds.
+  const envelopeKind = envelope['cio'] ?? envelope['codeinoven']
+  if (envelopeKind !== kind || envelope['version'] !== CLIPBOARD_VERSION) {
     throw new TypeError('The clipboard does not contain a copied item from this app.')
   }
   if (typeof envelope[dataKey] !== 'object' || envelope[dataKey] === null) {
