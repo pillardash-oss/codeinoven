@@ -179,6 +179,7 @@ export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void 
   __cioUsageExtension()(pi)
 __CIO_INTERACTIVE_TOOLS__  __cioGatewayExtension()(pi)
 __CIO_INTERACTIVE_TOOLS__  __cioCoreToolsExtension()(pi)
+__CIO_STRIP_BUILTINS__  pi.setActiveTools([])
   __cioCompactionExtension()(pi)
 }
 `
@@ -193,5 +194,12 @@ __CIO_INTERACTIVE_TOOLS__  __cioCoreToolsExtension()(pi)
     .replaceAll(
       '__CIO_INTERACTIVE_TOOLS__',
       options.oneShot === true ? '// ' : ''
+    )
+    // One-shot sessions also drop pi's own built-in tools (read, bash, ...):
+    // setActiveTools([]) is documented to cover built-in tools, so the model
+    // request carries no tool schemas at all — only the prompt.
+    .replaceAll(
+      '__CIO_STRIP_BUILTINS__',
+      options.oneShot === true ? '' : '// '
     )
 }
