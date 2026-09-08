@@ -244,6 +244,7 @@
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
+  import { LiveTokenRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
@@ -585,6 +586,25 @@
   // Non-reactive bookkeeping: only read inside event handlers, never in the template.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   const knownEphemeralSessionIds = new Set<string>()
+  // Live tokens-per-second tracker for the assistant message currently streaming,
+  // plus finalized per-message rates kept for the turn's hover row.
+  const liveTokenRate = new LiveTokenRate()
+  /** Finalized per-message rates, recorded when a live turn settles. */
+  let finalizedTokenRates = $state<Record<string, number>>({})
+  // Feed the live rate tracker from message-level token updates as well: some
+  // harnesses (OpenCode) attach cumulative tokens to message updates instead
+  // of emitting dedicated usage events. Cleared when the turn settles.
+  $effect(() => {
+    if (!busy) return
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message.role !== 'assistant') continue
+      // Only stream-observe an unfinished message so restored history can never
+      // restart the clock for an old turn.
+      if (message.tokens && !message.completedAt) liveTokenRate.observe(message.id, message.tokens)
+      break
+    }
+  })
   // Intentional initial-value capture — the view is remounted (keyed) per thread.
   // For controller-driven conversations, the controller owns the settings proxy.
   // svelte-ignore state_referenced_locally
@@ -4427,10 +4447,16 @@
       }
       case 'usage.updated': {
         if (event.sessionId !== sessionId) return
+        liveTokenRate.observe(event.messageId, event.tokens)
         break
       }
       case 'session.idle': {
         if (event.sessionId !== sessionId) return
+        if (liveTokenRate.messageId) {
+          const finalizedId = liveTokenRate.messageId
+          const rate = liveTokenRate.finalize()
+          if (rate !== null) finalizedTokenRates[finalizedId] = rate
+        }
         const interruptedCompaction = compactionInterrupted()
         if (!setIdleFromSession()) return
         if (interruptedCompaction) {
@@ -4450,6 +4476,7 @@
       }
       case 'session.error': {
         if (event.sessionId !== sessionId) return
+        liveTokenRate.clear()
         clearLocalTurn()
         agentRuns.setIdle(thread.projectId, thread.id)
         pendingPermissions = []
@@ -9365,6 +9392,23 @@
     return msg.harnessId ?? thread.sessionHarnessId ?? settings.harnessId
   }
 
+  /** Generation rate (tok/s) to show for a completed message: the rate
+   *  finalized at turn end when this view observed the turn live, otherwise
+   *  derived from the message's cumulative generated tokens over its own
+   *  duration (approximate — tool waits are included). `null` when the
+   *  harness reported no tokens. */
+  function messageTokenRate(msg: AgentMessage): number | null {
+    const finalized = finalizedTokenRates[msg.id]
+    if (finalized !== undefined && finalized > 0) return finalized
+    const generated = generatedTokens(msg.tokens)
+    if (generated <= 0) return null
+    if (msg.id === liveTokenRate.messageId) return liveTokenRate.rate()
+    if (msg.completedAt && msg.completedAt > msg.createdAt) {
+      return generated / ((msg.completedAt - msg.createdAt) / 1000)
+    }
+    return null
+  }
+
   /** Thinking level used for the message's turn, when its model reasons. */
   function messageThinkingLevel(msg: AgentMessage): ThinkingLevel | null {
     if (!msg.modelId) return null
@@ -10588,6 +10632,7 @@
                         latest={isCurrentAssistantTurn}
                         done={turnDone}
                         rehydrated={traceIsRestored}
+                        tokenRate={traceIsLive ? liveTokenRate.rate() : null}
                         startTime={isLatestTurn
                           ? (getTurnStartTime(absIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(absIndex)}
@@ -10858,6 +10903,12 @@
                                   >· {formatDuration(msg.completedAt - msg.createdAt)}</span
                                 >
                               {/if}
+                              {#if messageTokenRate(msg) !== null}
+                                {@const rate = messageTokenRate(msg) ?? 0}
+                                <span class="text-[0.625rem] text-dimmed tabular-nums">
+                                  · {formatTokenRate(rate)}</span
+                                >
+                              {/if}
                             </div>
                           </div>
                         </div>
@@ -10876,6 +10927,7 @@
               busy
               latest
               startTime={activeTurnStartTime}
+              tokenRate={liveTokenRate.rate()}
               modelLabel={currentWorkingTraceAttribution.modelLabel}
               thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
               providerName={currentWorkingTraceAttribution.providerName}
