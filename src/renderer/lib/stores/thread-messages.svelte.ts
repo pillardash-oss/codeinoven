@@ -49,7 +49,9 @@ interface ThreadMessagesEntry {
 export const THREAD_MESSAGE_PRELOAD_WINDOW = 12
 
 const EMPTY_MESSAGES: AgentMessage[] = []
-const STREAM_NOTIFICATION_DELAY_MS = 50
+/** Frame-aligned stream notification cadence: deltas paint within one frame
+ *  of arrival so the reveal trail stays fed and the stream never looks stalled. */
+const STREAM_NOTIFICATION_DELAY_MS = 16
 /** How many messages to reveal per frame when a large conversation first loads,
  *  so the heavy markdown render spreads across frames instead of mounting
  *  dozens of blocks in one synchronous flush (which blocks the composer). */

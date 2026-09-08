@@ -1614,7 +1614,10 @@ export class ChatEngine {
   /** Bound each drain so model ranking never monopolizes the main process. */
   private static readonly RANKING_DRAIN_BATCH_SIZE = 3
 
-  private static readonly STREAM_BROADCAST_INTERVAL_MS = 50
+  /** Frame-aligned (16ms) stream coalescing: token deltas still batch per
+   *  frame to bound IPC traffic, but no longer stack into perceptible ~50ms
+   *  pauses between visible output. */
+  private static readonly STREAM_BROADCAST_INTERVAL_MS = 16
   private static readonly TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
   private static readonly AUDIT_RUN_TIMEOUT_MS = 30 * 60 * 1000
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
