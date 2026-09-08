@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Notification, shell } from 'electron'
+import { createHash } from 'node:crypto'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
@@ -66,6 +67,20 @@ type ThreadClickedHandler = (payload: ThreadClickedPayload) => void
  * allowed for this application". Any other failure (invalid attachment, etc.)
  * is delivery noise and must not flip the permission state.
  */
+/**
+ * Windows rejects notification ids longer than 64 UTF-16 characters, and full
+ * payload ids (`slug-projectId-threadId-status-updatedAt`) easily exceed that.
+ * Keep a readable prefix and append a short deterministic hash of the full id
+ * so distinct payloads never collide while the result always fits.
+ */
+const NOTIFICATION_ID_MAX_UTF16 = 64
+function compactNotificationId(id: string): string {
+  if ([...id].length <= NOTIFICATION_ID_MAX_UTF16) return id
+  const hash = createHash('sha256').update(id).digest('base64url').slice(0, 12)
+  const prefix = id.slice(0, NOTIFICATION_ID_MAX_UTF16 - hash.length - 1)
+  return `${prefix}-${hash}`
+}
+
 function isPermissionRefusal(error: unknown): boolean {
   return typeof error === 'string' && /not allowed/i.test(error)
 }
@@ -531,8 +546,8 @@ export class NotificationService {
 
     try {
       const notification = new Notification({
-        id: payload.id,
-        groupId: payload.id,
+        id: compactNotificationId(payload.id),
+        groupId: compactNotificationId(payload.id),
         title: payload.title,
         subtitle,
         body: payload.body,
@@ -627,8 +642,8 @@ export class NotificationService {
 
     try {
       const notification = new Notification({
-        id: payload.id,
-        groupId: payload.id,
+        id: compactNotificationId(payload.id),
+        groupId: compactNotificationId(payload.id),
         title: payload.title,
         subtitle,
         body: payload.body,
