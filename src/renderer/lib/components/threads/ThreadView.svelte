@@ -244,7 +244,7 @@
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
-  import { LiveTokenRate, estimateGeneratedTokens, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
+  import { LiveTokenRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
@@ -591,10 +591,9 @@
   const liveTokenRate = new LiveTokenRate()
   /** Finalized per-message rates, recorded when a live turn settles. */
   let finalizedTokenRates = $state<Record<string, number>>({})
-  // Feed the live rate tracker: real usage reports take precedence; while the
-  // harness reports no usage during the turn, estimate generated tokens from
-  // the streamed text/reasoning parts so the live indicator works for every
-  // harness. Cleared when the turn settles.
+  // Feed the live rate tracker from real usage reports only — the streamed-text
+  // estimate was too crude to display and has been removed with the live rate.
+  // The tracker remains for the finalized end-of-turn rate.
   $effect(() => {
     if (!busy) return
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -606,14 +605,6 @@
         liveTokenRate.observe(message.id, generatedTokens(message.tokens), false)
       }
       break
-    }
-    // The in-flight message streams through `streamParts` before its record is
-    // cached; estimate from those parts until a real token report lands.
-    if (streamParts.length > 0) {
-      const messageId = streamParts[streamParts.length - 1]?.messageID
-      if (messageId) {
-        liveTokenRate.observe(messageId, estimateGeneratedTokens(streamParts), true)
-      }
     }
   })
   // Intentional initial-value capture — the view is remounted (keyed) per thread.
@@ -10648,7 +10639,6 @@
                         latest={isCurrentAssistantTurn}
                         done={turnDone}
                         rehydrated={traceIsRestored}
-                        tokenRate={traceIsLive ? liveTokenRate.rate() : null}
                         startTime={isLatestTurn
                           ? (getTurnStartTime(absIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(absIndex)}
@@ -10943,7 +10933,6 @@
               busy
               latest
               startTime={activeTurnStartTime}
-              tokenRate={liveTokenRate.rate()}
               modelLabel={currentWorkingTraceAttribution.modelLabel}
               thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
               providerName={currentWorkingTraceAttribution.providerName}

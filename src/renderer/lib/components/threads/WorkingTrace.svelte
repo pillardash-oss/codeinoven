@@ -28,7 +28,6 @@
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { latestWorkingTraceParts } from '$lib/working-trace-parts'
-  import { formatTokenRate } from '$lib/token-rate.svelte'
 
   interface Props {
     parts: AgentPart[]
@@ -46,9 +45,6 @@
     initialUserOpened?: boolean
     /** When the agent started working on this trace; used to show a live duration. */
     startTime?: number
-    /** Live generation rate in tokens/second for the working turn, when the
-     *  harness reports tokens. Rendered after the live duration. */
-    tokenRate?: number | null
     /** Attribution for the model currently working on this trace. */
     modelLabel?: string | null
     /** Thinking level used for this trace's turn, when the model reasons. */
@@ -77,7 +73,6 @@
     initialOpen = false,
     initialUserOpened = false,
     startTime,
-    tokenRate = null,
     modelLabel = null,
     thinkingLevel = null,
     providerName,
@@ -627,11 +622,6 @@
               {#if effectiveStartTime}
                 <span class="shrink-0 tabular-nums text-[0.625rem] text-info/80">
                   · {formatDuration(elapsed)}
-                </span>
-              {/if}
-              {#if tokenRate !== null}
-                <span class="shrink-0 tabular-nums text-[0.625rem] text-info/80">
-                  · {formatTokenRate(tokenRate)}
                 </span>
               {/if}
             </span>

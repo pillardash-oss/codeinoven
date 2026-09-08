@@ -16,22 +16,6 @@ export function generatedTokens(tokens?: AgentTokenUsage | null): number {
   return Math.max(0, tokens.output ?? 0) + Math.max(0, tokens.reasoning ?? 0)
 }
 
-/** Rough tokens-per-character divisor for streamed-text estimation. */
-const CHARS_PER_TOKEN = 4
-
-/**
- * Estimates generated tokens from streamed text/reasoning parts while the
- * harness reports no usage during a turn. Approximate (~4 chars/token) — it
- * only powers the live indicator until a real usage report arrives.
- */
-export function estimateGeneratedTokens(parts: readonly { type: string; text?: string }[]): number {
-  let chars = 0
-  for (const part of parts) {
-    if ((part.type === 'text' || part.type === 'reasoning') && part.text) chars += part.text.length
-  }
-  return Math.round(chars / CHARS_PER_TOKEN)
-}
-
 /** Formats a generation rate as e.g. `40 tok/s` (grouped: `1,234 tok/s`). */
 export function formatTokenRate(tokensPerSecond: number): string {
   return `${Math.max(1, Math.round(tokensPerSecond)).toLocaleString()} tok/s`
