@@ -152,6 +152,7 @@
   let fileSearchRequest = 0
   /** Scoped project ids for the footer picker; empty = all projects. */
   let fileSearchProjectIds = $state<string[]>([])
+  let lastFileSearchQuery = ''
   let threadSearchPaletteOpen = $state(false)
   let threadSearchActions = $state<ActionDefinition[]>([])
   let threadSearchLoading = $state(false)
@@ -159,6 +160,7 @@
   let threadSearchRequest = 0
   /** Scoped project ids for the footer picker; empty = all projects. */
   let threadSearchProjectIds = $state<string[]>([])
+  let lastThreadSearchQuery = ''
   let newProjectSpotlightOpen = $state(false)
   let onboardingOpen = $state(false)
   let onboardingStep = $state(0)
@@ -844,6 +846,7 @@
     fileSearchActions = []
     fileSearchTargets.clear()
     fileSearchProjectIds = []
+    lastFileSearchQuery = ''
   }
 
   function openFileSearchPalette(): void {
@@ -918,7 +921,21 @@
     fileSearchLoading = false
   }
 
+  /** Re-run the in-flight file search immediately when the project scope changes. */
+  function setFileSearchScope(projectIds: string[]): void {
+    fileSearchProjectIds = projectIds
+    if (!fileSearchPaletteOpen || lastFileSearchQuery.trim().length < 2) return
+    if (fileSearchTimer !== null) {
+      window.clearTimeout(fileSearchTimer)
+      fileSearchTimer = null
+    }
+    const request = ++fileSearchRequest
+    fileSearchLoading = true
+    void searchFilesAcrossProjects(lastFileSearchQuery.trim(), request)
+  }
+
   function handleFileSearchQuery(query: string): void {
+    lastFileSearchQuery = query
     if (fileSearchTimer !== null) window.clearTimeout(fileSearchTimer)
     const request = ++fileSearchRequest
     const normalized = query.trim()
@@ -960,6 +977,7 @@
     threadSearchActions = []
     threadSearchTargets.clear()
     threadSearchProjectIds = []
+    lastThreadSearchQuery = ''
   }
 
   function openThreadSearchPalette(): void {
@@ -1075,7 +1093,21 @@
     threadSearchLoading = false
   }
 
+  /** Re-run the in-flight thread search immediately when the project scope changes. */
+  function setThreadSearchScope(projectIds: string[]): void {
+    threadSearchProjectIds = projectIds
+    if (!threadSearchPaletteOpen || lastThreadSearchQuery.trim().length < 2) return
+    if (threadSearchTimer !== null) {
+      window.clearTimeout(threadSearchTimer)
+      threadSearchTimer = null
+    }
+    const request = ++threadSearchRequest
+    threadSearchLoading = true
+    void searchThreadsAcrossProjects(lastThreadSearchQuery.trim(), request)
+  }
+
   function handleThreadSearchQuery(query: string): void {
+    lastThreadSearchQuery = query
     if (threadSearchTimer !== null) window.clearTimeout(threadSearchTimer)
     const request = ++threadSearchRequest
     const normalized = query.trim()
@@ -1875,7 +1907,7 @@
         serverFiltered
         projects={scopeState.projects}
         selectedProjectIds={fileSearchProjectIds}
-        onSelectedProjectsChange={(ids) => (fileSearchProjectIds = ids)}
+        onSelectedProjectsChange={setFileSearchScope}
         onBack={backToCommandPaletteFromFileSearch}
         onQueryChange={handleFileSearchQuery}
         onSelect={handleFileSearchSelection}
@@ -1903,7 +1935,7 @@
         serverFiltered
         projects={scopeState.projects}
         selectedProjectIds={threadSearchProjectIds}
-        onSelectedProjectsChange={(ids) => (threadSearchProjectIds = ids)}
+        onSelectedProjectsChange={setThreadSearchScope}
         onBack={backToCommandPaletteFromThreadSearch}
         onQueryChange={handleThreadSearchQuery}
         onSelect={handleThreadSearchSelection}
