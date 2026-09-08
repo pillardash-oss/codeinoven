@@ -1873,7 +1873,7 @@
         headerIconBadge
         headerIconBadgeClass="border-warning/25 bg-warning/10 text-warning"
         serverFiltered
-        projects={scopeState.projectRecords}
+        projects={scopeState.projects}
         selectedProjectIds={fileSearchProjectIds}
         onSelectedProjectsChange={(ids) => (fileSearchProjectIds = ids)}
         onBack={backToCommandPaletteFromFileSearch}
@@ -1901,7 +1901,7 @@
         headerIconBadge
         headerIconBadgeClass="border-info/25 bg-info/10 text-info"
         serverFiltered
-        projects={scopeState.projectRecords}
+        projects={scopeState.projects}
         selectedProjectIds={threadSearchProjectIds}
         onSelectedProjectsChange={(ids) => (threadSearchProjectIds = ids)}
         onBack={backToCommandPaletteFromThreadSearch}
