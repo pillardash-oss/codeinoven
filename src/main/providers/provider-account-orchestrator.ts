@@ -306,18 +306,23 @@ async function readPiStatus(projectPath?: string): Promise<HarnessAuthStatus> {
   }
   const providers = record(stored['providers']) ?? {}
   const accounts: HarnessAuthAccount[] = []
-  let signedIn = 0
+  let connected = 0
   for (const [providerId, rawEntry] of Object.entries(providers)) {
     const entry = record(rawEntry)
     if (!entry) continue
     const apiKey = typeof entry['apiKey'] === 'string' ? entry['apiKey'] : undefined
-    const authenticated = Boolean(apiKey && apiKey !== 'none') || credentialIds.has(providerId)
+    const baseUrl = typeof entry['baseUrl'] === 'string' ? entry['baseUrl'] : undefined
+    // A models.json entry is connected when it is usable: an API key, a
+    // credential in auth.json, or a custom base URL (e.g. a local LM Studio
+    // endpoint that needs no key). An entry with none of these is a stub.
+    const isConnected =
+      Boolean(apiKey && apiKey !== 'none') || credentialIds.has(providerId) || Boolean(baseUrl)
     accounts.push({
       id: accountId(providerId),
       label: providerId,
-      active: authenticated
+      active: isConnected
     })
-    if (authenticated) signedIn += 1
+    if (isConnected) connected += 1
   }
   // Credentials stored directly in auth.json (catalog providers connected via
   // CodeInOven or pi's own sign-in) are connected even without a models.json
@@ -330,7 +335,7 @@ async function readPiStatus(projectPath?: string): Promise<HarnessAuthStatus> {
       ...((await fileBackedAuth.isOauth(providerId)) ? { method: 'oauth' } : {}),
       active: true
     })
-    signedIn += 1
+    connected += 1
   }
   // A fresh install with nothing configured is honestly "unauthenticated" —
   // reporting `unknown` here made the status pill look permanently stuck and
@@ -338,7 +343,7 @@ async function readPiStatus(projectPath?: string): Promise<HarnessAuthStatus> {
   // Pi's config file could not be read at all.
   return {
     state:
-      signedIn > 0
+      connected > 0
         ? 'authenticated'
         : accounts.length > 0 || configReadable
           ? 'unauthenticated'
