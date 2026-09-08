@@ -2114,9 +2114,7 @@ const USAGE_LIMIT_PROPAGATION_WINDOW_MS = 30 * 60 * 1000
 const USAGE_LIMIT_PROPAGATION_COOLDOWN_MS = 5 * 60 * 1000
 
 function codexUsageLimitResetAt(message: string, now = Date.now()): number | undefined {
-  const timeOnly = message.match(
-    /\btry again at\s+(\d{1,2})[:.](\d{2})\s*(a\.?m\.?|p\.?m\.?)\b/iu
-  )
+  const timeOnly = message.match(/\btry again at\s+(\d{1,2})[:.](\d{2})\s*(a\.?m\.?|p\.?m\.?)\b/iu)
   if (timeOnly) {
     const hour12 = Number(timeOnly[1])
     const minute = Number(timeOnly[2])
@@ -2929,12 +2927,35 @@ export function mapCodexRateLimits(value: unknown): {
     if (planType) credits = { ...credits, planType }
   }
 
-  // Codex's app-server only reports the aggregate count of banked resets, not
-  // each credit's individual grant/expiry date.
+  // Older app-server versions report only the count. Newer versions include
+  // credit details with expiry timestamps in Unix seconds.
   const resetCredits = recordValue(result['rateLimitResetCredits'])
   const availableCount = numberValue(resetCredits?.['availableCount'])
+  const rawCredits = resetCredits?.['credits']
+  const availableCredits: NonNullable<AgentBankedResets['credits']> = []
+  const seenCreditIds = new Set<string>()
+  if (Array.isArray(rawCredits)) {
+    for (const raw of rawCredits) {
+      const credit = recordValue(raw)
+      const id = stringValue(credit?.['id'])
+      if (!id || credit?.['status'] !== 'available' || seenCreditIds.has(id)) continue
+      seenCreditIds.add(id)
+      const seconds = numberValue(credit['expiresAt'])
+      const expiresAt = seconds !== undefined ? seconds * 1_000 : undefined
+      availableCredits.push({
+        id,
+        ...(credit['expiresAt'] === null
+          ? { expiresAt: null }
+          : expiresAt !== undefined && Number.isFinite(new Date(expiresAt).getTime())
+            ? { expiresAt }
+            : {})
+      })
+    }
+  }
   const bankedResets: AgentBankedResets | undefined =
-    availableCount !== undefined ? { availableCount } : undefined
+    availableCount !== undefined
+      ? { availableCount, ...(Array.isArray(rawCredits) ? { credits: availableCredits } : {}) }
+      : undefined
 
   return {
     rateLimits: mapped,

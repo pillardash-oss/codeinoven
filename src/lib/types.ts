@@ -2007,12 +2007,16 @@ export interface AgentRateLimitWindow {
   isUsingOverage?: boolean
 }
 
-/** Banked rate-limit resets a user has accumulated and can redeem on demand
- *  (currently Codex-only). Codex's app-server only reports the count, not
- *  each credit's individual grant/expiry date. */
+/** Banked rate-limit resets a user can redeem on demand (currently Codex-only). */
 export interface AgentBankedResets {
   /** Number of banked resets available to redeem. */
   availableCount: number
+  /** Available credits, when the provider reports individual details. */
+  credits?: {
+    id: string
+    /** Unix milliseconds; null means no expiry, omitted means unavailable. */
+    expiresAt?: number | null
+  }[]
 }
 
 /** Prepaid-credit balance reported alongside quota windows (e.g. Codex credits). */
