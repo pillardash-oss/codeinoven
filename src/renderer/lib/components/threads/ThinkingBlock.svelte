@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Brain, ChevronRight } from '@lucide/svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
+  import SmoothMarkdown from '../markdown/SmoothMarkdown.svelte'
   import type { AgentPart } from '$shared/types'
 
   interface Props {
@@ -68,7 +69,7 @@
   <div class="border-t border-border/40 px-3 py-2">
     <div class="max-h-80 overflow-y-auto">
       {#if part.text.trim()}
-        <MarkdownView text={part.text} class="text-xs text-muted" {onCiteFile} />
+        <SmoothMarkdown text={part.text} streaming={active && live} class="text-xs text-muted" {onCiteFile} />
       {:else if !part.summary?.trim()}
         <p class="text-xs text-muted/70 italic">No thinking text was recorded for this step.</p>
       {/if}
