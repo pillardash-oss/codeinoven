@@ -16,9 +16,9 @@ export function generatedTokens(tokens?: AgentTokenUsage | null): number {
   return Math.max(0, tokens.output ?? 0) + Math.max(0, tokens.reasoning ?? 0)
 }
 
-/** Formats a generation rate as e.g. `40 tok/s`. */
+/** Formats a generation rate as e.g. `40 tok/s` (grouped: `1,234 tok/s`). */
 export function formatTokenRate(tokensPerSecond: number): string {
-  return `${Math.max(1, Math.round(tokensPerSecond))} tok/s`
+  return `${Math.max(1, Math.round(tokensPerSecond)).toLocaleString()} tok/s`
 }
 
 /**
