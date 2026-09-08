@@ -1851,8 +1851,23 @@ export class CodexDriver extends PersistentCliDriver {
         this.hostsByProjectPath.has(projectPath) || this.hostsStartingByProjectPath.has(projectPath)
           ? await this.ensureAppServerHost(projectPath)
           : (temporaryHost = await this.createAppServerHost(projectPath))
+      const usage = mapCodexRateLimits(await this.appServerRequest(host, 'account/rateLimits/read'))
+      const now = Date.now()
+      let selectedCredit: NonNullable<AgentBankedResets['credits']>[number] | undefined
+      for (const credit of usage.bankedResets?.credits ?? []) {
+        if (typeof credit.expiresAt === 'number' && credit.expiresAt <= now) continue
+        if (
+          !selectedCredit ||
+          (credit.expiresAt ?? Infinity) < (selectedCredit.expiresAt ?? Infinity)
+        ) {
+          selectedCredit = credit
+        }
+      }
+      // Prefer the earliest known expiry. Count-only responses from older
+      // app-server versions still use the provider's default selection.
       await this.appServerRequest(host, 'account/rateLimitResetCredit/consume', {
-        idempotencyKey: randomUUID()
+        idempotencyKey: randomUUID(),
+        ...(selectedCredit ? { creditId: selectedCredit.id } : {})
       })
       return mapCodexRateLimits(await this.appServerRequest(host, 'account/rateLimits/read'))
     } finally {
