@@ -1,4 +1,5 @@
 import type {
+  HarnessInstallHandoff,
   HarnessUninstallHandoff,
   HarnessUpdateHandoff,
   HarnessUpdateStatus
@@ -11,14 +12,14 @@ import { providerStore } from '$lib/stores/providers.svelte'
 const LOCAL_UPDATE_TTL_MS = 5 * 60_000
 
 /** What the embedded terminal is doing for this harness. */
-export type HarnessRunKind = 'update' | 'uninstall'
+export type HarnessRunKind = 'install' | 'update' | 'uninstall'
 
 export interface HarnessRun {
   kind: HarnessRunKind
   harnessId: string
   harnessName: string
   terminalId: string
-  handoff: HarnessUpdateHandoff | HarnessUninstallHandoff
+  handoff: HarnessInstallHandoff | HarnessUpdateHandoff | HarnessUninstallHandoff
   /** Set once the process exits. */
   exitCode?: number
 }
@@ -120,6 +121,19 @@ class HarnessLifecycleStore {
     } catch (uninstallError) {
       const message =
         uninstallError instanceof Error ? uninstallError.message : 'Uninstall failed to start.'
+      toast.error(message)
+    }
+  }
+
+  /** Launch a harness's documented install command in an embedded terminal. */
+  async startInstall(harnessId: string, harnessName: string): Promise<void> {
+    if (this.isRunning(harnessId)) return
+    try {
+      const handoff = await invoke('harnessInstall:handoff', harnessId)
+      this.pushRun({ kind: 'install', harnessId, harnessName, handoff })
+    } catch (installError) {
+      const message =
+        installError instanceof Error ? installError.message : 'Install failed to start.'
       toast.error(message)
     }
   }

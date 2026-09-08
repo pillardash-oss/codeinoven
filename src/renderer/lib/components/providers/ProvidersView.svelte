@@ -812,12 +812,25 @@
               {:else}
                 {#if provider.status === 'not_found'}
                   <button
-                    class="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15"
+                    class="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
+                    title="Install {provider.name} in the embedded terminal"
+                    disabled={harnessLifecycleStore.isRunning(provider.id)}
+                    onclick={() =>
+                      void harnessLifecycleStore.startInstall(provider.id, provider.name)}
+                  >
+                    {#if harnessLifecycleStore.isRunning(provider.id)}
+                      <Loader2 size={13} class="animate-spin" />
+                    {:else}
+                      <Download size={13} />
+                    {/if}
+                    Install
+                  </button>
+                  <button
+                    class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                     title="Open the {provider.name} install page for your operating system"
                     onclick={() => void openInstallPage(provider)}
                   >
-                    <Download size={13} />
-                    Install
+                    Docs
                   </button>
                 {:else if harnessLifecycleStore.updateAvailableFor(provider.id)}
                   <button

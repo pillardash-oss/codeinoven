@@ -424,6 +424,7 @@ const INVOKE_CHANNELS = [
   'harnessUpdates:checkAll',
   'harnessUpdates:handoff',
   'harnessInstall:getInfo',
+  'harnessInstall:handoff',
   'harnessUninstall:handoff',
   'harnessManifest:list',
   'harnessManifest:confirm',

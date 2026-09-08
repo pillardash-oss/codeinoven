@@ -121,6 +121,7 @@ import type {
   HarnessUpdateHandoff,
   HarnessUpdateStatus,
   HarnessInstallInfo,
+  HarnessInstallHandoff,
   HarnessManifestEntry,
   HarnessUninstallHandoff,
   OfferedProvider,
@@ -2002,6 +2003,7 @@ export interface IpcInvokeContract {
   'harnessUpdates:checkAll': Contract<[force?: boolean], HarnessUpdateStatus[]>
   'harnessUpdates:handoff': Contract<[harnessId: string], HarnessUpdateHandoff>
   'harnessInstall:getInfo': Contract<[harnessId: string], HarnessInstallInfo>
+  'harnessInstall:handoff': Contract<[harnessId: string], HarnessInstallHandoff>
   'harnessUninstall:handoff': Contract<[harnessId: string], HarnessUninstallHandoff>
   'harnessManifest:list': Contract<[], HarnessManifestEntry[]>
   'harnessManifest:confirm': Contract<

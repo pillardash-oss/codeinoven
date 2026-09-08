@@ -281,7 +281,10 @@ const ALLOWED_COMMANDS = new Set([
   'winget',
   'rm',
   'git',
-  'wsl'
+  'wsl',
+  'sh',
+  'cmd',
+  'powershell'
 ])
 
 /** Normalize a command path to a comparable executable name. */

@@ -842,6 +842,16 @@ export interface HarnessInstallInfo {
   detectedMethod?: HarnessInstallMethod
 }
 
+/** User-controlled install terminal handoff. Main never executes this command. */
+export interface HarnessInstallHandoff {
+  kind: 'terminal'
+  command: string
+  args: string[]
+  title: string
+  /** The install method the command uses (native installers are preferred on Windows). */
+  method: HarnessInstallMethod
+}
+
 /** User-controlled uninstall terminal handoff. Main never executes this command. */
 export interface HarnessUninstallHandoff {
   kind: 'terminal'
