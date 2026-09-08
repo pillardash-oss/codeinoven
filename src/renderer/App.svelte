@@ -150,11 +150,15 @@
   let fileSearchLoading = $state(false)
   let fileSearchTimer: number | null = null
   let fileSearchRequest = 0
+  /** Scoped project ids for the footer picker; empty = all projects. */
+  let fileSearchProjectIds = $state<string[]>([])
   let threadSearchPaletteOpen = $state(false)
   let threadSearchActions = $state<ActionDefinition[]>([])
   let threadSearchLoading = $state(false)
   let threadSearchTimer: number | null = null
   let threadSearchRequest = 0
+  /** Scoped project ids for the footer picker; empty = all projects. */
+  let threadSearchProjectIds = $state<string[]>([])
   let newProjectSpotlightOpen = $state(false)
   let onboardingOpen = $state(false)
   let onboardingStep = $state(0)
@@ -839,6 +843,7 @@
     fileSearchLoading = false
     fileSearchActions = []
     fileSearchTargets.clear()
+    fileSearchProjectIds = []
   }
 
   function openFileSearchPalette(): void {
@@ -847,8 +852,13 @@
   }
 
   async function searchFilesAcrossProjects(query: string, request: number): Promise<void> {
+    const selectedIds = new Set(fileSearchProjectIds)
     const projects = scopeState.projectRecords.filter(
-      (project) => !project.hidden && project.source === 'local' && project.path
+      (project) =>
+        !project.hidden &&
+        project.source === 'local' &&
+        project.path &&
+        (selectedIds.size === 0 || selectedIds.has(project.id))
     )
     const projectResults = await Promise.all(
       projects.map(async (project) => {
@@ -949,6 +959,7 @@
     threadSearchLoading = false
     threadSearchActions = []
     threadSearchTargets.clear()
+    threadSearchProjectIds = []
   }
 
   function openThreadSearchPalette(): void {
@@ -974,7 +985,20 @@
   async function searchThreadsAcrossProjects(query: string, request: number): Promise<void> {
     let results: ThreadSearchResult[]
     try {
-      results = await invoke('threads:search', query, { limit: 50 })
+      // Scoped search: fan out per selected project so the manager can use its
+      // per-project index; empty selection searches all projects in one call.
+      results =
+        threadSearchProjectIds.length > 0
+          ? (
+              await Promise.all(
+                threadSearchProjectIds.map((projectId) =>
+                  invoke('threads:search', query, { projectId, limit: 50 }).catch(
+                    (): ThreadSearchResult[] => []
+                  )
+                )
+              )
+            ).flat()
+          : await invoke('threads:search', query, { limit: 50 })
     } catch {
       results = []
     }
@@ -1849,6 +1873,9 @@
         headerIconBadge
         headerIconBadgeClass="border-warning/25 bg-warning/10 text-warning"
         serverFiltered
+        projects={scopeState.projectRecords}
+        selectedProjectIds={fileSearchProjectIds}
+        onSelectedProjectsChange={(ids) => (fileSearchProjectIds = ids)}
         onBack={backToCommandPaletteFromFileSearch}
         onQueryChange={handleFileSearchQuery}
         onSelect={handleFileSearchSelection}
@@ -1874,6 +1901,9 @@
         headerIconBadge
         headerIconBadgeClass="border-info/25 bg-info/10 text-info"
         serverFiltered
+        projects={scopeState.projectRecords}
+        selectedProjectIds={threadSearchProjectIds}
+        onSelectedProjectsChange={(ids) => (threadSearchProjectIds = ids)}
         onBack={backToCommandPaletteFromThreadSearch}
         onQueryChange={handleThreadSearchQuery}
         onSelect={handleThreadSearchSelection}
