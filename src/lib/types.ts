@@ -2599,6 +2599,10 @@ export interface AgentMessage {
   harnessId?: string
   /** Reasoning effort in effect when this message's turn ran, when known. */
   thinkingLevel?: ThinkingLevel
+  /** Duration in milliseconds from the first streamed output part (the model's
+   *  first token) to turn end — excludes pre-generation tool/setup time, so a
+   *  tokens/second rate derived from it reflects actual generation. */
+  generationMs?: number
   createdAt: number
   completedAt?: number
   /** Cost and token accounting reported for this assistant message. */

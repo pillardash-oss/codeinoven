@@ -1616,13 +1616,15 @@ export class ThreadManager {
             sql: `INSERT INTO agent_messages (
               id, thread_id, role, origin, visibility, parts, search_text,
               model_id, provider_id, harness_id, thinking_level,
-              references_json, project_references_json, created_at, completed_at
+              references_json, project_references_json, created_at, completed_at,
+              generation_ms
             ) SELECT ?, ?, role, origin, visibility,
               (SELECT json_group_array(json(CASE WHEN json_type(value, '$.messageID') IS NULL
                 THEN value ELSE json_set(value, '$.messageID', ?, '$.id', ? || ':' || json_extract(value, '$.id')) END))
                 FROM json_each(parts)), search_text,
               model_id, provider_id, harness_id, thinking_level,
-              references_json, project_references_json, created_at, completed_at
+              references_json, project_references_json, created_at, completed_at,
+              generation_ms
               FROM agent_messages WHERE thread_id = ? AND id = ?`,
             params: [id, forked.id, id, id, threadId, row.id]
           }

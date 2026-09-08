@@ -1825,6 +1825,15 @@ export class ChatEngine {
    */
   private toolTimes = new Map<string, Map<string, { start: number; end?: number }>>()
 
+  /**
+   * Tracks generation windows per session per assistant message id: `start` is
+   * the timestamp of the first streamed output part (the model's first token),
+   * `end` is stamped when the message completes. Used to persist
+   * `AgentMessage.generationMs` so tokens-per-second rates reflect actual
+   * generation time instead of wall-clock turn time.
+   */
+  private generationWindows = new Map<string, Map<string, { start: number; end?: number }>>()
+
   /** Steered messages held back from the harness while its active turn has a
    *  tool call in flight — the undo window. Keyed by sessionId. */
   private heldSteers = new Map<string, HeldSteer>()
@@ -4337,6 +4346,7 @@ export class ChatEngine {
     updateRetryWakeWindow(sessionId, null)
     this.reasoningTimes.delete(sessionId)
     this.toolTimes.delete(sessionId)
+    this.generationWindows.delete(sessionId)
     this.handledIdleSessions.delete(sessionId)
     this.userAbortedSessions.delete(sessionId)
     this.outboundMessageIdsBySession.delete(sessionId)
@@ -4476,6 +4486,7 @@ export class ChatEngine {
       )
       this.applyReasoningStamps(thread.sessionId, messages)
       this.applyToolStamps(thread.sessionId, messages)
+      this.applyGenerationStamps(thread.sessionId, messages)
       const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
       this.outboundMessageIdsBySession.set(
         thread.sessionId,
@@ -4484,6 +4495,7 @@ export class ChatEngine {
       // Preserve thinking and tool timestamps from the mirror for parts the driver lacks.
       this.preserveMirrorReasoningStamps(mirror, messages)
       this.preserveMirrorToolStamps(mirror, messages)
+      this.preserveMirrorGenerationDurations(mirror, messages)
       let merged = restoreMirrorThinkingLevel(
         mergeAgentMessages(
           mirror,
@@ -5305,6 +5317,7 @@ export class ChatEngine {
         )
         this.applyReasoningStamps(sessionId, incoming)
         this.applyToolStamps(sessionId, incoming)
+        this.applyGenerationStamps(sessionId, incoming)
         const cached = await this.threadManager.loadSubagentMessages(
           owner.projectId,
           owner.threadId,
@@ -5312,6 +5325,7 @@ export class ChatEngine {
         )
         this.preserveMirrorReasoningStamps(cached, incoming)
         this.preserveMirrorToolStamps(cached, incoming)
+        this.preserveMirrorGenerationDurations(cached, incoming)
         const merged = restoreMirrorThinkingLevel(mergeAgentMessages(cached, incoming), cached)
         await this.threadManager.saveSubagentMessages(
           owner.projectId,
@@ -8195,6 +8209,7 @@ export class ChatEngine {
         ? await driver.loadMessages(temporary.projectPath, temporary.sessionId, temporary.isolated)
         : await driver.loadMessages(temporary.projectPath, temporary.sessionId)
     this.applyReasoningStamps(temporary.sessionId, messages)
+    this.applyGenerationStamps(temporary.sessionId, messages)
     return stampHarnessId(messages, temporary.driverId)
   }
 
@@ -17745,6 +17760,17 @@ export class ChatEngine {
     ) {
       return
     }
+    // Delta events can be the first signal of generated output (some drivers
+    // stream text purely as deltas). Record the generation-window start for
+    // the message they belong to.
+    if (event.type === 'message.part.delta' && streamedMessageId) {
+      let perSession = this.generationWindows.get(event.sessionId)
+      if (!perSession) {
+        perSession = new Map()
+        this.generationWindows.set(event.sessionId, perSession)
+      }
+      if (!perSession.has(streamedMessageId)) perSession.set(streamedMessageId, { start: Date.now() })
+    }
     if (
       eventOwner &&
       !eventOwner.ephemeral &&
@@ -17910,8 +17936,18 @@ export class ChatEngine {
 
     // Stamp thinking start time on reasoning parts that lack it.
     // Stamp tool start/end times on tool parts as their state transitions.
+    // Stamp the generation window (first output token → turn end) so the
+    // persisted generation duration reflects real generation time.
     if (event.type === 'message.part.updated') {
       const part = event.part
+      if (part.type === 'reasoning' || part.type === 'text') {
+        let perSession = this.generationWindows.get(event.sessionId)
+        if (!perSession) {
+          perSession = new Map()
+          this.generationWindows.set(event.sessionId, perSession)
+        }
+        if (!perSession.has(part.messageID)) perSession.set(part.messageID, { start: Date.now() })
+      }
       if (part.type === 'reasoning' && !part.time?.start) {
         const now = Date.now()
         part.time = { ...part.time, start: now }
@@ -18027,6 +18063,17 @@ export class ChatEngine {
       if (sessionToolTimes) {
         for (const entry of sessionToolTimes) {
           if (!entry[1].end) entry[1].end = now
+        }
+      }
+      const sessionGeneration = this.generationWindows.get(event.sessionId)
+      if (sessionGeneration) {
+        if (event.type === 'message.completed') {
+          const window = sessionGeneration.get(event.messageId)
+          if (window && !window.end) window.end = now
+        } else {
+          for (const entry of sessionGeneration) {
+            if (!entry[1].end) entry[1].end = now
+          }
         }
       }
     }
@@ -19716,6 +19763,7 @@ export class ChatEngine {
 
       this.applyReasoningStamps(sessionId, messages)
       this.applyToolStamps(sessionId, messages)
+      this.applyGenerationStamps(sessionId, messages)
 
       const mirrorAnchorId = info.activeTurnUserMessageId ?? messages[latestUserIndex]?.id
       const mirror = mirrorAnchorId
@@ -20939,6 +20987,23 @@ export class ChatEngine {
   }
 
   /**
+   * Apply in-memory generation windows to loaded assistant messages,
+   * persisting the first-token-to-completion duration as `generationMs`.
+   */
+  private applyGenerationStamps(sessionId: string, messages: AgentMessage[]): void {
+    const sessionGeneration = this.generationWindows.get(sessionId)
+    if (!sessionGeneration) return
+    for (const msg of messages) {
+      if (msg.role !== 'assistant' || msg.generationMs !== undefined) continue
+      const window = sessionGeneration.get(msg.id)
+      if (!window?.start) continue
+      const end = window.end ?? msg.completedAt ?? Date.now()
+      const duration = end - window.start
+      if (duration > 0) msg.generationMs = duration
+    }
+  }
+
+  /**
    * Copy thinking timestamps from the mirror to incoming messages so stamps
    * persisted in a previous session are not lost when the driver returns
    * messages without reasoning timing data.
@@ -20988,6 +21053,22 @@ export class ChatEngine {
             }
           }
         }
+      }
+    }
+  }
+
+  /**
+   * Copy the persisted generation duration from the mirror to incoming
+   * messages so a previously recorded first-token window is not lost when the
+   * driver returns messages without it.
+   */
+  private preserveMirrorGenerationDurations(mirror: AgentMessage[], incoming: AgentMessage[]): void {
+    if (mirror.length === 0) return
+    for (const incomingMsg of incoming) {
+      if (incomingMsg.generationMs !== undefined) continue
+      const mirrorMsg = mirror.find((m) => m.id === incomingMsg.id)
+      if (mirrorMsg?.generationMs !== undefined) {
+        incomingMsg.generationMs = mirrorMsg.generationMs
       }
     }
   }

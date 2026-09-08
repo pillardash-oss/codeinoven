@@ -9403,6 +9403,11 @@
     const generated = generatedTokens(msg.tokens)
     if (generated <= 0) return null
     if (msg.id === liveTokenRate.messageId) return liveTokenRate.rate()
+    // Persisted generation window (first output token → turn end) — excludes
+    // pre-generation tool/setup time, so it is the accurate history basis.
+    if (msg.generationMs !== undefined && msg.generationMs > 0) {
+      return generated / (msg.generationMs / 1000)
+    }
     if (msg.completedAt && msg.completedAt > msg.createdAt) {
       return generated / ((msg.completedAt - msg.createdAt) / 1000)
     }

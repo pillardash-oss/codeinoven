@@ -726,6 +726,7 @@ export class Database {
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
       this.migrateThreadIndependentAuditColumns(connection)
+      this.migrateAgentMessageGenerationColumn(connection)
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
     })()
   }
@@ -883,6 +884,20 @@ export class Database {
       connection.exec(
         'ALTER TABLE threads ADD COLUMN independent_audit_initialized INTEGER NOT NULL DEFAULT 0'
       )
+    }
+  }
+
+  /** Existing databases predate the per-message generation duration used by
+   *  tokens-per-second rates. Nullable — messages persisted before the column
+   *  have no generation window recorded and fall back to wall-clock rates. */
+  private migrateAgentMessageGenerationColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('generation_ms')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN generation_ms INTEGER')
     }
   }
 

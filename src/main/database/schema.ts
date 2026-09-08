@@ -208,6 +208,7 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   usage_credits_json TEXT,
   context_window  INTEGER,
   context_used    INTEGER,
+  generation_ms   INTEGER,
   error           TEXT,
   structured_output TEXT
 );
