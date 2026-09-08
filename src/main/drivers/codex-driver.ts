@@ -78,6 +78,14 @@ const CODEX_FALLBACK_MODELS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
 const CODEX_COMPACTION_TIMEOUT_MS = 180_000
 const CODEX_USAGE_TIMEOUT_MS = 15_000
 const CODEX_APP_SERVER_REQUEST_TIMEOUT_MS = 30_000
+/**
+ * App-owned Codex feature enablements for the resident app-server. These live
+ * here — passed as per-invocation `--enable` flags, never written to Codex's
+ * own `config.toml` — so a Codex reinstall or config reset can never flip
+ * them back off. Codex hard-errors on an unknown `--enable` flag, so if an
+ * update renames or removes a feature the app-server dies at spawn and
+ * createAppServerHost retries once without the flags (see codexFeaturesUnsupported).
+ */
 const CODEX_APP_SERVER_FEATURES = ['default_mode_request_user_input'] as const
 
 interface CodexAppServerHost {
@@ -761,9 +769,37 @@ export class CodexDriver extends PersistentCliDriver {
     this.stopAppServerHost(host, 'Codex app-server stopped after genuine inactivity')
   }
 
+  /**
+   * `--enable` args for the resident app-server, disabled permanently for
+   * this driver instance once an installed Codex rejects them (an update
+   * renamed or removed a feature). Without the flags the app-server still
+   * works — it just loses the feature behavior — which beats failing every
+   * session.
+   */
+  private codexFeaturesUnsupported = false
+
+  private appServerFeatureArgs(): string[] {
+    return this.codexFeaturesUnsupported
+      ? []
+      : CODEX_APP_SERVER_FEATURES.flatMap((feature) => ['--enable', feature])
+  }
+
+  /** Resolves when the app-server exits citing an unknown feature flag; stays
+   *  pending for every other exit so the normal failure path (initialize
+   *  rejection) reports it. */
+  private waitForUnknownFeatureExit(host: CodexAppServerHost): Promise<'unknown-feature'> {
+    return new Promise((resolve) => {
+      const onExit = (): void => {
+        if (/Unknown feature flag/iu.test(host.stderrBuffer)) resolve('unknown-feature')
+      }
+      host.child.once('exit', onExit)
+      host.child.once('error', onExit)
+    })
+  }
+
   private async createAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
     const { env: providerEnv, args: providerArgs } = await this.customProviderOverlay()
-    const featureArgs = CODEX_APP_SERVER_FEATURES.flatMap((feature) => ['--enable', feature])
+    const featureArgs = this.appServerFeatureArgs()
     const prepared = await prepareHarnessInvocation(
       'codex',
       [...providerArgs, 'app-server', ...featureArgs, '--listen', 'stdio://'],
@@ -791,17 +827,34 @@ export class CodexDriver extends PersistentCliDriver {
     // session) so thread-scoped process kills (thread deletion, SourcesPanel
     // "kill thread processes") never SIGTERM the universal session.
     this.observeHarnessProcess(undefined, child, 'codex app-server', projectPath)
-    try {
+    // A Codex update can rename or remove an enabled feature; Codex then
+    // refuses to start at all ("Error: Unknown feature flag"). Detect that
+    // fast-fail, permanently drop the flags for this driver instance, and
+    // respawn once — the app-server without the flags still works.
+    const unknownFeatureExit = this.waitForUnknownFeatureExit(host)
+    const initialize = (async () => {
       await this.appServerRequest(host, 'initialize', {
         clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
         capabilities: { experimentalApi: true }
       })
       this.appServerNotify(host, 'initialized')
-      return host
-    } catch (error) {
-      this.stopAppServerHost(host, 'Codex app-server initialization failed')
-      throw error
+    })()
+    // The race can abandon `initialize` (feature-fail retry) — keep a catch so
+    // the abandoned promise never becomes an unhandled rejection.
+    void initialize.catch(() => undefined)
+    const outcome = await Promise.race([
+      unknownFeatureExit,
+      initialize.then(() => 'initialized' as const)
+    ])
+    if (outcome === 'unknown-feature') {
+      this.codexFeaturesUnsupported = true
+      Logger.info(
+        'Codex rejected the app-server feature flags (update renamed or removed one); retrying without them'
+      )
+      this.stopAppServerHost(host, 'Codex app-server restarting without unsupported feature flags')
+      return this.createAppServerHost(projectPath)
     }
+    return host
   }
 
   private async ensureAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
