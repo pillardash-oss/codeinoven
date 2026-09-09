@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import type { AgentRunningProcess, TaskManagerProcess } from '../../lib/types'
 import type { AgentProcessObserver } from '../drivers/driver.interface'
-import { OWNED_PROCESS_MARKER } from '../drivers/cli-environment'
+import { OWNED_PROCESS_MARKER, OWNED_SESSION_MARKER } from '../drivers/cli-environment'
 import { Logger } from '../system/logger'
 import { OwnedProcessJournal } from '../system/owned-process-journal'
 import { broadcastAgentProcessesChanged } from '../chat/thread-events'
@@ -11,6 +11,8 @@ import { broadcastAgentProcessesChanged } from '../chat/thread-events'
 const execFileAsync = promisify(execFile)
 const PROCESS_EXIT_GRACE_MS = 1_500
 const PORT_SCAN_TIMEOUT_MS = 2_000
+/** Maximum pids per batched `ps -E` ownership probe. */
+const OWNERSHIP_PROBE_CHUNK = 64
 /** Key under which app-wide roots (e.g. the shared opencode server) are tracked. */
 const APP_SCOPE = '__codeinoven_app_scope__'
 
@@ -37,6 +39,13 @@ interface HarnessRoot {
 interface TrackedProcess extends AgentRunningProcess {
   sessionId: string
   cwd: string | null
+}
+
+interface ProcessOwnership {
+  /** App ownership marker present; `null` when the platform cannot tell. */
+  owned: boolean | null
+  /** CodeInOven session id stamped in the process environment, when known. */
+  sessionId: string | null
 }
 export interface ReapOrphansResult {
   killed: number[]
@@ -527,19 +536,70 @@ export class AgentProcessService implements AgentProcessObserver {
   }
 
   /**
+   * Best-effort ownership probe for another process's environment. Returns the
+   * app marker state and, when present, the CodeInOven session id that spawned
+   * it. macOS exposes the environment of same-user processes via `ps -E`;
+   * Linux via `/proc/<pid>/environ`; Windows cannot reveal it, so the result is
+   * `null` there.
+   */
+  private async readOwnership(pids: readonly number[]): Promise<Map<number, ProcessOwnership>> {
+    const result = new Map<number, ProcessOwnership>()
+    if (pids.length === 0) return result
+    if (process.platform === 'darwin') {
+      for (let index = 0; index < pids.length; index += OWNERSHIP_PROBE_CHUNK) {
+        const chunk = pids.slice(index, index + OWNERSHIP_PROBE_CHUNK)
+        try {
+          const { stdout } = await execFileAsync(
+            'ps',
+            ['-E', '-p', chunk.map(String).join(',')],
+            { timeout: PORT_SCAN_TIMEOUT_MS }
+          )
+          for (const line of stdout.split(/\r?\n/u)) {
+            const pid = Number(line.trim().split(/\s+/u)[0])
+            if (!Number.isFinite(pid) || pid <= 0 || result.has(pid)) continue
+            result.set(pid, {
+              owned: line.includes(`${OWNED_PROCESS_MARKER}=1`),
+              sessionId: line.match(new RegExp(`${OWNED_SESSION_MARKER}=(\\S+)`, 'u'))?.[1] ?? null
+            })
+          }
+        } catch {
+          // Probes are best-effort; missing rows are treated as unknown.
+        }
+      }
+      return result
+    }
+    if (process.platform !== 'linux') return result
+    const ownerships = await Promise.all(
+      pids.map(async (pid): Promise<[number, ProcessOwnership]> => {
+        try {
+          const environ = await readFile(`/proc/${pid}/environ`, 'utf8')
+          const entries = environ.split('\0')
+          return [
+            pid,
+            {
+              owned: entries.includes(`${OWNED_PROCESS_MARKER}=1`),
+              sessionId:
+                entries
+                  .find((entry) => entry.startsWith(`${OWNED_SESSION_MARKER}=`))
+                  ?.slice(OWNED_SESSION_MARKER.length + 1) ?? null
+            }
+          ]
+        } catch {
+          return [pid, { owned: null, sessionId: null }]
+        }
+      })
+    )
+    return new Map(ownerships)
+  }
+
+  /**
    * Best-effort check for the app's ownership marker in a process environment.
    * Returns `true`/`false` only where another process's environment is reliably
-   * readable (Linux `/proc`); returns `null` when the platform cannot reveal it
-   * (macOS `ps -E`, Windows) so callers fall back to the orphaned-parent check.
+   * readable (macOS `ps -E`, Linux `/proc`); returns `null` on Windows so
+   * callers fall back to the orphaned-parent check.
    */
   private async processHasMarker(pid: number): Promise<boolean | null> {
-    if (process.platform !== 'linux') return null
-    try {
-      const environ = await readFile(`/proc/${pid}/environ`, 'utf8')
-      return environ.split('\0').includes(`${OWNED_PROCESS_MARKER}=1`)
-    } catch {
-      return null
-    }
+    return (await this.readOwnership([pid])).get(pid)?.owned ?? null
   }
 
   private sessionsForThread(projectId: string, threadId: string): string[] {
@@ -581,7 +641,7 @@ export class AgentProcessService implements AgentProcessObserver {
         childrenByParent.set(entry.parentPid, children)
       }
 
-      this.adoptAdbServers(snapshot, currentByPid)
+      await this.adoptMarkedOrphans(snapshot, currentByPid)
 
       const changedOwners = new Map<string, ProcessOwner>()
       const sessionIds = new Set([...this.roots.keys(), ...this.tracked.keys()])
@@ -620,6 +680,7 @@ export class AgentProcessService implements AgentProcessObserver {
             tracked.parentPid = current.parentPid
           } else {
             sessionProcesses.delete(pid)
+            this.journal?.unregister(pid)
             changed = true
           }
         }
@@ -637,31 +698,54 @@ export class AgentProcessService implements AgentProcessObserver {
   }
 
   /**
-   * The adb server daemon re-parents itself to launchd/init the moment the
-   * `adb` client first spawns it, so it never appears under a harness root's
-   * descendant tree and would stay invisible to the task manager. Adopt any
-   * orphaned `adb fork-server` daemon while the app has live harness roots,
-   * attributing it to the only live session when there is exactly one (and to
-   * the app scope otherwise). A live `adb` client is a short-lived child of its
-   * harness and is unaffected. Not journaled: the daemon was not spawned by the
-   * app itself and is harmless to leave behind.
+   * Daemons spawned by a harness can outlive their parent: the adb server, for
+   * example, re-parents itself to launchd/init the moment the `adb` client
+   * first spawns it, so it never appears under a harness root's descendant
+   * tree. Adopt any orphaned process carrying the app's ownership marker so it
+   * stays visible in the task manager, is killable, and — via the journal — is
+   * reaped if the app closes while it is still running. Attribution uses the
+   * session marker stamped into the harness environment, falling back to the
+   * only live session, then app scope. On Windows, where the environment of
+   * another process cannot be read, only the uniquely fingerprintable adb
+   * server daemon is adopted. Live children of a harness (short-lived `adb`
+   * clients, dev servers, etc.) are already tracked as descendants and are
+   * unaffected.
    */
-  private adoptAdbServers(
+  private async adoptMarkedOrphans(
     snapshot: ProcessSnapshotEntry[],
     currentByPid: ReadonlyMap<number, ProcessSnapshotEntry>
-  ): void {
+  ): Promise<void> {
     if (currentByPid.size === 0) return
     const liveSessions = [...this.roots.entries()].flatMap(([sessionId, sessionRoots]) =>
       [...sessionRoots.keys()].some((pid) => currentByPid.has(pid)) ? [sessionId] : []
     )
-    if (liveSessions.length === 0) return
+    const trackedPids = new Set<number>()
+    for (const processes of this.tracked.values()) {
+      for (const pid of processes.keys()) trackedPids.add(pid)
+    }
+    const alive = new Set(currentByPid.keys())
+    const isWindows = process.platform === 'win32'
     const adbServerPattern = /\badb\b[^\0]*\bfork-server\b/u
+    const candidates = snapshot.filter(
+      (entry) =>
+        !trackedPids.has(entry.pid) &&
+        this.isOrphaned(entry.parentPid, alive) &&
+        // Windows cannot read another process's environment; only adopt the
+        // unambiguously fingerprintable adb server daemon there.
+        (!isWindows || adbServerPattern.test(entry.command))
+    )
+    if (candidates.length === 0) return
+    const ownership = await this.readOwnership(candidates.map((entry) => entry.pid))
     const adoptedScopes = new Set<string>()
-    for (const entry of snapshot) {
-      if (!adbServerPattern.test(entry.command)) continue
-      if (!this.isOrphaned(entry.parentPid, new Set(currentByPid.keys()))) continue
-      if ([...this.tracked.values()].some((processes) => processes.has(entry.pid))) continue
-      const scope = liveSessions.length === 1 ? liveSessions[0] : APP_SCOPE
+    for (const entry of candidates) {
+      const owner = ownership.get(entry.pid)
+      if (!owner?.owned) continue
+      const claimed = owner.sessionId !== null && this.owners.has(owner.sessionId)
+      const scope = claimed
+        ? (owner.sessionId as string)
+        : liveSessions.length === 1
+          ? liveSessions[0]
+          : APP_SCOPE
       let sessionProcesses = this.tracked.get(scope)
       if (!sessionProcesses) {
         sessionProcesses = new Map()
@@ -677,6 +761,9 @@ export class AgentProcessService implements AgentProcessObserver {
         sessionId: scope,
         cwd: null
       })
+      // Journal the adopted daemon so reapOrphans can still kill it after the
+      // app closes without a clean shutdown.
+      this.journal?.register(entry.pid, entry.command, '')
       adoptedScopes.add(scope)
     }
     for (const scope of adoptedScopes) {
