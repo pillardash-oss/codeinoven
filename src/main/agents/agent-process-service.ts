@@ -581,6 +581,8 @@ export class AgentProcessService implements AgentProcessObserver {
         childrenByParent.set(entry.parentPid, children)
       }
 
+      this.adoptAdbServers(snapshot, currentByPid)
+
       const changedOwners = new Map<string, ProcessOwner>()
       const sessionIds = new Set([...this.roots.keys(), ...this.tracked.keys()])
       for (const sessionId of sessionIds) {
@@ -631,6 +633,55 @@ export class AgentProcessService implements AgentProcessObserver {
       }
     } catch (error) {
       Logger.dev('Agent process scan failed:', error)
+    }
+  }
+
+  /**
+   * The adb server daemon re-parents itself to launchd/init the moment the
+   * `adb` client first spawns it, so it never appears under a harness root's
+   * descendant tree and would stay invisible to the task manager. Adopt any
+   * orphaned `adb fork-server` daemon while the app has live harness roots,
+   * attributing it to the only live session when there is exactly one (and to
+   * the app scope otherwise). A live `adb` client is a short-lived child of its
+   * harness and is unaffected. Not journaled: the daemon was not spawned by the
+   * app itself and is harmless to leave behind.
+   */
+  private adoptAdbServers(
+    snapshot: ProcessSnapshotEntry[],
+    currentByPid: ReadonlyMap<number, ProcessSnapshotEntry>
+  ): void {
+    if (currentByPid.size === 0) return
+    const liveSessions = [...this.roots.entries()].flatMap(([sessionId, sessionRoots]) =>
+      [...sessionRoots.keys()].some((pid) => currentByPid.has(pid)) ? [sessionId] : []
+    )
+    if (liveSessions.length === 0) return
+    const adbServerPattern = /\badb\b[^\0]*\bfork-server\b/u
+    const adoptedScopes = new Set<string>()
+    for (const entry of snapshot) {
+      if (!adbServerPattern.test(entry.command)) continue
+      if (!this.isOrphaned(entry.parentPid, new Set(currentByPid.keys()))) continue
+      if ([...this.tracked.values()].some((processes) => processes.has(entry.pid))) continue
+      const scope = liveSessions.length === 1 ? liveSessions[0] : APP_SCOPE
+      let sessionProcesses = this.tracked.get(scope)
+      if (!sessionProcesses) {
+        sessionProcesses = new Map()
+        this.tracked.set(scope, sessionProcesses)
+      }
+      if (sessionProcesses.has(entry.pid)) continue
+      sessionProcesses.set(entry.pid, {
+        pid: entry.pid,
+        parentPid: entry.parentPid,
+        command: entry.command,
+        startedAt: Date.now(),
+        scope: scope === APP_SCOPE ? 'app' : 'thread',
+        sessionId: scope,
+        cwd: null
+      })
+      adoptedScopes.add(scope)
+    }
+    for (const scope of adoptedScopes) {
+      const owner = this.owners.get(scope)
+      if (owner) broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
     }
   }
 
