@@ -43,7 +43,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
-import { QuestionRequestGoneError } from './driver.interface'
+import { InactiveQuestionTurnError, QuestionRequestGoneError } from './driver.interface'
 import {
   PersistentCliDriver,
   type CliLineParseContext,
@@ -79,14 +79,12 @@ const CODEX_COMPACTION_TIMEOUT_MS = 180_000
 const CODEX_USAGE_TIMEOUT_MS = 15_000
 const CODEX_APP_SERVER_REQUEST_TIMEOUT_MS = 30_000
 /**
- * App-owned Codex feature enablements for the resident app-server. These live
- * here — passed as per-invocation `--enable` flags, never written to Codex's
- * own `config.toml` — so a Codex reinstall or config reset can never flip
- * them back off. Codex hard-errors on an unknown `--enable` flag, so if an
- * update renames or removes a feature the app-server dies at spawn and
- * createAppServerHost retries once without the flags (see codexFeaturesUnsupported).
+ * CIO-owned app-server override that exposes Codex's structured question tool
+ * in default mode. Passing it on every spawn keeps the behavior independent
+ * from the user's Codex config and from CLI updates resetting feature flags.
  */
-const CODEX_APP_SERVER_FEATURES = ['default_mode_request_user_input'] as const
+const CODEX_DEFAULT_QUESTION_CONFIG = 'tools.experimental_request_user_input={}'
+const CODEX_ASYNC_QUESTION_METHOD = 'item/tool/requestUserInputAsync'
 
 interface CodexAppServerHost {
   child: ChildProcess
@@ -630,8 +628,12 @@ export class CodexDriver extends PersistentCliDriver {
     answers: string[][]
   ): Promise<void> {
     const request = this.serverRequests.get(requestId)
-    if (!request || !isCodexQuestionRequest(request.method)) {
+    if (!request || (!isCodexQuestionRequest(request.method) && !isCodexAsyncQuestion(request))) {
       throw new QuestionRequestGoneError(sessionId, requestId, this.name)
+    }
+    if (isCodexAsyncQuestion(request)) {
+      await this.continueAsyncQuestion(request, answers)
+      return
     }
     const questionIds = codexQuestionIds(request.params)
     const mappedAnswers: Record<string, { answers: string[] }> = {}
@@ -648,13 +650,60 @@ export class CodexDriver extends PersistentCliDriver {
     requestId: string
   ): Promise<void> {
     const request = this.serverRequests.get(requestId)
-    if (!request || !isCodexQuestionRequest(request.method)) {
+    if (!request || (!isCodexQuestionRequest(request.method) && !isCodexAsyncQuestion(request))) {
       throw new QuestionRequestGoneError(sessionId, requestId, this.name)
+    }
+    if (isCodexAsyncQuestion(request)) {
+      await this.continueAsyncQuestion(request)
+      return
     }
     const answers: Record<string, { answers: string[] }> = {}
     for (const id of codexQuestionIds(request.params)) answers[id] = { answers: [] }
     this.writeServerResponse(request, { answers })
     this.serverRequests.delete(requestId)
+  }
+
+  private async continueAsyncQuestion(
+    request: CodexServerRequest,
+    answers?: string[][]
+  ): Promise<void> {
+    const active = this.activeTurns.get(request.sessionId)
+    const requestId = String(request.id)
+    if (
+      !active?.nativeThreadId ||
+      !active.turnId ||
+      active.finished ||
+      active.host !== request.host
+    ) {
+      this.serverRequests.delete(requestId)
+      throw new InactiveQuestionTurnError(request.sessionId, requestId, this.name)
+    }
+    const questions = request.questions ?? normalizeAgentQuestions(request.params)
+    const decisions = questions.map((question, index) => ({
+      question: question.prompt,
+      answers: answers?.[index] ?? []
+    }))
+    const text = answers
+      ? [
+          '[Authoritative agent question answer]',
+          'The user submitted these answers. Continue the original task using them.',
+          JSON.stringify(decisions)
+        ].join('\n')
+      : 'The user dismissed the structured question. Continue the original task without an answer.'
+    try {
+      await this.appServerRequest(active.host, 'turn/steer', {
+        threadId: active.nativeThreadId,
+        input: [{ type: 'text', text, text_elements: [] }],
+        expectedTurnId: active.turnId
+      })
+      this.serverRequests.delete(requestId)
+    } catch (error) {
+      if (active.finished || this.activeTurns.get(request.sessionId) !== active) {
+        this.serverRequests.delete(requestId)
+        throw new InactiveQuestionTurnError(request.sessionId, requestId, this.name)
+      }
+      throw error
+    }
   }
 
   override async abort(projectPath: string, sessionId: string): Promise<void> {
@@ -769,40 +818,11 @@ export class CodexDriver extends PersistentCliDriver {
     this.stopAppServerHost(host, 'Codex app-server stopped after genuine inactivity')
   }
 
-  /**
-   * `--enable` args for the resident app-server, disabled permanently for
-   * this driver instance once an installed Codex rejects them (an update
-   * renamed or removed a feature). Without the flags the app-server still
-   * works — it just loses the feature behavior — which beats failing every
-   * session.
-   */
-  private codexFeaturesUnsupported = false
-
-  private appServerFeatureArgs(): string[] {
-    return this.codexFeaturesUnsupported
-      ? []
-      : CODEX_APP_SERVER_FEATURES.flatMap((feature) => ['--enable', feature])
-  }
-
-  /** Resolves when the app-server exits citing an unknown feature flag; stays
-   *  pending for every other exit so the normal failure path (initialize
-   *  rejection) reports it. */
-  private waitForUnknownFeatureExit(host: CodexAppServerHost): Promise<'unknown-feature'> {
-    return new Promise((resolve) => {
-      const onExit = (): void => {
-        if (/Unknown feature flag/iu.test(host.stderrBuffer)) resolve('unknown-feature')
-      }
-      host.child.once('exit', onExit)
-      host.child.once('error', onExit)
-    })
-  }
-
   private async createAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
     const { env: providerEnv, args: providerArgs } = await this.customProviderOverlay()
-    const featureArgs = this.appServerFeatureArgs()
     const prepared = await prepareHarnessInvocation(
       'codex',
-      [...providerArgs, 'app-server', ...featureArgs, '--listen', 'stdio://'],
+      [...providerArgs, 'app-server', '-c', CODEX_DEFAULT_QUESTION_CONFIG, '--listen', 'stdio://'],
       {
         cwd: projectPath,
         env: { ...buildProcessEnvironment(), ...providerEnv }
@@ -827,33 +847,11 @@ export class CodexDriver extends PersistentCliDriver {
     // session) so thread-scoped process kills (thread deletion, SourcesPanel
     // "kill thread processes") never SIGTERM the universal session.
     this.observeHarnessProcess(undefined, child, 'codex app-server', projectPath)
-    // A Codex update can rename or remove an enabled feature; Codex then
-    // refuses to start at all ("Error: Unknown feature flag"). Detect that
-    // fast-fail, permanently drop the flags for this driver instance, and
-    // respawn once — the app-server without the flags still works.
-    const unknownFeatureExit = this.waitForUnknownFeatureExit(host)
-    const initialize = (async () => {
-      await this.appServerRequest(host, 'initialize', {
-        clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
-        capabilities: { experimentalApi: true }
-      })
-      this.appServerNotify(host, 'initialized')
-    })()
-    // The race can abandon `initialize` (feature-fail retry) — keep a catch so
-    // the abandoned promise never becomes an unhandled rejection.
-    void initialize.catch(() => undefined)
-    const outcome = await Promise.race([
-      unknownFeatureExit,
-      initialize.then(() => 'initialized' as const)
-    ])
-    if (outcome === 'unknown-feature') {
-      this.codexFeaturesUnsupported = true
-      Logger.info(
-        'Codex rejected the app-server feature flags (update renamed or removed one); retrying without them'
-      )
-      this.stopAppServerHost(host, 'Codex app-server restarting without unsupported feature flags')
-      return this.createAppServerHost(projectPath)
-    }
+    await this.appServerRequest(host, 'initialize', {
+      clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
+      capabilities: { experimentalApi: true }
+    })
+    this.appServerNotify(host, 'initialized')
     return host
   }
 
@@ -1078,6 +1076,7 @@ export class CodexDriver extends PersistentCliDriver {
       // The app already owns a presentation-safe user bubble, so broadcasting
       // this transport echo would expose developer instructions in the trace.
       if (item && stringValue(item['type']) !== 'user_message') {
+        if (this.captureAsyncQuestion(active, item)) return
         this.applyCodexResult(
           active,
           parseItem(item, method === 'item/completed', active.session.id)
@@ -1171,6 +1170,34 @@ export class CodexDriver extends PersistentCliDriver {
         ? (codexUsageLimitIssue(error, message ?? '') ?? active.failureIssue)
         : active.failureIssue
     void this.completeAppServerTurn(active, message, issue)
+  }
+
+  /** Promote Codex's asynchronous default-mode question item into CIO's
+   *  question lifecycle and suppress its Markdown fallback from the transcript. */
+  private captureAsyncQuestion(active: CodexAppServerTurn, item: Record<string, unknown>): boolean {
+    if (stringValue(item['type']) !== 'agent_message' || !Array.isArray(item['questions'])) {
+      return false
+    }
+    const itemId = stringValue(item['id'])
+    if (!itemId) return false
+    if (this.serverRequests.has(itemId)) return true
+    const params = { questions: item['questions'] }
+    const questions = normalizeAgentQuestions(params, stringValue(item['text']))
+    this.serverRequests.set(itemId, {
+      id: itemId,
+      host: active.host,
+      sessionId: active.session.id,
+      method: CODEX_ASYNC_QUESTION_METHOD,
+      params,
+      questions
+    })
+    this.emit({
+      type: 'question.asked',
+      sessionId: active.session.id,
+      requestId: itemId,
+      questions
+    })
+    return true
   }
 
   private handleServerRequest(
@@ -2123,6 +2150,10 @@ function isCodexPermissionRequest(method: string): boolean {
 
 function isCodexQuestionRequest(method: string): boolean {
   return method === 'item/tool/requestUserInput'
+}
+
+function isCodexAsyncQuestion(request: CodexServerRequest): boolean {
+  return request.method === CODEX_ASYNC_QUESTION_METHOD
 }
 
 // `turn/started` fires the instant Codex's own retry loop begins its next

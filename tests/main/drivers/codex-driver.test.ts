@@ -228,8 +228,8 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     })
     expect(spawnMock.mock.calls[0]?.[1]).toEqual([
       'app-server',
-      '--enable',
-      'default_mode_request_user_input',
+      '-c',
+      'tools.experimental_request_user_input={}',
       '--listen',
       'stdio://'
     ])
@@ -604,9 +604,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       }
     })
     await vi.waitFor(() => {
-      expect(events).toContainEqual(
-        expect.objectContaining({ type: 'session.error', sessionId })
-      )
+      expect(events).toContainEqual(expect.objectContaining({ type: 'session.error', sessionId }))
     })
     const errorEvent = events.find(
       (event) => event.type === 'session.error' && event.sessionId === sessionId
@@ -644,9 +642,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       }
     })
     await vi.waitFor(() => {
-      expect(events).toContainEqual(
-        expect.objectContaining({ type: 'session.error', sessionId })
-      )
+      expect(events).toContainEqual(expect.objectContaining({ type: 'session.error', sessionId }))
     })
     const errorEvent = events.find(
       (event) => event.type === 'session.error' && event.sessionId === sessionId
@@ -682,9 +678,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       }
     })
     await vi.waitFor(() => {
-      expect(events).toContainEqual(
-        expect.objectContaining({ type: 'session.error', sessionId })
-      )
+      expect(events).toContainEqual(expect.objectContaining({ type: 'session.error', sessionId }))
     })
     const errorEvent = events.find(
       (event) => event.type === 'session.error' && event.sessionId === sessionId
