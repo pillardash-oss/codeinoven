@@ -7,6 +7,7 @@
  * even when the thread view is not mounted.
  */
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { mergeStreamedPart } from '$lib/agent-part-merge'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageId as createMessageId } from '$shared/id'
 import {
@@ -934,7 +935,9 @@ class ThreadMessagesStore {
       if (partIndex === -1) {
         msg.parts = [...msg.parts, part]
       } else {
-        msg.parts[partIndex] = part
+        // A snapshot shorter than what already streamed must never wipe the
+        // streamed text (see mergeStreamedPart).
+        msg.parts[partIndex] = mergeStreamedPart(msg.parts[partIndex], part)
       }
       entry.messages = [...entry.messages]
     }
