@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { access, mkdir, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { basename, dirname, extname, join } from 'node:path'
 import type {
   SpeechCapability,
   SpeechCapabilitySnapshot,
@@ -80,6 +81,25 @@ const UNLOAD_MS: Record<Exclude<SpeechUnloadOption, 'keep'>, number> = {
   '20m': 20 * 60_000,
   '30m': 30 * 60_000
 }
+
+/** Audio file extensions accepted by the Sound Playground importer. */
+const PLAYGROUND_AUDIO_EXTENSIONS = new Set([
+  'mp3',
+  'wav',
+  'ogg',
+  'oga',
+  'm4a',
+  'flac',
+  'webm',
+  'aac',
+  'opus',
+  'wma',
+  'aif',
+  'aiff'
+])
+
+/** Hard cap for a single playground audio source. */
+const MAX_PLAYGROUND_AUDIO_BYTES = 200 * 1024 * 1024
 
 const CAPABILITY_RUNTIME_MAP: Record<SpeechCapability, SpeechRuntime[]> = {
   asr: ['sherpa-onnx', 'mlx', 'coreml'],
@@ -171,6 +191,10 @@ export class SpeechService {
   }
   private readonly unloadTimers = new Map<SpeechCapability, NodeJS.Timeout>()
   private readonly lastUsed = new Map<SpeechCapability, number>()
+  private readonly playgroundAudio = new Map<
+    string,
+    { path: string; byteSize: number; mimeType: string }
+  >()
 
   constructor(
     private readonly paths: SpeechServicePaths,
@@ -552,6 +576,148 @@ export class SpeechService {
     } else {
       this.touch('asr')
     }
+  }
+
+  private playgroundDirectory(): string {
+    return join(tmpdir(), 'codeinoven-speech-playground')
+  }
+
+  /**
+   * Stage renderer-recorded audio bytes for the ephemeral Sound Playground.
+   * The copy lives only in a temp directory tracked in memory; it is never
+   * written to speech history storage.
+   */
+  async stagePlaygroundAudio(
+    audio: Uint8Array,
+    mimeType: string
+  ): Promise<{ token: string; byteSize: number }> {
+    if (!(audio instanceof Uint8Array) || audio.byteLength === 0) {
+      throw new RangeError('Audio is empty or invalid.')
+    }
+    if (audio.byteLength > MAX_PLAYGROUND_AUDIO_BYTES) {
+      throw new RangeError('Audio is too large (limit 200 MB).')
+    }
+    const type = mimeType === '' ? 'audio/webm' : mimeType.slice(0, 128)
+    await mkdir(this.playgroundDirectory(), { recursive: true })
+    const token = randomUUID()
+    const target = join(this.playgroundDirectory(), `playground-${token}.webm`)
+    await writeFile(target, audio)
+    this.playgroundAudio.set(token, { path: target, byteSize: audio.byteLength, mimeType: type })
+    return { token, byteSize: audio.byteLength }
+  }
+
+  /**
+   * Import a user-picked audio file into the ephemeral Sound Playground. The
+   * file is copied to the playground temp directory so nothing references the
+   * original after the session ends.
+   */
+  async importPlaygroundAudioFromPath(
+    rawPath: string
+  ): Promise<{ token: string; byteSize: number; fileName: string }> {
+    const normalizedPath = normalizePastedPath(rawPath)
+    if (!normalizedPath.normalized) throw new RangeError('The audio path is not allowed.')
+    const extension = extname(normalizedPath.normalized).toLowerCase()
+    if (!PLAYGROUND_AUDIO_EXTENSIONS.has(extension.replace(/^\./u, ''))) {
+      throw new RangeError(`Unsupported audio file type "${extension || '(none)'}".`)
+    }
+    const original = await readFile(normalizedPath.normalized)
+    if (original.byteLength === 0) throw new RangeError('The audio file is empty.')
+    if (original.byteLength > MAX_PLAYGROUND_AUDIO_BYTES) {
+      throw new RangeError('Audio is too large (limit 200 MB).')
+    }
+    await mkdir(this.playgroundDirectory(), { recursive: true })
+    const token = randomUUID()
+    const target = join(this.playgroundDirectory(), `playground-${token}.${extension}`)
+    await writeFile(target, original)
+    this.playgroundAudio.set(token, {
+      path: target,
+      byteSize: original.byteLength,
+      mimeType: `audio/${extension === '.mp3' ? 'mpeg' : extension.replace(/^\./u, '')}`
+    })
+    return { token, byteSize: original.byteLength, fileName: basename(normalizedPath.normalized) }
+  }
+
+  /** Read staged playground audio so the renderer can build a playback URL. */
+  async readPlaygroundAudio(token: string): Promise<Uint8Array> {
+    const staged = this.playgroundAudio.get(token)
+    if (!staged) {
+      throw new Error('The playground audio is no longer available. Record or import it again.')
+    }
+    return new Uint8Array(await readFile(staged.path))
+  }
+
+  /**
+   * Transcribe staged playground audio without touching speech history. When
+   * `cleanupMode` is not disabled, the raw transcript flows through the same
+   * cleanup service used by dictation.
+   */
+  async playgroundTranscribe(
+    token: string,
+    runtime: SpeechRuntime,
+    artifactId: string,
+    language: string | 'auto',
+    cleanupMode: SpeechCleanupMode = { kind: 'disabled' }
+  ): Promise<{ rawTranscript: string; finalTranscript: string }> {
+    const staged = this.playgroundAudio.get(token)
+    if (!staged) {
+      throw new Error('The playground audio is no longer available. Record or import it again.')
+    }
+    this.clearEvict('asr')
+    if (cleanupMode.kind === 'local') this.clearEvict('cleanup')
+    const artifact = this.requireSelectableArtifact(artifactId, runtime, 'asr')
+    const backend = this.requireBackend(runtime)
+    const modelFamily =
+      artifact.files.length > 0 &&
+      (artifact.familyId === 'whisper' || artifact.familyId === 'parakeet')
+        ? artifact.familyId
+        : undefined
+    const queued = this.queue.enqueue({
+      capability: 'asr',
+      runtime,
+      run: (signal) =>
+        backend.transcribe(
+          {
+            artifact: {
+              id: artifact.id,
+              directory: this.artifactDirectory(artifact.id),
+              ...(modelFamily ? { modelFamily } : {})
+            },
+            audioPath: staged.path,
+            language
+          },
+          signal
+        )
+    })
+    try {
+      const rawTranscript = (await queued.result).trim()
+      if (rawTranscript.length === 0) {
+        throw new Error('The speech runtime returned an empty transcript.')
+      }
+      let finalTranscript = rawTranscript
+      if (cleanupMode.kind !== 'disabled') {
+        finalTranscript = (await this.runCleanup(rawTranscript, cleanupMode, { kind: 'global' }))
+          .text
+      }
+      this.touch('asr')
+      if (cleanupMode.kind === 'local') this.touch('cleanup')
+      return { rawTranscript, finalTranscript }
+    } catch (cause) {
+      Logger.error('Playground transcription failed', {
+        runtime,
+        artifactId,
+        jobId: queued.id,
+        error: this.asError(cause, 'transcription-failed').message
+      })
+      throw cause
+    }
+  }
+
+  /** Delete a staged playground audio copy. Ephemeral by contract. */
+  async discardPlaygroundAudio(token: string): Promise<void> {
+    const staged = this.playgroundAudio.get(token)
+    if (!staged) return
+    this.playgroundAudio.delete(token)
+    await rm(staged.path, { force: true }).catch(() => undefined)
   }
 
   async history(cursor?: string, limit?: number): Promise<SpeechHistoryPage> {
@@ -1649,6 +1815,10 @@ export class SpeechService {
         'Recording stopped because the application shut down.'
       ).catch(() => undefined)
     }
+    for (const staged of this.playgroundAudio.values()) {
+      await rm(staged.path, { force: true }).catch(() => undefined)
+    }
+    this.playgroundAudio.clear()
     await this.nativeCapture.dispose()
     await this.queue.dispose()
     await Promise.all([...this.backends.values()].map((backend) => backend.dispose()))

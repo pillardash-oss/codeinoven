@@ -885,7 +885,10 @@ export interface IpcInvokeContract {
   'agent:listProviders': Contract<[projectId: string], ProviderCatalog[]>
   'agent:listProviderSnapshot': Contract<[projectId: string], ProviderCatalog[]>
   'agent:refreshProviderCatalog': Contract<[projectId: string, force?: boolean], ProviderCatalog[]>
-  'agent:refreshAccountUsage': Contract<[overrides?: AgentAccountUsageOverrides], AgentAccountUsage[]>
+  'agent:refreshAccountUsage': Contract<
+    [overrides?: AgentAccountUsageOverrides],
+    AgentAccountUsage[]
+  >
   /** Redeem one banked Codex rate-limit reset credit. Destructive: resets the
    *  account's active usage windows and consumes one banked credit. */
   'agent:activateBankedReset': Contract<
@@ -1323,6 +1326,31 @@ export interface IpcInvokeContract {
     [sessionId?: string],
     import('./speech/types').SpeechResult<boolean>
   >
+  /** Stage renderer-recorded audio bytes for the ephemeral Sound Playground. */
+  'speech:playgroundStage': Contract<
+    [audio: Uint8Array<ArrayBuffer>, mimeType: string],
+    import('./speech/types').SpeechResult<{ token: string; byteSize: number }>
+  >
+  /** Import a user-picked audio file into the ephemeral Sound Playground. */
+  'speech:playgroundImportPath': Contract<
+    [path: string],
+    import('./speech/types').SpeechResult<{ token: string; byteSize: number; fileName: string }>
+  >
+  'speech:playgroundReadAudio': Contract<
+    [token: string],
+    import('./speech/types').SpeechResult<Uint8Array<ArrayBuffer>>
+  >
+  'speech:playgroundTranscribe': Contract<
+    [
+      token: string,
+      runtime: import('./speech/types').SpeechRuntime,
+      artifactId: string,
+      language: string,
+      cleanupMode: import('./speech/types').SpeechCleanupMode
+    ],
+    import('./speech/types').SpeechResult<{ rawTranscript: string; finalTranscript: string }>
+  >
+  'speech:playgroundDiscard': Contract<[token: string], import('./speech/types').SpeechResult<void>>
   'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
   'dialog:pickFiles': Contract<[scope?: AttachmentStorageScope], string[]>
   'dialog:pickImage': Contract<[], string | null>

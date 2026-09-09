@@ -25,6 +25,7 @@
   import PasteModelPathModal from './PasteModelPathModal.svelte'
   import HistoryAudioPlayer from './HistoryAudioPlayer.svelte'
   import VoiceShortcutInput from './VoiceShortcutInput.svelte'
+  import SoundPlaygroundTab from './SoundPlaygroundTab.svelte'
 
   interface Props {
     settings: SpeechSettings
@@ -39,7 +40,7 @@
     isImported?: boolean
   }
 
-  type SoundTab = 'models' | 'history' | 'learning' | 'preferences'
+  type SoundTab = 'models' | 'history' | 'learning' | 'preferences' | 'playground'
   type ModelSubTab = 'asr' | 'tts' | 'llm'
 
   let { settings, settingsReady: _settingsReady, updateConfig }: Props = $props()
@@ -96,7 +97,8 @@
     { id: 'models', label: 'Models' },
     { id: 'history', label: 'History' },
     { id: 'learning', label: 'Learning' },
-    { id: 'preferences', label: 'Preferences' }
+    { id: 'preferences', label: 'Preferences' },
+    { id: 'playground', label: 'Playground' }
   ]
 
   const modelSubTabs: ReadonlyArray<{ id: ModelSubTab; label: string; hint: string }> = [
@@ -392,7 +394,9 @@
 
   {#if activeTab === 'history' || activeTab === 'learning'}
     <label class="relative block">
-      <span class="sr-only">Search {activeTab === 'history' ? 'recording history' : 'learned lessons'}</span>
+      <span class="sr-only"
+        >Search {activeTab === 'history' ? 'recording history' : 'learned lessons'}</span
+      >
       <Search
         size={15}
         class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
@@ -412,8 +416,7 @@
           class="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-dimmed hover:bg-overlay hover:text-foreground"
           title="Clear search"
           aria-label="Clear search"
-          onclick={() => (searchQuery = '')}
-          ><X size={13} aria-hidden="true" /></button
+          onclick={() => (searchQuery = '')}><X size={13} aria-hidden="true" /></button
         >
       {/if}
     </label>
@@ -442,7 +445,8 @@
             }}
           >
             <span class="block text-sm font-semibold leading-none">{sub.label}</span>
-            <span class="block text-[0.625rem] font-normal leading-none opacity-70">{sub.hint}</span>
+            <span class="block text-[0.625rem] font-normal leading-none opacity-70">{sub.hint}</span
+            >
           </button>
         {/each}
       </div>
@@ -629,7 +633,8 @@
         <span class="text-[0.6875rem] font-medium text-muted">Filter:</span>
         <button
           type="button"
-          class="rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter === 'all'
+          class="rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter ===
+          'all'
             ? 'bg-primary text-on-primary border-primary'
             : 'bg-elevated text-muted border-border hover:text-foreground'}"
           onclick={() => (runtimeFilter = 'all')}>All</button
@@ -637,7 +642,8 @@
         {#each runtimesForSubTab(activeModelSubTab) as rt (rt)}
           <button
             type="button"
-            class="rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter === rt
+            class="rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter ===
+            rt
               ? 'bg-primary text-on-primary border-primary'
               : 'bg-elevated text-muted border-border hover:text-foreground'}"
             onclick={() => (runtimeFilter = rt)}>{runtimeBadge(rt)}</button
@@ -1020,6 +1026,10 @@
           </p>
         {/if}
       </section>
+    {/if}
+
+    {#if activeTab === 'playground'}
+      <SoundPlaygroundTab {settings} />
     {/if}
 
     {#if activeTab === 'preferences'}
