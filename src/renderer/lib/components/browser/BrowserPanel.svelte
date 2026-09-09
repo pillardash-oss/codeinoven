@@ -50,6 +50,7 @@
       tabId,
       url: tabInitialUrl,
       title: tabInitialTitle,
+      favicon: null,
       loading: true,
       canGoBack: false,
       canGoForward: false
@@ -291,10 +292,19 @@
     </button>
     <label class="relative min-w-0 flex-1">
       <span class="sr-only">Browser address</span>
-      <Globe2
-        size={13}
-        class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
-      />
+      {#if pageState.favicon}
+        <img
+          src={pageState.favicon}
+          alt=""
+          class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+          aria-hidden="true"
+        />
+      {:else}
+        <Globe2
+          size={13}
+          class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
+        />
+      {/if}
       <input
         class="h-7 w-full rounded-lg border border-border bg-elevated pl-8 pr-8 text-xs text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary"
         class:border-danger={addressError !== ''}

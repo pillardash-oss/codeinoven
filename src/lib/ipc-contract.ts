@@ -225,6 +225,8 @@ export interface BrowserPageState {
   tabId: string
   url: string
   title: string
+  /** Favicon data URL reported by the page, or null until the page declares one. */
+  favicon: string | null
   loading: boolean
   canGoBack: boolean
   canGoForward: boolean

@@ -31,6 +31,8 @@ interface BrowserTab {
   threadId: string
   initialNavigationStarted: boolean
   consoleEntries: BrowserConsoleEntry[]
+  /** Favicon data URL from the last `page-favicon-updated`, cleared on navigation. */
+  favicon: string | null
 }
 
 interface PendingBrowserPermission {
@@ -492,16 +494,27 @@ export class BrowserService {
       projectId,
       threadId,
       initialNavigationStarted: false,
-      consoleEntries: []
+      consoleEntries: [],
+      favicon: null
     }
     this.tabs.set(tabId, tab)
 
     const publish = (): void => this.publishState(tabId)
     view.webContents.on('did-start-loading', publish)
     view.webContents.on('did-stop-loading', publish)
-    view.webContents.on('did-navigate', publish)
+    view.webContents.on('did-navigate', () => {
+      // A new document starts without an icon; the old site's favicon must not linger.
+      tab.favicon = null
+      publish()
+    })
     view.webContents.on('did-navigate-in-page', publish)
     view.webContents.on('page-title-updated', publish)
+    view.webContents.on('page-favicon-updated', (_event, favicons) => {
+      const favicon = favicons.find((candidate) => candidate.length > 0) ?? null
+      if (tab.favicon === favicon) return
+      tab.favicon = favicon
+      publish()
+    })
     view.webContents.on('console-message', (details) => {
       this.appendConsoleEntry(tabId, {
         level: details.level,
@@ -826,6 +839,7 @@ export class BrowserService {
       tabId,
       url: contents.getURL(),
       title: contents.getTitle(),
+      favicon: tab.favicon,
       loading: contents.isLoading(),
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward()
