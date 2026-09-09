@@ -549,6 +549,10 @@ const MUTATING_FILE_PATH_KEYS = new Set([
   'targetfile'
 ])
 
+const SHELL_COMMAND_INPUT_KEYS = ['command', 'cmd', 'script'] as const
+const SHELL_WORKING_DIRECTORY_INPUT_KEYS = ['cwd', 'workdir', 'workingDirectory'] as const
+const STATIC_PATH_EXPRESSION = String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[A-Za-z_$][\w$]*)`
+
 /** How long after a user's last terminal keystroke the user-activity window
  *  stays open, covering commands that finish writing files after Enter. */
 const USER_TERMINAL_SETTLE_MS = 10_000
@@ -599,11 +603,128 @@ function patchPaths(patch: string): string[] {
   )
 }
 
+function staticStringValue(value: string): string | null {
+  const quote = value[0]
+  if ((quote !== '"' && quote !== "'" && quote !== '`') || value.at(-1) !== quote) return null
+  const content = value.slice(1, -1)
+  if (quote === '`' && content.includes('${')) return null
+  return content.replaceAll(/\\([\\'"` ])/gu, '$1')
+}
+
+function shellVariableValues(command: string): Map<string, string> {
+  const values = new Map<string, string>()
+  const assignments = new RegExp(
+    String.raw`(?:^|[;\n"'])\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*=\s*(${STATIC_PATH_EXPRESSION})`,
+    'gmu'
+  )
+  for (const match of command.matchAll(assignments)) {
+    const name = match[1]
+    const literal = match[2]
+    if (!name || !literal) continue
+    const value = staticStringValue(literal)
+    if (value !== null) values.set(name, value)
+  }
+  return values
+}
+
+function shellWorkingDirectory(
+  projectPath: string,
+  input: Record<string, unknown>,
+  command: string
+): string {
+  let workingDirectory = projectPath
+  for (const key of SHELL_WORKING_DIRECTORY_INPUT_KEYS) {
+    const candidate = input[key]
+    if (typeof candidate !== 'string') continue
+    const normalized = projectRelativePath(projectPath, candidate)
+    if (normalized) workingDirectory = resolve(projectPath, normalized)
+    break
+  }
+  const directoryChanges = new RegExp(
+    String.raw`(?:^|&&|;|\n)\s*cd\s+("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;&|]+)(?=\s*(?:&&|;|\n|$))`,
+    'gmu'
+  )
+  for (const match of command.matchAll(directoryChanges)) {
+    const literal = match[1]
+    if (!literal) continue
+    const directory = staticStringValue(literal) ?? literal
+    if (directory === null || directory.includes('$')) continue
+    const absolute = isAbsolute(directory)
+      ? resolve(directory)
+      : resolve(workingDirectory, directory)
+    if (projectRelativePath(projectPath, absolute)) workingDirectory = absolute
+  }
+  return workingDirectory
+}
+
+/** Extract conservatively identifiable write targets from shell source. The
+ * completion snapshot validates every path, so a command that names a file but
+ * leaves its content unchanged cannot create a file-card entry. */
+function shellWritePaths(projectPath: string, input: Record<string, unknown>): string[] {
+  const command = SHELL_COMMAND_INPUT_KEYS.map((key) => input[key]).find(
+    (value): value is string => typeof value === 'string'
+  )
+  if (!command) return []
+  const variables = shellVariableValues(command)
+  const candidates: string[] = []
+  const addExpression = (expression: string | undefined): void => {
+    if (!expression) return
+    const literal = staticStringValue(expression)
+    const candidate =
+      literal ??
+      variables.get(expression) ??
+      (/[/.[\]\\]/u.test(expression) ? expression : undefined)
+    if (candidate) candidates.push(candidate)
+  }
+  const firstArgumentWriters = new RegExp(
+    String.raw`\b(?:Bun\s*\.\s*write|Deno\s*\.\s*(?:writeFile|writeTextFile)|(?:fs\s*\.\s*(?:promises\s*\.\s*)?)?(?:appendFile|appendFileSync|outputFile|outputFileSync|writeFile|writeFileSync))\s*\(\s*(${STATIC_PATH_EXPRESSION})`,
+    'gmu'
+  )
+  const pythonOpenMode = new RegExp(
+    String.raw`\bopen\s*\(\s*(${STATIC_PATH_EXPRESSION})\s*,\s*["'][^"']*[awx+][^"']*["']`,
+    'gmu'
+  )
+  const pythonOpenWrite = new RegExp(
+    String.raw`\bopen\s*\(\s*(${STATIC_PATH_EXPRESSION})\s*\)\s*\.\s*(?:truncate|write|writelines)\s*\(`,
+    'gmu'
+  )
+  const pythonPathWriter = new RegExp(
+    String.raw`\bPath\s*\(\s*(${STATIC_PATH_EXPRESSION})\s*\)\s*\.\s*(?:touch|write_bytes|write_text)\s*\(`,
+    'gmu'
+  )
+  for (const pattern of [firstArgumentWriters, pythonOpenMode, pythonOpenWrite, pythonPathWriter]) {
+    for (const match of command.matchAll(pattern)) addExpression(match[1])
+  }
+  for (const match of command.matchAll(
+    /(?:^|[\s;|&])(?:\d*)>>?\s*(?![&>])("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;|&]+)/gmu
+  )) {
+    addExpression(match[1])
+  }
+  candidates.push(...patchPaths(command))
+  const workingDirectory = shellWorkingDirectory(projectPath, input, command)
+  return [
+    ...new Set(
+      candidates
+        .map((candidate) =>
+          projectRelativePath(
+            projectPath,
+            isAbsolute(candidate) ? candidate : resolve(workingDirectory, candidate)
+          )
+        )
+        .filter((candidate): candidate is string => candidate !== null)
+    )
+  ]
+}
+
 export function changedPathsFromTool(
   projectPath: string,
   part: Extract<AgentPart, { type: 'tool' }>
 ): string[] {
-  if (!MUTATING_FILE_TOOLS.has(normalizedToolName(part.tool))) return []
+  const tool = normalizedToolName(part.tool)
+  if (UNBOUNDED_MUTATING_TOOLS.has(tool)) {
+    return shellWritePaths(projectPath, part.state.input)
+  }
+  if (!MUTATING_FILE_TOOLS.has(tool)) return []
   const candidates: string[] = []
   const input = part.state.input
   for (const [key, value] of Object.entries(input)) {
@@ -1200,6 +1321,9 @@ interface SessionInfo {
   preciseChangedPaths?: Map<string, number>
   /** Shell-like tool part ids currently in flight for the active turn. */
   openUnboundedTools?: Set<string>
+  /** Whether this turn invoked a shell-like tool. Its before/after project diff
+   *  is the completion fallback if command parsing or a stat window misses a write. */
+  unboundedToolObserved?: boolean
   /** Paths the user saved through the in-app editor while this turn ran.
    *  These are the user's own edits — never attributed to the thread. */
   userTouchedPaths?: Set<string>
@@ -18207,6 +18331,7 @@ export class ChatEngine {
         }
         if (session?.activeTurnId) {
           if (UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
+            session.unboundedToolObserved = true
             this.trackUnboundedToolWindow(session, part.id, part.state.status)
           }
           const precisePaths = changedPathsFromTool(session.projectPath, part)
@@ -18496,9 +18621,15 @@ export class ChatEngine {
       session.changedPaths = new Set(checkpoint.changes.map((change) => change.path))
       session.preciseChangedPaths = new Map()
       session.openUnboundedTools = undefined
+      session.unboundedToolObserved = unboundedClaim
       session.unboundedWindowStart = undefined
       session.pendingWindowScans = undefined
-      for (const path of claimedPaths) session.changedPaths.add(path)
+      const claimedAt = Date.now()
+      for (const path of claimedPaths) {
+        if (session.userTouchedPaths?.has(path)) continue
+        session.changedPaths.add(path)
+        session.preciseChangedPaths.set(path, claimedAt)
+      }
       if (unboundedClaim) {
         // A shell-like tool exposes no target paths, so its mutations must be
         // read off the workspace instead. Diff the current content against the
@@ -21563,11 +21694,11 @@ export class ChatEngine {
         info.projectPath,
         status,
         failure,
-        // A thread owns only mutations attributed through its tool events or a
-        // bounded shell window. An empty set is intentional: falling back to
-        // the project-wide before/after diff would claim concurrent work from
-        // every other thread sharing this scope.
-        info.changedPaths ?? new Set<string>(),
+        // Shell commands can hide writes inside Python, JavaScript, subprocesses,
+        // or syntax this parser has never seen. Use the full turn snapshot when
+        // one ran. completeTurn still removes user-owned paths and paths claimed
+        // by foreign threads, while precise parsed paths resolve same-file races.
+        info.unboundedToolObserved ? undefined : (info.changedPaths ?? new Set<string>()),
         {
           precisePaths: new Set(info.preciseChangedPaths?.keys() ?? []),
           foreignClaimedPaths: this.liveForeignClaimedPaths(info, ownThreadIds),
@@ -21584,6 +21715,7 @@ export class ChatEngine {
       info.preciseChangedPaths = undefined
       info.userTouchedPaths = undefined
       info.openUnboundedTools = undefined
+      info.unboundedToolObserved = undefined
       info.unboundedWindowStart = undefined
       info.pendingWindowScans = undefined
       const checkpointEvent = {
@@ -21865,6 +21997,7 @@ export class ChatEngine {
       preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
       userTouchedPaths: activeTurnId ? undefined : existing?.userTouchedPaths,
       openUnboundedTools: activeTurnId ? new Set() : existing?.openUnboundedTools,
+      unboundedToolObserved: activeTurnId ? false : existing?.unboundedToolObserved,
       unboundedWindowStart: activeTurnId ? undefined : existing?.unboundedWindowStart,
       pendingWindowScans: activeTurnId ? new Set() : existing?.pendingWindowScans,
       ephemeral: ephemeral ?? existing?.ephemeral
