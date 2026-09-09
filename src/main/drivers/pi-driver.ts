@@ -2687,10 +2687,12 @@ export class PiDriver extends PersistentCliDriver {
     sessionId: string
   ): Promise<AgentMessage[] | null> {
     // The chat engine captures a sub-agent's transcript the moment the spawn
-    // tool reports its childSessionId — often a few milliseconds before pi
-    // flushes the session's .jsonl to disk. Retry briefly so the live capture
-    // wins the race instead of leaving the sub-agent card transcript-less.
-    const attempts = 6
+    // tool reports its childSessionId — but pi only generates the session
+    // filename in memory at spawn and can take several seconds to flush the
+    // .jsonl to disk (observed ~3 s). Retry well past that so the live capture
+    // wins the race instead of leaving the sub-agent card transcript-less;
+    // the engine's capture race timeout is 15 s, so ~10 s stays inside it.
+    const attempts = 20
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       if (existsSync(nativePiSessionDir(projectPath))) {
         const file = await findNativePiSessionFile(projectPath, sessionId)
@@ -2704,7 +2706,7 @@ export class PiDriver extends PersistentCliDriver {
         }
       }
       if (attempt < attempts - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 250))
+        await new Promise((resolve) => setTimeout(resolve, 500))
       }
     }
     return null
