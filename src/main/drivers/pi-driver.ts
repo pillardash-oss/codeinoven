@@ -2686,15 +2686,25 @@ export class PiDriver extends PersistentCliDriver {
     projectPath: string,
     sessionId: string
   ): Promise<AgentMessage[] | null> {
-    if (existsSync(nativePiSessionDir(projectPath))) {
-      const file = await findNativePiSessionFile(projectPath, sessionId)
-      if (file) {
-        try {
-          return await parseNativePiSession(file, sessionId)
-        } catch (error) {
-          Logger.dev('Pi native sub-agent transcript parse failed:', error)
-          return null
+    // The chat engine captures a sub-agent's transcript the moment the spawn
+    // tool reports its childSessionId — often a few milliseconds before pi
+    // flushes the session's .jsonl to disk. Retry briefly so the live capture
+    // wins the race instead of leaving the sub-agent card transcript-less.
+    const attempts = 6
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (existsSync(nativePiSessionDir(projectPath))) {
+        const file = await findNativePiSessionFile(projectPath, sessionId)
+        if (file) {
+          try {
+            return await parseNativePiSession(file, sessionId)
+          } catch (error) {
+            Logger.dev('Pi native sub-agent transcript parse failed:', error)
+            return null
+          }
         }
+      }
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 250))
       }
     }
     return null
