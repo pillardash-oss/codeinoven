@@ -465,6 +465,9 @@ function subagentActivityFromPayload(
   const output = stringValue(payload['output'])
   const error = stringValue(payload['error'])
   const sessionFile = stringValue(payload['sessionFile'])
+  const files = Array.isArray(payload['files'])
+    ? payload['files'].filter((file): file is string => typeof file === 'string')
+    : undefined
   return {
     status:
       status === 'completed' || status === 'error'
@@ -477,6 +480,7 @@ function subagentActivityFromPayload(
     ...(childSessionId ? { childSessionId } : {}),
     ...(modelId ? { modelId } : {}),
     background: false,
+    ...(files && files.length > 0 ? { files } : {}),
     ...(output ? { output } : {}),
     ...(error ? { error } : {}),
     ...(sessionFile ? { metadata: { sessionFile } } : {})

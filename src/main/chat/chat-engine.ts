@@ -18743,6 +18743,31 @@ export class ChatEngine {
     this.broadcast({ type: 'session.status', sessionId: active.threadSessionId, status })
   }
 
+  /** Claim the file paths a sub-agent's worker reported through its activity
+   *  payload onto the owning thread's turn. While the turn is active the paths
+   *  join its live change tracking; after a premature settle they attach to the
+   *  just-completed checkpoint via the late-claim reopen path. */
+  private claimSubagentFiles(session: SessionInfo, files: readonly string[]): void {
+    const claimed: string[] = []
+    for (const file of files) {
+      const path = projectRelativePath(session.projectPath, file)
+      if (!path || session.userTouchedPaths?.has(path)) continue
+      claimed.push(path)
+    }
+    if (claimed.length === 0) return
+    if (session.activeTurnId) {
+      session.changedPaths ??= new Set()
+      session.preciseChangedPaths ??= new Map()
+      const claimedAt = Date.now()
+      for (const path of claimed) {
+        session.changedPaths.add(path)
+        session.preciseChangedPaths.set(path, claimedAt)
+      }
+      return
+    }
+    void this.reopenSettledTurnForLateClaim(session, claimed)
+  }
+
   private observeChildSession(driverId: string, event: SessionAgentEvent): void {
     if (
       event.type === 'message.part.updated' &&
@@ -18763,6 +18788,16 @@ export class ChatEngine {
           parentSessionId: registeredParent ? event.sessionId : inheritedOwner?.parentSessionId
         }
         this.childSessionOwners.set(childSessionId, owner)
+        // The worker's file-tool paths are the only reliable attribution for
+        // sub-agent edits: the child's CLI session can be disposed before any
+        // transcript capture runs, so claim them the moment they are reported.
+        if (event.part.activity.files?.length) {
+          const ownerSession = [...this.sessionRegistry.values()].find(
+            (candidate) =>
+              candidate.projectId === parent.projectId && candidate.threadId === parent.threadId
+          )
+          if (ownerSession) this.claimSubagentFiles(ownerSession, event.part.activity.files)
+        }
         const isTerminal =
           event.part.activity.status === 'completed' || event.part.activity.status === 'error'
         if (isTerminal) {

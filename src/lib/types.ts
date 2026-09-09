@@ -1834,6 +1834,8 @@ export interface AgentSubagentActivity {
   background: boolean
   output?: string
   error?: string
+  /** Project-relative paths the sub-agent's file tools edited or wrote. */
+  files?: string[]
   time?: { start: number; end?: number }
 }
 
