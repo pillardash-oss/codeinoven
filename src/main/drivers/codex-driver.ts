@@ -78,13 +78,56 @@ const CODEX_FALLBACK_MODELS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
 const CODEX_COMPACTION_TIMEOUT_MS = 180_000
 const CODEX_USAGE_TIMEOUT_MS = 15_000
 const CODEX_APP_SERVER_REQUEST_TIMEOUT_MS = 30_000
-/**
- * CIO-owned app-server override that exposes Codex's structured question tool
- * in default mode. Passing it on every spawn keeps the behavior independent
- * from the user's Codex config and from CLI updates resetting feature flags.
- */
+/** Compatibility fallback for Codex versions that expose their native async
+ * question item in default mode. The CIO-owned dynamic tool below is the
+ * authoritative, mode-independent path. */
 const CODEX_DEFAULT_QUESTION_CONFIG = 'tools.experimental_request_user_input={}'
 const CODEX_ASYNC_QUESTION_METHOD = 'item/tool/requestUserInputAsync'
+const CODEX_DYNAMIC_QUESTION_METHOD = 'item/tool/call:cio_ask_user'
+const CODEX_QUESTION_TOOL_NAME = 'cio_ask_user'
+const CODEX_QUESTION_TOOL = {
+  name: CODEX_QUESTION_TOOL_NAME,
+  description:
+    'Ask the user one to three structured questions in CodeInOven and wait for their answers. Use this instead of writing a question or choices as assistant text.',
+  inputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      questions: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 3,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            question: { type: 'string', minLength: 1 },
+            header: { type: 'string', minLength: 1, maxLength: 40 },
+            options: {
+              type: 'array',
+              minItems: 2,
+              maxItems: 3,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  label: { type: 'string', minLength: 1 },
+                  description: { type: 'string', minLength: 1 }
+                },
+                required: ['label', 'description']
+              }
+            },
+            multiple: { type: 'boolean' }
+          },
+          required: ['question', 'header', 'options']
+        }
+      }
+    },
+    required: ['questions']
+  }
+} as const
+const CODEX_QUESTION_INSTRUCTION =
+  'The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode.'
 
 interface CodexAppServerHost {
   child: ChildProcess
@@ -503,23 +546,27 @@ export class CodexDriver extends PersistentCliDriver {
     this.appendUserMessage(session, options)
 
     try {
-      const dynamicTools = this.utilityEndpoints.has(session.id)
-        ? GATEWAY_TOOLS.map(({ name, description, inputSchema }) => ({
-            name,
-            description,
-            inputSchema
-          }))
-        : []
+      const dynamicTools = [
+        CODEX_QUESTION_TOOL,
+        ...(this.utilityEndpoints.has(session.id)
+          ? GATEWAY_TOOLS.map(({ name, description, inputSchema }) => ({
+              name,
+              description,
+              inputSchema
+            }))
+          : [])
+      ]
+      const developerInstructions = codexDeveloperInstructions(options.systemPrompt)
       const threadResult = session.nativeSessionId
         ? await this.appServerRequest(host, 'thread/resume', {
             threadId: session.nativeSessionId,
             dynamicTools,
-            developerInstructions: options.systemPrompt ?? null
+            developerInstructions
           })
         : await this.appServerRequest(host, 'thread/start', {
             cwd: projectPath,
             dynamicTools,
-            developerInstructions: options.systemPrompt ?? null,
+            developerInstructions,
             model: options.settings.modelId,
             approvalPolicy: codexApprovalPolicy(
               options.readOnly === true,
@@ -628,8 +675,17 @@ export class CodexDriver extends PersistentCliDriver {
     answers: string[][]
   ): Promise<void> {
     const request = this.serverRequests.get(requestId)
-    if (!request || (!isCodexQuestionRequest(request.method) && !isCodexAsyncQuestion(request))) {
+    if (
+      !request ||
+      (!isCodexQuestionRequest(request.method) &&
+        !isCodexAsyncQuestion(request) &&
+        !isCodexDynamicQuestion(request))
+    ) {
       throw new QuestionRequestGoneError(sessionId, requestId, this.name)
+    }
+    if (isCodexDynamicQuestion(request)) {
+      this.completeDynamicQuestion(request, answers)
+      return
     }
     if (isCodexAsyncQuestion(request)) {
       await this.continueAsyncQuestion(request, answers)
@@ -650,8 +706,17 @@ export class CodexDriver extends PersistentCliDriver {
     requestId: string
   ): Promise<void> {
     const request = this.serverRequests.get(requestId)
-    if (!request || (!isCodexQuestionRequest(request.method) && !isCodexAsyncQuestion(request))) {
+    if (
+      !request ||
+      (!isCodexQuestionRequest(request.method) &&
+        !isCodexAsyncQuestion(request) &&
+        !isCodexDynamicQuestion(request))
+    ) {
       throw new QuestionRequestGoneError(sessionId, requestId, this.name)
+    }
+    if (isCodexDynamicQuestion(request)) {
+      this.completeDynamicQuestion(request)
+      return
     }
     if (isCodexAsyncQuestion(request)) {
       await this.continueAsyncQuestion(request)
@@ -661,6 +726,26 @@ export class CodexDriver extends PersistentCliDriver {
     for (const id of codexQuestionIds(request.params)) answers[id] = { answers: [] }
     this.writeServerResponse(request, { answers })
     this.serverRequests.delete(requestId)
+  }
+
+  private completeDynamicQuestion(request: CodexServerRequest, answers?: string[][]): void {
+    const questions = request.questions ?? normalizeAgentQuestions(request.params)
+    const decisions = questions.map((question, index) => ({
+      question: question.prompt,
+      answers: answers?.[index] ?? []
+    }))
+    const text = answers
+      ? [
+          '[Authoritative agent question answer]',
+          'The user submitted these answers. Continue the original task using them.',
+          JSON.stringify(decisions)
+        ].join('\n')
+      : 'The user dismissed the structured question. Continue the original task without an answer.'
+    this.writeServerResponse(request, {
+      success: true,
+      contentItems: [{ type: 'inputText', text }]
+    })
+    this.serverRequests.delete(String(request.id))
   }
 
   private async continueAsyncQuestion(
@@ -1077,6 +1162,7 @@ export class CodexDriver extends PersistentCliDriver {
       // this transport echo would expose developer instructions in the trace.
       if (item && stringValue(item['type']) !== 'user_message') {
         if (this.captureAsyncQuestion(active, item)) return
+        if (isCodexDynamicQuestionItem(item)) return
         this.applyCodexResult(
           active,
           parseItem(item, method === 'item/completed', active.session.id)
@@ -1218,6 +1304,26 @@ export class CodexDriver extends PersistentCliDriver {
         params['turnId'] !== active.turnId
       ) {
         this.respondToUnsupportedAppServerRequest(host, id, method)
+        return
+      }
+      if (params['tool'] === CODEX_QUESTION_TOOL_NAME) {
+        const questionParams = recordValue(params['arguments']) ?? {}
+        const questions = normalizeAgentQuestions(questionParams)
+        const request: CodexServerRequest = {
+          id,
+          host,
+          sessionId: active.session.id,
+          method: CODEX_DYNAMIC_QUESTION_METHOD,
+          params: questionParams,
+          questions
+        }
+        this.serverRequests.set(String(id), request)
+        this.emit({
+          type: 'question.asked',
+          sessionId: active.session.id,
+          requestId: String(id),
+          questions
+        })
         return
       }
       void this.callUtilityTool(active, params).then((result) => {
@@ -2156,6 +2262,17 @@ function isCodexAsyncQuestion(request: CodexServerRequest): boolean {
   return request.method === CODEX_ASYNC_QUESTION_METHOD
 }
 
+function isCodexDynamicQuestion(request: CodexServerRequest): boolean {
+  return request.method === CODEX_DYNAMIC_QUESTION_METHOD
+}
+
+function isCodexDynamicQuestionItem(item: Record<string, unknown>): boolean {
+  return (
+    stringValue(item['type']) === 'function_call' &&
+    (stringValue(item['tool']) ?? stringValue(item['name'])) === CODEX_QUESTION_TOOL_NAME
+  )
+}
+
 // `turn/started` fires the instant Codex's own retry loop begins its next
 // attempt, before that attempt has round-tripped to the provider at all — it
 // is not evidence the retry succeeded. Treating it as recovery flipped the UI
@@ -2399,6 +2516,10 @@ function normalizeAppServerItem(
 
 function composePrompt(systemPrompt: string | undefined, text: string): string {
   return systemPrompt ? `${systemPrompt}\n\n${text}` : text
+}
+
+function codexDeveloperInstructions(systemPrompt: string | undefined): string {
+  return [systemPrompt?.trim(), CODEX_QUESTION_INSTRUCTION].filter(Boolean).join('\n\n')
 }
 
 async function localAttachmentPath(attachment: PromptAttachment): Promise<string> {

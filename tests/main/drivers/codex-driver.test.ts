@@ -14,6 +14,8 @@ import {
 } from '../../../src/main/drivers/codex-driver'
 
 const spawnMock = vi.hoisted(() => vi.fn())
+const codexQuestionInstruction =
+  'The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode.'
 vi.mock('child_process', async (importOriginal) => {
   const original = await importOriginal<typeof import('child_process')>()
   return { ...original, spawn: spawnMock }
@@ -237,8 +239,11 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       expect.objectContaining({
         method: 'thread/start',
         params: expect.objectContaining({
-          developerInstructions: 'Internal memory contract',
-          dynamicTools
+          developerInstructions: `Internal memory contract\n\n${codexQuestionInstruction}`,
+          dynamicTools: expect.arrayContaining([
+            expect.objectContaining({ name: 'cio_ask_user' }),
+            ...dynamicTools
+          ])
         })
       })
     )
@@ -473,7 +478,14 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     expect(sharedChild.requests()).toContainEqual({
       id: expect.any(Number),
       method: 'thread/resume',
-      params: { threadId: 'native-1', developerInstructions: null, dynamicTools }
+      params: {
+        threadId: 'native-1',
+        developerInstructions: codexQuestionInstruction,
+        dynamicTools: expect.arrayContaining([
+          expect.objectContaining({ name: 'cio_ask_user' }),
+          ...dynamicTools
+        ])
+      }
     })
     expect(sharedChild.requests()).toContainEqual(
       expect.objectContaining({
