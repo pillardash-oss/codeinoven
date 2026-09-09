@@ -13,6 +13,7 @@ import type {
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
+import { fetchIconAsDataUrl } from '../editor/favicon-service'
 
 const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
 const MAX_BROWSER_URL_LENGTH = 8192
@@ -510,10 +511,15 @@ export class BrowserService {
     view.webContents.on('did-navigate-in-page', publish)
     view.webContents.on('page-title-updated', publish)
     view.webContents.on('page-favicon-updated', (_event, favicons) => {
-      const favicon = favicons.find((candidate) => candidate.length > 0) ?? null
-      if (tab.favicon === favicon) return
-      tab.favicon = favicon
-      publish()
+      const source = favicons.find((candidate) => candidate.length > 0) ?? null
+      if (!source) return
+      // Electron reports icon URLs, but remote images are blocked by the
+      // renderer CSP — convert to a data URL so any consumer can render it.
+      void fetchIconAsDataUrl(source).then((favicon) => {
+        if (!favicon || tab.favicon === favicon) return
+        tab.favicon = favicon
+        publish()
+      })
     })
     view.webContents.on('console-message', (details) => {
       this.appendConsoleEntry(tabId, {

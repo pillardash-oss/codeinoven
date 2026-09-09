@@ -17,6 +17,8 @@ const FAVICON_TIMEOUT_MS = 8_000
 const MAX_HTML_BYTES = 128 * 1024
 const MAX_ICON_BYTES = 512 * 1024
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000
+/** Failures expire quickly so a server that wasn't up yet isn't stuck negative. */
+const NEGATIVE_CACHE_TTL_MS = 10 * 60 * 1000
 const BROWSER_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
 
@@ -33,10 +35,27 @@ export async function resolveFavicons(hosts: string[]): Promise<Record<string, s
       continue
     }
     const dataUrl = await resolveFavicon(host)
-    cache.set(host, { dataUrl, expiresAt: Date.now() + CACHE_TTL_MS })
+    cache.set(host, {
+      dataUrl,
+      expiresAt: Date.now() + (dataUrl ? CACHE_TTL_MS : NEGATIVE_CACHE_TTL_MS)
+    })
     result[host] = dataUrl
   }
   return result
+}
+
+/** Fetch an arbitrary icon URL into a CSP-safe data URL, or null on failure. */
+export function fetchIconAsDataUrl(url: string): Promise<string | null> {
+  if (url.startsWith('data:')) return Promise.resolve(url)
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return Promise.resolve(null)
+    }
+  } catch {
+    return Promise.resolve(null)
+  }
+  return fetchImageAsDataUrl(url)
 }
 
 async function resolveFavicon(host: string): Promise<string | null> {

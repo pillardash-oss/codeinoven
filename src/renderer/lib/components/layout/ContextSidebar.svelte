@@ -261,9 +261,9 @@
     {:else if tab.kind === 'actions'}
       <MonitorCog size={12} class="shrink-0" />
     {:else if tab.kind === 'browser'}
-      {#if faviconState.faviconFor(tab.url)}
+      {#if tab.favicon ?? faviconState.faviconFor(tab.url)}
         <img
-          src={faviconState.faviconFor(tab.url) ?? ''}
+          src={(tab.favicon ?? faviconState.faviconFor(tab.url)) ?? ''}
           alt=""
           class="h-3 w-3 shrink-0"
           aria-hidden="true"

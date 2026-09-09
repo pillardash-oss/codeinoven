@@ -4,7 +4,7 @@
   import {
     ArrowLeft,
     ArrowRight,
-    Globe2,
+    Lock,
     LoaderCircle,
     RotateCw,
     SquareTerminal,
@@ -77,6 +77,8 @@
   let consoleToggleLabel = $derived(
     activeSurface === 'console' ? 'Show browser page' : 'Show browser console'
   )
+  /** Show a padlock only for https origins; http gets no icon at all. */
+  let secure = $derived(pageState.url.startsWith('https:'))
 
   const attachContentElement: Attachment<HTMLDivElement> = (element) => {
     contentElement = element
@@ -146,7 +148,12 @@
     if (next.tabId !== tabId) return
     pageState = next
     if (next.url) address = next.url
-    contextSidebarState.updateBrowserTab(tabId, next.url || untrack(() => (tab as BrowserContextTab | null)?.url ?? tabInitialUrl), next.title)
+    contextSidebarState.updateBrowserTab(
+      tabId,
+      next.url || untrack(() => (tab as BrowserContextTab | null)?.url ?? tabInitialUrl),
+      next.title,
+      next.favicon
+    )
   }
 
   function mergeConsoleEntries(entries: BrowserConsoleEntry[]): void {
@@ -292,15 +299,8 @@
     </button>
     <label class="relative min-w-0 flex-1">
       <span class="sr-only">Browser address</span>
-      {#if pageState.favicon}
-        <img
-          src={pageState.favicon}
-          alt=""
-          class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
-          aria-hidden="true"
-        />
-      {:else}
-        <Globe2
+      {#if secure}
+        <Lock
           size={13}
           class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
         />
