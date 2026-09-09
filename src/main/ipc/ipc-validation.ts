@@ -1388,12 +1388,21 @@ export function validateScopeBoard(value: unknown): ScopeBoard {
 }
 
 const HOSTNAME_PATTERN =
-  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/iu
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?::\d{1,5})?$/iu
+
+function isValidPortSuffix(value: string): boolean {
+  const portIndex = value.lastIndexOf(':')
+  if (portIndex === -1) return true
+  const port = Number(value.slice(portIndex + 1))
+  return Number.isInteger(port) && port >= 1 && port <= 65_535
+}
 
 /**
  * Validate a list of hostnames used for favicon resolution. Each entry must be
- * a bounded, hostname-shaped string with no scheme, path, port, or control
- * characters. Deduplicates preserving first occurrence.
+ * a bounded, hostname-shaped string with no scheme, path, or control
+ * characters. An optional trailing `:port` (1–65535) is allowed so localhost
+ * development servers resolve against their real port. Deduplicates preserving
+ * first occurrence.
  */
 export function validateFaviconHostnames(value: unknown): string[] {
   if (!Array.isArray(value)) throw new TypeError('Favicon hostnames must be an array')
@@ -1406,11 +1415,12 @@ export function validateFaviconHostnames(value: unknown): string[] {
     if (
       typeof entry !== 'string' ||
       entry.length === 0 ||
-      entry.length > 253 ||
+      entry.length > 253 + 6 ||
       entry.includes('\0') ||
       entry.includes('\n') ||
       entry.includes('\r') ||
-      !HOSTNAME_PATTERN.test(entry)
+      !HOSTNAME_PATTERN.test(entry) ||
+      !isValidPortSuffix(entry)
     ) {
       throw new TypeError(`Favicon hostname at index ${index} is invalid`)
     }
