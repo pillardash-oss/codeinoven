@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { existsSync, createReadStream } from 'node:fs'
+import { existsSync, createReadStream, watch } from 'node:fs'
+import type { FSWatcher } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
@@ -1285,6 +1286,42 @@ async function findNativePiSessionFile(
   const matches = entries.filter((name) => name.endsWith(`_${sessionId}.jsonl`)).sort()
   const latest = matches.at(-1)
   return latest ? join(dir, latest) : null
+}
+
+/**
+ * Wait for pi to flush a sub-agent's native session transcript. pi creates
+ * the .jsonl in one synchronous write when the session's first assistant
+ * message completes, so watching the directory for its creation is the
+ * reliable signal — no polling. Resolves the file path, or null on timeout
+ * or if the directory cannot be watched.
+ */
+async function waitForNativePiSessionFile(
+  projectPath: string,
+  sessionId: string,
+  timeoutMs = 10_000
+): Promise<string | null> {
+  const dir = nativePiSessionDir(projectPath)
+  const suffix = `_${sessionId}.jsonl`
+  let watcher: FSWatcher
+  try {
+    watcher = watch(dir)
+  } catch {
+    return null
+  }
+  return new Promise<string | null>((resolve) => {
+    const timer = setTimeout(() => finish(null), timeoutMs)
+    const finish = (file: string | null): void => {
+      clearTimeout(timer)
+      watcher.close()
+      resolve(file)
+    }
+    watcher.on('error', () => finish(null))
+    watcher.on('rename', (filename) => {
+      if (typeof filename === 'string' && filename.endsWith(suffix)) {
+        finish(join(dir, filename))
+      }
+    })
+  })
 }
 
 function nativeUserMessageText(message: Record<string, unknown>): string | undefined {
@@ -2687,29 +2724,32 @@ export class PiDriver extends PersistentCliDriver {
     sessionId: string
   ): Promise<AgentMessage[] | null> {
     // The chat engine captures a sub-agent's transcript the moment the spawn
-    // tool reports its childSessionId — but pi only generates the session
-    // filename in memory at spawn and can take several seconds to flush the
-    // .jsonl to disk (observed ~3 s). Retry well past that so the live capture
-    // wins the race instead of leaving the sub-agent card transcript-less;
-    // the engine's capture race timeout is 15 s, so ~10 s stays inside it.
-    const attempts = 20
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      if (existsSync(nativePiSessionDir(projectPath))) {
-        const file = await findNativePiSessionFile(projectPath, sessionId)
-        if (file) {
-          try {
-            return await parseNativePiSession(file, sessionId)
-          } catch (error) {
-            Logger.dev('Pi native sub-agent transcript parse failed:', error)
-            return null
-          }
+    // tool reports its childSessionId — but pi defers a new session's first
+    // disk write until its first assistant message completes
+    // (SessionManager._persist), so the .jsonl can appear seconds later.
+    // React to the file's creation instead of polling: watch the session
+    // directory and parse as soon as pi flushes it. The engine's capture race
+    // timeout is 15 s, so a ~10 s wait stays inside it.
+    const file =
+      (await findNativePiSessionFile(projectPath, sessionId)) ??
+      (await waitForNativePiSessionFile(projectPath, sessionId))
+    if (!file) return null
+    // pi writes the flushed file synchronously before closing it, but keep a
+    // short stabilization window in case the create event lands mid-flush.
+    const populatedBy = Date.now() + 2_000
+    for (;;) {
+      try {
+        const messages = await parseNativePiSession(file, sessionId)
+        if (messages.length > 0) return messages
+      } catch (error) {
+        if (Date.now() >= populatedBy) {
+          Logger.dev('Pi native sub-agent transcript parse failed:', error)
+          return null
         }
       }
-      if (attempt < attempts - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 500))
-      }
+      if (Date.now() >= populatedBy) return null
+      await new Promise((resolve) => setTimeout(resolve, 150))
     }
-    return null
   }
 
   private async syncNativeSessionId(projectPath: string, sessionId: string): Promise<void> {
