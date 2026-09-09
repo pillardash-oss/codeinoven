@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte'
-  import { ChevronDown, ChevronUp, X } from '@lucide/svelte'
+  import { ChevronDown, ChevronRight, ChevronUp, Replace, ReplaceAll, X } from '@lucide/svelte'
 
   interface Props {
     query: string
@@ -11,7 +11,12 @@
     floating?: boolean
     focusTrigger?: number
     debounceMs?: number
+    enableReplace?: boolean
+    replaceValue?: string
     onQueryChange: (query: string) => void | Promise<void>
+    onReplaceChange?: (value: string) => void
+    onReplaceOne?: () => void
+    onReplaceAll?: () => void
     onNext: () => void
     onPrev: () => void
     onSubmit?: () => void
@@ -27,7 +32,12 @@
     floating = false,
     focusTrigger = 0,
     debounceMs = 180,
+    enableReplace = false,
+    replaceValue = '',
     onQueryChange,
+    onReplaceChange = undefined,
+    onReplaceOne = undefined,
+    onReplaceAll = undefined,
     onNext,
     onPrev,
     onSubmit,
@@ -41,6 +51,8 @@
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
   let handledFocusTrigger = -1
   let previousFocus: HTMLElement | null = null
+  let replaceOpen = $state(false)
+  let replaceInputEl = $state<HTMLInputElement | null>(null)
 
   function clearDebounce(): void {
     if (debounceTimer === null) return
@@ -84,6 +96,25 @@
     void tick().then(() => previousFocus?.focus())
   }
 
+  function toggleReplace(): void {
+    replaceOpen = !replaceOpen
+    if (replaceOpen) {
+      void tick().then(() => replaceInputEl?.focus())
+    }
+  }
+
+  function handleReplaceKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      handleClose()
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      onReplaceOne?.()
+    }
+  }
+
   $effect(() => {
     const trigger = focusTrigger
     if (!inputEl || handledFocusTrigger === trigger) return
@@ -98,14 +129,32 @@
 </script>
 
 <div
-  data-find-exclude
   class={[
-    'flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-border bg-surface px-2 shadow-xl',
+    'flex flex-col',
     floating ? 'absolute right-3 top-3 z-30 w-[min(26rem,calc(100%-1.5rem))]' : 'w-full'
   ]}
-  role="search"
-  aria-label={label}
 >
+  <div
+    data-find-exclude
+    class="flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-border bg-surface px-2 shadow-xl"
+    role="search"
+    aria-label={label}
+  >
+  {#if enableReplace}
+    <button
+      type="button"
+      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      aria-label={replaceOpen ? 'Hide replace' : 'Show replace'}
+      title={replaceOpen ? 'Hide replace' : 'Show replace'}
+      onclick={toggleReplace}
+    >
+      {#if replaceOpen}
+        <ChevronDown size={13} aria-hidden="true" />
+      {:else}
+        <ChevronRight size={13} aria-hidden="true" />
+      {/if}
+    </button>
+  {/if}
   <input
     bind:this={inputEl}
     type="search"
@@ -150,4 +199,40 @@
   >
     <X size={13} aria-hidden="true" />
   </button>
+  </div>
+  {#if enableReplace && replaceOpen}
+    <div class="mt-1 flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-border bg-surface pr-2 pl-9 shadow-xl">
+      <input
+        bind:this={replaceInputEl}
+        type="text"
+        class="h-7 min-w-0 flex-1 rounded-lg border border-border bg-app px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+        placeholder="Replace…"
+        aria-label="Replace"
+        value={replaceValue}
+        oninput={(event: Event & { currentTarget: HTMLInputElement }) =>
+          onReplaceChange?.(event.currentTarget.value)}
+        onkeydown={handleReplaceKeydown}
+      />
+      <button
+        type="button"
+        class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+        aria-label="Replace match"
+        title="Replace"
+        disabled={matches === 0 || !onReplaceOne}
+        onclick={() => onReplaceOne?.()}
+      >
+        <Replace size={13} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+        aria-label="Replace all matches"
+        title="Replace All"
+        disabled={matches === 0 || !onReplaceAll}
+        onclick={() => onReplaceAll?.()}
+      >
+        <ReplaceAll size={13} aria-hidden="true" />
+      </button>
+    </div>
+  {/if}
 </div>

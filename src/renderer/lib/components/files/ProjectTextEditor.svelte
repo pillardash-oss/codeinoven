@@ -13,10 +13,13 @@
     spellcheck?: boolean
     findQuery?: string
     findActiveIndex?: number
+    findNonce?: number
+    replaceRequest?: { nonce: number; action: 'one' | 'all'; query: string; replacement: string } | null
     focusLine?: number | null
     focusLineRequest?: number
     onInput: (input: { currentTarget: { value: string } }) => void
     onFindMatches?: (matches: number) => void
+    onReplaceDone?: (replaced: number) => void
   }
 
   let {
@@ -29,10 +32,13 @@
     spellcheck = false,
     findQuery = '',
     findActiveIndex = 0,
+    findNonce = 0,
+    replaceRequest = null,
     focusLine = null,
     focusLineRequest = 0,
     onInput,
-    onFindMatches = undefined
+    onFindMatches = undefined,
+    onReplaceDone = undefined
   }: Props = $props()
 
   let host = $state<HTMLDivElement | null>(null)
@@ -40,6 +46,7 @@
   // proxy it and break identity with the instance held by the editor module.
   let controller = $state.raw<FileEditorController | null>(null)
   let handledFocusLineRequest = 0
+  let handledReplaceNonce = 0
 
   onMount(() => {
     const hostElement = host
@@ -98,6 +105,21 @@
 
   $effect(() => {
     controller?.setFind(findQuery, findActiveIndex)
+    // findNonce lets the parent force a re-scan (e.g. after a replace).
+    void findNonce
+  })
+
+  $effect(() => {
+    const request = replaceRequest
+    if (!controller || !request || request.nonce === handledReplaceNonce) return
+    handledReplaceNonce = request.nonce
+    const replaced =
+      request.action === 'all'
+        ? controller.replaceAll(request.query, request.replacement)
+        : controller.replaceOne(request.query, request.replacement, findActiveIndex)
+        ? 1
+        : 0
+    onReplaceDone?.(replaced)
   })
 
   $effect(() => {
