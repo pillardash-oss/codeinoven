@@ -129,17 +129,15 @@
 </script>
 
 <div
+  data-find-exclude
   class={[
-    'flex flex-col',
+    'flex shrink-0 flex-col gap-1 rounded-xl border border-border bg-surface p-1 shadow-xl',
     floating ? 'absolute right-3 top-3 z-30 w-[min(26rem,calc(100%-1.5rem))]' : 'w-full'
   ]}
+  role="search"
+  aria-label={label}
 >
-  <div
-    data-find-exclude
-    class="flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-border bg-surface px-2 shadow-xl"
-    role="search"
-    aria-label={label}
-  >
+  <div class="flex h-8 items-center gap-1.5 pl-1">
   {#if enableReplace}
     <button
       type="button"
@@ -201,7 +199,7 @@
   </button>
   </div>
   {#if enableReplace && replaceOpen}
-    <div class="mt-1 flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-border bg-surface pr-2 pl-9 shadow-xl">
+    <div class="flex h-8 shrink-0 items-center gap-1.5 pl-9">
       <input
         bind:this={replaceInputEl}
         type="text"
