@@ -56,11 +56,7 @@ import {
 } from '../../lib/provider-issue'
 import { isSvgAttachment, readSvgAttachmentText, formatSvgAsText } from './svg-attachment'
 import { isTextAttachment, readTextAttachment, formatTextAsText } from './text-attachment'
-import {
-  formatDocumentAsText,
-  isDocumentAttachment,
-  readDocumentText
-} from './document-attachment'
+import { formatDocumentAsText, isDocumentAttachment, readDocumentText } from './document-attachment'
 import { buildTitlePrompt, HEARTBEAT_PROMPT, sanitizeGeneratedTitle } from '../chat/title-generator'
 import { buildRankingGradePrompt, parseRankingGrade } from '../chat/turn-grader-prompt'
 import { leanAgentConfigMap } from '../opencode/opencode-agent-definitions'
@@ -1055,7 +1051,8 @@ export class OpenCodeDriver implements HarnessDriver {
    */
   constructor(
     private readonly baseUrlProviders?: BaseUrlProviderService,
-    private readonly secretVault?: SecretVault
+    private readonly secretVault?: SecretVault,
+    private readonly accountEnvironment: NodeJS.ProcessEnv = {}
   ) {}
 
   /** Note live traffic against a spawned server so the idle reaper skips it. */
@@ -2407,7 +2404,11 @@ export class OpenCodeDriver implements HarnessDriver {
     ]
     const env = runtime
       ? this.buildEnv(runtime)
-      : buildProcessEnvironment({ ...process.env, ...(overlay?.env ?? {}) })
+      : buildProcessEnvironment({
+          ...process.env,
+          ...this.accountEnvironment,
+          ...(overlay?.env ?? {})
+        })
     const prepared = await prepareHarnessInvocation('opencode', args, { cwd: projectPath, env })
 
     return new Promise((resolve, reject) => {
@@ -2486,7 +2487,11 @@ export class OpenCodeDriver implements HarnessDriver {
     const args = ['serve', '--port', '0', '--hostname', '127.0.0.1']
     const prepared = await prepareHarnessInvocation('opencode', args, {
       cwd: projectPath,
-      env: buildProcessEnvironment({ ...process.env, ...(providerOverlay.env ?? {}) })
+      env: buildProcessEnvironment({
+        ...process.env,
+        ...this.accountEnvironment,
+        ...(providerOverlay.env ?? {})
+      })
     })
     return new Promise((resolve, reject) => {
       const child = spawn(prepared.command, prepared.args, {
@@ -2557,7 +2562,9 @@ export class OpenCodeDriver implements HarnessDriver {
 
   /** GUI apps don't inherit the shell PATH — augment with common install locations. */
   private buildEnv(runtime?: PreparedUtilityRuntime): NodeJS.ProcessEnv {
-    if (!runtime) return buildProcessEnvironment()
+    if (!runtime) {
+      return buildProcessEnvironment({ ...process.env, ...this.accountEnvironment })
+    }
 
     const configPath =
       runtime.configPaths['OPENCODE_CONFIG'] ??
@@ -2569,6 +2576,7 @@ export class OpenCodeDriver implements HarnessDriver {
       runtime.configPaths['skills']
     return buildProcessEnvironment({
       ...process.env,
+      ...this.accountEnvironment,
       ...(configPath ? { OPENCODE_CONFIG: configPath } : {}),
       ...(skillPath ? { OPENCODE_CONFIG_DIR: skillPath } : {}),
       ...runtime.env

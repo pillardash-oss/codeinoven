@@ -152,9 +152,9 @@ const CLAUDE_NON_INTERACTIVE_COMMANDS: readonly HarnessCommand[] = [
 const CLAUDE_COMMANDS_REQUIRING_ARGUMENTS = new Set(['config', 'settings'])
 
 /** Keep Claude Code's native per-repository memory from crossing app threads. */
-function buildClaudeEnvironment(): NodeJS.ProcessEnv {
+function buildClaudeEnvironment(accountEnvironment: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
-    ...buildProcessEnvironment(),
+    ...buildProcessEnvironment({ ...process.env, ...accountEnvironment }),
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
     CLAUDE_CODE_ENABLE_TODO_TOOLS: '1'
   }
@@ -339,7 +339,10 @@ function keepClaudeDiscoveryOpen(): AsyncIterable<SDKUserMessage> {
   }
 }
 
-async function discoverClaudeModels(projectPath: string): Promise<ProviderModel[]> {
+async function discoverClaudeModels(
+  projectPath: string,
+  accountEnvironment: NodeJS.ProcessEnv = {}
+): Promise<ProviderModel[]> {
   const runtime = await resolveHarnessRuntime('claude', projectPath)
   if (!runtime) throw new Error('Claude Code CLI is unavailable')
   const { query } = await import('@anthropic-ai/claude-agent-sdk')
@@ -361,7 +364,7 @@ async function discoverClaudeModels(projectPath: string): Promise<ProviderModel[
     prompt: keepClaudeDiscoveryOpen(),
     options: {
       cwd: projectPath,
-      env: buildClaudeEnvironment(),
+      env: buildClaudeEnvironment(accountEnvironment),
       pathToClaudeCodeExecutable: runtime.resolvedPath,
       ...(spawnClaudeCodeProcess ? { spawnClaudeCodeProcess } : {}),
       tools: []
@@ -1192,8 +1195,7 @@ export function mapClaudeCodeRecord(
         // result is the async-launch marker and the real agent result arrives
         // later as a <task-notification> prompt in the same process. Keep the
         // part running (background) so the turn process is not torn down.
-        const asyncLaunch =
-          !failed && !!output && output.includes(CLAUDE_ASYNC_AGENT_LAUNCH_MARKER)
+        const asyncLaunch = !failed && !!output && output.includes(CLAUDE_ASYNC_AGENT_LAUNCH_MARKER)
         parts.push({
           ...existingSubagent,
           activity: {
@@ -1244,7 +1246,10 @@ export function mapClaudeCodeRecord(
       if (notificationText.includes('<task-notification>')) {
         const callId = /<tool-use-id>([^<]+)<\/tool-use-id>/.exec(notificationText)?.[1]
         const subagent = callId ? findSubagentPart(context, callId) : undefined
-        if (subagent && (subagent.activity.status === 'pending' || subagent.activity.status === 'running')) {
+        if (
+          subagent &&
+          (subagent.activity.status === 'pending' || subagent.activity.status === 'running')
+        ) {
           const resultText = /<result>([\s\S]*?)<\/result>/.exec(notificationText)?.[1]
           const part: AgentPart = {
             ...subagent,
@@ -1537,7 +1542,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   constructor(
     storage: StorageEngine,
     private readonly baseUrlProviders?: BaseUrlProviderService,
-    private readonly secretVault?: SecretVault
+    private readonly secretVault?: SecretVault,
+    private readonly accountEnvironment: NodeJS.ProcessEnv = {}
   ) {
     super(storage)
   }
@@ -1545,7 +1551,9 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
     let anthropicCatalog: ProviderCatalog
     try {
-      const models = await this.runAuthSerialized(() => discoverClaudeModels(projectPath))
+      const models = await this.runAuthSerialized(() =>
+        discoverClaudeModels(projectPath, this.accountEnvironment)
+      )
       if (models.length === 0) throw new Error('Claude Code returned no account-selectable models')
       anthropicCatalog = {
         id: 'anthropic',
@@ -1969,7 +1977,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     try {
       await runHarnessCommand('claude', ['--version'], {
         cwd: projectPath,
-        env: buildClaudeEnvironment(),
+        env: buildClaudeEnvironment(this.accountEnvironment),
         timeoutMs: 10_000
       })
     } finally {
@@ -2244,7 +2252,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
             ['auth', 'status', '--json'],
             {
               cwd: projectPath,
-              env: buildClaudeEnvironment(),
+              env: buildClaudeEnvironment(this.accountEnvironment),
               timeout: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
               maxBuffer: 1024 * 1024
             },
@@ -2269,7 +2277,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       try {
         const { stdout } = await runHarnessCommand('claude', ['auth', 'status', '--json'], {
           cwd: projectPath,
-          env: buildClaudeEnvironment(),
+          env: buildClaudeEnvironment(this.accountEnvironment),
           timeoutMs: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
           maxOutputBytes: 1024 * 1024
         })
@@ -2314,7 +2322,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    * active endpoint per process, so only the selected provider is applied.
    */
   private async customProviderEnv(providerId: string): Promise<NodeJS.ProcessEnv> {
-    const env = buildClaudeEnvironment()
+    const env = buildClaudeEnvironment(this.accountEnvironment)
     if (!this.baseUrlProviders || !this.secretVault || !providerId) return env
     const provider = await this.baseUrlProviders.getProvider(this.id, providerId)
     if (!provider || provider.harnessId !== this.id || !provider.enabled) return env
@@ -2451,7 +2459,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       const prepared = await prepareHarnessInvocation(
         'claude',
         ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose'],
-        { cwd: projectPath, env: buildClaudeEnvironment() }
+        { cwd: projectPath, env: buildClaudeEnvironment(this.accountEnvironment) }
       )
       const telemetry = await this.runAuthSerialized(
         () =>
@@ -2561,7 +2569,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   override dispose(): void {
     this.authProbeCache.clear()
     this.authenticatedSessions.clear()
-    for (const timer of [...this.asyncAgentCloseTimers.values(), ...this.asyncAgentHoldDeadlines.values()]) {
+    for (const timer of [
+      ...this.asyncAgentCloseTimers.values(),
+      ...this.asyncAgentHoldDeadlines.values()
+    ]) {
       clearTimeout(timer)
     }
     this.asyncAgentCloseTimers.clear()

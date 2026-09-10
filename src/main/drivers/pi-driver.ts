@@ -1671,7 +1671,8 @@ export class PiDriver extends PersistentCliDriver {
   constructor(
     storage: StorageEngine,
     private readonly baseUrlProviders?: BaseUrlProviderService,
-    private readonly secretVault?: SecretVault
+    private readonly secretVault?: SecretVault,
+    private readonly accountEnvironment: NodeJS.ProcessEnv = {}
   ) {
     super(storage)
   }
@@ -1688,7 +1689,7 @@ export class PiDriver extends PersistentCliDriver {
     try {
       await runHarnessCommand('pi', ['--version'], {
         cwd: projectPath,
-        env: buildProcessEnvironment(),
+        env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
         timeoutMs: 5_000
       })
     } catch {
@@ -1824,7 +1825,10 @@ export class PiDriver extends PersistentCliDriver {
     let models: unknown
     const invocation = await prepareHarnessInvocation('pi', ['--mode', 'rpc', ...overlay.args], {
       cwd: projectPath,
-      env: { ...buildProcessEnvironment(), ...overlay.env }
+      env: {
+        ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+        ...overlay.env
+      }
     })
     const client = new PiRpcClient({
       invocation
@@ -1854,7 +1858,7 @@ export class PiDriver extends PersistentCliDriver {
     try {
       help = (
         await runHarnessCommand('pi', ['--help'], {
-          env: buildProcessEnvironment(),
+          env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
           timeoutMs: 10_000
         })
       ).stdout
@@ -1874,7 +1878,7 @@ export class PiDriver extends PersistentCliDriver {
     if (!(await resolveHarnessRuntime('pi', cwd))) return []
     const invocation = await prepareHarnessInvocation('pi', ['--mode', 'rpc'], {
       cwd,
-      env: buildProcessEnvironment()
+      env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment })
     })
     const client = new PiRpcClient({
       invocation
@@ -2457,7 +2461,7 @@ export class PiDriver extends PersistentCliDriver {
       {
         cwd: projectPath,
         env: {
-          ...buildProcessEnvironment(),
+          ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
           ...runtimeEnv
         }
       }

@@ -53,6 +53,7 @@
     providerId?: string | null
     harnessId?: string | null
     harnessName?: string | null
+    accountLabel?: string | null
     isFast?: boolean
     projectId?: string
     threadId?: string
@@ -79,6 +80,7 @@
     providerId,
     harnessId,
     harnessName,
+    accountLabel,
     isFast = false,
     projectId,
     threadId,
@@ -662,6 +664,15 @@
                 >
                   <Brain size={9} />
                   {thinkingLevel}
+                </span>
+              {/if}
+              {#if accountLabel && accountLabel !== 'Default'}
+                <span
+                  class="flex shrink-0 items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
+                  title={`Account: ${accountLabel}`}
+                  aria-label={`Account: ${accountLabel}`}
+                >
+                  {accountLabel}
                 </span>
               {/if}
             </span>

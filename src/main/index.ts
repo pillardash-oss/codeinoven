@@ -904,7 +904,9 @@ async function bootPostPaintServices(): Promise<void> {
     const { registerUtilityIpc } = await import('./ipc/utility-ipc')
     const { registerGatewayIpc } = await import('./ipc/gateway-ipc')
     const { OwnedProcessJournal } = await import('./system/owned-process-journal')
-    registerProviderAccountIpc()
+    registerProviderAccountIpc(storage, undefined, (accountId) =>
+      chatEngine!.removeHarnessAccount(accountId)
+    )
     registerBaseUrlProviderIpc(storage)
     registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService ?? undefined)
     gatewaySupervisor = registerGatewayIpc(
@@ -1020,7 +1022,9 @@ async function bootPostPaintServices(): Promise<void> {
     // by turns that ran before internal attribution existed. Bounded,
     // idempotent, and batched; a no-op once every candidate is repaired.
     try {
-      const repaired = await new CheckpointManager(database).repairMisattributedInternalCheckpoints()
+      const repaired = await new CheckpointManager(
+        database
+      ).repairMisattributedInternalCheckpoints()
       if (repaired > 0) {
         Logger.info(`Reattributed ${repaired} internal-turn file-change checkpoints`)
       }

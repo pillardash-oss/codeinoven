@@ -114,6 +114,8 @@ import type {
   PrdSectionId,
   PrdWorkflowState,
   ProviderAccountAuthStatus,
+  HarnessAccount,
+  HarnessAccountCreateInput,
   ProviderAccountLoginHandoff,
   ProviderAccountLoginOptions,
   ProviderCatalog,
@@ -897,7 +899,10 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string],
     AgentAccountUsage | null
   >
-  'agent:getHarnessAuthStatus': Contract<[projectId: string, harnessId: string], boolean | null>
+  'agent:getHarnessAuthStatus': Contract<
+    [projectId: string, harnessId: string, accountId?: string],
+    boolean | null
+  >
   'agent:listTools': Contract<
     [
       projectId?: string,
@@ -2047,17 +2052,27 @@ export interface IpcInvokeContract {
     [harnessId: string, projectPath?: string],
     ProviderAccountAuthStatus
   >
+  'providerAccounts:list': Contract<[harnessId?: string], HarnessAccount[]>
+  'providerAccounts:create': Contract<[input: HarnessAccountCreateInput], HarnessAccount>
+  'providerAccounts:rename': Contract<[accountId: string, label: string], HarnessAccount>
+  'providerAccounts:remove': Contract<[accountId: string], boolean>
   'providerAccounts:beginLogin': Contract<
     [harnessId: string, options?: ProviderAccountLoginOptions],
     ProviderAccountLoginHandoff
   >
   'providerAccounts:listOffered': Contract<[harnessId: string], OfferedProvider[]>
-  'providerAccounts:logout': Contract<[harnessId: string, providerId?: string], void>
-  'providerAccounts:setApiKey': Contract<
-    [harnessId: string, providerId: string, apiKey: string],
+  'providerAccounts:logout': Contract<
+    [harnessId: string, providerId?: string, accountId?: string],
     void
   >
-  'providerAccounts:beginOAuthLogin': Contract<[harnessId: string, providerId: string], string>
+  'providerAccounts:setApiKey': Contract<
+    [harnessId: string, providerId: string, apiKey: string, accountId?: string],
+    void
+  >
+  'providerAccounts:beginOAuthLogin': Contract<
+    [harnessId: string, providerId: string, accountId?: string],
+    string
+  >
   'providerAccounts:respondOAuthPrompt': Contract<[loginId: string, value: string], void>
   'providerAccounts:cancelOAuthLogin': Contract<[loginId: string], void>
   'providerAccounts:getHidden': Contract<[harnessId: string], string[]>
@@ -2153,7 +2168,8 @@ export interface IpcInvokeContract {
       columns: number,
       rows: number,
       /** Kill the session after this many ms of zero output/input (e.g. hung updates). */
-      idleTimeoutMs?: number
+      idleTimeoutMs?: number,
+      environment?: Record<string, string>
     ],
     { id: string; pid: number }
   >

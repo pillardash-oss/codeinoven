@@ -9,6 +9,7 @@
     RefreshCw,
     Search,
     Server,
+    Trash2,
     Unplug,
     X
   } from '@lucide/svelte'
@@ -25,7 +26,8 @@
     ProviderAccountAuthEntry,
     ProviderAccountAuthStatus,
     ProviderAccountLoginHandoff,
-    ProviderConnectionInfo
+    ProviderConnectionInfo,
+    HarnessAccount
   } from '$shared/types'
 
   type AddTab = 'connect' | 'custom'
@@ -67,6 +69,12 @@
   let notice = $state('')
   let actionWarning = $state('')
   let actionError = $state('')
+  let accountLabel = $state('')
+  let managedAccounts = $state.raw<HarnessAccount[]>([])
+  let editingAccountId = $state<string | null>(null)
+  let editingAccountLabel = $state('')
+  let removingAccount = $state<HarnessAccount | null>(null)
+  let removing = $state(false)
 
   let customProviders = $derived(
     baseUrlProviderStore.providers.filter((provider) => provider.harnessId === harness.id)
@@ -199,10 +207,16 @@
     oauthStarting = true
     oauthStatus = 'Starting sign-in…'
     try {
+      const account = await createManagedAccount(selectedProvider.id)
+      if (!account) {
+        resetOAuthState()
+        return
+      }
       oauthLoginId = await invoke(
         'providerAccounts:beginOAuthLogin',
         harness.id,
-        selectedProvider.id
+        selectedProvider.id,
+        account.id
       )
     } catch (startError) {
       actionError =
@@ -279,6 +293,22 @@
     } finally {
       checkingAuth = false
     }
+    managedAccounts = await invoke('providerAccounts:list', harness.id).catch(() => [])
+  }
+
+  async function createManagedAccount(providerId: string): Promise<HarnessAccount | null> {
+    const label = accountLabel.trim()
+    if (!label) {
+      actionWarning = 'Name this account before connecting it.'
+      return null
+    }
+    const account = await invoke('providerAccounts:create', {
+      harnessId: harness.id,
+      providerId,
+      label
+    })
+    managedAccounts = await invoke('providerAccounts:list', harness.id)
+    return account
   }
 
   async function loadOffered(): Promise<void> {
@@ -333,10 +363,13 @@
     }
     storingKey = true
     try {
-      await invoke('providerAccounts:setApiKey', harness.id, selectedProvider.id, key)
+      const account = await createManagedAccount(selectedProvider.id)
+      if (!account) return
+      await invoke('providerAccounts:setApiKey', harness.id, selectedProvider.id, key, account.id)
       notice = `${selectedProvider.name} connected. Its models will appear in the picker.`
       selectedProvider = null
       apiKey = ''
+      accountLabel = ''
       await checkAuth()
       await loadOffered()
       providerCatalog.invalidateAll()
@@ -357,8 +390,14 @@
     actionWarning = ''
     notice = ''
     try {
+      const providerId =
+        provider?.id ??
+        (harness.id === 'codex' ? 'openai' : harness.id === 'claude-code' ? 'anthropic' : '')
+      const account = await createManagedAccount(providerId)
+      if (!account) return
       loginHandoff = await invoke('providerAccounts:beginLogin', harness.id, {
-        ...(provider ? { providerId: provider.id } : {})
+        ...(provider ? { providerId: provider.id } : {}),
+        accountId: account.id
       })
       selectedProvider = provider
       terminalId = `provider-login-${crypto.randomUUID()}`
@@ -375,6 +414,7 @@
     loginHandoff = null
     selectedProvider = null
     apiKey = ''
+    accountLabel = ''
     step = pickerLogin && !apiKeyEntry ? 'idle' : 'picking'
   }
 
@@ -410,6 +450,7 @@
       notice = `Disconnected ${targetId}.`
       await checkAuth()
       await loadOffered()
+      managedAccounts = await invoke('providerAccounts:list', harness.id)
       providerCatalog.invalidateAll()
     } catch (logoutError) {
       actionError =
@@ -418,6 +459,48 @@
           : 'The provider could not be disconnected.'
     } finally {
       disconnecting = false
+    }
+  }
+
+  function beginRename(account: HarnessAccount): void {
+    editingAccountId = account.id
+    editingAccountLabel = account.label
+  }
+
+  async function saveRename(account: HarnessAccount): Promise<void> {
+    const label = editingAccountLabel.trim()
+    if (!label || label === account.label) {
+      editingAccountId = null
+      return
+    }
+    actionError = ''
+    try {
+      await invoke('providerAccounts:rename', account.id, label)
+      managedAccounts = await invoke('providerAccounts:list', harness.id)
+      editingAccountId = null
+      notice = `Renamed the account to ${label}.`
+    } catch (renameError) {
+      actionError =
+        renameError instanceof Error ? renameError.message : 'The account was not renamed.'
+    }
+  }
+
+  async function confirmRemoveAccount(): Promise<void> {
+    if (!removingAccount) return
+    removing = true
+    actionError = ''
+    try {
+      const label = removingAccount.label
+      await invoke('providerAccounts:remove', removingAccount.id)
+      removingAccount = null
+      managedAccounts = await invoke('providerAccounts:list', harness.id)
+      providerCatalog.invalidateAll()
+      notice = `Removed ${label} and its isolated credential container.`
+    } catch (removeError) {
+      actionError =
+        removeError instanceof Error ? removeError.message : 'The account was not removed.'
+    } finally {
+      removing = false
     }
   }
 
@@ -618,6 +701,16 @@
   {#if tab === 'connect'}
     <div class="space-y-4">
       {#if step === 'idle'}
+        <label class="block space-y-1.5">
+          <span class="text-[0.6875rem] font-medium text-dimmed">New account label</span>
+          <input
+            class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+            placeholder="Personal Pro, Work, Side project…"
+            maxlength="80"
+            autocomplete="off"
+            bind:value={accountLabel}
+          />
+        </label>
         <div
           class="flex items-center justify-between gap-3 rounded-xl border bg-surface px-3 py-2.5"
         >
@@ -645,6 +738,68 @@
         <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
           {actionError}
         </p>
+      {/if}
+
+      {#if step === 'idle' && managedAccounts.length > 0}
+        <div class="space-y-1.5">
+          <p class="text-[0.6875rem] font-medium text-dimmed">Account containers</p>
+          {#each managedAccounts as account (account.id)}
+            <div class="flex items-center gap-2 rounded-lg border bg-surface px-3 py-2">
+              {#if editingAccountId === account.id}
+                <input
+                  class="h-7 min-w-0 flex-1 rounded-md border bg-elevated px-2 text-xs outline-none focus:border-primary"
+                  aria-label={`New label for ${account.label}`}
+                  maxlength="80"
+                  autocomplete="off"
+                  bind:value={editingAccountLabel}
+                  onkeydown={(event: KeyboardEvent) => {
+                    if (event.key === 'Enter') void saveRename(account)
+                    if (event.key === 'Escape') editingAccountId = null
+                  }}
+                />
+                <button
+                  type="button"
+                  class="h-7 rounded-md bg-primary px-2 text-[0.6875rem] font-medium text-on-primary"
+                  onclick={() => void saveRename(account)}
+                >
+                  Save
+                </button>
+              {:else}
+                <span class="min-w-0 flex-1 truncate text-xs">{account.label}</span>
+              {/if}
+              {#if account.providerId}
+                <span class="max-w-28 truncate font-mono text-[0.625rem] text-dimmed">
+                  {account.providerId}
+                </span>
+              {/if}
+              <span class="text-[0.625rem] text-dimmed">
+                {account.containerKind === 'legacy-default' ? 'Legacy' : 'Isolated'}
+              </span>
+              {#if editingAccountId !== account.id}
+                <button
+                  type="button"
+                  class="flex size-7 items-center justify-center rounded-md text-dimmed hover:bg-elevated hover:text-foreground"
+                  title={`Rename ${account.label}`}
+                  aria-label={`Rename ${account.label}`}
+                  onclick={() => beginRename(account)}
+                >
+                  <Pencil size={11} />
+                </button>
+                {#if account.containerKind === 'managed'}
+                  <button
+                    type="button"
+                    class="flex size-7 items-center justify-center rounded-md text-dimmed hover:bg-danger/10 hover:text-danger"
+                    title={`Remove ${account.label}`}
+                    aria-label={`Remove ${account.label}`}
+                    onclick={() => (removingAccount = account)}
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                {/if}
+              {/if}
+            </div>
+          {/each}
+        </div>
       {/if}
       {#if actionWarning}
         <p
@@ -716,6 +871,7 @@
               {terminalId}
               command={loginHandoff.command}
               args={loginHandoff.args}
+              environment={loginHandoff.environment}
               onExit={(exitCode) => void handleLoginExit(exitCode)}
             />
           </div>
@@ -874,7 +1030,9 @@
                   {#if oauthPrompt}
                     <div class="space-y-1.5">
                       {#if oauthPrompt.type === 'select' && oauthPrompt.options}
-                        <p class="text-[0.6875rem] font-medium text-foreground">{oauthPrompt.message}</p>
+                        <p class="text-[0.6875rem] font-medium text-foreground">
+                          {oauthPrompt.message}
+                        </p>
                         <div class="space-y-1">
                           {#each oauthPrompt.options as option (option.id)}
                             <button
@@ -1043,6 +1201,40 @@
       {/if}
     </div>
   {/if}
+</Modal>
+
+<Modal
+  open={removingAccount !== null}
+  title="Remove account container"
+  onClose={() => (removingAccount = null)}
+>
+  {#snippet footer()}
+    <button
+      class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+      type="button"
+      onclick={() => (removingAccount = null)}
+    >
+      Cancel
+    </button>
+    <button
+      class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+      type="button"
+      disabled={removing}
+      onclick={() => void confirmRemoveAccount()}
+    >
+      {#if removing}<Loader2 size={13} class="animate-spin" />{:else}<Trash2 size={13} />{/if}
+      Remove account
+    </button>
+  {/snippet}
+
+  <div class="flex gap-2 text-sm text-muted">
+    <Trash2 size={16} class="mt-0.5 shrink-0 text-danger" />
+    <p>
+      Remove <strong class="text-foreground">{removingAccount?.label}</strong>? Its isolated
+      credentials and harness data will be deleted. Existing conversation history stays in
+      CodeInOven.
+    </p>
+  </div>
 </Modal>
 
 <Modal

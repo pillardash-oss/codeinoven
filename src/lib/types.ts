@@ -433,6 +433,8 @@ export interface Thread {
    *  field keeps identifying the driver that owns `sessionId` so the old
    *  session is read/synced through the correct driver. */
   sessionHarnessId?: string
+  /** Account container that owns the bound native session. */
+  sessionAccountId?: string
   /** Last specification card explicitly dismissed by the user. */
   dismissedSpecId?: string
   dismissedSpecVersion?: number
@@ -777,6 +779,29 @@ export interface ProviderAccountAuthEntry {
   active?: boolean
 }
 
+/** One user-named credential container for a harness. */
+export interface HarnessAccount {
+  id: string
+  harnessId: string
+  /** Provider authenticated inside the container. Empty for the legacy default account. */
+  providerId: string
+  label: string
+  containerKind: 'legacy-default' | 'managed'
+  createdAt: number
+  updatedAt: number
+}
+
+export interface HarnessAccountCreateInput {
+  harnessId: string
+  providerId: string
+  label: string
+}
+
+export interface HarnessAccountRenameInput {
+  accountId: string
+  label: string
+}
+
 export interface ProviderAccountAuthStatus {
   capabilities: ProviderAccountAuthCapabilities | null
   state: 'authenticated' | 'unauthenticated' | 'unknown' | 'error' | 'unsupported'
@@ -790,6 +815,8 @@ export interface ProviderAccountLoginOptions {
   sso?: boolean
   /** Provider to authenticate against, for harnesses that support per-provider login. */
   providerId?: string
+  /** Managed account whose isolated credential home receives the login. */
+  accountId?: string
 }
 
 /** User-controlled terminal handoff. Main never executes this command. */
@@ -797,8 +824,10 @@ export interface ProviderAccountLoginHandoff {
   kind: 'terminal'
   command: string
   args: string[]
+  /** Bounded credential-home overrides applied only to this login process. */
+  environment?: Record<string, string>
   title: string
-  mutatesGlobalCredentials: true
+  mutatesGlobalCredentials: boolean
 }
 
 // ─── Harness updates ─────────────────────────────────────────────────────────
@@ -1163,6 +1192,8 @@ export interface ThreadSettings {
   harnessId: string
   /** Model provider exposed by the harness, e.g. anthropic or openai. */
   providerId: string
+  /** Selected credential container. Missing means the harness's legacy Default account. */
+  accountId?: string
   modelId: string
   /** Use only the immediate deterministic fallback title, skipping auxiliary model calls. */
   titleMode?: 'model' | 'deterministic'
@@ -1931,6 +1962,8 @@ export interface UsageEventDetails {
   attempt: number
   feature: UsageEventFeature
   harnessId: string | null
+  /** Credential container that owned the attempt. */
+  accountId?: string | null
   providerId: string | null
   modelId: string | null
   /** Reasoning effort in effect when the attempt ran, when known. */
@@ -2090,12 +2123,14 @@ export interface AgentHarnessUsage {
 export interface AgentAccountUsageOverrides {
   harnessId?: string
   providerId?: string
+  accountId?: string
 }
 
 /** On-demand account quota snapshot for one harness used on a thread. */
 export interface AgentAccountUsage {
   harnessId: string
   providerId: string
+  accountId?: string
   rateLimits: AgentRateLimitWindow[]
   credits?: AgentUsageCredits
   /** Banked rate-limit resets available to redeem (currently Codex-only). */
@@ -2609,6 +2644,10 @@ export interface AgentMessage {
   providerId?: string
   /** Agent harness that produced this message, e.g. opencode or claude-code. */
   harnessId?: string
+  /** Credential container that produced this message. */
+  accountId?: string
+  /** Historical label snapshot. Renaming an account does not rewrite old turns. */
+  accountLabel?: string
   /** Reasoning effort in effect when this message's turn ran, when known. */
   thinkingLevel?: ThinkingLevel
   /** Duration in milliseconds from the first streamed output part (the model's

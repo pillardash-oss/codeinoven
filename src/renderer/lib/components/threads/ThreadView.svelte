@@ -232,7 +232,8 @@
     UsageEfficiencyKpis,
     EngineeringLifecycleSelectionInput,
     EngineeringLifecycleState,
-    EngineeringLifecycleStage
+    EngineeringLifecycleStage,
+    HarnessAccount
   } from '$shared/types'
   import {
     hasSelectedStage,
@@ -252,7 +253,7 @@
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
-    'harnessId' | 'providerId' | 'modelId' | 'thinkingLevel'
+    'harnessId' | 'accountId' | 'providerId' | 'modelId' | 'thinkingLevel'
   >
 
   interface Props {
@@ -844,6 +845,14 @@
    *  a new turn is actually sent — never cleared by waiting, error, or idle
    *  transitions — so resumed turns keep their original attribution. */
   let liveWorkingSelection = $state<WorkingModelSelection | null>(null)
+  let harnessAccounts = $state.raw<HarnessAccount[]>([])
+
+  function rememberSelectedAccount(account: HarnessAccount): void {
+    harnessAccounts = [
+      account,
+      ...harnessAccounts.filter((candidate) => candidate.id !== account.id)
+    ]
+  }
   /** True while we are showing a working trace rehydrated from persisted state
    *  because no live session activity is available to confirm the run (a silent
    *  session, an app restart, or a relay drop mid-turn). The trace renders the
@@ -889,6 +898,7 @@
   function captureLiveWorkingSelection(): void {
     liveWorkingSelection = {
       harnessId: settings.harnessId,
+      accountId: settings.accountId,
       providerId: settings.providerId,
       modelId: settings.modelId,
       thinkingLevel: settings.thinkingLevel
@@ -1740,16 +1750,21 @@
   async function refreshAccountUsageOnDemand(): Promise<void> {
     // Drop a response for a harness selection the user already moved away
     // from — an out-of-order resolve must not clobber the current selection.
-    const refreshKey = `${settings.harnessId}:${settings.providerId}`
+    const refreshKey = `${settings.harnessId}:${settings.accountId ?? ''}:${settings.providerId}`
     const usageList = await accountUsageCache.refresh(
       {
         harnessId: settings.harnessId,
-        providerId: settings.providerId
+        providerId: settings.providerId,
+        accountId: settings.accountId
       },
-      () => refreshKey !== `${settings.harnessId}:${settings.providerId}`
+      () =>
+        refreshKey !== `${settings.harnessId}:${settings.accountId ?? ''}:${settings.providerId}`
     )
     const currentUsage = usageList.find(
-      (usage) => usage.harnessId === settings.harnessId && usage.providerId === settings.providerId
+      (usage) =>
+        usage.harnessId === settings.harnessId &&
+        usage.accountId === (settings.accountId ?? `${settings.harnessId}.default`) &&
+        usage.providerId === settings.providerId
     )
     if (currentUsage) {
       // Fold the fresh quota over whatever the meter already shows so an empty
@@ -3602,6 +3617,13 @@
     // project boundary through the now-null live prop.
     const mountedProjectId = thread.projectId
     const mountedThreadId = thread.id
+    void invoke('providerAccounts:list', settings.harnessId)
+      .then((accounts) => {
+        if (alive) harnessAccounts = accounts
+      })
+      .catch(() => {
+        if (alive) harnessAccounts = []
+      })
     if (!controller) {
       workspaceState.jumpToMessage = jumpToMessage
       workspaceState.loadUserMessageHistory = refreshUserMessageHistory
@@ -4263,7 +4285,8 @@
       const authenticated = await invoke(
         'agent:getHarnessAuthStatus',
         thread.projectId,
-        settings.harnessId
+        settings.harnessId,
+        settings.accountId
       )
       if (!alive || authenticated !== false || providerStatus !== null) return
       const issue: AgentProviderIssue = {
@@ -4286,7 +4309,8 @@
       const authenticated = await invoke(
         'agent:getHarnessAuthStatus',
         thread.projectId,
-        settings.harnessId
+        settings.harnessId,
+        settings.accountId
       )
       if (authenticated === true) {
         proactiveAuthIssue = null
@@ -9477,6 +9501,8 @@
       harnessName: selection.harnessId
         ? (getAgentIcon(selection.harnessId)?.name ?? selection.harnessId)
         : null,
+      accountLabel:
+        harnessAccounts.find((account) => account.id === selection.accountId)?.label ?? null,
       isFast: fastVariantForModelId(modelId) !== null
     }
   })
@@ -10660,6 +10686,9 @@
                         harnessName={useLiveAttribution
                           ? currentWorkingTraceAttribution.harnessName
                           : harnessName}
+                        accountLabel={useLiveAttribution
+                          ? currentWorkingTraceAttribution.accountLabel
+                          : msg.accountLabel}
                         isFast={useLiveAttribution
                           ? currentWorkingTraceAttribution.isFast
                           : fastVariant !== null}
@@ -10897,6 +10926,15 @@
                                   </span>
                                 {/if}
                               {/if}
+                              {#if msg.accountLabel && msg.accountLabel !== 'Default'}
+                                <span
+                                  class="flex items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
+                                  title={`Account: ${msg.accountLabel}`}
+                                  aria-label={`Account: ${msg.accountLabel}`}
+                                >
+                                  {msg.accountLabel}
+                                </span>
+                              {/if}
                               <span class="text-[0.625rem] text-dimmed"
                                 >· {formatTime(msg.completedAt ?? msg.createdAt)}</span
                               >
@@ -10939,6 +10977,7 @@
               providerId={currentWorkingTraceAttribution.providerId}
               harnessId={currentWorkingTraceAttribution.harnessId}
               harnessName={currentWorkingTraceAttribution.harnessName}
+              accountLabel={currentWorkingTraceAttribution.accountLabel}
               isFast={currentWorkingTraceAttribution.isFast}
               initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}
               initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, conversationId)}
@@ -11711,6 +11750,7 @@
                     showChatModes={chatMode}
                     {settings}
                     onSettingsChange={updateSettings}
+                    onAccountSelected={rememberSelectedAccount}
                     {providers}
                     harnessId={settings.harnessId}
                     actions={activeActions}

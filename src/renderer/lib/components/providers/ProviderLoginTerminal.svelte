@@ -12,11 +12,12 @@
     args: string[]
     /** Kill the process after this many ms of complete silence (used for hung updates). */
     idleTimeoutMs?: number
+    environment?: Record<string, string>
     /** Invoked once the login process exits. */
     onExit: (exitCode: number) => void
   }
 
-  let { terminalId, command, args, idleTimeoutMs, onExit }: Props = $props()
+  let { terminalId, command, args, idleTimeoutMs, environment, onExit }: Props = $props()
 
   let error = $state('')
   let started = $state(false)
@@ -122,7 +123,8 @@
         args,
         terminal.cols,
         terminal.rows,
-        idleTimeoutMs
+        idleTimeoutMs,
+        environment
       )
       started = true
       terminal.focus()

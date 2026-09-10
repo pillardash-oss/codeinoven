@@ -99,6 +99,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   context_usage        TEXT,
   session_id           TEXT,
   session_harness_id   TEXT,
+  session_account_id   TEXT,
   dismissed_spec_id    TEXT,
   dismissed_spec_version INTEGER,
   audit_state          TEXT CHECK(audit_state IN ('offered','running','report_ready','reworking')),
@@ -196,6 +197,8 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   model_id        TEXT,
   provider_id     TEXT,
   harness_id      TEXT,
+  account_id      TEXT,
+  account_label   TEXT,
   thinking_level  TEXT,
   references_json TEXT,
   project_references_json TEXT,
@@ -746,6 +749,7 @@ export const USAGE_EVENTS_COLUMNS_SQL = `
   attempt               INTEGER NOT NULL CHECK(attempt >= 1),
   feature               TEXT NOT NULL CHECK(feature IN ('main','title','turn_grade','memory','image_descriptor','search_nudge','computer_use','web','audit','assignment')),
   harness_id            TEXT,
+  account_id            TEXT,
   provider_id           TEXT,
   model_id              TEXT,
   thinking_level        TEXT,
@@ -786,7 +790,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
   ON usage_events(feature, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_usage_events_analytics_range
-  ON usage_events(created_at, feature, harness_id, provider_id, model_id, thinking_level);`
+  ON usage_events(created_at, feature, harness_id, account_id, provider_id, model_id, thinking_level);`
 
 export const HARNESS_USAGE_SQL = `
 -- ─── Harness Usage Analytics ────────────────────────────────────────────

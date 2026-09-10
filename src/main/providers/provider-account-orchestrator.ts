@@ -573,6 +573,7 @@ export class ProviderAccountOrchestrator {
     {
       controller: AbortController
       pendingPrompt?: (value: string) => void
+      authStore: PiAuthConfigService
     }
   >()
 
@@ -589,8 +590,18 @@ export class ProviderAccountOrchestrator {
   }
 
   /** Store an API key for one catalog provider in a file-backed auth store. */
-  async setCredential(harnessId: string, providerId: string, apiKey: string): Promise<void> {
+  async setCredential(
+    harnessId: string,
+    providerId: string,
+    apiKey: string,
+    environment: NodeJS.ProcessEnv = {}
+  ): Promise<void> {
     const definition = this.requireDefinition(harnessId)
+    const piAgentDir = environment['PI_CODING_AGENT_DIR']
+    if (harnessId === 'pi' && piAgentDir) {
+      await new PiAuthConfigService(join(piAgentDir, 'auth.json')).setApiKey(providerId, apiKey)
+      return
+    }
     if (!definition.setCredential) {
       throw new Error(
         `${harnessId} does not support headless credential storage. Use the harness's own sign-in flow.`
@@ -608,15 +619,27 @@ export class ProviderAccountOrchestrator {
    * {@link respondOAuthPrompt}; the resulting credential is stored in Pi's own
    * auth store. Mirrors what Pi's TUI does — without the TUI.
    */
-  async beginOAuthLogin(harnessId: string, providerId: string): Promise<string> {
+  async beginOAuthLogin(
+    harnessId: string,
+    providerId: string,
+    environment: NodeJS.ProcessEnv = {}
+  ): Promise<string> {
     this.requireDefinition(harnessId)
     if (harnessId !== 'pi') {
       throw new Error(`${harnessId} does not support in-app sign-in.`)
     }
     const loginId = `pi-oauth-${crypto.randomUUID()}`
     const controller = new AbortController()
-    const session: { controller: AbortController; pendingPrompt?: (value: string) => void } = {
-      controller
+    const piAgentDir = environment['PI_CODING_AGENT_DIR']
+    const session: {
+      controller: AbortController
+      pendingPrompt?: (value: string) => void
+      authStore: PiAuthConfigService
+    } = {
+      controller,
+      authStore: piAgentDir
+        ? new PiAuthConfigService(join(piAgentDir, 'auth.json'))
+        : fileBackedAuth
     }
     this.oauthSessions.set(loginId, session)
     void runPiLogin(providerId, {
@@ -636,9 +659,9 @@ export class ProviderAccountOrchestrator {
     })
       .then(async (credential) => {
         if (credential.type === 'oauth') {
-          await fileBackedAuth.setOAuthCredential(providerId, credential)
+          await session.authStore.setOAuthCredential(providerId, credential)
         } else {
-          await fileBackedAuth.setApiKey(providerId, credential.key ?? '', credential.env)
+          await session.authStore.setApiKey(providerId, credential.key ?? '', credential.env)
         }
         this.broadcastOAuthEvent(loginId, { kind: 'complete', providerId })
       })
@@ -699,7 +722,8 @@ export class ProviderAccountOrchestrator {
 
   async beginLogin(
     harnessId: string,
-    options: HarnessLoginOptions = {}
+    options: HarnessLoginOptions = {},
+    environment: NodeJS.ProcessEnv = {}
   ): Promise<HarnessLoginHandoff> {
     const definition = this.requireDefinition(harnessId)
     const prepared = await prepareHarnessTerminalHandoff(
@@ -710,14 +734,27 @@ export class ProviderAccountOrchestrator {
       kind: 'terminal',
       command: prepared.command,
       args: prepared.args,
+      ...(Object.keys(environment).length > 0
+        ? { environment: environment as Record<string, string> }
+        : {}),
       title: `Sign in to ${definition.name}`,
-      mutatesGlobalCredentials: true
+      mutatesGlobalCredentials: Object.keys(environment).length === 0
     }
   }
 
   /** Remove a stored harness credential via its CLI logout or auth store. */
-  async logout(harnessId: string, providerId?: string): Promise<void> {
+  async logout(
+    harnessId: string,
+    providerId?: string,
+    environment: NodeJS.ProcessEnv = {}
+  ): Promise<void> {
     const definition = this.requireDefinition(harnessId)
+    const piAgentDir = environment['PI_CODING_AGENT_DIR']
+    if (harnessId === 'pi' && piAgentDir) {
+      if (!providerId) throw new Error('pi requires a provider to disconnect.')
+      await new PiAuthConfigService(join(piAgentDir, 'auth.json')).removeCredential(providerId)
+      return
+    }
     if (definition.removeStoredCredential) {
       if (!providerId) throw new Error(`${harnessId} requires a provider to disconnect.`)
       await definition.removeStoredCredential(providerId)
@@ -728,7 +765,12 @@ export class ProviderAccountOrchestrator {
         `${harnessId} does not expose a logout command. Remove the credential in the harness itself.`
       )
     }
-    const result = await this.run(definition.command, definition.logoutArgs(providerId), homedir())
+    const result = await this.run(
+      definition.command,
+      definition.logoutArgs(providerId),
+      homedir(),
+      environment
+    )
     if (!result.succeeded) {
       const detail = result.error ?? (result.stderr.trim() || result.stdout.trim())
       throw new Error(`Logout failed: ${detail || 'unknown error'}`)
@@ -897,11 +939,16 @@ export class ProviderAccountOrchestrator {
     return definition
   }
 
-  private async run(command: string, args: string[], cwd?: string): Promise<CommandResult> {
+  private async run(
+    command: string,
+    args: string[],
+    cwd?: string,
+    environment: NodeJS.ProcessEnv = {}
+  ): Promise<CommandResult> {
     try {
       const result = await runHarnessCommand(command, args, {
         ...(cwd ? { cwd } : {}),
-        env: buildProcessEnvironment(),
+        env: buildProcessEnvironment({ ...process.env, ...environment }),
         timeoutMs: STATUS_TIMEOUT_MS,
         maxOutputBytes: STATUS_OUTPUT_MAX_BYTES
       })

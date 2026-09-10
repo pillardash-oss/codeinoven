@@ -343,7 +343,7 @@ export class CodexDriver extends PersistentCliDriver {
   protected async ensureCliReady(): Promise<void> {
     try {
       await runHarnessCommand('codex', ['--version'], {
-        env: buildProcessEnvironment(),
+        env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
         timeoutMs: 10_000
       })
     } catch (error) {
@@ -355,7 +355,8 @@ export class CodexDriver extends PersistentCliDriver {
   constructor(
     storage: StorageEngine,
     private readonly baseUrlProviders?: BaseUrlProviderService,
-    private readonly secretVault?: SecretVault
+    private readonly secretVault?: SecretVault,
+    private readonly accountEnvironment: NodeJS.ProcessEnv = {}
   ) {
     super(storage)
   }
@@ -910,7 +911,10 @@ export class CodexDriver extends PersistentCliDriver {
       [...providerArgs, 'app-server', '-c', CODEX_DEFAULT_QUESTION_CONFIG, '--listen', 'stdio://'],
       {
         cwd: projectPath,
-        env: { ...buildProcessEnvironment(), ...providerEnv }
+        env: {
+          ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+          ...providerEnv
+        }
       }
     )
     const child = spawn(prepared.command, prepared.args, {
@@ -1854,7 +1858,10 @@ export class CodexDriver extends PersistentCliDriver {
     return {
       command: 'codex',
       args,
-      env: { ...buildProcessEnvironment(), ...env },
+      env: {
+        ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+        ...env
+      },
       provenanceModelId: resolveFastModelId(
         options.settings.modelId,
         fastInference ? 'fast' : 'normal'

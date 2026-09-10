@@ -28,6 +28,57 @@ interface PtySession {
 /** How often the watchdog sweeps for idle sessions. */
 const IDLE_WATCHDOG_INTERVAL_MS = 5_000
 
+const ALLOWED_COMMANDS = new Set([
+  'opencode',
+  'claude',
+  'codex',
+  'cline',
+  'pi',
+  'agy',
+  'muse',
+  'npm',
+  'bun',
+  'brew',
+  'winget',
+  'rm',
+  'git',
+  'wsl',
+  'sh',
+  'cmd',
+  'powershell'
+])
+
+const ACCOUNT_ENVIRONMENT_KEYS = new Set([
+  'PI_CODING_AGENT_DIR',
+  'OPENCODE_CONFIG_DIR',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_STATE_HOME',
+  'XDG_CACHE_HOME',
+  'CODEX_HOME',
+  'CLAUDE_CONFIG_DIR'
+])
+
+function normalizedCommandName(command: string): string {
+  return basename(command)
+    .replace(/\.(?:exe|cmd|bat|ps1)$/iu, '')
+    .toLowerCase()
+}
+
+function safeCommandEnvironment(environment?: Record<string, string>): Record<string, string> {
+  if (!environment) return {}
+  return Object.fromEntries(
+    Object.entries(environment).filter(
+      ([key, value]) =>
+        ACCOUNT_ENVIRONMENT_KEYS.has(key) &&
+        typeof value === 'string' &&
+        value.length > 0 &&
+        value.length <= 4_096 &&
+        !value.includes('\0')
+    )
+  )
+}
+
 /** Called when the user types into a project terminal, so concurrent agent
  *  turns can exclude the user's own shell-driven edits from their cards. */
 export interface PtyUserInputHook {
@@ -129,8 +180,16 @@ export class PtyService {
     )
     ipcMain.handle(
       'pty:createCommand',
-      (_, id: string, command: string, args: string[], cols: number, rows: number) =>
-        this.createCommand(id, command, args, cols, rows)
+      (
+        _,
+        id: string,
+        command: string,
+        args: string[],
+        cols: number,
+        rows: number,
+        idleTimeoutMs?: number,
+        environment?: Record<string, string>
+      ) => this.createCommand(id, command, args, cols, rows, idleTimeoutMs, environment)
     )
     ipcMain.handle(
       'pty:createAction',
@@ -224,7 +283,8 @@ export class PtyService {
       projectId,
       cwd,
       shell,
-      createdAt
+      createdAt,
+      lastActivityAt: createdAt
     })
     await this.recordEvent({
       type: 'create',
@@ -260,39 +320,9 @@ export class PtyService {
     args: string[],
     cols: number,
     rows: number,
-    idleTimeoutMs?: number
+    idleTimeoutMs?: number,
+    environment?: Record<string, string>
   ): Promise<{ id: string; pid: number }> {
-/**
- * Harness binaries allowed to run as single-command PTY sessions. Compared
- * against the resolved executable's name with any Windows extension
- * (`.exe`/`.cmd`/`.bat`/`.ps1`) stripped, so `pi.exe` on Windows matches `pi`.
- */
-const ALLOWED_COMMANDS = new Set([
-  'opencode',
-  'claude',
-  'codex',
-  'cline',
-  'pi',
-  'agy',
-  'muse',
-  'npm',
-  'bun',
-  'brew',
-  'winget',
-  'rm',
-  'git',
-  'wsl',
-  'sh',
-  'cmd',
-  'powershell'
-])
-
-/** Normalize a command path to a comparable executable name. */
-function normalizedCommandName(command: string): string {
-  return basename(command)
-    .replace(/\.(?:exe|cmd|bat|ps1)$/iu, '')
-    .toLowerCase()
-}
     if (!ALLOWED_COMMANDS.has(normalizedCommandName(command))) {
       throw new Error(`Refusing to start unknown harness command: ${command}`)
     }
@@ -306,7 +336,7 @@ function normalizedCommandName(command: string): string {
       cols,
       rows,
       cwd,
-      env: buildShellEnv()
+      env: { ...buildShellEnv(), ...safeCommandEnvironment(environment) }
     })
     this.trackProcess?.({
       pid: proc.pid,
@@ -451,7 +481,15 @@ function normalizedCommandName(command: string): string {
         timestamp: Date.now()
       })
     })
-    this.sessions.set(id, { id, process: proc, projectId, cwd, shell, createdAt })
+    this.sessions.set(id, {
+      id,
+      process: proc,
+      projectId,
+      cwd,
+      shell,
+      createdAt,
+      lastActivityAt: createdAt
+    })
     await this.recordEvent({
       type: 'create',
       terminalId: id,

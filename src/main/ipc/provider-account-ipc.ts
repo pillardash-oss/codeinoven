@@ -1,14 +1,46 @@
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { isAbsolute } from 'node:path'
 import type { ProviderAccountLoginOptions } from '../../lib/types'
+import type { StorageEngine } from '../storage/storage-engine'
 import { validateEntityId } from './ipc-validation'
 import { ProviderAccountOrchestrator } from '../providers/provider-account-orchestrator'
+import { HarnessAccountRegistry } from '../providers/harness-account-registry'
 
-const LOGIN_FIELDS = new Set(['mode', 'accountHint', 'sso', 'providerId'])
+const LOGIN_FIELDS = new Set(['mode', 'accountHint', 'sso', 'providerId', 'accountId'])
 const LOGIN_MODES = new Set(['default', 'subscription', 'console', 'device'])
 
 /** Register the validated provider sign-in renderer boundary. */
-export function registerProviderAccountIpc(auth = new ProviderAccountOrchestrator()): void {
+export function registerProviderAccountIpc(
+  storage: StorageEngine,
+  auth = new ProviderAccountOrchestrator(),
+  removeAccount?: (accountId: string) => Promise<boolean>
+): void {
+  const accounts = new HarnessAccountRegistry(storage)
+  ipcMain.handle('providerAccounts:list', (_, rawHarnessId?: unknown) =>
+    accounts.list(
+      rawHarnessId === undefined ? undefined : validateEntityId(rawHarnessId, 'Harness ID', 256)
+    )
+  )
+  ipcMain.handle('providerAccounts:create', (_, rawInput: unknown) => {
+    const input = record(rawInput, 'Account')
+    rejectUnknownFields(input, new Set(['harnessId', 'providerId', 'label']), 'account')
+    return accounts.create({
+      harnessId: validateEntityId(input['harnessId'], 'Harness ID', 256),
+      providerId: text(input['providerId'], 'Provider ID', 256, false, true),
+      label: text(input['label'], 'Account label', 80)
+    })
+  })
+  ipcMain.handle('providerAccounts:rename', (_, rawAccountId: unknown, rawLabel: unknown) =>
+    accounts.rename(
+      validateEntityId(rawAccountId, 'Account ID', 256),
+      text(rawLabel, 'Account label', 80)
+    )
+  )
+  ipcMain.handle('providerAccounts:remove', (_, rawAccountId: unknown) =>
+    (removeAccount ?? ((accountId: string) => accounts.remove(accountId)))(
+      validateEntityId(rawAccountId, 'Account ID', 256)
+    )
+  )
   ipcMain.handle(
     'providerAccounts:getAuthStatus',
     async (_, rawHarnessId: unknown, rawProjectPath?: unknown) => {
@@ -26,37 +58,74 @@ export function registerProviderAccountIpc(auth = new ProviderAccountOrchestrato
       return { capabilities, ...(await auth.getStatus(harnessId, projectPath)) }
     }
   )
-  ipcMain.handle('providerAccounts:beginLogin', (_, rawHarnessId: unknown, rawOptions?: unknown) =>
-    auth.beginLogin(
-      validateEntityId(rawHarnessId, 'Harness ID', 256),
-      parseLoginOptions(rawOptions)
-    )
+  ipcMain.handle(
+    'providerAccounts:beginLogin',
+    async (_, rawHarnessId: unknown, rawOptions?: unknown) => {
+      const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
+      const options = parseLoginOptions(rawOptions)
+      const account = options.accountId
+        ? await accounts.resolve(harnessId, options.accountId)
+        : undefined
+      return auth.beginLogin(
+        harnessId,
+        options,
+        account ? accounts.environment(account) : undefined
+      )
+    }
   )
   ipcMain.handle('providerAccounts:listOffered', (_, rawHarnessId: unknown) =>
     auth.listOffered(validateEntityId(rawHarnessId, 'Harness ID', 256))
   )
-  ipcMain.handle('providerAccounts:logout', (_, rawHarnessId: unknown, rawProviderId?: unknown) =>
-    auth.logout(
-      validateEntityId(rawHarnessId, 'Harness ID', 256),
-      rawProviderId === undefined ? undefined : validateEntityId(rawProviderId, 'Provider ID', 256)
-    )
+  ipcMain.handle(
+    'providerAccounts:logout',
+    async (_, rawHarnessId: unknown, rawProviderId?: unknown, rawAccountId?: unknown) => {
+      const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
+      const accountId =
+        rawAccountId === undefined ? undefined : validateEntityId(rawAccountId, 'Account ID', 256)
+      const account = accountId ? await accounts.resolve(harnessId, accountId) : undefined
+      return auth.logout(
+        harnessId,
+        rawProviderId === undefined
+          ? undefined
+          : validateEntityId(rawProviderId, 'Provider ID', 256),
+        account ? accounts.environment(account) : undefined
+      )
+    }
   )
   ipcMain.handle(
     'providerAccounts:setApiKey',
-    (_, rawHarnessId: unknown, rawProviderId: unknown, rawApiKey: unknown) =>
-      auth.setCredential(
-        validateEntityId(rawHarnessId, 'Harness ID', 256),
+    async (
+      _,
+      rawHarnessId: unknown,
+      rawProviderId: unknown,
+      rawApiKey: unknown,
+      rawAccountId?: unknown
+    ) => {
+      const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
+      const accountId =
+        rawAccountId === undefined ? undefined : validateEntityId(rawAccountId, 'Account ID', 256)
+      const account = accountId ? await accounts.resolve(harnessId, accountId) : undefined
+      return auth.setCredential(
+        harnessId,
         validateEntityId(rawProviderId, 'Provider ID', 256),
-        text(rawApiKey, 'API key', 4_096, true)
+        text(rawApiKey, 'API key', 4_096, true),
+        account ? accounts.environment(account) : undefined
       )
+    }
   )
   ipcMain.handle(
     'providerAccounts:beginOAuthLogin',
-    (_, rawHarnessId: unknown, rawProviderId: unknown) =>
-      auth.beginOAuthLogin(
-        validateEntityId(rawHarnessId, 'Harness ID', 256),
-        validateEntityId(rawProviderId, 'Provider ID', 256)
+    async (_, rawHarnessId: unknown, rawProviderId: unknown, rawAccountId?: unknown) => {
+      const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
+      const accountId =
+        rawAccountId === undefined ? undefined : validateEntityId(rawAccountId, 'Account ID', 256)
+      const account = accountId ? await accounts.resolve(harnessId, accountId) : undefined
+      return auth.beginOAuthLogin(
+        harnessId,
+        validateEntityId(rawProviderId, 'Provider ID', 256),
+        account ? accounts.environment(account) : undefined
       )
+    }
   )
   ipcMain.handle(
     'providerAccounts:respondOAuthPrompt',
@@ -99,7 +168,10 @@ function parseLoginOptions(value: unknown): ProviderAccountLoginOptions {
     ...(options['sso'] === undefined ? {} : { sso: boolean(options['sso'], 'SSO') }),
     ...(options['providerId'] === undefined
       ? {}
-      : { providerId: validateEntityId(options['providerId'], 'Provider ID', 256) })
+      : { providerId: validateEntityId(options['providerId'], 'Provider ID', 256) }),
+    ...(options['accountId'] === undefined
+      ? {}
+      : { accountId: validateEntityId(options['accountId'], 'Account ID', 256) })
   }
 }
 

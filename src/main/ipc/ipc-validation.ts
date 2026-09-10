@@ -122,6 +122,7 @@ export function validateEngineeringLifecycleResumeToken(value: unknown): string 
 const THREAD_SETTINGS_FIELDS = new Set([
   'harnessId',
   'providerId',
+  'accountId',
   'modelId',
   'titleMode',
   'thinkingLevel',
@@ -1040,6 +1041,9 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
         ? false
         : validateBoolean(input.assignmentMode, 'Assignment'),
     loopMode: input.loopMode === undefined ? false : validateBoolean(input.loopMode, 'Achievement')
+  }
+  if (input.accountId !== undefined) {
+    settings.accountId = validateEntityId(input.accountId, 'Account ID', 256)
   }
   if (input.inferenceMode !== undefined) {
     settings.inferenceMode = assertEnum(input.inferenceMode, INFERENCE_MODES, 'inference mode')

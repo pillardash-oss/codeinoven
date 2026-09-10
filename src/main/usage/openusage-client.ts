@@ -197,12 +197,15 @@ async function openUsageExecutable(): Promise<string | undefined> {
   return undefined
 }
 
-async function readOpenUsageCli(providerId: string): Promise<unknown> {
+async function readOpenUsageCli(
+  providerId: string,
+  environment: NodeJS.ProcessEnv = {}
+): Promise<unknown> {
   const executable = await openUsageExecutable()
   if (!executable) return null
   return new Promise((resolve) => {
     const child = spawn(executable, [providerId], {
-      env: buildProcessEnvironment(),
+      env: buildProcessEnvironment({ ...process.env, ...environment }),
       stdio: ['ignore', 'pipe', 'ignore']
     })
     let stdout = ''
@@ -242,14 +245,16 @@ export class OpenUsageClient {
 
   async readProviderUsage(
     providerId: string,
-    fallbackProviderIds: readonly string[] = []
+    fallbackProviderIds: readonly string[] = [],
+    accountKey = 'default',
+    environment: NodeJS.ProcessEnv = {}
   ): Promise<OpenUsageTelemetry | null> {
     const candidates = [providerId, OPENUSAGE_PROVIDER_ALIASES[providerId], ...fallbackProviderIds]
       .filter((candidate): candidate is string => Boolean(candidate))
       .filter((candidate, index, all) => all.indexOf(candidate) === index)
     let credits: AgentUsageCredits | undefined
     for (const candidate of candidates) {
-      const telemetry = await this.readExactProviderUsage(candidate)
+      const telemetry = await this.readExactProviderUsage(candidate, accountKey, environment)
       if (!telemetry) continue
       credits ??= telemetry.credits
       if (telemetry.rateLimits.length > 0) {
@@ -259,30 +264,41 @@ export class OpenUsageClient {
     return credits ? { rateLimits: [], credits } : null
   }
 
-  private async readExactProviderUsage(providerId: string): Promise<OpenUsageTelemetry | null> {
-    const cached = this.cache.get(providerId)
+  private async readExactProviderUsage(
+    providerId: string,
+    accountKey: string,
+    environment: NodeJS.ProcessEnv
+  ): Promise<OpenUsageTelemetry | null> {
+    const cacheKey = `${accountKey}\0${providerId}`
+    const cached = this.cache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now()) return cached.value
-    const existing = this.inflight.get(providerId)
+    const existing = this.inflight.get(cacheKey)
     if (existing) return existing
 
-    const request = this.fetchProvider(providerId).finally(() => this.inflight.delete(providerId))
-    this.inflight.set(providerId, request)
+    const request = this.fetchProvider(providerId, cacheKey, environment).finally(() =>
+      this.inflight.delete(cacheKey)
+    )
+    this.inflight.set(cacheKey, request)
     return request
   }
 
-  private async fetchProvider(providerId: string): Promise<OpenUsageTelemetry | null> {
+  private async fetchProvider(
+    providerId: string,
+    cacheKey: string,
+    environment: NodeJS.ProcessEnv
+  ): Promise<OpenUsageTelemetry | null> {
     const encodedProviderId = encodeURIComponent(providerId)
     const endpoints = [
       `${OPENUSAGE_API_BASE}/${encodedProviderId}`,
       `http://127.0.0.1:6736/v1/usage/${encodedProviderId}`
     ]
-    for (const endpoint of endpoints) {
+    for (const endpoint of Object.keys(environment).length === 0 ? endpoints : []) {
       try {
         const response = await fetch(endpoint, { signal: AbortSignal.timeout(1_000) })
         if (!response.ok) continue
         const value = parseProviderTelemetry((await response.json()) as unknown, providerId)
         if (value) {
-          this.cache.set(providerId, { expiresAt: Date.now() + OPENUSAGE_CACHE_MS, value })
+          this.cache.set(cacheKey, { expiresAt: Date.now() + OPENUSAGE_CACHE_MS, value })
           return value
         }
       } catch {
@@ -290,11 +306,14 @@ export class OpenUsageClient {
       }
     }
 
-    const value = parseProviderTelemetry(await readOpenUsageCli(providerId), providerId)
+    const value = parseProviderTelemetry(
+      await readOpenUsageCli(providerId, environment),
+      providerId
+    )
     // A missing helper or a provider refresh failure is transient. Do not cache
     // the miss, otherwise opening OpenUsage and hovering again still shows no bar.
     if (value) {
-      this.cache.set(providerId, { expiresAt: Date.now() + OPENUSAGE_CACHE_MS, value })
+      this.cache.set(cacheKey, { expiresAt: Date.now() + OPENUSAGE_CACHE_MS, value })
     }
     return value
   }

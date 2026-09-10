@@ -8,6 +8,7 @@ const CHAT_SETTINGS_KEY = `${APP_SLUG}.chatSettings.lastUsed`
 /** Fallback settings used before anything has been persisted. */
 export const DEFAULT_SETTINGS: ThreadSettings = {
   harnessId: DEFAULT_HARNESS,
+  accountId: `${DEFAULT_HARNESS}.default`,
   providerId: '',
   modelId: '',
   thinkingLevel: 'medium',

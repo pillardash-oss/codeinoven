@@ -66,6 +66,7 @@
   import EngineeringToolbox from './EngineeringToolbox.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import AccountPicker from '../shared/AccountPicker.svelte'
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
@@ -95,7 +96,8 @@
     UsageEfficiencyKpis,
     Thread,
     EngineeringLifecycleSelectionInput,
-    EngineeringLifecycleState
+    EngineeringLifecycleState,
+    HarnessAccount
   } from '$shared/types'
 
   type StartAfterSelection = Pick<Thread, 'id' | 'title'>
@@ -126,6 +128,9 @@
     settings?: ThreadSettings
     /** Called when any toolbar setting changes. */
     onSettingsChange?: (settings: ThreadSettings) => void
+    /** Reports the selected account so the owning thread can attribute the
+     *  pending/live turn without issuing a second account-registry read. */
+    onAccountSelected?: (account: HarnessAccount) => void
     /** Thread-scoped actions available through the composer slash menu. */
     actions?: readonly ActionDefinition[]
     /** Executes a non-command action selected from the slash menu. */
@@ -268,6 +273,7 @@
     autofocus = false,
     settings,
     onSettingsChange,
+    onAccountSelected,
     actions = [],
     onActionSelect,
     onSlashCommand,
@@ -1286,11 +1292,30 @@
       harnessId: nextHarnessId ?? resolved.harnessId,
       providerId,
       modelId,
+      ...(nextHarness !== resolved.harnessId ? { accountId: `${nextHarness}.default` } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(fastSupported ? {} : { inferenceMode: 'normal' })
     }
     if (onSettingsChange) onSettingsChange(updated)
     else threadSettingsStore.commit(updated)
+  }
+
+  function selectAccount(account: HarnessAccount): void {
+    const provider = account.providerId
+      ? resolvedProviders.find(
+          (candidate) =>
+            candidate.harnessId === account.harnessId && candidate.id === account.providerId
+        )
+      : undefined
+    const model = provider?.models[0]
+    const updated: ThreadSettings = {
+      ...resolved,
+      accountId: account.id,
+      ...(provider && model ? { providerId: provider.id, modelId: model.id } : {})
+    }
+    if (onSettingsChange) onSettingsChange(updated)
+    else threadSettingsStore.commit(updated)
+    onAccountSelected?.(account)
   }
 
   function selectThinking(preset: ThinkingPreset): void {
@@ -2564,6 +2589,12 @@
       thinkingLevel={resolved.thinkingLevel}
       {thinkingPresets}
       onSelectThinking={(level) => selectThinking({ id: level, label: level })}
+    />
+
+    <AccountPicker
+      harnessId={resolved.harnessId}
+      accountId={resolved.accountId}
+      onSelect={selectAccount}
     />
 
     <!-- Fast inference — native harness tier or catalog-provided fast variant -->

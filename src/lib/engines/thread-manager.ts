@@ -1196,7 +1196,8 @@ export class ThreadManager {
     projectId: string,
     threadId: string,
     sessionId: string,
-    harnessId?: string
+    harnessId?: string,
+    accountId?: string
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
@@ -1204,6 +1205,7 @@ export class ThreadManager {
       ...existing,
       sessionId,
       ...(harnessId ? { sessionHarnessId: harnessId } : {}),
+      ...(accountId ? { sessionAccountId: accountId } : {}),
       updatedAt: Date.now()
     }
 
@@ -1218,6 +1220,7 @@ export class ThreadManager {
     const updated: Thread = { ...existing, updatedAt: Date.now() }
     delete updated.sessionId
     delete updated.sessionHarnessId
+    delete updated.sessionAccountId
 
     await this.threadRepo.upsertViaWorker(updated)
     return updated

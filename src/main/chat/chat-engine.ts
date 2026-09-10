@@ -111,6 +111,10 @@ import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { CIO_UTILITY_SETUP_PROMPT, isCioUtilityRequest } from '../utilities/cio-utility-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import {
+  HarnessAccountRegistry,
+  legacyHarnessAccountId
+} from '../providers/harness-account-registry'
 import { refreshCustomProviderModels } from '../providers/base-url-model-refresh'
 import { AgentProcessService } from '../agents/agent-process-service'
 import {
@@ -1306,6 +1310,8 @@ interface SessionInfo {
   projectPath: string
   permissionLevel: PermissionLevel
   driverId: string
+  /** Credential container that owns this native session. */
+  accountId?: string
   activeTurnId?: string
   /** Stable user message that starts the active provider turn. */
   activeTurnUserMessageId?: string
@@ -1343,6 +1349,7 @@ interface TemporaryChatSession {
   threadId: string
   projectPath: string
   driverId: string
+  accountId?: string
   /** Provider the session's turns run against, for quota reads. */
   providerId?: string
   sessionId: string
@@ -1477,6 +1484,7 @@ interface ChildSessionInfo {
   threadId: string
   projectPath: string
   driverId: string
+  accountId?: string
   /** Root thread session whose watchdog must include this child's activity. */
   parentSessionId?: string
 }
@@ -1748,6 +1756,8 @@ export class ChatEngine {
   /** Parsed stream-log entries held per thread before the oldest is evicted. */
   private static readonly TURN_STREAM_CACHE_LIMIT = 16
   private drivers = new Map<string, HarnessDriver>()
+  /** Managed-account drivers are lazy and isolated by credential container. */
+  private accountDrivers = new Map<string, HarnessDriver>()
   private readonly openUsage = new OpenUsageClient()
   private readonly customProviderUsage = new CustomProviderUsageClient()
   private sessionRegistry = new Map<string, SessionInfo>()
@@ -2040,6 +2050,7 @@ export class ChatEngine {
   private utilityRegistry: UtilityRegistryService
   private capabilityDiscovery: CapabilityDiscoveryService
   private baseUrlProviders: BaseUrlProviderService
+  private accountRegistry: HarnessAccountRegistry
   private utilityOrchestration: UtilityOrchestrationService
   private usageRepo: HarnessUsageRepo
   private rankingRepo: ModelRankingRepo
@@ -2107,6 +2118,7 @@ export class ChatEngine {
     this.utilityRegistry = new UtilityRegistryService(storage)
     this.capabilityDiscovery = new CapabilityDiscoveryService()
     this.baseUrlProviders = new BaseUrlProviderService(storage)
+    this.accountRegistry = new HarnessAccountRegistry(storage)
     this.utilityOrchestration = new UtilityOrchestrationService(storage, database)
     this.brainstormAlignmentNotes = new BrainstormAlignmentNotes(storage)
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
@@ -2147,6 +2159,104 @@ export class ChatEngine {
       driver.setProcessObserver?.(this.agentProcesses)
       driver.onEvent((event) => this.handleDriverEvent(driver.id, event))
     }
+  }
+
+  private createAccountDriver(harnessId: string, environment: NodeJS.ProcessEnv): HarnessDriver {
+    switch (harnessId) {
+      case 'opencode':
+        return new OpenCodeDriver(this.baseUrlProviders, this.secretVault, environment)
+      case 'codex':
+        return new CodexDriver(this.storage, this.baseUrlProviders, this.secretVault, environment)
+      case 'claude-code':
+        return new ClaudeCodeDriver(
+          this.storage,
+          this.baseUrlProviders,
+          this.secretVault,
+          environment
+        )
+      case 'pi':
+        return new PiDriver(this.storage, this.baseUrlProviders, this.secretVault, environment)
+      default:
+        throw new Error(`${harnessId} does not support isolated account containers.`)
+    }
+  }
+
+  private async driverForAccount(harnessId: string, accountId?: string): Promise<HarnessDriver> {
+    const resolvedId = accountId || legacyHarnessAccountId(harnessId)
+    if (resolvedId === legacyHarnessAccountId(harnessId)) {
+      const driver = this.drivers.get(harnessId)
+      if (!driver) throw new Error(`Harness driver "${harnessId}" is not available.`)
+      return driver
+    }
+    const existing = this.accountDrivers.get(resolvedId)
+    if (existing) return existing
+    const account = await this.accountRegistry.resolve(harnessId, resolvedId)
+    const driver = this.createAccountDriver(harnessId, this.accountRegistry.environment(account))
+    driver.setProcessObserver?.(this.agentProcesses)
+    driver.onEvent((event) => this.handleDriverEvent(driver.id, event))
+    this.accountDrivers.set(resolvedId, driver)
+    return driver
+  }
+
+  private driverForRuntime(harnessId: string, accountId?: string): HarnessDriver | undefined {
+    const resolvedId = accountId || legacyHarnessAccountId(harnessId)
+    return resolvedId === legacyHarnessAccountId(harnessId)
+      ? this.drivers.get(harnessId)
+      : this.accountDrivers.get(resolvedId)
+  }
+
+  private allDrivers(): HarnessDriver[] {
+    return [...new Set([...this.drivers.values(), ...this.accountDrivers.values()])]
+  }
+
+  async removeHarnessAccount(accountId: string): Promise<boolean> {
+    const account = (await this.accountRegistry.list()).find(
+      (candidate) => candidate.id === accountId
+    )
+    if (!account) return false
+    if (account.containerKind === 'legacy-default') {
+      throw new Error('The Default account cannot be removed.')
+    }
+
+    const ownedSessions = [...this.sessionRegistry.entries()].filter(
+      ([, info]) => info.accountId === accountId
+    )
+    await Promise.allSettled(
+      ownedSessions.map(async ([sessionId, info]) => {
+        const driver = this.driverForRuntime(info.driverId, accountId)
+        if (driver && this.sessionStatuses.get(sessionId)?.state === 'working') {
+          this.userAbortedSessions.add(sessionId)
+          await driver.abort(info.projectPath, sessionId)
+          this.handleSessionIdleSignal(sessionId)
+          await this.awaitSessionIdleFinalization(sessionId)
+        }
+        await this.cleanupTurnUtilities(sessionId)
+        await this.threadManager.clearSessionId(info.projectId, info.threadId)
+        this.retireSessionState(sessionId)
+      })
+    )
+
+    const fallbackAccountId = legacyHarnessAccountId(account.harnessId)
+    const affectedThreads = (await this.threadManager.listAllThreads()).filter(
+      (thread) => thread.settings?.accountId === accountId
+    )
+    for (let offset = 0; offset < affectedThreads.length; offset += 25) {
+      await Promise.all(
+        affectedThreads.slice(offset, offset + 25).map((thread) => {
+          const settings = thread.settings
+          if (!settings) return Promise.resolve(null)
+          return this.threadManager.updateSettings(thread.projectId, thread.id, {
+            ...settings,
+            accountId: fallbackAccountId
+          })
+        })
+      )
+    }
+
+    const driver = this.accountDrivers.get(accountId)
+    driver?.dispose()
+    this.accountDrivers.delete(accountId)
+    return this.accountRegistry.remove(accountId)
   }
 
   setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
@@ -2218,8 +2328,10 @@ export class ChatEngine {
     ipcMain.handle('agent:activateBankedReset', (_, projectId: string, threadId: string) =>
       this.activateBankedReset(projectId, threadId)
     )
-    ipcMain.handle('agent:getHarnessAuthStatus', (_, projectId: string, harnessId: string) =>
-      this.getHarnessAuthStatus(projectId, harnessId)
+    ipcMain.handle(
+      'agent:getHarnessAuthStatus',
+      (_, projectId: string, harnessId: string, accountId?: string) =>
+        this.getHarnessAuthStatus(projectId, harnessId, accountId)
     )
     ipcMain.handle(
       'agent:listTools',
@@ -2768,7 +2880,10 @@ export class ChatEngine {
     requestId = validateEntityId(requestId, 'Question request ID', 256)
     const pending = this.requirePendingQuestion(projectId, threadId, requestId)
     const safeAnswers = this.validateQuestionAnswers(answers, pending.request.questions)
-    const driver = this.drivers.get(pending.driverId)
+    const driver = this.driverForRuntime(
+      pending.driverId,
+      this.sessionRegistry.get(pending.request.sessionId)?.accountId
+    )
     if (!driver) {
       throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
     }
@@ -2894,7 +3009,10 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     requestId = validateEntityId(requestId, 'Question request ID', 256)
     const pending = this.requirePendingQuestion(projectId, threadId, requestId)
-    const driver = this.drivers.get(pending.driverId)
+    const driver = this.driverForRuntime(
+      pending.driverId,
+      this.sessionRegistry.get(pending.request.sessionId)?.accountId
+    )
     if (!driver) {
       throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
     }
@@ -3020,7 +3138,12 @@ export class ChatEngine {
       this.sessionRegistry.get(thread.sessionId)?.driverId ??
       thread.settings?.harnessId ??
       DEFAULT_HARNESS
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    const { driver, projectPath } = await this.resolve(
+      projectId,
+      driverId,
+      threadId,
+      thread.sessionAccountId ?? this.sessionRegistry.get(thread.sessionId)?.accountId
+    )
     const providerRequests = await driver.listPendingQuestions(projectPath)
     const timeoutMs = (await this.storage.getConfig()).questionTimeoutMs
     for (const request of providerRequests) {
@@ -3121,7 +3244,7 @@ export class ChatEngine {
     }
     await Promise.allSettled(
       active.map(async ({ sessionId, info }) => {
-        const driver = this.drivers.get(info.driverId)
+        const driver = this.driverForRuntime(info.driverId, info.accountId)
         if (!driver) return
         try {
           if (driver.terminate) {
@@ -3174,9 +3297,10 @@ export class ChatEngine {
     await Promise.allSettled(
       [...this.utilityTurns.keys()].map((sessionId) => this.cleanupTurnUtilities(sessionId))
     )
-    for (const driver of this.drivers.values()) {
+    for (const driver of this.allDrivers()) {
       driver.dispose()
     }
+    this.accountDrivers.clear()
     await this.utilityOrchestration.dispose()
     await this.utilityRuntime.dispose()
     this.retryScheduler?.dispose()
@@ -3591,7 +3715,8 @@ export class ChatEngine {
   async refreshAccountUsage(overrides?: AgentAccountUsageOverrides): Promise<AgentAccountUsage[]> {
     const harnessId = overrides?.harnessId
     if (!harnessId) return []
-    const driver = this.drivers.get(harnessId)
+    const account = await this.accountRegistry.resolve(harnessId, overrides?.accountId)
+    const driver = await this.driverForAccount(harnessId, account.id).catch(() => undefined)
     if (!driver) {
       Logger.dev(`On-demand account usage refresh: unknown harness "${harnessId}"`)
       return []
@@ -3606,7 +3731,14 @@ export class ChatEngine {
       await this.storage.ensureDirectory(CHATS_CWD_DIR)
       projectPath = this.storage.resolve(CHATS_CWD_DIR)
     }
-    const entry = await this.readHarnessAccountUsage({ harnessId, providerId, driver, projectPath })
+    const entry = await this.readHarnessAccountUsage({
+      harnessId,
+      providerId,
+      accountId: account.id,
+      accountEnvironment: this.accountRegistry.environment(account),
+      driver,
+      projectPath
+    })
     return entry ? [entry] : []
   }
 
@@ -3616,10 +3748,12 @@ export class ChatEngine {
   private async readHarnessAccountUsage(target: {
     harnessId: string
     providerId: string
+    accountId: string
+    accountEnvironment: NodeJS.ProcessEnv
     driver: HarnessDriver
     projectPath: string
   }): Promise<AgentAccountUsage | null> {
-    const { harnessId, providerId, driver, projectPath } = target
+    const { harnessId, providerId, accountId, accountEnvironment, driver, projectPath } = target
     try {
       const nativeTelemetry = driver.readAccountUsage
         ? await driver.readAccountUsage(projectPath, providerId)
@@ -3629,7 +3763,9 @@ export class ChatEngine {
       // at Z.AI queries "z-ai", not "pi").
       const openUsage = await this.openUsage.readProviderUsage(
         providerId,
-        harnessId === 'pi' ? ['pi'] : []
+        harnessId === 'pi' ? ['pi'] : [],
+        accountId,
+        accountEnvironment
       )
       // A custom provider with a user-defined usage route answers the
       // quota question directly when the harness itself reports nothing.
@@ -3671,7 +3807,7 @@ export class ChatEngine {
       ) {
         return null
       }
-      return { harnessId, providerId, ...telemetry }
+      return { harnessId, providerId, accountId, ...telemetry }
     } catch (error) {
       Logger.dev('On-demand account usage refresh unavailable:', error)
       return null
@@ -3694,12 +3830,18 @@ export class ChatEngine {
     if (!thread) return null
     const harnessId = thread.settings?.harnessId
     if (!harnessId) return null
-    const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
+    const accountId = thread.settings?.accountId ?? legacyHarnessAccountId(harnessId)
+    const { driver, projectPath } = await this.resolve(
+      projectIdSafe,
+      harnessId,
+      threadId,
+      accountId
+    )
     if (!driver.activateBankedReset) return null
     const telemetry = await driver.activateBankedReset(projectPath)
     if (!telemetry) return null
     const providerId = thread.settings?.providerId ?? harnessId
-    return { harnessId, providerId, ...telemetry }
+    return { harnessId, providerId, accountId, ...telemetry }
   }
 
   /**
@@ -3738,10 +3880,14 @@ export class ChatEngine {
    * null when the harness exposes no status probe (the renderer then shows
    * nothing); otherwise true when the stored credential authenticates.
    */
-  async getHarnessAuthStatus(projectId: string, harnessId: string): Promise<boolean | null> {
+  async getHarnessAuthStatus(
+    projectId: string,
+    harnessId: string,
+    accountId?: string
+  ): Promise<boolean | null> {
     projectId = validateEntityId(projectId, 'Project ID')
     harnessId = validateEntityId(harnessId, 'Harness ID', 256)
-    const { driver, projectPath } = await this.resolve(projectId, harnessId)
+    const { driver, projectPath } = await this.resolve(projectId, harnessId, undefined, accountId)
     if (!driver.getAuthStatus) return null
     const status = await driver.getAuthStatus(projectPath)
     return status.state === 'authenticated'
@@ -3751,23 +3897,37 @@ export class ChatEngine {
   private async discoverProviders(projectId: string): Promise<ProviderCatalog[]> {
     const projectPath = await this.resolveProjectPath(projectId)
     const harnessEnv = buildProcessEnvironment()
-    const drivers = [...this.drivers.values()].filter((driver) => {
+    const defaultDrivers = [...this.drivers.values()].filter((driver) => {
       const command = findHarness(driver.id)?.command
       return command !== undefined && resolveExecutablePath(command, harnessEnv) !== undefined
     })
-    const results = await Promise.all(
-      drivers.map(async (driver): Promise<DriverDiscovery> => {
-        try {
-          return await this.discoverDriverProviders(driver, projectPath)
-        } catch (error) {
-          Logger.info('Harness provider discovery skipped', {
-            driverId: driver.id,
-            error: error instanceof Error ? error.message : String(error)
-          })
-          return { catalogs: [], probe: Promise.resolve([]) }
-        }
-      })
+    const managedAccounts = (await this.accountRegistry.list()).filter(
+      (account) =>
+        account.containerKind === 'managed' &&
+        defaultDrivers.some((driver) => driver.id === account.harnessId) &&
+        ['pi', 'opencode', 'codex', 'claude-code'].includes(account.harnessId)
     )
+    const managedDrivers = await Promise.all(
+      managedAccounts.map((account) => this.driverForAccount(account.harnessId, account.id))
+    )
+    const drivers = [...defaultDrivers, ...managedDrivers]
+    const results: DriverDiscovery[] = []
+    for (let offset = 0; offset < drivers.length; offset += 4) {
+      const batch = await Promise.all(
+        drivers.slice(offset, offset + 4).map(async (driver): Promise<DriverDiscovery> => {
+          try {
+            return await this.discoverDriverProviders(driver, projectPath)
+          } catch (error) {
+            Logger.info('Harness provider discovery skipped', {
+              driverId: driver.id,
+              error: error instanceof Error ? error.message : String(error)
+            })
+            return { catalogs: [], probe: Promise.resolve([]) }
+          }
+        })
+      )
+      results.push(...batch)
+    }
     const merged = mergeProviderCatalogs(
       results
         .filter((entry) => entry.catalogs !== undefined)
@@ -4285,7 +4445,8 @@ export class ChatEngine {
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
 
     const driverId = requestedDriverId ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    const accountId = thread.settings?.accountId ?? legacyHarnessAccountId(driverId)
+    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
 
     // A harness switch orphans the old harness's session. The thread's bound
     // session belongs to the harness that created it — after a mid-run switch
@@ -4298,11 +4459,19 @@ export class ChatEngine {
     const sessionOwner = thread.sessionId
       ? (thread.sessionHarnessId ?? this.sessionRegistry.get(thread.sessionId)?.driverId)
       : undefined
-    const switchedHarness = Boolean(thread.sessionId && sessionOwner && sessionOwner !== driverId)
-    const previousHarnessId = switchedHarness ? sessionOwner : undefined
-    const previousSessionId = switchedHarness ? thread.sessionId : undefined
+    const sessionOwnerAccount = thread.sessionId
+      ? (thread.sessionAccountId ?? legacyHarnessAccountId(sessionOwner ?? driverId))
+      : undefined
+    const switchedRuntime = Boolean(
+      thread.sessionId &&
+      sessionOwner &&
+      (sessionOwner !== driverId || sessionOwnerAccount !== accountId)
+    )
+    const previousHarnessId = switchedRuntime ? sessionOwner : undefined
+    const previousAccountId = switchedRuntime ? sessionOwnerAccount : undefined
+    const previousSessionId = switchedRuntime ? thread.sessionId : undefined
 
-    let sessionId = switchedHarness ? undefined : thread.sessionId
+    let sessionId = switchedRuntime ? undefined : thread.sessionId
     // Planning-turn suppression is applied per turn in sendPrompt (where the
     // turn's intent is known). Marking the session here unconditionally for a
     // lifecycle-active thread would suppress the final answer of every parked
@@ -4351,7 +4520,8 @@ export class ChatEngine {
         projectId,
         threadId,
         sessionId,
-        driverId
+        driverId,
+        accountId
       )
       // Stamp the thread onto the driver record so the session can be
       // relocated across harness switches (see the switch branch below).
@@ -4364,7 +4534,7 @@ export class ChatEngine {
       // that harness still holds the thread's real native transcript. Restore
       // the binding so the next RPC spawn resumes it instead of cold-starting
       // on the engine's history recap.
-      if (switchedHarness) {
+      if (switchedRuntime) {
         try {
           nativeHistoryBound =
             (await driver.restoreNativeBinding?.(projectPath, sessionId, threadId)) ?? false
@@ -4388,7 +4558,7 @@ export class ChatEngine {
       // of its own. Seed the driver's native transcript from the edited
       // mirror so the next turn resumes the real (edited) conversation
       // natively instead of replaying it as a history recap.
-      if (!nativeHistoryBound && !switchedHarness) {
+      if (!nativeHistoryBound && !switchedRuntime) {
         try {
           const editedMirror = await this.threadManager.loadMessageRecords(projectId, threadId)
           const prefillMirror =
@@ -4427,7 +4597,7 @@ export class ChatEngine {
     // smaller than the thread's last-known native usage, compact the native
     // session before it resumes so the new model never hits Codex's "ran out of
     // room in the model's context window" boundary.
-    if (!switchedHarness && storedSessionMessages.length > 0 && thread.settings) {
+    if (!switchedRuntime && storedSessionMessages.length > 0 && thread.settings) {
       await this.maybeAutoCompactOnModelSwitch(
         projectId,
         threadId,
@@ -4441,12 +4611,13 @@ export class ChatEngine {
     // The switch succeeded (a replacement session is bound). Best-effort release
     // the old harness's session so its native context, prompt cache, and storage
     // are reclaimed instead of orphaned on disk.
-    if (switchedHarness && previousHarnessId && previousSessionId) {
+    if (switchedRuntime && previousHarnessId && previousAccountId && previousSessionId) {
       await this.releaseOrphanedHarnessSession(
         projectId,
         threadId,
         projectPath,
         previousHarnessId,
+        previousAccountId,
         previousSessionId
       )
     }
@@ -4459,6 +4630,8 @@ export class ChatEngine {
       thread.settings?.permissionLevel ?? 'auto_review',
       driverId
     )
+    const registered = this.sessionRegistry.get(sessionId)
+    if (registered) registered.accountId = accountId
     const recoveredTurnFinished = storedSessionMessages.at(-1)?.role === 'assistant'
     if (recoveredTurnFinished || (thread.status !== 'planning' && thread.status !== 'executing')) {
       const initialSpecKey = this.initialSpecKey(projectId, threadId)
@@ -4545,24 +4718,35 @@ export class ChatEngine {
     threadId: string,
     projectPath: string,
     previousHarnessId: string,
+    previousAccountId: string,
     previousSessionId: string
   ): Promise<void> {
     this.retireSessionState(previousSessionId)
-    const previousDriver = this.drivers.get(previousHarnessId)
+    const previousDriver = await this.driverForAccount(previousHarnessId, previousAccountId).catch(
+      () => undefined
+    )
     // The orphaned session's transcript must land in the app mirror before its
     // native session is destroyed, so the user never loses the old harness's
     // final output when they switch harnesses. Best-effort and non-throwing:
     // the idle sync usually already mirrored the completed turn.
     if (previousDriver?.loadMessages) {
       try {
-        const previousMessages = stampHarnessId(
-          await previousDriver.loadMessages(projectPath, previousSessionId),
-          previousHarnessId
+        const previousAccount = await this.accountRegistry.resolve(
+          previousHarnessId,
+          previousAccountId
+        )
+        const previousMessages = stampAccount(
+          stampHarnessId(
+            await previousDriver.loadMessages(projectPath, previousSessionId),
+            previousHarnessId
+          ),
+          previousAccount.id,
+          previousAccount.label
         )
         if (previousMessages.length > 0) {
           const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
-          const merged = restoreMirrorThinkingLevel(
-            mergeAgentMessages(mirror, previousMessages),
+          const merged = restoreMirrorAccount(
+            restoreMirrorThinkingLevel(mergeAgentMessages(mirror, previousMessages), mirror),
             mirror
           )
           await this.threadManager.upsertMessages(projectId, threadId, merged, previousSessionId)
@@ -4642,7 +4826,10 @@ export class ChatEngine {
     const driverId =
       registeredOwner ?? thread.sessionHarnessId ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
     try {
-      const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+      const accountId =
+        this.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
+      const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
+      const account = await this.accountRegistry.resolve(driverId, accountId)
       this.registerSession(
         thread.sessionId,
         projectId,
@@ -4651,9 +4838,12 @@ export class ChatEngine {
         thread.settings?.permissionLevel ?? 'auto_review',
         driverId
       )
-      const messages = stampHarnessId(
-        await driver.loadMessages(projectPath, thread.sessionId),
-        driverId
+      const registered = this.sessionRegistry.get(thread.sessionId)
+      if (registered) registered.accountId = accountId
+      const messages = stampAccount(
+        stampHarnessId(await driver.loadMessages(projectPath, thread.sessionId), driverId),
+        account.id,
+        account.label
       )
       this.applyReasoningStamps(thread.sessionId, messages)
       this.applyToolStamps(thread.sessionId, messages)
@@ -4667,14 +4857,17 @@ export class ChatEngine {
       this.preserveMirrorReasoningStamps(mirror, messages)
       this.preserveMirrorToolStamps(mirror, messages)
       this.preserveMirrorGenerationDurations(mirror, messages)
-      let merged = restoreMirrorThinkingLevel(
-        mergeAgentMessages(
-          mirror,
-          classifyProviderMessages(
-            messages,
-            this.planningSessions.has(thread.sessionId) ||
-              isDedicatedAssignmentAuditorThread(thread)
-          )
+      let merged = restoreMirrorAccount(
+        restoreMirrorThinkingLevel(
+          mergeAgentMessages(
+            mirror,
+            classifyProviderMessages(
+              messages,
+              this.planningSessions.has(thread.sessionId) ||
+                isDedicatedAssignmentAuditorThread(thread)
+            )
+          ),
+          mirror
         ),
         mirror
       )
@@ -5219,12 +5412,16 @@ export class ChatEngine {
       (thread.sessionId ? this.sessionRegistry.get(thread.sessionId)?.driverId : undefined) ??
       thread.settings?.harnessId ??
       DEFAULT_HARNESS
-    const { projectPath } = await this.resolve(projectId, driverId, threadId)
+    const accountId =
+      thread.sessionAccountId ??
+      (thread.sessionId ? this.sessionRegistry.get(thread.sessionId)?.accountId : undefined)
+    const { projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
     const owner: ChildSessionInfo = {
       projectId,
       threadId,
       projectPath,
       driverId,
+      accountId,
       parentSessionId: thread.sessionId
     }
     this.childSessionOwners.set(sessionId, owner)
@@ -5253,7 +5450,7 @@ export class ChatEngine {
     const owner = await this.resolveChildSessionOwner(projectId, threadId, sessionId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.settings) throw new Error('Thread settings are unavailable')
-    const driver = this.drivers.get(owner.driverId)
+    const driver = this.driverForRuntime(owner.driverId, owner.accountId)
     if (!driver) throw new Error(`Harness driver is unavailable: ${owner.driverId}`)
     const messages = await this.threadManager.loadSubagentMessages(projectId, threadId, sessionId)
     const latestModelMessage = [...messages]
@@ -5449,7 +5646,7 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     sessionId = validateEntityId(sessionId, 'Session ID', 512)
     const owner = await this.resolveChildSessionOwner(projectId, threadId, sessionId)
-    const driver = this.drivers.get(owner.driverId)
+    const driver = this.driverForRuntime(owner.driverId, owner.accountId)
     if (!driver) throw new Error(`Harness driver is unavailable: ${owner.driverId}`)
     this.userAbortedSessions.add(sessionId)
     await driver.abort(owner.projectPath, sessionId)
@@ -5467,24 +5664,31 @@ export class ChatEngine {
     if (existing) return existing
 
     const capture = (async (): Promise<AgentMessage[]> => {
-      const driver = resolvedDriver ?? this.drivers.get(owner.driverId)
+      const driver = resolvedDriver ?? this.driverForRuntime(owner.driverId, owner.accountId)
       if (!driver) {
         throw new Error(`Unknown harness: ${owner.driverId}`)
       }
       let timeout: ReturnType<typeof setTimeout> | undefined
       try {
-        const incoming = stampHarnessId(
-          await Promise.race([
-            driver.loadMessages(owner.projectPath, sessionId),
-            new Promise<never>((_, reject) => {
-              timeout = setTimeout(
-                () =>
-                  reject(new Error('The provider took too long to load the sub-agent transcript')),
-                15_000
-              )
-            })
-          ]),
-          owner.driverId
+        const account = await this.accountRegistry.resolve(owner.driverId, owner.accountId)
+        const incoming = stampAccount(
+          stampHarnessId(
+            await Promise.race([
+              driver.loadMessages(owner.projectPath, sessionId),
+              new Promise<never>((_, reject) => {
+                timeout = setTimeout(
+                  () =>
+                    reject(
+                      new Error('The provider took too long to load the sub-agent transcript')
+                    ),
+                  15_000
+                )
+              })
+            ]),
+            owner.driverId
+          ),
+          account.id,
+          account.label
         )
         this.applyReasoningStamps(sessionId, incoming)
         this.applyToolStamps(sessionId, incoming)
@@ -5497,7 +5701,10 @@ export class ChatEngine {
         this.preserveMirrorReasoningStamps(cached, incoming)
         this.preserveMirrorToolStamps(cached, incoming)
         this.preserveMirrorGenerationDurations(cached, incoming)
-        const merged = restoreMirrorThinkingLevel(mergeAgentMessages(cached, incoming), cached)
+        const merged = restoreMirrorAccount(
+          restoreMirrorThinkingLevel(mergeAgentMessages(cached, incoming), cached),
+          cached
+        )
         await this.threadManager.saveSubagentMessages(
           owner.projectId,
           owner.threadId,
@@ -5970,7 +6177,7 @@ export class ChatEngine {
         projectPaths: [...project.projectPaths]
       })
       for (const projectPath of project.projectPaths) {
-        for (const driver of this.drivers.values()) {
+        for (const driver of this.allDrivers()) {
           try {
             await driver.releaseProjectResources?.(projectPath)
           } catch (error) {
@@ -6070,8 +6277,13 @@ export class ChatEngine {
       // binding — so the pre-edit conversation can never be restored onto a
       // later session. The next turn seeds a fresh native transcript from the
       // edited mirror (see ensureSession's prefill).
-      const driver = this.drivers.get(
-        thread.settings?.harnessId ?? thread.sessionHarnessId ?? DEFAULT_HARNESS
+      const sessionOwner = this.sessionRegistry.get(thread.sessionId)
+      const driver = this.driverForRuntime(
+        sessionOwner?.driverId ??
+          thread.sessionHarnessId ??
+          thread.settings?.harnessId ??
+          DEFAULT_HARNESS,
+        sessionOwner?.accountId ?? thread.sessionAccountId
       )
       try {
         const projectPath = await this.resolveProjectPath(projectId)
@@ -6302,6 +6514,18 @@ export class ChatEngine {
     if (this.sessionStatuses.get(activeSessionId)?.state !== 'working') {
       throw new Error('The harness turn finished before the steer message could be delivered')
     }
+    const steerSettings =
+      thread.settings ??
+      ({
+        harnessId: DEFAULT_HARNESS,
+        accountId: legacyHarnessAccountId(DEFAULT_HARNESS),
+        providerId: '',
+        modelId: '',
+        thinkingLevel: 'low',
+        permissionLevel: 'auto_review',
+        assignmentMode: false,
+        loopMode: false
+      } satisfies ThreadSettings)
     // Steering targets the ACTIVE session, which belongs to the harness that
     // created it — after a mid-run harness switch the active session still
     // lives in the old harness while `settings.harnessId` points at the new
@@ -6314,7 +6538,39 @@ export class ChatEngine {
       activeSessionOwner ??
       thread.settings?.harnessId ??
       DEFAULT_HARNESS
-    const resolved = activeBrainstorm ?? (await this.resolve(projectId, driverId, threadId))
+    const activeAccountId =
+      this.sessionRegistry.get(activeSessionId)?.accountId ?? thread.sessionAccountId
+    const selectedDriverId = steerSettings.harnessId || DEFAULT_HARNESS
+    const selectedAccountId = steerSettings.accountId ?? legacyHarnessAccountId(selectedDriverId)
+    if (
+      driverId !== selectedDriverId ||
+      (activeAccountId ?? legacyHarnessAccountId(driverId)) !== selectedAccountId
+    ) {
+      const activeRuntime = await this.resolve(projectId, driverId, threadId, activeAccountId)
+      this.userAbortedSessions.add(activeSessionId)
+      this.clearHeldSteers(activeSessionId)
+      await activeRuntime.driver.abort(activeRuntime.projectPath, activeSessionId)
+      this.sessionStatuses.set(activeSessionId, { state: 'idle' })
+      this.handleSessionIdleSignal(activeSessionId)
+      await this.awaitSessionIdleFinalization(activeSessionId)
+      return this.sendPrompt(
+        projectId,
+        threadId,
+        steerSettings,
+        text,
+        attachments,
+        undefined,
+        messageId,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        'user',
+        presentation,
+        taskReferences
+      )
+    }
+    const resolved =
+      activeBrainstorm ?? (await this.resolve(projectId, driverId, threadId, activeAccountId))
     const { driver, projectPath } = resolved
     if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
       throw new Error(`${driver.name} does not expose native active-turn steering`)
@@ -6386,17 +6642,6 @@ export class ChatEngine {
     // Steer does not start a new turn — keep the original turn's checkpoint
     // source and start-message anchor. The scanner's window is the true turn
     // (message after final output → final output), not the steer.
-    const steerSettings =
-      thread.settings ??
-      ({
-        harnessId: driverId,
-        providerId: '',
-        modelId: '',
-        thinkingLevel: 'low',
-        permissionLevel: 'auto_review',
-        assignmentMode: false,
-        loopMode: false
-      } satisfies ThreadSettings)
     // A steer is the latest user expression in the running turn — keep it (and
     // its referenced selections) as the memory signal for when the turn ends,
     // replacing the message that originally dispatched the turn.
@@ -6961,7 +7206,12 @@ export class ChatEngine {
     }
 
     const driverId = settings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    const { driver, projectPath } = await this.resolve(
+      projectId,
+      driverId,
+      threadId,
+      settings.accountId
+    )
     // Branch metadata must use the same resolved cwd as the harness. Relative
     // thread directories are anchored to the project root by resolveThreadPath.
     if (targetThread?.workingDirectory) {
@@ -7763,7 +8013,8 @@ export class ChatEngine {
         }
       }
       const driverId = settings.harnessId || DEFAULT_HARNESS
-      const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+      const accountId = settings.accountId ?? legacyHarnessAccountId(driverId)
+      const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
       const isolated =
         driver instanceof OpenCodeDriver
           ? await driver.createIsolatedSession(projectPath, 'Temporary read-only chat')
@@ -7778,6 +8029,7 @@ export class ChatEngine {
         threadId,
         projectPath,
         driverId,
+        accountId,
         providerId: settings.providerId,
         sessionId,
         isolated,
@@ -7800,12 +8052,18 @@ export class ChatEngine {
         undefined,
         true
       )
+      const registered = this.sessionRegistry.get(sessionId)
+      if (registered) registered.accountId = accountId
     }
     if (temporary.projectId !== projectId || temporary.threadId !== threadId) {
       throw new Error('Temporary chat does not belong to this thread')
     }
-    if (temporary.driverId !== settings.harnessId) {
-      throw new Error('The temporary chat harness cannot be changed after its first message')
+    if (
+      temporary.driverId !== settings.harnessId ||
+      temporary.accountId !==
+        (settings.accountId ?? legacyHarnessAccountId(settings.harnessId || DEFAULT_HARNESS))
+    ) {
+      throw new Error('The temporary chat harness or account cannot change after its first message')
     }
     this.refreshTemporaryChatExpiry(temporary)
     this.broadcast({
@@ -7815,7 +8073,7 @@ export class ChatEngine {
       projectId: temporary.projectId
     })
 
-    const driver = this.drivers.get(temporary.driverId)
+    const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
     assertHarnessRequestCapabilities(driver, validatedAttachments, 'auto_review')
     const promptText = selectedTexts.length
@@ -8176,15 +8434,19 @@ export class ChatEngine {
     if (temporary.projectId !== projectId || temporary.threadId !== threadId) {
       throw new Error('Temporary chat does not belong to this thread')
     }
-    if (temporary.driverId !== settings.harnessId) {
-      throw new Error('The temporary chat harness cannot be changed after its first message')
+    if (
+      temporary.driverId !== settings.harnessId ||
+      temporary.accountId !==
+        (settings.accountId ?? legacyHarnessAccountId(settings.harnessId || DEFAULT_HARNESS))
+    ) {
+      throw new Error('The temporary chat harness or account cannot change after its first message')
     }
     if (this.sessionStatuses.get(temporary.sessionId)?.state !== 'working') {
       throw new Error('The quick chat turn finished before the steer message could be delivered')
     }
     this.refreshTemporaryChatExpiry(temporary)
 
-    const driver = this.drivers.get(temporary.driverId)
+    const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
     if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
       throw new Error(`${driver.name} does not expose native active-turn steering`)
@@ -8303,7 +8565,7 @@ export class ChatEngine {
         waiter.reject(new TemporaryChatCancelledError('Temporary chat stopped by user'))
       }
     }
-    const driver = this.drivers.get(temporary.driverId)
+    const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (driver) {
       try {
         if (temporary.isolated && driver instanceof OpenCodeDriver) {
@@ -8415,7 +8677,7 @@ export class ChatEngine {
     temporaryChatId = validateEntityId(temporaryChatId, 'Temporary chat ID', 256)
     const temporary = this.temporaryChats.get(temporaryChatId)
     if (!temporary) return []
-    const driver = this.drivers.get(temporary.driverId)
+    const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
     const messages =
       temporary.isolated && driver instanceof OpenCodeDriver
@@ -8575,7 +8837,7 @@ export class ChatEngine {
     this.sessionStatuses.delete(temporary.sessionId)
     this.reasoningTimes.delete(temporary.sessionId)
     this.toolTimes.delete(temporary.sessionId)
-    const driver = this.drivers.get(temporary.driverId)
+    const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) return true
     if (temporary.isolated && driver instanceof OpenCodeDriver) {
       try {
@@ -9601,7 +9863,12 @@ export class ChatEngine {
     parentTurnId: string,
     parentSessionId?: string
   ): Promise<string | null> {
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    const { driver, projectPath } = await this.resolve(
+      projectId,
+      driverId,
+      threadId,
+      settings.accountId
+    )
     let generated: string | null = null
     let failure: string | null = null
     try {
@@ -9966,7 +10233,12 @@ export class ChatEngine {
       thread.sessionHarnessId ??
       thread.settings?.harnessId ??
       DEFAULT_HARNESS
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    const { driver, projectPath } = await this.resolve(
+      projectId,
+      driverId,
+      threadId,
+      this.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
+    )
     await driver.abort(projectPath, thread.sessionId)
     await this.cleanupTurnUtilities(thread.sessionId)
     updateRetryWakeWindow(thread.sessionId, null)
@@ -10015,12 +10287,13 @@ export class ChatEngine {
 
     const tearDownSession = async (
       sessionId: string,
-      info?: { driverId?: string; projectPath?: string }
+      info?: { driverId?: string; projectPath?: string; accountId?: string }
     ): Promise<void> => {
       const registered = this.sessionRegistry.get(sessionId)
       const driverId = info?.driverId ?? registered?.driverId
       const projectPath = info?.projectPath ?? registered?.projectPath
-      const driver = driverId ? this.drivers.get(driverId) : undefined
+      const accountId = info?.accountId ?? registered?.accountId
+      const driver = driverId ? this.driverForRuntime(driverId, accountId) : undefined
       // Abort only a turn we believe is running — aborting an idle session
       // would otherwise force pooled drivers to spawn their server just to
       // tear this thread down.
@@ -10056,13 +10329,17 @@ export class ChatEngine {
 
     // Child (subagent) sessions owned by this thread.
     const sessionIds = new Set<string>()
-    const childSessionInfo = new Map<string, { driverId: string; projectPath: string }>()
+    const childSessionInfo = new Map<
+      string,
+      { driverId: string; projectPath: string; accountId?: string }
+    >()
     for (const [childSessionId, owner] of this.childSessionOwners) {
       if (owner.projectId !== projectId || owner.threadId !== threadId) continue
       sessionIds.add(childSessionId)
       childSessionInfo.set(childSessionId, {
         driverId: owner.driverId,
-        projectPath: owner.projectPath
+        projectPath: owner.projectPath,
+        accountId: owner.accountId
       })
       this.childCaptureTasks.delete(`${owner.projectId}:${owner.threadId}:${childSessionId}`)
       this.childSessionOwners.delete(childSessionId)
@@ -10075,7 +10352,14 @@ export class ChatEngine {
       }
     }
     const thread = await this.threadManager.getThread(projectId, threadId)
-    if (thread?.sessionId) sessionIds.add(thread.sessionId)
+    if (thread?.sessionId) {
+      sessionIds.add(thread.sessionId)
+      childSessionInfo.set(thread.sessionId, {
+        driverId: thread.sessionHarnessId ?? thread.settings?.harnessId ?? DEFAULT_HARNESS,
+        projectPath: await this.resolveThreadPath(projectId, threadId),
+        accountId: thread.sessionAccountId
+      })
+    }
 
     await Promise.allSettled(
       [...sessionIds].map((sessionId) =>
@@ -10115,7 +10399,7 @@ export class ChatEngine {
       throw new Error(`Permission request is no longer pending: ${requestId}`)
     }
 
-    const driver = this.drivers.get(pending.driverId)
+    const driver = this.driverForRuntime(pending.driverId, pending.session.accountId)
     if (!driver) throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
     if (
       pending.policy.approval.expiresAt !== undefined &&
@@ -10573,7 +10857,7 @@ export class ChatEngine {
         this.userAbortedSessions.add(sessionId)
         this.activeCompactions.delete(sessionId)
         this.rejectCompletionWaiter(sessionId, 'Assignment stopped by user')
-        const driver = this.drivers.get(owner.driverId)
+        const driver = this.driverForRuntime(owner.driverId, owner.accountId)
         try {
           if (driver && this.sessionStatuses.get(sessionId)?.state === 'working') {
             await driver.abort(owner.projectPath, sessionId)
@@ -17224,7 +17508,10 @@ export class ChatEngine {
       )
     }
 
-    const driver = this.drivers.get(pending.harnessId)
+    const driver = this.driverForRuntime(
+      pending.harnessId,
+      this.sessionRegistry.get(sessionId)?.accountId
+    )
     if (!driver) throw new Error(`Unknown harness: ${pending.harnessId}`)
     const projectPath =
       this.sessionRegistry.get(sessionId)?.projectPath ??
@@ -17631,17 +17918,13 @@ export class ChatEngine {
   private async resolve(
     projectId: string,
     driverId: string,
-    threadId?: string
+    threadId?: string,
+    accountId?: string
   ): Promise<{ driver: HarnessDriver; projectPath: string }> {
     const projectPath = threadId
       ? await this.resolveThreadPath(projectId, threadId)
       : await this.resolveProjectPath(projectId)
-    const driver = this.drivers.get(driverId)
-    if (!driver) {
-      throw new Error(
-        `Harness driver "${driverId}" is not available. Available: ${[...this.drivers.keys()].join(', ')}`
-      )
-    }
+    const driver = await this.driverForAccount(driverId, accountId)
     this.trackProjectResourcePath(projectId, projectPath)
 
     // Installation/version probes belong to the explicit Settings harness check.
@@ -17860,7 +18143,10 @@ export class ChatEngine {
 
     const delay = Math.max(0, expiresAt - Date.now())
     pending.timer = setTimeout(() => {
-      const driver = this.drivers.get(pending.driverId)
+      const driver = this.driverForRuntime(
+        pending.driverId,
+        this.sessionRegistry.get(pending.request.sessionId)?.accountId
+      )
       if (!driver || !this.pendingQuestions.has(pending.request.requestId)) {
         return
       }
@@ -18028,7 +18314,7 @@ export class ChatEngine {
       !event.questions.some((question) => isBrainstormDocumentQuestion(question.prompt)) &&
       (await this.achievementOwnsDecisions(thread ?? null))
     ) {
-      const driver = this.drivers.get(driverId)
+      const driver = this.driverForRuntime(driverId, session.accountId)
       if (!driver) return
       const answers = event.questions.map((question) => [this.recommendedQuestionAnswer(question)])
       await this.resolvePendingQuestion(pending, 'answered', answers, () =>
@@ -18577,7 +18863,7 @@ export class ChatEngine {
       return
     }
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
-    const driver = this.drivers.get(driverId)
+    const driver = this.driverForRuntime(driverId, info.accountId)
     if (!thread?.settings || !driver?.steerPrompt) return
 
     this.searchNudgeAttempts.set(sessionId, 1)
@@ -18916,6 +19202,7 @@ export class ChatEngine {
           threadId: parent.threadId,
           projectPath: parent.projectPath,
           driverId,
+          accountId: parent.accountId,
           parentSessionId: registeredParent ? event.sessionId : inheritedOwner?.parentSessionId
         }
         this.childSessionOwners.set(childSessionId, owner)
@@ -19538,7 +19825,7 @@ export class ChatEngine {
     }
     const info = this.sessionRegistry.get(sessionId)
     if (!info || info.ephemeral === true || this.childSessionOwners.has(sessionId)) return false
-    const driver = this.drivers.get(info.driverId)
+    const driver = this.driverForRuntime(info.driverId, info.accountId)
     if (!driver) return false
     let retryAt = issue.retryAt
     if (retryAt !== undefined) retryAt += RETRY_FIRE_GRACE_MS
@@ -19682,7 +19969,7 @@ export class ChatEngine {
   ): Promise<void> {
     if (this.isUsageResetWaitActive(sessionId)) return
     if (this.sessionStatuses.get(sessionId)?.state === 'error') return
-    const driver = this.drivers.get(driverId)
+    const driver = this.driverForRuntime(driverId, info.accountId)
     if (!driver) return
     const messages = await driver.loadMessages(info.projectPath, sessionId)
     const latest = messages.at(-1)
@@ -19934,7 +20221,7 @@ export class ChatEngine {
     reply: PermissionReply,
     decidedBy: string
   ): Promise<void> {
-    const driver = this.drivers.get(pending.driverId)
+    const driver = this.driverForRuntime(pending.driverId, pending.session.accountId)
     if (!driver) return
     await driver.replyPermission(
       pending.session.projectPath,
@@ -20105,18 +20392,23 @@ export class ChatEngine {
       settings: ThreadSettings
     } | null = null
     try {
-      const driver = this.drivers.get(info.driverId)
+      const driver = this.driverForRuntime(info.driverId, info.accountId)
       if (!driver) return
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
-      const loadedMessages = stampHarnessId(
-        info.activeTurnUserMessageId && driver.loadMessagesSince
-          ? await driver.loadMessagesSince(
-              info.projectPath,
-              sessionId,
-              info.activeTurnUserMessageId
-            )
-          : await driver.loadMessages(info.projectPath, sessionId),
-        info.driverId
+      const account = await this.accountRegistry.resolve(info.driverId, info.accountId)
+      const loadedMessages = stampAccount(
+        stampHarnessId(
+          info.activeTurnUserMessageId && driver.loadMessagesSince
+            ? await driver.loadMessagesSince(
+                info.projectPath,
+                sessionId,
+                info.activeTurnUserMessageId
+              )
+            : await driver.loadMessages(info.projectPath, sessionId),
+          info.driverId
+        ),
+        account.id,
+        account.label
       )
       const activeTurnStartIndex = info.activeTurnUserMessageId
         ? loadedMessages.findLastIndex((message) => message.id === info.activeTurnUserMessageId)
@@ -20169,8 +20461,8 @@ export class ChatEngine {
       let classifiedMessages = classifyProviderMessages(messages, suppressTerminalAnswer).filter(
         (message) => !(message.role === 'user' && message.visibility === 'hidden')
       )
-      let merged = restoreMirrorThinkingLevel(
-        mergeAgentMessages(mirror, classifiedMessages),
+      let merged = restoreMirrorAccount(
+        restoreMirrorThinkingLevel(mergeAgentMessages(mirror, classifiedMessages), mirror),
         mirror
       )
       const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -20248,8 +20540,8 @@ export class ChatEngine {
           classifiedMessages = classifiedMessages.map((message) =>
             message.id === rejected.id ? rejected : message
           )
-          merged = restoreMirrorThinkingLevel(
-            mergeAgentMessages(mirror, classifiedMessages),
+          merged = restoreMirrorAccount(
+            restoreMirrorThinkingLevel(mergeAgentMessages(mirror, classifiedMessages), mirror),
             mirror
           )
           if ((this.mermaidRepairAttempts.get(sessionId) ?? 0) >= 1 || !thread?.settings) {
@@ -20793,7 +21085,7 @@ export class ChatEngine {
       })
     }
     if (pendingMemory && assistantResponse && memoryParentTurnId) {
-      const driver = this.drivers.get(info.driverId)
+      const driver = this.driverForRuntime(info.driverId, info.accountId)
       if (driver) {
         void this.proposeMemoryFromCompletedTurn(
           pendingMemory.userMessage,
@@ -20844,6 +21136,7 @@ export class ChatEngine {
       attempt: 1,
       feature,
       harnessId: message.harnessId ?? null,
+      accountId: message.accountId ?? null,
       providerId: message.providerId ?? null,
       modelId: message.modelId ?? null,
       thinkingLevel: message.thinkingLevel ?? thread?.settings?.thinkingLevel ?? null,
@@ -21166,6 +21459,7 @@ export class ChatEngine {
       attempt: input.attempt,
       feature: input.feature,
       harnessId: input.harnessId,
+      accountId: input.response?.accountId ?? input.settings.accountId ?? null,
       providerId: input.settings.providerId,
       modelId: input.settings.modelId,
       thinkingLevel: input.settings.thinkingLevel ?? null,
@@ -21280,6 +21574,7 @@ export class ChatEngine {
         attempt: 1,
         feature,
         harnessId: message.harnessId ?? null,
+        accountId: message.accountId ?? null,
         providerId: message.providerId ?? null,
         modelId: message.modelId ?? null,
         thinkingLevel: message.thinkingLevel ?? null,
@@ -21325,6 +21620,7 @@ export class ChatEngine {
       attempt: 1,
       feature: 'web',
       harnessId: settings.harnessId,
+      accountId: settings.accountId ?? null,
       providerId: settings.providerId,
       modelId: settings.modelId,
       thinkingLevel: settings.thinkingLevel ?? null,
@@ -21498,7 +21794,7 @@ export class ChatEngine {
     // process keeps running and finishes the turn normally. Probe the live
     // process before tearing anything down so a false alarm doesn't wipe the
     // turn's utility gateway handoff out from under still-running tool calls.
-    const errorDriver = this.drivers.get(info.driverId)
+    const errorDriver = this.driverForRuntime(info.driverId, info.accountId)
     if (errorDriver?.isSessionBusy) {
       const probe = await this.probeSessionLiveness(errorDriver, info, sessionId)
       if (probe === 'busy') return
@@ -21989,6 +22285,7 @@ export class ChatEngine {
       // the registered owner so a settings-derived re-registration (mid-run
       // harness switch) can never clobber which driver owns the session.
       driverId: existing?.driverId ?? driverId,
+      accountId: existing?.accountId,
       activeTurnId: activeTurnId ?? existing?.activeTurnId,
       lastTurnId: activeTurnId ?? existing?.activeTurnId ?? existing?.lastTurnId,
       activeTurnUserMessageId: existing?.activeTurnUserMessageId,
@@ -22097,7 +22394,7 @@ export class ChatEngine {
     // session with no registered driver turn is not an error: emit a synthetic
     // idle so the engine's normal finalization runs (its incomplete-turn
     // recovery continues the thread) instead of parking it on an error card.
-    const watchdogDriver = this.drivers.get(info.driverId)
+    const watchdogDriver = this.driverForRuntime(info.driverId, info.accountId)
     if (
       watchdogDriver?.hasActiveTurn &&
       !watchdogDriver.hasActiveTurn(sessionId) &&
@@ -22126,7 +22423,7 @@ export class ChatEngine {
     await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
     await this.onSessionError(sessionId, issue.message)
     try {
-      const driver = this.drivers.get(info.driverId)
+      const driver = this.driverForRuntime(info.driverId, info.accountId)
       if (driver) await driver.abort(info.projectPath, sessionId)
     } catch {
       /* abort is best-effort */
@@ -22155,7 +22452,7 @@ export class ChatEngine {
     info: SessionInfo
   ): Promise<AgentProviderIssue | null> {
     const harnessId = info.driverId
-    const driver = this.drivers.get(harnessId)
+    const driver = this.driverForRuntime(harnessId, info.accountId)
     try {
       if (driver) {
         const messages = await driver.loadMessages(info.projectPath, sessionId)
@@ -22912,6 +23209,17 @@ export function stampHarnessId(messages: AgentMessage[], harnessId: string): Age
   return messages.map((message) => (message.harnessId ? message : { ...message, harnessId }))
 }
 
+/** Record the account container and its label at the time the turn ran. */
+export function stampAccount(
+  messages: AgentMessage[],
+  accountId: string,
+  accountLabel: string
+): AgentMessage[] {
+  return messages.map((message) =>
+    message.accountId ? message : { ...message, accountId, accountLabel }
+  )
+}
+
 /**
  * Keep a message's persisted thinking level when the driver transcript omits it
  * (driver reloads and history loads never know the reasoning effort of past
@@ -22940,6 +23248,33 @@ export function restoreMirrorThinkingLevel(
       return { ...message, thinkingLevel: undefined }
     }
     return message
+  })
+}
+
+/** Keep historical account attribution immutable when a fresh account session
+ *  was prefilled from the app mirror and reports those older messages again. */
+export function restoreMirrorAccount(
+  merged: AgentMessage[],
+  mirror: AgentMessage[]
+): AgentMessage[] {
+  if (mirror.length === 0) return merged
+  const byId = new Map(mirror.map((message) => [message.id, message]))
+  return merged.map((message) => {
+    const persisted = byId.get(message.id)
+    if (!persisted) return message
+    if (persisted.accountId) {
+      return message.accountId === persisted.accountId &&
+        message.accountLabel === persisted.accountLabel
+        ? message
+        : {
+            ...message,
+            accountId: persisted.accountId,
+            accountLabel: persisted.accountLabel
+          }
+    }
+    return message.accountId
+      ? { ...message, accountId: undefined, accountLabel: undefined }
+      : message
   })
 }
 
