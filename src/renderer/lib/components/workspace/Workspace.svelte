@@ -3142,11 +3142,11 @@
         {:else}
           <DropdownMenu.Root>
             <DropdownMenu.Trigger
-              class="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated"
+              class="flex max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated"
               aria-label="Switch view"
               title="Switch view"
             >
-              <span class="truncate" class:animate-pulse={anyProjectWorking}
+              <span class="whitespace-nowrap" class:animate-pulse={anyProjectWorking}
                 >{sidebarViewLabel}</span
               >
               <ChevronDown size={12} class="shrink-0 text-muted" />
