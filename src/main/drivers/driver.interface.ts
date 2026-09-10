@@ -175,6 +175,8 @@ export interface HarnessAuthCapabilities {
 
 export interface HarnessAuthAccount {
   id: string
+  /** Stable provider id used by models, login, and logout commands. */
+  providerId: string
   label: string
   method?: string
   active?: boolean

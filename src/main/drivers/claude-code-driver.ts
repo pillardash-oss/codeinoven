@@ -2312,7 +2312,15 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     }
     return {
       state: 'authenticated',
-      accounts: [{ id: 'anthropic', label: 'Anthropic', method: 'oauth', active: true }]
+      accounts: [
+        {
+          id: 'anthropic',
+          providerId: 'anthropic',
+          label: 'Anthropic',
+          method: 'oauth',
+          active: true
+        }
+      ]
     }
   }
 

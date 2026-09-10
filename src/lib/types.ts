@@ -774,6 +774,8 @@ export interface PiOAuthUiPrompt {
 
 export interface ProviderAccountAuthEntry {
   id: string
+  /** Stable provider id used by models, login, and logout commands. */
+  providerId: string
   label: string
   method?: string
   active?: boolean
@@ -785,6 +787,8 @@ export interface HarnessAccount {
   harnessId: string
   /** Provider authenticated inside the container. Empty for the legacy default account. */
   providerId: string
+  /** Display name reported by the harness for this provider. */
+  providerName: string
   label: string
   containerKind: 'legacy-default' | 'managed'
   createdAt: number
@@ -796,6 +800,13 @@ export interface HarnessAccountCreateInput {
   providerId: string
   /** Optional display label. Blank labels are generated as `<provider>-N`. */
   label?: string
+}
+
+/** Unlisted credential container used only while a provider sign-in is underway. */
+export interface PendingHarnessAccount {
+  id: string
+  harnessId: string
+  providerId: string
 }
 
 export interface HarnessAccountRenameInput {

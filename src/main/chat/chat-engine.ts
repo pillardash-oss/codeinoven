@@ -2183,25 +2183,24 @@ export class ChatEngine {
   }
 
   private async driverForAccount(harnessId: string, accountId?: string): Promise<HarnessDriver> {
-    const resolvedId = accountId || legacyHarnessAccountId(harnessId)
-    if (resolvedId === legacyHarnessAccountId(harnessId)) {
+    const account = await this.accountRegistry.resolve(harnessId, accountId)
+    if (account.containerKind === 'legacy-default') {
       const driver = this.drivers.get(harnessId)
       if (!driver) throw new Error(`Harness driver "${harnessId}" is not available.`)
       return driver
     }
-    const existing = this.accountDrivers.get(resolvedId)
+    const existing = this.accountDrivers.get(account.id)
     if (existing) return existing
-    const account = await this.accountRegistry.resolve(harnessId, resolvedId)
     const driver = this.createAccountDriver(harnessId, this.accountRegistry.environment(account))
     driver.setProcessObserver?.(this.agentProcesses)
     driver.onEvent((event) => this.handleDriverEvent(driver.id, event))
-    this.accountDrivers.set(resolvedId, driver)
+    this.accountDrivers.set(account.id, driver)
     return driver
   }
 
   private driverForRuntime(harnessId: string, accountId?: string): HarnessDriver | undefined {
     const resolvedId = accountId || legacyHarnessAccountId(harnessId)
-    return resolvedId === legacyHarnessAccountId(harnessId)
+    return resolvedId.startsWith(legacyHarnessAccountId(harnessId))
       ? this.drivers.get(harnessId)
       : this.accountDrivers.get(resolvedId)
   }
@@ -2215,10 +2214,6 @@ export class ChatEngine {
       (candidate) => candidate.id === accountId
     )
     if (!account) return false
-    if (account.containerKind === 'legacy-default') {
-      throw new Error('The Default account cannot be removed.')
-    }
-
     const ownedSessions = [...this.sessionRegistry.entries()].filter(
       ([, info]) => info.accountId === accountId
     )
@@ -2237,7 +2232,10 @@ export class ChatEngine {
       })
     )
 
-    const fallbackAccountId = legacyHarnessAccountId(account.harnessId)
+    const fallbackAccountId =
+      (await this.accountRegistry.list(account.harnessId)).find(
+        (candidate) => candidate.id !== accountId
+      )?.id ?? legacyHarnessAccountId(account.harnessId)
     const affectedThreads = (await this.threadManager.listAllThreads()).filter(
       (thread) => thread.settings?.accountId === accountId
     )
@@ -2254,9 +2252,11 @@ export class ChatEngine {
       )
     }
 
-    const driver = this.accountDrivers.get(accountId)
-    driver?.dispose()
-    this.accountDrivers.delete(accountId)
+    if (account.containerKind === 'managed') {
+      const driver = this.accountDrivers.get(accountId)
+      driver?.dispose()
+      this.accountDrivers.delete(accountId)
+    }
     return this.accountRegistry.remove(accountId)
   }
 
@@ -3831,7 +3831,7 @@ export class ChatEngine {
     if (!thread) return null
     const harnessId = thread.settings?.harnessId
     if (!harnessId) return null
-    const accountId = thread.settings?.accountId ?? legacyHarnessAccountId(harnessId)
+    const accountId = (await this.accountRegistry.resolve(harnessId, thread.settings?.accountId)).id
     const { driver, projectPath } = await this.resolve(
       projectIdSafe,
       harnessId,
@@ -4446,7 +4446,8 @@ export class ChatEngine {
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
 
     const driverId = requestedDriverId ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
-    const accountId = thread.settings?.accountId ?? legacyHarnessAccountId(driverId)
+    const account = await this.accountRegistry.resolve(driverId, thread.settings?.accountId)
+    const accountId = account.id
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
 
     // A harness switch orphans the old harness's session. The thread's bound
@@ -6542,7 +6543,9 @@ export class ChatEngine {
     const activeAccountId =
       this.sessionRegistry.get(activeSessionId)?.accountId ?? thread.sessionAccountId
     const selectedDriverId = steerSettings.harnessId || DEFAULT_HARNESS
-    const selectedAccountId = steerSettings.accountId ?? legacyHarnessAccountId(selectedDriverId)
+    const selectedAccountId = (
+      await this.accountRegistry.resolve(selectedDriverId, steerSettings.accountId)
+    ).id
     if (
       driverId !== selectedDriverId ||
       (activeAccountId ?? legacyHarnessAccountId(driverId)) !== selectedAccountId
@@ -8014,7 +8017,7 @@ export class ChatEngine {
         }
       }
       const driverId = settings.harnessId || DEFAULT_HARNESS
-      const accountId = settings.accountId ?? legacyHarnessAccountId(driverId)
+      const accountId = (await this.accountRegistry.resolve(driverId, settings.accountId)).id
       const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
       const isolated =
         driver instanceof OpenCodeDriver

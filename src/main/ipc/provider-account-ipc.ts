@@ -16,22 +16,89 @@ export function registerProviderAccountIpc(
   removeAccount?: (accountId: string) => Promise<boolean>
 ): void {
   const accounts = new HarnessAccountRegistry(storage)
-  ipcMain.handle('providerAccounts:list', (_, rawHarnessId?: unknown) =>
-    accounts.list(
-      rawHarnessId === undefined ? undefined : validateEntityId(rawHarnessId, 'Harness ID', 256)
+  const lastAccountSync = new Map<string, number>()
+  ipcMain.handle(
+    'providerAccounts:list',
+    async (_, rawHarnessId?: unknown, rawRefresh?: unknown) => {
+      if (rawHarnessId === undefined) return accounts.list()
+      const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
+      const refresh = rawRefresh === undefined ? false : boolean(rawRefresh, 'Refresh')
+      const capabilities = auth.capabilities(harnessId)
+      const shouldSync = refresh || Date.now() - (lastAccountSync.get(harnessId) ?? 0) >= 30_000
+      if (capabilities && shouldSync) {
+        const status = await auth.getStatus(harnessId)
+        if (status.state !== 'error' && status.state !== 'unknown') {
+          await accounts.reconcileLegacy(harnessId, status.accounts)
+        }
+        const unresolved = (await accounts.list(harnessId)).filter(
+          (account) => account.containerKind === 'managed' && account.providerId === ''
+        )
+        for (const account of unresolved) {
+          const managedStatus = await auth.getStatus(
+            harnessId,
+            undefined,
+            accounts.environment(account)
+          )
+          const authenticated = managedStatus.accounts.find((entry) => entry.active !== false)
+          if (authenticated) {
+            await accounts.adoptManagedCredential(
+              account.id,
+              authenticated.providerId,
+              authenticated.label
+            )
+          } else if (managedStatus.state === 'unauthenticated') {
+            await (removeAccount ?? ((accountId: string) => accounts.remove(accountId)))(account.id)
+          }
+        }
+        lastAccountSync.set(harnessId, Date.now())
+      }
+      return accounts.list(harnessId)
+    }
+  )
+  ipcMain.handle('providerAccounts:prepare', (_, rawHarnessId: unknown, rawProviderId?: unknown) =>
+    accounts.prepare(
+      validateEntityId(rawHarnessId, 'Harness ID', 256),
+      rawProviderId === undefined ? undefined : validateEntityId(rawProviderId, 'Provider ID', 256)
     )
   )
-  ipcMain.handle('providerAccounts:create', (_, rawInput: unknown) => {
-    const input = record(rawInput, 'Account')
-    rejectUnknownFields(input, new Set(['harnessId', 'providerId', 'label']), 'account')
-    return accounts.create({
-      harnessId: validateEntityId(input['harnessId'], 'Harness ID', 256),
-      providerId: text(input['providerId'], 'Provider ID', 256, false, true),
-      ...(input['label'] === undefined
-        ? {}
-        : { label: text(input['label'], 'Account label', 80, false, true) })
-    })
+  ipcMain.handle('providerAccounts:inspectPending', async (_, rawPendingAccountId: unknown) => {
+    const pending = accounts.pendingAccountById(
+      validateEntityId(rawPendingAccountId, 'Pending account ID', 256)
+    )
+    const capabilities = auth.capabilities(pending.harnessId)
+    return {
+      capabilities,
+      ...(await auth.getStatus(pending.harnessId, undefined, accounts.environment(pending)))
+    }
   })
+  ipcMain.handle(
+    'providerAccounts:finalizePending',
+    async (_, rawPendingAccountId: unknown, rawProviderId: unknown, rawLabel?: unknown) => {
+      const pendingId = validateEntityId(rawPendingAccountId, 'Pending account ID', 256)
+      const providerId = validateEntityId(rawProviderId, 'Provider ID', 256)
+      const pending = accounts.pendingAccountById(pendingId)
+      const status = await auth.getStatus(
+        pending.harnessId,
+        undefined,
+        accounts.environment(pending)
+      )
+      const authenticated = status.accounts.find(
+        (account) => account.active !== false && account.providerId === providerId
+      )
+      if (!authenticated) {
+        throw new Error('The provider did not report a completed sign-in.')
+      }
+      return accounts.finalizePending(
+        pendingId,
+        providerId,
+        authenticated.label || providerId,
+        rawLabel === undefined ? undefined : text(rawLabel, 'Account label', 80, false, true)
+      )
+    }
+  )
+  ipcMain.handle('providerAccounts:cancelPending', (_, rawPendingAccountId: unknown) =>
+    accounts.cancelPending(validateEntityId(rawPendingAccountId, 'Pending account ID', 256))
+  )
   ipcMain.handle('providerAccounts:rename', (_, rawAccountId: unknown, rawLabel: unknown) =>
     accounts.rename(
       validateEntityId(rawAccountId, 'Account ID', 256),
@@ -57,7 +124,12 @@ export function registerProviderAccountIpc(
           detail: `Authentication is not supported for harness: ${harnessId}`
         }
       }
-      return { capabilities, ...(await auth.getStatus(harnessId, projectPath)) }
+      const status = await auth.getStatus(harnessId, projectPath)
+      if (status.state !== 'error' && status.state !== 'unknown') {
+        await accounts.reconcileLegacy(harnessId, status.accounts)
+        lastAccountSync.set(harnessId, Date.now())
+      }
+      return { capabilities, ...status }
     }
   )
   ipcMain.handle(
@@ -66,7 +138,7 @@ export function registerProviderAccountIpc(
       const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
       const options = parseLoginOptions(rawOptions)
       const account = options.accountId
-        ? await accounts.resolve(harnessId, options.accountId)
+        ? await resolveCredentialAccount(accounts, harnessId, options.accountId)
         : undefined
       return auth.beginLogin(
         harnessId,
@@ -84,7 +156,9 @@ export function registerProviderAccountIpc(
       const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
       const accountId =
         rawAccountId === undefined ? undefined : validateEntityId(rawAccountId, 'Account ID', 256)
-      const account = accountId ? await accounts.resolve(harnessId, accountId) : undefined
+      const account = accountId
+        ? await resolveCredentialAccount(accounts, harnessId, accountId)
+        : undefined
       return auth.logout(
         harnessId,
         rawProviderId === undefined
@@ -106,7 +180,9 @@ export function registerProviderAccountIpc(
       const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
       const accountId =
         rawAccountId === undefined ? undefined : validateEntityId(rawAccountId, 'Account ID', 256)
-      const account = accountId ? await accounts.resolve(harnessId, accountId) : undefined
+      const account = accountId
+        ? await resolveCredentialAccount(accounts, harnessId, accountId)
+        : undefined
       return auth.setCredential(
         harnessId,
         validateEntityId(rawProviderId, 'Provider ID', 256),
@@ -121,7 +197,9 @@ export function registerProviderAccountIpc(
       const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
       const accountId =
         rawAccountId === undefined ? undefined : validateEntityId(rawAccountId, 'Account ID', 256)
-      const account = accountId ? await accounts.resolve(harnessId, accountId) : undefined
+      const account = accountId
+        ? await resolveCredentialAccount(accounts, harnessId, accountId)
+        : undefined
       return auth.beginOAuthLogin(
         harnessId,
         validateEntityId(rawProviderId, 'Provider ID', 256),
@@ -223,4 +301,13 @@ function parseOptionalAbsolutePath(value: unknown): string | undefined {
   const path = text(value, 'Project path', 4_096)
   if (!isAbsolute(path)) throw new TypeError('Project path must be absolute')
   return path
+}
+
+async function resolveCredentialAccount(
+  accounts: HarnessAccountRegistry,
+  harnessId: string,
+  accountId: string
+) {
+  if (accountId.startsWith('pending-')) return accounts.pendingAccount(harnessId, accountId)
+  return accounts.resolve(harnessId, accountId)
 }

@@ -9,6 +9,7 @@
     RefreshCw,
     Search,
     Server,
+    Unplug,
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -28,7 +29,7 @@
   } from '$shared/types'
 
   type AddTab = 'connect' | 'custom'
-  type ConnectStep = 'idle' | 'picking' | 'running'
+  type ConnectStep = 'idle' | 'picking' | 'running' | 'labeling'
 
   interface Props {
     harness: ProviderConnectionInfo
@@ -64,6 +65,12 @@
   let actionWarning = $state('')
   let actionError = $state('')
   let accountLabel = $state('')
+  let pendingAccountId = $state<string | null>(null)
+  let authenticatedProvider = $state<{ id: string; name: string } | null>(null)
+  let finalizingAccount = $state(false)
+  let knownAccounts = $state.raw<HarnessAccount[]>([])
+  let disconnectTarget = $state<HarnessAccount | null>(null)
+  let disconnecting = $state(false)
 
   let customProviders = $derived(
     baseUrlProviderStore.providers.filter((provider) => provider.harnessId === harness.id)
@@ -175,16 +182,12 @@
     } else if (data['kind'] === 'complete') {
       const providerId = String(data['providerId'] ?? '')
       resetOAuthState()
-      selectedProvider = null
       apiKey = ''
-      accountLabel = ''
-      notice = `${providerId} connected. Its models will appear in the picker.`
-      void checkAuth()
-      void loadOffered()
-      providerCatalog.invalidateAll()
+      void finishAuthentication(providerId, selectedProvider?.name ?? providerId)
     } else if (data['kind'] === 'failed') {
       actionError = String(data['error'] ?? 'The sign-in failed.')
       resetOAuthState()
+      void discardPendingAccount()
     }
   }
 
@@ -197,11 +200,7 @@
     oauthStarting = true
     oauthStatus = 'Starting sign-in…'
     try {
-      const account = await createManagedAccount(selectedProvider.id)
-      if (!account) {
-        resetOAuthState()
-        return
-      }
+      const account = await preparePendingAccount(selectedProvider.id)
       oauthLoginId = await invoke(
         'providerAccounts:beginOAuthLogin',
         harness.id,
@@ -212,6 +211,7 @@
       actionError =
         startError instanceof Error ? startError.message : 'The sign-in could not be started.'
       resetOAuthState()
+      await discardPendingAccount()
     }
   }
 
@@ -252,6 +252,7 @@
     } catch {
       // The session may have already ended.
     }
+    await discardPendingAccount()
   }
 
   let canAddCustom = $derived(harness.supportsCustomProviders && harness.integration === 'ready')
@@ -273,6 +274,7 @@
     checkingAuth = true
     try {
       authStatus = await invoke('providerAccounts:getAuthStatus', harness.id)
+      knownAccounts = await invoke('providerAccounts:list', harness.id)
     } catch (authError) {
       authStatus = {
         capabilities: null,
@@ -285,15 +287,93 @@
     }
   }
 
-  async function createManagedAccount(providerId: string): Promise<HarnessAccount | null> {
-    const label = accountLabel.trim()
-    const account = await invoke('providerAccounts:create', {
-      harnessId: harness.id,
-      providerId,
-      ...(label ? { label } : {})
-    })
-    harnessAccountCache.invalidate(harness.id)
-    return account
+  async function preparePendingAccount(providerId = ''): Promise<HarnessAccount> {
+    if (pendingAccountId) {
+      return {
+        id: pendingAccountId,
+        harnessId: harness.id,
+        providerId,
+        providerName: providerId,
+        label: '',
+        containerKind: 'managed',
+        createdAt: 0,
+        updatedAt: 0
+      }
+    }
+    const pending = await invoke('providerAccounts:prepare', harness.id, providerId || undefined)
+    pendingAccountId = pending.id
+    return {
+      ...pending,
+      providerName: providerId,
+      label: '',
+      containerKind: 'managed',
+      createdAt: 0,
+      updatedAt: 0
+    }
+  }
+
+  async function discardPendingAccount(): Promise<void> {
+    const pendingId = pendingAccountId
+    pendingAccountId = null
+    authenticatedProvider = null
+    accountLabel = ''
+    if (!pendingId) return
+    await invoke('providerAccounts:cancelPending', pendingId).catch(() => undefined)
+  }
+
+  async function finishAuthentication(providerId: string, providerName: string): Promise<void> {
+    if (!pendingAccountId) return
+    try {
+      const pendingStatus = await invoke('providerAccounts:inspectPending', pendingAccountId)
+      const authenticated = pendingStatus.accounts.find(
+        (account) => account.active !== false && account.providerId === providerId
+      )
+      if (!authenticated) {
+        actionError = `${providerName} did not report a completed sign-in.`
+        await discardPendingAccount()
+        return
+      }
+      authenticatedProvider = {
+        id: authenticated.providerId,
+        name: authenticated.label || providerName
+      }
+      accountLabel = ''
+      selectedProvider = null
+      step = 'labeling'
+    } catch (inspectError) {
+      actionError =
+        inspectError instanceof Error
+          ? inspectError.message
+          : `${providerName} sign-in could not be verified.`
+    }
+  }
+
+  async function saveAuthenticatedAccount(): Promise<void> {
+    if (!pendingAccountId || !authenticatedProvider || finalizingAccount) return
+    finalizingAccount = true
+    actionError = ''
+    try {
+      const account = await invoke(
+        'providerAccounts:finalizePending',
+        pendingAccountId,
+        authenticatedProvider.id,
+        accountLabel.trim() || undefined
+      )
+      notice = `${account.label} connected.`
+      pendingAccountId = null
+      authenticatedProvider = null
+      accountLabel = ''
+      step = 'idle'
+      harnessAccountCache.invalidate(harness.id)
+      await checkAuth()
+      await loadOffered()
+      providerCatalog.invalidateAll()
+    } catch (finalizeError) {
+      actionError =
+        finalizeError instanceof Error ? finalizeError.message : 'The account could not be saved.'
+    } finally {
+      finalizingAccount = false
+    }
   }
 
   async function loadOffered(): Promise<void> {
@@ -348,19 +428,14 @@
     }
     storingKey = true
     try {
-      const account = await createManagedAccount(selectedProvider.id)
-      if (!account) return
+      const account = await preparePendingAccount(selectedProvider.id)
       await invoke('providerAccounts:setApiKey', harness.id, selectedProvider.id, key, account.id)
-      notice = `${selectedProvider.name} connected. Its models will appear in the picker.`
-      selectedProvider = null
       apiKey = ''
-      accountLabel = ''
-      await checkAuth()
-      await loadOffered()
-      providerCatalog.invalidateAll()
+      await finishAuthentication(selectedProvider.id, selectedProvider.name)
     } catch (storeError) {
       actionError =
         storeError instanceof Error ? storeError.message : 'The API key could not be stored.'
+      await discardPendingAccount()
     } finally {
       storingKey = false
     }
@@ -378,8 +453,7 @@
       const providerId =
         provider?.id ??
         (harness.id === 'codex' ? 'openai' : harness.id === 'claude-code' ? 'anthropic' : '')
-      const account = await createManagedAccount(providerId)
-      if (!account) return
+      const account = await preparePendingAccount(providerId)
       loginHandoff = await invoke('providerAccounts:beginLogin', harness.id, {
         ...(provider ? { providerId: provider.id } : {}),
         accountId: account.id
@@ -392,6 +466,7 @@
         loginError instanceof Error
           ? loginError.message
           : 'The login command could not be prepared.'
+      await discardPendingAccount()
     }
   }
 
@@ -401,26 +476,76 @@
     apiKey = ''
     accountLabel = ''
     step = pickerLogin && !apiKeyEntry ? 'idle' : 'picking'
+    void discardPendingAccount()
   }
 
   async function handleLoginExit(exitCode: number): Promise<void> {
+    const attemptedProvider = selectedProvider
     const providerName = selectedProvider?.name ?? 'Provider'
     loginHandoff = null
     selectedProvider = null
     apiKey = ''
     step = pickerLogin && !apiKeyEntry ? 'idle' : 'picking'
     if (exitCode === 0) {
-      notice = pickerLogin
-        ? 'Sign-in complete. Newly connected providers appear above and their models show up in the model picker.'
-        : `${providerName} connected. Its models will appear in the picker.`
+      if (!pendingAccountId) return
+      try {
+        const pendingStatus = await invoke('providerAccounts:inspectPending', pendingAccountId)
+        const authenticated = attemptedProvider
+          ? pendingStatus.accounts.find(
+              (account) => account.providerId === attemptedProvider.id && account.active !== false
+            )
+          : pendingStatus.accounts.find((account) => account.active !== false)
+        if (!authenticated) {
+          actionWarning = `${providerName} exited without completing sign-in.`
+          await discardPendingAccount()
+        } else {
+          await finishAuthentication(authenticated.providerId, authenticated.label)
+        }
+      } catch (inspectError) {
+        actionError =
+          inspectError instanceof Error
+            ? inspectError.message
+            : `${providerName} sign-in could not be verified.`
+      }
     } else {
       actionWarning = `${providerName} sign-in exited with code ${exitCode}.`
+      await discardPendingAccount()
     }
-    await checkAuth()
-    await loadOffered()
-    // A new connection means new models — drop the stale model-picker cache so
-    // the next open refresh reflects the newly connected provider.
-    providerCatalog.invalidateAll()
+  }
+
+  function accountForProvider(providerId: string): HarnessAccount | undefined {
+    return knownAccounts.find(
+      (account) => account.containerKind === 'legacy-default' && account.providerId === providerId
+    )
+  }
+
+  async function disconnectProvider(): Promise<void> {
+    if (!disconnectTarget || disconnecting) return
+    disconnecting = true
+    actionError = ''
+    const account = disconnectTarget
+    try {
+      await invoke('providerAccounts:logout', account.harnessId, account.providerId, account.id)
+      await invoke('providerAccounts:remove', account.id)
+      disconnectTarget = null
+      harnessAccountCache.invalidate(harness.id)
+      await checkAuth()
+      await loadOffered()
+      providerCatalog.invalidateAll()
+    } catch (disconnectError) {
+      actionError =
+        disconnectError instanceof Error
+          ? disconnectError.message
+          : 'The provider could not be disconnected.'
+    } finally {
+      disconnecting = false
+    }
+  }
+
+  async function closeModal(): Promise<void> {
+    if (oauthLoginId) await cancelOAuthSignIn()
+    else await discardPendingAccount()
+    onClose()
   }
 
   function shellCommand(handoff: ProviderAccountLoginHandoff): string {
@@ -461,22 +586,7 @@
   })
 </script>
 
-{#snippet accountLabelField(providerName: string)}
-  <label class="block space-y-1.5">
-    <span class="text-[0.6875rem] font-medium text-foreground">
-      Account label <span class="font-normal text-dimmed">(optional)</span>
-    </span>
-    <input
-      class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
-      placeholder={`Automatically named ${providerName.toLocaleLowerCase('en-US').replaceAll(' ', '-')}-N`}
-      maxlength="80"
-      autocomplete="off"
-      bind:value={accountLabel}
-    />
-  </label>
-{/snippet}
-
-<Modal open size="lg" title={`Add provider — ${harness.name}`} {onClose}>
+<Modal open size="lg" title={`Add provider — ${harness.name}`} onClose={() => void closeModal()}>
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-4">
       {#if tab === 'custom'}
@@ -517,6 +627,16 @@
             onclick={() => onAddCustom(harness.id)}
           >
             <Server size={13} /> Open custom provider form
+          </button>
+        {:else if step === 'labeling'}
+          <button
+            class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+            type="button"
+            disabled={finalizingAccount}
+            onclick={() => void saveAuthenticatedAccount()}
+          >
+            {#if finalizingAccount}<Loader2 size={13} class="animate-spin" />{/if}
+            Save account
           </button>
         {:else if step === 'running'}
           <button
@@ -641,9 +761,36 @@
             Check
           </button>
         </div>
-        {#if pickerLogin}
-          <div class="rounded-xl border bg-surface p-3">
-            {@render accountLabelField('provider')}
+        {#if authStatus?.accounts.length}
+          <div class="overflow-hidden rounded-xl border bg-surface">
+            <div
+              class="border-b bg-elevated px-3 py-2 text-[0.625rem] font-medium uppercase tracking-wide text-dimmed"
+            >
+              Connected providers
+            </div>
+            {#each authStatus.accounts.filter((account) => account.active !== false) as connected (connected.providerId)}
+              {@const account = accountForProvider(connected.providerId)}
+              <div class="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
+                <CheckCircle2 size={14} class="shrink-0 text-success" />
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-xs font-medium text-foreground">{connected.label}</p>
+                  <p class="truncate font-mono text-[0.625rem] text-dimmed">
+                    {connected.providerId}{#if connected.method}
+                      · {connected.method}{/if}
+                  </p>
+                </div>
+                {#if account}
+                  <button
+                    type="button"
+                    class="flex h-7 items-center gap-1 rounded-lg px-2 text-[0.6875rem] font-medium text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                    title={`Disconnect ${connected.label}`}
+                    onclick={() => (disconnectTarget = account)}
+                  >
+                    <Unplug size={11} /> Disconnect
+                  </button>
+                {/if}
+              </div>
+            {/each}
           </div>
         {/if}
       {/if}
@@ -668,7 +815,33 @@
         </p>
       {/if}
 
-      {#if step === 'running' && loginHandoff}
+      {#if step === 'labeling' && authenticatedProvider}
+        <div class="space-y-3 rounded-xl border bg-surface p-4">
+          <div class="flex items-start gap-2">
+            <CheckCircle2 size={16} class="mt-0.5 shrink-0 text-success" />
+            <div>
+              <p class="text-sm font-medium text-foreground">
+                Label your newly logged in {authenticatedProvider.name} account
+              </p>
+              <p class="mt-0.5 text-xs text-muted">
+                Leave the label blank to use {authenticatedProvider.name}-N automatically.
+              </p>
+            </div>
+          </div>
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+            placeholder={`${authenticatedProvider.name}-N`}
+            maxlength="80"
+            autocomplete="off"
+            bind:value={accountLabel}
+            autofocus
+            onkeydown={(event: KeyboardEvent) => {
+              if (event.key === 'Enter') void saveAuthenticatedAccount()
+            }}
+          />
+        </div>
+      {:else if step === 'running' && loginHandoff}
         <div class="space-y-2">
           <div class="h-60 overflow-hidden rounded-xl border bg-app">
             <ProviderLoginTerminal
@@ -760,12 +933,6 @@
                   {/if}
                 </button>
               {/each}
-            </div>
-          {/if}
-
-          {#if selectedProvider}
-            <div class="rounded-xl border bg-surface p-3">
-              {@render accountLabelField(selectedProvider.name)}
             </div>
           {/if}
 
@@ -1011,4 +1178,34 @@
       {/if}
     </div>
   {/if}
+</Modal>
+
+<Modal
+  open={disconnectTarget !== null}
+  title="Disconnect provider"
+  onClose={() => (disconnectTarget = null)}
+>
+  {#snippet footer()}
+    <button
+      type="button"
+      class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+      onclick={() => (disconnectTarget = null)}
+    >
+      Cancel
+    </button>
+    <button
+      type="button"
+      class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+      disabled={disconnecting}
+      onclick={() => void disconnectProvider()}
+    >
+      {#if disconnecting}<Loader2 size={13} class="animate-spin" />{:else}<Unplug size={13} />{/if}
+      Disconnect
+    </button>
+  {/snippet}
+
+  <p class="text-sm text-muted">
+    Disconnect <strong class="text-foreground">{disconnectTarget?.label}</strong> from
+    {harness.name}? The provider credential will be removed from this account container.
+  </p>
 </Modal>

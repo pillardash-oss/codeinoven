@@ -115,7 +115,7 @@ import type {
   PrdWorkflowState,
   ProviderAccountAuthStatus,
   HarnessAccount,
-  HarnessAccountCreateInput,
+  PendingHarnessAccount,
   ProviderAccountLoginHandoff,
   ProviderAccountLoginOptions,
   ProviderCatalog,
@@ -2057,8 +2057,17 @@ export interface IpcInvokeContract {
     [harnessId: string, projectPath?: string],
     ProviderAccountAuthStatus
   >
-  'providerAccounts:list': Contract<[harnessId?: string], HarnessAccount[]>
-  'providerAccounts:create': Contract<[input: HarnessAccountCreateInput], HarnessAccount>
+  'providerAccounts:list': Contract<[harnessId?: string, refresh?: boolean], HarnessAccount[]>
+  'providerAccounts:prepare': Contract<
+    [harnessId: string, providerId?: string],
+    PendingHarnessAccount
+  >
+  'providerAccounts:inspectPending': Contract<[pendingAccountId: string], ProviderAccountAuthStatus>
+  'providerAccounts:finalizePending': Contract<
+    [pendingAccountId: string, providerId: string, label?: string],
+    HarnessAccount
+  >
+  'providerAccounts:cancelPending': Contract<[pendingAccountId: string], void>
   'providerAccounts:rename': Contract<[accountId: string, label: string], HarnessAccount>
   'providerAccounts:remove': Contract<[accountId: string], boolean>
   'providerAccounts:beginLogin': Contract<

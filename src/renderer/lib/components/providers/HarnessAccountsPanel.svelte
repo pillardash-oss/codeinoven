@@ -39,14 +39,39 @@
   }
 
   function providerLabel(account: HarnessAccount): string {
-    return account.providerId || 'Harness default'
+    return account.providerName || account.providerId
   }
 
   async function loadAccounts(): Promise<void> {
     loading = true
     error = ''
     try {
-      accounts = await invoke('providerAccounts:list')
+      const loaded: HarnessAccount[] = []
+      const loadErrors: string[] = []
+      const harnesses = providers
+      for (let offset = 0; offset < harnesses.length; offset += 3) {
+        const batch = await Promise.allSettled(
+          harnesses
+            .slice(offset, offset + 3)
+            .map((provider) => invoke('providerAccounts:list', provider.id, true))
+        )
+        for (const result of batch) {
+          if (result.status === 'fulfilled') {
+            loaded.push(...result.value)
+          } else {
+            loadErrors.push(
+              result.reason instanceof Error ? result.reason.message : 'An account source failed.'
+            )
+          }
+        }
+      }
+      accounts = loaded.sort((left, right) => left.createdAt - right.createdAt)
+      if (loadErrors.length > 0) {
+        error =
+          loaded.length > 0
+            ? 'Some account sources could not be refreshed. Showing the accounts that are available.'
+            : loadErrors[0]
+      }
     } catch (loadError) {
       error = loadError instanceof Error ? loadError.message : 'Accounts could not be loaded.'
     } finally {
@@ -92,9 +117,7 @@
         account.providerId || undefined,
         account.id
       )
-      if (account.containerKind === 'managed') {
-        await invoke('providerAccounts:remove', account.id)
-      }
+      await invoke('providerAccounts:remove', account.id)
       harnessAccountCache.invalidate(account.harnessId)
       disconnectTarget = null
       await loadAccounts()
@@ -182,11 +205,6 @@
           </span>
           <div class="flex min-w-0 items-center gap-2">
             <span class="truncate text-xs">{account.label}</span>
-            {#if account.containerKind === 'legacy-default'}
-              <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed">
-                Default
-              </span>
-            {/if}
           </div>
           <div class="flex items-center gap-1">
             <button

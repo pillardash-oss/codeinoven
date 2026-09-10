@@ -198,9 +198,7 @@
   let effectiveAccountId = $derived(
     accountId && harnessAccounts.some((account) => account.id === accountId)
       ? accountId
-      : harnessAccounts.length === 1
-        ? harnessAccounts[0].id
-        : `${harnessId}.default`
+      : (harnessAccounts[0]?.id ?? `${harnessId}.default`)
   )
   let selectedAccount = $derived(
     harnessAccounts.find((account) => account.id === effectiveAccountId)
