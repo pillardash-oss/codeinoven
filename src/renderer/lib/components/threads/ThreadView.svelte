@@ -198,7 +198,6 @@
     PermissionRequest,
     Project,
     ProjectFileEntry,
-    ComposerProject,
     CapturableSpecContextType,
     BrainstormDecisionAction,
     BrainstormDocument,
@@ -969,8 +968,19 @@
       bucket,
       source: project?.source,
       host: project?.host,
+      project: project
+        ? {
+            name: project.name,
+            path: project.path,
+            source: project.source,
+            host: project.host,
+            iconUrl: getProjectIcon(project, projectIconUrl ?? undefined),
+            branch: thread.branch
+          }
+        : undefined,
       isNewThread: messages.length === 0 && !busy,
-      onOpenScopeView: () => onOpenScopeView?.(thread)
+      onOpenScopeView: () => onOpenScopeView?.(thread),
+      onSwitchProject: (pid: string) => void switchProject(pid)
     }
   })
   let errorMessage = $state('')
@@ -2904,19 +2914,6 @@
         return 'Executing'
       default:
         return 'Working'
-    }
-  })
-
-  /** Project context for the composer — only shown before the first message. */
-  let composerProject = $derived.by((): ComposerProject | undefined => {
-    if (!project || messages.length > 0) return undefined
-    return {
-      name: project.name,
-      path: project.path,
-      source: project.source,
-      host: project.host,
-      iconUrl: getProjectIcon(project, projectIconUrl ?? undefined),
-      branch: thread.branch
     }
   })
 
@@ -11779,7 +11776,6 @@
                     onActivateBankedReset={() => {
                       showBankedResetConfirm = true
                     }}
-                    projectContext={composerProject}
                     projectId={thread.projectId}
                     threadId={thread.id}
                     scopeShoe={scopeShoe}
@@ -11788,7 +11784,6 @@
                       projectId: thread.projectId,
                       threadId: thread.id
                     }}
-                    onSwitchProject={(pid) => void switchProject(pid)}
                     fileTagProjectId={project?.source === 'local' && project.path
                       ? thread.projectId
                       : undefined}

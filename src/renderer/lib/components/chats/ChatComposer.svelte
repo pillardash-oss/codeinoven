@@ -8,10 +8,6 @@
     Paperclip,
     Square,
     X,
-    Folder,
-    GitBranch,
-    Monitor,
-    Globe,
     Shield,
     ShieldCheck,
     FileText,
@@ -39,12 +35,7 @@
   import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { modelKey } from '$lib/model-keys'
-  import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
-  import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
-  import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
-  import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import { getInlineFileTypeIconSvg, getInlineFolderTypeIconSvg } from '../files/file-type-icons'
-  import { scopeState } from '$lib/stores/scope.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { attachmentPreviewKind, fileUrlToPath, mimeFromPath, pathToFileUrl } from '$lib/mime'
   import { placeCaretAtEnd } from '../shared/rich-markdown'
@@ -86,7 +77,6 @@
     PromptAttachment,
     PromptAssignmentTaskReference,
     PromptProjectReference,
-    ComposerProject,
     AgentContextUsage,
     AgentHarnessUsage,
     PromptReference,
@@ -146,7 +136,6 @@
     /** Id of the agent harness serving the models (shown on each model row). */
     harnessId?: string
     /** Project context row shown before the first message of the thread. */
-    projectContext?: ComposerProject
     /** Active project ID for the project switcher dropdown. */
     projectId?: string | null
     /** Active thread ID used to prevent selecting the current thread as a dependency. */
@@ -154,7 +143,6 @@
     /** Project or app scratch destination for pasted/ephemeral attachment files. */
     attachmentStorage?: AttachmentStorageScope
     /** Called when the user selects a different project from the switcher. */
-    onSwitchProject?: (projectId: string) => void
     /** Local project whose files can be referenced with bare @ tags. */
     fileTagProjectId?: string
     /** Active Assignment tasks available through the composer @ picker. */
@@ -284,11 +272,9 @@
     usageCreditsCommandId,
     providers = [],
     harnessId = DEFAULT_HARNESS,
-    projectContext,
     projectId = null,
     threadId = '',
     attachmentStorage,
-    onSwitchProject,
     fileTagProjectId,
     assignmentId,
     assignmentTasks = [],
@@ -434,19 +420,6 @@
       value: taskReferenceToken(reference)
     }))
   ])
-  /** Git remote origin URL for the active project, surfaced on the branch pill. */
-  let remoteOriginUrl = $derived(projectRemotes.get(projectId ?? '') ?? null)
-  let branchPillTitle = $derived(
-    remoteOriginUrl ?? (projectContext ? projectIdentityTitle(projectContext) : undefined)
-  )
-
-  // Resolve the project's GitHub repo so hovering the branch pill can reveal it.
-  $effect(() => {
-    const id = projectId
-    const path = projectContext?.path
-    if (!id || !path) return
-    void projectRemotes.ensure(id, path)
-  })
   let isDragging = $state(false)
   let previewFile = $state<PromptAttachment | null>(null)
   /** Object URLs for image/PDF/media/document downloads, keyed by attachment file:// URL. */
@@ -2022,49 +1995,10 @@
     </div>
   {/if}
 
-  <!-- Project context + attachment chips -->
-  {#if projectContext || attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || (showChatModes && resolved.fileSystemMode)}
+  <!-- Attachment chips (project identity + type + branch now live on the scope shoe) -->
+  {#if attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || (showChatModes && resolved.fileSystemMode)}
     <div class="flex flex-col gap-1.5 px-3 pt-2.5">
       <div class="flex flex-wrap items-center gap-1.5">
-        {#if projectContext}
-          <ProjectSwitch
-            activeProjectId={projectId}
-            onSwitch={onSwitchProject}
-            class="flex items-center gap-2 justify-start"
-          >
-            {#if projectContext.iconUrl}
-              <img src={projectContext.iconUrl} alt="" class="h-4 w-4 shrink-0 rounded" />
-            {:else}
-              <Folder size={13} class="shrink-0 text-dimmed" />
-            {/if}
-            <ProjectIdentity
-              project={projectContext}
-              class="min-w-0 max-w-48"
-              nameClass="text-xs font-medium text-foreground"
-              locationClass="text-[0.5625rem] text-dimmed"
-              showLocation={hasProjectNameCollision(projectContext, scopeState.projectRecords)}
-            />
-            <span
-              class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
-            >
-              {#if projectContext.source === 'ssh'}
-                <Globe size={9} />
-              {:else}
-                <Monitor size={9} />
-              {/if}
-              {projectContext.source}
-            </span>
-            {#if projectContext.branch}
-              <span
-                class="flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
-                title={branchPillTitle}
-              >
-                <GitBranch size={9} class="shrink-0" />
-                <span class="truncate">{projectContext.branch}</span>
-              </span>
-            {/if}
-          </ProjectSwitch>
-        {/if}
         {#if showChatModes && resolved.fileSystemMode}
           <div class="flex flex-wrap items-center gap-1.5" aria-label="Active chat modes">
             {#if resolved.fileSystemMode}
@@ -2753,6 +2687,8 @@
           bucket={scopeShoe.bucket}
           source={scopeShoe.source}
           host={scopeShoe.host}
+          project={scopeShoe.project}
+          onSwitchProject={scopeShoe.onSwitchProject}
           isNewThread={scopeShoe.isNewThread}
           onOpenScopeView={scopeShoe.onOpenScopeView}
         />
