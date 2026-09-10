@@ -39,7 +39,6 @@
     GitPullRequest,
     Globe,
     Kanban,
-    MessageSquare,
     Loader2
   } from '@lucide/svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
@@ -97,20 +96,6 @@
     return isThreadRetryPaused(thread) || threadWorkingForIndicator(thread)
   }
 
-  /** True while any project thread is actively being worked on. */
-  let anyProjectWorking = $derived(
-    scopeState.allScopeThreads.some(
-      (t) => !t.archived && t.projectId !== INBOX_PROJECT_ID && threadWorkingForIndicator(t)
-    )
-  )
-
-  /** True while any standalone chat is actively being worked on. */
-  let anyChatWorking = $derived(
-    scopeState.allScopeThreads.some(
-      (t) => !t.archived && t.projectId === INBOX_PROJECT_ID && threadWorkingForIndicator(t)
-    )
-  )
-
   /** Return the most recently visited thread of one navigation family. */
   function recentThreadForKind(isChat: boolean): Thread | null {
     for (const visit of workspaceState.recentThreadVisits) {
@@ -150,7 +135,7 @@
     'settings-profile': 'Profile',
     remote: 'Remote',
     settings: 'Settings',
-    scope: 'Scope',
+    scope: 'Scope Board',
     threads: 'Threads'
   }
 
@@ -556,8 +541,8 @@
         ? 'opacity-60'
         : ''}"
       use:shortcutHint={{ keys: ['mod', '4'] }}
-      aria-label={activeView === 'scope' ? 'Scope view open' : 'Open scope view'}
-      title="Scope"
+      aria-label={activeView === 'scope' ? 'Return to previous view' : 'Open scope board'}
+      title="Scope Board"
       onmouseenter={() => {
         preloadNavigationThreads('projects')
         preloadScopeChunk()
@@ -565,31 +550,8 @@
       onclick={() => void onPrimaryNavClick('scope')}
       data-onboarding="view-switcher"
     >
-      <Kanban size={14} strokeWidth={1.8} class={anyProjectWorking ? 'animate-pulse' : ''} />
-      <span class="header-control-label text-[0.6875rem] font-medium">Scope</span>
-    </button>
-
-    <!-- Chats — standalone group, distinct from the project views. -->
-    <button
-      class="flex h-7 items-center gap-1.5 rounded-md px-2.5 transition-colors duration-150 {activeView ===
-      'chats'
-        ? 'bg-foreground text-app'
-        : 'text-muted hover:bg-elevated hover:text-foreground'} {activeView === 'chats' &&
-      sidebarState.collapsed
-        ? 'opacity-60'
-        : ''}"
-      aria-label={activeView === 'chats'
-        ? sidebarState.collapsed
-          ? 'Show Chats sidebar'
-          : 'Hide Chats sidebar'
-        : 'Open Chats'}
-      use:shortcutHint={{ keys: ['mod', '0'] }}
-      title="Chats"
-      onmouseenter={() => preloadNavigationThreads('chats')}
-      onclick={() => void onPrimaryNavClick('chats')}
-    >
-      <MessageSquare size={14} strokeWidth={1.8} class={anyChatWorking ? 'animate-pulse' : ''} />
-      <span class="header-control-label text-[0.6875rem] font-medium">Chats</span>
+      <Kanban size={14} strokeWidth={1.8} />
+      <span class="header-control-label text-[0.6875rem] font-medium">Scope Board</span>
     </button>
   </nav>
 

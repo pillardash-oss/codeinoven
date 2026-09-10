@@ -50,6 +50,7 @@
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
   import ProjectIdentity from '../shared/ProjectIdentity.svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
+  import ShortcutHint from '../ui/ShortcutHint.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import FolderRow from './FolderRow.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
@@ -1874,14 +1875,14 @@
    *  is only for the regular Projects/Threads/Chats views. */
   let isScopeBoardView = $derived(mode === 'projects' && Boolean(scopeState.sidebarContext))
 
-  // ─── Sidebar title dropdown — Projects / Scope state / Threads / Chats ──────
+  // ─── Sidebar title dropdown — Projects / Scoped threads / Threads / Chats ──
   // The sidebar head now owns the old header view switcher: the title renders
   // the current view in sentence case and opens a menu to move between views;
-  // "Scope state" toggles the scope board sidebar instead of navigating.
+  // "Scoped threads" toggles the scope board sidebar instead of navigating.
   let sidebarViewLabel = $derived(
     mode === 'projects'
       ? scopeState.sidebarContext
-        ? 'Scope state'
+        ? 'Scoped threads'
         : 'Projects'
       : mode === 'threads'
         ? 'Threads'
@@ -1889,41 +1890,59 @@
   )
 
   const sidebarViewOptions: Array<{
-    id: 'projects' | 'threads' | 'chats' | 'scope-state'
+    id: 'projects' | 'threads' | 'chats' | 'scoped-threads'
     label: string
     icon: Component
+    keys?: [string, string]
     select: () => void
   }> = [
     {
       id: 'projects',
       label: 'Projects',
       icon: FolderKanban,
-      select: () => navigate('projects')
+      keys: ['mod', '1'],
+      select: () => {
+        // While the scoped-threads board is open, picking Projects closes it —
+        // the board is a layer over Projects, not a separate destination.
+        if (scopeState.sidebarContext) scopeState.clearSidebarContext()
+        navigate('projects')
+      }
     },
     {
-      id: 'scope-state',
-      label: 'Scope state',
+      id: 'scoped-threads',
+      label: 'Scoped threads',
       icon: SquareDashedKanban,
-      select: () => void toggleSidebarScopeState()
+      keys: ['mod', '3'],
+      select: () => void toggleScopedThreadsSidebar()
     },
     {
       id: 'threads',
       label: 'Threads',
       icon: Timeline,
+      keys: ['mod', '2'],
       select: () => navigate('threads')
     },
     {
       id: 'chats',
       label: 'Chats',
       icon: MessageSquare,
+      keys: ['mod', '0'],
       select: () => navigate('chats')
     }
   ]
 
+  /** True while any project thread is actively being worked on — shown as a
+   *  gentle pulse on the sidebar's view-switcher title. */
+  let anyProjectWorking = $derived(
+    scopeState.allScopeThreads.some(
+      (t) => !t.archived && t.projectId !== INBOX_PROJECT_ID && isThreadWorking(t)
+    )
+  )
+
   /** Toggles the scope board sidebar for the current context. Mirrors the
-   *  former header "Scope state" button: navigates to Projects when needed and
+   *  former header "scope state" toggle: navigates to Projects when needed and
    *  restores a stashed board context before building a fresh one. */
-  async function toggleSidebarScopeState(): Promise<void> {
+  async function toggleScopedThreadsSidebar(): Promise<void> {
     if (scopeState.sidebarContext) {
       scopeState.clearSidebarContext()
       return
@@ -3127,7 +3146,9 @@
               aria-label="Switch view"
               title="Switch view"
             >
-              <span class="truncate">{sidebarViewLabel}</span>
+              <span class="truncate" class:animate-pulse={anyProjectWorking}
+                >{sidebarViewLabel}</span
+              >
               <ChevronDown size={12} class="shrink-0 text-muted" />
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
@@ -3141,7 +3162,7 @@
                 {#each sidebarViewOptions as option (option.id)}
                   {@const Icon = option.icon}
                   {@const isSelected =
-                    option.id === (scopeState.sidebarContext ? 'scope-state' : mode)}
+                    option.id === (scopeState.sidebarContext ? 'scoped-threads' : mode)}
                   <DropdownMenu.Item
                     class={[
                       'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors',
@@ -3153,6 +3174,9 @@
                   >
                     <Icon size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
                     <span class="flex-1 truncate">{option.label}</span>
+                    {#if option.keys}
+                      <ShortcutHint keys={option.keys} />
+                    {/if}
                     {#if isSelected}
                       <Check size={14} class="text-primary" />
                     {/if}
@@ -3315,6 +3339,49 @@
           (bucket) => bucket.id !== scopeContext.bucketId
         )}
         <div class="flex h-full flex-col">
+          <!-- Board context bar: project identity + scope switcher sit right
+               under the view/controls header -->
+          <div
+            class="flex shrink-0 items-center gap-2 border-b px-3 py-2"
+            style:background-color={scopeProject?.color
+              ? `color-mix(in srgb, ${scopeProject.color} 10%, var(--color-surface))`
+              : undefined}
+          >
+            {#if scopeProject && getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))}
+              <img
+                src={getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))!}
+                alt=""
+                class="h-4 w-4 shrink-0 object-contain"
+                onerror={projectIconOnError(scopeProject)}
+              />
+            {:else}
+              <Folder size={14} class="shrink-0 text-muted" />
+            {/if}
+            {#if scopeProject}
+              <ProjectIdentity
+                project={scopeProject}
+                class="min-w-0 flex-1"
+                nameClass="text-xs font-semibold text-foreground"
+                locationClass="text-[0.5625rem] text-dimmed"
+                showLocation={hasProjectNameCollision(scopeProject, visibleProjects)}
+              />
+            {:else}
+              <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
+                Project
+              </span>
+            {/if}
+            {#if scopeBucket}
+              <ScopeBadge bucket={scopeBucket} size="xs" />
+            {/if}
+            <ProjectSwitch
+              activeProjectId={scopeProject?.id ?? null}
+              class="h-5 w-5 shrink-0 text-dimmed hover:text-foreground"
+              onSwitch={switchScopedProject}
+            >
+              <FolderKanban size={12} />
+            </ProjectSwitch>
+          </div>
+
           {#if otherBuckets.length > 0}
             <div class="shrink-0 border-b px-3 py-2">
               <div
@@ -3449,49 +3516,6 @@
               </div>
             </div>
           {/key}
-
-          <!-- Board footer context bar: project identity + scope switcher sit
-               at the bottom so the top edge stays a pure view/controls row -->
-          <div
-            class="flex shrink-0 items-center gap-2 border-t px-3 py-2"
-            style:background-color={scopeProject?.color
-              ? `color-mix(in srgb, ${scopeProject.color} 10%, var(--color-surface))`
-              : undefined}
-          >
-            {#if scopeProject && getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))}
-              <img
-                src={getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))!}
-                alt=""
-                class="h-4 w-4 shrink-0 object-contain"
-                onerror={projectIconOnError(scopeProject)}
-              />
-            {:else}
-              <Folder size={14} class="shrink-0 text-muted" />
-            {/if}
-            {#if scopeProject}
-              <ProjectIdentity
-                project={scopeProject}
-                class="min-w-0 flex-1"
-                nameClass="text-xs font-semibold text-foreground"
-                locationClass="text-[0.5625rem] text-dimmed"
-                showLocation={hasProjectNameCollision(scopeProject, visibleProjects)}
-              />
-            {:else}
-              <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
-                Project
-              </span>
-            {/if}
-            {#if scopeBucket}
-              <ScopeBadge bucket={scopeBucket} size="xs" />
-            {/if}
-            <ProjectSwitch
-              activeProjectId={scopeProject?.id ?? null}
-              class="h-5 w-5 shrink-0 text-dimmed hover:text-foreground"
-              onSwitch={switchScopedProject}
-            >
-              <FolderKanban size={12} />
-            </ProjectSwitch>
-          </div>
         </div>
       {:else if loading}
         <p class="px-2 py-4 text-sm text-dimmed">Loading...</p>
