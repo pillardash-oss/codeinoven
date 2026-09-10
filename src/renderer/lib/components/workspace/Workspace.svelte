@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { tick, type Component } from 'svelte'
   import { fly } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
   import { motionDuration } from '$lib/motion'
@@ -13,7 +13,6 @@
     Pin,
     PinOff,
     Trash2,
-    X,
     MessageSquare,
     SquarePen,
     Pencil,
@@ -41,7 +40,10 @@
     Play,
     ShieldQuestion,
     SquareTerminal,
-    StickyNote
+    StickyNote,
+    ChevronDown,
+    SquareDashedKanban,
+    Timeline
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
   import WelcomeStart from './WelcomeStart.svelte'
@@ -436,16 +438,15 @@
       })
     }
   }
-  const newChatHarnessUsage = $derived.by(
-    (): AgentHarnessUsage[] =>
-      newChatUsage.usage.map((usage) => ({
-        harnessId: usage.harnessId,
-        providerId: usage.providerId,
-        costUsd: 0,
-        rateLimits: usage.rateLimits,
-        ...(usage.credits ? { credits: usage.credits } : {}),
-        ...(usage.bankedResets ? { bankedResets: usage.bankedResets } : {})
-      }))
+  const newChatHarnessUsage = $derived.by((): AgentHarnessUsage[] =>
+    newChatUsage.usage.map((usage) => ({
+      harnessId: usage.harnessId,
+      providerId: usage.providerId,
+      costUsd: 0,
+      rateLimits: usage.rateLimits,
+      ...(usage.credits ? { credits: usage.credits } : {}),
+      ...(usage.bankedResets ? { bankedResets: usage.bankedResets } : {})
+    }))
   )
   $effect(() => {
     if (mode !== 'chats') return
@@ -1873,6 +1874,82 @@
    *  is only for the regular Projects/Threads/Chats views. */
   let isScopeBoardView = $derived(mode === 'projects' && Boolean(scopeState.sidebarContext))
 
+  // ─── Sidebar title dropdown — Projects / Scope state / Threads / Chats ──────
+  // The sidebar head now owns the old header view switcher: the title renders
+  // the current view in sentence case and opens a menu to move between views;
+  // "Scope state" toggles the scope board sidebar instead of navigating.
+  let sidebarViewLabel = $derived(
+    mode === 'projects'
+      ? scopeState.sidebarContext
+        ? 'Scope state'
+        : 'Projects'
+      : mode === 'threads'
+        ? 'Threads'
+        : 'Chats'
+  )
+
+  const sidebarViewOptions: Array<{
+    id: 'projects' | 'threads' | 'chats' | 'scope-state'
+    label: string
+    icon: Component
+    select: () => void
+  }> = [
+    {
+      id: 'projects',
+      label: 'Projects',
+      icon: FolderKanban,
+      select: () => navigate('projects')
+    },
+    {
+      id: 'scope-state',
+      label: 'Scope state',
+      icon: SquareDashedKanban,
+      select: () => void toggleSidebarScopeState()
+    },
+    {
+      id: 'threads',
+      label: 'Threads',
+      icon: Timeline,
+      select: () => navigate('threads')
+    },
+    {
+      id: 'chats',
+      label: 'Chats',
+      icon: MessageSquare,
+      select: () => navigate('chats')
+    }
+  ]
+
+  /** Toggles the scope board sidebar for the current context. Mirrors the
+   *  former header "Scope state" button: navigates to Projects when needed and
+   *  restores a stashed board context before building a fresh one. */
+  async function toggleSidebarScopeState(): Promise<void> {
+    if (scopeState.sidebarContext) {
+      scopeState.clearSidebarContext()
+      return
+    }
+    if (mode !== 'projects') navigate('projects')
+    if (scopeState.stashedSidebarContext) {
+      scopeState.restoreStashedSidebarContext()
+      return
+    }
+    const thread = workspaceState.selectedThread
+    const targetProjectId =
+      thread?.projectId ?? scopeState.activeProjectId ?? workspaceState.activeProject?.id
+    if (!targetProjectId) return
+    await scopeState.activateProject(targetProjectId)
+    if (thread) scopeState.showSidebarForThread(thread)
+    else scopeState.showSidebarForProject(targetProjectId)
+  }
+
+  /** New thread inside the board's active scope bucket. */
+  function newThreadInScopeContext(): void {
+    const context = scopeState.sidebarContext
+    const project = projects.find((candidate) => candidate.id === context?.projectId)
+    if (!context || !project) return
+    void createThreadInProject(project, context.bucketId)
+  }
+
   // The scope-state sidebar board reads its data from the active project's board
   // and thread list (`scopeState.board` / `currentProjectThreads`, keyed off
   // `activeProjectId`). The sidebar context is set with a fire-and-forget
@@ -3036,11 +3113,57 @@
           : mode === 'threads'
             ? 'Threads'
             : 'Chats'}
-      hideHeader={mode === 'projects' &&
-        Boolean(scopeState.sidebarContext) &&
-        !workspaceState.specStudioOpen}
       bind:scroller={sidebarScroller}
     >
+      {#snippet titleSnippet()}
+        {#if workspaceState.specStudioOpen}
+          <h2 class="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-muted">
+            Spec conversation
+          </h2>
+        {:else}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger
+              class="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated"
+              aria-label="Switch view"
+              title="Switch view"
+            >
+              <span class="truncate">{sidebarViewLabel}</span>
+              <ChevronDown size={12} class="shrink-0 text-muted" />
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                side="bottom"
+                align="start"
+                sideOffset={6}
+                collisionPadding={8}
+                class="z-50 w-44 overflow-hidden rounded-md border bg-surface p-1 shadow-lg"
+              >
+                {#each sidebarViewOptions as option (option.id)}
+                  {@const Icon = option.icon}
+                  {@const isSelected =
+                    option.id === (scopeState.sidebarContext ? 'scope-state' : mode)}
+                  <DropdownMenu.Item
+                    class={[
+                      'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors',
+                      isSelected
+                        ? 'text-foreground'
+                        : 'text-muted hover:bg-elevated focus:bg-elevated'
+                    ]}
+                    onSelect={option.select}
+                  >
+                    <Icon size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
+                    <span class="flex-1 truncate">{option.label}</span>
+                    {#if isSelected}
+                      <Check size={14} class="text-primary" />
+                    {/if}
+                  </DropdownMenu.Item>
+                {/each}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        {/if}
+      {/snippet}
+
       {#snippet header()}
         {#if workspaceState.specStudioOpen}
           <span class="text-[0.625rem] tabular-nums text-dimmed">
@@ -3129,6 +3252,31 @@
               size="md"
             />
           </div>
+        {:else if mode === 'projects' && scopeState.sidebarContext}
+          <div class="flex items-center gap-0.5">
+            <button
+              class="flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="New thread in {scopeState.sidebarContext.projectId} scope"
+              title="New thread in this scope"
+              disabled={!scopeState.activeProjectId}
+              onclick={newThreadInScopeContext}
+            >
+              <Plus size={14} />
+            </button>
+            <ThreadSearchControl
+              threads={STAGE_ORDER.flatMap((stage) =>
+                scopeState.threadsFor(
+                  scopeState.sidebarContext?.bucketId ?? DEFAULT_SCOPE_BUCKET_ID,
+                  stage
+                )
+              )}
+              contextLabel="threads in this scope"
+              title="Search threads in this scope"
+              onOpen={(thread) => void openScopedThread(thread)}
+              fts={{}}
+            />
+            <ScopeCreateControl title="New scope" />
+          </div>
         {:else}
           <div class="flex items-center gap-0.5">
             <ThreadSearchControl
@@ -3166,93 +3314,7 @@
         {@const otherBuckets = scopeState.buckets.filter(
           (bucket) => bucket.id !== scopeContext.bucketId
         )}
-        {@const scopeThreads = STAGE_ORDER.flatMap((stage) =>
-          scopeState.threadsFor(scopeContext.bucketId, stage)
-        )}
         <div class="flex h-full flex-col">
-          <div
-            class="flex shrink-0 items-center justify-center gap-2 border-b px-3 py-2"
-            style:background-color={scopeProject?.color
-              ? `color-mix(in srgb, ${scopeProject.color} 10%, var(--color-surface))`
-              : undefined}
-          >
-            {#if scopeProject && getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))}
-              <img
-                src={getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))!}
-                alt=""
-                class="h-4 w-4 shrink-0 object-contain"
-                onerror={projectIconOnError(scopeProject)}
-              />
-            {:else}
-              <Folder size={14} class="shrink-0 text-muted" />
-            {/if}
-            {#if scopeProject}
-              <ProjectIdentity
-                project={scopeProject}
-                class="min-w-0 flex-1"
-                nameClass="text-xs font-semibold text-foreground"
-                locationClass="text-[0.5625rem] text-dimmed"
-                showLocation={hasProjectNameCollision(scopeProject, visibleProjects)}
-              />
-            {:else}
-              <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
-                Project
-              </span>
-            {/if}
-            <ProjectSwitch
-              activeProjectId={scopeProject?.id ?? null}
-              class="ml-auto h-5 w-5 text-dimmed hover:text-foreground"
-              onSwitch={switchScopedProject}
-            >
-              <FolderKanban size={12} />
-            </ProjectSwitch>
-          </div>
-
-          <div class="shrink-0 border-b px-3 py-3">
-            <div class="flex justify-center">
-              {#if scopeBucket}
-                <ScopeBadge bucket={scopeBucket} size="sm" />
-              {/if}
-            </div>
-            <div class="mt-2 flex items-center justify-center gap-1">
-              <button
-                class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                aria-label="New thread in {scopeBucket?.name ?? 'Default'}"
-                title="New thread in {scopeBucket?.name ?? 'Default'}"
-                disabled={!scopeProject}
-                onclick={() => {
-                  if (scopeProject) {
-                    void createThreadInProject(scopeProject, scopeContext.bucketId)
-                  }
-                }}
-              >
-                <Plus size={14} />
-              </button>
-              <ThreadSearchControl
-                threads={scopeThreads}
-                contextLabel="threads in this scope"
-                title="Search threads in this scope"
-                onOpen={openScopedThread}
-                fts={{
-                  filter: (t) =>
-                    !t.archived &&
-                    (t.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID) ===
-                      (scopeContext.bucketId ?? DEFAULT_SCOPE_BUCKET_ID) &&
-                    t.projectId === scopeContext.projectId
-                }}
-              />
-              <button
-                class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                aria-label="Clear scope view"
-                title="Return to regular project threads"
-                onclick={() => scopeState.clearSidebarContext()}
-              >
-                <X size={14} />
-              </button>
-              <ScopeCreateControl title="New scope" />
-            </div>
-          </div>
-
           {#if otherBuckets.length > 0}
             <div class="shrink-0 border-b px-3 py-2">
               <div
@@ -3387,6 +3449,49 @@
               </div>
             </div>
           {/key}
+
+          <!-- Board footer context bar: project identity + scope switcher sit
+               at the bottom so the top edge stays a pure view/controls row -->
+          <div
+            class="flex shrink-0 items-center gap-2 border-t px-3 py-2"
+            style:background-color={scopeProject?.color
+              ? `color-mix(in srgb, ${scopeProject.color} 10%, var(--color-surface))`
+              : undefined}
+          >
+            {#if scopeProject && getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))}
+              <img
+                src={getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))!}
+                alt=""
+                class="h-4 w-4 shrink-0 object-contain"
+                onerror={projectIconOnError(scopeProject)}
+              />
+            {:else}
+              <Folder size={14} class="shrink-0 text-muted" />
+            {/if}
+            {#if scopeProject}
+              <ProjectIdentity
+                project={scopeProject}
+                class="min-w-0 flex-1"
+                nameClass="text-xs font-semibold text-foreground"
+                locationClass="text-[0.5625rem] text-dimmed"
+                showLocation={hasProjectNameCollision(scopeProject, visibleProjects)}
+              />
+            {:else}
+              <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
+                Project
+              </span>
+            {/if}
+            {#if scopeBucket}
+              <ScopeBadge bucket={scopeBucket} size="xs" />
+            {/if}
+            <ProjectSwitch
+              activeProjectId={scopeProject?.id ?? null}
+              class="h-5 w-5 shrink-0 text-dimmed hover:text-foreground"
+              onSwitch={switchScopedProject}
+            >
+              <FolderKanban size={12} />
+            </ProjectSwitch>
+          </div>
         </div>
       {:else if loading}
         <p class="px-2 py-4 text-sm text-dimmed">Loading...</p>
@@ -3657,10 +3762,7 @@
                               >
                                 Show {filteredThreads.length - getVisibleCount(project.id)} more
                               </button>
-                            {:else if
-                              getVisibleCount(project.id) >= filteredThreads.length &&
-                              filteredThreads.length > 0 &&
-                              projectHasMoreInDb(project.id)}
+                            {:else if getVisibleCount(project.id) >= filteredThreads.length && filteredThreads.length > 0 && projectHasMoreInDb(project.id)}
                               <button
                                 class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
                                 disabled={projectPageLoading === project.id}
@@ -3872,16 +3974,15 @@
                             >
                               Show {filteredThreads.length - getVisibleCount(project.id)} more
                             </button>
-                          {:else if
-                            getVisibleCount(project.id) >= filteredThreads.length &&
-                            filteredThreads.length > 0 &&
-                            projectHasMoreInDb(project.id)}
+                          {:else if getVisibleCount(project.id) >= filteredThreads.length && filteredThreads.length > 0 && projectHasMoreInDb(project.id)}
                             <button
                               class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
                               disabled={projectPageLoading === project.id}
                               onclick={() => void loadProjectThreadsPage(project.id)}
                             >
-                              {projectPageLoading === project.id ? 'Loading…' : 'Load older threads'}
+                              {projectPageLoading === project.id
+                                ? 'Loading…'
+                                : 'Load older threads'}
                             </button>
                           {/if}
                           {#if getVisibleCount(project.id) > THREADS_PER_PAGE}

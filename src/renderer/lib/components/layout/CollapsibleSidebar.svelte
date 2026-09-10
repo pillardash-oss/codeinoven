@@ -18,6 +18,8 @@
     header?: Snippet
     /** Content rendered before the title in the sidebar header (e.g. back icon). */
     titlePrefix?: Snippet
+    /** Replaces the static title label (e.g. a view-switcher dropdown). */
+    titleSnippet?: Snippet
     /** Hide the generic title/action row when the child supplies contextual navigation. */
     hideHeader?: boolean
     /** Full-width footer slot at the bottom of the sidebar (e.g. settings button). */
@@ -33,6 +35,7 @@
     pinned = false,
     header,
     titlePrefix,
+    titleSnippet,
     hideHeader = false,
     footer,
     scroller = $bindable(null),
@@ -103,9 +106,13 @@
       <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">
         <div class="flex min-w-0 items-center gap-2">
           {@render titlePrefix?.()}
-          <h2 class="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-muted">
-            {title}
-          </h2>
+          {#if titleSnippet}
+            {@render titleSnippet()}
+          {:else}
+            <h2 class="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-muted">
+              {title}
+            </h2>
+          {/if}
         </div>
         {@render header?.()}
       </div>
@@ -153,9 +160,13 @@
         <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">
           <div class="flex min-w-0 items-center gap-2">
             {@render titlePrefix?.()}
-            <h2 class="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-muted">
-              {title}
-            </h2>
+            {#if titleSnippet}
+              {@render titleSnippet()}
+            {:else}
+              <h2 class="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-muted">
+                {title}
+              </h2>
+            {/if}
           </div>
           {@render header?.()}
         </div>
