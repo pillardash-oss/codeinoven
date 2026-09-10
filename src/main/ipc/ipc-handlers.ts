@@ -4529,6 +4529,75 @@ export function registerIpcHandlers(
   // Read a local file into bytes for renderer-side media previews. The preload
   // no longer reads files directly; it delegates here so the path can be
   // constrained to registered project, config-root, or user-selected scopes.
+  // Read a pasted-file source for the Sound Playground's read-aloud section:
+  // plain text files directly, PDFs parsed to text with unpdf. Only scoped
+  // paths (e.g. a file the user just picked from the system dialog) are read.
+  // Text is capped below the prepared-playback text limit.
+  const PLAYGROUND_TEXT_EXTENSIONS = new Set([
+    'txt',
+    'md',
+    'markdown',
+    'log',
+    'json',
+    'jsonc',
+    'csv',
+    'tsv',
+    'yml',
+    'yaml',
+    'toml',
+    'xml',
+    'html',
+    'htm',
+    'css',
+    'js',
+    'jsx',
+    'mjs',
+    'cjs',
+    'ts',
+    'tsx',
+    'py',
+    'sh',
+    'sql',
+    'srt',
+    'vtt'
+  ])
+  const MAX_PLAYGROUND_TEXT_CHARS = 900_000
+  privileged('speech:playgroundReadText', async (_event, rawPath: unknown) => {
+    try {
+      if (typeof rawPath !== 'string' || rawPath.length === 0 || rawPath.length > 4_096) {
+        throw new RangeError('The file path is invalid.')
+      }
+      const safePath = await privilegedIpc.resolveScopedPath(rawPath)
+      const extension = extname(safePath).toLowerCase().replace(/^\./u, '')
+      const fileName = basename(safePath)
+      let text: string
+      if (extension === 'pdf') {
+        const buffer = await readFile(safePath)
+        const { extractText, getDocumentProxy } = await import('unpdf')
+        const pdf = await getDocumentProxy(new Uint8Array(buffer))
+        const extracted = await extractText(pdf, { mergePages: true })
+        text = extracted.text
+      } else {
+        if (!PLAYGROUND_TEXT_EXTENSIONS.has(extension)) {
+          throw new RangeError(`Unsupported file type ".${extension}".`)
+        }
+        text = await readFile(safePath, 'utf8')
+      }
+      text = text.replace(/\r\n?/gu, '\n').trimEnd()
+      if (text.trim().length === 0) throw new RangeError('The file contains no readable text.')
+      let truncated = false
+      if (text.length > MAX_PLAYGROUND_TEXT_CHARS) {
+        text = text.slice(0, MAX_PLAYGROUND_TEXT_CHARS)
+        truncated = true
+      }
+      return { text, fileName, truncated }
+    } catch (error) {
+      if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
+      Logger.error('speech:playgroundReadText rejected path:', error)
+      return null
+    }
+  })
+
   privileged('file:read', async (_event, filePath: unknown) => {
     try {
       const safePath = await privilegedIpc.resolveScopedPath(filePath)

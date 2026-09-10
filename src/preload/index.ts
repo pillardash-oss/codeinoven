@@ -239,6 +239,7 @@ const INVOKE_CHANNELS = [
   'speech:playgroundReadAudio',
   'speech:playgroundTranscribe',
   'speech:playgroundDiscard',
+  'speech:playgroundReadText',
   'dialog:pickFile',
   'dialog:pickFiles',
   'dialog:pickImage',

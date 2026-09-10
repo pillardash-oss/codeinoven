@@ -78,6 +78,7 @@
     "mammoth": "1.12.2",
     "node-pty": "1.1.0",
     "sherpa-onnx-node": "1.13.7",
+    "unpdf": "^1.8.1",
     "web-push": "^3.6.7",
     "werift": "^0.24.4",
     "word-extractor": "^1.0.4",

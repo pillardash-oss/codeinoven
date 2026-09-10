@@ -17,6 +17,10 @@
   import type { SpeechModelArtifact, SpeechRuntime } from '../../../../lib/speech/types'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
   import { setCurrentHistoryAudio } from '../../speech/global-audio'
+  import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
+  import ReadAlongOverlay from '../speech/ReadAlongOverlay.svelte'
+  import { probeInstalledTts } from '../../speech/tts-availability'
+  import { speechController } from '../../speech/speech-controller.svelte'
 
   interface Props {
     settings: SpeechSettings
@@ -43,6 +47,87 @@
   let recorder: MediaRecorder | null = null
   let stream: MediaStream | null = null
   let chunks: Blob[] = []
+
+  interface ReadBlock {
+    id: string
+    label: string
+    text: string
+  }
+
+  const READ_MESSAGE_ID = 'playground-read'
+  let readingBlocks = $state<ReadBlock[]>([])
+  let readingDraft = $state('')
+  let readingImporting = $state(false)
+  let readingError = $state('')
+  let hasInstalledTts = $state<boolean | null>(null)
+
+  probeInstalledTts()
+    .then((installed) => {
+      hasInstalledTts = installed
+    })
+    .catch(() => {
+      hasInstalledTts = false
+    })
+
+  const combinedReadingText = $derived(readingBlocks.map((block) => block.text).join('\n\n'))
+  const readingActive = $derived.by(() => {
+    const playback = speechController.playback
+    return (
+      'messageId' in playback &&
+      playback.messageId === READ_MESSAGE_ID &&
+      (playback.state === 'preparing' ||
+        playback.state === 'playing' ||
+        playback.state === 'paused')
+    )
+  })
+  const readingOverlayLive = $derived(
+    readingActive &&
+      speechController.activeSegments !== null &&
+      speechController.activeSegments.length > 0 &&
+      speechController.readingOverlayActive
+  )
+
+  function addReadingDraft(): void {
+    readingError = ''
+    const text = readingDraft.trim()
+    if (!text) return
+    readingBlocks = [...readingBlocks, { id: crypto.randomUUID(), label: 'Pasted text', text }]
+    readingDraft = ''
+  }
+
+  async function importReadingFile(): Promise<void> {
+    if (readingImporting) return
+    readingError = ''
+    readingImporting = true
+    try {
+      const path = await invoke('dialog:pickFile')
+      if (!path) return
+      const result = await invoke('speech:playgroundReadText', path)
+      if (!result) throw new Error('The file could not be read.')
+      readingBlocks = [
+        ...readingBlocks,
+        {
+          id: crypto.randomUUID(),
+          label: `${result.fileName}${result.truncated ? ' · truncated' : ''}`,
+          text: result.text
+        }
+      ]
+    } catch (cause) {
+      readingError = cause instanceof Error ? cause.message : String(cause)
+    } finally {
+      readingImporting = false
+    }
+  }
+
+  function removeReadingBlock(id: string): void {
+    readingBlocks = readingBlocks.filter((block) => block.id !== id)
+  }
+
+  function clearReadingBlocks(): void {
+    readingBlocks = []
+    readingDraft = ''
+    readingError = ''
+  }
 
   const staged = $derived(audioToken !== null)
   const cleanupReady = $derived.by(() => {
@@ -303,6 +388,10 @@
     transcript = ''
     error = ''
     transcribing = null
+    readingBlocks = []
+    readingDraft = ''
+    readingError = ''
+    void speechController.cancelPlayback()
   }
 
   onDestroy(resetAll)
@@ -479,4 +568,124 @@
       {/if}
     </div>
   {/if}
+</section>
+
+<section id="settings-block-sound-playground-read" class="rounded-xl border bg-surface p-4">
+  <div class="mb-3 flex items-start justify-between gap-3">
+    <div>
+      <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Read out</h2>
+      <p class="mt-1 text-[0.6875rem] text-dimmed">
+        Paste text or import a text or PDF file, then have the local text-to-speech model read it
+        aloud. Nothing is saved — blocks and playback state are cleared when you leave the page.
+      </p>
+    </div>
+    {#if readingBlocks.length > 0 && !readingActive}
+      <button
+        type="button"
+        class="inline-flex shrink-0 items-center gap-1 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+        title="Remove all text blocks"
+        aria-label="Remove all text blocks"
+        onclick={clearReadingBlocks}
+      >
+        <X size={12} aria-hidden="true" /> Clear all
+      </button>
+    {/if}
+  </div>
+
+  {#if readingError}
+    <p class="mb-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+      {readingError}
+    </p>
+  {/if}
+
+  {#if !readingActive}
+    <label class="block">
+      <span class="sr-only">Text to read aloud</span>
+      <textarea
+        class="min-h-24 w-full resize-y rounded-lg border bg-elevated/40 px-3 py-2 text-sm leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+        placeholder="Paste a block of text to read aloud…"
+        bind:value={readingDraft}
+        aria-label="Text to read aloud"></textarea>
+    </label>
+    <div class="mt-2 flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        class="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-on-primary hover:bg-primary/90 disabled:opacity-50"
+        title="Add the pasted text as a block"
+        aria-label="Add the pasted text"
+        disabled={!readingDraft.trim()}
+        onclick={addReadingDraft}
+      >
+        <FileAudio size={14} aria-hidden="true" /> Add text
+      </button>
+      <button
+        type="button"
+        class="inline-flex items-center gap-2 rounded-lg border bg-elevated px-3 py-2 text-sm font-medium text-foreground hover:bg-overlay disabled:opacity-50"
+        title="Import a text or PDF file"
+        aria-label="Import a text or PDF file"
+        disabled={readingImporting}
+        onclick={() => void importReadingFile()}
+      >
+        {#if readingImporting}
+          <LoaderCircle size={14} class="animate-spin" aria-hidden="true" />
+        {:else}
+          <FileAudio size={14} aria-hidden="true" />
+        {/if}
+        Import file
+      </button>
+    </div>
+  {/if}
+
+  {#if readingOverlayLive}
+    <div class="mt-3 max-h-[50dvh] overflow-y-auto rounded-lg border bg-elevated/40 p-3">
+      <ReadAlongOverlay
+        segments={speechController.activeSegments!}
+        activeIndex={speechController.visibleSegmentIndex}
+        spokenProgress={speechController.activeSegmentProgress}
+        textClass="text-sm"
+      />
+    </div>
+  {:else if readingActive && speechController.playback.state === 'preparing'}
+    <p
+      class="mt-3 flex items-center gap-2 rounded-lg border border-dashed border-info/40 bg-info/5 px-3 py-3 text-xs text-muted"
+    >
+      <LoaderCircle size={13} class="animate-spin" aria-hidden="true" /> Preparing spoken response…
+    </p>
+  {:else if readingBlocks.length > 0}
+    <div
+      class="mt-3 max-h-[50dvh] divide-y divide-border overflow-y-auto rounded-lg border bg-elevated/40"
+    >
+      {#each readingBlocks as block (block.id)}
+        <div class="flex items-start justify-between gap-3 px-3 py-2.5">
+          <div class="min-w-0">
+            <p class="text-xs font-semibold" title={block.label}>{block.label}</p>
+            <p class="tabular-nums text-[0.625rem] text-dimmed">{block.text.length} chars</p>
+            <p class="mt-1 line-clamp-3 text-xs leading-relaxed text-muted">{block.text}</p>
+          </div>
+          <button
+            type="button"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-transparent text-dimmed hover:border-border hover:bg-surface hover:text-muted"
+            title={`Remove ${block.label}`}
+            aria-label={`Remove ${block.label}`}
+            onclick={() => removeReadingBlock(block.id)}
+          >
+            <X size={12} aria-hidden="true" />
+          </button>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
+  <div class="mt-2 flex flex-wrap items-center gap-2 text-[0.6875rem] text-dimmed">
+    <SpeechPlaybackButton
+      messageId={READ_MESSAGE_ID}
+      markdown={combinedReadingText}
+      disabled={readingBlocks.length === 0}
+    />
+    {#if hasInstalledTts === false}
+      <span>Read-aloud needs a text-to-speech model — download one in the Models tab.</span>
+    {:else if readingBlocks.length === 0}
+      <span>Add a text block to enable read aloud.</span>
+    {/if}
+  </div>
 </section>

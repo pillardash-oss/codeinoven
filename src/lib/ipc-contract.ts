@@ -1358,6 +1358,11 @@ export interface IpcInvokeContract {
     import('./speech/types').SpeechResult<{ rawTranscript: string; finalTranscript: string }>
   >
   'speech:playgroundDiscard': Contract<[token: string], import('./speech/types').SpeechResult<void>>
+  /** Read a user-picked text/PDF file for the Playground read-aloud section. */
+  'speech:playgroundReadText': Contract<
+    [path: string],
+    { text: string; fileName: string; truncated: boolean } | null
+  >
   'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
   'dialog:pickFiles': Contract<[scope?: AttachmentStorageScope], string[]>
   'dialog:pickImage': Contract<[], string | null>

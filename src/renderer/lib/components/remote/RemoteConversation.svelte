@@ -33,8 +33,8 @@
   import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { copyText } from '$lib/copy-text'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
+  import ReadAlongOverlay from '../speech/ReadAlongOverlay.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
-  import { spokenWordOffset } from '../../speech/read-along'
   import { attachmentPreviewKind, fileUrlToPath } from '$lib/mime'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { fastVariantForModelId } from '$shared/fast-inference'
@@ -1250,31 +1250,12 @@
                       speechController.playback.state === 'playing' ||
                       speechController.playback.state === 'paused')}
                   {#if isReadingRemote && speechController.activeSegments && speechController.activeSegments.length > 0 && speechController.readingOverlayActive}
-                    {@const segs = speechController.activeSegments}
-                    {@const activeIdx = speechController.visibleSegmentIndex}
-                    {@const spokenProgress = speechController.activeSegmentProgress}
-                    <div class="flex flex-col gap-1.5 text-sm text-foreground">
-                      {#each segs as seg, i (seg.id)}
-                        {@const spokenOffset =
-                          i === activeIdx ? spokenWordOffset(seg.text, spokenProgress) : -1}
-                        <div
-                          class={i === activeIdx
-                            ? 'rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors'
-                            : 'px-2.5 py-1 opacity-80'}
-                          data-speech-line={i === activeIdx ? 'active' : undefined}
-                        >
-                          <span class="leading-relaxed">
-                            {#if spokenOffset > 0}
-                              <span class="rounded-sm bg-info/20 px-0.5 box-decoration-clone"
-                                >{seg.text.slice(0, spokenOffset)}</span
-                              >{seg.text.slice(spokenOffset)}
-                            {:else}
-                              {seg.text}
-                            {/if}
-                          </span>
-                        </div>
-                      {/each}
-                    </div>
+                    <ReadAlongOverlay
+                      segments={speechController.activeSegments}
+                      activeIndex={speechController.visibleSegmentIndex}
+                      spokenProgress={speechController.activeSegmentProgress}
+                      textClass="text-sm"
+                    />
                   {:else}
                     <div
                       class={isReadingRemote && speechController.playback.state === 'preparing'
