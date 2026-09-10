@@ -1,6 +1,5 @@
 <script lang="ts">
   import { MousePointer2, X, PictureInPicture2 } from '@lucide/svelte'
-  import { onMount } from 'svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -96,11 +95,6 @@
       target.releasePointerCapture(event.pointerId)
     }
   }
-
-  onMount(() => {
-    pipState.init()
-    return () => pipState.destroy()
-  })
 </script>
 
 {#if visible}
