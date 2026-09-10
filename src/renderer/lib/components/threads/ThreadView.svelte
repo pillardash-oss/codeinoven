@@ -9505,7 +9505,10 @@
         ? (getAgentIcon(selection.harnessId)?.name ?? selection.harnessId)
         : null,
       accountLabel:
-        harnessAccounts.find((account) => account.id === selection.accountId)?.label ?? null,
+        harnessAccounts.find(
+          (account) =>
+            account.id === selection.accountId && account.providerId === selection.providerId
+        )?.label ?? null,
       isFast: fastVariantForModelId(modelId) !== null
     }
   })

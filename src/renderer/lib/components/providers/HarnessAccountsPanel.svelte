@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { SvelteMap } from 'svelte/reactivity'
   import { Loader2, Pencil, RefreshCw, Search, Unplug, UserRound } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
@@ -14,7 +15,10 @@
   let { providers }: Props = $props()
 
   let accounts = $state.raw<HarnessAccount[]>([])
-  let loading = $state(false)
+  let loading = $state(true)
+  let refreshing = $state(false)
+  let refreshCompleted = $state(0)
+  let refreshTotal = $state(0)
   let error = $state('')
   let search = $state('')
   let editTarget = $state<HarnessAccount | null>(null)
@@ -42,41 +46,89 @@
     return account.providerName || account.providerId
   }
 
-  async function loadAccounts(): Promise<void> {
+  function sortAccounts(nextAccounts: HarnessAccount[]): HarnessAccount[] {
+    return nextAccounts.toSorted((left, right) => left.createdAt - right.createdAt)
+  }
+
+  function accountGroups(seed: HarnessAccount[]): SvelteMap<string, HarnessAccount[]> {
+    const groups = new SvelteMap<string, HarnessAccount[]>()
+    for (const account of seed) {
+      groups.set(account.harnessId, [...(groups.get(account.harnessId) ?? []), account])
+    }
+    return groups
+  }
+
+  function applyAccountGroups(groups: ReadonlyMap<string, HarnessAccount[]>): void {
+    accounts = sortAccounts([...groups.values()].flat())
+  }
+
+  async function loadStoredAccounts(): Promise<void> {
     loading = true
     error = ''
     try {
-      const loaded: HarnessAccount[] = []
-      const loadErrors: string[] = []
-      const harnesses = providers
-      for (let offset = 0; offset < harnesses.length; offset += 3) {
-        const batch = await Promise.allSettled(
-          harnesses
-            .slice(offset, offset + 3)
-            .map((provider) => invoke('providerAccounts:list', provider.id, true))
-        )
-        for (const result of batch) {
-          if (result.status === 'fulfilled') {
-            loaded.push(...result.value)
-          } else {
-            loadErrors.push(
-              result.reason instanceof Error ? result.reason.message : 'An account source failed.'
-            )
-          }
-        }
-      }
-      accounts = loaded.sort((left, right) => left.createdAt - right.createdAt)
-      if (loadErrors.length > 0) {
-        error =
-          loaded.length > 0
-            ? 'Some account sources could not be refreshed. Showing the accounts that are available.'
-            : loadErrors[0]
-      }
+      accounts = sortAccounts(await invoke('providerAccounts:list'))
     } catch (loadError) {
       error = loadError instanceof Error ? loadError.message : 'Accounts could not be loaded.'
     } finally {
       loading = false
     }
+  }
+
+  async function refreshAccounts(): Promise<void> {
+    if (refreshing) return
+    refreshing = true
+    error = ''
+    refreshCompleted = 0
+    const groups = accountGroups(accounts)
+    const storedHarnesses = new Set(groups.keys())
+    const harnesses = providers
+      .map((provider, index) => ({ provider, index }))
+      .toSorted((left, right) => {
+        const leftPriority = storedHarnesses.has(left.provider.id)
+          ? 0
+          : left.provider.status === 'available'
+            ? 1
+            : 2
+        const rightPriority = storedHarnesses.has(right.provider.id)
+          ? 0
+          : right.provider.status === 'available'
+            ? 1
+            : 2
+        return leftPriority - rightPriority || left.index - right.index
+      })
+      .map(({ provider }) => provider)
+    refreshTotal = harnesses.length
+    const refreshErrors: string[] = []
+    try {
+      // Main-process auth probes are serialized. Updating one harness at a time
+      // keeps work bounded and makes each completed result visible immediately.
+      for (const provider of harnesses) {
+        try {
+          groups.set(provider.id, await invoke('providerAccounts:list', provider.id, true))
+          harnessAccountCache.invalidate(provider.id)
+          applyAccountGroups(groups)
+        } catch (refreshError) {
+          refreshErrors.push(
+            refreshError instanceof Error ? refreshError.message : 'An account source failed.'
+          )
+        } finally {
+          refreshCompleted += 1
+        }
+      }
+      if (refreshErrors.length > 0) {
+        error =
+          accounts.length > 0
+            ? 'Some providers could not be checked. Showing the accounts that are available.'
+            : refreshErrors[0]
+      }
+    } finally {
+      refreshing = false
+    }
+  }
+
+  async function initializeAccounts(): Promise<void> {
+    await loadStoredAccounts()
+    await refreshAccounts()
   }
 
   function openEdit(account: HarnessAccount): void {
@@ -97,7 +149,7 @@
       await invoke('providerAccounts:rename', editTarget.id, label)
       harnessAccountCache.invalidate(editTarget.harnessId)
       editTarget = null
-      await loadAccounts()
+      await loadStoredAccounts()
     } catch (saveError) {
       error = saveError instanceof Error ? saveError.message : 'The account label was not saved.'
     } finally {
@@ -120,7 +172,7 @@
       await invoke('providerAccounts:remove', account.id)
       harnessAccountCache.invalidate(account.harnessId)
       disconnectTarget = null
-      await loadAccounts()
+      await loadStoredAccounts()
     } catch (disconnectError) {
       error =
         disconnectError instanceof Error
@@ -131,7 +183,7 @@
     }
   }
 
-  onMount(() => void loadAccounts())
+  onMount(() => void initializeAccounts())
 </script>
 
 <div class="space-y-4">
@@ -153,20 +205,31 @@
       type="button"
       class="flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       title="Refresh accounts"
-      disabled={loading}
-      onclick={() => void loadAccounts()}
+      disabled={loading || refreshing}
+      onclick={() => void refreshAccounts()}
     >
-      <RefreshCw size={12} class={loading ? 'animate-spin' : ''} /> Refresh
+      <RefreshCw size={12} class={refreshing ? 'animate-spin' : ''} /> Refresh
     </button>
+    <span class="w-10 text-right text-xs tabular-nums text-dimmed" aria-live="polite">
+      {refreshing ? `${refreshCompleted}/${refreshTotal}` : ''}
+    </span>
   </div>
 
   {#if error}
     <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
   {/if}
 
-  {#if loading && accounts.length === 0}
+  {#if loading}
     <div class="flex h-32 items-center justify-center">
       <Loader2 size={18} class="animate-spin text-dimmed" />
+    </div>
+  {:else if refreshing && accounts.length === 0}
+    <div class="flex h-32 flex-col items-center justify-center gap-2 text-center">
+      <Loader2 size={18} class="animate-spin text-dimmed" />
+      <p class="text-xs text-muted">Checking connected providers…</p>
+      <p class="text-xs tabular-nums text-dimmed">
+        {refreshCompleted} of {refreshTotal} checked
+      </p>
     </div>
   {:else if accounts.length === 0}
     <div class="rounded-xl border border-dashed p-8 text-center">

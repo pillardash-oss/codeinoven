@@ -5,6 +5,7 @@ import type {
   PendingHarnessAccount,
   ProviderAccountAuthEntry
 } from '../../lib/types'
+import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
 import type { StorageEngine } from '../storage/storage-engine'
 
 const REGISTRY_PATH = 'provider-accounts/accounts.json'
@@ -35,7 +36,11 @@ export class HarnessAccountRegistry {
   async list(harnessId?: string): Promise<HarnessAccount[]> {
     const stored = await this.read()
     return stored.accounts
-      .filter((account) => harnessId === undefined || account.harnessId === harnessId)
+      .filter(
+        (account) =>
+          !isCodeInOvenCustomProviderId(account.providerId) &&
+          (harnessId === undefined || account.harnessId === harnessId)
+      )
       .sort((left, right) => left.createdAt - right.createdAt)
   }
 
@@ -46,7 +51,9 @@ export class HarnessAccountRegistry {
   ): Promise<HarnessAccount[]> {
     return this.mutate(async (registry) => {
       const active = authenticated
-        .filter((account) => account.active !== false)
+        .filter(
+          (account) => account.active !== false && !isCodeInOvenCustomProviderId(account.providerId)
+        )
         .sort((left, right) => left.providerId.localeCompare(right.providerId))
       const managed = registry.accounts.filter(
         (account) => account.harnessId === harnessId && account.containerKind === 'managed'
@@ -60,14 +67,24 @@ export class HarnessAccountRegistry {
       const legacy: HarnessAccount[] = []
       for (const [index, discovered] of active.entries()) {
         const existing = priorLegacy.find((account) => account.providerId === discovered.providerId)
+        const mayUseHarnessDefault = active.length === 1
         const id =
-          existing?.id ??
-          (index === 0 && !occupiedIds.has(legacyHarnessAccountId(harnessId))
-            ? legacyHarnessAccountId(harnessId)
-            : additionalLegacyAccountId(harnessId, discovered.providerId))
+          existing && (mayUseHarnessDefault || existing.id !== legacyHarnessAccountId(harnessId))
+            ? existing.id
+            : mayUseHarnessDefault && !occupiedIds.has(legacyHarnessAccountId(harnessId))
+              ? legacyHarnessAccountId(harnessId)
+              : additionalLegacyAccountId(harnessId, discovered.providerId)
         occupiedIds.add(id)
         const providerName = discovered.label || discovered.providerId
-        let label = existing?.label && existing.label !== 'Default' ? existing.label : ''
+        const existingLabelWasGenerated =
+          existing !== undefined &&
+          [existing.providerName, existing.providerId, harnessId].some((base) =>
+            generatedLabelFor(existing.label, base)
+          )
+        let label =
+          existing?.label && existing.label !== 'Default' && !existingLabelWasGenerated
+            ? existing.label
+            : ''
         if (!label) {
           let sequence = 1
           while (labels.has(`${providerName}-${sequence}`.toLocaleLowerCase('en-US'))) sequence += 1
@@ -179,6 +196,9 @@ export class HarnessAccountRegistry {
   ): Promise<HarnessAccount> {
     const pending = this.pending.get(pendingId)
     if (!pending) throw new Error('The pending account no longer exists.')
+    if (isCodeInOvenCustomProviderId(providerId)) {
+      throw new Error('Custom base URL providers do not create authenticated accounts.')
+    }
     const account = await this.create({
       harnessId: pending.harnessId,
       providerId,
@@ -385,4 +405,9 @@ export class HarnessAccountRegistry {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+function generatedLabelFor(label: string, base: string): boolean {
+  if (!base.trim()) return false
+  return new RegExp(`^${escapeRegExp(base)}-\\d+$`, 'iu').test(label)
 }

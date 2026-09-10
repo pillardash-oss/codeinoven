@@ -4,6 +4,7 @@ import { homedir } from 'os'
 import { dirname, join } from 'path'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { OfferedProvider } from '../../lib/types'
+import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
 import type {
   HarnessAuthAccount,
   HarnessAuthCapabilities,
@@ -319,7 +320,9 @@ async function readPiStatus(
   const auth = isolatedAgentDir
     ? new PiAuthConfigService(join(isolatedAgentDir, 'auth.json'))
     : fileBackedAuth
-  const credentialIds = await auth.credentialIds()
+  const credentialIds = new Set(
+    (await auth.credentialIds()).filter((providerId) => !isCodeInOvenCustomProviderId(providerId))
+  )
   let stored: Record<string, unknown> = {}
   let configReadable = false
   try {
@@ -341,12 +344,11 @@ async function readPiStatus(
   const accounts: HarnessAuthAccount[] = []
   let connected = 0
   for (const [providerId, rawEntry] of Object.entries(providers)) {
+    if (isCodeInOvenCustomProviderId(providerId)) continue
     const entry = record(rawEntry)
     if (!entry) continue
     const apiKey = typeof entry['apiKey'] === 'string' ? entry['apiKey'] : undefined
-    // Base-URL-only entries are CodeInOven's custom providers (managed on the
-    // Custom base URL tab) — they hold no credential, so they are not auth
-    // accounts and must not appear in the authenticated-providers view.
+    // Credential-less native entries are model configuration, not accounts.
     if (!apiKey || apiKey === 'none') {
       if (!credentialIds.has(providerId)) continue
     }
