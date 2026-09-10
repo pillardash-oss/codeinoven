@@ -2785,6 +2785,12 @@ export function registerIpcHandlers(
     const safeId = validateBoundedString(id, 'Heartbeat ID', 1, 200)
     return scheduler.update(safeId, validateHeartbeatPatchInput(patch))
   })
+  ipcMain.handle('heartbeat:trigger', async (_, id: unknown) => {
+    const scheduler = options.heartbeatScheduler
+    if (!scheduler) throw new Error('Heartbeat scheduler is not available')
+    const safeId = validateBoundedString(id, 'Heartbeat ID', 1, 200)
+    await scheduler.trigger(safeId)
+  })
   ipcMain.handle('heartbeat:delete', async (_, id: unknown) => {
     const scheduler = options.heartbeatScheduler
     if (!scheduler) throw new Error('Heartbeat scheduler is not available')

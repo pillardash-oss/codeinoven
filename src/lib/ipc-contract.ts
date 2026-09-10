@@ -287,6 +287,15 @@ export interface BrowserPermissionRequest {
  */
 export type BrowserPermissionDecision = 'allow' | 'allow-once' | 'deny' | 'dismiss'
 
+/**
+ * Selectable scopes for clearing an in-app browser session's stored state.
+ * - `site-data`: cookies, storage, service workers, IndexedDB and similar
+ *   persistent site data.
+ * - `cache`: HTTP disk and memory caches.
+ * - `permissions`: remembered permission grants and denials.
+ */
+export type BrowserSiteDataScope = 'site-data' | 'cache' | 'permissions'
+
 export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
 
 /** Where a renderer log line originated, for the durable log tag. */
@@ -2119,6 +2128,7 @@ export interface IpcInvokeContract {
     [id: string, patch: Partial<Omit<HeartbeatConfig, 'id'>>],
     HeartbeatConfig
   >
+  'heartbeat:trigger': Contract<[id: string], void>
   'heartbeat:delete': Contract<[id: string], boolean>
   'heartbeat:toggle': Contract<[id: string, enabled: boolean], HeartbeatConfig>
   'gateway:list': Contract<[], import('./gateway-types').GatewayStatus[]>
@@ -2246,6 +2256,7 @@ export interface IpcInvokeContract {
   'browser:getConsole': Contract<[tabId: string], BrowserConsoleEntry[]>
   'browser:clearConsole': Contract<[tabId: string], void>
   'browser:clearData': Contract<[projectId: string], void>
+  'browser:clearSiteData': Contract<[projectId: string, scopes: BrowserSiteDataScope[]], void>
   'browser:resolvePermission': Contract<
     [requestId: string, decision: BrowserPermissionDecision],
     void

@@ -8,7 +8,8 @@
     Pencil,
     Plus,
     Trash2,
-    XCircle
+    XCircle,
+    Zap
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -37,6 +38,19 @@
   let draftTimeInput = $state('')
   let draftError = $state('')
   let deleteTarget = $state<HeartbeatConfig | null>(null)
+  let triggeringId = $state<string | null>(null)
+
+  async function triggerNow(id: string): Promise<void> {
+    triggeringId = id
+    try {
+      await heartbeatStore.trigger(id)
+    } catch (triggerError) {
+      heartbeatStore.error =
+        triggerError instanceof Error ? triggerError.message : 'Failed to trigger heartbeat.'
+    } finally {
+      triggeringId = null
+    }
+  }
 
   function providerName(harnessId: string): string {
     return providers.find((catalog) => catalog.harnessId === harnessId)?.name ?? harnessId
@@ -279,6 +293,21 @@
             </div>
           </div>
           <div class="flex shrink-0 items-center gap-1">
+            <button
+              class="flex h-7 w-7 items-center justify-center rounded-lg {triggeringId === config.id
+                ? 'text-primary'
+                : 'text-muted'} hover:bg-overlay hover:text-foreground"
+              aria-label="Trigger {config.name} now"
+              title="Trigger {config.name} now — send an immediate ping"
+              disabled={triggeringId !== null}
+              onclick={() => void triggerNow(config.id)}
+            >
+              {#if triggeringId === config.id}
+                <Loader2 size={13} class="animate-spin" />
+              {:else}
+                <Zap size={13} />
+              {/if}
+            </button>
             <Switch
               checked={config.enabled}
               onchange={(enabled) => void heartbeatStore.setEnabled(config.id, enabled)}

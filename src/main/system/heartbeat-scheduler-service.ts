@@ -92,6 +92,13 @@ export class HeartbeatSchedulerService {
     return true
   }
 
+  /** Fire a ping immediately on demand, bypassing the schedule. */
+  async trigger(id: string): Promise<void> {
+    const config = this.heartbeats.find((entry) => entry.id === id)
+    if (!config) throw new Error(`Heartbeat not found: ${id}`)
+    await this.fire(config)
+  }
+
   stop(): void {
     if (this.timer !== null) {
       clearInterval(this.timer)
