@@ -4530,7 +4530,8 @@ export function registerIpcHandlers(
   // no longer reads files directly; it delegates here so the path can be
   // constrained to registered project, config-root, or user-selected scopes.
   // Read a pasted-file source for the Sound Playground's read-aloud section:
-  // plain text files directly, PDFs parsed to text with unpdf. Only scoped
+  // plain text files directly, the `@firecrawl/pdf-inspector` Rust library (fully local, no network, OCR
+  // never invoked — text-based PDFs only). Only scoped
   // paths (e.g. a file the user just picked from the system dialog) are read.
   // Text is capped below the prepared-playback text limit.
   const PLAYGROUND_TEXT_EXTENSIONS = new Set([
@@ -4573,10 +4574,14 @@ export function registerIpcHandlers(
       let text: string
       if (extension === 'pdf') {
         const buffer = await readFile(safePath)
-        const { extractText, getDocumentProxy } = await import('unpdf')
-        const pdf = await getDocumentProxy(new Uint8Array(buffer))
-        const extracted = await extractText(pdf, { mergePages: true })
-        text = extracted.text
+        const { classifyPdfAsync, extractText } = await import('@firecrawl/pdf-inspector')
+        const parsed = await classifyPdfAsync(buffer)
+        if (parsed.pdfType === 'Scanned' || parsed.pdfType === 'ImageBased') {
+          throw new RangeError(
+            'This PDF appears to be scanned — no local OCR is performed in the playground.'
+          )
+        }
+        text = extractText(buffer)
       } else {
         if (!PLAYGROUND_TEXT_EXTENSIONS.has(extension)) {
           throw new RangeError(`Unsupported file type ".${extension}".`)
