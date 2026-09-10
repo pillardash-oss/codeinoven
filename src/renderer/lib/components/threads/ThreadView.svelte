@@ -43,6 +43,7 @@
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import type { ComposerScopeShoe } from '../chats/ComposerShoe.svelte'
   import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { normalizeComposerMessage, spaceOutProjectReferences } from '../chats/composer-mentions'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
@@ -303,7 +304,8 @@
     onContinueInThread,
     controller,
     headerSnippet,
-    allowCenteredComposer = true
+    allowCenteredComposer = true,
+    onOpenScopeView
   }: Props = $props()
 
   // Workspace clears its selected-thread state before this keyed view's
@@ -953,6 +955,24 @@
   let activeTodo = $derived(latestAgentTodo(todoMessages))
   let project = $state<Project | null>(null)
   let projectIconUrl = $state<string | null>(null)
+  /** Composer scope shoe data — project mode only (ChatComposer hides it in chat mode). */
+  let scopeShoe = $derived.by((): ComposerScopeShoe | undefined => {
+    if (chatMode) return undefined
+    const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+    // Resolve against the thread's own project board like scope.bucketForThread.
+    const board = scopeState.boards.get(thread.projectId) ?? scopeState.board
+    const bucket = board.buckets.find((candidate) => candidate.id === bucketId)
+    if (!bucket) return undefined
+    return {
+      projectId: thread.projectId,
+      threadId: thread.id,
+      bucket,
+      source: project?.source,
+      host: project?.host,
+      isNewThread: messages.length === 0 && !busy,
+      onOpenScopeView: () => onOpenScopeView?.(thread)
+    }
+  })
   let errorMessage = $state('')
   let providerStatus = $state<AgentSessionStatus | null>(null)
   /** Synthetic authentication issue raised by the thread-open auth probe, so
@@ -4165,6 +4185,7 @@
   /** Load project info for the composer context row. */
   async function loadProjectContext(): Promise<void> {
     const { projectId } = thread
+    void scopeState.ensureBoardLoaded(projectId)
     try {
       project = await invoke('project:get', projectId)
       if (project?.icon) {
@@ -11761,6 +11782,7 @@
                     projectContext={composerProject}
                     projectId={thread.projectId}
                     threadId={thread.id}
+                    scopeShoe={scopeShoe}
                     attachmentStorage={{
                       kind: chatMode ? 'chat' : 'project',
                       projectId: thread.projectId,
