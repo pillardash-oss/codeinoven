@@ -320,9 +320,10 @@ async function readPiStatus(
   const auth = isolatedAgentDir
     ? new PiAuthConfigService(join(isolatedAgentDir, 'auth.json'))
     : fileBackedAuth
-  const credentialIds = new Set(
-    (await auth.credentialIds()).filter((providerId) => !isCodeInOvenCustomProviderId(providerId))
-  )
+  const credentialIds = await auth.credentialIds()
+  for (const providerId of credentialIds) {
+    if (isCodeInOvenCustomProviderId(providerId)) credentialIds.delete(providerId)
+  }
   let stored: Record<string, unknown> = {}
   let configReadable = false
   try {
