@@ -326,7 +326,7 @@ export class CodexDriver extends PersistentCliDriver {
     contextUsage: true,
     compaction: true,
     subagents: true,
-    nativeUtilities: ['web_search', 'web_fetch']
+    nativeUtilities: ['web_search', 'web_fetch', 'computer_use']
   }
   private activeTurns = new Map<string, CodexAppServerTurn>()
   private utilityEndpoints = new Map<string, { url: string; token: string }>()
