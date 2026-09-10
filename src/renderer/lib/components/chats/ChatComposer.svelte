@@ -2745,7 +2745,7 @@
 {#if scopeShoe}
   <div class="composer-shoe relative -mt-4 flex w-full justify-center px-6 pt-3 pb-2">
     <div
-      class="flex w-[80%] min-w-0 items-center justify-center rounded-b-xl rounded-t-lg border bg-surface px-2 pt-2.5 pb-1 shadow-md"
+      class="flex w-[80%] min-w-0 items-center justify-center border bg-surface px-2 pt-2.5 pb-1 shadow-md"
     >
         <ComposerShoe
           projectId={scopeShoe.projectId}
