@@ -1,7 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { SvelteMap } from 'svelte/reactivity'
-  import { Loader2, Pencil, RefreshCw, Search, Unplug, UserRound } from '@lucide/svelte'
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+  import {
+    ListFilter,
+    Loader2,
+    Pencil,
+    RefreshCw,
+    Search,
+    Unplug,
+    UserRound,
+    X
+  } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
@@ -27,10 +36,28 @@
   let disconnectTarget = $state<HarnessAccount | null>(null)
   let disconnecting = $state(false)
 
+  let filterHarnesses = $derived.by(() => {
+    const seen: Record<string, true> = {}
+    const harnesses: Array<{ id: string; name: string }> = []
+    for (const account of accounts) {
+      if (seen[account.harnessId]) continue
+      seen[account.harnessId] = true
+      harnesses.push({
+        id: account.harnessId,
+        name: harnessFor(account.harnessId)?.name ?? account.harnessId
+      })
+    }
+    return harnesses.toSorted((left, right) => left.name.localeCompare(right.name))
+  })
+
+  let selectedHarnesses = new SvelteSet<string>()
+  let harnessFilterActive = $derived(selectedHarnesses.size > 0)
+
   let filteredAccounts = $derived.by(() => {
     const query = search.trim().toLocaleLowerCase('en-US')
-    if (!query) return accounts
     return accounts.filter((account) => {
+      if (harnessFilterActive && !selectedHarnesses.has(account.harnessId)) return false
+      if (!query) return true
       const harnessName = harnessFor(account.harnessId)?.name ?? account.harnessId
       return [account.label, account.providerId, harnessName, account.harnessId].some((value) =>
         value.toLocaleLowerCase('en-US').includes(query)
@@ -44,6 +71,15 @@
 
   function providerLabel(account: HarnessAccount): string {
     return account.providerName || account.providerId
+  }
+
+  function toggleHarnessFilter(harnessId: string): void {
+    if (selectedHarnesses.has(harnessId)) selectedHarnesses.delete(harnessId)
+    else selectedHarnesses.add(harnessId)
+  }
+
+  function clearHarnessFilter(): void {
+    selectedHarnesses.clear()
   }
 
   function sortAccounts(nextAccounts: HarnessAccount[]): HarnessAccount[] {
@@ -98,7 +134,7 @@
       })
       .map(({ provider }) => provider)
     refreshTotal = harnesses.length
-    const refreshErrors: string[] = []
+    const refreshErrors: Array<{ harnessName: string; message: string }> = []
     try {
       // Main-process auth probes are serialized. Updating one harness at a time
       // keeps work bounded and makes each completed result visible immediately.
@@ -108,18 +144,23 @@
           harnessAccountCache.invalidate(provider.id)
           applyAccountGroups(groups)
         } catch (refreshError) {
-          refreshErrors.push(
-            refreshError instanceof Error ? refreshError.message : 'An account source failed.'
-          )
+          refreshErrors.push({
+            harnessName: provider.name,
+            message:
+              refreshError instanceof Error ? refreshError.message : 'The account check failed.'
+          })
         } finally {
           refreshCompleted += 1
         }
       }
       if (refreshErrors.length > 0) {
-        error =
-          accounts.length > 0
-            ? 'Some providers could not be checked. Showing the accounts that are available.'
-            : refreshErrors[0]
+        const names = refreshErrors.map((failure) => failure.harnessName)
+        const harnessNames =
+          names.length === 1
+            ? names[0]
+            : `${names.slice(0, -1).join(', ')} and ${names.at(-1) ?? ''}`
+        const firstFailure = refreshErrors[0]
+        error = `${harnessNames} could not be checked.${firstFailure ? ` ${firstFailure.harnessName}: ${firstFailure.message}` : ''}`
       }
     } finally {
       refreshing = false
@@ -215,6 +256,49 @@
     </span>
   </div>
 
+  {#if filterHarnesses.length > 1}
+    <div class="flex flex-wrap items-center gap-1" role="group" aria-label="Filter by harness">
+      <button
+        type="button"
+        class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
+          ? 'border-primary bg-primary text-on-primary'
+          : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+        aria-pressed={!harnessFilterActive}
+        title="Show accounts for all harnesses"
+        onclick={clearHarnessFilter}
+      >
+        <ListFilter size={11} class="shrink-0" />
+        All
+      </button>
+      {#each filterHarnesses as harness (harness.id)}
+        <button
+          type="button"
+          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {selectedHarnesses.has(
+            harness.id
+          )
+            ? 'border-primary bg-primary text-on-primary'
+            : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+          aria-pressed={selectedHarnesses.has(harness.id)}
+          title={`Filter accounts by ${harness.name}`}
+          onclick={() => toggleHarnessFilter(harness.id)}
+        >
+          <AgentIcon agentId={harness.id} label={harness.name} size={14} />
+          <span class="truncate">{harness.name}</span>
+        </button>
+      {/each}
+      {#if harnessFilterActive}
+        <button
+          type="button"
+          class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
+          title="Clear harness filter"
+          onclick={clearHarnessFilter}
+        >
+          <X size={11} /> Clear
+        </button>
+      {/if}
+    </div>
+  {/if}
+
   {#if error}
     <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
   {/if}
@@ -237,8 +321,22 @@
       <p class="text-xs text-muted">No accounts have been created yet.</p>
     </div>
   {:else if filteredAccounts.length === 0}
-    <div class="rounded-xl border border-dashed p-8 text-center text-xs text-dimmed">
-      No accounts match your search.
+    <div class="rounded-xl border border-dashed p-8 text-center">
+      <ListFilter size={18} class="mx-auto mb-2 text-dimmed" />
+      <p class="text-xs text-dimmed">
+        {harnessFilterActive
+          ? 'No accounts match the selected harnesses.'
+          : 'No accounts match your search.'}
+      </p>
+      {#if harnessFilterActive}
+        <button
+          type="button"
+          class="mt-2 text-xs font-medium text-primary hover:underline"
+          onclick={clearHarnessFilter}
+        >
+          Show all accounts
+        </button>
+      {/if}
     </div>
   {:else}
     <div class="overflow-x-auto rounded-xl border bg-surface">
