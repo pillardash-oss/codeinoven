@@ -289,12 +289,13 @@ export type BrowserPermissionDecision = 'allow' | 'allow-once' | 'deny' | 'dismi
 
 /**
  * Selectable scopes for clearing an in-app browser session's stored state.
- * - `site-data`: cookies, storage, service workers, IndexedDB and similar
- *   persistent site data.
+ * - `cookies`: HTTP cookies for visited sites.
+ * - `site-data`: persistent site data (storage, service workers, IndexedDB),
+ *   excluding cookies.
  * - `cache`: HTTP disk and memory caches.
  * - `permissions`: remembered permission grants and denials.
  */
-export type BrowserSiteDataScope = 'site-data' | 'cache' | 'permissions'
+export type BrowserSiteDataScope = 'cookies' | 'site-data' | 'cache' | 'permissions'
 
 export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
 

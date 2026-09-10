@@ -98,7 +98,22 @@ function validateDownloadId(value: unknown): string {
   return value
 }
 
-const SITE_DATA_SCOPES: readonly BrowserSiteDataScope[] = ['site-data', 'cache', 'permissions']
+const SITE_DATA_SCOPES: readonly BrowserSiteDataScope[] = [
+  'cookies',
+  'site-data',
+  'cache',
+  'permissions'
+]
+
+/** Storage buckets cleared by `session.clearStorageData()` for each scope.
+ *  Cookies get their own scope so "cookies" and "site data" stay separable. */
+const SCOPE_STORAGE_TYPES: Record<
+  'cookies' | 'site-data',
+  Array<'cookies' | 'filesystem' | 'indexdb' | 'localstorage' | 'shadercache' | 'serviceworkers' | 'cachestorage'>
+> = {
+  cookies: ['cookies'],
+  'site-data': ['cachestorage', 'filesystem', 'indexdb', 'localstorage', 'serviceworkers']
+}
 
 function validateSiteDataScopes(value: unknown): BrowserSiteDataScope[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > SITE_DATA_SCOPES.length) {
@@ -805,11 +820,12 @@ export class BrowserService {
     }
     const browserSession = this.sessionForProject(projectId)
     const work: Promise<unknown>[] = []
-    if (scopes.includes('site-data')) {
-      work.push(browserSession.clearStorageData())
-    }
-    if (scopes.includes('cache')) {
-      work.push(browserSession.clearCache())
+    for (const scope of scopes) {
+      if (scope === 'cache') {
+        work.push(browserSession.clearCache())
+      } else if (scope === 'cookies' || scope === 'site-data') {
+        work.push(browserSession.clearStorageData({ storages: SCOPE_STORAGE_TYPES[scope] }))
+      }
     }
     if (work.length > 0) {
       await Promise.all(work)

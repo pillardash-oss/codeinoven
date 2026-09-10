@@ -5,6 +5,7 @@
     ArrowLeft,
     ArrowRight,
     Cookie,
+    Database,
     Eraser,
     Lock,
     LockOpen,
@@ -110,10 +111,17 @@
 
   const clearActions: readonly ClearAction[] = [
     {
-      scope: 'site-data',
-      label: 'Clear cookies and site data',
+      scope: 'cookies',
+      label: 'Clear cookies',
       icon: Cookie,
-      detail: 'Cookies, storage and sessions for sites visited in this browser will be deleted.'
+      detail: 'Cookies for sites visited in this browser will be deleted. You may be signed out.'
+    },
+    {
+      scope: 'site-data',
+      label: 'Clear site data',
+      icon: Database,
+      detail:
+        'Storage, service workers and sessions for sites visited in this browser will be deleted.'
     },
     {
       scope: 'cache',
