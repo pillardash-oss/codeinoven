@@ -634,6 +634,8 @@ export class ThreadRepo {
     const quotas = await this.projectQuotasViaWorker()
     // Per-project quotas default to the callback value; the inbox project
     // overrides it with its configured thread_limit (the Chats bucket size).
+    // Unread threads bypass the quota entirely: a stale-but-unread row must
+    // never be hidden from the first-paint slice, whatever its age.
     const cases = [...quotas.entries()]
       .filter(([id]) => quotaByProject(id) === Number.MAX_SAFE_INTEGER)
       .map(([id, quota]) => `WHEN project_id = '${id.replace(/'/g, "''")}' THEN ${quota}`)
@@ -653,7 +655,7 @@ export class ThreadRepo {
            AND achievement_role IS NOT 'auditor'
            AND coordinator_thread_id IS NULL
            AND assignment_id IS NULL
-       ) WHERE rn <= ${quotaExpr}
+       ) WHERE rn <= ${quotaExpr} OR read = 0
        ORDER BY pinned DESC, pinned_at DESC, last_activity DESC, id ASC`,
       [],
       0

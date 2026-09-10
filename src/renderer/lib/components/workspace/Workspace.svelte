@@ -2017,6 +2017,18 @@
   })
 
   /** New thread inside the board's active scope bucket. */
+  /** Composer scope shoe: on an existing thread, clicking the scope toggles the
+   *  projects view with the scope sidebar focused on this thread. Mirrors what
+   *  the former header scope badge did. */
+  async function openThreadScopeView(thread: Thread): Promise<void> {
+    navigate('projects')
+    const allThreads: Thread[] = await invoke('thread:listAll')
+    scopeState.setThreads(allThreads)
+    await scopeState.activateProject(thread.projectId)
+    scopeState.showSidebarForThread(thread)
+    void scopeState.ensureBoardLoaded(thread.projectId)
+  }
+
   function newThreadInScopeContext(): void {
     const context = scopeState.sidebarContext
     const project = projects.find((candidate) => candidate.id === context?.projectId)
@@ -3403,6 +3415,19 @@
                       No threads in this slice
                     </p>
                   {/each}
+                  {#if scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length > 0 && projectHasMoreInDb(scopeContext.projectId)}
+                    <div class="flex justify-center border-t py-1.5">
+                      <button
+                        class="flex items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+                        disabled={projectPageLoading === scopeContext.projectId}
+                        onclick={() => void loadProjectThreadsPage(scopeContext.projectId)}
+                      >
+                        {projectPageLoading === scopeContext.projectId
+                          ? 'Loading…'
+                          : 'Load older threads'}
+                      </button>
+                    </div>
+                  {/if}
                 </div>
               </div>
             </div>
@@ -4016,6 +4041,7 @@
                   {projectIcons}
                   onContinueInProject={handleContinuedInProject}
                   onProjectCreated={handleChatProjectCreated}
+                  onOpenScopeView={(thread) => void openThreadScopeView(thread)}
                 />
                 {#snippet failed(_error: unknown, reset: () => void)}
                   <div class="flex h-full min-h-0 items-center justify-center px-6">

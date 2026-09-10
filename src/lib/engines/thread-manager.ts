@@ -1423,7 +1423,8 @@ export class ThreadManager {
    * Bounded per-project recent-thread list for sidebar hydration. The inbox
    * (Chats) project gets its configured `thread_limit` quota; every other
    * project gets `RECENT_THREADS_PER_PROJECT`. Older rows stay reachable via
-   * `listProjectThreads` paging.
+   * `listProjectThreads` paging. Unread threads bypass every quota so they
+   * always surface in the first-paint slice regardless of age.
    */
   async listRecentPerProject(): Promise<Thread[]> {
     return this.threadRepo.listRecentPerProjectViaWorker((projectId) =>
