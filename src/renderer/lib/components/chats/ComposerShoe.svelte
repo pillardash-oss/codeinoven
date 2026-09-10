@@ -12,8 +12,7 @@
 </script>
 
 <script lang="ts">
-  import { ChevronDown, Globe, Monitor, Search, X } from '@lucide/svelte'
-  import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
+  import { ChevronDown, FolderTree, Globe, Monitor, Search, X } from '@lucide/svelte'
   import { pickColorForSeed } from '$lib/project-colors'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -62,13 +61,6 @@
 
   function bucketColor(candidate: ScopeBucket): string {
     return candidate.color ?? pickColorForSeed(candidate.id)
-  }
-
-  function iconSourceFor(candidate: ScopeBucket): string | null {
-    const color = bucketColor(candidate)
-    if (candidate.iconType) return getIconSvgDataUrl(candidate.iconType, color)
-    if (candidate.color) return generateInitialsIconSvg(candidate.name, color)
-    return null
   }
 
   async function assignScope(bucketId: string): Promise<void> {
@@ -144,6 +136,16 @@
         : `Toggle the scoped views for ${bucket.name}`}
       onclick={toggleMenu}
     >
+      {#if bucket.root.kind === 'worktree'}
+        <span
+          class="flex shrink-0 items-center"
+          role="img"
+          aria-label="Managed Git worktree scope on {bucket.root.branch}"
+          title="Managed Git worktree scope on {bucket.root.branch}"
+        >
+          <FolderTree size={12} class="text-warning" />
+        </span>
+      {/if}
       <ScopeBadge {bucket} size="sm" />
       {#if isNewThread}
         <span class="shrink-0 text-dimmed">
@@ -201,9 +203,6 @@
             aria-checked="true"
             onclick={closeMenu}
           >
-            {#if iconSourceFor(bucket)}
-              <img src={iconSourceFor(bucket)} alt="" class="h-4 w-4 shrink-0 object-contain" draggable="false" />
-            {/if}
             <span class="min-w-0 flex-1 truncate">{bucket.name}</span>
             <span class="shrink-0 text-[0.625rem] text-dimmed">Inherited</span>
           </button>
@@ -249,9 +248,6 @@
               title={candidate.name}
               onclick={() => void assignScope(candidate.id)}
             >
-              {#if iconSourceFor(candidate)}
-                <img src={iconSourceFor(candidate)} alt="" class="h-4 w-4 shrink-0 object-contain" draggable="false" />
-              {/if}
               <span class="min-w-0 flex-1 truncate">{candidate.name}</span>
             </button>
           {:else}

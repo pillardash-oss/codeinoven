@@ -2734,11 +2734,15 @@
       </button>
     {/if}
   </div>
+</div>
 
-  <!-- Scope shoe — project scope + project type, only in project mode -->
-  {#if scopeShoe}
-    <div class="composer-shoe flex min-w-0 border-t px-3 pb-2 pt-1.5">
-      <div class="mx-auto flex w-[80%] min-w-0 items-center">
+<!-- Scope shoe — floats underneath the composer as its own inset bar,
+     centered at 80% of the composer width; project mode only -->
+{#if scopeShoe}
+  <div class="composer-shoe relative z-10 -mt-2 flex w-full justify-center px-6 pb-2">
+    <div
+      class="flex w-[80%] min-w-0 items-center justify-center rounded-xl border bg-surface px-2 py-1 shadow-md"
+    >
         <ComposerShoe
           projectId={scopeShoe.projectId}
           threadId={scopeShoe.threadId}
@@ -2748,10 +2752,9 @@
           isNewThread={scopeShoe.isNewThread}
           onOpenScopeView={scopeShoe.onOpenScopeView}
         />
-      </div>
     </div>
-  {/if}
-</div>
+  </div>
+{/if}
 
 <StartAfterThreadPicker
   open={startAfterPickerOpen}

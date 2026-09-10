@@ -1,6 +1,5 @@
 <script lang="ts">
   import { Pin } from '@lucide/svelte'
-  import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import type { ScopeBucket } from '$shared/types'
 
@@ -11,7 +10,11 @@
 
   let { bucket, size = 'xs' }: Props = $props()
 
+  /** Scopes are identified by colour only — no icons. The deterministic picked
+   *  colour is the fallback when no explicit bucket colour is persisted. */
   let color = $derived(bucket.color ?? pickColorForSeed(bucket.id))
+  /** Washed-out tint of the scope colour. */
+  let wash = $derived(`color-mix(in srgb, ${color} 16%, var(--color-raised))`)
 </script>
 
 <code
@@ -19,25 +22,8 @@
   'xs'
     ? 'px-1.5 py-0.5 text-[0.625rem]'
     : 'px-2.5 py-1 text-xs'}"
-  style:background-color={bucket.color
-    ? `color-mix(in srgb, ${bucket.color} 16%, var(--color-raised))`
-    : undefined}
+  style:background-color={wash}
 >
-  {#if bucket.iconType}
-    <img
-      src={getIconSvgDataUrl(bucket.iconType, color)}
-      alt=""
-      class="shrink-0 object-contain {size === 'xs' ? 'h-3 w-3' : 'h-3.5 w-3.5'}"
-      draggable="false"
-    />
-  {:else if bucket.color}
-    <img
-      src={generateInitialsIconSvg(bucket.name, color)}
-      alt=""
-      class="shrink-0 object-contain {size === 'xs' ? 'h-3 w-3' : 'h-3.5 w-3.5'}"
-      draggable="false"
-    />
-  {/if}
   {#if bucket.pinned}
     <span
       class="shrink-0 text-accent"
