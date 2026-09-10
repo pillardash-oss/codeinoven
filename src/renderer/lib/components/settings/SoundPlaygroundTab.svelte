@@ -611,8 +611,9 @@
       <div>
         <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Read out</h2>
         <p class="mt-1 text-[0.6875rem] text-dimmed">
-          Paste text or import a text or PDF file, then have the local text-to-speech model read it
-          aloud. Nothing is saved — blocks and playback state are cleared when you leave the page.
+          Paste text or import a text, PDF, or Office document, then have the local text-to-speech
+          model read it aloud. Nothing is saved — blocks and playback state are cleared when you
+          leave the page.
         </p>
       </div>
       {#if readingBlocks.length > 0}
@@ -656,8 +657,8 @@
       <button
         type="button"
         class="inline-flex items-center gap-2 rounded-lg border bg-elevated px-3 py-2 text-sm font-medium text-foreground hover:bg-overlay disabled:opacity-50"
-        title="Import a text or PDF file"
-        aria-label="Import a text or PDF file"
+        title="Import a text, PDF, or document file"
+        aria-label="Import a text, PDF, or document file"
         disabled={readingImporting}
         onclick={() => void importReadingFile()}
       >

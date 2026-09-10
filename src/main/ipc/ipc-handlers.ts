@@ -4530,9 +4530,10 @@ export function registerIpcHandlers(
   // no longer reads files directly; it delegates here so the path can be
   // constrained to registered project, config-root, or user-selected scopes.
   // Read a pasted-file source for the Sound Playground's read-aloud section:
-  // plain text files directly, the `@firecrawl/pdf-inspector` Rust library (fully local, no network, OCR
-  // never invoked — text-based PDFs only). Only scoped
-  // paths (e.g. a file the user just picked from the system dialog) are read.
+  // plain text files directly, and rich documents (PDF, Word, PowerPoint, Excel,
+  // OpenDocument, RTF, EPUB) through the `@firecrawl/anydoc` Rust library —
+  // fully local, no network, OCR never invoked. Only scoped paths (e.g. a file
+  // the user just picked from the system dialog) are read.
   // Text is capped below the prepared-playback text limit.
   const PLAYGROUND_TEXT_EXTENSIONS = new Set([
     'txt',
@@ -4562,6 +4563,18 @@ export function registerIpcHandlers(
     'srt',
     'vtt'
   ])
+  const PLAYGROUND_DOCUMENT_EXTENSIONS = new Set([
+    'pdf',
+    'docx',
+    'doc',
+    'odt',
+    'rtf',
+    'epub',
+    'pptx',
+    'xlsx',
+    'xls',
+    'ods'
+  ])
   const MAX_PLAYGROUND_TEXT_CHARS = 900_000
   privileged('speech:playgroundReadText', async (_event, rawPath: unknown) => {
     try {
@@ -4572,16 +4585,32 @@ export function registerIpcHandlers(
       const extension = extname(safePath).toLowerCase().replace(/^\./u, '')
       const fileName = basename(safePath)
       let text: string
-      if (extension === 'pdf') {
-        const buffer = await readFile(safePath)
-        const { classifyPdfAsync, extractText } = await import('@firecrawl/pdf-inspector')
-        const parsed = await classifyPdfAsync(buffer)
-        if (parsed.pdfType === 'Scanned' || parsed.pdfType === 'ImageBased') {
-          throw new RangeError(
-            'This PDF appears to be scanned — no local OCR is performed in the playground.'
-          )
+      if (PLAYGROUND_DOCUMENT_EXTENSIONS.has(extension)) {
+        const bytes = await readFile(safePath)
+        const { toMarkdownBytes, formatFromExtension } = await import('@firecrawl/anydoc')
+        const format = formatFromExtension(extension)
+        try {
+          text = await toMarkdownBytes(bytes, format)
+        } catch (parseError) {
+          if (
+            extension === 'pdf' &&
+            parseError instanceof Error &&
+            parseError.message.includes('NeedsOcr')
+          ) {
+            throw new RangeError(
+              'This PDF appears to be scanned — no local OCR is performed in the playground.',
+              { cause: parseError }
+            )
+          }
+          throw parseError
         }
-        text = extractText(buffer)
+        // Strip Markdown emphasis/heading markup so the TTS voice does not
+        // read out syntax characters from the converted document.
+        text = text
+          .replace(/^#{1,6}\s+/gmu, '')
+          .replace(/[*_~`]+/gu, '')
+          .replace(/\[([^\]]*)\]\([^)]*\)/gu, '$1')
+          .replace(/<[^>]+>/gu, '')
       } else {
         if (!PLAYGROUND_TEXT_EXTENSIONS.has(extension)) {
           throw new RangeError(`Unsupported file type ".${extension}".`)
