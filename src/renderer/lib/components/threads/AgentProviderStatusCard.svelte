@@ -202,7 +202,12 @@
   /** Commit a new thread model from the shared picker, mirroring the pattern used
    *  by the Audit/Spec/Assignment cards. Fast inference only survives the switch
    *  when the newly selected model actually exposes a fast tier. */
-  function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
+  function chooseModel(
+    providerId: string,
+    modelId: string,
+    nextHarnessId?: string,
+    accountId?: string
+  ): void {
     if (!settings || !onModelChange) return
     const harnessId = nextHarnessId ?? settings.harnessId
     const provider = providers.find(
@@ -210,7 +215,7 @@
     )
     const model = provider?.models.find((candidate) => candidate.id === modelId)
     const updated = normalizeFastInference(
-      { ...settings, harnessId, providerId, modelId },
+      { ...settings, harnessId, accountId, providerId, modelId },
       harnessId,
       providerId,
       modelId,
@@ -258,7 +263,9 @@
           {providerName}
         </span>
         {#if sourceLabel}
-          <span class="rounded-full bg-danger/10 px-2 py-0.5 text-[0.625rem] font-semibold text-danger">
+          <span
+            class="rounded-full bg-danger/10 px-2 py-0.5 text-[0.625rem] font-semibold text-danger"
+          >
             Worker · {sourceLabel}
           </span>
         {/if}
@@ -372,6 +379,7 @@
             harnessId={settings.harnessId}
             providerId={settings.providerId}
             modelId={settings.modelId}
+            accountId={settings.accountId}
             {favoriteModels}
             {recentModels}
             {onRemoveRecent}

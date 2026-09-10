@@ -794,7 +794,8 @@ export interface HarnessAccount {
 export interface HarnessAccountCreateInput {
   harnessId: string
   providerId: string
-  label: string
+  /** Optional display label. Blank labels are generated as `<provider>-N`. */
+  label?: string
 }
 
 export interface HarnessAccountRenameInput {
@@ -1167,6 +1168,8 @@ export interface AgentModelSelection {
   harnessId: string
   providerId: string
   modelId: string
+  /** Credential container used for this role. Missing means the harness Default account. */
+  accountId?: string
   /** Reasoning effort for the role. When absent, the thread's own level is used. */
   thinkingLevel?: ThinkingLevel
 }

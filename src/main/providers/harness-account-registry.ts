@@ -41,6 +41,7 @@ export class HarnessAccountRegistry {
 
   async resolve(harnessId: string, accountId?: string): Promise<HarnessAccount> {
     const accounts = await this.list(harnessId)
+    if (accounts.length === 1) return accounts[0]
     const resolvedId = accountId || legacyHarnessAccountId(harnessId)
     const account = accounts.find((candidate) => candidate.id === resolvedId)
     if (!account) throw new Error('The selected account no longer exists.')
@@ -50,13 +51,14 @@ export class HarnessAccountRegistry {
   async create(input: HarnessAccountCreateInput): Promise<HarnessAccount> {
     return this.mutate(async (registry) => {
       const accounts = await this.ensureDefault(registry.accounts, input.harnessId, false)
-      this.assertUniqueLabel(accounts, input.harnessId, input.label)
+      const label = input.label?.trim() || this.nextGeneratedLabel(accounts, input)
+      this.assertUniqueLabel(accounts, input.harnessId, label)
       const now = Date.now()
       const account: HarnessAccount = {
         id: crypto.randomUUID(),
         harnessId: input.harnessId,
         providerId: input.providerId,
-        label: input.label,
+        label,
         containerKind: 'managed',
         createdAt: now,
         updatedAt: now
@@ -157,6 +159,26 @@ export class HarnessAccountRegistry {
     ) {
       throw new Error(`An account named "${label}" already exists for this harness.`)
     }
+  }
+
+  private nextGeneratedLabel(
+    accounts: HarnessAccount[],
+    input: Pick<HarnessAccountCreateInput, 'harnessId' | 'providerId'>
+  ): string {
+    const base =
+      (input.providerId.trim() || input.harnessId.trim() || 'account')
+        .replaceAll(/[^a-zA-Z0-9._-]+/gu, '-')
+        .replaceAll(/^-+|-+$/gu, '')
+        .toLocaleLowerCase('en-US')
+        .slice(0, 64) || 'account'
+    const used = new Set(
+      accounts
+        .filter((account) => account.harnessId === input.harnessId)
+        .map((account) => account.label.toLocaleLowerCase('en-US'))
+    )
+    let sequence = 1
+    while (used.has(`${base}-${sequence}`)) sequence += 1
+    return `${base}-${sequence}`
   }
 
   private async read(): Promise<AccountRegistryFile> {

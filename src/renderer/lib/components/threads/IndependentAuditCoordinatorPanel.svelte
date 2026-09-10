@@ -82,8 +82,13 @@
     }
   })
 
-  function chooseModel(providerId: string, modelId: string, harnessId: string): void {
-    onModelChange({ ...auditorSettings, harnessId, providerId, modelId })
+  function chooseModel(
+    providerId: string,
+    modelId: string,
+    harnessId: string,
+    accountId?: string
+  ): void {
+    onModelChange({ ...auditorSettings, harnessId, accountId, providerId, modelId })
   }
 
   function chooseThinking(level: ThinkingLevel): void {
@@ -105,8 +110,8 @@
     <p class="mt-3 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Scope</p>
     <h3 class="mt-1 text-sm font-semibold text-foreground">Independent audit</h3>
     <p class="mt-1 text-xs leading-relaxed text-muted">
-      The auditor judges the work from this thread's requests and outputs, then verifies it
-      against the repository with read-only checks.
+      The auditor judges the work from this thread's requests and outputs, then verifies it against
+      the repository with read-only checks.
     </p>
     <div class="mt-3 flex gap-2">
       {#if !running && onOpenAudit}
@@ -171,6 +176,7 @@
           harnessId={auditorSettings.harnessId}
           providerId={auditorSettings.providerId}
           modelId={auditorSettings.modelId}
+          accountId={auditorSettings.accountId}
           {favoriteModels}
           {recentModels}
           {onRemoveRecent}

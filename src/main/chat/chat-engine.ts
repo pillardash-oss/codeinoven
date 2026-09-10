@@ -343,7 +343,8 @@ function isSameImageDescriptorModel(
     a !== undefined &&
     a.harnessId === b.harnessId &&
     a.providerId === b.providerId &&
-    a.modelId === b.modelId
+    a.modelId === b.modelId &&
+    a.accountId === b.accountId
   )
 }
 
@@ -9087,7 +9088,12 @@ export class ChatEngine {
     request: ImageDescriptorExecutorRequest,
     selection: AgentModelSelection
   ): Promise<ImageDescriptorBatchCapability> {
-    const { driver } = await this.resolve(request.projectId, selection.harnessId, request.threadId)
+    const { driver } = await this.resolve(
+      request.projectId,
+      selection.harnessId,
+      request.threadId,
+      selection.accountId
+    )
     if (!driver.capabilities) {
       return { supportsBatch: false, maxImages: IMAGE_DESCRIPTOR_BATCH_MAX_IMAGES }
     }
@@ -9109,9 +9115,15 @@ export class ChatEngine {
     parentTurnId: string | undefined,
     featureCallId: string
   ): Promise<unknown> {
-    const { driver } = await this.resolve(request.projectId, selection.harnessId, request.threadId)
+    const { driver } = await this.resolve(
+      request.projectId,
+      selection.harnessId,
+      request.threadId,
+      selection.accountId
+    )
     const settings: ThreadSettings = {
       harnessId: selection.harnessId,
+      accountId: selection.accountId ?? legacyHarnessAccountId(selection.harnessId),
       providerId: selection.providerId,
       modelId: selection.modelId,
       thinkingLevel: 'low',
@@ -9135,6 +9147,8 @@ export class ChatEngine {
       undefined,
       true
     )
+    const registeredBatchSession = this.sessionRegistry.get(sessionId)
+    if (registeredBatchSession) registeredBatchSession.accountId = settings.accountId
     let response: AgentMessage | undefined
     let failure: string | null = null
     try {
@@ -9462,9 +9476,15 @@ export class ChatEngine {
     attempt: number,
     parentTurnId?: string
   ): Promise<string> {
-    const { driver } = await this.resolve(projectId, selection.harnessId, threadId)
+    const { driver } = await this.resolve(
+      projectId,
+      selection.harnessId,
+      threadId,
+      selection.accountId
+    )
     const settings: ThreadSettings = {
       harnessId: selection.harnessId,
+      accountId: selection.accountId ?? legacyHarnessAccountId(selection.harnessId),
       providerId: selection.providerId,
       modelId: selection.modelId,
       thinkingLevel: 'low',
@@ -9488,6 +9508,8 @@ export class ChatEngine {
       undefined,
       true
     )
+    const registeredImageSession = this.sessionRegistry.get(sessionId)
+    if (registeredImageSession) registeredImageSession.accountId = settings.accountId
     let response: AgentMessage | undefined
     let failure: string | null = null
     try {
@@ -10578,7 +10600,12 @@ export class ChatEngine {
           1,
           256
         ),
-        modelId: validateBoundedString(selection.modelId, 'Image descriptor model ID', 1, 256)
+        modelId: validateBoundedString(selection.modelId, 'Image descriptor model ID', 1, 256),
+        ...(selection.accountId === undefined
+          ? {}
+          : {
+              accountId: validateEntityId(selection.accountId, 'Image descriptor account ID', 256)
+            })
       }
     }
     if (
@@ -12112,6 +12139,9 @@ export class ChatEngine {
         harnessId: this.apiString(value.model.harnessId, 'task.model.harnessId'),
         providerId: this.apiString(value.model.providerId, 'task.model.providerId'),
         modelId: this.apiString(value.model.modelId, 'task.model.modelId'),
+        ...(value.model.accountId === undefined
+          ? {}
+          : { accountId: this.apiString(value.model.accountId, 'task.model.accountId') }),
         thinkingLevel: thinkingLevel as NonNullable<
           AssignmentFollowUpTaskInput['model']
         >['thinkingLevel']
@@ -19658,15 +19688,13 @@ export class ChatEngine {
    * substitution. Runs in the same inbox scratch directory as standalone chats.
    */
   private async sendHeartbeatPing(config: HeartbeatConfig): Promise<boolean> {
-    const driver = this.drivers.get(config.harnessId)
-    if (!driver) {
-      throw new Error(`Harness driver "${config.harnessId}" is not available`)
-    }
+    const driver = await this.driverForAccount(config.harnessId, config.accountId)
     const projectPath = await this.resolveProjectPath(INBOX_PROJECT_ID)
     await driver.ensureReady(projectPath)
     return driver.sendHeartbeatPing(projectPath, {
       settings: {
         harnessId: config.harnessId,
+        accountId: config.accountId ?? legacyHarnessAccountId(config.harnessId),
         providerId: config.providerId,
         modelId: config.modelId,
         thinkingLevel: config.thinkingLevel ?? 'minimal',

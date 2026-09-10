@@ -58,13 +58,21 @@
     achievement: 'Achievement'
   }
 
-  const stageLabel = $derived(stage === undefined ? 'Engineering' : (STAGE_LABELS[stage] ?? 'Engineering'))
+  const stageLabel = $derived(
+    stage === undefined ? 'Engineering' : (STAGE_LABELS[stage] ?? 'Engineering')
+  )
 
-  function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
+  function chooseModel(
+    providerId: string,
+    modelId: string,
+    nextHarnessId?: string,
+    accountId?: string
+  ): void {
     if (!settings) return
     onModelChange?.({
       ...settings,
       harnessId: nextHarnessId ?? settings.harnessId,
+      accountId,
       providerId,
       modelId
     })
@@ -90,7 +98,8 @@
   <div class="space-y-1.5 p-4">
     <p class="text-sm font-semibold text-foreground">The {stageLabel} stage could not complete</p>
     <p class="text-xs leading-relaxed text-muted">
-      {failure?.trim() || 'The stage stopped with an error. Retry it from where it stopped — completed progress and context are preserved.'}
+      {failure?.trim() ||
+        'The stage stopped with an error. Retry it from where it stopped — completed progress and context are preserved.'}
     </p>
   </div>
 
@@ -113,6 +122,7 @@
           harnessId={settings.harnessId}
           providerId={settings.providerId}
           modelId={settings.modelId}
+          accountId={settings.accountId}
           {favoriteModels}
           {recentModels}
           {onRemoveRecent}

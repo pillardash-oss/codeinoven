@@ -849,9 +849,14 @@ ${instructions}`
     }
   }
 
-  function selectAgentModel(providerId: string, modelId: string, harnessId: string): void {
+  function selectAgentModel(
+    providerId: string,
+    modelId: string,
+    harnessId: string,
+    accountId?: string
+  ): void {
     if (!agentSettings) return
-    agentSettings = { ...agentSettings, harnessId, providerId, modelId }
+    agentSettings = { ...agentSettings, harnessId, accountId, providerId, modelId }
   }
 
   function selectAgentThinking(thinkingLevel: ThreadSettings['thinkingLevel']): void {
@@ -1430,6 +1435,7 @@ ${instructions}`
                   harnessId={agentSettings.harnessId}
                   providerId={agentSettings.providerId}
                   modelId={agentSettings.modelId}
+                  accountId={agentSettings.accountId}
                   thinkingLevel={agentSettings.thinkingLevel}
                   variant="action"
                   side="top"

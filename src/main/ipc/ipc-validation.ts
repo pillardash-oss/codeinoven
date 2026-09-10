@@ -139,6 +139,7 @@ const AGENT_MODEL_SELECTION_FIELDS = new Set([
   'harnessId',
   'providerId',
   'modelId',
+  'accountId',
   'thinkingLevel'
 ])
 const CREATE_PROJECT_FIELDS = new Set([
@@ -1066,6 +1067,11 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
         128
       ),
       modelId: validateBoundedString(auditor.modelId, 'Achievement auditor model ID', 1, 256),
+      ...(auditor.accountId === undefined
+        ? {}
+        : {
+            accountId: validateEntityId(auditor.accountId, 'Achievement auditor account ID', 256)
+          }),
       ...(auditor.thinkingLevel === undefined
         ? {}
         : {
@@ -1089,6 +1095,11 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
         128
       ),
       modelId: validateBoundedString(descriptor.modelId, 'Image descriptor model ID', 1, 256),
+      ...(descriptor.accountId === undefined
+        ? {}
+        : {
+            accountId: validateEntityId(descriptor.accountId, 'Image descriptor account ID', 256)
+          }),
       ...(descriptor.thinkingLevel === undefined
         ? {}
         : {
@@ -1117,6 +1128,15 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
         1,
         256
       ),
+      ...(descriptor.accountId === undefined
+        ? {}
+        : {
+            accountId: validateEntityId(
+              descriptor.accountId,
+              'Image descriptor fallback account ID',
+              256
+            )
+          }),
       ...(descriptor.thinkingLevel === undefined
         ? {}
         : {

@@ -239,6 +239,7 @@
     providerId: string,
     modelId: string,
     nextHarnessId?: string,
+    accountId?: string,
     thinkingLevel?: ThinkingLevel
   ): void {
     const phaseIndex = content.phases.findIndex((phase) => phase.id === phaseId)
@@ -248,6 +249,7 @@
     const selection: AssignmentModelSelection = {
       ...current,
       harnessId: selectedHarnessId,
+      accountId,
       providerId,
       modelId,
       thinkingLevel: thinkingLevel ?? current.thinkingLevel
@@ -260,6 +262,7 @@
     providerId: string,
     modelId: string,
     nextHarnessId?: string,
+    accountId?: string,
     thinkingLevel?: ThinkingLevel
   ): void {
     const current = content.tasks.find((task) => task.id === taskId)
@@ -269,6 +272,7 @@
     const selection: AssignmentModelSelection = {
       ...resolved,
       harnessId: selectedHarnessId,
+      accountId,
       providerId,
       modelId,
       thinkingLevel: thinkingLevel ?? resolved.thinkingLevel
@@ -449,14 +453,15 @@
               harnessId={selectedPhaseModel.harnessId}
               providerId={selectedPhaseModel.providerId}
               modelId={selectedPhaseModel.modelId}
+              accountId={selectedPhaseModel.accountId}
               {favoriteModels}
               {recentModels}
               {onRemoveRecent}
               side="bottom"
               variant="action"
               label="Phase model"
-              onSelect={(providerId, modelId, harnessId) =>
-                updatePhaseModel(phase.id, providerId, modelId, harnessId)}
+              onSelect={(providerId, modelId, harnessId, accountId) =>
+                updatePhaseModel(phase.id, providerId, modelId, harnessId, accountId)}
               {onToggleFavorite}
               {onReorderFavorite}
               thinkingLevel={selectedPhaseModel.thinkingLevel}
@@ -466,6 +471,7 @@
                   selectedPhaseModel.providerId,
                   selectedPhaseModel.modelId,
                   selectedPhaseModel.harnessId,
+                  selectedPhaseModel.accountId,
                   level
                 )}
             />
@@ -558,14 +564,15 @@
                     harnessId={selectedTaskModel.harnessId}
                     providerId={selectedTaskModel.providerId}
                     modelId={selectedTaskModel.modelId}
+                    accountId={selectedTaskModel.accountId}
                     {favoriteModels}
                     {recentModels}
                     {onRemoveRecent}
                     side="top"
                     variant="action"
                     label={task.model ? 'Task model' : 'Use phase model'}
-                    onSelect={(providerId, modelId, harnessId) =>
-                      updateTaskModel(task.id, providerId, modelId, harnessId)}
+                    onSelect={(providerId, modelId, harnessId, accountId) =>
+                      updateTaskModel(task.id, providerId, modelId, harnessId, accountId)}
                     {onToggleFavorite}
                     {onReorderFavorite}
                     thinkingLevel={selectedTaskModel.thinkingLevel}
@@ -575,6 +582,7 @@
                         selectedTaskModel.providerId,
                         selectedTaskModel.modelId,
                         selectedTaskModel.harnessId,
+                        selectedTaskModel.accountId,
                         level
                       )}
                   />

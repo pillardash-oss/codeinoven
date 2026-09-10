@@ -675,6 +675,7 @@
       harnessId: selection.harnessId,
       providerId: selection.providerId,
       modelId: selection.modelId,
+      accountId: selection.accountId,
       thinkingLevel: selection.thinkingLevel,
       inferenceMode: 'normal',
       permissionLevel: 'auto_review',
@@ -712,7 +713,12 @@
     }
   }
 
-  function chooseComposeModel(providerId: string, modelId: string, harnessId: string): void {
+  function chooseComposeModel(
+    providerId: string,
+    modelId: string,
+    harnessId: string,
+    accountId?: string
+  ): void {
     const provider = composeProviders.find(
       (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
     )
@@ -729,6 +735,7 @@
       harnessId,
       providerId,
       modelId,
+      accountId,
       thinkingLevel
     })
     composeError = ''
@@ -791,7 +798,8 @@
         {:else}
           <GitPullRequest size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
         {/if}
-        <span class="truncate text-[0.625rem] font-semibold text-foreground">{dockProjectName}</span>
+        <span class="truncate text-[0.625rem] font-semibold text-foreground">{dockProjectName}</span
+        >
       </button>
     {/if}
   {/snippet}
@@ -921,6 +929,7 @@
                         harnessId={prComposeAgentSettings.selection?.harnessId ?? ''}
                         providerId={prComposeAgentSettings.selection?.providerId ?? ''}
                         modelId={prComposeAgentSettings.selection?.modelId ?? ''}
+                        accountId={prComposeAgentSettings.selection?.accountId}
                         label={prComposeAgentSettings.selection ? undefined : 'Choose a model'}
                         favoriteModels={rendererRecovery.favoriteModels}
                         recentModels={rendererRecovery.recentModels}
@@ -1188,8 +1197,8 @@
               <p class="text-[0.625rem] font-semibold text-foreground">Nothing to merge</p>
               <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-dimmed">
                 <span class="font-medium text-foreground">{head}</span> is already up to date with
-                <span class="font-medium text-foreground">{base}</span> — there are no commits left
-                to open a pull request for. It was likely merged elsewhere while this panel was open.
+                <span class="font-medium text-foreground">{base}</span> — there are no commits left to
+                open a pull request for. It was likely merged elsewhere while this panel was open.
               </p>
             </div>
           </div>

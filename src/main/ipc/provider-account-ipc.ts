@@ -27,7 +27,9 @@ export function registerProviderAccountIpc(
     return accounts.create({
       harnessId: validateEntityId(input['harnessId'], 'Harness ID', 256),
       providerId: text(input['providerId'], 'Provider ID', 256, false, true),
-      label: text(input['label'], 'Account label', 80)
+      ...(input['label'] === undefined
+        ? {}
+        : { label: text(input['label'], 'Account label', 80, false, true) })
     })
   })
   ipcMain.handle('providerAccounts:rename', (_, rawAccountId: unknown, rawLabel: unknown) =>

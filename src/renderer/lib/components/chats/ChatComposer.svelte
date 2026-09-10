@@ -66,7 +66,6 @@
   import EngineeringToolbox from './EngineeringToolbox.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
-  import AccountPicker from '../shared/AccountPicker.svelte'
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
@@ -1268,7 +1267,12 @@
     else threadSettingsStore.commit(updated)
   }
 
-  function selectModel(providerId: string, modelId: string, nextHarnessId?: string): void {
+  function selectModel(
+    providerId: string,
+    modelId: string,
+    nextHarnessId?: string,
+    accountId?: string
+  ): void {
     modelMenuOpen = false
     const nextHarness = nextHarnessId ?? resolved.harnessId
     onModelUsed?.(modelKey(nextHarness, providerId, modelId))
@@ -1292,30 +1296,16 @@
       harnessId: nextHarnessId ?? resolved.harnessId,
       providerId,
       modelId,
-      ...(nextHarness !== resolved.harnessId ? { accountId: `${nextHarness}.default` } : {}),
+      accountId:
+        accountId ??
+        (nextHarness !== resolved.harnessId
+          ? `${nextHarness}.default`
+          : (resolved.accountId ?? `${nextHarness}.default`)),
       ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(fastSupported ? {} : { inferenceMode: 'normal' })
     }
     if (onSettingsChange) onSettingsChange(updated)
     else threadSettingsStore.commit(updated)
-  }
-
-  function selectAccount(account: HarnessAccount): void {
-    const provider = account.providerId
-      ? resolvedProviders.find(
-          (candidate) =>
-            candidate.harnessId === account.harnessId && candidate.id === account.providerId
-        )
-      : undefined
-    const model = provider?.models[0]
-    const updated: ThreadSettings = {
-      ...resolved,
-      accountId: account.id,
-      ...(provider && model ? { providerId: provider.id, modelId: model.id } : {})
-    }
-    if (onSettingsChange) onSettingsChange(updated)
-    else threadSettingsStore.commit(updated)
-    onAccountSelected?.(account)
   }
 
   function selectThinking(preset: ThinkingPreset): void {
@@ -1963,6 +1953,7 @@
               resolved.harnessId}
             providerId={gateVisionSelection?.providerId ?? ''}
             modelId={gateVisionSelection?.modelId ?? ''}
+            accountId={gateVisionSelection?.accountId}
             {favoriteModels}
             {recentModels}
             {onRemoveRecent}
@@ -1970,8 +1961,8 @@
             side="top"
             variant="field"
             label={gateVisionSelection ? undefined : 'Choose a vision model'}
-            onSelect={(providerId, modelId, harnessId) => {
-              gateVisionSelection = { harnessId, providerId, modelId }
+            onSelect={(providerId, modelId, harnessId, accountId) => {
+              gateVisionSelection = { harnessId, providerId, modelId, accountId }
             }}
             thinkingLevel={gateVisionSelection?.thinkingLevel}
             onSelectThinking={(level) => {
@@ -2577,24 +2568,20 @@
       {harnessId}
       providerId={resolved.providerId}
       modelId={resolved.modelId}
+      accountId={resolved.accountId}
       {favoriteModels}
       {recentModels}
       {onRemoveRecent}
       bind:open={modelMenuOpen}
       bind:thinkingMenuOpen
       onSelect={selectModel}
+      onSelectAccount={onAccountSelected}
       {onToggleFavorite}
       {onReorderFavorite}
       fast={inferenceMode === 'fast'}
       thinkingLevel={resolved.thinkingLevel}
       {thinkingPresets}
       onSelectThinking={(level) => selectThinking({ id: level, label: level })}
-    />
-
-    <AccountPicker
-      harnessId={resolved.harnessId}
-      accountId={resolved.accountId}
-      onSelect={selectAccount}
     />
 
     <!-- Fast inference — native harness tier or catalog-provided fast variant -->

@@ -38,6 +38,7 @@
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
   import AddProviderModal from './AddProviderModal.svelte'
   import BaseUrlProviderEditor from './BaseUrlProviderEditor.svelte'
+  import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import ThreadDropdown from '../shared/ThreadDropdown.svelte'
@@ -86,7 +87,7 @@
   let autoUpdatePrefs = $state.raw<Record<string, boolean>>({})
   let autoUpdateSaving = $state<Record<string, boolean>>({})
   /** Which top-level tab is on screen. */
-  let activeTab = $state<'harnesses' | 'custom'>('harnesses')
+  let activeTab = $state<'harnesses' | 'accounts' | 'custom'>('harnesses')
   /** Per-harness advanced-info disclosure (Settings for ready harnesses, Details for errored ones), collapsed by default. */
   let expandedSettings = $state<Record<string, boolean>>({})
   /** Free-text filter over harness name/command/path. */
@@ -569,6 +570,19 @@
     <button
       type="button"
       class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+      'accounts'
+        ? 'bg-surface text-foreground shadow-sm'
+        : 'text-muted hover:text-foreground'}"
+      role="tab"
+      aria-selected={activeTab === 'accounts'}
+      title="Manage harness accounts"
+      onclick={() => (activeTab = 'accounts')}
+    >
+      Accounts
+    </button>
+    <button
+      type="button"
+      class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
       'custom'
         ? 'bg-surface text-foreground shadow-sm'
         : 'text-muted hover:text-foreground'}"
@@ -777,7 +791,9 @@
                   {provider.detail ?? 'Needs attention'}
                 </p>
               {:else if provider.status === 'available'}
-                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">Providers</p>
+                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+                  Providers
+                </p>
                 <p class="mt-0.5 truncate text-xs text-muted">
                   {totalProviderCount(provider)} provider{totalProviderCount(provider) === 1
                     ? ''
@@ -786,7 +802,9 @@
                   {/if}
                 </p>
               {:else}
-                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">Providers</p>
+                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+                  Providers
+                </p>
                 <p class="mt-0.5 text-xs text-dimmed">—</p>
               {/if}
             </div>
@@ -1017,6 +1035,8 @@
         {lastCheckedLabel}
       </span>
     </div>
+  {:else if activeTab === 'accounts'}
+    <HarnessAccountsPanel providers={providerStore.providers} />
   {:else}
     <BaseUrlProvidersPanel providers={providerStore.providers} />
   {/if}

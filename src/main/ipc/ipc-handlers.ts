@@ -970,7 +970,7 @@ function requireVersion(value: unknown): number {
 
 function validateAgentModelSelection(value: unknown, label: string): AgentModelSelection {
   if (!isRecord(value)) throw new TypeError(`${label} must be an object`)
-  const fields = new Set(['harnessId', 'providerId', 'modelId', 'thinkingLevel'])
+  const fields = new Set(['harnessId', 'providerId', 'modelId', 'accountId', 'thinkingLevel'])
   for (const field of Object.keys(value)) {
     if (!fields.has(field)) throw new TypeError(`Unsupported ${label} field: ${field}`)
   }
@@ -986,6 +986,9 @@ function validateAgentModelSelection(value: unknown, label: string): AgentModelS
     harnessId: requireString(value.harnessId, `${label} harness ID`),
     providerId: requireString(value.providerId, `${label} provider ID`),
     modelId: requireString(value.modelId, `${label} model ID`),
+    ...(value.accountId === undefined
+      ? {}
+      : { accountId: requireString(value.accountId, `${label} account ID`) }),
     ...(thinkingLevel === undefined
       ? {}
       : { thinkingLevel: thinkingLevel as AgentModelSelection['thinkingLevel'] })
@@ -1053,6 +1056,9 @@ function validateAssignmentModel(
     harnessId: requireString(value.harnessId, `${label} harness ID`),
     providerId: requireString(value.providerId, `${label} provider ID`),
     modelId: requireString(value.modelId, `${label} model ID`),
+    ...(value.accountId === undefined
+      ? {}
+      : { accountId: requireString(value.accountId, `${label} account ID`) }),
     thinkingLevel: thinkingLevel as AssignmentModelSelection['thinkingLevel']
   }
 }
@@ -2211,6 +2217,9 @@ function validateHeartbeatCreateInput(value: unknown): Omit<HeartbeatConfig, 'id
     harnessId: validateBoundedString(input.harnessId, 'Heartbeat harness ID', 1, 100),
     providerId: validateBoundedString(input.providerId, 'Heartbeat provider ID', 1, 100),
     modelId: validateBoundedString(input.modelId, 'Heartbeat model ID', 1, 200),
+    ...(input.accountId === undefined
+      ? {}
+      : { accountId: validateEntityId(input.accountId, 'Heartbeat account ID', 256) }),
     thinkingLevel: validateHeartbeatThinkingLevel(input.thinkingLevel),
     times: validateHeartbeatTimes(input.times),
     enabled: typeof input.enabled === 'boolean' ? input.enabled : true
@@ -2231,6 +2240,9 @@ function validateHeartbeatPatchInput(value: unknown): Partial<Omit<HeartbeatConf
   }
   if (input.modelId !== undefined) {
     patch.modelId = validateBoundedString(input.modelId, 'Heartbeat model ID', 1, 200)
+  }
+  if (input.accountId !== undefined) {
+    patch.accountId = validateEntityId(input.accountId, 'Heartbeat account ID', 256)
   }
   if (input.thinkingLevel !== undefined) {
     patch.thinkingLevel = validateHeartbeatThinkingLevel(input.thinkingLevel)

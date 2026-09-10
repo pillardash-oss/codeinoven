@@ -31,6 +31,7 @@
   let draftHarnessId = $state('')
   let draftProviderId = $state('')
   let draftModelId = $state('')
+  let draftAccountId = $state<string | undefined>(undefined)
   let draftThinkingLevel = $state<ThinkingLevel | undefined>(undefined)
   let draftTimes = $state<string[]>([])
   let draftTimeInput = $state('')
@@ -73,6 +74,7 @@
     draftHarnessId = providers[0]?.harnessId ?? ''
     draftProviderId = ''
     draftModelId = ''
+    draftAccountId = undefined
     draftThinkingLevel = undefined
     draftTimes = []
     draftTimeInput = ''
@@ -86,6 +88,7 @@
     draftHarnessId = config.harnessId
     draftProviderId = config.providerId
     draftModelId = config.modelId
+    draftAccountId = config.accountId
     draftThinkingLevel = config.thinkingLevel
     draftTimes = [...config.times]
     draftTimeInput = ''
@@ -130,6 +133,7 @@
           harnessId: draftHarnessId,
           providerId: draftProviderId,
           modelId: draftModelId,
+          accountId: draftAccountId,
           thinkingLevel: draftThinkingLevel,
           times: draftTimes
         })
@@ -139,6 +143,7 @@
           harnessId: draftHarnessId,
           providerId: draftProviderId,
           modelId: draftModelId,
+          accountId: draftAccountId,
           thinkingLevel: draftThinkingLevel,
           times: draftTimes,
           enabled: true
@@ -156,7 +161,8 @@
       await heartbeatStore.remove(deleteTarget.id)
       deleteTarget = null
     } catch (removeError) {
-      draftError = removeError instanceof Error ? removeError.message : 'Failed to delete heartbeat.'
+      draftError =
+        removeError instanceof Error ? removeError.message : 'Failed to delete heartbeat.'
     }
   }
 
@@ -229,7 +235,11 @@
       {#each heartbeatStore.heartbeats as config (config.id)}
         <div class="flex items-start gap-3 border-b px-4 py-3 last:border-b-0">
           <div class="mt-0.5 rounded-lg bg-primary/10 p-1.5 text-primary">
-            <AgentIcon agentId={config.harnessId} label={providerName(config.harnessId)} size={16} />
+            <AgentIcon
+              agentId={config.harnessId}
+              label={providerName(config.harnessId)}
+              size={16}
+            />
           </div>
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
@@ -345,6 +355,7 @@
         harnessId={draftHarnessId || providers[0]?.harnessId || DEFAULT_HARNESS}
         providerId={draftProviderId}
         modelId={draftModelId}
+        accountId={draftAccountId}
         favoriteModels={rendererRecovery.favoriteModels}
         recentModels={rendererRecovery.recentModels}
         onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
@@ -352,10 +363,11 @@
         variant="field"
         label={draftModelId ? undefined : 'Choose model'}
         disabled={providers.length === 0}
-        onSelect={(providerId, modelId, harnessId) => {
+        onSelect={(providerId, modelId, harnessId, accountId) => {
           draftHarnessId = harnessId
           draftProviderId = providerId
           draftModelId = modelId
+          draftAccountId = accountId
           // Not every model supports thinking — drop a stale level the new
           // model doesn't offer so saving never carries an invalid value.
           const catalog = providers.find(
@@ -437,6 +449,8 @@
   {/snippet}
   <div class="flex gap-2 text-sm text-muted">
     <AlertTriangle size={16} class="mt-0.5 shrink-0 text-warning" />
-    <p>Delete <strong class="text-foreground">{deleteTarget?.name}</strong>? This can't be undone.</p>
+    <p>
+      Delete <strong class="text-foreground">{deleteTarget?.name}</strong>? This can't be undone.
+    </p>
   </div>
 </Modal>
