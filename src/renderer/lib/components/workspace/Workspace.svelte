@@ -1909,18 +1909,18 @@
       }
     },
     {
-      id: 'scoped-threads',
-      label: 'Scoped threads',
-      icon: SquareDashedKanban,
-      keys: ['mod', '3'],
-      select: () => void toggleScopedThreadsSidebar()
-    },
-    {
       id: 'threads',
       label: 'Threads',
       icon: Timeline,
       keys: ['mod', '2'],
       select: () => navigate('threads')
+    },
+    {
+      id: 'scoped-threads',
+      label: 'Scoped threads',
+      icon: SquareDashedKanban,
+      keys: ['mod', '3'],
+      select: () => void toggleScopedThreadsSidebar()
     },
     {
       id: 'chats',
@@ -3142,11 +3142,11 @@
         {:else}
           <DropdownMenu.Root>
             <DropdownMenu.Trigger
-              class="flex max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated"
+              class="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated"
               aria-label="Switch view"
               title="Switch view"
             >
-              <span class="whitespace-nowrap" class:animate-pulse={anyProjectWorking}
+              <span class="truncate" class:animate-pulse={anyProjectWorking}
                 >{sidebarViewLabel}</span
               >
               <ChevronDown size={12} class="shrink-0 text-muted" />
@@ -3157,7 +3157,7 @@
                 align="start"
                 sideOffset={6}
                 collisionPadding={8}
-                class="z-50 w-44 overflow-hidden rounded-md border bg-surface p-1 shadow-lg"
+                class="z-50 w-56 overflow-hidden rounded-md border bg-surface p-1 shadow-lg"
               >
                 {#each sidebarViewOptions as option (option.id)}
                   {@const Icon = option.icon}
@@ -3173,12 +3173,9 @@
                     onSelect={option.select}
                   >
                     <Icon size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
-                    <span class="flex-1 truncate">{option.label}</span>
+                    <span class="flex-1 whitespace-nowrap">{option.label}</span>
                     {#if option.keys}
                       <ShortcutHint keys={option.keys} />
-                    {/if}
-                    {#if isSelected}
-                      <Check size={14} class="text-primary" />
                     {/if}
                   </DropdownMenu.Item>
                 {/each}

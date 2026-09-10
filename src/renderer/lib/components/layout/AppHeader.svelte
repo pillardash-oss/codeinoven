@@ -233,6 +233,18 @@
     void scopeState.ensureBoardLoaded(thread.projectId)
   }
 
+  /** Track the primary view (Projects/Threads/Chats) the user was on before
+   *  entering the scope view, so the header Scope Board button can toggle
+   *  between scope view and whatever came last. All other views (settings,
+   *  remote…) keep the previous primary view. */
+  type PrimaryView = 'projects' | 'chats' | 'threads'
+  let lastViewBeforeScope: PrimaryView = $state('projects')
+  $effect(() => {
+    if (activeView === 'projects' || activeView === 'threads' || activeView === 'chats') {
+      lastViewBeforeScope = activeView
+    }
+  })
+
   /** Navigate to a primary view without any sidebar toggling — used by the
    *  Cmd/Ctrl+0-4 view shortcuts so they always land on the requested view. */
   async function navigateToView(view: 'projects' | 'chats' | 'scope' | 'threads'): Promise<void> {
@@ -275,10 +287,15 @@
     view: 'projects' | 'chats' | 'scope' | 'threads'
   ): Promise<void> {
     const isCurrent = view === activeView
+    // The Scope Board header button is a toggle: while the scope view is
+    // already open, clicking it returns to the last primary view.
+    if (view === 'scope' && isCurrent) {
+      await navigateToView(lastViewBeforeScope)
+      return
+    }
     await navigateToView(view)
-    // The primary nav button toggles the sidebar when already on a project view
-    // (Scope, when already on scope, exits back to Projects instead).
-    if (isCurrent && view !== 'scope') {
+    // The primary nav button toggles the sidebar when already on a view.
+    if (isCurrent) {
       sidebarState.toggle()
     }
   }
