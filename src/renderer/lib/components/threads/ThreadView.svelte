@@ -287,6 +287,9 @@
      *  conversation. Workspace gates this: always true in chat mode, and in
      *  project mode only for a project's sole, untouched thread. */
     allowCenteredComposer?: boolean
+    /** Opens the scoped projects view with the sidebar focused on this thread
+     *  (composer scope shoe — existing threads). */
+    onOpenScopeView?: (thread: Thread) => void
   }
 
   let {

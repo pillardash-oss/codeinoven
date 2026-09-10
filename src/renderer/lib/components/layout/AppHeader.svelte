@@ -47,7 +47,6 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
-  import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import ProjectInfoDropdown from '$lib/components/shared/ProjectInfoDropdown.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
@@ -60,12 +59,10 @@
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
   import {
     coordinatorHasActiveDelegates,
-    DEFAULT_SCOPE_BUCKET_ID,
     INBOX_PROJECT_ID,
     isOrchestrationChildThread,
     isThreadRetryPaused,
-    isThreadWorking,
-    type ScopeBucket
+    isThreadWorking
   } from '$shared/types'
   import { SvelteSet } from 'svelte/reactivity'
 
@@ -554,32 +551,12 @@
     }
   }
 
-  /** Title shown in the header — real title once generated, else a draft label. */
   let headerThreadTitle = $derived(
     workspaceState.selectedThread ? effectiveThreadTitle(workspaceState.selectedThread) : ''
   )
 
-  let scopeBucket = $derived.by((): ScopeBucket | null => {
-    const thread = workspaceState.selectedThread
-    if (!thread || chatMode) return null
-    const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
-    return (
-      scopeState.bucketFor(thread.projectId, bucketId) ??
-      scopeState.bucketFor(thread.projectId, DEFAULT_SCOPE_BUCKET_ID) ?? {
-        id: DEFAULT_SCOPE_BUCKET_ID,
-        name: 'Default',
-        sortOrder: 0,
-        collapsed: false,
-        collapsedSlices: [],
-        root: { kind: 'project' } as const
-      }
-    )
-  })
-
-  /**
-   * Always resolve the scope board for the open thread's project so the scope
-   * badge renders on mount and on every thread change, regardless of whether
-   * the scope sidebar or scope view was ever opened for that project.
+  /** Always resolve the scope board for the open thread's project so the
+   *  composer scope shoe renders on mount and on every thread change.
    */
   $effect(() => {
     const thread = workspaceState.selectedThread
@@ -821,34 +798,6 @@
               </span>
             {/if}
           </div>
-          {#if scopeBucket && !workspaceState.specStudioOpen}
-            <div
-              class="titlebar-no-drag absolute left-1/2 top-full mt-0.75 -translate-x-1/2 whitespace-nowrap"
-            >
-              <button
-                class="cursor-pointer"
-                title="Show scope view for {scopeBucket.name}"
-                aria-label="Show scope view for {scopeBucket.name}"
-                onclick={async () => {
-                  if (activeView !== 'projects') {
-                    navigate('projects')
-                  }
-                  const allThreads: Thread[] = await invoke('thread:listAll')
-                  scopeState.setThreads(allThreads)
-                  await scopeState.activateProject(thread.projectId)
-                  scopeState.showSidebarForThread(thread)
-                  const project =
-                    scopeState.projectRecords.find(
-                      (candidate) => candidate.id === thread.projectId
-                    ) ?? null
-                  workspaceState.openThread(thread, project)
-                  void scopeState.ensureBoardLoaded(thread.projectId)
-                }}
-              >
-                <ScopeBadge bucket={scopeBucket} size="xs" />
-              </button>
-            </div>
-          {/if}
         </div>
       {:else}
         <div class="pointer-events-none">

@@ -2016,7 +2016,6 @@
     }
   })
 
-  /** New thread inside the board's active scope bucket. */
   /** Composer scope shoe: on an existing thread, clicking the scope toggles the
    *  projects view with the scope sidebar focused on this thread. Mirrors what
    *  the former header scope badge did. */
@@ -2029,6 +2028,7 @@
     void scopeState.ensureBoardLoaded(thread.projectId)
   }
 
+  /** New thread inside the board's active scope bucket. */
   function newThreadInScopeContext(): void {
     const context = scopeState.sidebarContext
     const project = projects.find((candidate) => candidate.id === context?.projectId)
@@ -3274,6 +3274,16 @@
               </span>
             {/if}
             {#if scopeBucket}
+              {#if scopeBucket && scopeBucket.root.kind === 'worktree'}
+                <span
+                  class="flex shrink-0 items-center"
+                  role="img"
+                  aria-label="Managed Git worktree scope on {scopeBucket.root.branch}"
+                  title="Managed Git worktree scope on {scopeBucket.root.branch}"
+                >
+                  <FolderTree size={12} class="text-warning" />
+                </span>
+              {/if}
               <ScopeBadge bucket={scopeBucket} size="xs" />
             {/if}
             <ProjectSwitch
@@ -3345,6 +3355,16 @@
                       {#if bucket.pinned}
                         <Pin size={10} class="shrink-0 text-accent" aria-hidden="true" />
                       {/if}
+                      {#if bucket.root.kind === 'worktree'}
+                        <span
+                          class="flex shrink-0 items-center"
+                          role="img"
+                          aria-label="Managed Git worktree scope on {bucket.root.branch}"
+                          title="Managed Git worktree scope on {bucket.root.branch}"
+                        >
+                          <FolderTree size={10} class="text-warning" />
+                        </span>
+                      {/if}
                       <span class="truncate">{bucket.name}</span>
                     </button>
                     <div class="opacity-0 transition-opacity group-hover:opacity-100">
@@ -3362,13 +3382,15 @@
 
           {#key scopeContext.bucketId}
             <div class="flex flex-1 min-h-0">
-              <div class="flex shrink-0 flex-col items-stretch border-r py-2 gap-1.5 w-11">
+              <!-- Stage rail: slices share the full sidebar height, growing to
+                   fill available space and shrinking to their floor when tight -->
+              <div class="flex min-h-0 shrink-0 flex-col items-stretch border-r py-2 gap-1.5 w-11">
                 {#each STAGE_ORDER as stage (stage)}
                   {@const stageCount = scopeState.threadsFor(scopeContext.bucketId, stage).length}
                   {@const isActive = scopeContext.stage === stage}
                   {@const bgOpacity = isActive ? '35%' : '8%'}
                   <button
-                    class="flex items-center justify-center rounded-md transition-all text-xs font-medium h-24"
+                    class="flex min-h-12 flex-1 items-center justify-center rounded-md transition-all text-xs font-medium"
                     style="background-color: color-mix(in srgb, {STAGE_COLORS[
                       stage
                     ]} {bgOpacity}, transparent); color: {isActive

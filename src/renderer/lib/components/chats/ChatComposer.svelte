@@ -71,6 +71,7 @@
   import { APP_NAME } from '$shared/brand'
   import { getVendorIconSvg } from '$lib/vendor-icons/registry'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
+  import ComposerShoe, { type ComposerScopeShoe } from './ComposerShoe.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import type { SpeechEditorApplyResult, SpeechEditorTarget } from '../../speech/editor-target'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
@@ -261,7 +262,11 @@
     /** Hides the inline context-usage indicator — for hosts that surface the
      *  same detail elsewhere (e.g. the mobile header). */
     hideUsageIndicator?: boolean
+    /** Renders the scope shoe — the project scope + project type row at the
+     *  footer of the composer. Only set in project mode. */
+    scopeShoe?: ComposerScopeShoe
   }
+
 
   let {
     onSend,
@@ -336,7 +341,8 @@
     onImageDescriptorDefaultChange,
     onImageDescriptorAskAgainChange,
     enableImageDescriptorGate = true,
-    hideUsageIndicator = false
+    hideUsageIndicator = false,
+    scopeShoe
   }: Props = $props()
 
   /** Base composer settings — the prop when provided, else the global last-used. */
@@ -2728,6 +2734,23 @@
       </button>
     {/if}
   </div>
+
+  <!-- Scope shoe — project scope + project type, only in project mode -->
+  {#if scopeShoe}
+    <div class="composer-shoe flex min-w-0 border-t px-3 pb-2 pt-1.5">
+      <div class="mx-auto flex w-[80%] min-w-0 items-center">
+        <ComposerShoe
+          projectId={scopeShoe.projectId}
+          threadId={scopeShoe.threadId}
+          bucket={scopeShoe.bucket}
+          source={scopeShoe.source}
+          host={scopeShoe.host}
+          isNewThread={scopeShoe.isNewThread}
+          onOpenScopeView={scopeShoe.onOpenScopeView}
+        />
+      </div>
+    </div>
+  {/if}
 </div>
 
 <StartAfterThreadPicker
