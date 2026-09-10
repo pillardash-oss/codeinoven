@@ -231,8 +231,13 @@
   type PrimaryView = 'projects' | 'chats' | 'threads'
   let lastViewBeforeScope: PrimaryView = $state('projects')
   $effect(() => {
-    if (activeView === 'projects' || activeView === 'threads' || activeView === 'chats') {
-      lastViewBeforeScope = activeView
+    if (
+      activeView === 'projects'
+      || activeView === 'projects-scope'
+      || activeView === 'threads'
+      || activeView === 'chats'
+    ) {
+      lastViewBeforeScope = activeView === 'projects-scope' ? 'projects' : activeView
     }
   })
 
@@ -304,8 +309,9 @@
   }
 
   async function toggleScopedThreads(): Promise<void> {
-    if (activeView === 'projects' && scopeState.sidebarContext) {
-      scopeState.clearSidebarContext()
+    if (activeView === 'projects-scope' || (activeView === 'projects' && scopeState.sidebarContext)) {
+      // Off: land on the plain projects view — navigate() closes the sidebar.
+      await navigateToView('projects')
       return
     }
     await openProjectWithScopeState()
@@ -357,7 +363,9 @@
   /** The currently active option is shown with brighter text in the menu. */
   let activeHeaderViewOption = $derived.by((): HeaderViewOptionId => {
     if (activeView === 'scope') return 'scope-board'
-    if (activeView === 'projects' && scopeState.sidebarContext) return 'scoped-threads'
+    if (activeView === 'projects-scope' || (activeView === 'projects' && scopeState.sidebarContext)) {
+      return 'scoped-threads'
+    }
     if (activeView === 'threads') return 'threads'
     if (activeView === 'chats') return 'chats'
     return 'projects'
@@ -371,7 +379,7 @@
   /** Cmd/Ctrl+3 — Projects view with the scope sidebar active for the current
    *  thread (or project). Idempotent: never turns scope state off. */
   async function openProjectWithScopeState(): Promise<void> {
-    if (activeView !== 'projects') {
+    if (activeView !== 'projects' && activeView !== 'projects-scope') {
       await navigateToView('projects')
       // Coming back from another view — restore a stashed scope context first.
       if (scopeState.stashedSidebarContext) {

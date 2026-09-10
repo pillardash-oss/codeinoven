@@ -562,6 +562,11 @@
       scopeState.stashSidebarContext()
     } else if (view === 'threads') {
       scopeState.clearSidebarContext()
+    } else if (view === 'projects') {
+      // Leaving the registered scoped view (or any scoped state) for the plain
+      // projects view: the sidebar is what defines the scoped state, so close
+      // it — the sidebar context itself is stashed for later restore.
+      scopeState.clearSidebarContext()
     }
     const previousContentView = rendererRecovery.lastContentView
     activeView = view
@@ -1287,7 +1292,9 @@
   ): Promise<void> {
     const isChat = thread.projectId === INBOX_PROJECT_ID
     const inScopeState =
-      activeView === 'scope' || (activeView === 'projects' && Boolean(scopeState.sidebarContext))
+      activeView === 'scope'
+      || activeView === 'projects-scope'
+      || (activeView === 'projects' && Boolean(scopeState.sidebarContext))
 
     if (isChat) {
       // Chat notifications always land in the chats view.
@@ -1823,13 +1830,23 @@
          mounted across Settings/Scope so returning never reloads the thread
          list or reconnects the harness; it's simply hidden while away. -->
     <div
-      class={activeView === 'projects' || activeView === 'chats' || activeView === 'threads'
-        ? 'h-full'
-        : 'hidden'}
+      class={
+        activeView === 'projects'
+        || activeView === 'projects-scope'
+        || activeView === 'chats'
+        || activeView === 'threads'
+          ? 'h-full'
+          : 'hidden'
+      }
     >
       <Workspace
         mode={lastContentView}
-        active={activeView === 'projects' || activeView === 'chats' || activeView === 'threads'}
+        active={
+          activeView === 'projects'
+          || activeView === 'projects-scope'
+          || activeView === 'chats'
+          || activeView === 'threads'
+        }
         scopeViewActive={activeView === 'scope'}
         {navigate}
         {config}

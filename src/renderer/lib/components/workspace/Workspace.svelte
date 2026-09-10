@@ -2024,19 +2024,18 @@
    *  the last view the user was on and the scoped projects view (sidebar focused
    *  on this thread). */
   async function openThreadScopeView(thread: Thread): Promise<void> {
-    // Already showing the scope sidebar over the projects view: bounce back to
-    // the view the user came from when the shoe opened it. The projects view
-    // and the scoped state share one activeView, so the open sidebarContext is
-    // what distinguishes "scoped" from a plain projects visit.
+    // Already on the registered scoped view (projects board with the scope
+    // sidebar focused on this thread): bounce back to the view the user came
+    // from when the shoe opened it (second half of the toggle).
     if (
-      rendererRecovery.activeView === 'projects'
+      rendererRecovery.activeView === 'projects-scope'
       && scopeState.sidebarContext !== null
     ) {
       navigate(scopeShoeReturnView)
       return
     }
     scopeShoeReturnView = rendererRecovery.activeView
-    navigate('projects')
+    navigate('projects-scope')
     const allThreads: Thread[] = await invoke('thread:listAll')
     scopeState.setThreads(allThreads)
     await scopeState.activateProject(thread.projectId)
