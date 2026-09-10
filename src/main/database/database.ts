@@ -726,6 +726,9 @@ export class Database {
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
       this.migrateThreadIndependentAuditColumns(connection)
+      this.migrateThreadAccountColumn(connection)
+      this.migrateAgentMessageGenerationColumn(connection)
+      this.migrateAgentMessageAccountColumns(connection)
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
     })()
   }
@@ -804,9 +807,11 @@ export class Database {
   migrateModelRankingSnapshotClaimToken(connection?: DatabaseType): void {
     const target = connection ?? this.requireDb()
     const columns = new Set<string>(
-      (target.prepare('PRAGMA table_info(model_ranking_snapshots)').all() as Array<{ name: string }>).map(
-        (column) => column.name
-      )
+      (
+        target.prepare('PRAGMA table_info(model_ranking_snapshots)').all() as Array<{
+          name: string
+        }>
+      ).map((column) => column.name)
     )
     if (columns.size === 0 || columns.has('claim_token')) return
     target.exec('ALTER TABLE model_ranking_snapshots ADD COLUMN claim_token TEXT')
@@ -875,14 +880,53 @@ export class Database {
       )
     )
     if (!columns.has('independent_audit')) {
-      connection.exec(
-        'ALTER TABLE threads ADD COLUMN independent_audit INTEGER NOT NULL DEFAULT 0'
-      )
+      connection.exec('ALTER TABLE threads ADD COLUMN independent_audit INTEGER NOT NULL DEFAULT 0')
     }
     if (!columns.has('independent_audit_initialized')) {
       connection.exec(
         'ALTER TABLE threads ADD COLUMN independent_audit_initialized INTEGER NOT NULL DEFAULT 0'
       )
+    }
+  }
+
+  /** Existing databases predate account-scoped native session ownership. */
+  private migrateThreadAccountColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('session_account_id')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN session_account_id TEXT')
+    }
+  }
+
+  /** Existing databases predate the per-message generation duration used by
+   *  tokens-per-second rates. Nullable — messages persisted before the column
+   *  have no generation window recorded and fall back to wall-clock rates. */
+  private migrateAgentMessageGenerationColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('generation_ms')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN generation_ms INTEGER')
+    }
+  }
+
+  /** Existing message mirrors predate account-container attribution. */
+  private migrateAgentMessageAccountColumns(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('account_id')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN account_id TEXT')
+    }
+    if (!columns.has('account_label')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN account_label TEXT')
     }
   }
 
@@ -895,6 +939,10 @@ export class Database {
     )
     const addedTokensTotal = !columns.has('tokens_total')
     const addedDuration = !columns.has('duration_ms')
+
+    if (!columns.has('account_id')) {
+      connection.exec('ALTER TABLE usage_events ADD COLUMN account_id TEXT')
+    }
 
     if (addedTokensTotal) {
       connection.exec('ALTER TABLE usage_events ADD COLUMN tokens_total INTEGER')
@@ -984,7 +1032,7 @@ export class Database {
         sql: `INSERT INTO usage_events(
           id, thread_id, parent_turn_id, project_id, project_name,
           feature_call_id, attempt, feature,
-          harness_id, provider_id, model_id, thinking_level, utility_id,
+          harness_id, account_id, provider_id, model_id, thinking_level, utility_id,
           raw_provider_usage_json,
           tokens_uncached_input, tokens_cached_input, tokens_cache_write,
           tokens_output, tokens_reasoning, tokens_total, raw_total, total_semantics,
@@ -994,7 +1042,7 @@ export class Database {
         SELECT
           legacy.id, legacy.thread_id, legacy.parent_turn_id, ${projectId}, ${projectName},
           legacy.feature_call_id, legacy.attempt, legacy.feature,
-          legacy.harness_id, legacy.provider_id, legacy.model_id, legacy.thinking_level,
+          legacy.harness_id, legacy.account_id, legacy.provider_id, legacy.model_id, legacy.thinking_level,
           legacy.utility_id, legacy.raw_provider_usage_json,
           legacy.tokens_uncached_input, legacy.tokens_cached_input, legacy.tokens_cache_write,
           legacy.tokens_output, legacy.tokens_reasoning, legacy.tokens_total,

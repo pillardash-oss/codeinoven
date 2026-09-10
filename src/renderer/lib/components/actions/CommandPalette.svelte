@@ -10,6 +10,8 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import type { ScopeProject } from '$lib/stores/scope.svelte'
+  import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
 
   interface Props {
     open: boolean
@@ -36,6 +38,11 @@
     serverFiltered?: boolean
     /** Render a < Back button in the footer to return to a previous surface. */
     onBack?: () => void
+    /** When provided, the footer shows a project scope picker (empty selection = all projects). */
+    projects?: readonly ScopeProject[]
+    /** Currently scoped project ids; an empty array means all projects. */
+    selectedProjectIds?: readonly string[]
+    onSelectedProjectsChange?: (projectIds: string[]) => void
   }
 
   let {
@@ -57,7 +64,10 @@
     headerIconBadge = false,
     headerIconBadgeClass = '',
     serverFiltered = false,
-    onBack
+    onBack,
+    projects,
+    selectedProjectIds = [],
+    onSelectedProjectsChange
   }: Props = $props()
 
   let query = $state('')
@@ -378,7 +388,19 @@
         {/if}
         <span class="tabular-nums">{visibleActions.length} actions</span>
       </span>
-      <span class="shrink-0">↑↓ Navigate · Enter Run</span>
+      {#if projects && onSelectedProjectsChange}
+        <ProjectSwitch
+          multiSelect
+          compact
+          {projects}
+          selectedIds={selectedProjectIds}
+          onSelectionChange={onSelectedProjectsChange}
+          allLabel="All Projects"
+          ariaLabel="Scope search to projects"
+        />
+      {:else}
+        <span class="shrink-0">↑↓ Navigate · Enter Run</span>
+      {/if}
     </footer>
   </Command.Root>
 {/snippet}

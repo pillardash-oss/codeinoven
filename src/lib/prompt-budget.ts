@@ -7,6 +7,19 @@
  * the entire window with input.
  */
 
+/**
+ * Maximum share of the aggregate input allowance the history recap may take.
+ *
+ * A rebuilt (fresh-session) turn — a fork, harness switch, or model handoff —
+ * replays prior history as a recap. When that recap is allowed to fill the
+ * whole input allowance, the very first turn lands the native session at ~95%
+ * of the context window, so the harness's own auto-compaction fires on almost
+ * every subsequent turn (each compaction is an expensive summarize request
+ * that drains provider usage). Capping the recap leaves real conversational
+ * headroom before the harness's compaction threshold is reached.
+ */
+export const RECAP_MAX_INPUT_RATIO = 0.6
+
 /** Fallback context window when the selected model reports none. */
 export const DEFAULT_PROMPT_BUDGET = {
   contextWindowTokens: 128_000,
@@ -177,7 +190,11 @@ export function budgetTurnLayers(
   let remaining = Math.max(0, availableInputTokens - fixed)
   const hiddenTokens = Math.min(Math.max(0, layers.hiddenTokens), remaining)
   remaining -= hiddenTokens
-  const recapTokens = Math.min(Math.max(0, layers.recapTokens), remaining)
+  const recapTokens = Math.min(
+    Math.max(0, layers.recapTokens),
+    remaining,
+    Math.floor(availableInputTokens * RECAP_MAX_INPUT_RATIO)
+  )
   return {
     hiddenTokens,
     recapTokens,

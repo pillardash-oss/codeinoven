@@ -144,6 +144,13 @@ function preferredNodeBin(base: NodeJS.ProcessEnv, platform: NodeJS.Platform): s
  * external claude-code/opencode sessions. Inherited by agent-spawned children. */
 export const OWNED_PROCESS_MARKER = 'CODEINOVEN_OWNED'
 
+/** Companion marker stamped with the CodeInOven session id that spawned the
+ * harness. Inherited by agent-spawned children — including daemons that
+ * re-parent to launchd/init (e.g. the adb server) — so the agent process
+ * service can attribute an orphaned daemon back to its owning thread even
+ * after the parent harness process is gone. */
+export const OWNED_SESSION_MARKER = 'CODEINOVEN_SESSION'
+
 /**
  * Desktop apps do not inherit a login shell PATH. Keep the augmented external
  * process environment in one place so every app-owned command agrees.

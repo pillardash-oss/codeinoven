@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { lstat, readdir } from 'node:fs/promises'
+import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { watch, type FSWatcher } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
@@ -70,6 +70,55 @@ interface RankedProjectEntry extends ProjectFileEntry {
   score: number
 }
 
+interface ParsedQueryWord {
+  /** The word as typed, for the free-form substring fallback. */
+  raw: string
+  /** The word with any trailing "/", "/*", or "*" glob stripped. */
+  base: string
+  /** Whether the word must match a directory on the entry's path, so that
+   *  "settings/" and "settings/*" mean "inside (or at) a settings folder"
+   *  instead of a raw substring test. */
+  requireDirectory: boolean
+}
+
+/** Split a query word into its matched form. Trailing glob syntax ("/", "/*",
+ *  "*") narrows the word to directory-scope matching; everything else matches
+ *  file or directory names on path-segment boundaries. */
+function parseQueryWord(word: string): ParsedQueryWord {
+  const base = word.replace(/\/+\*?$/u, '').replace(/\*+$/u, '')
+  return { raw: word, base, requireDirectory: base !== word }
+}
+
+/** Directory segments relevant to matching: every ancestor segment of the
+ *  entry, plus the entry's own name when the entry is itself a directory. */
+function directorySegmentsOf(path: string, kind: ProjectFileEntry['kind']): string[] {
+  const segments = path.split('/')
+  if (kind === 'directory') return segments
+  segments.pop()
+  return segments
+}
+
+/** Score one parsed word against an entry: highest when the entry's own name
+ *  matches, then when a directory on its path matches. Zero when the word does
+ *  not match the entry's intent (for directory-scoped words the entry's name
+ *  alone never satisfies the match). */
+function scoreWordMatch(word: ParsedQueryWord, normalizedName: string, dirSegments: string[]): number {
+  if (!word.base) return 0
+  if (!word.requireDirectory) {
+    if (normalizedName === word.base) return 12
+    if (normalizedName.startsWith(word.base)) return 8
+    if (normalizedName.includes(word.base)) return 4
+  }
+  let best = 0
+  for (const segment of dirSegments) {
+    if (segment === word.base) best = Math.max(best, 6)
+    else if (segment.startsWith(word.base)) best = Math.max(best, 3)
+    else if (segment.includes(word.base)) best = Math.max(best, 1)
+    if (best === 6) break
+  }
+  return best
+}
+
 interface ProjectWatcher {
   watcher: FSWatcher
   root: string
@@ -119,7 +168,12 @@ export class ProjectFileIndexService {
     category: 'all' | 'rules',
     projectName?: string
   ): Promise<ProjectFileEntry[]> {
-    const words = query.trim().toLocaleLowerCase().split(/\s+/u).filter(Boolean)
+    const words = query
+      .trim()
+      .toLocaleLowerCase()
+      .split(/\s+/u)
+      .filter(Boolean)
+      .map(parseQueryWord)
     // A query term may match the project name too (e.g. "app.html codeinoven"),
     // so results surface across a project whose display name the user typed.
     const projectHaystack = projectName ? `${projectName.toLocaleLowerCase()} ` : ''
@@ -127,29 +181,32 @@ export class ProjectFileIndexService {
     const matches: RankedProjectEntry[] = []
 
     for (const indexed of index.entries.values()) {
-      if (category === 'rules' && indexed.ruleScore === 0) continue
-      if (!words.every((word) => `${projectHaystack}${indexed.normalizedPath}`.includes(word))) {
-        continue
+      const entry = indexed.entry
+      const dirSegments = directorySegmentsOf(entry.path, entry.kind)
+      let allWordsMatch = true
+      let queryScore = 0
+      for (const word of words) {
+        const score = scoreWordMatch(word, indexed.normalizedName, dirSegments)
+        if (score > 0) {
+          queryScore += score
+          continue
+        }
+        // Fallback for free-form queries that do not align with path segments
+        // (partial segments, project-name matches): keep the old substring rule
+        // so existing behavior never regresses.
+        if (`${projectHaystack}${indexed.normalizedPath}`.includes(word.raw)) {
+          queryScore += 1
+          continue
+        }
+        allWordsMatch = false
+        break
       }
-
-      const queryScore = words.reduce(
-        (score, word) =>
-          score +
-          (indexed.normalizedName === word
-            ? 12
-            : indexed.normalizedName.startsWith(word)
-              ? 8
-              : indexed.normalizedName.includes(word)
-                ? 4
-                : 1),
-        0
-      )
+      if (!allWordsMatch) continue
+      if (category === 'rules' && indexed.ruleScore === 0) continue
       this.insertRankedResult(matches, {
-        ...indexed.entry,
+        ...entry,
         score:
-          indexed.ruleScore +
-          queryScore +
-          (indexed.entry.kind === 'directory' && words.length > 0 ? 2 : 0)
+          indexed.ruleScore + queryScore + (entry.kind === 'directory' && words.length > 0 ? 2 : 0)
       })
     }
 
@@ -440,11 +497,30 @@ export class ProjectFileIndexService {
     return [...entries.values()]
   }
 
+  /** Whether a symlinked directory's target stays inside the project after
+   *  resolving symlinks in both the link and the root. Prevents traversal of
+   *  links that escape the project. */
+  private async isInsideRoot(root: string, linkPath: string): Promise<boolean> {
+    try {
+      const [rootReal, linkReal] = await Promise.all([realpath(root), realpath(linkPath)])
+      const rel = relative(rootReal, linkReal)
+      return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+    } catch {
+      return false
+    }
+  }
+
   private async walkProjectEntries(root: string): Promise<ProjectFileEntry[]> {
     const entries: ProjectFileEntry[] = []
     const pending: Array<{ absolutePath: string; relativePath: string }> = [
       { absolutePath: root, relativePath: '' }
     ]
+    const visitedRealDirectories = new Set<string>()
+    try {
+      visitedRealDirectories.add(await realpath(root))
+    } catch {
+      // Root is not resolvable; the walk below will fail anyway.
+    }
     let pendingIndex = 0
 
     while (pendingIndex < pending.length) {
@@ -453,21 +529,53 @@ export class ProjectFileIndexService {
       if (!directory) break
       const children = await readdir(directory.absolutePath, { withFileTypes: true })
       for (const child of children) {
-        if (child.isSymbolicLink()) continue
-        if (child.isDirectory() && INDEX_EXCLUDED_DIRECTORIES.has(child.name)) continue
-        if (!child.isDirectory() && !child.isFile()) continue
+        // Symlinks need their target resolved: readdir dirents report lstat-like
+        // info, so a link is neither file nor directory on its own. Symlinked
+        // files are followed and indexed; symlinked directories are traversed
+        // only when their target resolves inside the project root, so cycles
+        // and links escaping the project cannot recurse forever.
+        let isDirectory = child.isDirectory()
+        let isFile = child.isFile()
+        if (child.isSymbolicLink()) {
+          let target
+          try {
+            target = await stat(join(directory.absolutePath, child.name))
+          } catch {
+            // Broken symlink: no target to index.
+            continue
+          }
+          isDirectory = target.isDirectory()
+          isFile = target.isFile()
+          if (isDirectory && !(await this.isInsideRoot(root, join(directory.absolutePath, child.name)))) {
+            isDirectory = false
+            isFile = false
+          }
+        }
+        if (isDirectory) {
+          // A link may point back up the tree (a → b → a); track real paths so
+          // such cycles are traversed at most once per directory.
+          try {
+            const realPath = await realpath(join(directory.absolutePath, child.name))
+            if (visitedRealDirectories.has(realPath)) continue
+            visitedRealDirectories.add(realPath)
+          } catch {
+            continue
+          }
+        }
+        if (isDirectory && INDEX_EXCLUDED_DIRECTORIES.has(child.name)) continue
+        if (!isDirectory && !isFile) continue
         const path = directory.relativePath ? `${directory.relativePath}/${child.name}` : child.name
         entries.push({
           name: child.name,
           path,
-          kind: child.isDirectory() ? 'directory' : 'file'
+          kind: isDirectory ? 'directory' : 'file'
         })
         if (entries.length > MAX_INDEX_ENTRIES) {
           throw new Error(
             `Project index exceeds the ${MAX_INDEX_ENTRIES.toLocaleString()}-entry safety limit`
           )
         }
-        if (child.isDirectory()) {
+        if (isDirectory) {
           pending.push({
             absolutePath: join(directory.absolutePath, child.name),
             relativePath: path

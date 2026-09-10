@@ -433,6 +433,8 @@ export interface Thread {
    *  field keeps identifying the driver that owns `sessionId` so the old
    *  session is read/synced through the correct driver. */
   sessionHarnessId?: string
+  /** Account container that owns the bound native session. */
+  sessionAccountId?: string
   /** Last specification card explicitly dismissed by the user. */
   dismissedSpecId?: string
   dismissedSpecVersion?: number
@@ -772,9 +774,44 @@ export interface PiOAuthUiPrompt {
 
 export interface ProviderAccountAuthEntry {
   id: string
+  /** Stable provider id used by models, login, and logout commands. */
+  providerId: string
   label: string
   method?: string
   active?: boolean
+}
+
+/** One user-named credential container for a harness. */
+export interface HarnessAccount {
+  id: string
+  harnessId: string
+  /** Provider authenticated by this account. */
+  providerId: string
+  /** Display name reported by the harness for this provider. */
+  providerName: string
+  label: string
+  containerKind: 'legacy-default' | 'managed'
+  createdAt: number
+  updatedAt: number
+}
+
+export interface HarnessAccountCreateInput {
+  harnessId: string
+  providerId: string
+  /** Optional display label. Blank labels are generated as `<provider>-N`. */
+  label?: string
+}
+
+/** Unlisted credential container used only while a provider sign-in is underway. */
+export interface PendingHarnessAccount {
+  id: string
+  harnessId: string
+  providerId: string
+}
+
+export interface HarnessAccountRenameInput {
+  accountId: string
+  label: string
 }
 
 export interface ProviderAccountAuthStatus {
@@ -790,6 +827,8 @@ export interface ProviderAccountLoginOptions {
   sso?: boolean
   /** Provider to authenticate against, for harnesses that support per-provider login. */
   providerId?: string
+  /** Managed account whose isolated credential home receives the login. */
+  accountId?: string
 }
 
 /** User-controlled terminal handoff. Main never executes this command. */
@@ -797,8 +836,10 @@ export interface ProviderAccountLoginHandoff {
   kind: 'terminal'
   command: string
   args: string[]
+  /** Bounded credential-home overrides applied only to this login process. */
+  environment?: Record<string, string>
   title: string
-  mutatesGlobalCredentials: true
+  mutatesGlobalCredentials: boolean
 }
 
 // ─── Harness updates ─────────────────────────────────────────────────────────
@@ -840,6 +881,16 @@ export interface HarnessInstallInfo {
   methods: HarnessInstallMethod[]
   /** The install method detected for the local install (drives uninstall). */
   detectedMethod?: HarnessInstallMethod
+}
+
+/** User-controlled install terminal handoff. Main never executes this command. */
+export interface HarnessInstallHandoff {
+  kind: 'terminal'
+  command: string
+  args: string[]
+  title: string
+  /** The install method the command uses (native installers are preferred on Windows). */
+  method: HarnessInstallMethod
 }
 
 /** User-controlled uninstall terminal handoff. Main never executes this command. */
@@ -1128,6 +1179,8 @@ export interface AgentModelSelection {
   harnessId: string
   providerId: string
   modelId: string
+  /** Credential container used for this role. Missing means the harness Default account. */
+  accountId?: string
   /** Reasoning effort for the role. When absent, the thread's own level is used. */
   thinkingLevel?: ThinkingLevel
 }
@@ -1153,6 +1206,8 @@ export interface ThreadSettings {
   harnessId: string
   /** Model provider exposed by the harness, e.g. anthropic or openai. */
   providerId: string
+  /** Selected credential container. Missing means the harness's legacy Default account. */
+  accountId?: string
   modelId: string
   /** Use only the immediate deterministic fallback title, skipping auxiliary model calls. */
   titleMode?: 'model' | 'deterministic'
@@ -1824,6 +1879,8 @@ export interface AgentSubagentActivity {
   background: boolean
   output?: string
   error?: string
+  /** Project-relative paths the sub-agent's file tools edited or wrote. */
+  files?: string[]
   time?: { start: number; end?: number }
 }
 
@@ -1919,6 +1976,8 @@ export interface UsageEventDetails {
   attempt: number
   feature: UsageEventFeature
   harnessId: string | null
+  /** Credential container that owned the attempt. */
+  accountId?: string | null
   providerId: string | null
   modelId: string | null
   /** Reasoning effort in effect when the attempt ran, when known. */
@@ -2007,12 +2066,16 @@ export interface AgentRateLimitWindow {
   isUsingOverage?: boolean
 }
 
-/** Banked rate-limit resets a user has accumulated and can redeem on demand
- *  (currently Codex-only). Codex's app-server only reports the count, not
- *  each credit's individual grant/expiry date. */
+/** Banked rate-limit resets a user can redeem on demand (currently Codex-only). */
 export interface AgentBankedResets {
   /** Number of banked resets available to redeem. */
   availableCount: number
+  /** Available credits, when the provider reports individual details. */
+  credits?: {
+    id: string
+    /** Unix milliseconds; null means no expiry, omitted means unavailable. */
+    expiresAt?: number | null
+  }[]
 }
 
 /** Prepaid-credit balance reported alongside quota windows (e.g. Codex credits). */
@@ -2074,12 +2137,14 @@ export interface AgentHarnessUsage {
 export interface AgentAccountUsageOverrides {
   harnessId?: string
   providerId?: string
+  accountId?: string
 }
 
 /** On-demand account quota snapshot for one harness used on a thread. */
 export interface AgentAccountUsage {
   harnessId: string
   providerId: string
+  accountId?: string
   rateLimits: AgentRateLimitWindow[]
   credits?: AgentUsageCredits
   /** Banked rate-limit resets available to redeem (currently Codex-only). */
@@ -2113,6 +2178,10 @@ export interface CustomProviderUsage {
 export interface ThreadContextUsage extends AgentContextUsage {
   harnessId: string
   providerId: string
+  /** Model the usage was reported under. A snapshot from a different model
+   *  carries that model's context window, so it must never seed a meter (or
+   *  drive an auto-compaction decision) for the newly selected model. */
+  modelId?: string
 }
 
 /** One row of cumulative per-harness analytics keyed by (thread, harness, provider). */
@@ -2536,6 +2605,9 @@ export type AgentPart =
       overflow?: boolean
       /** Completed compaction output, attached by the presentation layer. */
       summary?: string
+      /** Pi retains recent context before the compaction record. */
+      firstKeptEntryId?: string
+      firstKeptCreatedAt?: number
     }
   | {
       type: 'compaction-summary'
@@ -2586,8 +2658,16 @@ export interface AgentMessage {
   providerId?: string
   /** Agent harness that produced this message, e.g. opencode or claude-code. */
   harnessId?: string
+  /** Credential container that produced this message. */
+  accountId?: string
+  /** Historical label snapshot. Renaming an account does not rewrite old turns. */
+  accountLabel?: string
   /** Reasoning effort in effect when this message's turn ran, when known. */
   thinkingLevel?: ThinkingLevel
+  /** Duration in milliseconds from the first streamed output part (the model's
+   *  first token) to turn end — excludes pre-generation tool/setup time, so a
+   *  tokens/second rate derived from it reflects actual generation. */
+  generationMs?: number
   createdAt: number
   completedAt?: number
   /** Cost and token accounting reported for this assistant message. */

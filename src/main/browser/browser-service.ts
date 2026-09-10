@@ -8,11 +8,13 @@ import type {
   BrowserPageState,
   BrowserPermissionDecision,
   BrowserPermissionRequest,
+  BrowserSiteDataScope,
   BrowserViewBounds
 } from '../../lib/ipc-contract'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
+import { fetchIconAsDataUrl } from '../editor/favicon-service'
 
 const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
 const MAX_BROWSER_URL_LENGTH = 8192
@@ -31,6 +33,8 @@ interface BrowserTab {
   threadId: string
   initialNavigationStarted: boolean
   consoleEntries: BrowserConsoleEntry[]
+  /** Favicon data URL from the last `page-favicon-updated`, cleared on navigation. */
+  favicon: string | null
 }
 
 interface PendingBrowserPermission {
@@ -92,6 +96,36 @@ function validateDownloadId(value: unknown): string {
     throw new TypeError('Browser download ID is invalid')
   }
   return value
+}
+
+const SITE_DATA_SCOPES: readonly BrowserSiteDataScope[] = [
+  'cookies',
+  'site-data',
+  'cache',
+  'permissions'
+]
+
+/** Storage buckets cleared by `session.clearStorageData()` for each scope.
+ *  Cookies get their own scope so "cookies" and "site data" stay separable. */
+const SCOPE_STORAGE_TYPES: Record<
+  'cookies' | 'site-data',
+  Array<'cookies' | 'filesystem' | 'indexdb' | 'localstorage' | 'shadercache' | 'serviceworkers' | 'cachestorage'>
+> = {
+  cookies: ['cookies'],
+  'site-data': ['cachestorage', 'filesystem', 'indexdb', 'localstorage', 'serviceworkers']
+}
+
+function validateSiteDataScopes(value: unknown): BrowserSiteDataScope[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > SITE_DATA_SCOPES.length) {
+    throw new TypeError('Browser site data scopes must be a non-empty array')
+  }
+  const unique = new Set(value)
+  for (const scope of unique) {
+    if (!SITE_DATA_SCOPES.includes(scope as BrowserSiteDataScope)) {
+      throw new TypeError(`Browser site data scope is invalid: ${String(scope)}`)
+    }
+  }
+  return [...unique]
 }
 
 /** Reduce a server-suggested filename to a safe, absolute-path-free basename. */
@@ -285,6 +319,13 @@ export class BrowserService {
     })
     ipcMain.handle('browser:clearData', async (_event, rawProjectId) => {
       await this.clearProjectData(validateProjectId(rawProjectId))
+    })
+    ipcMain.handle('browser:clearSiteData', (_event, rawProjectId, rawScopes) => {
+      const projectId = validateProjectId(rawProjectId)
+      const scopes = validateSiteDataScopes(rawScopes)
+      void this.clearSiteData(projectId, scopes).catch((error: unknown) => {
+        Logger.error('Browser site data could not be cleared:', error)
+      })
     })
     ipcMain.handle('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)
@@ -492,16 +533,32 @@ export class BrowserService {
       projectId,
       threadId,
       initialNavigationStarted: false,
-      consoleEntries: []
+      consoleEntries: [],
+      favicon: null
     }
     this.tabs.set(tabId, tab)
 
     const publish = (): void => this.publishState(tabId)
     view.webContents.on('did-start-loading', publish)
     view.webContents.on('did-stop-loading', publish)
-    view.webContents.on('did-navigate', publish)
+    view.webContents.on('did-navigate', () => {
+      // A new document starts without an icon; the old site's favicon must not linger.
+      tab.favicon = null
+      publish()
+    })
     view.webContents.on('did-navigate-in-page', publish)
     view.webContents.on('page-title-updated', publish)
+    view.webContents.on('page-favicon-updated', (_event, favicons) => {
+      const source = favicons.find((candidate) => candidate.length > 0) ?? null
+      if (!source) return
+      // Electron reports icon URLs, but remote images are blocked by the
+      // renderer CSP — convert to a data URL so any consumer can render it.
+      void fetchIconAsDataUrl(source).then((favicon) => {
+        if (!favicon || tab.favicon === favicon) return
+        tab.favicon = favicon
+        publish()
+      })
+    })
     view.webContents.on('console-message', (details) => {
       this.appendConsoleEntry(tabId, {
         level: details.level,
@@ -748,6 +805,37 @@ export class BrowserService {
     }
   }
 
+  /** Clear only the requested scopes for the project's browser session. Tabs of
+   *  the project reload afterwards so cleared state takes effect immediately. */
+  private async clearSiteData(projectId: string, scopes: BrowserSiteDataScope[]): Promise<void> {
+    if (scopes.includes('permissions')) {
+      for (const [requestId, pending] of this.pendingPermissions) {
+        if (pending.request.projectId === projectId) {
+          this.resolvePermission(requestId, permissionResolutions.dismiss, false)
+        }
+      }
+      const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
+      this.permissionGrants.get(partition)?.clear()
+      this.permissionDenies.get(partition)?.clear()
+    }
+    const browserSession = this.sessionForProject(projectId)
+    const work: Promise<unknown>[] = []
+    for (const scope of scopes) {
+      if (scope === 'cache') {
+        work.push(browserSession.clearCache())
+      } else if (scope === 'cookies' || scope === 'site-data') {
+        work.push(browserSession.clearStorageData({ storages: SCOPE_STORAGE_TYPES[scope] }))
+      }
+    }
+    if (work.length > 0) {
+      await Promise.all(work)
+      await browserSession.closeAllConnections()
+    }
+    for (const tab of this.tabs.values()) {
+      if (tab.projectId === projectId && tab.initialNavigationStarted) tab.view.webContents.reload()
+    }
+  }
+
   private resolvePermission(
     requestId: string,
     resolution: PermissionResolution,
@@ -826,6 +914,7 @@ export class BrowserService {
       tabId,
       url: contents.getURL(),
       title: contents.getTitle(),
+      favicon: tab.favicon,
       loading: contents.isLoading(),
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward()

@@ -29,10 +29,12 @@
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import Toaster from '$lib/components/ui/Toaster.svelte'
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
+  import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
   import { toast } from 'svelte-sonner'
   import { SvelteMap } from 'svelte/reactivity'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
+  import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import {
     rendererRecovery,
     isSettingsSection,
@@ -148,11 +150,17 @@
   let fileSearchLoading = $state(false)
   let fileSearchTimer: number | null = null
   let fileSearchRequest = 0
+  /** Scoped project ids for the footer picker; empty = all projects. */
+  let fileSearchProjectIds = $state<string[]>([])
+  let lastFileSearchQuery = ''
   let threadSearchPaletteOpen = $state(false)
   let threadSearchActions = $state<ActionDefinition[]>([])
   let threadSearchLoading = $state(false)
   let threadSearchTimer: number | null = null
   let threadSearchRequest = 0
+  /** Scoped project ids for the footer picker; empty = all projects. */
+  let threadSearchProjectIds = $state<string[]>([])
+  let lastThreadSearchQuery = ''
   let newProjectSpotlightOpen = $state(false)
   let onboardingOpen = $state(false)
   let onboardingStep = $state(0)
@@ -554,6 +562,11 @@
       scopeState.stashSidebarContext()
     } else if (view === 'threads') {
       scopeState.clearSidebarContext()
+    } else if (view === 'projects') {
+      // Leaving the registered scoped view (or any scoped state) for the plain
+      // projects view: the sidebar is what defines the scoped state, so close
+      // it — the sidebar context itself is stashed for later restore.
+      scopeState.clearSidebarContext()
     }
     const previousContentView = rendererRecovery.lastContentView
     activeView = view
@@ -837,6 +850,8 @@
     fileSearchLoading = false
     fileSearchActions = []
     fileSearchTargets.clear()
+    fileSearchProjectIds = []
+    lastFileSearchQuery = ''
   }
 
   function openFileSearchPalette(): void {
@@ -845,8 +860,13 @@
   }
 
   async function searchFilesAcrossProjects(query: string, request: number): Promise<void> {
+    const selectedIds = new Set(fileSearchProjectIds)
     const projects = scopeState.projectRecords.filter(
-      (project) => !project.hidden && project.source === 'local' && project.path
+      (project) =>
+        !project.hidden &&
+        project.source === 'local' &&
+        project.path &&
+        (selectedIds.size === 0 || selectedIds.has(project.id))
     )
     const projectResults = await Promise.all(
       projects.map(async (project) => {
@@ -906,7 +926,21 @@
     fileSearchLoading = false
   }
 
+  /** Re-run the in-flight file search immediately when the project scope changes. */
+  function setFileSearchScope(projectIds: string[]): void {
+    fileSearchProjectIds = projectIds
+    if (!fileSearchPaletteOpen || lastFileSearchQuery.trim().length < 2) return
+    if (fileSearchTimer !== null) {
+      window.clearTimeout(fileSearchTimer)
+      fileSearchTimer = null
+    }
+    const request = ++fileSearchRequest
+    fileSearchLoading = true
+    void searchFilesAcrossProjects(lastFileSearchQuery.trim(), request)
+  }
+
   function handleFileSearchQuery(query: string): void {
+    lastFileSearchQuery = query
     if (fileSearchTimer !== null) window.clearTimeout(fileSearchTimer)
     const request = ++fileSearchRequest
     const normalized = query.trim()
@@ -947,6 +981,8 @@
     threadSearchLoading = false
     threadSearchActions = []
     threadSearchTargets.clear()
+    threadSearchProjectIds = []
+    lastThreadSearchQuery = ''
   }
 
   function openThreadSearchPalette(): void {
@@ -972,7 +1008,20 @@
   async function searchThreadsAcrossProjects(query: string, request: number): Promise<void> {
     let results: ThreadSearchResult[]
     try {
-      results = await invoke('threads:search', query, { limit: 50 })
+      // Scoped search: fan out per selected project so the manager can use its
+      // per-project index; empty selection searches all projects in one call.
+      results =
+        threadSearchProjectIds.length > 0
+          ? (
+              await Promise.all(
+                threadSearchProjectIds.map((projectId) =>
+                  invoke('threads:search', query, { projectId, limit: 50 }).catch(
+                    (): ThreadSearchResult[] => []
+                  )
+                )
+              )
+            ).flat()
+          : await invoke('threads:search', query, { limit: 50 })
     } catch {
       results = []
     }
@@ -1049,7 +1098,21 @@
     threadSearchLoading = false
   }
 
+  /** Re-run the in-flight thread search immediately when the project scope changes. */
+  function setThreadSearchScope(projectIds: string[]): void {
+    threadSearchProjectIds = projectIds
+    if (!threadSearchPaletteOpen || lastThreadSearchQuery.trim().length < 2) return
+    if (threadSearchTimer !== null) {
+      window.clearTimeout(threadSearchTimer)
+      threadSearchTimer = null
+    }
+    const request = ++threadSearchRequest
+    threadSearchLoading = true
+    void searchThreadsAcrossProjects(lastThreadSearchQuery.trim(), request)
+  }
+
   function handleThreadSearchQuery(query: string): void {
+    lastThreadSearchQuery = query
     if (threadSearchTimer !== null) window.clearTimeout(threadSearchTimer)
     const request = ++threadSearchRequest
     const normalized = query.trim()
@@ -1215,17 +1278,6 @@
     navigate('settings-harnesses')
   }
 
-  async function openScopeThread(thread: Thread): Promise<void> {
-    navigate('projects')
-    const project =
-      scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
-    workspaceState.openThread(thread, project)
-    void scopeState.ensureBoardLoaded(thread.projectId)
-    const updated = await invoke('thread:markRead', thread.projectId, thread.id)
-    scopeState.updateThread(updated)
-    workspaceState.updateThread(updated)
-  }
-
   /**
    * Open a thread from a notification while preserving the current view:
    * - Regular project view → stay there (no scope sidebar).
@@ -1240,7 +1292,9 @@
   ): Promise<void> {
     const isChat = thread.projectId === INBOX_PROJECT_ID
     const inScopeState =
-      activeView === 'scope' || (activeView === 'projects' && Boolean(scopeState.sidebarContext))
+      activeView === 'scope'
+      || activeView === 'projects-scope'
+      || (activeView === 'projects' && Boolean(scopeState.sidebarContext))
 
     if (isChat) {
       // Chat notifications always land in the chats view.
@@ -1582,6 +1636,16 @@
   /** Global application shortcuts. */
   function onKeydown(e: KeyboardEvent): void {
     const isMac = window.api?.windowInfo?.platform === 'darwin'
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      // ⌘/Ctrl+Enter runs the topmost open modal's primary action. The shared
+      // LIFO registry (modal-primary-action.svelte.ts) resolves which modal is
+      // in focus; when no modal claims the chord, composers (chat send, git
+      // commit, PR sheet) keep their existing focused-element behavior.
+      if (activateTopModalPrimaryAction()) {
+        e.preventDefault()
+        return
+      }
+    }
     if (e.key.toLowerCase() === 'w' && (isMac ? e.metaKey : e.ctrlKey)) {
       // Primary path is the main process `before-input-event` → the
       // `window:closeShortcut` event. This is a fallback for platforms where
@@ -1632,8 +1696,10 @@
     // remap side buttons to on macOS, since there's no native OS-level
     // back/forward gesture API for non-Apple mice. Alt+Left/Alt+Right mirrors
     // the same convention on Windows/Linux.
-    if ((isMac && e.metaKey && (e.key === '[' || e.key === ']')) ||
-      (!isMac && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))) {
+    if (
+      (isMac && e.metaKey && (e.key === '[' || e.key === ']')) ||
+      (!isMac && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))
+    ) {
       e.preventDefault()
       if (e.repeat) return
       if (e.key === '[' || e.key === 'ArrowLeft') void goBack()
@@ -1757,27 +1823,30 @@
 </script>
 
 <div class="flex h-screen flex-col bg-app">
-  <AppHeader
-    {activeView}
-    {navigate}
-    {goBack}
-    {goForward}
-    onProjectCreated={handleProjectCreated}
-    onScopeThreadOpen={openScopeThread}
-  />
+  <AppHeader {activeView} {navigate} {goBack} {goForward} />
 
   <main class="flex-1 overflow-hidden">
     <!-- One shell for all views — the workspace (and the open thread) stays
          mounted across Settings/Scope so returning never reloads the thread
          list or reconnects the harness; it's simply hidden while away. -->
     <div
-      class={activeView === 'projects' || activeView === 'chats' || activeView === 'threads'
-        ? 'h-full'
-        : 'hidden'}
+      class={
+        activeView === 'projects'
+        || activeView === 'projects-scope'
+        || activeView === 'chats'
+        || activeView === 'threads'
+          ? 'h-full'
+          : 'hidden'
+      }
     >
       <Workspace
         mode={lastContentView}
-        active={activeView === 'projects' || activeView === 'chats' || activeView === 'threads'}
+        active={
+          activeView === 'projects'
+          || activeView === 'projects-scope'
+          || activeView === 'chats'
+          || activeView === 'threads'
+        }
         scopeViewActive={activeView === 'scope'}
         {navigate}
         {config}
@@ -1837,6 +1906,9 @@
         headerIconBadge
         headerIconBadgeClass="border-warning/25 bg-warning/10 text-warning"
         serverFiltered
+        projects={scopeState.projects}
+        selectedProjectIds={fileSearchProjectIds}
+        onSelectedProjectsChange={setFileSearchScope}
         onBack={backToCommandPaletteFromFileSearch}
         onQueryChange={handleFileSearchQuery}
         onSelect={handleFileSearchSelection}
@@ -1862,6 +1934,9 @@
         headerIconBadge
         headerIconBadgeClass="border-info/25 bg-info/10 text-info"
         serverFiltered
+        projects={scopeState.projects}
+        selectedProjectIds={threadSearchProjectIds}
+        onSelectedProjectsChange={setThreadSearchScope}
         onBack={backToCommandPaletteFromThreadSearch}
         onQueryChange={handleThreadSearchQuery}
         onSelect={handleThreadSearchSelection}
@@ -1899,6 +1974,7 @@
     {/key}
   {/if}
   <Toaster />
+  <TextSelectionContextMenu />
   <TooltipHost />
   {#if pipState.active && pipState.frameDataUrl !== null}
     {#await import('$lib/components/pip/PipOverlay.svelte') then { default: PipOverlay }}

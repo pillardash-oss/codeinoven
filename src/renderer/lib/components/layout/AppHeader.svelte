@@ -1,10 +1,10 @@
 <script lang="ts">
+  import { type Component } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { toast } from 'svelte-sonner'
   import { projectIconOnError, getProjectIcon } from '$lib/project-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
-  import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -17,11 +17,8 @@
     isSettingsView,
     type MainView
   } from '$lib/stores/renderer-recovery.svelte'
-  import ProjectCreateControl from '$lib/components/shared/ProjectCreateControl.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { preloadScopeChunk } from '$lib/page-preload'
-  import ScopeCreateControl from '$lib/components/shared/ScopeCreateControl.svelte'
-  import ThreadSearchControl from '$lib/components/shared/ThreadSearchControl.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gatewayState } from '$lib/stores/gateway.svelte'
   import type { EditorId, Project, Thread } from '$shared/types'
@@ -40,9 +37,9 @@
     GitPullRequest,
     Globe,
     Kanban,
+    Loader2,
     MessageSquare,
     SquareDashedKanban,
-    Loader2,
     Timeline
   } from '@lucide/svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
@@ -50,69 +47,35 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
-  import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import ProjectInfoDropdown from '$lib/components/shared/ProjectInfoDropdown.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
-  import { DropdownMenu } from 'bits-ui'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
+  import { viewActions } from '$lib/stores/view-actions.svelte'
+  import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
+  import { DropdownMenu } from 'bits-ui'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
   import {
     coordinatorHasActiveDelegates,
-    DEFAULT_SCOPE_BUCKET_ID,
     INBOX_PROJECT_ID,
     isOrchestrationChildThread,
     isThreadRetryPaused,
-    isThreadWorking,
-    type ScopeBucket
+    isThreadWorking
   } from '$shared/types'
   import { SvelteSet } from 'svelte/reactivity'
-  import { type Component } from 'svelte'
 
   type View = MainView
-
-  type ProjectViewMode = 'projects' | 'scope' | 'threads'
 
   interface Props {
     activeView: View
     navigate: (view: View) => void
     goBack: () => void
     goForward: () => void
-    onProjectCreated?: (project: Project) => void | Promise<void>
-    onScopeThreadOpen?: (thread: Thread) => void | Promise<void>
   }
 
-  let {
-    activeView,
-    navigate,
-    goBack,
-    goForward,
-    onProjectCreated = () => undefined,
-    onScopeThreadOpen = () => undefined
-  }: Props = $props()
-
-  /** The three ways to view the project workspace — Projects, Scope, Threads. */
-  const projectViewOptions: Array<{ id: ProjectViewMode; label: string; icon: Component }> = [
-    { id: 'projects', label: 'Projects', icon: FolderKanban },
-    { id: 'threads', label: 'Threads', icon: Timeline },
-    { id: 'scope', label: 'Scope', icon: Kanban }
-  ]
-
-  /**
-   * The project view the header's composite button represents: the active
-   * view while the app is in one of the project views, otherwise the last
-   * project view visited (so the button survives trips to Chats or Settings).
-   */
-  const projectViewMode = $derived(
-    activeView === 'scope' || activeView === 'threads' || activeView === 'projects'
-      ? activeView
-      : navigationHistoryState.lastProjectView
-  )
-
-  /** True while the app is actually in the represented project view. */
-  let projectViewActive = $derived(projectViewMode === activeView)
+  let { activeView, navigate, goBack, goForward }: Props = $props()
 
   function threadWorkingForIndicator(thread: Thread): boolean {
     return agentRuns.hasSettled(thread.projectId, thread.id)
@@ -122,32 +85,6 @@
 
   function threadBusyForIndicator(thread: Thread): boolean {
     return isThreadRetryPaused(thread) || threadWorkingForIndicator(thread)
-  }
-
-  /** True while any project thread is actively being worked on. */
-  let anyProjectWorking = $derived(
-    scopeState.allScopeThreads.some(
-      (t) => !t.archived && t.projectId !== INBOX_PROJECT_ID && threadWorkingForIndicator(t)
-    )
-  )
-
-  /** True while any standalone chat is actively being worked on. */
-  let anyChatWorking = $derived(
-    scopeState.allScopeThreads.some(
-      (t) => !t.archived && t.projectId === INBOX_PROJECT_ID && threadWorkingForIndicator(t)
-    )
-  )
-
-  let projectViewMenuOpen = $state(false)
-
-  /** Switch the project view via the header dropdown. No-op when already there. */
-  function selectProjectView(view: ProjectViewMode): void {
-    projectViewMenuOpen = false
-    if (view === 'projects') {
-      if (activeView !== 'projects') void onPrimaryNavClick('projects')
-    } else if (activeView !== view) {
-      navigate(view)
-    }
   }
 
   /** Return the most recently visited thread of one navigation family. */
@@ -189,7 +126,7 @@
     'settings-profile': 'Profile',
     remote: 'Remote',
     settings: 'Settings',
-    scope: 'Scope',
+    scope: 'Scope Board',
     threads: 'Threads'
   }
 
@@ -287,6 +224,23 @@
     void scopeState.ensureBoardLoaded(thread.projectId)
   }
 
+  /** Track the primary view (Projects/Threads/Chats) the user was on before
+   *  entering the scope view, so the header Scope Board button can toggle
+   *  between scope view and whatever came last. All other views (settings,
+   *  remote…) keep the previous primary view. */
+  type PrimaryView = 'projects' | 'chats' | 'threads'
+  let lastViewBeforeScope: PrimaryView = $state('projects')
+  $effect(() => {
+    if (
+      activeView === 'projects'
+      || activeView === 'projects-scope'
+      || activeView === 'threads'
+      || activeView === 'chats'
+    ) {
+      lastViewBeforeScope = activeView === 'projects-scope' ? 'projects' : activeView
+    }
+  })
+
   /** Navigate to a primary view without any sidebar toggling — used by the
    *  Cmd/Ctrl+0-4 view shortcuts so they always land on the requested view. */
   async function navigateToView(view: 'projects' | 'chats' | 'scope' | 'threads'): Promise<void> {
@@ -328,19 +282,104 @@
   async function onPrimaryNavClick(
     view: 'projects' | 'chats' | 'scope' | 'threads'
   ): Promise<void> {
-    const isCurrent = view === activeView
-    await navigateToView(view)
-    // The primary nav button toggles the sidebar when already on a project view
-    // (Scope, when already on scope, exits back to Projects instead).
-    if (isCurrent && view !== 'scope') {
-      sidebarState.toggle()
+    // Scope Board keeps its toggle behaviour: already open → last view.
+    if (view === 'scope' && view === activeView) {
+      await navigateToView(lastViewBeforeScope)
+      return
     }
+    // Selecting the view already open from the dropdown is a no-op — in
+    // particular, scoped threads → projects must simply close the board (the
+    // caller clears it) without hiding the sidebar.
+    if (view === activeView) return
+    await navigateToView(view)
   }
+
+  // ─── View switcher dropdown (app header) ─────────────────────────────
+  // One dropdown exposes every primary view. "Projects / Threads / Chats"
+  // navigate; "Scoped threads" toggles the scope board sidebar over the
+  // Projects view; "Scope Board" opens the full-page scope view and acts as
+  // a toggle back to the last primary view.
+  type HeaderViewOptionId = 'projects' | 'threads' | 'scoped-threads' | 'scope-board' | 'chats'
+  interface HeaderViewOption {
+    id: HeaderViewOptionId
+    label: string
+    icon: Component
+    keys: readonly string[]
+    select: () => void
+  }
+
+  async function toggleScopedThreads(): Promise<void> {
+    if (activeView === 'projects-scope' || (activeView === 'projects' && scopeState.sidebarContext)) {
+      // Off: land on the plain projects view — navigate() closes the sidebar.
+      await navigateToView('projects')
+      return
+    }
+    await openProjectWithScopeState()
+  }
+
+  function headerViewOptions(): HeaderViewOption[] {
+    return [
+      {
+        id: 'projects',
+        label: 'Projects',
+        icon: FolderKanban,
+        keys: ['mod', '1'],
+        select: () => {
+          if (scopeState.sidebarContext) scopeState.clearSidebarContext()
+          void onPrimaryNavClick('projects')
+        }
+      },
+      {
+        id: 'threads',
+        label: 'Threads',
+        icon: Timeline,
+        keys: ['mod', '2'],
+        select: () => void onPrimaryNavClick('threads')
+      },
+      {
+        id: 'scoped-threads',
+        label: 'Scoped threads',
+        icon: SquareDashedKanban,
+        keys: ['mod', '3'],
+        select: () => void toggleScopedThreads()
+      },
+      {
+        id: 'scope-board',
+        label: 'Scope Board',
+        icon: Kanban,
+        keys: ['mod', '4'],
+        select: () => void onPrimaryNavClick('scope')
+      },
+      {
+        id: 'chats',
+        label: 'Chats',
+        icon: MessageSquare,
+        keys: ['mod', '0'],
+        select: () => void onPrimaryNavClick('chats')
+      }
+    ]
+  }
+
+  /** The currently active option is shown with brighter text in the menu. */
+  let activeHeaderViewOption = $derived.by((): HeaderViewOptionId => {
+    if (activeView === 'scope') return 'scope-board'
+    if (activeView === 'projects-scope' || (activeView === 'projects' && scopeState.sidebarContext)) {
+      return 'scoped-threads'
+    }
+    if (activeView === 'threads') return 'threads'
+    if (activeView === 'chats') return 'chats'
+    return 'projects'
+  })
+
+  let activeHeaderViewLabel = $derived.by(() => {
+    const option = headerViewOptions().find((candidate) => candidate.id === activeHeaderViewOption)
+    return option?.label ?? 'Projects'
+  })
 
   /** Cmd/Ctrl+3 — Projects view with the scope sidebar active for the current
    *  thread (or project). Idempotent: never turns scope state off. */
   async function openProjectWithScopeState(): Promise<void> {
-    if (activeView !== 'projects') {
+    if (activeView !== 'projects' && activeView !== 'projects-scope') {
       await navigateToView('projects')
       // Coming back from another view — restore a stashed scope context first.
       if (scopeState.stashedSidebarContext) {
@@ -370,65 +409,13 @@
     }
   }
 
-  function openScopeThread(thread: Thread): void {
-    scopeState.showSidebarForThread(thread)
-    void onScopeThreadOpen(thread)
-  }
-
-  async function toggleProjectScopeState(): Promise<void> {
-    if (activeView !== 'projects') {
-      // Coming back from another view — try restoring a stashed context first.
-      if (scopeState.stashedSidebarContext) {
-        // Remember the current chat thread before switching away
-        scopeState.stashedChatThreadId = workspaceState.selectedThread?.id ?? null
-        navigate('projects')
-        scopeState.restoreStashedSidebarContext()
-        // Restore the project thread we were on before switching to chats
-        if (scopeState.stashedProjectThreadId) {
-          void restoreThread(scopeState.stashedProjectThreadId)
-        }
-        return
-      }
-      if (activeView === 'scope') {
-        scopeState.clearSidebarContext()
-      }
-      navigate('projects')
-    }
-
-    // If we came back from chats via the Projects nav and the scope sidebar
-    // was stashed, restore it now instead of building a fresh context.
-    if (scopeState.stashedSidebarContext) {
-      scopeState.restoreStashedSidebarContext()
-      if (scopeState.stashedProjectThreadId) {
-        void restoreThread(scopeState.stashedProjectThreadId)
-      }
-      return
-    }
-
-    const project = workspaceState.activeProject
-    if (!project) {
-      if (scopeState.sidebarContext) scopeState.clearSidebarContext()
-      return
-    }
-
-    if (scopeState.sidebarContext) {
-      scopeState.clearSidebarContext()
-      return
-    }
-
-    const thread = workspaceState.selectedThread
-    const targetProjectId = thread?.projectId ?? project.id
-
-    const allThreads: Thread[] = await invoke('thread:listAll')
-    scopeState.setThreads(allThreads)
-    await scopeState.activateProject(targetProjectId)
-
-    if (thread) {
-      scopeState.showSidebarForThread(thread)
-    } else {
-      scopeState.showSidebarForProject(targetProjectId)
-    }
-  }
+  /** True while any project thread is actively being worked on — a gentle
+   *  pulse on the view switcher title. */
+  let anyProjectWorking = $derived(
+    scopeState.allScopeThreads.some(
+      (t) => !t.archived && t.projectId !== INBOX_PROJECT_ID && threadWorkingForIndicator(t)
+    )
+  )
 
   $effect(() => {
     memoryProposalState.setContext(workspaceState.selectedThread?.projectId ?? null)
@@ -572,40 +559,18 @@
     }
   }
 
-  /** Title shown in the header — real title once generated, else a draft label. */
   let headerThreadTitle = $derived(
     workspaceState.selectedThread ? effectiveThreadTitle(workspaceState.selectedThread) : ''
   )
 
-  let scopeBucket = $derived.by((): ScopeBucket | null => {
-    const thread = workspaceState.selectedThread
-    if (!thread || chatMode) return null
-    const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
-    return (
-      scopeState.bucketFor(thread.projectId, bucketId) ??
-      scopeState.bucketFor(thread.projectId, DEFAULT_SCOPE_BUCKET_ID) ?? {
-        id: DEFAULT_SCOPE_BUCKET_ID,
-        name: 'Default',
-        sortOrder: 0,
-        collapsed: false,
-        collapsedSlices: [],
-        root: { kind: 'project' } as const
-      }
-    )
-  })
-
-  /**
-   * Always resolve the scope board for the open thread's project so the scope
-   * badge renders on mount and on every thread change, regardless of whether
-   * the scope sidebar or scope view was ever opened for that project.
+  /** Always resolve the scope board for the open thread's project so the
+   *  composer scope shoe renders on mount and on every thread change.
    */
   $effect(() => {
     const thread = workspaceState.selectedThread
     if (!thread || chatMode || thread.projectId === INBOX_PROJECT_ID) return
     void scopeState.ensureBoardLoaded(thread.projectId)
   })
-
-
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} />
@@ -641,155 +606,76 @@
       </button>
     </div>
 
-    <!-- Project view group: active project view button + view switcher dropdown -->
-    <div class="relative">
-      <div
-        class="flex h-7 items-center overflow-hidden rounded-md transition-colors duration-150 {projectViewActive
-          ? 'bg-foreground text-app'
-          : ''} {projectViewActive && projectViewMode !== 'scope' && sidebarState.collapsed
-          ? 'opacity-60'
-          : ''}"
-      >
-        {#if projectViewMode === 'scope'}
-          <button
-            class="flex h-full items-center gap-1.5 px-2.5 transition-colors duration-150 {projectViewActive
-              ? 'text-app'
-              : 'text-muted hover:bg-elevated hover:text-foreground'}"
-            aria-label={projectViewActive ? 'Exit scope view' : 'Open scope view'}
-            title="Scope"
-            onmouseenter={() => {
-              preloadNavigationThreads('projects')
-              preloadScopeChunk()
-            }}
-            onclick={() => void onPrimaryNavClick('scope')}
+    <!-- View switcher dropdown + per-view quick actions -->
+    <div class="flex items-center gap-0.5">
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger
+          class="flex h-7 items-center gap-1 rounded-md px-1.5 text-[0.6875rem] font-medium text-foreground transition-colors duration-150 hover:bg-elevated"
+          aria-label="Switch view"
+          title="Switch view"
+          data-onboarding="view-switcher"
+        >
+          <span class="truncate" class:animate-pulse={anyProjectWorking}
+            >{activeHeaderViewLabel}</span
           >
-            <Kanban size={14} strokeWidth={1.8} class={anyProjectWorking ? 'animate-pulse' : ''} />
-            <span class="header-control-label text-[0.6875rem] font-medium">Scope</span>
-          </button>
-        {:else if projectViewMode === 'threads'}
-          <button
-            class="flex h-full items-center gap-1.5 px-2.5 transition-colors duration-150 {projectViewActive
-              ? 'text-app'
-              : 'text-muted hover:bg-elevated hover:text-foreground'}"
-            aria-label={projectViewActive
-              ? sidebarState.collapsed
-                ? 'Show Threads sidebar'
-                : 'Hide Threads sidebar'
-              : 'Open Threads'}
-            title="Threads"
-            onmouseenter={() => preloadNavigationThreads('projects')}
-            onclick={() => void onPrimaryNavClick('threads')}
+          <ChevronDown size={12} class="shrink-0 text-muted" />
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            side="bottom"
+            align="start"
+            sideOffset={6}
+            collisionPadding={8}
+            class="z-50 w-56 overflow-hidden rounded-md border bg-surface p-1 shadow-lg"
           >
-            <Timeline
-              size={14}
-              strokeWidth={1.8}
-              class={anyProjectWorking ? 'animate-pulse' : ''}
-            />
-            <span class="header-control-label text-[0.6875rem] font-medium">Threads</span>
-          </button>
-        {:else}
-          <button
-            class="flex h-full items-center gap-1.5 px-2.5 transition-colors duration-150 {projectViewActive
-              ? 'text-app'
-              : 'text-muted hover:bg-elevated hover:text-foreground'}"
-            aria-label={projectViewActive
-              ? sidebarState.collapsed
-                ? 'Show Projects sidebar'
-                : 'Hide Projects sidebar'
-              : 'Open Projects'}
-            title="Projects"
-            onmouseenter={() => preloadNavigationThreads('projects')}
-            onclick={() => void onPrimaryNavClick('projects')}
-          >
-            <FolderKanban
-              size={14}
-              strokeWidth={1.8}
-              class={anyProjectWorking ? 'animate-pulse' : ''}
-            />
-            <span class="header-control-label text-[0.6875rem] font-medium">Projects</span>
-          </button>
-          <div class="mx-0.5 h-4 w-px bg-border/40" aria-hidden="true"></div>
-          <button
-            class="flex h-full items-center px-1.5 transition-colors duration-150 {projectViewActive
-              ? 'text-app'
-              : 'text-muted hover:bg-elevated hover:text-foreground'}"
-            aria-label={scopeState.sidebarContext ? 'Exit scope state' : 'Show scope state'}
-            title="Scope state"
-            onmouseenter={() => preloadNavigationThreads('projects')}
-            onclick={() => void toggleProjectScopeState()}
-          >
-            <SquareDashedKanban size={14} strokeWidth={1.8} />
-          </button>
-        {/if}
-        <div class="mx-0.5 h-4 w-px bg-border/40" aria-hidden="true"></div>
-        <DropdownMenu.Root bind:open={projectViewMenuOpen}>
-          <DropdownMenu.Trigger
-            class="flex h-full items-center px-1 transition-colors duration-150 {projectViewActive
-              ? 'text-app'
-              : 'text-muted hover:bg-elevated hover:text-foreground'}"
-            aria-label="Switch project view"
-            title="Switch project view"
-          >
-            <ChevronDown size={13} strokeWidth={1.8} />
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="bottom"
-              align="start"
-              sideOffset={6}
-              collisionPadding={8}
-              class="z-50 w-44 overflow-hidden rounded-md border bg-surface p-1 shadow-lg"
-            >
-              {#each projectViewOptions as option (option.id)}
-                {@const Icon = option.icon}
-                {@const isSelected = projectViewMode === option.id}
-                <DropdownMenu.Item
-                  class={[
-                    'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors',
-                    isSelected
-                      ? 'text-foreground'
-                      : 'text-muted hover:bg-elevated focus:bg-elevated'
-                  ]}
-                  onpointerenter={() => {
+            {#each headerViewOptions() as option (option.id)}
+              {@const Icon = option.icon}
+              {@const isSelected = option.id === activeHeaderViewOption}
+              <DropdownMenu.Item
+                class={[
+                  'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors',
+                  isSelected ? 'text-foreground' : 'text-muted hover:bg-elevated focus:bg-elevated'
+                ]}
+                onpointerenter={() => {
+                  if (option.id === 'chats') {
+                    preloadNavigationThreads('chats')
+                  } else {
                     preloadNavigationThreads('projects')
-                    if (option.id === 'scope') preloadScopeChunk()
-                  }}
-                  onSelect={() => selectProjectView(option.id)}
-                >
-                  <Icon size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
-                  <span class="flex-1 truncate">{option.label}</span>
-                  {#if isSelected}
-                    <Check size={14} class="text-primary" />
-                  {/if}
-                </DropdownMenu.Item>
-              {/each}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+                  }
+                  if (option.id === 'scope-board' || option.id === 'scoped-threads')
+                    preloadScopeChunk()
+                }}
+                onSelect={option.select}
+              >
+                <Icon size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
+                <span class="flex-1 whitespace-nowrap">{option.label}</span>
+                <ShortcutHint keys={option.keys} />
+              </DropdownMenu.Item>
+            {/each}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+
+      <!-- Per-view quick actions, registered by the workspace store -->
+      <div class="flex items-center gap-0.5">
+        {#each viewActions.items as item (item.id)}
+          {#if item.component}
+            {@const ActionControl = item.component}
+            <ActionControl {...item.props ?? {}} />
+          {:else if item.icon && item.run}
+            {@const ActionIcon = item.icon}
+            <button
+              class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+              aria-label={item.ariaLabel ?? item.title ?? 'Action'}
+              title={item.title}
+              onclick={() => item.run?.()}
+            >
+              <ActionIcon size={14} />
+            </button>
+          {/if}
+        {/each}
       </div>
     </div>
-
-    <!-- Chats — standalone group, distinct from the project views. -->
-    <button
-      class="flex h-7 items-center gap-1.5 rounded-md px-2.5 transition-colors duration-150 {activeView ===
-      'chats'
-        ? 'bg-foreground text-app'
-        : 'text-muted hover:bg-elevated hover:text-foreground'} {activeView === 'chats' &&
-      sidebarState.collapsed
-        ? 'opacity-60'
-        : ''}"
-      aria-label={activeView === 'chats'
-        ? sidebarState.collapsed
-          ? 'Show Chats sidebar'
-          : 'Hide Chats sidebar'
-        : 'Open Chats'}
-      title="Chats"
-      onmouseenter={() => preloadNavigationThreads('chats')}
-      onclick={() => void onPrimaryNavClick('chats')}
-    >
-      <MessageSquare size={14} strokeWidth={1.8} class={anyChatWorking ? 'animate-pulse' : ''} />
-      <span class="header-control-label text-[0.6875rem] font-medium">Chats</span>
-    </button>
   </nav>
 
   <!-- Scope view header area — separator, scrollable tabs, sticky tools -->
@@ -842,23 +728,6 @@
             </button>
           {/each}
         </div>
-      </div>
-
-      <div class="ml-2 flex shrink-0 items-center gap-0.5 bg-surface">
-        <ProjectCreateControl
-          projects={scopeState.projectRecords}
-          {onProjectCreated}
-          onExisting={(project) => switchProject(project.id)}
-          title="Add project"
-        />
-        <ThreadSearchControl
-          threads={scopeState.currentProjectThreads}
-          contextLabel="threads in this project"
-          title="Search threads in this project"
-          onOpen={openScopeThread}
-          fts={{ projectId: scopeState.activeProjectId ?? undefined }}
-        />
-        <ScopeCreateControl title="New scope" />
       </div>
     </div>
   {:else}
@@ -937,34 +806,6 @@
               </span>
             {/if}
           </div>
-          {#if scopeBucket && !workspaceState.specStudioOpen}
-            <div
-              class="titlebar-no-drag absolute left-1/2 top-full mt-0.75 -translate-x-1/2 whitespace-nowrap"
-            >
-              <button
-                class="cursor-pointer"
-                title="Show scope view for {scopeBucket.name}"
-                aria-label="Show scope view for {scopeBucket.name}"
-                onclick={async () => {
-                  if (activeView !== 'projects') {
-                    navigate('projects')
-                  }
-                  const allThreads: Thread[] = await invoke('thread:listAll')
-                  scopeState.setThreads(allThreads)
-                  await scopeState.activateProject(thread.projectId)
-                  scopeState.showSidebarForThread(thread)
-                  const project =
-                    scopeState.projectRecords.find(
-                      (candidate) => candidate.id === thread.projectId
-                    ) ?? null
-                  workspaceState.openThread(thread, project)
-                  void scopeState.ensureBoardLoaded(thread.projectId)
-                }}
-              >
-                <ScopeBadge bucket={scopeBucket} size="xs" />
-              </button>
-            </div>
-          {/if}
         </div>
       {:else}
         <div class="pointer-events-none">

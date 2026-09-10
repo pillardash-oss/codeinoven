@@ -14,6 +14,7 @@
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type {
+    AgentBankedResets,
     AgentContextUsage,
     AgentHarnessUsage,
     AgentRateLimitWindow,
@@ -144,6 +145,23 @@
     return `Resets in ${duration} · ${date}`
   }
 
+  const expiryFormatter = new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short'
+  })
+
+  function formatExpiry(value: number | null | undefined): string {
+    if (value === null) return 'Does not expire'
+    if (value === undefined || !Number.isFinite(new Date(value).getTime())) {
+      return 'Expiry time unavailable'
+    }
+    return `Expires ${expiryFormatter.format(value)}`
+  }
+
   function readableStatus(value: string | undefined): string {
     if (!value) return 'Status unavailable'
     const normalized = value.replaceAll('_', ' ')
@@ -185,10 +203,7 @@
   {#each limits as limit (limit.id)}
     {@const percent = quotaPercent(limit)}
     {@const overage = overageLabel(limit)}
-    <div
-      transition:slide={{ duration: 300 }}
-      class="overflow-hidden"
-    >
+    <div transition:slide={{ duration: 300 }} class="overflow-hidden">
       <div class="mb-1 flex items-center justify-between gap-3 text-[0.625rem]">
         <span class="font-medium text-muted">{limit.label}</span>
         <span class="tabular-nums text-dimmed">
@@ -210,7 +225,10 @@
           aria-valuemax="100"
           aria-valuenow={Math.round(percent)}
         >
-          <div class="h-full rounded-full bg-info transition-[width] duration-700 ease-out" style={`width: ${percent}%`}></div>
+          <div
+            class="h-full rounded-full bg-info transition-[width] duration-700 ease-out"
+            style={`width: ${percent}%`}
+          ></div>
         </div>
       {/if}
       <p class="mt-1 text-[0.5625rem] text-dimmed">{formatReset(limit.resetsAt)}</p>
@@ -221,16 +239,25 @@
   {/each}
 {/snippet}
 
-{#snippet bankedResetRow(availableCount: number)}
+{#snippet bankedResetRow(resets: AgentBankedResets)}
   <div transition:slide={{ duration: 250 }} class="rounded-md border border-border bg-app/40 p-2.5">
     <div class="flex items-center gap-2">
       <BatteryCharging size={16} class="shrink-0 text-info" aria-hidden="true" />
       <span class="text-base leading-none font-semibold tabular-nums text-foreground">
-        {availableCount}
+        {resets.availableCount}
       </span>
       <span class="text-[0.625rem] font-medium text-muted">
-        banked reset{availableCount === 1 ? '' : 's'} available
+        banked reset{resets.availableCount === 1 ? '' : 's'} available
       </span>
+    </div>
+    <div
+      class="mt-1.5 max-h-24 space-y-1 overflow-y-auto text-[0.5625rem] tabular-nums text-dimmed"
+    >
+      {#each resets.credits ?? [] as credit (credit.id)}
+        <p>{formatExpiry(credit.expiresAt)}</p>
+      {:else}
+        <p>Expiry time unavailable</p>
+      {/each}
     </div>
     <button
       type="button"
@@ -247,7 +274,9 @@
 
 {#snippet modelRows(models: HarnessModelUsage[])}
   <div class="rounded-md border border-border bg-app/40 p-2">
-    <p class="mb-1.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">Models used</p>
+    <p class="mb-1.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
+      Models used
+    </p>
     {#each models as model (`${model.providerId}:${model.modelId}:${model.thinkingLevel ?? ''}`)}
       <div class="flex items-baseline justify-between gap-3 py-0.5 text-[0.625rem]">
         <span class="flex min-w-0 items-center gap-1.5">
@@ -327,7 +356,7 @@
           <p class="text-[0.5625rem] text-dimmed">Credits: {creditsLine(entry)}</p>
         {/if}
         {#if entry.bankedResets?.availableCount}
-          {@render bankedResetRow(entry.bankedResets.availableCount)}
+          {@render bankedResetRow(entry.bankedResets)}
         {/if}
       </div>
     {/if}
@@ -378,14 +407,14 @@
       {/if}
       {@render limitRows(harnessUsage[0].rateLimits)}
       {#if harnessUsage[0]?.bankedResets?.availableCount}
-        {@render bankedResetRow(harnessUsage[0].bankedResets.availableCount)}
+        {@render bankedResetRow(harnessUsage[0].bankedResets)}
       {/if}
     </div>
   {/if}
 
   {#if !multiHarness && !harnessUsage[0]?.bankedResets && usage?.bankedResets?.availableCount}
     <div class="mt-3 border-t border-border pt-3">
-      {@render bankedResetRow(usage.bankedResets.availableCount)}
+      {@render bankedResetRow(usage.bankedResets)}
     </div>
   {/if}
 
@@ -409,7 +438,10 @@
       aria-valuemax="100"
       aria-valuenow={Math.round(boundedPercent ?? 0)}
     >
-      <div class={`h-full rounded-full ${fillClass} transition-[width] duration-700 ease-out`} style={`width: ${boundedPercent}%`}></div>
+      <div
+        class={`h-full rounded-full ${fillClass} transition-[width] duration-700 ease-out`}
+        style={`width: ${boundedPercent}%`}
+      ></div>
     </div>
     {#if usage?.contextWindow && usage.contextUsed !== undefined}
       <div class="mt-2 grid grid-cols-3 gap-2 text-[0.5625rem] text-dimmed">

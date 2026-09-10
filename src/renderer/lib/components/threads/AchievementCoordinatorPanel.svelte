@@ -134,8 +134,13 @@
         }
   })
 
-  function chooseModel(providerId: string, modelId: string, harnessId: string): void {
-    onModelChange({ ...auditorSettings, harnessId, providerId, modelId })
+  function chooseModel(
+    providerId: string,
+    modelId: string,
+    harnessId: string,
+    accountId?: string
+  ): void {
+    onModelChange({ ...auditorSettings, harnessId, accountId, providerId, modelId })
   }
 
   function chooseThinking(level: ThinkingLevel): void {
@@ -238,6 +243,7 @@
           harnessId={auditorSettings.harnessId}
           providerId={auditorSettings.providerId}
           modelId={auditorSettings.modelId}
+          accountId={auditorSettings.accountId}
           {favoriteModels}
           {recentModels}
           {onRemoveRecent}

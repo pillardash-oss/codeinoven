@@ -29,6 +29,7 @@ import { classifyProviderIssue } from '../../lib/provider-issue'
 import { resolveFastModelId } from '../../lib/fast-inference'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
+import { GATEWAY_TOOLS } from '../../lib/gateway-tools'
 import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment } from './cli-environment'
@@ -42,7 +43,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
-import { QuestionRequestGoneError } from './driver.interface'
+import { InactiveQuestionTurnError, QuestionRequestGoneError } from './driver.interface'
 import {
   PersistentCliDriver,
   type CliLineParseContext,
@@ -77,7 +78,56 @@ const CODEX_FALLBACK_MODELS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
 const CODEX_COMPACTION_TIMEOUT_MS = 180_000
 const CODEX_USAGE_TIMEOUT_MS = 15_000
 const CODEX_APP_SERVER_REQUEST_TIMEOUT_MS = 30_000
-const CODEX_APP_SERVER_FEATURES = ['default_mode_request_user_input'] as const
+/** Compatibility fallback for Codex versions that expose their native async
+ * question item in default mode. The CIO-owned dynamic tool below is the
+ * authoritative, mode-independent path. */
+const CODEX_DEFAULT_QUESTION_CONFIG = 'tools.experimental_request_user_input={}'
+const CODEX_ASYNC_QUESTION_METHOD = 'item/tool/requestUserInputAsync'
+const CODEX_DYNAMIC_QUESTION_METHOD = 'item/tool/call:cio_ask_user'
+const CODEX_QUESTION_TOOL_NAME = 'cio_ask_user'
+const CODEX_QUESTION_TOOL = {
+  name: CODEX_QUESTION_TOOL_NAME,
+  description:
+    'Ask the user one to three structured questions in CodeInOven and wait for their answers. Use this instead of writing a question or choices as assistant text.',
+  inputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      questions: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 3,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            question: { type: 'string', minLength: 1 },
+            header: { type: 'string', minLength: 1, maxLength: 40 },
+            options: {
+              type: 'array',
+              minItems: 2,
+              maxItems: 3,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  label: { type: 'string', minLength: 1 },
+                  description: { type: 'string', minLength: 1 }
+                },
+                required: ['label', 'description']
+              }
+            },
+            multiple: { type: 'boolean' }
+          },
+          required: ['question', 'header', 'options']
+        }
+      }
+    },
+    required: ['questions']
+  }
+} as const
+const CODEX_QUESTION_INSTRUCTION =
+  'The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode.'
 
 interface CodexAppServerHost {
   child: ChildProcess
@@ -279,6 +329,7 @@ export class CodexDriver extends PersistentCliDriver {
     nativeUtilities: ['web_search', 'web_fetch']
   }
   private activeTurns = new Map<string, CodexAppServerTurn>()
+  private utilityEndpoints = new Map<string, { url: string; token: string }>()
   private modelsWithoutReasoningSummaries = new Set<string>()
   private compactionsByThreadId = new Map<string, CodexCompactionRun>()
   private contextUsageByThreadId = new Map<string, CodexContextUsageWaiter>()
@@ -292,7 +343,7 @@ export class CodexDriver extends PersistentCliDriver {
   protected async ensureCliReady(): Promise<void> {
     try {
       await runHarnessCommand('codex', ['--version'], {
-        env: buildProcessEnvironment(),
+        env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
         timeoutMs: 10_000
       })
     } catch (error) {
@@ -304,7 +355,8 @@ export class CodexDriver extends PersistentCliDriver {
   constructor(
     storage: StorageEngine,
     private readonly baseUrlProviders?: BaseUrlProviderService,
-    private readonly secretVault?: SecretVault
+    private readonly secretVault?: SecretVault,
+    private readonly accountEnvironment: NodeJS.ProcessEnv = {}
   ) {
     super(storage)
   }
@@ -458,6 +510,15 @@ export class CodexDriver extends PersistentCliDriver {
     return this.cheapestCandidate(projectPath)
   }
 
+  async publishUtilityGatewayEndpoint(
+    _projectPath: string,
+    sessionId: string,
+    endpoint: { url: string; token: string } | null
+  ): Promise<void> {
+    if (endpoint) this.utilityEndpoints.set(sessionId, endpoint)
+    else this.utilityEndpoints.delete(sessionId)
+  }
+
   /** Start a Codex turn through app-server so the same native turn can be steered. */
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
@@ -486,14 +547,27 @@ export class CodexDriver extends PersistentCliDriver {
     this.appendUserMessage(session, options)
 
     try {
+      const dynamicTools = [
+        CODEX_QUESTION_TOOL,
+        ...(this.utilityEndpoints.has(session.id)
+          ? GATEWAY_TOOLS.map(({ name, description, inputSchema }) => ({
+              name,
+              description,
+              inputSchema
+            }))
+          : [])
+      ]
+      const developerInstructions = codexDeveloperInstructions(options.systemPrompt)
       const threadResult = session.nativeSessionId
         ? await this.appServerRequest(host, 'thread/resume', {
             threadId: session.nativeSessionId,
-            developerInstructions: options.systemPrompt ?? null
+            dynamicTools,
+            developerInstructions
           })
         : await this.appServerRequest(host, 'thread/start', {
             cwd: projectPath,
-            developerInstructions: options.systemPrompt ?? null,
+            dynamicTools,
+            developerInstructions,
             model: options.settings.modelId,
             approvalPolicy: codexApprovalPolicy(
               options.readOnly === true,
@@ -602,8 +676,21 @@ export class CodexDriver extends PersistentCliDriver {
     answers: string[][]
   ): Promise<void> {
     const request = this.serverRequests.get(requestId)
-    if (!request || !isCodexQuestionRequest(request.method)) {
+    if (
+      !request ||
+      (!isCodexQuestionRequest(request.method) &&
+        !isCodexAsyncQuestion(request) &&
+        !isCodexDynamicQuestion(request))
+    ) {
       throw new QuestionRequestGoneError(sessionId, requestId, this.name)
+    }
+    if (isCodexDynamicQuestion(request)) {
+      this.completeDynamicQuestion(request, answers)
+      return
+    }
+    if (isCodexAsyncQuestion(request)) {
+      await this.continueAsyncQuestion(request, answers)
+      return
     }
     const questionIds = codexQuestionIds(request.params)
     const mappedAnswers: Record<string, { answers: string[] }> = {}
@@ -620,13 +707,89 @@ export class CodexDriver extends PersistentCliDriver {
     requestId: string
   ): Promise<void> {
     const request = this.serverRequests.get(requestId)
-    if (!request || !isCodexQuestionRequest(request.method)) {
+    if (
+      !request ||
+      (!isCodexQuestionRequest(request.method) &&
+        !isCodexAsyncQuestion(request) &&
+        !isCodexDynamicQuestion(request))
+    ) {
       throw new QuestionRequestGoneError(sessionId, requestId, this.name)
+    }
+    if (isCodexDynamicQuestion(request)) {
+      this.completeDynamicQuestion(request)
+      return
+    }
+    if (isCodexAsyncQuestion(request)) {
+      await this.continueAsyncQuestion(request)
+      return
     }
     const answers: Record<string, { answers: string[] }> = {}
     for (const id of codexQuestionIds(request.params)) answers[id] = { answers: [] }
     this.writeServerResponse(request, { answers })
     this.serverRequests.delete(requestId)
+  }
+
+  private completeDynamicQuestion(request: CodexServerRequest, answers?: string[][]): void {
+    const questions = request.questions ?? normalizeAgentQuestions(request.params)
+    const decisions = questions.map((question, index) => ({
+      question: question.prompt,
+      answers: answers?.[index] ?? []
+    }))
+    const text = answers
+      ? [
+          '[Authoritative agent question answer]',
+          'The user submitted these answers. Continue the original task using them.',
+          JSON.stringify(decisions)
+        ].join('\n')
+      : 'The user dismissed the structured question. Continue the original task without an answer.'
+    this.writeServerResponse(request, {
+      success: true,
+      contentItems: [{ type: 'inputText', text }]
+    })
+    this.serverRequests.delete(String(request.id))
+  }
+
+  private async continueAsyncQuestion(
+    request: CodexServerRequest,
+    answers?: string[][]
+  ): Promise<void> {
+    const active = this.activeTurns.get(request.sessionId)
+    const requestId = String(request.id)
+    if (
+      !active?.nativeThreadId ||
+      !active.turnId ||
+      active.finished ||
+      active.host !== request.host
+    ) {
+      this.serverRequests.delete(requestId)
+      throw new InactiveQuestionTurnError(request.sessionId, requestId, this.name)
+    }
+    const questions = request.questions ?? normalizeAgentQuestions(request.params)
+    const decisions = questions.map((question, index) => ({
+      question: question.prompt,
+      answers: answers?.[index] ?? []
+    }))
+    const text = answers
+      ? [
+          '[Authoritative agent question answer]',
+          'The user submitted these answers. Continue the original task using them.',
+          JSON.stringify(decisions)
+        ].join('\n')
+      : 'The user dismissed the structured question. Continue the original task without an answer.'
+    try {
+      await this.appServerRequest(active.host, 'turn/steer', {
+        threadId: active.nativeThreadId,
+        input: [{ type: 'text', text, text_elements: [] }],
+        expectedTurnId: active.turnId
+      })
+      this.serverRequests.delete(requestId)
+    } catch (error) {
+      if (active.finished || this.activeTurns.get(request.sessionId) !== active) {
+        this.serverRequests.delete(requestId)
+        throw new InactiveQuestionTurnError(request.sessionId, requestId, this.name)
+      }
+      throw error
+    }
   }
 
   override async abort(projectPath: string, sessionId: string): Promise<void> {
@@ -683,6 +846,7 @@ export class CodexDriver extends PersistentCliDriver {
       active.finished = true
     }
     this.activeTurns.clear()
+    this.utilityEndpoints.clear()
     for (const compaction of this.compactionsByThreadId.values()) {
       clearTimeout(compaction.timer)
       compaction.reject(new Error('Codex driver disposed'))
@@ -742,13 +906,15 @@ export class CodexDriver extends PersistentCliDriver {
 
   private async createAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
     const { env: providerEnv, args: providerArgs } = await this.customProviderOverlay()
-    const featureArgs = CODEX_APP_SERVER_FEATURES.flatMap((feature) => ['--enable', feature])
     const prepared = await prepareHarnessInvocation(
       'codex',
-      [...providerArgs, 'app-server', ...featureArgs, '--listen', 'stdio://'],
+      [...providerArgs, 'app-server', '-c', CODEX_DEFAULT_QUESTION_CONFIG, '--listen', 'stdio://'],
       {
         cwd: projectPath,
-        env: { ...buildProcessEnvironment(), ...providerEnv }
+        env: {
+          ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+          ...providerEnv
+        }
       }
     )
     const child = spawn(prepared.command, prepared.args, {
@@ -770,17 +936,12 @@ export class CodexDriver extends PersistentCliDriver {
     // session) so thread-scoped process kills (thread deletion, SourcesPanel
     // "kill thread processes") never SIGTERM the universal session.
     this.observeHarnessProcess(undefined, child, 'codex app-server', projectPath)
-    try {
-      await this.appServerRequest(host, 'initialize', {
-        clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
-        capabilities: { experimentalApi: true }
-      })
-      this.appServerNotify(host, 'initialized')
-      return host
-    } catch (error) {
-      this.stopAppServerHost(host, 'Codex app-server initialization failed')
-      throw error
-    }
+    await this.appServerRequest(host, 'initialize', {
+      clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
+      capabilities: { experimentalApi: true }
+    })
+    this.appServerNotify(host, 'initialized')
+    return host
   }
 
   private async ensureAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
@@ -1004,6 +1165,8 @@ export class CodexDriver extends PersistentCliDriver {
       // The app already owns a presentation-safe user bubble, so broadcasting
       // this transport echo would expose developer instructions in the trace.
       if (item && stringValue(item['type']) !== 'user_message') {
+        if (this.captureAsyncQuestion(active, item)) return
+        if (isCodexDynamicQuestionItem(item)) return
         this.applyCodexResult(
           active,
           parseItem(item, method === 'item/completed', active.session.id)
@@ -1099,6 +1262,34 @@ export class CodexDriver extends PersistentCliDriver {
     void this.completeAppServerTurn(active, message, issue)
   }
 
+  /** Promote Codex's asynchronous default-mode question item into CIO's
+   *  question lifecycle and suppress its Markdown fallback from the transcript. */
+  private captureAsyncQuestion(active: CodexAppServerTurn, item: Record<string, unknown>): boolean {
+    if (stringValue(item['type']) !== 'agent_message' || !Array.isArray(item['questions'])) {
+      return false
+    }
+    const itemId = stringValue(item['id'])
+    if (!itemId) return false
+    if (this.serverRequests.has(itemId)) return true
+    const params = { questions: item['questions'] }
+    const questions = normalizeAgentQuestions(params, stringValue(item['text']))
+    this.serverRequests.set(itemId, {
+      id: itemId,
+      host: active.host,
+      sessionId: active.session.id,
+      method: CODEX_ASYNC_QUESTION_METHOD,
+      params,
+      questions
+    })
+    this.emit({
+      type: 'question.asked',
+      sessionId: active.session.id,
+      requestId: itemId,
+      questions
+    })
+    return true
+  }
+
   private handleServerRequest(
     host: CodexAppServerHost,
     id: string | number,
@@ -1108,6 +1299,40 @@ export class CodexDriver extends PersistentCliDriver {
     const active = this.activeTurnForNotification(params)
     if (!active) {
       this.respondToUnsupportedAppServerRequest(host, id, method)
+      return
+    }
+    if (method === 'item/tool/call') {
+      if (
+        active.host !== host ||
+        params['threadId'] !== active.nativeThreadId ||
+        params['turnId'] !== active.turnId
+      ) {
+        this.respondToUnsupportedAppServerRequest(host, id, method)
+        return
+      }
+      if (params['tool'] === CODEX_QUESTION_TOOL_NAME) {
+        const questionParams = recordValue(params['arguments']) ?? {}
+        const questions = normalizeAgentQuestions(questionParams)
+        const request: CodexServerRequest = {
+          id,
+          host,
+          sessionId: active.session.id,
+          method: CODEX_DYNAMIC_QUESTION_METHOD,
+          params: questionParams,
+          questions
+        }
+        this.serverRequests.set(String(id), request)
+        this.emit({
+          type: 'question.asked',
+          sessionId: active.session.id,
+          requestId: String(id),
+          questions
+        })
+        return
+      }
+      void this.callUtilityTool(active, params).then((result) => {
+        host.child.stdin?.write(`${JSON.stringify({ id, result })}\n`)
+      })
       return
     }
     if (isCodexPermissionRequest(method)) {
@@ -1164,6 +1389,58 @@ export class CodexDriver extends PersistentCliDriver {
 
   private writeServerResponse(request: CodexServerRequest, result: Record<string, unknown>): void {
     request.host.child.stdin?.write(`${JSON.stringify({ id: request.id, result })}\n`)
+  }
+
+  /** Resolve credentials from the owning session on every structured tool call. */
+  private async callUtilityTool(
+    active: CodexAppServerTurn,
+    params: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    try {
+      const tool = GATEWAY_TOOLS.find(({ name }) => name === params['tool'])
+      const endpoint = this.utilityEndpoints.get(active.session.id)
+      if (!tool || !endpoint || active.finished) {
+        throw new Error('The utility tool is not active for this turn')
+      }
+      const response = await fetch(`${endpoint.url}${tool.route}`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${endpoint.token}`,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify(recordValue(params['arguments']) ?? {}),
+        signal: AbortSignal.timeout(120_000)
+      })
+      const result: unknown = await response.json()
+      const body = recordValue(result)
+      if (!response.ok) {
+        throw new Error(stringValue(body?.['error']) ?? 'Utility tool call failed')
+      }
+      const content = body?.['content']
+      const contentItems = Array.isArray(content)
+        ? content.map<Record<string, unknown>>((item: unknown) => {
+            const entry = recordValue(item)
+            if (entry?.['type'] === 'image' && typeof entry['data'] === 'string') {
+              return {
+                type: 'inputImage',
+                imageUrl: `data:${stringValue(entry['mimeType']) ?? 'image/png'};base64,${entry['data']}`
+              }
+            }
+            return { type: 'inputText', text: stringValue(entry?.['text']) ?? JSON.stringify(item) }
+          })
+        : [{ type: 'inputText', text: JSON.stringify(result) }]
+      return { success: body?.['isError'] !== true, contentItems }
+    } catch (error) {
+      return {
+        success: false,
+        contentItems: [
+          {
+            type: 'inputText',
+            text: error instanceof Error ? error.message : 'Utility tool call failed'
+          }
+        ]
+      }
+    }
   }
 
   private async retryWithoutReasoningSummary(active: CodexAppServerTurn): Promise<void> {
@@ -1304,7 +1581,10 @@ export class CodexDriver extends PersistentCliDriver {
         const finalMessage = [...active.session.messages]
           .reverse()
           .find((message) => message.role === 'assistant')
-        if ((telemetry.rateLimits.length > 0 || telemetry.credits || telemetry.bankedResets) && finalMessage) {
+        if (
+          (telemetry.rateLimits.length > 0 || telemetry.credits || telemetry.bankedResets) &&
+          finalMessage
+        ) {
           const event: AgentEvent = {
             type: 'usage.updated',
             sessionId: active.session.id,
@@ -1578,7 +1858,10 @@ export class CodexDriver extends PersistentCliDriver {
     return {
       command: 'codex',
       args,
-      env: { ...buildProcessEnvironment(), ...env },
+      env: {
+        ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+        ...env
+      },
       provenanceModelId: resolveFastModelId(
         options.settings.modelId,
         fastInference ? 'fast' : 'normal'
@@ -1761,8 +2044,23 @@ export class CodexDriver extends PersistentCliDriver {
         this.hostsByProjectPath.has(projectPath) || this.hostsStartingByProjectPath.has(projectPath)
           ? await this.ensureAppServerHost(projectPath)
           : (temporaryHost = await this.createAppServerHost(projectPath))
+      const usage = mapCodexRateLimits(await this.appServerRequest(host, 'account/rateLimits/read'))
+      const now = Date.now()
+      let selectedCredit: NonNullable<AgentBankedResets['credits']>[number] | undefined
+      for (const credit of usage.bankedResets?.credits ?? []) {
+        if (typeof credit.expiresAt === 'number' && credit.expiresAt <= now) continue
+        if (
+          !selectedCredit ||
+          (credit.expiresAt ?? Infinity) < (selectedCredit.expiresAt ?? Infinity)
+        ) {
+          selectedCredit = credit
+        }
+      }
+      // Prefer the earliest known expiry. Count-only responses from older
+      // app-server versions still use the provider's default selection.
       await this.appServerRequest(host, 'account/rateLimitResetCredit/consume', {
-        idempotencyKey: randomUUID()
+        idempotencyKey: randomUUID(),
+        ...(selectedCredit ? { creditId: selectedCredit.id } : {})
       })
       return mapCodexRateLimits(await this.appServerRequest(host, 'account/rateLimits/read'))
     } finally {
@@ -1967,6 +2265,21 @@ function isCodexQuestionRequest(method: string): boolean {
   return method === 'item/tool/requestUserInput'
 }
 
+function isCodexAsyncQuestion(request: CodexServerRequest): boolean {
+  return request.method === CODEX_ASYNC_QUESTION_METHOD
+}
+
+function isCodexDynamicQuestion(request: CodexServerRequest): boolean {
+  return request.method === CODEX_DYNAMIC_QUESTION_METHOD
+}
+
+function isCodexDynamicQuestionItem(item: Record<string, unknown>): boolean {
+  return (
+    stringValue(item['type']) === 'function_call' &&
+    (stringValue(item['tool']) ?? stringValue(item['name'])) === CODEX_QUESTION_TOOL_NAME
+  )
+}
+
 // `turn/started` fires the instant Codex's own retry loop begins its next
 // attempt, before that attempt has round-tripped to the provider at all — it
 // is not evidence the retry succeeded. Treating it as recovery flipped the UI
@@ -2013,8 +2326,40 @@ function codexRetryIssue(
  *  leading weekday ("…try again at Monday, Sep 7th, 2026 12:40 PM.") and
  *  "a.m./p.m." with periods, since a stricter match here silently falls
  *  through to a farther, unrelated reset window (see `scheduleAutomaticRetry`)
- *  instead of trusting the date the provider itself reported. */
+ *  instead of trusting the date the provider itself reported. Codex also emits
+ *  a time-only variant for same-day resets ("…or try again at 9:30 AM.");
+ *  that form resolves to the next occurrence of the time (today, or tomorrow
+ *  once the time has already passed) so automatic retry stays schedulable. */
+/** How recently a time-only reset may have expired and still count as
+ *  propagation lag rather than a genuine next-day window (30 minutes). */
+const USAGE_LIMIT_PROPAGATION_WINDOW_MS = 30 * 60 * 1000
+/** Short cooldown used when a time-only reset expired within the lag window. */
+const USAGE_LIMIT_PROPAGATION_COOLDOWN_MS = 5 * 60 * 1000
+
 function codexUsageLimitResetAt(message: string, now = Date.now()): number | undefined {
+  const timeOnly = message.match(/\btry again at\s+(\d{1,2})[:.](\d{2})\s*(a\.?m\.?|p\.?m\.?)\b/iu)
+  if (timeOnly) {
+    const hour12 = Number(timeOnly[1])
+    const minute = Number(timeOnly[2])
+    if (hour12 < 1 || hour12 > 12 || minute < 0 || minute > 59) return undefined
+    const hour = (hour12 % 12) + (timeOnly[3].toLowerCase().startsWith('p') ? 12 : 0)
+    const from = new Date(now)
+    const reset = new Date(from.getFullYear(), from.getMonth(), from.getDate(), hour, minute, 0, 0)
+    if (reset.getTime() <= now) {
+      // A reset that expired only moments ago is provider propagation lag, not
+      // tomorrow's window: the auto-resume fires right at the reset second, the
+      // still-limited provider re-reports the same time, and naively rolling to
+      // tomorrow would park the thread a full day out (observed 2026-09-07:
+      // resume at 2:30:02 PM re-failed at 2:30:10 PM). Retry after a short
+      // cooldown instead; only a genuinely stale time rolls to tomorrow.
+      if (now - reset.getTime() <= USAGE_LIMIT_PROPAGATION_WINDOW_MS) {
+        return now + USAGE_LIMIT_PROPAGATION_COOLDOWN_MS
+      }
+      // The time already passed today means the window resets tomorrow.
+      reset.setDate(reset.getDate() + 1)
+    }
+    return reset.getTime()
+  }
   const match = message.match(
     /\btry again at\s+(?:[a-z]+,\s+)?([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+(\d{1,2})[:.](\d{2})\s*(a\.?m\.?|p\.?m\.?)\b/iu
   )
@@ -2178,6 +2523,10 @@ function normalizeAppServerItem(
 
 function composePrompt(systemPrompt: string | undefined, text: string): string {
   return systemPrompt ? `${systemPrompt}\n\n${text}` : text
+}
+
+function codexDeveloperInstructions(systemPrompt: string | undefined): string {
+  return [systemPrompt?.trim(), CODEX_QUESTION_INSTRUCTION].filter(Boolean).join('\n\n')
 }
 
 async function localAttachmentPath(attachment: PromptAttachment): Promise<string> {
@@ -2805,12 +3154,35 @@ export function mapCodexRateLimits(value: unknown): {
     if (planType) credits = { ...credits, planType }
   }
 
-  // Codex's app-server only reports the aggregate count of banked resets, not
-  // each credit's individual grant/expiry date.
+  // Older app-server versions report only the count. Newer versions include
+  // credit details with expiry timestamps in Unix seconds.
   const resetCredits = recordValue(result['rateLimitResetCredits'])
   const availableCount = numberValue(resetCredits?.['availableCount'])
+  const rawCredits = resetCredits?.['credits']
+  const availableCredits: NonNullable<AgentBankedResets['credits']> = []
+  const seenCreditIds = new Set<string>()
+  if (Array.isArray(rawCredits)) {
+    for (const raw of rawCredits) {
+      const credit = recordValue(raw)
+      const id = stringValue(credit?.['id'])
+      if (!id || credit?.['status'] !== 'available' || seenCreditIds.has(id)) continue
+      seenCreditIds.add(id)
+      const seconds = numberValue(credit['expiresAt'])
+      const expiresAt = seconds !== undefined ? seconds * 1_000 : undefined
+      availableCredits.push({
+        id,
+        ...(credit['expiresAt'] === null
+          ? { expiresAt: null }
+          : expiresAt !== undefined && Number.isFinite(new Date(expiresAt).getTime())
+            ? { expiresAt }
+            : {})
+      })
+    }
+  }
   const bankedResets: AgentBankedResets | undefined =
-    availableCount !== undefined ? { availableCount } : undefined
+    availableCount !== undefined
+      ? { availableCount, ...(Array.isArray(rawCredits) ? { credits: availableCredits } : {}) }
+      : undefined
 
   return {
     rateLimits: mapped,

@@ -46,7 +46,8 @@ function runtime(value: unknown): SpeechRuntime {
 }
 
 function refinementFlags(value: unknown): SpeechRefinementFlags {
-  if (typeof value !== 'object' || value === null) throw new RangeError('Cleanup flags are invalid.')
+  if (typeof value !== 'object' || value === null)
+    throw new RangeError('Cleanup flags are invalid.')
   const candidate = value as Record<string, unknown>
   if (
     typeof candidate['smartCleanup'] !== 'boolean' ||
@@ -68,11 +69,12 @@ function cleanupMode(value: unknown): SpeechCleanupMode {
   if (candidate['kind'] === 'disabled') return { kind: 'disabled' }
   if (candidate['kind'] === 'local') {
     const artifactId = candidate['artifactId']
-    const flags =
-      candidate['flags'] === undefined ? undefined : refinementFlags(candidate['flags'])
+    const flags = candidate['flags'] === undefined ? undefined : refinementFlags(candidate['flags'])
     return {
       kind: 'local',
-      ...(artifactId === undefined ? {} : { artifactId: entityId(artifactId, 'Cleanup artifact id') }),
+      ...(artifactId === undefined
+        ? {}
+        : { artifactId: entityId(artifactId, 'Cleanup artifact id') }),
       ...(flags ? { flags } : {})
     }
   }
@@ -85,12 +87,13 @@ function cleanupMode(value: unknown): SpeechCleanupMode {
     if (selection === 'fixed' && modelId === undefined) {
       throw new RangeError('A fixed remote cleanup model is required.')
     }
-    const flags =
-      candidate['flags'] === undefined ? undefined : refinementFlags(candidate['flags'])
+    const flags = candidate['flags'] === undefined ? undefined : refinementFlags(candidate['flags'])
     return {
       kind: 'remote',
       selection,
-      ...(modelId === undefined ? {} : { modelId: boundedString(modelId, 'Remote cleanup model', 256) }),
+      ...(modelId === undefined
+        ? {}
+        : { modelId: boundedString(modelId, 'Remote cleanup model', 256) }),
       ...(flags ? { flags } : {})
     }
   }
@@ -246,7 +249,9 @@ export function registerSpeechIpc(
       )
   )
   ipcMain.handle('speech:preloadAsr', (_event, rawRuntime: unknown, rawArtifactId: unknown) =>
-    speechResult(() => service.preloadAsr(runtime(rawRuntime), entityId(rawArtifactId, 'Artifact id')))
+    speechResult(() =>
+      service.preloadAsr(runtime(rawRuntime), entityId(rawArtifactId, 'Artifact id'))
+    )
   )
   ipcMain.handle(
     'speech:transcribeAudioToLlm',
@@ -321,13 +326,11 @@ export function registerSpeechIpc(
   ipcMain.handle('speech:observeCorrection', (_event, rawObservation: unknown) =>
     speechResult(() => service.observeCorrection(learningObservation(rawObservation)))
   )
-  ipcMain.handle(
-    'speech:setLessonEnabled',
-    (_event, rawLessonId: unknown, rawEnabled: unknown) =>
-      speechResult(() => {
-        if (typeof rawEnabled !== 'boolean') throw new RangeError('Enabled state is invalid.')
-        return service.setLessonEnabled(entityId(rawLessonId, 'Lesson id'), rawEnabled)
-      })
+  ipcMain.handle('speech:setLessonEnabled', (_event, rawLessonId: unknown, rawEnabled: unknown) =>
+    speechResult(() => {
+      if (typeof rawEnabled !== 'boolean') throw new RangeError('Enabled state is invalid.')
+      return service.setLessonEnabled(entityId(rawLessonId, 'Lesson id'), rawEnabled)
+    })
   )
   ipcMain.handle(
     'speech:deleteLesson',
@@ -440,6 +443,50 @@ export function registerSpeechIpc(
       )
     )
   )
+  ipcMain.handle('speech:playgroundStage', (_event, rawAudio: unknown, rawMimeType: unknown) =>
+    speechResult(() => {
+      if (!(rawAudio instanceof Uint8Array)) throw new RangeError('Audio chunk is invalid.')
+      if (typeof rawMimeType !== 'string' || rawMimeType.length > 128) {
+        throw new RangeError('MIME type is invalid.')
+      }
+      if (rawMimeType.length > 128) throw new RangeError('MIME type is invalid.')
+      return service.stagePlaygroundAudio(rawAudio, rawMimeType)
+    })
+  )
+  ipcMain.handle('speech:playgroundImportPath', (_event, rawPath: unknown) =>
+    speechResult(() =>
+      service.importPlaygroundAudioFromPath(boundedString(rawPath, 'Audio path', 4_096))
+    )
+  )
+  ipcMain.handle('speech:playgroundReadAudio', (_event, rawToken: unknown) =>
+    speechResult(() => service.readPlaygroundAudio(entityId(rawToken, 'Playground audio token')))
+  )
+  ipcMain.handle(
+    'speech:playgroundTranscribe',
+    (
+      _event,
+      rawToken: unknown,
+      rawRuntime: unknown,
+      rawArtifactId: unknown,
+      rawLanguage: unknown,
+      rawCleanupMode: unknown
+    ) =>
+      speechResult(() => {
+        if (typeof rawLanguage !== 'string' || rawLanguage.length > 32) {
+          throw new RangeError('Language is invalid.')
+        }
+        return service.playgroundTranscribe(
+          entityId(rawToken, 'Playground audio token'),
+          runtime(rawRuntime),
+          entityId(rawArtifactId, 'Artifact id'),
+          rawLanguage,
+          cleanupMode(rawCleanupMode)
+        )
+      })
+  )
+  ipcMain.handle('speech:playgroundDiscard', (_event, rawToken: unknown) =>
+    speechResult(() => service.discardPlaygroundAudio(entityId(rawToken, 'Playground audio token')))
+  )
 
   return () => {
     stopProgress()
@@ -480,7 +527,12 @@ export function registerSpeechIpc(
       'speech:deleteArtifact',
       'speech:preparePlayback',
       'speech:synthesizePlaybackSegment',
-      'speech:cancelPlayback'
+      'speech:cancelPlayback',
+      'speech:playgroundStage',
+      'speech:playgroundImportPath',
+      'speech:playgroundReadAudio',
+      'speech:playgroundTranscribe',
+      'speech:playgroundDiscard'
     ]) {
       ipcMain.removeHandler(channel)
     }

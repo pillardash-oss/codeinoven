@@ -25,6 +25,14 @@ export function hasProjectNameCollision(
   return false
 }
 
+/**
+ * Derive a project name from a folder path: the last segment of a
+ * POSIX or Windows path (`/a/b/repo`, `C:\a\b\repo`, `a/b/repo`).
+ */
+export function folderBaseName(folder: string): string {
+  return folder.split(/[/\\]/u).filter(Boolean).pop() ?? folder
+}
+
 function abbreviateHomePath(path: string): string {
   const normalized = path.trim().replace(/\\/gu, '/')
   return normalized

@@ -38,8 +38,8 @@
   }
 </script>
 
-<div class="relative h-full min-h-32 overflow-hidden bg-terminal-background">
-  <div class="h-full min-h-32 w-full overflow-hidden py-1 pl-2" {@attach attachTerminal}></div>
+<div class="relative h-full min-h-32 overflow-x-auto overflow-y-hidden bg-terminal-background">
+  <div class="h-full min-h-32 w-full py-1 pl-2" {@attach attachTerminal}></div>
   {#if error}
     <div
       class="absolute inset-0 flex items-center justify-center bg-app p-4 text-center text-xs text-danger"
@@ -52,7 +52,11 @@
 <style>
   div :global(.terminal-host) {
     height: 100%;
-    width: calc(100% + 15px);
+    /* Action terminals run a fixed wide grid (ACTION_COLS); the host grows to
+       the canvas so the scrollable pane reveals long lines instead of clipping
+       them. */
+    width: max-content;
+    min-width: calc(100% + 15px);
     overflow: hidden;
     outline: none;
     padding: 4px 0;

@@ -38,6 +38,7 @@
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
   import AddProviderModal from './AddProviderModal.svelte'
   import BaseUrlProviderEditor from './BaseUrlProviderEditor.svelte'
+  import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import ThreadDropdown from '../shared/ThreadDropdown.svelte'
@@ -86,7 +87,7 @@
   let autoUpdatePrefs = $state.raw<Record<string, boolean>>({})
   let autoUpdateSaving = $state<Record<string, boolean>>({})
   /** Which top-level tab is on screen. */
-  let activeTab = $state<'harnesses' | 'custom'>('harnesses')
+  let activeTab = $state<'harnesses' | 'accounts' | 'custom'>('harnesses')
   /** Per-harness advanced-info disclosure (Settings for ready harnesses, Details for errored ones), collapsed by default. */
   let expandedSettings = $state<Record<string, boolean>>({})
   /** Free-text filter over harness name/command/path. */
@@ -569,6 +570,19 @@
     <button
       type="button"
       class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+      'accounts'
+        ? 'bg-surface text-foreground shadow-sm'
+        : 'text-muted hover:text-foreground'}"
+      role="tab"
+      aria-selected={activeTab === 'accounts'}
+      title="Manage harness accounts"
+      onclick={() => (activeTab = 'accounts')}
+    >
+      Accounts
+    </button>
+    <button
+      type="button"
+      class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
       'custom'
         ? 'bg-surface text-foreground shadow-sm'
         : 'text-muted hover:text-foreground'}"
@@ -777,7 +791,9 @@
                   {provider.detail ?? 'Needs attention'}
                 </p>
               {:else if provider.status === 'available'}
-                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">Providers</p>
+                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+                  Providers
+                </p>
                 <p class="mt-0.5 truncate text-xs text-muted">
                   {totalProviderCount(provider)} provider{totalProviderCount(provider) === 1
                     ? ''
@@ -786,7 +802,9 @@
                   {/if}
                 </p>
               {:else}
-                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">Providers</p>
+                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+                  Providers
+                </p>
                 <p class="mt-0.5 text-xs text-dimmed">—</p>
               {/if}
             </div>
@@ -812,12 +830,25 @@
               {:else}
                 {#if provider.status === 'not_found'}
                   <button
-                    class="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15"
+                    class="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
+                    title="Install {provider.name} in the embedded terminal"
+                    disabled={harnessLifecycleStore.isRunning(provider.id)}
+                    onclick={() =>
+                      void harnessLifecycleStore.startInstall(provider.id, provider.name)}
+                  >
+                    {#if harnessLifecycleStore.isRunning(provider.id)}
+                      <Loader2 size={13} class="animate-spin" />
+                    {:else}
+                      <Download size={13} />
+                    {/if}
+                    Install
+                  </button>
+                  <button
+                    class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                     title="Open the {provider.name} install page for your operating system"
                     onclick={() => void openInstallPage(provider)}
                   >
-                    <Download size={13} />
-                    Install
+                    Docs
                   </button>
                 {:else if harnessLifecycleStore.updateAvailableFor(provider.id)}
                   <button
@@ -1004,6 +1035,8 @@
         {lastCheckedLabel}
       </span>
     </div>
+  {:else if activeTab === 'accounts'}
+    <HarnessAccountsPanel providers={providerStore.providers} />
   {:else}
     <BaseUrlProvidersPanel providers={providerStore.providers} />
   {/if}

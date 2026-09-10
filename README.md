@@ -108,6 +108,25 @@ bun install
 bun run dev
 ```
 
+#### Windows on ARM: ffmpeg install note
+
+`bun install` fails on Windows on ARM with `ffmpeg-static install failed: No binary found for architecture`, because `ffmpeg-static` publishes no win32-arm64 binary. Fix by pointing the app at an ffmpeg you install yourself:
+
+1. Download an x64 Windows ffmpeg build (runs on ARM Windows via emulation), e.g. from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or [BtbN builds](https://github.com/BtbN/FFmpeg-Builds/releases).
+2. Point `FFMPEG_BIN` at the executable:
+
+   ```powershell
+   setx FFMPEG_BIN "C:\ffmpeg\bin\ffmpeg.exe"
+   ```
+
+3. Install with scripts skipped, since the bundled binary is not needed when `FFMPEG_BIN` is set:
+
+   ```powershell
+   bun install --ignore-scripts
+   ```
+
+`FFMPEG_BIN` overrides the bundled binary entirely, so the app works normally once it is set.
+
 Release builds are available for:
 
 - macOS (`.dmg` / `.zip`)
@@ -153,6 +172,14 @@ Release builds are available for:
 
 ### Troubleshooting
 
+- **Windows on ARM:** if `bun install` fails with `ffmpeg-static install failed: No binary found for architecture`, see [Windows on ARM: ffmpeg install note](#windows-on-arm-ffmpeg-install-note) — set `FFMPEG_BIN` to an x64 ffmpeg and run `bun install --ignore-scripts`.
+- **Windows on ARM (native build):** `better-sqlite3` has no prebuilt win32-arm64 binary, so `bun install` rebuilds it from source and requires the Visual Studio C++ toolset. If you get `error MSB8020: The build tools for v145 cannot be found`, install the C++ BuildTools workload:
+
+  ```powershell
+  winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+  ```
+
+  Make sure **MSVC build tools** and a **Windows SDK** are selected in the installer, then re-run `bun install`.
 - If a harness is not detected, verify the CLI is on `PATH` and authenticated.
 - Use exported diagnostics when reporting issues.
 - Thread recovery handles interrupted work on restart.

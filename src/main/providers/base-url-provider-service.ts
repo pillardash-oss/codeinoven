@@ -4,6 +4,7 @@ import type {
   BaseUrlProviderModel,
   BaseUrlProviderUpdateRequest
 } from '../../lib/types'
+import { CODEINOVEN_CUSTOM_PROVIDER_PREFIX } from '../../lib/custom-provider-id'
 import {
   hasNativeProviderCatalog,
   NativeProviderConfigService
@@ -293,7 +294,7 @@ function slugifyProviderName(name: string): string {
 
 /** Appends `-2`, `-3`, … until the slug no longer collides within the harness. */
 function deriveProviderId(name: string, existingIds: ReadonlySet<string>): string {
-  const base = `cio-${slugifyProviderName(name)}`
+  const base = `${CODEINOVEN_CUSTOM_PROVIDER_PREFIX}${slugifyProviderName(name)}`
   if (!existingIds.has(base)) return base
   let suffix = 2
   while (existingIds.has(`${base}-${suffix}`)) suffix++

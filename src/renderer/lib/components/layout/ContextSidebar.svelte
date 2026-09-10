@@ -25,6 +25,7 @@
     X
   } from '@lucide/svelte'
   import type { ContextSidebarTab, TerminalPlacement } from '$lib/stores/context-sidebar.svelte'
+  import { faviconState } from '$lib/stores/favicons.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -75,6 +76,13 @@
 
   let resizing = $state(false)
   let activeTab = $derived(tabs.find((tab) => tab.id === activeTabId) ?? null)
+
+  // Resolve favicons for browser tab URLs so the strip can show the site's icon
+  // once available. Resolution is deduped per hostname inside the store.
+  let browserTabUrls = $derived(
+    tabs.flatMap((tab) => (tab.kind === 'browser' ? [tab.url] : []))
+  )
+  $effect(() => faviconState.ensureResolved(browserTabUrls))
 
   // Every other tool opens from the context dock rail and owns the whole panel,
   // so only these kinds get a tab strip — the rest get a plain titled header.
@@ -253,7 +261,16 @@
     {:else if tab.kind === 'actions'}
       <MonitorCog size={12} class="shrink-0" />
     {:else if tab.kind === 'browser'}
-      <Globe2 size={12} class="shrink-0" />
+      {#if tab.favicon ?? faviconState.faviconFor(tab.url)}
+        <img
+          src={(tab.favicon ?? faviconState.faviconFor(tab.url)) ?? ''}
+          alt=""
+          class="h-3 w-3 shrink-0"
+          aria-hidden="true"
+        />
+      {:else}
+        <Globe2 size={12} class="shrink-0" />
+      {/if}
     {:else if tab.kind === 'debugger'}
       <Bug size={12} class="shrink-0 text-accent" />
     {:else if tab.kind === 'sources'}

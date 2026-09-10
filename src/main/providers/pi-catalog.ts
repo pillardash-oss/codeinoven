@@ -1,9 +1,5 @@
-import { createRequire } from 'node:module'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import type { OfferedProvider } from '../../lib/types'
-import { bundledPiVendorDir } from '../drivers/harness-runtime'
+import { importPiAiProvidersRegistry } from './pi-ai-registry'
 
 /**
  * Enumerate every provider in Pi's built-in model registry — the full catalog
@@ -12,9 +8,8 @@ import { bundledPiVendorDir } from '../drivers/harness-runtime'
  * usable providers, so the connect flow's searchable set reads the same
  * `@earendil-works/pi-ai` registry Pi itself ships.
  *
- * The library is resolved from dev node_modules first, then from the vendored
- * copy shipped next to the bundled Pi harness — the packaged app does not
- * contain pi-ai in its own node_modules.
+ * The module is loaded by `importPiAiProvidersRegistry` — see
+ * `pi-ai-registry.ts` for the resolution strategy and fallbacks.
  */
 
 interface RegistryModule {
@@ -26,26 +21,18 @@ interface RegistryModule {
 let registryModulePromise: Promise<RegistryModule> | null = null
 
 async function registryModule(): Promise<RegistryModule> {
-  registryModulePromise ??= (async () => {
-    const require = createRequire(import.meta.url)
-    const candidates: string[] = []
-    try {
-      candidates.push(require.resolve('@earendil-works/pi-ai/dist/providers/all.js'))
-    } catch {
-      // Not installed in this context — fall through to the vendored copy.
-    }
-    const vendor = bundledPiVendorDir()
-    if (vendor) {
-      const vendored = join(vendor, 'pi-ai/dist/providers/all.js')
-      if (existsSync(vendored)) candidates.push(vendored)
-    }
-    const resolved = candidates[0]
-    if (!resolved) {
-      throw new Error('The Pi provider catalog is unavailable in this installation.')
-    }
-    return (await import(pathToFileURL(resolved).href)) as RegistryModule
-  })()
-  return registryModulePromise
+  // A failed import must never be cached: one transient failure (file lock,
+  // antivirus scan, first-launch timing) would otherwise disable the whole
+  // provider catalog until the app is restarted.
+  registryModulePromise ??= importPiAiProvidersRegistry(
+    'The Pi provider catalog'
+  ) as Promise<RegistryModule>
+  try {
+    return await registryModulePromise
+  } catch (error) {
+    registryModulePromise = null
+    throw error
+  }
 }
 
 export async function listPiCatalogProviders(_projectPath?: string): Promise<OfferedProvider[]> {

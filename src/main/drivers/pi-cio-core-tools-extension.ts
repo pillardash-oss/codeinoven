@@ -14,8 +14,8 @@
  * generated module is split into imports + body, the body is wrapped in a
  * scoped factory (module-level constants become factory locals, so identical
  * names across extensions cannot collide), `export default function` becomes
- * the factory's `return`, and the merged module's default export invokes all
- * four factories in order. A generator that grows a new import is picked up
+ * the factory's `return`, and the merged module's default export invokes the
+ * factories in order. A generator that grows a new import is picked up
  * automatically by the import parser — a source that stops parsing fails
  * materialization loudly instead of silently dropping behavior.
  *
@@ -30,6 +30,7 @@
  */
 
 import { piCoreToolsExtension } from './pi-core-tools-extension'
+import { piCompactionExtension } from './pi-compaction-extension'
 import { piStatusExtension } from './pi-status-extension'
 import { piUsageExtension } from './pi-usage-extension'
 import { piUtilityGatewayExtension } from './pi-utility-gateway-extension'
@@ -45,6 +46,11 @@ interface GeneratedImport {
 }
 
 export interface CioCoreToolsExtensionOptions {
+  /** One-shot sessions (title generation, grading, lessons) run pure text
+   *  prompts: the extension then registers no gateway or interactive tools
+   *  and skips the permission gate entirely, so the model request carries
+   *  only pi's own built-ins plus the status/usage/compaction plumbing. */
+  oneShot?: boolean
   /** Absolute path of the per-session utility-gateway handoff file. */
   gatewayHandoffPath: string
   /** Absolute path of the per-session system-prompt handoff file. */
@@ -60,6 +66,9 @@ export interface CioCoreToolsExtensionOptions {
    *  resolver has not been materialized yet; the gateway tools then skip
    *  host-level recovery. */
   retrieveScriptPath: string
+  /** Absolute path of the per-session oversized-request recovery arm/disarm
+   *  flag file the driver rewrites during oversized-body error recovery. */
+  oversizedFlagPath: string
 }
 
 /** Split a generated extension module into its import statements and body. */
@@ -140,13 +149,14 @@ function scopedExtensionFactory(factoryName: string, body: string): string {
   return `const ${factoryName} = (): ((pi: ExtensionAPI) => void) => {\n${rewritten}}\n`
 }
 
-/** Compose the four app-owned extensions into one self-contained module source. */
+/** Compose the app-owned extensions into one self-contained module source. */
 export function piCioCoreToolsExtension(options: CioCoreToolsExtensionOptions): string {
   const sources = [
     { factory: '__cioStatusExtension', source: piStatusExtension() },
     { factory: '__cioUsageExtension', source: piUsageExtension() },
     { factory: '__cioGatewayExtension', source: piUtilityGatewayExtension() },
-    { factory: '__cioCoreToolsExtension', source: piCoreToolsExtension() }
+    { factory: '__cioCoreToolsExtension', source: piCoreToolsExtension() },
+    { factory: '__cioCompactionExtension', source: piCompactionExtension() }
   ]
   const parsed = sources.map((entry) => {
     const split = splitGeneratedModule(entry.source)
@@ -167,8 +177,15 @@ export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void 
   // introduced and this invocation fixed).
   __cioStatusExtension()(pi)
   __cioUsageExtension()(pi)
-  __cioGatewayExtension()(pi)
-  __cioCoreToolsExtension()(pi)
+__CIO_INTERACTIVE_TOOLS__  __cioGatewayExtension()(pi)
+__CIO_INTERACTIVE_TOOLS__  __cioCoreToolsExtension()(pi)
+__CIO_STRIP_BUILTINS__  // Strip built-in tools after load: setActiveTools is an action
+__CIO_STRIP_BUILTINS__  // method and throws during extension loading, so it is deferred
+__CIO_STRIP_BUILTINS__  // to before_agent_start where the runtime is already bound.
+__CIO_STRIP_BUILTINS__  pi.on('before_agent_start', () => {
+__CIO_STRIP_BUILTINS__    pi.setActiveTools([])
+__CIO_STRIP_BUILTINS__  })
+  __cioCompactionExtension()(pi)
 }
 `
     .replace('__HANDOFF_PATH__', JSON.stringify(options.gatewayHandoffPath).slice(1, -1))
@@ -176,4 +193,18 @@ export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void 
     .replace('__CIO_ALLOWED_TOOLS_PATH__', JSON.stringify(options.allowedToolsPath).slice(1, -1))
     .replace('__CIO_SESSION_ID__', JSON.stringify(options.sessionId).slice(1, -1))
     .replace('__CIO_RETRIEVE_SCRIPT__', JSON.stringify(options.retrieveScriptPath).slice(1, -1))
+    .replace('__CIO_OVERSIZED_FLAG_PATH__', JSON.stringify(options.oversizedFlagPath).slice(1, -1))
+    // One-shot sessions strip the interactive tool factories at generation
+    // time (not runtime), so the materialized module never even imports them.
+    .replaceAll(
+      '__CIO_INTERACTIVE_TOOLS__',
+      options.oneShot === true ? '// ' : ''
+    )
+    // One-shot sessions also drop pi's own built-in tools (read, bash, ...):
+    // setActiveTools([]) is documented to cover built-in tools, so the model
+    // request carries no tool schemas at all — only the prompt.
+    .replaceAll(
+      '__CIO_STRIP_BUILTINS__',
+      options.oneShot === true ? '' : '// '
+    )
 }

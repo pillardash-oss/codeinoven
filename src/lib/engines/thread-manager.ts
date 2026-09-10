@@ -230,24 +230,6 @@ export function remapCopiedMessages(messages: AgentMessage[]): AgentMessage[] {
 }
 
 /**
- * Keep the latest completed compaction and everything after it. A compaction
- * replaces the harness context that preceded it, so older mirrored messages
- * are unnecessary when creating a new branch from this history.
- */
-function historyFromLatestCompaction(messages: AgentMessage[]): AgentMessage[] {
-  const latestCompactionIndex = messages.findLastIndex((message) =>
-    message.parts.some(
-      (part) =>
-        part.type === 'compaction-summary' ||
-        (part.type === 'compaction' &&
-          typeof part.summary === 'string' &&
-          part.summary.trim().length > 0)
-    )
-  )
-  return latestCompactionIndex === -1 ? messages : messages.slice(latestCompactionIndex)
-}
-
-/**
  * Main-process injection point that resolves a scope target into its
  * authoritative filesystem root. The persisted `Thread.workingDirectory` is
  * compatibility data; this provider is the authority at creation time.
@@ -1187,10 +1169,7 @@ export class ThreadManager {
     }
     if (enabled && existing.independentAudit !== true) {
       const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
-      if (
-        (lifecycle && lifecycle.selection !== 'none') ||
-        lifecycle?.startedAt !== undefined
-      ) {
+      if ((lifecycle && lifecycle.selection !== 'none') || lifecycle?.startedAt !== undefined) {
         throw new Error(
           'Independent audit excludes Engineering modes — turn them off first or fork the thread.'
         )
@@ -1217,7 +1196,8 @@ export class ThreadManager {
     projectId: string,
     threadId: string,
     sessionId: string,
-    harnessId?: string
+    harnessId?: string,
+    accountId?: string
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
@@ -1225,6 +1205,7 @@ export class ThreadManager {
       ...existing,
       sessionId,
       ...(harnessId ? { sessionHarnessId: harnessId } : {}),
+      ...(accountId ? { sessionAccountId: accountId } : {}),
       updatedAt: Date.now()
     }
 
@@ -1239,6 +1220,7 @@ export class ThreadManager {
     const updated: Thread = { ...existing, updatedAt: Date.now() }
     delete updated.sessionId
     delete updated.sessionHarnessId
+    delete updated.sessionAccountId
 
     await this.threadRepo.upsertViaWorker(updated)
     return updated
@@ -1255,10 +1237,14 @@ export class ThreadManager {
     // multi-megabyte transaction payload in memory. Every batch is its own
     // transaction; the delete+upsert sequence below preserves the same
     // end state because the delete always precedes the first upsert batch.
-    const statements = buildSaveMessagesStatements(threadId, messages)
-    const BATCH = 64
-    for (let offset = 0; offset < statements.length; offset += BATCH) {
-      const batch = statements.slice(offset, offset + BATCH)
+    const BATCH = 16
+    for (let offset = 0; offset < Math.max(1, messages.length); offset += BATCH) {
+      const statements = buildSaveMessagesStatements(
+        threadId,
+        messages.slice(offset, offset + BATCH)
+      )
+      const batch = offset === 0 ? statements : statements.slice(2)
+      if (offset > 0) await new Promise<void>((resolve) => setImmediate(resolve))
       const outcome = await this.db.transactionViaWorker(batch)
       if (!outcome.ok) {
         // Fallback: identical batching semantics on the primary connection.
@@ -1437,22 +1423,18 @@ export class ThreadManager {
    * Bounded per-project recent-thread list for sidebar hydration. The inbox
    * (Chats) project gets its configured `thread_limit` quota; every other
    * project gets `RECENT_THREADS_PER_PROJECT`. Older rows stay reachable via
-   * `listProjectThreads` paging.
+   * `listProjectThreads` paging. Unread threads bypass every quota so they
+   * always surface in the first-paint slice regardless of age.
    */
   async listRecentPerProject(): Promise<Thread[]> {
     return this.threadRepo.listRecentPerProjectViaWorker((projectId) =>
-      projectId === INBOX_PROJECT_ID
-        ? Number.MAX_SAFE_INTEGER
-        : RECENT_THREADS_PER_PROJECT
+      projectId === INBOX_PROJECT_ID ? Number.MAX_SAFE_INTEGER : RECENT_THREADS_PER_PROJECT
     )
   }
 
   /** Paged threads for one project: the project filter is applied in SQL
    *  before the limit, so "load more" always reaches the project's older rows. */
-  async listProjectThreads(
-    projectId: string,
-    options?: ThreadListOptions
-  ): Promise<Thread[]> {
+  async listProjectThreads(projectId: string, options?: ThreadListOptions): Promise<Thread[]> {
     return this.threadRepo.listByProjectViaWorker(projectId, {
       includeArchived: false,
       order: 'activity',
@@ -1534,19 +1516,45 @@ export class ThreadManager {
       const destination = this.projectRepo.get(destinationProjectId)
       if (!destination) throw new Error(`Project not found: ${destinationProjectId}`)
     }
-    // Forking can copy a large transcript. Use the worker-backed paged reader
-    // instead of running the unbounded repository query on Electron's main
-    // connection while active agent streams remain responsive.
-    const parentMessages = await this.loadMessageRecords(projectId, threadId)
-    let copied = parentMessages
-    if (messageId) {
-      const cutoff = parentMessages.findIndex((message) => message.id === messageId)
-      if (cutoff === -1) {
-        throw new Error(`Cannot fork from message ${messageId}: message not found in thread`)
-      }
-      copied = parentMessages.slice(0, cutoff + 1)
+    // Resolve the upper bound before creating a destination. Only metadata crosses
+    // the worker boundary; transcript JSON stays in SQLite throughout the copy.
+    const upper = await this.db.queryViaWorker(
+      `SELECT id, created_at FROM agent_messages WHERE thread_id = ?
+       AND session_id IS NULL ${messageId ? 'AND id = ?' : ''}
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+      messageId ? [threadId, messageId] : [threadId],
+      1
+    )
+    if (!upper.ok) throw new Error(upper.error ?? 'Cannot read fork boundary')
+    if (messageId && upper.rows.length === 0) {
+      throw new Error(`Cannot fork from message ${messageId}: message not found in thread`)
     }
-    copied = historyFromLatestCompaction(copied)
+    const cutoff = upper.rows[0]
+    const boundary = cutoff
+      ? await this.db.queryViaWorker(
+          `SELECT CASE WHEN json_extract(p.value, '$.firstKeptCreatedAt') IS NOT NULL THEN '' ELSE m.id END AS id,
+         min(m.created_at, coalesce((SELECT max(k.created_at) FROM agent_messages k
+           WHERE k.thread_id = m.thread_id AND k.session_id IS NULL
+             AND k.created_at <= json_extract(p.value, '$.firstKeptCreatedAt')),
+           json_extract(p.value, '$.firstKeptCreatedAt'), m.created_at)) AS created_at
+       FROM agent_messages m, json_each(m.parts) p
+       WHERE m.thread_id = ? AND m.session_id IS NULL
+       AND (m.created_at, m.id) <= (?, ?)
+       AND (
+         (json_extract(p.value, '$.type') = 'compaction-summary'
+           AND length(trim(json_extract(p.value, '$.text'))) > 0)
+         OR (json_extract(p.value, '$.type') = 'compaction'
+           AND length(trim(json_extract(p.value, '$.summary'))) > 0
+           AND (json_extract(p.value, '$.firstKeptEntryId') IS NULL
+             OR json_extract(p.value, '$.firstKeptCreatedAt') IS NOT NULL)))
+       ORDER BY m.created_at DESC, m.id DESC LIMIT 1`,
+          [threadId, cutoff.created_at, cutoff.id],
+          1
+        )
+      : undefined
+    if (boundary && !boundary.ok)
+      throw new Error(boundary.error ?? 'Cannot read compaction boundary')
+    const lower = boundary?.rows[0]
 
     const destinationPath = this.projectRepo.get(destinationProjectId)?.path ?? ''
     const forkScopeBucketId = destinationProjectId === projectId ? parent.scopeBucketId : undefined
@@ -1585,13 +1593,51 @@ export class ThreadManager {
         }
       }
     }
-    if (copied.length > 0) {
-      // Yield the main-process event loop before the copy so an active agent
-      // stream (or the renderer) is never starved by the fork's serialization
-      // work, even for a large legacy transcript.
-      await new Promise<void>((resolve) => setImmediate(resolve))
-      const withNewIds = remapCopiedMessages(copied)
-      await this.saveMessages(destinationProjectId, forked.id, withNewIds)
+    if (cutoff) {
+      let after: Record<string, unknown> | undefined
+      for (;;) {
+        const page = await this.db.queryViaWorker(
+          `SELECT id, created_at FROM agent_messages WHERE thread_id = ?
+           AND session_id IS NULL AND visibility IN ('conversation', 'working_trace')
+           AND (created_at, id) <= (?, ?)
+           ${lower ? 'AND (created_at, id) >= (?, ?)' : ''}
+           ${after ? 'AND (created_at, id) > (?, ?)' : ''}
+           ORDER BY created_at, id LIMIT 16`,
+          [
+            threadId,
+            cutoff.created_at,
+            cutoff.id,
+            ...(lower ? [lower.created_at, lower.id] : []),
+            ...(after ? [after.created_at, after.id] : [])
+          ],
+          16
+        )
+        if (!page.ok) throw new Error(page.error ?? 'Cannot read fork page')
+        if (page.rows.length === 0) break
+        const statements = page.rows.map((row) => {
+          const id = createMessageId()
+          return {
+            sql: `INSERT INTO agent_messages (
+              id, thread_id, role, origin, visibility, parts, search_text,
+              model_id, provider_id, harness_id, thinking_level,
+              references_json, project_references_json, created_at, completed_at,
+              generation_ms
+            ) SELECT ?, ?, role, origin, visibility,
+              (SELECT json_group_array(json(CASE WHEN json_type(value, '$.messageID') IS NULL
+                THEN value ELSE json_set(value, '$.messageID', ?, '$.id', ? || ':' || json_extract(value, '$.id')) END))
+                FROM json_each(parts)), search_text,
+              model_id, provider_id, harness_id, thinking_level,
+              references_json, project_references_json, created_at, completed_at,
+              generation_ms
+              FROM agent_messages WHERE thread_id = ? AND id = ?`,
+            params: [id, forked.id, id, id, threadId, row.id]
+          }
+        })
+        const outcome = await this.db.transactionViaWorker(statements)
+        if (!outcome.ok) throw new Error(outcome.error ?? 'Cannot copy fork page')
+        after = page.rows[page.rows.length - 1]
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
     }
 
     // A fork carries the parent's history, so it is a completed thread, not an

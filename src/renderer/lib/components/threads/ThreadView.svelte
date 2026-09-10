@@ -43,6 +43,7 @@
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import type { ComposerScopeShoe } from '../chats/ComposerShoe.svelte'
   import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { normalizeComposerMessage, spaceOutProjectReferences } from '../chats/composer-mentions'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
@@ -55,8 +56,8 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
+  import ReadAlongOverlay from '../speech/ReadAlongOverlay.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
-  import { spokenWordOffset } from '../../speech/read-along'
   import WorkingTrace from './WorkingTrace.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
@@ -197,7 +198,6 @@
     PermissionRequest,
     Project,
     ProjectFileEntry,
-    ComposerProject,
     CapturableSpecContextType,
     BrainstormDecisionAction,
     BrainstormDocument,
@@ -232,7 +232,8 @@
     UsageEfficiencyKpis,
     EngineeringLifecycleSelectionInput,
     EngineeringLifecycleState,
-    EngineeringLifecycleStage
+    EngineeringLifecycleStage,
+    HarnessAccount
   } from '$shared/types'
   import {
     hasSelectedStage,
@@ -244,6 +245,7 @@
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
+  import { LiveTokenRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
@@ -251,7 +253,7 @@
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
-    'harnessId' | 'providerId' | 'modelId' | 'thinkingLevel'
+    'harnessId' | 'accountId' | 'providerId' | 'modelId' | 'thinkingLevel'
   >
 
   interface Props {
@@ -285,6 +287,9 @@
      *  conversation. Workspace gates this: always true in chat mode, and in
      *  project mode only for a project's sole, untouched thread. */
     allowCenteredComposer?: boolean
+    /** Opens the scoped projects view with the sidebar focused on this thread
+     *  (composer scope shoe — existing threads). */
+    onOpenScopeView?: (thread: Thread) => void
   }
 
   let {
@@ -298,7 +303,8 @@
     onContinueInThread,
     controller,
     headerSnippet,
-    allowCenteredComposer = true
+    allowCenteredComposer = true,
+    onOpenScopeView
   }: Props = $props()
 
   // Workspace clears its selected-thread state before this keyed view's
@@ -585,6 +591,27 @@
   // Non-reactive bookkeeping: only read inside event handlers, never in the template.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   const knownEphemeralSessionIds = new Set<string>()
+  // Live tokens-per-second tracker for the assistant message currently streaming,
+  // plus finalized per-message rates kept for the turn's hover row.
+  const liveTokenRate = new LiveTokenRate()
+  /** Finalized per-message rates, recorded when a live turn settles. */
+  let finalizedTokenRates = $state<Record<string, number>>({})
+  // Feed the live rate tracker from real usage reports only — the streamed-text
+  // estimate was too crude to display and has been removed with the live rate.
+  // The tracker remains for the finalized end-of-turn rate.
+  $effect(() => {
+    if (!busy) return
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message.role !== 'assistant') continue
+      // Only stream-observe an unfinished message so restored history can never
+      // restart the clock for an old turn.
+      if (message.tokens && !message.completedAt) {
+        liveTokenRate.observe(message.id, generatedTokens(message.tokens), false)
+      }
+      break
+    }
+  })
   // Intentional initial-value capture — the view is remounted (keyed) per thread.
   // For controller-driven conversations, the controller owns the settings proxy.
   // svelte-ignore state_referenced_locally
@@ -822,6 +849,14 @@
    *  a new turn is actually sent — never cleared by waiting, error, or idle
    *  transitions — so resumed turns keep their original attribution. */
   let liveWorkingSelection = $state<WorkingModelSelection | null>(null)
+  let harnessAccounts = $state.raw<HarnessAccount[]>([])
+
+  function rememberSelectedAccount(account: HarnessAccount): void {
+    harnessAccounts = [
+      account,
+      ...harnessAccounts.filter((candidate) => candidate.id !== account.id)
+    ]
+  }
   /** True while we are showing a working trace rehydrated from persisted state
    *  because no live session activity is available to confirm the run (a silent
    *  session, an app restart, or a relay drop mid-turn). The trace renders the
@@ -867,6 +902,7 @@
   function captureLiveWorkingSelection(): void {
     liveWorkingSelection = {
       harnessId: settings.harnessId,
+      accountId: settings.accountId,
       providerId: settings.providerId,
       modelId: settings.modelId,
       thinkingLevel: settings.thinkingLevel
@@ -918,6 +954,35 @@
   let activeTodo = $derived(latestAgentTodo(todoMessages))
   let project = $state<Project | null>(null)
   let projectIconUrl = $state<string | null>(null)
+  /** Composer scope shoe data — project mode only (ChatComposer hides it in chat mode). */
+  let scopeShoe = $derived.by((): ComposerScopeShoe | undefined => {
+    if (chatMode) return undefined
+    const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+    // Resolve against the thread's own project board like scope.bucketForThread.
+    const board = scopeState.boards.get(thread.projectId) ?? scopeState.board
+    const bucket = board.buckets.find((candidate) => candidate.id === bucketId)
+    if (!bucket) return undefined
+    return {
+      projectId: thread.projectId,
+      threadId: thread.id,
+      bucket,
+      source: project?.source,
+      host: project?.host,
+      project: project
+        ? {
+            name: project.name,
+            path: project.path,
+            source: project.source,
+            host: project.host,
+            iconUrl: getProjectIcon(project, projectIconUrl ?? undefined),
+            branch: thread.branch
+          }
+        : undefined,
+      isNewThread: messages.length === 0 && !busy,
+      onOpenScopeView: () => onOpenScopeView?.(thread),
+      onSwitchProject: (pid: string) => void switchProject(pid)
+    }
+  })
   let errorMessage = $state('')
   let providerStatus = $state<AgentSessionStatus | null>(null)
   /** Synthetic authentication issue raised by the thread-open auth probe, so
@@ -1685,7 +1750,8 @@
     const snapshot: ThreadContextUsage = {
       ...usage,
       harnessId: settings.harnessId,
-      providerId: settings.providerId
+      providerId: settings.providerId,
+      modelId: settings.modelId
     }
     // Persist with the thread so the next mount restores instantly. Fire and
     // forget — the live value is already displayed; a failed write only delays
@@ -1717,16 +1783,21 @@
   async function refreshAccountUsageOnDemand(): Promise<void> {
     // Drop a response for a harness selection the user already moved away
     // from — an out-of-order resolve must not clobber the current selection.
-    const refreshKey = `${settings.harnessId}:${settings.providerId}`
+    const refreshKey = `${settings.harnessId}:${settings.accountId ?? ''}:${settings.providerId}`
     const usageList = await accountUsageCache.refresh(
       {
         harnessId: settings.harnessId,
-        providerId: settings.providerId
+        providerId: settings.providerId,
+        accountId: settings.accountId
       },
-      () => refreshKey !== `${settings.harnessId}:${settings.providerId}`
+      () =>
+        refreshKey !== `${settings.harnessId}:${settings.accountId ?? ''}:${settings.providerId}`
     )
     const currentUsage = usageList.find(
-      (usage) => usage.harnessId === settings.harnessId && usage.providerId === settings.providerId
+      (usage) =>
+        usage.harnessId === settings.harnessId &&
+        usage.accountId === (settings.accountId ?? `${settings.harnessId}.default`) &&
+        usage.providerId === settings.providerId
     )
     if (currentUsage) {
       // Fold the fresh quota over whatever the meter already shows so an empty
@@ -2827,7 +2898,7 @@
   let loopAuditing = $derived(settings.loopMode === true && auditState === 'running')
   let activityLabel = $derived.by((): string => {
     if (loopAuditing) return 'Auditing'
-    if (activePlanningEntry === 'brainstorm') return 'Formulating brainstorm'
+    if (activePlanningEntry === 'brainstorm') return 'Researching and discussing'
     if (activePlanningEntry === 'spec') {
       return providerStatus?.state === 'working'
         ? (providerStatus.activity?.label ?? 'Formulating specification')
@@ -2843,19 +2914,6 @@
         return 'Executing'
       default:
         return 'Working'
-    }
-  })
-
-  /** Project context for the composer — only shown before the first message. */
-  let composerProject = $derived.by((): ComposerProject | undefined => {
-    if (!project || messages.length > 0) return undefined
-    return {
-      name: project.name,
-      path: project.path,
-      source: project.source,
-      host: project.host,
-      iconUrl: getProjectIcon(project, projectIconUrl ?? undefined),
-      branch: thread.branch
     }
   })
 
@@ -3579,6 +3637,13 @@
     // project boundary through the now-null live prop.
     const mountedProjectId = thread.projectId
     const mountedThreadId = thread.id
+    void invoke('providerAccounts:list', settings.harnessId)
+      .then((accounts) => {
+        if (alive) harnessAccounts = accounts
+      })
+      .catch(() => {
+        if (alive) harnessAccounts = []
+      })
     if (!controller) {
       workspaceState.jumpToMessage = jumpToMessage
       workspaceState.loadUserMessageHistory = refreshUserMessageHistory
@@ -4117,6 +4182,7 @@
   /** Load project info for the composer context row. */
   async function loadProjectContext(): Promise<void> {
     const { projectId } = thread
+    void scopeState.ensureBoardLoaded(projectId)
     try {
       project = await invoke('project:get', projectId)
       if (project?.icon) {
@@ -4240,7 +4306,8 @@
       const authenticated = await invoke(
         'agent:getHarnessAuthStatus',
         thread.projectId,
-        settings.harnessId
+        settings.harnessId,
+        settings.accountId
       )
       if (!alive || authenticated !== false || providerStatus !== null) return
       const issue: AgentProviderIssue = {
@@ -4263,7 +4330,8 @@
       const authenticated = await invoke(
         'agent:getHarnessAuthStatus',
         thread.projectId,
-        settings.harnessId
+        settings.harnessId,
+        settings.accountId
       )
       if (authenticated === true) {
         proactiveAuthIssue = null
@@ -4426,10 +4494,16 @@
       }
       case 'usage.updated': {
         if (event.sessionId !== sessionId) return
+        liveTokenRate.observe(event.messageId, generatedTokens(event.tokens), false)
         break
       }
       case 'session.idle': {
         if (event.sessionId !== sessionId) return
+        if (liveTokenRate.messageId) {
+          const finalizedId = liveTokenRate.messageId
+          const rate = liveTokenRate.finalize()
+          if (rate !== null) finalizedTokenRates[finalizedId] = rate
+        }
         const interruptedCompaction = compactionInterrupted()
         if (!setIdleFromSession()) return
         if (interruptedCompaction) {
@@ -4449,6 +4523,7 @@
       }
       case 'session.error': {
         if (event.sessionId !== sessionId) return
+        liveTokenRate.clear()
         clearLocalTurn()
         agentRuns.setIdle(thread.projectId, thread.id)
         pendingPermissions = []
@@ -7009,7 +7084,7 @@
 
     return [
       'Continue the interactive Brainstorm discussion about this session report.',
-      'Treat the review feedback as discussion input, not as instructions for a one-pass rewrite. Address what is already clear. When any material intent, tradeoff, or requested change remains ambiguous, use the question tool and continue the back-and-forth until alignment is reached. Do not generate or rewrite the session report in this response. The application refreshes it after the discussion turn is complete.',
+      'Treat the review feedback as interview input. Build on the document, annotations, review text, and versioned alignment notes. Research relevant code and online sources, share concrete findings, and ask focused questions until the intended direction is clear. Save cumulative notes for the next Brainstorm version through the alignment-note utility. Once aligned, recap the direction and ask the application-supplied document-creation question. Only explicit user approval authorizes a new document; completing this discussion turn does not.',
       'The review manifest is authoritative for the report identity and content hash. Resolve annotations using their exact quote, range, and surrounding text together. If those anchors disagree, ask the reviewer instead of guessing. The edits are compact diffs from the agent-generated baseline. Do not ask for or reconstruct the full report when fullReportFallback is absent.',
       `<brainstorm-review-manifest>\n${JSON.stringify(manifest)}\n</brainstorm-review-manifest>`
     ].join('\n\n')
@@ -9364,6 +9439,28 @@
     return msg.harnessId ?? thread.sessionHarnessId ?? settings.harnessId
   }
 
+  /** Generation rate (tok/s) to show for a completed message: the rate
+   *  finalized at turn end when this view observed the turn live, otherwise
+   *  derived from the message's cumulative generated tokens over its own
+   *  duration (approximate — tool waits are included). `null` when the
+   *  harness reported no tokens. */
+  function messageTokenRate(msg: AgentMessage): number | null {
+    const finalized = finalizedTokenRates[msg.id]
+    if (finalized !== undefined && finalized > 0) return finalized
+    const generated = generatedTokens(msg.tokens)
+    if (generated <= 0) return null
+    if (msg.id === liveTokenRate.messageId) return liveTokenRate.rate()
+    // Persisted generation window (first output token → turn end) — excludes
+    // pre-generation tool/setup time, so it is the accurate history basis.
+    if (msg.generationMs !== undefined && msg.generationMs > 0) {
+      return generated / (msg.generationMs / 1000)
+    }
+    if (msg.completedAt && msg.completedAt > msg.createdAt) {
+      return generated / ((msg.completedAt - msg.createdAt) / 1000)
+    }
+    return null
+  }
+
   /** Thinking level used for the message's turn, when its model reasons. */
   function messageThinkingLevel(msg: AgentMessage): ThinkingLevel | null {
     if (!msg.modelId) return null
@@ -9425,6 +9522,11 @@
       harnessName: selection.harnessId
         ? (getAgentIcon(selection.harnessId)?.name ?? selection.harnessId)
         : null,
+      accountLabel:
+        harnessAccounts.find(
+          (account) =>
+            account.id === selection.accountId && account.providerId === selection.providerId
+        )?.label ?? null,
       isFast: fastVariantForModelId(modelId) !== null
     }
   })
@@ -10608,6 +10710,9 @@
                         harnessName={useLiveAttribution
                           ? currentWorkingTraceAttribution.harnessName
                           : harnessName}
+                        accountLabel={useLiveAttribution
+                          ? currentWorkingTraceAttribution.accountLabel
+                          : msg.accountLabel}
                         isFast={useLiveAttribution
                           ? currentWorkingTraceAttribution.isFast
                           : fastVariant !== null}
@@ -10682,32 +10787,12 @@
                           data-message-id={msg.id}
                         >
                           {#if isReadingActiveLine}
-                            {@const segs = speechController.activeSegments!}
-                            {@const activeIdx = speechController.visibleSegmentIndex}
-                            {@const spokenProgress = speechController.activeSegmentProgress}
-                            <div class="flex flex-col gap-1.5">
-                              {#each segs as seg, i (seg.id)}
-                                {@const spokenOffset =
-                                  i === activeIdx ? spokenWordOffset(seg.text, spokenProgress) : -1}
-                                <div
-                                  class={i === activeIdx
-                                    ? 'rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors'
-                                    : 'px-2.5 py-1 opacity-80'}
-                                  data-speech-line={i === activeIdx ? 'active' : undefined}
-                                >
-                                  <span class="leading-relaxed">
-                                    {#if spokenOffset > 0}
-                                      <span
-                                        class="rounded-sm bg-info/20 px-0.5 box-decoration-clone"
-                                        >{seg.text.slice(0, spokenOffset)}</span
-                                      >{seg.text.slice(spokenOffset)}
-                                    {:else}
-                                      {seg.text}
-                                    {/if}
-                                  </span>
-                                </div>
-                              {/each}
-                            </div>
+                            <ReadAlongOverlay
+                              segments={speechController.activeSegments!}
+                              activeIndex={speechController.visibleSegmentIndex}
+                              spokenProgress={speechController.activeSegmentProgress}
+                              textClass="text-[0.8125rem]"
+                            />
                           {:else}
                             <MarkdownView
                               text={(turnFinalText as Extract<AgentPart, { type: 'text' }>).text}
@@ -10845,6 +10930,15 @@
                                   </span>
                                 {/if}
                               {/if}
+                              {#if msg.accountLabel && msg.accountLabel !== 'Default'}
+                                <span
+                                  class="flex items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
+                                  title={`Account: ${msg.accountLabel}`}
+                                  aria-label={`Account: ${msg.accountLabel}`}
+                                >
+                                  {msg.accountLabel}
+                                </span>
+                              {/if}
                               <span class="text-[0.625rem] text-dimmed"
                                 >· {formatTime(msg.completedAt ?? msg.createdAt)}</span
                               >
@@ -10855,6 +10949,12 @@
                               {:else if msg.completedAt && msg.createdAt}
                                 <span class="text-[0.625rem] text-dimmed tabular-nums"
                                   >· {formatDuration(msg.completedAt - msg.createdAt)}</span
+                                >
+                              {/if}
+                              {#if messageTokenRate(msg) !== null}
+                                {@const rate = messageTokenRate(msg) ?? 0}
+                                <span class="text-[0.625rem] text-dimmed tabular-nums">
+                                  · {formatTokenRate(rate)}</span
                                 >
                               {/if}
                             </div>
@@ -10881,6 +10981,7 @@
               providerId={currentWorkingTraceAttribution.providerId}
               harnessId={currentWorkingTraceAttribution.harnessId}
               harnessName={currentWorkingTraceAttribution.harnessName}
+              accountLabel={currentWorkingTraceAttribution.accountLabel}
               isFast={currentWorkingTraceAttribution.isFast}
               initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}
               initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, conversationId)}
@@ -11626,7 +11727,7 @@
                   <ChatComposer
                     bind:this={composer}
                     placeholder={activePlanningEntry === 'brainstorm'
-                      ? 'Sr. Engineer is preparing the Brainstorm…'
+                      ? 'Add details to the Brainstorm discussion…'
                       : activePlanningEntry === 'spec'
                         ? 'Sr. Engineer is preparing the specification…'
                         : assignmentFormulating
@@ -11653,6 +11754,7 @@
                     showChatModes={chatMode}
                     {settings}
                     onSettingsChange={updateSettings}
+                    onAccountSelected={rememberSelectedAccount}
                     {providers}
                     harnessId={settings.harnessId}
                     actions={activeActions}
@@ -11674,15 +11776,14 @@
                     onActivateBankedReset={() => {
                       showBankedResetConfirm = true
                     }}
-                    projectContext={composerProject}
                     projectId={thread.projectId}
                     threadId={thread.id}
+                    scopeShoe={scopeShoe}
                     attachmentStorage={{
                       kind: chatMode ? 'chat' : 'project',
                       projectId: thread.projectId,
                       threadId: thread.id
                     }}
-                    onSwitchProject={(pid) => void switchProject(pid)}
                     fileTagProjectId={project?.source === 'local' && project.path
                       ? thread.projectId
                       : undefined}

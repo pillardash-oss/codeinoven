@@ -724,7 +724,6 @@ export class RemoteRpcDispatcher {
         }
         return undefined
       case 'thread:fork': {
-        await chatEngine.loadMessages(this.string(args[0]), this.string(args[1]))
         return this.threadManager.forkThread(
           this.string(args[0]),
           this.string(args[1]),
@@ -892,7 +891,11 @@ export class RemoteRpcDispatcher {
       case 'agent:refreshAccountUsage':
         return chatEngine.refreshAccountUsage(this.optionalAccountUsageOverrides(args[0]))
       case 'agent:getHarnessAuthStatus':
-        return chatEngine.getHarnessAuthStatus(this.string(args[0]), this.string(args[1]))
+        return chatEngine.getHarnessAuthStatus(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.optionalString(args[2])
+        )
       case 'agent:getSessionStatus':
         return chatEngine.getSessionStatus(this.string(args[0]), this.string(args[1]))
       case 'agent:ensureSession':
@@ -2286,10 +2289,14 @@ export class RemoteRpcDispatcher {
     const raw = value as Record<string, unknown>
     const harnessId = this.optionalString(raw.harnessId)
     const providerId = this.optionalString(raw.providerId)
-    if (harnessId === undefined && providerId === undefined) return undefined
+    const accountId = this.optionalString(raw.accountId)
+    if (harnessId === undefined && providerId === undefined && accountId === undefined) {
+      return undefined
+    }
     return {
       ...(harnessId !== undefined ? { harnessId } : {}),
-      ...(providerId !== undefined ? { providerId } : {})
+      ...(providerId !== undefined ? { providerId } : {}),
+      ...(accountId !== undefined ? { accountId } : {})
     }
   }
 

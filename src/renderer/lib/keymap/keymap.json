@@ -508,6 +508,13 @@
           "scenario": "Any focusable control."
         },
         {
+          "id": "ui-modal-primary-action",
+          "keys": ["mod", "enter"],
+          "label": "Run modal primary action",
+          "description": "Activates the topmost open modal's primary action — start, save, merge, confirm, and so on — even when a text field inside the modal has focus.",
+          "scenario": "A modal overlay is open."
+        },
+        {
           "id": "ui-close-modal",
           "keys": ["escape"],
           "label": "Close modal / sheet",

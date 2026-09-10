@@ -970,7 +970,7 @@ function requireVersion(value: unknown): number {
 
 function validateAgentModelSelection(value: unknown, label: string): AgentModelSelection {
   if (!isRecord(value)) throw new TypeError(`${label} must be an object`)
-  const fields = new Set(['harnessId', 'providerId', 'modelId', 'thinkingLevel'])
+  const fields = new Set(['harnessId', 'providerId', 'modelId', 'accountId', 'thinkingLevel'])
   for (const field of Object.keys(value)) {
     if (!fields.has(field)) throw new TypeError(`Unsupported ${label} field: ${field}`)
   }
@@ -986,6 +986,9 @@ function validateAgentModelSelection(value: unknown, label: string): AgentModelS
     harnessId: requireString(value.harnessId, `${label} harness ID`),
     providerId: requireString(value.providerId, `${label} provider ID`),
     modelId: requireString(value.modelId, `${label} model ID`),
+    ...(value.accountId === undefined
+      ? {}
+      : { accountId: requireString(value.accountId, `${label} account ID`) }),
     ...(thinkingLevel === undefined
       ? {}
       : { thinkingLevel: thinkingLevel as AgentModelSelection['thinkingLevel'] })
@@ -1053,6 +1056,9 @@ function validateAssignmentModel(
     harnessId: requireString(value.harnessId, `${label} harness ID`),
     providerId: requireString(value.providerId, `${label} provider ID`),
     modelId: requireString(value.modelId, `${label} model ID`),
+    ...(value.accountId === undefined
+      ? {}
+      : { accountId: requireString(value.accountId, `${label} account ID`) }),
     thinkingLevel: thinkingLevel as AssignmentModelSelection['thinkingLevel']
   }
 }
@@ -2211,6 +2217,9 @@ function validateHeartbeatCreateInput(value: unknown): Omit<HeartbeatConfig, 'id
     harnessId: validateBoundedString(input.harnessId, 'Heartbeat harness ID', 1, 100),
     providerId: validateBoundedString(input.providerId, 'Heartbeat provider ID', 1, 100),
     modelId: validateBoundedString(input.modelId, 'Heartbeat model ID', 1, 200),
+    ...(input.accountId === undefined
+      ? {}
+      : { accountId: validateEntityId(input.accountId, 'Heartbeat account ID', 256) }),
     thinkingLevel: validateHeartbeatThinkingLevel(input.thinkingLevel),
     times: validateHeartbeatTimes(input.times),
     enabled: typeof input.enabled === 'boolean' ? input.enabled : true
@@ -2231,6 +2240,9 @@ function validateHeartbeatPatchInput(value: unknown): Partial<Omit<HeartbeatConf
   }
   if (input.modelId !== undefined) {
     patch.modelId = validateBoundedString(input.modelId, 'Heartbeat model ID', 1, 200)
+  }
+  if (input.accountId !== undefined) {
+    patch.accountId = validateEntityId(input.accountId, 'Heartbeat account ID', 256)
   }
   if (input.thinkingLevel !== undefined) {
     patch.thinkingLevel = validateHeartbeatThinkingLevel(input.thinkingLevel)
@@ -2772,6 +2784,12 @@ export function registerIpcHandlers(
     if (!scheduler) throw new Error('Heartbeat scheduler is not available')
     const safeId = validateBoundedString(id, 'Heartbeat ID', 1, 200)
     return scheduler.update(safeId, validateHeartbeatPatchInput(patch))
+  })
+  ipcMain.handle('heartbeat:trigger', async (_, id: unknown) => {
+    const scheduler = options.heartbeatScheduler
+    if (!scheduler) throw new Error('Heartbeat scheduler is not available')
+    const safeId = validateBoundedString(id, 'Heartbeat ID', 1, 200)
+    await scheduler.trigger(safeId)
   })
   ipcMain.handle('heartbeat:delete', async (_, id: unknown) => {
     const scheduler = options.heartbeatScheduler
@@ -4517,6 +4535,109 @@ export function registerIpcHandlers(
   // Read a local file into bytes for renderer-side media previews. The preload
   // no longer reads files directly; it delegates here so the path can be
   // constrained to registered project, config-root, or user-selected scopes.
+  // Read a pasted-file source for the Sound Playground's read-aloud section:
+  // plain text files directly, and rich documents (PDF, Word, PowerPoint, Excel,
+  // OpenDocument, RTF, EPUB) through the `@firecrawl/anydoc` Rust library —
+  // fully local, no network, OCR never invoked. Only scoped paths (e.g. a file
+  // the user just picked from the system dialog) are read.
+  // Text is capped below the prepared-playback text limit.
+  const PLAYGROUND_TEXT_EXTENSIONS = new Set([
+    'txt',
+    'md',
+    'markdown',
+    'log',
+    'json',
+    'jsonc',
+    'csv',
+    'tsv',
+    'yml',
+    'yaml',
+    'toml',
+    'xml',
+    'html',
+    'htm',
+    'css',
+    'js',
+    'jsx',
+    'mjs',
+    'cjs',
+    'ts',
+    'tsx',
+    'py',
+    'sh',
+    'sql',
+    'srt',
+    'vtt'
+  ])
+  const PLAYGROUND_DOCUMENT_EXTENSIONS = new Set([
+    'pdf',
+    'docx',
+    'doc',
+    'odt',
+    'rtf',
+    'epub',
+    'pptx',
+    'xlsx',
+    'xls',
+    'ods'
+  ])
+  const MAX_PLAYGROUND_TEXT_CHARS = 900_000
+  privileged('speech:playgroundReadText', async (_event, rawPath: unknown) => {
+    try {
+      if (typeof rawPath !== 'string' || rawPath.length === 0 || rawPath.length > 4_096) {
+        throw new RangeError('The file path is invalid.')
+      }
+      const safePath = await privilegedIpc.resolveScopedPath(rawPath)
+      const extension = extname(safePath).toLowerCase().replace(/^\./u, '')
+      const fileName = basename(safePath)
+      let text: string
+      if (PLAYGROUND_DOCUMENT_EXTENSIONS.has(extension)) {
+        const bytes = await readFile(safePath)
+        const { toMarkdownBytes, formatFromExtension } = await import('@firecrawl/anydoc')
+        const format = formatFromExtension(extension)
+        try {
+          text = await toMarkdownBytes(bytes, format)
+        } catch (parseError) {
+          if (
+            extension === 'pdf' &&
+            parseError instanceof Error &&
+            parseError.message.includes('NeedsOcr')
+          ) {
+            throw new RangeError(
+              'This PDF appears to be scanned — no local OCR is performed in the playground.',
+              { cause: parseError }
+            )
+          }
+          throw parseError
+        }
+        // Strip Markdown emphasis/heading markup so the TTS voice does not
+        // read out syntax characters from the converted document.
+        text = text
+          .replace(/^#{1,6}\s+/gmu, '')
+          .replace(/[*_~`]+/gu, '')
+          .replace(/\[([^\]]*)\]\([^)]*\)/gu, '$1')
+          .replace(/<[^>]+>/gu, '')
+      } else {
+        if (!PLAYGROUND_TEXT_EXTENSIONS.has(extension)) {
+          throw new RangeError(`Unsupported file type ".${extension}".`)
+        }
+        text = await readFile(safePath, 'utf8')
+      }
+      text = text.replace(/\r\n?/gu, '\n').trimEnd()
+      if (text.trim().length === 0) throw new RangeError('The file contains no readable text.')
+      let truncated = false
+      if (text.length > MAX_PLAYGROUND_TEXT_CHARS) {
+        text = text.slice(0, MAX_PLAYGROUND_TEXT_CHARS)
+        truncated = true
+      }
+      return { text, fileName, truncated }
+    } catch (error) {
+      if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
+      Logger.error('speech:playgroundReadText rejected path:', error)
+      return null
+    }
+  })
+
   privileged('file:read', async (_event, filePath: unknown) => {
     try {
       const safePath = await privilegedIpc.resolveScopedPath(filePath)
@@ -5095,7 +5216,9 @@ export function registerIpcHandlers(
         return await projectFilesService.readText(
           validateEntityId(projectId, 'Project ID'),
           requireString(relativePath, 'Project file path'),
-          scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
         )
       } catch {
         return null
@@ -5210,21 +5333,25 @@ export function registerIpcHandlers(
       if (!/^[a-f0-9]{64}$/u.test(revision)) {
         throw new TypeError('Project file revision must be a SHA-256 digest')
       }
-      return projectFilesService.writeText(
-        validateEntityId(projectId, 'Project ID'),
-        requireString(relativePath, 'Project file path'),
-        requireString(content, 'Project file content', true),
-        revision,
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
-      ).then((result) => {
-        // The user saved this file themselves — record it so a concurrent
-        // agent turn's file-changes card never claims their edit.
-        chatEngine?.recordUserFileSave(
+      return projectFilesService
+        .writeText(
           validateEntityId(projectId, 'Project ID'),
-          requireString(relativePath, 'Project file path')
+          requireString(relativePath, 'Project file path'),
+          requireString(content, 'Project file content', true),
+          revision,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
         )
-        return result
-      })
+        .then((result) => {
+          // The user saved this file themselves — record it so a concurrent
+          // agent turn's file-changes card never claims their edit.
+          chatEngine?.recordUserFileSave(
+            validateEntityId(projectId, 'Project ID'),
+            requireString(relativePath, 'Project file path')
+          )
+          return result
+        })
     }
   )
   ipcMain.handle(
@@ -7727,7 +7854,6 @@ export function registerIpcHandlers(
         targetProjectId === undefined
           ? undefined
           : validateEntityId(targetProjectId, 'Target project ID')
-      await chatEngine?.loadMessages(safeProjectId, safeThreadId)
       const forked = await threadManager.forkThread(
         safeProjectId,
         safeThreadId,

@@ -1,5 +1,6 @@
 import { readFile } from 'fs/promises'
 import { join } from 'path'
+import type { Statement } from 'better-sqlite3'
 import type { Database } from '../database/database'
 import { AgentMessageRepo } from '../database/repositories/agent-message-repo'
 import { ProjectRepo } from '../database/repositories/project-repo'
@@ -15,9 +16,32 @@ const MAX_LOG_ENTRIES = 200
 const MAX_MESSAGES = 120
 const MAX_THREAD_LIST_RESULTS = 20
 const MAX_LOG_BYTES = 1_000_000
+const MAX_QUERY_ROWS = 200
+const MAX_QUERY_VALUE_LENGTH = 2_000
+const MAX_QUERY_SQL_LENGTH = 4_000
+const MAX_QUERY_PARAMS = 32
+const MAX_SCHEMA_TABLES = 80
 
 /** Log files an agent may inspect during an explicit diagnostics turn. */
 const READABLE_LOG_FILES = ['logs/main.jsonl', 'logs/error.log', 'logs/permission-events.jsonl']
+
+/** Schema PRAGMA statements an agent may run to learn the app schema. */
+const READABLE_PRAGMAS = new Set([
+  'collation_list',
+  'compile_options',
+  'database_list',
+  'foreign_key_list',
+  'function_list',
+  'index_info',
+  'index_list',
+  'index_xinfo',
+  'table_info',
+  'table_list',
+  'table_xinfo'
+])
+
+/** SQL functions that SQLite still classifies as read-only but that touch the host. */
+const DENIED_SQL_FUNCTIONS = /\b(load_extension|readfile|writefile|fts3_tokenizer)\s*\(/iu
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -75,6 +99,117 @@ export interface DiagnosticLogResult {
   file: string
   entries: DiagnosticLogEntry[]
   truncated: boolean
+}
+
+/** One column of a table returned by the `list_schema` action. */
+export interface DiagnosticSchemaColumn {
+  name: string
+  type: string
+  notNull: boolean
+  primaryKey: boolean
+}
+
+export interface DiagnosticTableSchema {
+  name: string
+  schema: string
+  type: string
+  columns: DiagnosticSchemaColumn[]
+}
+
+/** Column name → redacted, bounded value. */
+export type DiagnosticQueryRow = Record<string, string | number | null>
+
+export interface DiagnosticQueryResult {
+  /** The statement actually executed, including the enforced row cap. */
+  sql: string
+  columns: string[]
+  rows: DiagnosticQueryRow[]
+  rowCount: number
+  /** More rows existed than the cap allows. */
+  truncated: boolean
+  /** Guidance when the row cap or a value cap was hit. */
+  note?: string
+}
+
+/** Statement classes accepted by `query_sql`. */
+type ReadOnlySqlKind = 'select' | 'explain' | 'pragma'
+
+/** Quote an identifier for interpolation into a PRAGMA statement. */
+function quoteIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`
+}
+
+/** Trim an SQL string to one statement and classify it for read-only execution. */
+function classifyReadOnlySql(rawSql: string): { sql: string; kind: ReadOnlySqlKind } {
+  let sql = rawSql.trim()
+  if (!sql) throw new TypeError('sql is required for query_sql')
+  if (sql.length > MAX_QUERY_SQL_LENGTH) {
+    throw new TypeError(`sql must be at most ${MAX_QUERY_SQL_LENGTH} characters`)
+  }
+  sql = sql.replace(/;+\s*$/u, '').trim()
+  if (!sql || sql.includes(';')) {
+    throw new TypeError('query_sql accepts exactly one statement — remove the extra ";"')
+  }
+  if (sql.includes('\0')) throw new TypeError('sql must not contain a null byte')
+  if (DENIED_SQL_FUNCTIONS.test(sql)) {
+    throw new Error('That SQL function is not allowed in read-only diagnostics')
+  }
+  const lead = (sql.match(/^[A-Za-z_]+/iu)?.[0] ?? '').toLocaleLowerCase()
+  if (lead === 'select' || lead === 'with') return { sql, kind: 'select' }
+  if (lead === 'explain') return { sql, kind: 'explain' }
+  if (lead === 'pragma') {
+    // `PRAGMA [schema.]name[= value]` and `PRAGMA name(args)` — read the name
+    // before any argument list, then drop an optional schema qualifier, so a
+    // quoted table name can never be mistaken for the PRAGMA name.
+    const remainder = sql.slice(lead.length).trim()
+    const head = remainder.split(/[\s(=]/u, 1)[0] ?? ''
+    const name = (head.split('.').at(-1) ?? '')
+      .match(/^"?([A-Za-z_][A-Za-z0-9_]*)/u)?.[1]
+      ?.toLocaleLowerCase()
+    if (!name || !READABLE_PRAGMAS.has(name)) {
+      throw new Error(
+        `PRAGMA ${name || '(unknown)'} is not allowed. Allowed: ${[...READABLE_PRAGMAS].join(', ')}`
+      )
+    }
+    return { sql, kind: 'pragma' }
+  }
+  throw new TypeError(
+    'query_sql accepts read-only SELECT, WITH, EXPLAIN, or schema PRAGMA statements only'
+  )
+}
+
+/** Bind values must be scalars; anything else is rejected before SQLite sees it. */
+function normalizeQueryParams(params: readonly unknown[]): Array<string | number | null> {
+  if (params.length > MAX_QUERY_PARAMS) {
+    throw new TypeError(`query_sql accepts at most ${MAX_QUERY_PARAMS} parameters`)
+  }
+  return params.map((value, index) => {
+    if (value === null || value === undefined) return null
+    if (typeof value === 'string') return value
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null
+    if (typeof value === 'boolean') return value ? 1 : 0
+    throw new TypeError(`Query parameter ${index + 1} must be a string, number, boolean, or null`)
+  })
+}
+
+/** Redact and bound one cell so secrets and large blobs never stream back raw. */
+function formatQueryValue(value: unknown): string | number | null {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'number') return Number.isFinite(value) ? value : String(value)
+  if (typeof value === 'bigint') return value.toString()
+  if (value instanceof Uint8Array) return `<blob:${value.byteLength} bytes>`
+  const text =
+    typeof value === 'string'
+      ? value
+      : (() => {
+          try {
+            return JSON.stringify(value)
+          } catch {
+            return String(value)
+          }
+        })()
+  if (text.length <= MAX_QUERY_VALUE_LENGTH) return redactSensitiveText(text)
+  return `${redactSensitiveText(text.slice(0, MAX_QUERY_VALUE_LENGTH))}... [truncated]`
 }
 
 function summarizeDiagnosticThread(
@@ -193,9 +328,7 @@ export class CioDiagnosticsService {
   ): Promise<DiagnosticLogResult> {
     const normalized = `logs/${file.replace(/^logs\//u, '').replace(/^\/+/u, '')}`
     if (!READABLE_LOG_FILES.includes(normalized)) {
-      throw new Error(
-        `Log file not readable: ${file}. Allowed: ${READABLE_LOG_FILES.join(', ')}`
-      )
+      throw new Error(`Log file not readable: ${file}. Allowed: ${READABLE_LOG_FILES.join(', ')}`)
     }
     const boundedLimit = Math.max(1, Math.min(MAX_LOG_ENTRIES, Math.trunc(options.limit ?? 100)))
     let raw: string
@@ -243,6 +376,94 @@ export class CioDiagnosticsService {
     }
   }
 
+  /**
+   * List the app database tables (and optionally one table's columns) so an
+   * agent can write informed SQL instead of guessing the schema.
+   */
+  listSchema(table?: string): { tables: DiagnosticTableSchema[] } {
+    const listed = this.runReadOnly('PRAGMA table_list') as Array<Record<string, unknown>>
+    const needle = table?.trim().toLocaleLowerCase() ?? ''
+    const matches = listed
+      .filter((entry) => typeof entry['name'] === 'string')
+      .filter((entry) => !String(entry['name']).startsWith('sqlite_'))
+      .filter((entry) => {
+        if (!needle) return true
+        const name = String(entry['name']).toLocaleLowerCase()
+        return name === needle || name.includes(needle)
+      })
+      .slice(0, MAX_SCHEMA_TABLES)
+    return {
+      tables: matches.map((entry) => {
+        const name = String(entry['name'])
+        const schema = typeof entry['schema'] === 'string' ? entry['schema'] : 'main'
+        // SQLite accepts `PRAGMA schema.table_info(table)` — the schema is the
+        // PRAGMA qualifier, not an argument, so it cannot go inside the parens.
+        const columns = this.runReadOnly(
+          `PRAGMA ${quoteIdentifier(schema)}.table_info(${quoteIdentifier(name)})`
+        ) as Array<Record<string, unknown>>
+        return {
+          name,
+          schema,
+          type: typeof entry['type'] === 'string' ? entry['type'] : 'table',
+          columns: columns.map((column) => ({
+            name: String(column['name'] ?? ''),
+            type: String(column['type'] ?? ''),
+            notNull: column['notnull'] === 1,
+            primaryKey: Number(column['pk'] ?? 0) > 0
+          }))
+        }
+      })
+    }
+  }
+
+  /**
+   * Run one bounded, read-only SQL statement. This is the escape hatch for
+   * questions the structured actions cannot answer; writes, DDL, ATTACH,
+   * multi-statement input, and host-touching SQL functions are all rejected,
+   * and SELECT/WITH statements are wrapped in a hard row cap so a wide scan
+   * can never stream unbounded rows through the main thread.
+   */
+  runQuery(sql: string, params: readonly unknown[] = []): DiagnosticQueryResult {
+    const { statement } = this.prepareReadOnly(sql)
+    const boundParams = normalizeQueryParams(params)
+    const rows = statement.all(...boundParams) as Array<Record<string, unknown>>
+    const truncated = rows.length > MAX_QUERY_ROWS
+    const page = truncated ? rows.slice(0, MAX_QUERY_ROWS) : rows
+    const columns = statement.columns().map((column) => column.name)
+    const result: DiagnosticQueryResult = {
+      sql: statement.source,
+      columns,
+      rows: page.map((row) => {
+        const formatted: DiagnosticQueryRow = {}
+        for (const name of columns) formatted[name] = formatQueryValue(row[name])
+        return formatted
+      }),
+      rowCount: page.length,
+      truncated
+    }
+    if (truncated) {
+      result.note = `Stopped at ${MAX_QUERY_ROWS} rows; narrow the query with WHERE/LIMIT or aggregate to see the rest.`
+    }
+    return result
+  }
+
+  /** Prepare a validated read-only statement; never executes anything but a reader. */
+  private prepareReadOnly(rawSql: string): { statement: Statement; kind: ReadOnlySqlKind } {
+    const { sql, kind } = classifyReadOnlySql(rawSql)
+    const executable =
+      kind === 'select' ? `SELECT * FROM (\n${sql}\n) LIMIT ${MAX_QUERY_ROWS + 1}` : sql
+    const statement = this.db.prepare(executable)
+    if (!statement.reader) {
+      throw new Error('Only read-only statements may run through app diagnostics')
+    }
+    return { statement, kind }
+  }
+
+  /** Run an internal read-only statement and return its raw rows. */
+  private runReadOnly(sql: string): unknown[] {
+    return this.prepareReadOnly(sql).statement.all()
+  }
+
   private summarize(thread: Thread, projectNameOverride?: string): DiagnosticThreadSummary {
     const names = this.projectNameById()
     return summarizeDiagnosticThread(
@@ -254,8 +475,9 @@ export class CioDiagnosticsService {
 
   private toDiagnosticMessage(message: AgentMessage): DiagnosticMessage | null {
     const text = message.parts
-      .filter((part): part is Extract<AgentMessage['parts'][number], { type: 'text' }> =>
-        part.type === 'text'
+      .filter(
+        (part): part is Extract<AgentMessage['parts'][number], { type: 'text' }> =>
+          part.type === 'text'
       )
       .map((part) => part.text)
       .join('\n')

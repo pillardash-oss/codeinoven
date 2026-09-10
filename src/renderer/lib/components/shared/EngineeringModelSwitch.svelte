@@ -40,7 +40,12 @@
   /** Commit a new thread model, mirroring the pattern used by the provider
    *  status card and the Audit/Spec ready cards. Fast inference only survives
    *  the switch when the newly selected model actually exposes a fast tier. */
-  function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
+  function chooseModel(
+    providerId: string,
+    modelId: string,
+    nextHarnessId?: string,
+    accountId?: string
+  ): void {
     if (!settings || !onModelChange) return
     const harnessId = nextHarnessId ?? settings.harnessId
     const provider = providers.find(
@@ -49,7 +54,7 @@
     const model = provider?.models.find((candidate) => candidate.id === modelId)
     onModelChange(
       normalizeFastInference(
-        { ...settings, harnessId, providerId, modelId },
+        { ...settings, harnessId, accountId, providerId, modelId },
         harnessId,
         providerId,
         modelId,
@@ -71,6 +76,7 @@
     harnessId={settings.harnessId}
     providerId={settings.providerId}
     modelId={settings.modelId}
+    accountId={settings.accountId}
     {favoriteModels}
     {recentModels}
     {onRemoveRecent}

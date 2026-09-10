@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { DropdownMenu, Popover } from 'bits-ui'
   import {
@@ -14,6 +14,7 @@
     Search,
     Star,
     SquareTerminal,
+    UserRound,
     Zap,
     X
   } from '@lucide/svelte'
@@ -27,13 +28,22 @@
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { getVendorSlug } from '$lib/vendor-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import type { ProviderCatalog, ProviderModel, ThinkingLevel, ThinkingPreset } from '$shared/types'
+  import { harnessAccountCache } from '$lib/stores/harness-accounts'
+  import type {
+    HarnessAccount,
+    ProviderCatalog,
+    ProviderModel,
+    ThinkingLevel,
+    ThinkingPreset
+  } from '$shared/types'
 
   interface Props {
     providers: ProviderCatalog[]
     harnessId: string
     providerId: string
     modelId: string
+    /** Credential container used by the selected provider. Missing means its default. */
+    accountId?: string
     favoriteModels?: string[]
     recentModels?: string[]
     /** True while the picker is open — opening it refreshes the catalog. */
@@ -63,7 +73,9 @@
     /** Thinking presets to display. Defaults to the selected model's declared
      *  presets — when the model declares none, thinking controls stay hidden. */
     thinkingPresets?: ThinkingPreset[]
-    onSelect: (providerId: string, modelId: string, harnessId: string) => void
+    onSelect: (providerId: string, modelId: string, harnessId: string, accountId?: string) => void
+    /** Reports the full account record when the account segment changes. */
+    onSelectAccount?: (account: HarnessAccount) => void
     onSelectMultiple?: (modelKeys: string[]) => void
     /** Fired when the thinking level changes — either from an explicit preset
      *  click, or automatically when a newly selected model no longer supports
@@ -87,6 +99,7 @@
     harnessId,
     providerId,
     modelId,
+    accountId,
     favoriteModels = [],
     recentModels = [],
     open = $bindable(false),
@@ -103,6 +116,7 @@
     thinkingLevel = null,
     thinkingPresets,
     onSelect,
+    onSelectAccount,
     onSelectMultiple,
     onSelectThinking,
     onToggleFavorite,
@@ -116,6 +130,9 @@
   let search = $state('')
   let searchInput: HTMLInputElement | undefined
   let modelList: HTMLDivElement | undefined
+  let accounts = $state.raw<HarnessAccount[]>([])
+  let accountLoading = $state(false)
+  let accountLoadGeneration = 0
   const collapsedGroups = new SvelteSet<string>()
   let favoriteModelsSet = $derived(new Set(favoriteModels))
   let selectedModelKeysSet = $derived(new Set(selectedModelKeys))
@@ -177,6 +194,20 @@
       effectiveThinkingPresets[0]?.label ??
       ''
   )
+  let providerAccounts = $derived(
+    accounts.filter(
+      (account) => account.harnessId === harnessId && account.providerId === providerId
+    )
+  )
+  let effectiveAccountId = $derived(
+    accountId && providerAccounts.some((account) => account.id === accountId)
+      ? accountId
+      : (providerAccounts[0]?.id ?? `${harnessId}.default`)
+  )
+  let selectedAccount = $derived(
+    providerAccounts.find((account) => account.id === effectiveAccountId)
+  )
+  let showAccountPicker = $derived(!multiSelect && providerAccounts.length > 1)
   /**
    * Snapshot fallback so the trigger renders instantly, before any harness
    * catalog resolves: the thread's stored harness icon is always available, and
@@ -491,6 +522,20 @@
     // prevents catalog updates from snapping the user's scroll position back
     // to the selected model.
     if (projectId) void providerCatalog.refresh(projectId)
+    void loadAccounts(harnessId, true)
+  }
+
+  async function loadAccounts(targetHarnessId: string, force = false): Promise<void> {
+    const generation = ++accountLoadGeneration
+    accountLoading = true
+    try {
+      const loaded = await harnessAccountCache.list(targetHarnessId, force)
+      if (generation === accountLoadGeneration) accounts = loaded
+    } catch {
+      if (generation === accountLoadGeneration) accounts = []
+    } finally {
+      if (generation === accountLoadGeneration) accountLoading = false
+    }
   }
 
   // ---- Virtualized model list ----------------------------------------------
@@ -763,7 +808,11 @@
     void providerCatalog.refresh(projectId, true)
   }
 
-  function choose(nextProviderId: string, nextModelId: string, nextHarnessId: string): void {
+  async function choose(
+    nextProviderId: string,
+    nextModelId: string,
+    nextHarnessId: string
+  ): Promise<void> {
     if (multiSelect) {
       const nextKey = modelKey(nextHarnessId, nextProviderId, nextModelId)
       const nextKeys = selectedModelKeysSet.has(nextKey)
@@ -776,7 +825,23 @@
       findModelEntry(displayProviders, nextProviderId, nextModelId, nextHarnessId) ??
       findModelEntry(cachedProviders, nextProviderId, nextModelId, nextHarnessId)
     close()
-    onSelect(nextProviderId, nextModelId, nextHarnessId)
+    let availableAccounts = nextHarnessId === harnessId ? accounts : []
+    if (nextHarnessId !== harnessId) {
+      try {
+        availableAccounts = await harnessAccountCache.list(nextHarnessId)
+      } catch {
+        availableAccounts = []
+      }
+    }
+    const matchingAccounts = availableAccounts.filter(
+      (account) => account.harnessId === nextHarnessId && account.providerId === nextProviderId
+    )
+    const nextAccountId =
+      matchingAccounts.find((account) => account.id === accountId)?.id ??
+      matchingAccounts[0]?.id ??
+      `${nextHarnessId}.default`
+    onSelect(nextProviderId, nextModelId, nextHarnessId, nextAccountId)
+    if (nextHarnessId !== harnessId) accounts = availableAccounts
     // Thinking level depends on the model: resolve a level the new model
     // actually offers and surface it right after the model change, so parents
     // never keep a stale level the model no longer supports.
@@ -793,6 +858,11 @@
       )
       if (resolved && resolved !== thinkingLevel) onSelectThinking?.(resolved)
     }
+  }
+
+  function chooseAccount(account: HarnessAccount): void {
+    onSelect(providerId, modelId, harnessId, account.id)
+    onSelectAccount?.(account)
   }
 
   function toggleGroup(id: string): void {
@@ -846,6 +916,10 @@
     favoriteDropTarget = null
     draggingFavoriteKey = null
   }
+
+  onMount(() => {
+    void loadAccounts(harnessId)
+  })
 </script>
 
 <div class="min-w-0">
@@ -936,11 +1010,60 @@
                   <span class="flex flex-col">
                     <span class="capitalize">{preset.label}</span>
                     {#if preset.description}
-                      <span class="text-[0.625rem] font-normal text-muted">{preset.description}</span>
+                      <span class="text-[0.625rem] font-normal text-muted"
+                        >{preset.description}</span
+                      >
                     {/if}
                   </span>
                 </DropdownMenu.Item>
               {/each}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      {/if}
+      {#if showAccountPicker}
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            aria-label={`Account: ${selectedAccount?.label ?? 'Default'}`}
+            title="Account"
+            {disabled}
+          >
+            <UserRound size={10} class="shrink-0" />
+            <span class="max-w-24 truncate">{selectedAccount?.label ?? 'Default'}</span>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="start"
+              sideOffset={4}
+              collisionPadding={12}
+              onCloseAutoFocus={(event) => event.preventDefault()}
+              class="z-70 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
+            >
+              {#if accountLoading}
+                <div class="px-2 py-2 text-xs text-muted">Loading accounts…</div>
+              {:else}
+                {#each providerAccounts as account (account.id)}
+                  {@const active = account.id === effectiveAccountId}
+                  <DropdownMenu.Item
+                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
+                      ? 'text-primary'
+                      : ''}"
+                    title={`Use ${account.label}`}
+                    onSelect={() => {
+                      if (!active) chooseAccount(account)
+                    }}
+                  >
+                    {#if active}
+                      <Check size={11} class="shrink-0 text-primary" />
+                    {:else}
+                      <span class="w-[11px] shrink-0" aria-hidden="true"></span>
+                    {/if}
+                    <span class="min-w-0 flex-1 truncate">{account.label}</span>
+                  </DropdownMenu.Item>
+                {/each}
+              {/if}
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
@@ -1312,7 +1435,7 @@
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
-    onclick={() => choose(entry.provider.id, entry.model.id, entry.provider.harnessId)}
+    onclick={() => void choose(entry.provider.id, entry.model.id, entry.provider.harnessId)}
     onkeydown={(event: KeyboardEvent) => {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
@@ -1343,7 +1466,7 @@
       }
       if (event.key === 'Enter') {
         event.preventDefault()
-        choose(entry.provider.id, entry.model.id, entry.provider.harnessId)
+        void choose(entry.provider.id, entry.model.id, entry.provider.harnessId)
         return
       }
       // Editing intent: left/right moves the caret and characters/backspace edit

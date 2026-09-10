@@ -175,6 +175,8 @@ export interface HarnessAuthCapabilities {
 
 export interface HarnessAuthAccount {
   id: string
+  /** Stable provider id used by models, login, and logout commands. */
+  providerId: string
   label: string
   method?: string
   active?: boolean
@@ -202,8 +204,9 @@ export interface HarnessLoginHandoff {
   kind: 'terminal'
   command: string
   args: string[]
+  environment?: Record<string, string>
   title: string
-  mutatesGlobalCredentials: true
+  mutatesGlobalCredentials: boolean
 }
 
 /** Options for sending a prompt to the harness. */
@@ -525,7 +528,10 @@ export interface HarnessDriver {
    * predate quota capture — can still show live quota. Returns null when the
    * harness cannot report quota without a turn.
    */
-  readAccountUsage?(projectPath: string, providerId?: string): Promise<{
+  readAccountUsage?(
+    projectPath: string,
+    providerId?: string
+  ): Promise<{
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits
     bankedResets?: AgentBankedResets

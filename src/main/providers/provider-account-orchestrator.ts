@@ -4,6 +4,7 @@ import { homedir } from 'os'
 import { dirname, join } from 'path'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { OfferedProvider } from '../../lib/types'
+import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
 import type {
   HarnessAuthAccount,
   HarnessAuthCapabilities,
@@ -25,6 +26,7 @@ import { runPiLogin, listPiProviderAuthInfo } from './pi-login'
 import { BrowserWindow } from 'electron'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
+import { Logger } from '../system/logger'
 
 /** Shared headless store for harnesses whose credentials live in files (Pi). */
 const fileBackedAuth = new PiAuthConfigService(undefined, piAuthFileIo)
@@ -50,7 +52,7 @@ interface AuthDefinition {
   statusArgs?: string[]
   parseStatus?(output: string, succeeded: boolean): HarnessAuthStatus
   /** Alternative to CLI probing for harnesses without a status subcommand. */
-  readStatus?(projectPath?: string): Promise<HarnessAuthStatus>
+  readStatus?(projectPath?: string, environment?: NodeJS.ProcessEnv): Promise<HarnessAuthStatus>
   loginArgs(options: HarnessLoginOptions): string[]
   /** CLI arguments that remove a provider's stored credentials. */
   logoutArgs?(providerId?: string): string[]
@@ -113,6 +115,7 @@ function parseOpenCodeStatus(output: string, succeeded: boolean): HarnessAuthSta
       const label = match[1]?.trim() ?? 'Provider'
       return {
         id: accountId(label),
+        providerId: accountId(label),
         label,
         method: match[2]?.toLowerCase()
       }
@@ -146,6 +149,7 @@ function parseClaudeStatus(output: string, succeeded: boolean): HarnessAuthStatu
           ? [
               {
                 id: accountId(provider),
+                providerId: 'anthropic',
                 label: provider,
                 ...(method ? { method } : {}),
                 active: true
@@ -171,10 +175,18 @@ function parseCodexStatus(output: string, succeeded: boolean): HarnessAuthStatus
   }
   const match = clean.match(/logged in(?:\s+using)?\s+(.+)/iu)
   if (match) {
-    const label = match[1]?.trim() ?? 'OpenAI'
+    const method = match[1]?.trim()
     return {
       state: 'authenticated',
-      accounts: [{ id: accountId(label), label, active: true }]
+      accounts: [
+        {
+          id: 'openai',
+          providerId: 'openai',
+          label: 'OpenAI',
+          ...(method ? { method } : {}),
+          active: true
+        }
+      ]
     }
   }
   return {
@@ -199,7 +211,7 @@ function parseAntigravityStatus(output: string, succeeded: boolean): HarnessAuth
   if (hasSlugs) {
     return {
       state: 'authenticated',
-      accounts: [{ id: 'google', label: 'Google', active: true }]
+      accounts: [{ id: 'google', providerId: 'google', label: 'Google', active: true }]
     }
   }
   return {
@@ -214,11 +226,14 @@ function parseAntigravityStatus(output: string, succeeded: boolean): HarnessAuth
  * so the shared execFile-based probe cannot be used. Spawn `agy models` with
  * stdin ignored and let the common parser classify the result.
  */
-async function readAntigravityStatus(): Promise<HarnessAuthStatus> {
+async function readAntigravityStatus(
+  _projectPath?: string,
+  environment: NodeJS.ProcessEnv = {}
+): Promise<HarnessAuthStatus> {
   let result: { succeeded: boolean; stdout: string; stderr: string }
   try {
     const output = await runHarnessCommand('agy', ['models'], {
-      env: buildProcessEnvironment(),
+      env: buildProcessEnvironment({ ...process.env, ...environment }),
       timeoutMs: STATUS_TIMEOUT_MS,
       maxOutputBytes: STATUS_OUTPUT_MAX_BYTES
     })
@@ -269,6 +284,7 @@ async function readClineStatus(projectPath?: string): Promise<HarnessAuthStatus>
     const method = typeof entry['tokenSource'] === 'string' ? entry['tokenSource'] : undefined
     accounts.push({
       id: accountId(providerId),
+      providerId,
       label: providerId,
       ...(method === undefined ? {} : { method }),
       active: providerId === lastUsed
@@ -288,47 +304,88 @@ async function readClineStatus(projectPath?: string): Promise<HarnessAuthStatus>
  * credential exists in auth.json; credentials without a models.json entry are
  * still connected providers and must be listed.
  */
-async function readPiStatus(projectPath?: string): Promise<HarnessAuthStatus> {
-  const credentialIds = await fileBackedAuth.credentialIds()
-  let stored: Record<string, unknown> = {}
+async function readPiStatus(
+  projectPath?: string,
+  environment: NodeJS.ProcessEnv = {}
+): Promise<HarnessAuthStatus> {
+  let providerNames = new Map<string, string>()
   try {
-    const wslRaw = await readHarnessHomeFile('pi', '.pi/agent/models.json', projectPath)
+    providerNames = new Map(
+      (await listPiCatalogProviders()).map((provider) => [provider.id, provider.name])
+    )
+  } catch {
+    // Auth status remains useful when Pi's optional catalog cannot load.
+  }
+  const isolatedAgentDir = environment['PI_CODING_AGENT_DIR']
+  const auth = isolatedAgentDir
+    ? new PiAuthConfigService(join(isolatedAgentDir, 'auth.json'))
+    : fileBackedAuth
+  const credentialIds = await auth.credentialIds()
+  for (const providerId of credentialIds) {
+    if (isCodeInOvenCustomProviderId(providerId)) credentialIds.delete(providerId)
+  }
+  let stored: Record<string, unknown> = {}
+  let configReadable = false
+  try {
+    const wslRaw = isolatedAgentDir
+      ? undefined
+      : await readHarnessHomeFile('pi', '.pi/agent/models.json', projectPath)
     const raw =
-      wslRaw === undefined ? await readFile(join(PI_AGENT_DIR, 'models.json'), 'utf8') : wslRaw
-    if (raw !== null) stored = JSON.parse(raw) as Record<string, unknown>
+      wslRaw === undefined
+        ? await readFile(join(isolatedAgentDir ?? PI_AGENT_DIR, 'models.json'), 'utf8')
+        : wslRaw
+    if (raw !== null) {
+      stored = JSON.parse(raw) as Record<string, unknown>
+      configReadable = true
+    }
   } catch {
     stored = {}
   }
   const providers = record(stored['providers']) ?? {}
   const accounts: HarnessAuthAccount[] = []
-  let signedIn = 0
+  let connected = 0
   for (const [providerId, rawEntry] of Object.entries(providers)) {
+    if (isCodeInOvenCustomProviderId(providerId)) continue
     const entry = record(rawEntry)
     if (!entry) continue
     const apiKey = typeof entry['apiKey'] === 'string' ? entry['apiKey'] : undefined
-    const authenticated = Boolean(apiKey && apiKey !== 'none') || credentialIds.has(providerId)
+    // Credential-less native entries are model configuration, not accounts.
+    if (!apiKey || apiKey === 'none') {
+      if (!credentialIds.has(providerId)) continue
+    }
     accounts.push({
       id: accountId(providerId),
-      label: providerId,
-      active: authenticated
+      providerId,
+      label: providerNames.get(providerId) ?? providerId,
+      active: true
     })
-    if (authenticated) signedIn += 1
+    connected += 1
   }
   // Credentials stored directly in auth.json (catalog providers connected via
   // CodeInOven or pi's own sign-in) are connected even without a models.json
   // entry.
   for (const providerId of credentialIds) {
-    if (accounts.some((account) => account.label === providerId)) continue
+    if (accounts.some((account) => account.providerId === providerId)) continue
     accounts.push({
       id: accountId(providerId),
-      label: providerId,
-      ...((await fileBackedAuth.isOauth(providerId)) ? { method: 'oauth' } : {}),
+      providerId,
+      label: providerNames.get(providerId) ?? providerId,
+      ...((await auth.isOauth(providerId)) ? { method: 'oauth' } : {}),
       active: true
     })
-    signedIn += 1
+    connected += 1
   }
+  // A fresh install with nothing configured is honestly "unauthenticated" —
+  // reporting `unknown` here made the status pill look permanently stuck and
+  // the re-check button appear dead. `unknown` is reserved for installs where
+  // Pi's config file could not be read at all.
   return {
-    state: signedIn > 0 ? 'authenticated' : accounts.length > 0 ? 'unauthenticated' : 'unknown',
+    state:
+      connected > 0
+        ? 'authenticated'
+        : accounts.length > 0 || configReadable
+          ? 'unauthenticated'
+          : 'unknown',
     accounts
   }
 }
@@ -347,17 +404,29 @@ function record(value: unknown): Record<string, unknown> | null {
  * `{ schema_version, providers: { <id>: { access_token, api_key, ... } } }` —
  * a provider is authenticated when it carries an `access_token` or `api_key`.
  */
-async function readMuseStatus(projectPath?: string): Promise<HarnessAuthStatus> {
-  if (process.env['META_API_KEY']) {
+async function readMuseStatus(
+  projectPath?: string,
+  environment: NodeJS.ProcessEnv = {}
+): Promise<HarnessAuthStatus> {
+  if (environment['META_API_KEY'] ?? process.env['META_API_KEY']) {
     return {
       state: 'authenticated',
-      accounts: [{ id: 'meta', label: 'Meta', method: 'api-key', active: true }]
+      accounts: [{ id: 'meta', providerId: 'meta', label: 'Meta', method: 'api-key', active: true }]
     }
   }
   let stored: Record<string, unknown>
   try {
-    const wslRaw = await readHarnessHomeFile('muse', '.config/muse/auth.json', projectPath)
-    const raw = wslRaw === undefined ? await readFile(MUSE_AUTH_PATH, 'utf8') : wslRaw
+    const isolatedConfigHome = environment['XDG_CONFIG_HOME']
+    const wslRaw = isolatedConfigHome
+      ? undefined
+      : await readHarnessHomeFile('muse', '.config/muse/auth.json', projectPath)
+    const raw =
+      wslRaw === undefined
+        ? await readFile(
+            isolatedConfigHome ? join(isolatedConfigHome, 'muse', 'auth.json') : MUSE_AUTH_PATH,
+            'utf8'
+          )
+        : wslRaw
     if (raw === null) return { state: 'unauthenticated', accounts: [] }
     stored = JSON.parse(raw) as Record<string, unknown>
   } catch {
@@ -385,6 +454,7 @@ async function readMuseStatus(projectPath?: string): Promise<HarnessAuthStatus> 
             : undefined
     accounts.push({
       id: accountId(providerId),
+      providerId,
       label: (typeof entry['user_full_name'] === 'string' && entry['user_full_name']) || providerId,
       ...(method === undefined ? {} : { method }),
       active: authenticated
@@ -554,6 +624,7 @@ export class ProviderAccountOrchestrator {
     {
       controller: AbortController
       pendingPrompt?: (value: string) => void
+      authStore: PiAuthConfigService
     }
   >()
 
@@ -570,8 +641,18 @@ export class ProviderAccountOrchestrator {
   }
 
   /** Store an API key for one catalog provider in a file-backed auth store. */
-  async setCredential(harnessId: string, providerId: string, apiKey: string): Promise<void> {
+  async setCredential(
+    harnessId: string,
+    providerId: string,
+    apiKey: string,
+    environment: NodeJS.ProcessEnv = {}
+  ): Promise<void> {
     const definition = this.requireDefinition(harnessId)
+    const piAgentDir = environment['PI_CODING_AGENT_DIR']
+    if (harnessId === 'pi' && piAgentDir) {
+      await new PiAuthConfigService(join(piAgentDir, 'auth.json')).setApiKey(providerId, apiKey)
+      return
+    }
     if (!definition.setCredential) {
       throw new Error(
         `${harnessId} does not support headless credential storage. Use the harness's own sign-in flow.`
@@ -589,15 +670,27 @@ export class ProviderAccountOrchestrator {
    * {@link respondOAuthPrompt}; the resulting credential is stored in Pi's own
    * auth store. Mirrors what Pi's TUI does — without the TUI.
    */
-  async beginOAuthLogin(harnessId: string, providerId: string): Promise<string> {
+  async beginOAuthLogin(
+    harnessId: string,
+    providerId: string,
+    environment: NodeJS.ProcessEnv = {}
+  ): Promise<string> {
     this.requireDefinition(harnessId)
     if (harnessId !== 'pi') {
       throw new Error(`${harnessId} does not support in-app sign-in.`)
     }
     const loginId = `pi-oauth-${crypto.randomUUID()}`
     const controller = new AbortController()
-    const session: { controller: AbortController; pendingPrompt?: (value: string) => void } = {
-      controller
+    const piAgentDir = environment['PI_CODING_AGENT_DIR']
+    const session: {
+      controller: AbortController
+      pendingPrompt?: (value: string) => void
+      authStore: PiAuthConfigService
+    } = {
+      controller,
+      authStore: piAgentDir
+        ? new PiAuthConfigService(join(piAgentDir, 'auth.json'))
+        : fileBackedAuth
     }
     this.oauthSessions.set(loginId, session)
     void runPiLogin(providerId, {
@@ -617,9 +710,9 @@ export class ProviderAccountOrchestrator {
     })
       .then(async (credential) => {
         if (credential.type === 'oauth') {
-          await fileBackedAuth.setOAuthCredential(providerId, credential)
+          await session.authStore.setOAuthCredential(providerId, credential)
         } else {
-          await fileBackedAuth.setApiKey(providerId, credential.key ?? '', credential.env)
+          await session.authStore.setApiKey(providerId, credential.key ?? '', credential.env)
         }
         this.broadcastOAuthEvent(loginId, { kind: 'complete', providerId })
       })
@@ -655,13 +748,22 @@ export class ProviderAccountOrchestrator {
     forwardRemoteEvent('providerAccounts:oauthEvent', { loginId, ...payload })
   }
 
-  async getStatus(harnessId: string, projectPath?: string): Promise<HarnessAuthStatus> {
+  async getStatus(
+    harnessId: string,
+    projectPath?: string,
+    environment: NodeJS.ProcessEnv = {}
+  ): Promise<HarnessAuthStatus> {
     return this.enqueueStatus(async () => {
       const definition = this.requireDefinition(harnessId)
       if (definition.readStatus) {
-        return definition.readStatus(projectPath)
+        return definition.readStatus(projectPath, environment)
       }
-      const result = await this.run(definition.command, definition.statusArgs ?? [], projectPath)
+      const result = await this.run(
+        definition.command,
+        definition.statusArgs ?? [],
+        projectPath,
+        environment
+      )
       if (!definition.parseStatus) {
         return {
           state: 'error',
@@ -680,7 +782,8 @@ export class ProviderAccountOrchestrator {
 
   async beginLogin(
     harnessId: string,
-    options: HarnessLoginOptions = {}
+    options: HarnessLoginOptions = {},
+    environment: NodeJS.ProcessEnv = {}
   ): Promise<HarnessLoginHandoff> {
     const definition = this.requireDefinition(harnessId)
     const prepared = await prepareHarnessTerminalHandoff(
@@ -691,14 +794,27 @@ export class ProviderAccountOrchestrator {
       kind: 'terminal',
       command: prepared.command,
       args: prepared.args,
+      ...(Object.keys(environment).length > 0
+        ? { environment: environment as Record<string, string> }
+        : {}),
       title: `Sign in to ${definition.name}`,
-      mutatesGlobalCredentials: true
+      mutatesGlobalCredentials: Object.keys(environment).length === 0
     }
   }
 
   /** Remove a stored harness credential via its CLI logout or auth store. */
-  async logout(harnessId: string, providerId?: string): Promise<void> {
+  async logout(
+    harnessId: string,
+    providerId?: string,
+    environment: NodeJS.ProcessEnv = {}
+  ): Promise<void> {
     const definition = this.requireDefinition(harnessId)
+    const piAgentDir = environment['PI_CODING_AGENT_DIR']
+    if (harnessId === 'pi' && piAgentDir) {
+      if (!providerId) throw new Error('pi requires a provider to disconnect.')
+      await new PiAuthConfigService(join(piAgentDir, 'auth.json')).removeCredential(providerId)
+      return
+    }
     if (definition.removeStoredCredential) {
       if (!providerId) throw new Error(`${harnessId} requires a provider to disconnect.`)
       await definition.removeStoredCredential(providerId)
@@ -709,7 +825,12 @@ export class ProviderAccountOrchestrator {
         `${harnessId} does not expose a logout command. Remove the credential in the harness itself.`
       )
     }
-    const result = await this.run(definition.command, definition.logoutArgs(providerId), homedir())
+    const result = await this.run(
+      definition.command,
+      definition.logoutArgs(providerId),
+      homedir(),
+      environment
+    )
     if (!result.succeeded) {
       const detail = result.error ?? (result.stderr.trim() || result.stdout.trim())
       throw new Error(`Logout failed: ${detail || 'unknown error'}`)
@@ -730,7 +851,7 @@ export class ProviderAccountOrchestrator {
         const status = await this.getStatus(harnessId)
         if (status.state === 'error') return []
         return status.accounts.map((account) => ({
-          id: account.id,
+          id: account.providerId,
           name: account.label,
           modelCount: 0,
           authenticated: status.state === 'authenticated'
@@ -755,7 +876,7 @@ export class ProviderAccountOrchestrator {
         const status = await this.getStatus(harnessId)
         if (status.state === 'error') return []
         return status.accounts.map((account) => ({
-          id: account.id,
+          id: account.providerId,
           name: account.label,
           modelCount: 0,
           authenticated: status.state === 'authenticated'
@@ -765,7 +886,7 @@ export class ProviderAccountOrchestrator {
         const status = await this.getStatus(harnessId)
         if (status.state === 'error') return []
         return status.accounts.map((account) => ({
-          id: account.id,
+          id: account.providerId,
           name: account.label,
           modelCount: 0,
           authenticated: status.state === 'authenticated'
@@ -787,26 +908,32 @@ export class ProviderAccountOrchestrator {
   private async listPiOffered(): Promise<OfferedProvider[]> {
     const native = await readPiStatus()
     const keyedNativeIds = new Set(
-      native.accounts.filter((account) => account.active === true).map((account) => account.label)
+      native.accounts
+        .filter((account) => account.active === true)
+        .map((account) => account.providerId)
     )
     let catalog: OfferedProvider[]
     try {
       catalog = await listPiCatalogProviders()
-    } catch {
+    } catch (catalogError) {
+      Logger.info(
+        '[provider-accounts] Pi catalog unavailable — falling back to configured accounts:',
+        catalogError
+      )
       return native.accounts.map((account) => ({
-        id: account.label,
+        id: account.providerId,
         name: account.label,
         modelCount: 0,
-        authenticated: keyedNativeIds.has(account.label)
+        authenticated: keyedNativeIds.has(account.providerId)
       }))
     }
     const merged = new Map(catalog.map((provider) => [provider.id, provider]))
     // Native custom providers from models.json are connectable targets too and
     // may not appear in the bundled catalog.
     for (const account of native.accounts) {
-      if (!merged.has(account.label)) {
-        merged.set(account.label, {
-          id: account.label,
+      if (!merged.has(account.providerId)) {
+        merged.set(account.providerId, {
+          id: account.providerId,
           name: account.label,
           modelCount: 0,
           authenticated: false
@@ -874,11 +1001,16 @@ export class ProviderAccountOrchestrator {
     return definition
   }
 
-  private async run(command: string, args: string[], cwd?: string): Promise<CommandResult> {
+  private async run(
+    command: string,
+    args: string[],
+    cwd?: string,
+    environment: NodeJS.ProcessEnv = {}
+  ): Promise<CommandResult> {
     try {
       const result = await runHarnessCommand(command, args, {
         ...(cwd ? { cwd } : {}),
-        env: buildProcessEnvironment(),
+        env: buildProcessEnvironment({ ...process.env, ...environment }),
         timeoutMs: STATUS_TIMEOUT_MS,
         maxOutputBytes: STATUS_OUTPUT_MAX_BYTES
       })

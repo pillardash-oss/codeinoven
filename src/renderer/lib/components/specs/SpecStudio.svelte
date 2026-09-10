@@ -32,10 +32,7 @@
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import { offsetsForQuote, offsetsForRange } from './studio-annotation-anchors'
-  import {
-    StudioAnnotationOverlay,
-    clampPendingPosition
-  } from './studio-annotation-overlay.svelte'
+  import { StudioAnnotationOverlay, clampPendingPosition } from './studio-annotation-overlay.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import type { PendingOverlayAnchor } from './studio-annotation-overlay.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
@@ -235,10 +232,16 @@
 
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
 
-  function chooseAuditModel(providerId: string, modelId: string, harnessId?: string): void {
+  function chooseAuditModel(
+    providerId: string,
+    modelId: string,
+    harnessId?: string,
+    accountId?: string
+  ): void {
     onAuditModelChange({
       ...auditSettings,
       harnessId: harnessId ?? auditSettings.harnessId,
+      accountId,
       providerId,
       modelId
     })
@@ -1039,7 +1042,7 @@
       {savePending}
       versionMenuTitle="Choose a specification version"
       versionItemTitle={(version) => `Open version ${version}`}
-      onSelectVersion={onSelectVersion}
+      {onSelectVersion}
       onUndo={undoEdit}
       onRedo={redoEdit}
       onSave={() => void saveDraft()}
@@ -1055,6 +1058,7 @@
           harnessId={auditSettings.harnessId}
           providerId={auditSettings.providerId}
           modelId={auditSettings.modelId}
+          accountId={auditSettings.accountId}
           {favoriteModels}
           {recentModels}
           {onRemoveRecent}
@@ -1205,7 +1209,10 @@
               <AlertCircle size={13} class="mt-0.5 shrink-0 text-danger" />
               <div class="min-w-0 flex-1">
                 <p class="text-xs leading-relaxed text-foreground">{issue.message}</p>
-                <p class="mt-0.5 truncate font-mono text-[0.5625rem] text-dimmed" title={issue.path}>
+                <p
+                  class="mt-0.5 truncate font-mono text-[0.5625rem] text-dimmed"
+                  title={issue.path}
+                >
                   {issue.path}
                 </p>
                 <button
@@ -1736,9 +1743,7 @@
                 <button
                   type="button"
                   class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-elevated disabled:cursor-pointer disabled:opacity-60"
-                  title={selected
-                    ? `${entry.path} is already included`
-                    : `Include ${entry.path}`}
+                  title={selected ? `${entry.path} is already included` : `Include ${entry.path}`}
                   disabled={selected || busy}
                   onclick={() => void selectContextPath(activeContextPickerType, entry.path)}
                 >
@@ -1777,8 +1782,8 @@
           <p
             class="col-span-full rounded-lg border border-dashed p-4 text-center text-xs text-dimmed"
           >
-            Tag project files, add rules or skills, attach external files, or drop files
-            anywhere in the Studio.
+            Tag project files, add rules or skills, attach external files, or drop files anywhere in
+            the Studio.
           </p>
         {/each}
       </div>

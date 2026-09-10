@@ -22,7 +22,7 @@ import type {
 import { Logger } from '../system/logger'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import type { StorageEngine } from '../storage/storage-engine'
-import { buildProcessEnvironment } from './cli-environment'
+import { buildProcessEnvironment, OWNED_SESSION_MARKER } from './cli-environment'
 import { prepareHarnessInvocation } from './harness-runtime'
 import type {
   AgentEventCallback,
@@ -540,12 +540,18 @@ export abstract class PersistentCliDriver implements HarnessDriver {
           ])
         )
       : {}
-    const invocationEnv = runtime
-      ? {
-          ...(invocation.env ?? buildProcessEnvironment()),
-          ...runtimeEnv
-        }
-      : (invocation.env ?? buildProcessEnvironment())
+    const invocationEnv = {
+      ...(runtime
+        ? {
+            ...(invocation.env ?? buildProcessEnvironment()),
+            ...runtimeEnv
+          }
+        : (invocation.env ?? buildProcessEnvironment())),
+      // Session-scoped ownership marker so any daemon this harness spawns that
+      // re-parents away from the process tree (e.g. the adb server) can still
+      // be attributed back to this session by the agent process service.
+      [OWNED_SESSION_MARKER]: session.id
+    }
     this.setTurnProvenance(
       session.id,
       opts.settings.providerId,

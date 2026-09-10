@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Notification, shell } from 'electron'
+import { createHash } from 'node:crypto'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
@@ -20,6 +21,7 @@ import { THREAD_STATUSES, threadStatusPolicy } from '../../lib/thread-status-pol
 import type {
   AgentNotificationKind,
   AgentNotificationPayload,
+  NotificationSoundKind,
   NotificationSource,
   SystemNotificationPermissionStatus,
   SystemNotificationTestResult,
@@ -66,6 +68,20 @@ type ThreadClickedHandler = (payload: ThreadClickedPayload) => void
  * allowed for this application". Any other failure (invalid attachment, etc.)
  * is delivery noise and must not flip the permission state.
  */
+/**
+ * Windows rejects notification ids longer than 64 UTF-16 characters, and full
+ * payload ids (`slug-projectId-threadId-status-updatedAt`) easily exceed that.
+ * Keep a readable prefix and append a short deterministic hash of the full id
+ * so distinct payloads never collide while the result always fits.
+ */
+const NOTIFICATION_ID_MAX_UTF16 = 64
+function compactNotificationId(id: string): string {
+  if ([...id].length <= NOTIFICATION_ID_MAX_UTF16) return id
+  const hash = createHash('sha256').update(id).digest('base64url').slice(0, 12)
+  const prefix = id.slice(0, NOTIFICATION_ID_MAX_UTF16 - hash.length - 1)
+  return `${prefix}-${hash}`
+}
+
 function isPermissionRefusal(error: unknown): boolean {
   return typeof error === 'string' && /not allowed/i.test(error)
 }
@@ -103,6 +119,13 @@ export class NotificationService {
     this.threadRepo = new ThreadRepo(db)
     this.assignmentRepo = new AssignmentRepo(db)
     this.onThreadClicked = onThreadClicked
+
+    // Register IPC handlers eagerly: the renderer's settings panel can query
+    // the permission status on mount before start() runs (start is deferred
+    // until after first paint, but the renderer may boot faster).
+    ipcMain.handle('notification:test', () => this.sendTestNotification())
+    ipcMain.handle('notification:getPermissionStatus', () => this.getVerifiedPermissionStatus())
+    ipcMain.handle('notification:openSettings', () => this.openSettings())
   }
 
   start(): void {
@@ -110,9 +133,6 @@ export class NotificationService {
     this.started = true
     void this.hydrateBadge()
     void this.hydratePermissionStatus()
-    ipcMain.handle('notification:test', () => this.sendTestNotification())
-    ipcMain.handle('notification:getPermissionStatus', () => this.getVerifiedPermissionStatus())
-    ipcMain.handle('notification:openSettings', () => this.openSettings())
   }
 
   stop(): void {
@@ -346,13 +366,26 @@ export class NotificationService {
   }
 
   /**
+   * Whether any app window currently has OS focus. While the app is in the
+   * background the renderer can still mark a thread read (e.g. the thread that
+   * happens to be selected auto-marks itself read when a live update arrives),
+   * which would otherwise close an OS notification the user has not even seen
+   * yet — leaving only the alert sound with no card.
+   */
+  private appFocused(): boolean {
+    return BrowserWindow.getAllWindows().some((window) => window.isFocused())
+  }
+
+  /**
    * Dismiss every delivered notification for a thread — closes its OS
    * notifications (including side-chat notifications piped through it) and
    * drops the thread from the app-icon badge. Called whenever the thread is
    * marked read or deleted so the OS notification center stays in sync with
-   * in-app state.
+   * in-app state. Skipped entirely while the app is unfocused: a background
+   * auto-mark-read must never retract a notification the user has not seen.
    */
   dismissForThread(projectId: string, threadId: string): void {
+    if (!this.appFocused()) return
     const threadKey = `${projectId}:${threadId}`
     for (const [key, notification] of this.activeNotifications) {
       if (key === threadKey || key.startsWith(`${threadKey}:temp:`)) {
@@ -501,8 +534,8 @@ export class NotificationService {
       .send(payload)
       .catch((error) => Logger.dev('Remote Web Push notification failed:', error))
 
-    if (windows.some((window) => window.isFocused())) return
-    this.dispatchNotificationSound(windows)
+    if (this.appFocused()) return
+    this.dispatchNotificationSound(payload.kind === 'attention' ? 'attention' : 'default', windows)
     const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
       if (!this.unsupportedLogged) {
@@ -514,8 +547,8 @@ export class NotificationService {
 
     try {
       const notification = new Notification({
-        id: payload.id,
-        groupId: payload.id,
+        id: compactNotificationId(payload.id),
+        groupId: compactNotificationId(payload.id),
         title: payload.title,
         subtitle,
         body: payload.body,
@@ -597,8 +630,8 @@ export class NotificationService {
       .send(payload)
       .catch((error) => Logger.dev('Remote Web Push notification failed:', error))
 
-    if (windows.some((window) => window.isFocused())) return
-    this.dispatchNotificationSound(windows)
+    if (this.appFocused()) return
+    this.dispatchNotificationSound(payload.kind === 'attention' ? 'attention' : 'default', windows)
     const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
       if (!this.unsupportedLogged) {
@@ -610,8 +643,8 @@ export class NotificationService {
 
     try {
       const notification = new Notification({
-        id: payload.id,
-        groupId: payload.id,
+        id: compactNotificationId(payload.id),
+        groupId: compactNotificationId(payload.id),
         title: payload.title,
         subtitle,
         body: payload.body,
@@ -798,7 +831,10 @@ export class NotificationService {
    * the decision is deterministic and the first sound is dispatched the moment
    * its notification arrives, instead of seconds after the OS card appears.
    */
-  private dispatchNotificationSound(windows = BrowserWindow.getAllWindows()): boolean {
+  private dispatchNotificationSound(
+    sound: NotificationSoundKind = 'default',
+    windows = BrowserWindow.getAllWindows()
+  ): boolean {
     const soundWindow = windows.find(
       (window) => !window.isDestroyed() && !window.webContents.isDestroyed()
     )
@@ -808,7 +844,7 @@ export class NotificationService {
     if (now - this.lastNotificationSoundPlayedAt < NOTIFICATION_SOUND_DEDUP_MS) return false
     this.lastNotificationSoundPlayedAt = now
 
-    return sendToRenderer(soundWindow.webContents, 'notification:playSound')
+    return sendToRenderer(soundWindow.webContents, 'notification:playSound', sound)
   }
 
   private retainNotification(key: string, notification: Notification): void {

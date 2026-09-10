@@ -114,6 +114,8 @@ import type {
   PrdSectionId,
   PrdWorkflowState,
   ProviderAccountAuthStatus,
+  HarnessAccount,
+  PendingHarnessAccount,
   ProviderAccountLoginHandoff,
   ProviderAccountLoginOptions,
   ProviderCatalog,
@@ -121,6 +123,7 @@ import type {
   HarnessUpdateHandoff,
   HarnessUpdateStatus,
   HarnessInstallInfo,
+  HarnessInstallHandoff,
   HarnessManifestEntry,
   HarnessUninstallHandoff,
   OfferedProvider,
@@ -224,6 +227,8 @@ export interface BrowserPageState {
   tabId: string
   url: string
   title: string
+  /** Favicon data URL reported by the page, or null until the page declares one. */
+  favicon: string | null
   loading: boolean
   canGoBack: boolean
   canGoForward: boolean
@@ -281,6 +286,16 @@ export interface BrowserPermissionRequest {
  * - `dismiss`: refuse only this request (e.g. closing the modal) without remembering.
  */
 export type BrowserPermissionDecision = 'allow' | 'allow-once' | 'deny' | 'dismiss'
+
+/**
+ * Selectable scopes for clearing an in-app browser session's stored state.
+ * - `cookies`: HTTP cookies for visited sites.
+ * - `site-data`: persistent site data (storage, service workers, IndexedDB),
+ *   excluding cookies.
+ * - `cache`: HTTP disk and memory caches.
+ * - `permissions`: remembered permission grants and denials.
+ */
+export type BrowserSiteDataScope = 'cookies' | 'site-data' | 'cache' | 'permissions'
 
 export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
 
@@ -884,14 +899,20 @@ export interface IpcInvokeContract {
   'agent:listProviders': Contract<[projectId: string], ProviderCatalog[]>
   'agent:listProviderSnapshot': Contract<[projectId: string], ProviderCatalog[]>
   'agent:refreshProviderCatalog': Contract<[projectId: string, force?: boolean], ProviderCatalog[]>
-  'agent:refreshAccountUsage': Contract<[overrides?: AgentAccountUsageOverrides], AgentAccountUsage[]>
+  'agent:refreshAccountUsage': Contract<
+    [overrides?: AgentAccountUsageOverrides],
+    AgentAccountUsage[]
+  >
   /** Redeem one banked Codex rate-limit reset credit. Destructive: resets the
    *  account's active usage windows and consumes one banked credit. */
   'agent:activateBankedReset': Contract<
     [projectId: string, threadId: string],
     AgentAccountUsage | null
   >
-  'agent:getHarnessAuthStatus': Contract<[projectId: string, harnessId: string], boolean | null>
+  'agent:getHarnessAuthStatus': Contract<
+    [projectId: string, harnessId: string, accountId?: string],
+    boolean | null
+  >
   'agent:listTools': Contract<
     [
       projectId?: string,
@@ -1321,6 +1342,36 @@ export interface IpcInvokeContract {
   'speech:cancelPlayback': Contract<
     [sessionId?: string],
     import('./speech/types').SpeechResult<boolean>
+  >
+  /** Stage renderer-recorded audio bytes for the ephemeral Sound Playground. */
+  'speech:playgroundStage': Contract<
+    [audio: Uint8Array<ArrayBuffer>, mimeType: string],
+    import('./speech/types').SpeechResult<{ token: string; byteSize: number }>
+  >
+  /** Import a user-picked audio file into the ephemeral Sound Playground. */
+  'speech:playgroundImportPath': Contract<
+    [path: string],
+    import('./speech/types').SpeechResult<{ token: string; byteSize: number; fileName: string }>
+  >
+  'speech:playgroundReadAudio': Contract<
+    [token: string],
+    import('./speech/types').SpeechResult<Uint8Array<ArrayBuffer>>
+  >
+  'speech:playgroundTranscribe': Contract<
+    [
+      token: string,
+      runtime: import('./speech/types').SpeechRuntime,
+      artifactId: string,
+      language: string,
+      cleanupMode: import('./speech/types').SpeechCleanupMode
+    ],
+    import('./speech/types').SpeechResult<{ rawTranscript: string; finalTranscript: string }>
+  >
+  'speech:playgroundDiscard': Contract<[token: string], import('./speech/types').SpeechResult<void>>
+  /** Read a user-picked text/PDF file for the Playground read-aloud section. */
+  'speech:playgroundReadText': Contract<
+    [path: string],
+    { text: string; fileName: string; truncated: boolean } | null
   >
   'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
   'dialog:pickFiles': Contract<[scope?: AttachmentStorageScope], string[]>
@@ -2002,6 +2053,7 @@ export interface IpcInvokeContract {
   'harnessUpdates:checkAll': Contract<[force?: boolean], HarnessUpdateStatus[]>
   'harnessUpdates:handoff': Contract<[harnessId: string], HarnessUpdateHandoff>
   'harnessInstall:getInfo': Contract<[harnessId: string], HarnessInstallInfo>
+  'harnessInstall:handoff': Contract<[harnessId: string], HarnessInstallHandoff>
   'harnessUninstall:handoff': Contract<[harnessId: string], HarnessUninstallHandoff>
   'harnessManifest:list': Contract<[], HarnessManifestEntry[]>
   'harnessManifest:confirm': Contract<
@@ -2015,17 +2067,36 @@ export interface IpcInvokeContract {
     [harnessId: string, projectPath?: string],
     ProviderAccountAuthStatus
   >
+  'providerAccounts:list': Contract<[harnessId?: string, refresh?: boolean], HarnessAccount[]>
+  'providerAccounts:prepare': Contract<
+    [harnessId: string, providerId?: string],
+    PendingHarnessAccount
+  >
+  'providerAccounts:inspectPending': Contract<[pendingAccountId: string], ProviderAccountAuthStatus>
+  'providerAccounts:finalizePending': Contract<
+    [pendingAccountId: string, providerId: string, label?: string],
+    HarnessAccount
+  >
+  'providerAccounts:cancelPending': Contract<[pendingAccountId: string], void>
+  'providerAccounts:rename': Contract<[accountId: string, label: string], HarnessAccount>
+  'providerAccounts:remove': Contract<[accountId: string], boolean>
   'providerAccounts:beginLogin': Contract<
     [harnessId: string, options?: ProviderAccountLoginOptions],
     ProviderAccountLoginHandoff
   >
   'providerAccounts:listOffered': Contract<[harnessId: string], OfferedProvider[]>
-  'providerAccounts:logout': Contract<[harnessId: string, providerId?: string], void>
-  'providerAccounts:setApiKey': Contract<
-    [harnessId: string, providerId: string, apiKey: string],
+  'providerAccounts:logout': Contract<
+    [harnessId: string, providerId?: string, accountId?: string],
     void
   >
-  'providerAccounts:beginOAuthLogin': Contract<[harnessId: string, providerId: string], string>
+  'providerAccounts:setApiKey': Contract<
+    [harnessId: string, providerId: string, apiKey: string, accountId?: string],
+    void
+  >
+  'providerAccounts:beginOAuthLogin': Contract<
+    [harnessId: string, providerId: string, accountId?: string],
+    string
+  >
   'providerAccounts:respondOAuthPrompt': Contract<[loginId: string, value: string], void>
   'providerAccounts:cancelOAuthLogin': Contract<[loginId: string], void>
   'providerAccounts:getHidden': Contract<[harnessId: string], string[]>
@@ -2058,6 +2129,7 @@ export interface IpcInvokeContract {
     [id: string, patch: Partial<Omit<HeartbeatConfig, 'id'>>],
     HeartbeatConfig
   >
+  'heartbeat:trigger': Contract<[id: string], void>
   'heartbeat:delete': Contract<[id: string], boolean>
   'heartbeat:toggle': Contract<[id: string, enabled: boolean], HeartbeatConfig>
   'gateway:list': Contract<[], import('./gateway-types').GatewayStatus[]>
@@ -2114,7 +2186,16 @@ export interface IpcInvokeContract {
     { id: string; pid: number }
   >
   'pty:createCommand': Contract<
-    [id: string, command: string, args: string[], columns: number, rows: number],
+    [
+      id: string,
+      command: string,
+      args: string[],
+      columns: number,
+      rows: number,
+      /** Kill the session after this many ms of zero output/input (e.g. hung updates). */
+      idleTimeoutMs?: number,
+      environment?: Record<string, string>
+    ],
     { id: string; pid: number }
   >
   'pty:createAction': Contract<
@@ -2176,6 +2257,7 @@ export interface IpcInvokeContract {
   'browser:getConsole': Contract<[tabId: string], BrowserConsoleEntry[]>
   'browser:clearConsole': Contract<[tabId: string], void>
   'browser:clearData': Contract<[projectId: string], void>
+  'browser:clearSiteData': Contract<[projectId: string, scopes: BrowserSiteDataScope[]], void>
   'browser:resolvePermission': Contract<
     [requestId: string, decision: BrowserPermissionDecision],
     void
@@ -2576,6 +2658,8 @@ export interface CloseConfirmationPayload {
 }
 
 export type AgentNotificationKind = 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
+/** Which bundled alert the renderer should play for a notification. */
+export type NotificationSoundKind = 'default' | 'attention'
 
 /** Where a notification originated: a project thread, the global chat (inbox),
  *  or a temporary (side) chat piped through a parent thread. */
@@ -2702,7 +2786,7 @@ export interface IpcEventContract {
   'thread:deleted': [projectId: string, threadId: string]
   /** Note presence changed for a thread (saved or deleted). */
   'note:changed': [projectId: string, threadId: string, hasNote: boolean]
-  'notification:playSound': []
+  'notification:playSound': [kind: NotificationSoundKind]
   'notification:show': [payload: AgentNotificationPayload]
   'notification:threadClicked': [payload: ThreadClickedPayload]
   /** macOS notification authorization changed (delivery outcome or re-verification). */

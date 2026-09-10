@@ -5,6 +5,7 @@ import { tmpdir } from 'os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import type { AgentEvent } from '../../../src/lib/types'
+import { GATEWAY_TOOLS } from '../../../src/lib/gateway-tools'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import {
   CodexDriver,
@@ -13,6 +14,8 @@ import {
 } from '../../../src/main/drivers/codex-driver'
 
 const spawnMock = vi.hoisted(() => vi.fn())
+const codexQuestionInstruction =
+  'The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode.'
 vi.mock('child_process', async (importOriginal) => {
   const original = await importOriginal<typeof import('child_process')>()
   return { ...original, spawn: spawnMock }
@@ -78,6 +81,7 @@ class FakeChild extends EventEmitter {
 const roots: string[] = []
 afterEach(async () => {
   spawnMock.mockReset()
+  vi.restoreAllMocks()
   vi.useRealTimers()
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
@@ -95,7 +99,7 @@ const settings = {
   providerId: 'openai',
   modelId: 'gpt-5.6-sol',
   thinkingLevel: 'medium' as const,
-  permissionLevel: 'auto_review' as const,
+  permissionLevel: 'auto_review' as const
 }
 
 describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
@@ -205,6 +209,18 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     const sharedChild = new FakeChild()
     spawnMock.mockReturnValue(sharedChild as unknown as ChildProcess)
     const sessionId = await driver.createSession('/project', 'Codex')
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => Response.json({ notFound: false, utilities: [] }))
+    const dynamicTools = GATEWAY_TOOLS.map(({ name, description, inputSchema }) => ({
+      name,
+      description,
+      inputSchema
+    }))
+    await driver.publishUtilityGatewayEndpoint('/project', sessionId, {
+      url: 'http://127.0.0.1:12345',
+      token: 'first-turn'
+    })
     await driver.sendPrompt('/project', {
       sessionId,
       settings,
@@ -214,8 +230,8 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     })
     expect(spawnMock.mock.calls[0]?.[1]).toEqual([
       'app-server',
-      '--enable',
-      'default_mode_request_user_input',
+      '-c',
+      'tools.experimental_request_user_input={}',
       '--listen',
       'stdio://'
     ])
@@ -223,7 +239,11 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       expect.objectContaining({
         method: 'thread/start',
         params: expect.objectContaining({
-          developerInstructions: 'Internal memory contract'
+          developerInstructions: `Internal memory contract\n\n${codexQuestionInstruction}`,
+          dynamicTools: expect.arrayContaining([
+            expect.objectContaining({ name: 'cio_ask_user' }),
+            ...dynamicTools
+          ])
         })
       })
     )
@@ -236,6 +256,33 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
           input: [{ type: 'text', text: 'first', text_elements: [] }],
           sandboxPolicy: expect.objectContaining({ type: 'workspaceWrite' })
         })
+      })
+    )
+    sharedChild.emitPayload({
+      id: 'utility-first',
+      method: 'item/tool/call',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        tool: 'cio_util_find',
+        arguments: { query: 'svelte' }
+      }
+    })
+    await vi.waitFor(() =>
+      expect(sharedChild.requests()).toContainEqual({
+        id: 'utility-first',
+        result: {
+          success: true,
+          contentItems: [
+            { type: 'inputText', text: JSON.stringify({ notFound: false, utilities: [] }) }
+          ]
+        }
+      })
+    )
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'http://127.0.0.1:12345/search',
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: 'Bearer first-turn' })
       })
     )
     const eventsBeforeInputEcho = events.length
@@ -416,6 +463,11 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
         error: 'Codex reached the response retry limit.'
       })
     })
+    await driver.publishUtilityGatewayEndpoint('/project', sessionId, null)
+    await driver.publishUtilityGatewayEndpoint('/project', sessionId, {
+      url: 'http://127.0.0.1:12345',
+      token: 'second-turn'
+    })
     await driver.sendPrompt('/project', {
       sessionId,
       settings: { ...settings, permissionLevel: 'full_access' },
@@ -426,7 +478,14 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     expect(sharedChild.requests()).toContainEqual({
       id: expect.any(Number),
       method: 'thread/resume',
-      params: { threadId: 'native-1', developerInstructions: null }
+      params: {
+        threadId: 'native-1',
+        developerInstructions: codexQuestionInstruction,
+        dynamicTools: expect.arrayContaining([
+          expect.objectContaining({ name: 'cio_ask_user' }),
+          ...dynamicTools
+        ])
+      }
     })
     expect(sharedChild.requests()).toContainEqual(
       expect.objectContaining({
@@ -436,6 +495,36 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
         })
       })
     )
+    sharedChild.emitPayload({
+      id: 'utility-second',
+      method: 'item/tool/call',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-3',
+        tool: 'cio_util_find',
+        arguments: { query: 'svelte' }
+      }
+    })
+    await vi.waitFor(() =>
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        'http://127.0.0.1:12345/search',
+        expect.objectContaining({
+          headers: expect.objectContaining({ authorization: 'Bearer second-turn' })
+        })
+      )
+    )
+    const calls = fetchMock.mock.calls.length
+    sharedChild.emitPayload({
+      id: 'utility-stale',
+      method: 'item/tool/call',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        tool: 'cio_util_find',
+        arguments: {}
+      }
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(calls)
   })
 
   it('surfaces a Codex usage-limit failure as a quota issue with a retry time', async () => {
@@ -497,6 +586,117 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     )
     expect(errorEvent && 'issue' in errorEvent ? errorEvent.issue?.retryAt : undefined).toEqual(
       new Date(2026, 7, 20, 7, 30, 0, 0).getTime()
+    )
+  })
+
+  it('schedules retry from the time-only usage-limit variant', async () => {
+    // Codex emits a bare "try again at 9:30 AM" for same-day resets. The time
+    // has not passed yet on the faked clock, so today's 9:30 AM is the reset.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 7, 19, 8, 0, 0))
+    const driver = new CodexDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    child.emitPayload({
+      method: 'turn/completed',
+      params: {
+        threadId: 'native-1',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: {
+            message:
+              "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 9:30 AM."
+          }
+        }
+      }
+    })
+    await vi.waitFor(() => {
+      expect(events).toContainEqual(expect.objectContaining({ type: 'session.error', sessionId }))
+    })
+    const errorEvent = events.find(
+      (event) => event.type === 'session.error' && event.sessionId === sessionId
+    )
+    expect(errorEvent && 'issue' in errorEvent ? errorEvent.issue?.retryAt : undefined).toEqual(
+      new Date(2026, 7, 19, 9, 30, 0, 0).getTime()
+    )
+  })
+
+  it('retries after a short cooldown when the time-only reset just passed', async () => {
+    // Right after an auto-resume fires, the still-limited provider re-reports
+    // the same reset time a few seconds in the past. That is propagation lag,
+    // not tomorrow's window — the retry must land in minutes, not a day out.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 7, 19, 9, 32, 0, 0))
+    const driver = new CodexDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    child.emitPayload({
+      method: 'turn/completed',
+      params: {
+        threadId: 'native-1',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: {
+            message:
+              "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 9:30 AM."
+          }
+        }
+      }
+    })
+    await vi.waitFor(() => {
+      expect(events).toContainEqual(expect.objectContaining({ type: 'session.error', sessionId }))
+    })
+    const errorEvent = events.find(
+      (event) => event.type === 'session.error' && event.sessionId === sessionId
+    )
+    const retryAt = errorEvent && 'issue' in errorEvent ? errorEvent.issue?.retryAt : undefined
+    expect(retryAt).toBeDefined()
+    expect(retryAt).toBeGreaterThan(Date.now())
+    expect(retryAt! - Date.now()).toBeLessThanOrEqual(5 * 60 * 1000)
+  })
+
+  it('rolls the time-only usage-limit reset to tomorrow when the time has passed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 7, 19, 12, 0, 0))
+    const driver = new CodexDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    child.emitPayload({
+      method: 'turn/completed',
+      params: {
+        threadId: 'native-1',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: {
+            message:
+              "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 9:30 AM."
+          }
+        }
+      }
+    })
+    await vi.waitFor(() => {
+      expect(events).toContainEqual(expect.objectContaining({ type: 'session.error', sessionId }))
+    })
+    const errorEvent = events.find(
+      (event) => event.type === 'session.error' && event.sessionId === sessionId
+    )
+    expect(errorEvent && 'issue' in errorEvent ? errorEvent.issue?.retryAt : undefined).toEqual(
+      new Date(2026, 7, 20, 9, 30, 0, 0).getTime()
     )
   })
 

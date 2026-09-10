@@ -1106,18 +1106,10 @@ export class ClineDriver extends PersistentCliDriver {
     }
 
     if (Object.keys(mcpServers).length === 0) return {}
-    const customProvider = await this.resolveCustomProvider(request.providerId)
-    if (!customProvider) {
-      // Cline stores its account access and refresh tokens inside the active
-      // data directory. Pointing an authenticated Cline/ClinePass turn at an
-      // ephemeral utility directory hides those tokens and makes every request
-      // fail as unauthorized. Cline has no per-turn MCP config flag, so keep the
-      // user's real profile authoritative and do not advertise an unreachable
-      // gateway. App-owned custom providers remain isolated below.
-      return { gatewayAvailable: false }
-    }
+    // Override only MCP settings; moving the data directory hides the user's
+    // account access and refresh tokens. Each launch gets its own MCP config.
     return {
-      args: ['--data-dir', '{{runtime-directory}}/config/cline-data'],
+      env: { CLINE_MCP_SETTINGS_PATH: '{{config:cline-mcp}}' },
       configFiles: [
         {
           id: 'cline-mcp',

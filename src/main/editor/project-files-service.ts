@@ -1,5 +1,16 @@
-import { constants, lstatSync, realpathSync } from 'node:fs'
-import { copyFile, link, lstat, mkdir, open, readdir, realpath, rename, rm } from 'node:fs/promises'
+import { constants, realpathSync, statSync } from 'node:fs'
+import {
+  copyFile,
+  link,
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat
+} from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { ProjectFileIndexService } from './project-file-index-service'
@@ -37,6 +48,19 @@ function isWithinRoot(root: string, target: string): boolean {
     pathFromRoot === '' ||
     (!pathFromRoot.startsWith(`..${sep}`) && pathFromRoot !== '..' && !isAbsolute(pathFromRoot))
   )
+}
+
+/** Whether a symlinked directory's target, fully resolved through both the
+ *  link and the root, stays inside the project. Mirrors the file-index
+ *  service's guard so links escaping the project or cycling up the tree are
+ *  never listed. */
+async function isSymlinkedDirectoryInsideRoot(root: string, linkPath: string): Promise<boolean> {
+  try {
+    const [rootReal, linkReal] = await Promise.all([realpath(root), realpath(linkPath)])
+    return isWithinRoot(rootReal, linkReal)
+  } catch {
+    return false
+  }
 }
 
 function toPosixPath(path: string): string {
@@ -80,17 +104,46 @@ export class ProjectFilesService {
     const root = await this.projectRoot(projectId, scopeBucketId)
     const directory = await this.resolveExistingPath(root, relativeDirectory, true)
     const entries = await readdir(directory, { withFileTypes: true })
-    const visible = entries
-      .filter((entry) => !entry.isSymbolicLink() && (entry.isDirectory() || entry.isFile()))
-      .sort((left, right) => {
-        if (left.isDirectory() !== right.isDirectory()) {
-          return left.isDirectory() ? -1 : 1
-        }
-        return left.name.localeCompare(right.name, undefined, {
-          numeric: true,
-          sensitivity: 'base'
-        })
+    // Symlinked entries are followed so linked files and directories appear in
+    // the tree. A symlinked directory is only kept when its target stays inside
+    // the project root after resolving symlinks, so links escaping the project
+    // or cycling back up the tree are never listed.
+    const visible: Array<{ name: string; isDirectory: boolean }> = []
+    for (const entry of entries) {
+      if (entry.isFile()) {
+        visible.push({ name: entry.name, isDirectory: false })
+        continue
+      }
+      if (entry.isDirectory()) {
+        visible.push({ name: entry.name, isDirectory: true })
+        continue
+      }
+      if (!entry.isSymbolicLink()) continue
+      const linkPath = join(directory, entry.name)
+      let target: import('node:fs').Stats
+      try {
+        target = await stat(linkPath)
+      } catch {
+        // Broken symlink: no target to list.
+        continue
+      }
+      if (target.isFile()) {
+        visible.push({ name: entry.name, isDirectory: false })
+        continue
+      }
+      if (target.isDirectory() && (await isSymlinkedDirectoryInsideRoot(root, linkPath))) {
+        visible.push({ name: entry.name, isDirectory: true })
+      }
+    }
+    visible.sort((left, right) => {
+      if (left.isDirectory !== right.isDirectory) {
+        return left.isDirectory ? -1 : 1
+      }
+      return left.name.localeCompare(right.name, undefined, {
+        numeric: true,
+        sensitivity: 'base'
       })
+    })
 
     if (visible.length > MAX_DIRECTORY_ENTRIES) {
       throw new Error(
@@ -101,11 +154,11 @@ export class ProjectFilesService {
     const results: ProjectFileEntry[] = []
     for (const entry of visible) {
       const entryPath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
-      if (entry.isDirectory()) {
-        results.push({ name: entry.name, path: entryPath, kind: 'directory' })
-        continue
-      }
-      results.push({ name: entry.name, path: entryPath, kind: 'file' })
+      results.push({
+        name: entry.name,
+        path: entryPath,
+        kind: entry.isDirectory ? 'directory' : 'file'
+      })
     }
     return results
   }
@@ -533,12 +586,10 @@ export class ProjectFilesService {
         current = resolve(current, segment)
         if (!isWithinRoot(root, current))
           throw new Error('Project file path escapes the project root')
-        const metadata = lstatSync(current)
-        if (metadata.isSymbolicLink()) {
-          throw new Error('Symbolic links are not available in the sidebar')
-        }
       }
-      const metadata = lstatSync(current)
+      // Symlinks are followed; the realpath containment check below is the
+      // safety gate, so links resolving outside the project still fail.
+      const metadata = statSync(current)
       if (!metadata.isFile() && !metadata.isDirectory()) {
         throw new Error('Project path is not a regular file or directory')
       }
@@ -921,13 +972,12 @@ export class ProjectFilesService {
       if (!isWithinRoot(root, current)) {
         throw new Error('Project file path escapes the project root')
       }
-      const metadata = await lstat(current)
-      if (metadata.isSymbolicLink()) {
-        throw new Error('Symbolic links are not available in the sidebar')
-      }
     }
 
-    const metadata = await lstat(current)
+    // Symlinks are followed so linked files and directories listed in the
+    // tree can also be opened. Safety relies on the realpath containment
+    // check below: only links resolving inside the project pass.
+    const metadata = await stat(current)
     if (expectDirectory ? !metadata.isDirectory() : !metadata.isFile()) {
       throw new Error(
         expectDirectory

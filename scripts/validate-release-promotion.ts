@@ -51,7 +51,9 @@ export function validateReleasePromotion(input: {
     }
     return
   }
-  // main promotion: current must be exactly one patch ahead of base (e.g. 0.5.50 → 0.5.51)
+  // main promotion: current must be exactly one patch ahead of the last published
+  // stable base (e.g. 0.5.52 -> 0.5.53). deploy:main passes the last published
+  // stable release as the base version, since main's package.json can drift.
   if (compareVersions(currentVersion, baseVersion) <= 0) {
     throw new Error(
       `package.json version must increase for ${input.headBranch} → ${input.baseBranch} ` +

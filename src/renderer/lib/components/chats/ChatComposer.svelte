@@ -8,10 +8,6 @@
     Paperclip,
     Square,
     X,
-    Folder,
-    GitBranch,
-    Monitor,
-    Globe,
     Shield,
     ShieldCheck,
     FileText,
@@ -39,12 +35,7 @@
   import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { modelKey } from '$lib/model-keys'
-  import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
-  import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
-  import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
-  import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import { getInlineFileTypeIconSvg, getInlineFolderTypeIconSvg } from '../files/file-type-icons'
-  import { scopeState } from '$lib/stores/scope.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { attachmentPreviewKind, fileUrlToPath, mimeFromPath, pathToFileUrl } from '$lib/mime'
   import { placeCaretAtEnd } from '../shared/rich-markdown'
@@ -71,6 +62,7 @@
   import { APP_NAME } from '$shared/brand'
   import { getVendorIconSvg } from '$lib/vendor-icons/registry'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
+  import ComposerShoe, { type ComposerScopeShoe } from './ComposerShoe.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import type { SpeechEditorApplyResult, SpeechEditorTarget } from '../../speech/editor-target'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
@@ -85,7 +77,6 @@
     PromptAttachment,
     PromptAssignmentTaskReference,
     PromptProjectReference,
-    ComposerProject,
     AgentContextUsage,
     AgentHarnessUsage,
     PromptReference,
@@ -95,7 +86,8 @@
     UsageEfficiencyKpis,
     Thread,
     EngineeringLifecycleSelectionInput,
-    EngineeringLifecycleState
+    EngineeringLifecycleState,
+    HarnessAccount
   } from '$shared/types'
 
   type StartAfterSelection = Pick<Thread, 'id' | 'title'>
@@ -126,6 +118,9 @@
     settings?: ThreadSettings
     /** Called when any toolbar setting changes. */
     onSettingsChange?: (settings: ThreadSettings) => void
+    /** Reports the selected account so the owning thread can attribute the
+     *  pending/live turn without issuing a second account-registry read. */
+    onAccountSelected?: (account: HarnessAccount) => void
     /** Thread-scoped actions available through the composer slash menu. */
     actions?: readonly ActionDefinition[]
     /** Executes a non-command action selected from the slash menu. */
@@ -141,7 +136,6 @@
     /** Id of the agent harness serving the models (shown on each model row). */
     harnessId?: string
     /** Project context row shown before the first message of the thread. */
-    projectContext?: ComposerProject
     /** Active project ID for the project switcher dropdown. */
     projectId?: string | null
     /** Active thread ID used to prevent selecting the current thread as a dependency. */
@@ -149,7 +143,6 @@
     /** Project or app scratch destination for pasted/ephemeral attachment files. */
     attachmentStorage?: AttachmentStorageScope
     /** Called when the user selects a different project from the switcher. */
-    onSwitchProject?: (projectId: string) => void
     /** Local project whose files can be referenced with bare @ tags. */
     fileTagProjectId?: string
     /** Active Assignment tasks available through the composer @ picker. */
@@ -257,7 +250,11 @@
     /** Hides the inline context-usage indicator — for hosts that surface the
      *  same detail elsewhere (e.g. the mobile header). */
     hideUsageIndicator?: boolean
+    /** Renders the scope shoe — the project scope + project type row at the
+     *  footer of the composer. Only set in project mode. */
+    scopeShoe?: ComposerScopeShoe
   }
+
 
   let {
     onSend,
@@ -268,17 +265,16 @@
     autofocus = false,
     settings,
     onSettingsChange,
+    onAccountSelected,
     actions = [],
     onActionSelect,
     onSlashCommand,
     usageCreditsCommandId,
     providers = [],
     harnessId = DEFAULT_HARNESS,
-    projectContext,
     projectId = null,
     threadId = '',
     attachmentStorage,
-    onSwitchProject,
     fileTagProjectId,
     assignmentId,
     assignmentTasks = [],
@@ -331,7 +327,8 @@
     onImageDescriptorDefaultChange,
     onImageDescriptorAskAgainChange,
     enableImageDescriptorGate = true,
-    hideUsageIndicator = false
+    hideUsageIndicator = false,
+    scopeShoe
   }: Props = $props()
 
   /** Base composer settings — the prop when provided, else the global last-used. */
@@ -423,19 +420,6 @@
       value: taskReferenceToken(reference)
     }))
   ])
-  /** Git remote origin URL for the active project, surfaced on the branch pill. */
-  let remoteOriginUrl = $derived(projectRemotes.get(projectId ?? '') ?? null)
-  let branchPillTitle = $derived(
-    remoteOriginUrl ?? (projectContext ? projectIdentityTitle(projectContext) : undefined)
-  )
-
-  // Resolve the project's GitHub repo so hovering the branch pill can reveal it.
-  $effect(() => {
-    const id = projectId
-    const path = projectContext?.path
-    if (!id || !path) return
-    void projectRemotes.ensure(id, path)
-  })
   let isDragging = $state(false)
   let previewFile = $state<PromptAttachment | null>(null)
   /** Object URLs for image/PDF/media/document downloads, keyed by attachment file:// URL. */
@@ -1262,7 +1246,12 @@
     else threadSettingsStore.commit(updated)
   }
 
-  function selectModel(providerId: string, modelId: string, nextHarnessId?: string): void {
+  function selectModel(
+    providerId: string,
+    modelId: string,
+    nextHarnessId?: string,
+    accountId?: string
+  ): void {
     modelMenuOpen = false
     const nextHarness = nextHarnessId ?? resolved.harnessId
     onModelUsed?.(modelKey(nextHarness, providerId, modelId))
@@ -1286,6 +1275,11 @@
       harnessId: nextHarnessId ?? resolved.harnessId,
       providerId,
       modelId,
+      accountId:
+        accountId ??
+        (nextHarness !== resolved.harnessId
+          ? `${nextHarness}.default`
+          : (resolved.accountId ?? `${nextHarness}.default`)),
       ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(fastSupported ? {} : { inferenceMode: 'normal' })
     }
@@ -1897,7 +1891,7 @@
 {/if}
 
 <div
-  class="chat-composer border bg-surface shadow-sm"
+  class="chat-composer relative z-10 border bg-surface shadow-sm"
   data-onboarding="composer"
   data-voice-trigger-root
 >
@@ -1938,6 +1932,7 @@
               resolved.harnessId}
             providerId={gateVisionSelection?.providerId ?? ''}
             modelId={gateVisionSelection?.modelId ?? ''}
+            accountId={gateVisionSelection?.accountId}
             {favoriteModels}
             {recentModels}
             {onRemoveRecent}
@@ -1945,8 +1940,8 @@
             side="top"
             variant="field"
             label={gateVisionSelection ? undefined : 'Choose a vision model'}
-            onSelect={(providerId, modelId, harnessId) => {
-              gateVisionSelection = { harnessId, providerId, modelId }
+            onSelect={(providerId, modelId, harnessId, accountId) => {
+              gateVisionSelection = { harnessId, providerId, modelId, accountId }
             }}
             thinkingLevel={gateVisionSelection?.thinkingLevel}
             onSelectThinking={(level) => {
@@ -2000,49 +1995,10 @@
     </div>
   {/if}
 
-  <!-- Project context + attachment chips -->
-  {#if projectContext || attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || (showChatModes && resolved.fileSystemMode)}
+  <!-- Attachment chips (project identity + type + branch now live on the scope shoe) -->
+  {#if attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || (showChatModes && resolved.fileSystemMode)}
     <div class="flex flex-col gap-1.5 px-3 pt-2.5">
       <div class="flex flex-wrap items-center gap-1.5">
-        {#if projectContext}
-          <ProjectSwitch
-            activeProjectId={projectId}
-            onSwitch={onSwitchProject}
-            class="flex items-center gap-2 justify-start"
-          >
-            {#if projectContext.iconUrl}
-              <img src={projectContext.iconUrl} alt="" class="h-4 w-4 shrink-0 rounded" />
-            {:else}
-              <Folder size={13} class="shrink-0 text-dimmed" />
-            {/if}
-            <ProjectIdentity
-              project={projectContext}
-              class="min-w-0 max-w-48"
-              nameClass="text-xs font-medium text-foreground"
-              locationClass="text-[0.5625rem] text-dimmed"
-              showLocation={hasProjectNameCollision(projectContext, scopeState.projectRecords)}
-            />
-            <span
-              class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
-            >
-              {#if projectContext.source === 'ssh'}
-                <Globe size={9} />
-              {:else}
-                <Monitor size={9} />
-              {/if}
-              {projectContext.source}
-            </span>
-            {#if projectContext.branch}
-              <span
-                class="flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
-                title={branchPillTitle}
-              >
-                <GitBranch size={9} class="shrink-0" />
-                <span class="truncate">{projectContext.branch}</span>
-              </span>
-            {/if}
-          </ProjectSwitch>
-        {/if}
         {#if showChatModes && resolved.fileSystemMode}
           <div class="flex flex-wrap items-center gap-1.5" aria-label="Active chat modes">
             {#if resolved.fileSystemMode}
@@ -2552,12 +2508,14 @@
       {harnessId}
       providerId={resolved.providerId}
       modelId={resolved.modelId}
+      accountId={resolved.accountId}
       {favoriteModels}
       {recentModels}
       {onRemoveRecent}
       bind:open={modelMenuOpen}
       bind:thinkingMenuOpen
       onSelect={selectModel}
+      onSelectAccount={onAccountSelected}
       {onToggleFavorite}
       {onReorderFavorite}
       fast={inferenceMode === 'fast'}
@@ -2712,6 +2670,32 @@
   </div>
 </div>
 
+<!-- Scope shoe — floats underneath the composer as its own inset bar,
+     centered at 80% of the composer width; project mode only. It slides up
+     behind the composer (z below it) so the shoe's top edge is tucked under
+     the composer's bottom border — only the lower half shows, like a shoe.
+     No z-index on the wrapper: the composer (z-10) paints over the card, but
+     the shoe's dropdown (z-40 inside) still opens above the composer. -->
+{#if scopeShoe}
+  <div class="composer-shoe relative -mt-4 flex w-full justify-center px-6 pt-3 pb-2">
+    <div
+      class="composer-shoe-card flex w-[80%] min-w-0 items-center justify-center border bg-surface px-2 pt-2.5 pb-1 shadow-md @container"
+    >
+        <ComposerShoe
+          projectId={scopeShoe.projectId}
+          threadId={scopeShoe.threadId}
+          bucket={scopeShoe.bucket}
+          source={scopeShoe.source}
+          host={scopeShoe.host}
+          project={scopeShoe.project}
+          onSwitchProject={scopeShoe.onSwitchProject}
+          isNewThread={scopeShoe.isNewThread}
+          onOpenScopeView={scopeShoe.onOpenScopeView}
+        />
+    </div>
+  </div>
+{/if}
+
 <StartAfterThreadPicker
   open={startAfterPickerOpen}
   {projectId}
@@ -2749,6 +2733,14 @@
 
     .pending-stop-icon {
       display: block;
+    }
+  }
+
+  /* Shoe stays at 80% width; expands up to 95% as the conversation screen
+     shrinks (e.g. a very wide right sidebar), so its content keeps fitting. */
+  @container (max-width: 640px) {
+    .composer-shoe-card {
+      width: 95%;
     }
   }
 </style>

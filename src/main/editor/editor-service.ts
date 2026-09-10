@@ -540,7 +540,7 @@ export class EditorService {
       }
     }
     const terminalPath = this.findMacAppPath(['Terminal'])
-    if (terminalPath) {
+    if (terminalPath && process.platform === 'darwin') {
       return {
         id: 'system',
         name: 'Terminal',
@@ -574,7 +574,7 @@ export class EditorService {
   private appNameFromPath(appPath: string): string {
     return (
       appPath
-        .split('/')
+        .split(/[/\\]/u)
         .pop()
         ?.replace(/\.app$/, '') ?? 'System Default'
     )
@@ -611,9 +611,25 @@ export class EditorService {
     if (process.platform !== 'darwin') {
       if (this.defaultHandler === undefined) {
         this.defaultHandler =
-          process.platform === 'linux' ? await this.resolveLinuxDefaultHandler() : null
+          process.platform === 'linux'
+            ? await this.resolveLinuxDefaultHandler()
+            : this.resolveWindowsDefaultHandler()
       }
-      await this.harvestFallback(paths.filter((p) => !this.iconCache.has(p)))
+      const pending = paths.filter((p) => !this.iconCache.has(p))
+      // The system handler's icon is harvested in the same pass as the editors.
+      const handlerPath =
+        this.defaultHandler && !this.iconCache.has(this.defaultHandler.path)
+          ? [this.defaultHandler.path]
+          : []
+      const all = [...pending, ...handlerPath]
+      if (all.length > 0) await this.harvestFallback(all)
+      if (this.defaultHandler) {
+        this.defaultHandler = {
+          ...this.defaultHandler,
+          iconDataUrl:
+            this.iconCache.get(this.defaultHandler.path) ?? this.defaultHandler.iconDataUrl
+        }
+      }
       return
     }
 
@@ -634,6 +650,33 @@ export class EditorService {
     await this.harvestFallback(pending.filter((p) => this.iconCache.get(p) === undefined))
   }
 
+  /**
+   * Windows has exactly one folder handler: Explorer. Its real icon comes
+   * from `explorer.exe`, which `app.getFileIcon` renders reliably (unlike
+   * the 0-byte app-execution aliases under WindowsApps).
+   */
+  private resolveWindowsDefaultHandler(): { path: string; name: string } | null {
+    const explorer = join(process.env['WINDIR'] ?? 'C:\\Windows', 'explorer.exe')
+    return existsSync(explorer) ? { path: explorer, name: 'File Explorer' } : null
+  }
+
+  /**
+   * Windows Terminal's PATH entry is a 0-byte app-execution alias that
+   * `app.getFileIcon` cannot render. When its icon (or resolution) fails,
+   * fall back to the real `powershell.exe` — the terminal Windows actually
+   * opens in auto mode.
+   */
+  private windowsTerminalIconFallback(): string | null {
+    const powershell = join(
+      process.env['WINDIR'] ?? 'C:\\Windows',
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe'
+    )
+    return existsSync(powershell) ? powershell : null
+  }
+
   /** Electron's getFileIcon is generic for .app bundles, but better than nothing. */
   private async harvestFallback(paths: string[]): Promise<void> {
     await Promise.all(
@@ -641,6 +684,19 @@ export class EditorService {
         this.iconCache.set(p, await this.getElectronIcon(p))
       })
     )
+    // Windows Terminal's app-execution alias is unrenderable — use the real shell icon.
+    if (process.platform === 'win32') {
+      const broken = paths.filter(
+        (p) => this.iconCache.get(p) === undefined && /wt\.exe$/iu.test(p)
+      )
+      if (broken.length > 0) {
+        const fallback = this.windowsTerminalIconFallback()
+        if (fallback) {
+          const shellIcon = this.iconCache.get(fallback) ?? (await this.getElectronIcon(fallback))
+          for (const p of broken) this.iconCache.set(p, shellIcon)
+        }
+      }
+    }
   }
 
   /** Resolve Linux's directory handler and its desktop-file icon. */

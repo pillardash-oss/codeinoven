@@ -107,13 +107,20 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_DIAGNOSTICS_TOOL_NAME,
     description:
-      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, and read recent app log entries (main.jsonl, error.log, permission-events.jsonl). All output is redacted and bounded. Available only during an explicit @cio-utility turn. Never write, delete, or configure anything with it.',
+      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available only during an explicit @cio-utility turn. Never write, delete, or configure anything with it.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['lookup_thread', 'search_threads', 'read_messages', 'read_log'],
+          enum: [
+            'lookup_thread',
+            'search_threads',
+            'read_messages',
+            'read_log',
+            'list_schema',
+            'query_sql'
+          ],
           description: 'Diagnostic operation to perform.'
         },
         query: {
@@ -124,7 +131,8 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
         thread_id: { type: 'string', description: 'For read_messages: the thread id to inspect.' },
         limit: {
           type: 'number',
-          description: 'Optional cap; read_messages returns at most 120 messages, read_log at most 200 entries.'
+          description:
+            'Optional cap; read_messages returns at most 120 messages, read_log at most 200 entries.'
         },
         level: {
           type: 'string',
@@ -134,6 +142,22 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
           type: 'string',
           description:
             'For read_log: one of logs/main.jsonl, logs/error.log, logs/permission-events.jsonl.'
+        },
+        table: {
+          type: 'string',
+          description:
+            'For list_schema: optional table name (exact or substring) to limit the schema report to.'
+        },
+        sql: {
+          type: 'string',
+          description:
+            'For query_sql: one read-only SELECT (or WITH ... SELECT, EXPLAIN, or a schema PRAGMA such as table_info). Statements are executed with a hard row cap and are rejected if SQLite classifies them as writers.'
+        },
+        params: {
+          type: 'array',
+          items: { type: ['string', 'number', 'boolean', 'null'] },
+          description:
+            'For query_sql: optional positional bind values (string, number, boolean, or null) for ? placeholders.'
         }
       },
       required: ['action'],

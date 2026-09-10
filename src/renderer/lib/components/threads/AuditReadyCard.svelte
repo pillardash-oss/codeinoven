@@ -46,11 +46,17 @@
     onReorderFavorite
   }: Props = $props()
 
-  function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
+  function chooseModel(
+    providerId: string,
+    modelId: string,
+    nextHarnessId?: string,
+    accountId?: string
+  ): void {
     if (!settings) return
     onModelChange?.({
       ...settings,
       harnessId: nextHarnessId ?? settings.harnessId,
+      accountId,
       providerId,
       modelId
     })
@@ -113,6 +119,7 @@
           harnessId={settings.harnessId}
           providerId={settings.providerId}
           modelId={settings.modelId}
+          accountId={settings.accountId}
           {favoriteModels}
           {recentModels}
           {onRemoveRecent}

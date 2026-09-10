@@ -51,9 +51,14 @@
     return { provider, model }
   })
 
-  function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
+  function chooseModel(
+    providerId: string,
+    modelId: string,
+    nextHarnessId?: string,
+    accountId?: string
+  ): void {
     const harnessId = nextHarnessId ?? settings.harnessId
-    onModelChange({ ...settings, harnessId, providerId, modelId })
+    onModelChange({ ...settings, harnessId, accountId, providerId, modelId })
   }
 
   function chooseThinking(level: ThinkingLevel): void {
@@ -93,6 +98,7 @@
         harnessId={settings.harnessId}
         providerId={settings.providerId}
         modelId={settings.modelId}
+        accountId={settings.accountId}
         {favoriteModels}
         {recentModels}
         {onRemoveRecent}

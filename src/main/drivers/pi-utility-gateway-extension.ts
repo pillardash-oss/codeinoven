@@ -70,7 +70,7 @@ const diagnosticsTool = gatewayTool(UTILITY_DIAGNOSTICS_TOOL_NAME)
 
 export function piUtilityGatewayExtension(): string {
   return `import { execFile } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
@@ -94,14 +94,14 @@ function fail(message: string, marker: 'gatewayInactive'): GatewayFailure {
   return error
 }
 
-function loadHandoff(): GatewayHandoff {
-  const handoff = JSON.parse(readFileSync(HANDOFF_PATH, 'utf8')) as GatewayHandoff
+async function loadHandoff(): Promise<GatewayHandoff> {
+  const handoff = JSON.parse(await readFile(HANDOFF_PATH, 'utf8')) as GatewayHandoff
   // An empty handoff is the seed written before the first real endpoint publish,
   // and a missing file means the previous turn's cleanup already ran — both are
   // the "gateway not active this turn" case, never an opaque crash.
   if (!handoff.url || !handoff.token) {
     throw fail(
-      'The CodeInOven utility gateway is not active for this turn: no gateway credentials were published (this happens on queued or steer turns, or before the first utility turn). Continue without app utilities; the next regular user turn re-arms them.',
+      'The CodeInOven utility gateway is not active for this turn: no gateway credentials were published (this happens on queued or steer turns, or before the first utility turn). The application must refresh the utility transport before continuing utility work.',
       'gatewayInactive'
     )
   }
@@ -142,7 +142,7 @@ function postJson(base: string, token: string, route: string, body: Record<strin
               // help: the credentials are gone, only a fresh turn re-arms them.
               reject(
                 fail(
-                  'The CodeInOven utility gateway is not active for this turn: the turn credentials were already cleaned up (this happens on queued or steer turns). Continue without app utilities; the next regular user turn re-arms them.',
+                  'The CodeInOven utility gateway is not active for this turn: the turn credentials were already cleaned up (this happens on queued or steer turns). The application must refresh the utility transport before continuing utility work.',
                   'gatewayInactive'
                 )
               )
@@ -190,16 +190,17 @@ function discoverGatewayHost(): Promise<string | null> {
 }
 
 async function callGateway(route: string, body: Record<string, unknown>): Promise<unknown> {
-  const first = loadHandoff()
+  const first = await loadHandoff()
   try {
     return await postJson(first.url, first.token, route, body)
   } catch (error) {
-    if (error && error.gatewayInactive) throw error
+    // Re-read even after a rejected token: the next turn may have published
+    // fresh credentials before the rejection arrived.
     // The credentials may have been rotated between the read and the request
     // (a new turn raced this call) — retry once against a freshly read handoff.
     let fresh: GatewayHandoff
     try {
-      fresh = loadHandoff()
+      fresh = await loadHandoff()
     } catch (handoffError) {
       throw handoffError
     }
@@ -211,6 +212,7 @@ async function callGateway(route: string, body: Record<string, unknown>): Promis
         throw retryError
       }
     }
+    if (error && error.gatewayInactive) throw error
     // Host-level recovery: the app may have restarted and moved the loopback
     // port while this long-lived session kept the old handoff.
     const host = await discoverGatewayHost()
@@ -324,13 +326,18 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
         Type.Literal('lookup_thread'),
         Type.Literal('search_threads'),
         Type.Literal('read_messages'),
-        Type.Literal('read_log')
+        Type.Literal('read_log'),
+        Type.Literal('list_schema'),
+        Type.Literal('query_sql')
       ]),
       query: Type.Optional(Type.String()),
       thread_id: Type.Optional(Type.String()),
       limit: Type.Optional(Type.Number()),
       level: Type.Optional(Type.String()),
-      file: Type.Optional(Type.String())
+      file: Type.Optional(Type.String()),
+      table: Type.Optional(Type.String()),
+      sql: Type.Optional(Type.String()),
+      params: Type.Optional(Type.Array(Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()])))
     }),
     async execute(_toolCallId, params) {
       const body = { action: params.action }
@@ -339,6 +346,9 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       if (params.limit !== undefined) body.limit = params.limit
       if (params.level !== undefined) body.level = params.level
       if (params.file !== undefined) body.file = params.file
+      if (params.table !== undefined) body.table = params.table
+      if (params.sql !== undefined) body.sql = params.sql
+      if (params.params !== undefined) body.params = params.params
       const result = await callGateway(${JSON.stringify(diagnosticsTool.route)}, body)
       return textResult(result)
     }

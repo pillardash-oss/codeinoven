@@ -6,6 +6,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { APP_NAME } from '$shared/brand'
   import type { Project } from '$shared/types'
+  import { folderBaseName } from '$lib/project-location'
 
   interface Props {
     open: boolean
@@ -143,7 +144,7 @@
       try {
         // Verify clone succeeded and create project via regular local flow
         const folder = handoff.destination
-        const name = folder.split('/').filter(Boolean).pop() ?? handoff.repoName ?? folder
+        const name = folderBaseName(folder) || handoff.repoName || folder
         const project = (await invoke('project:create', {
           name,
           path: folder,

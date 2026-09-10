@@ -8,7 +8,8 @@
     Pencil,
     Plus,
     Trash2,
-    XCircle
+    XCircle,
+    Zap
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -31,11 +32,25 @@
   let draftHarnessId = $state('')
   let draftProviderId = $state('')
   let draftModelId = $state('')
+  let draftAccountId = $state<string | undefined>(undefined)
   let draftThinkingLevel = $state<ThinkingLevel | undefined>(undefined)
   let draftTimes = $state<string[]>([])
   let draftTimeInput = $state('')
   let draftError = $state('')
   let deleteTarget = $state<HeartbeatConfig | null>(null)
+  let triggeringId = $state<string | null>(null)
+
+  async function triggerNow(id: string): Promise<void> {
+    triggeringId = id
+    try {
+      await heartbeatStore.trigger(id)
+    } catch (triggerError) {
+      heartbeatStore.error =
+        triggerError instanceof Error ? triggerError.message : 'Failed to trigger heartbeat.'
+    } finally {
+      triggeringId = null
+    }
+  }
 
   function providerName(harnessId: string): string {
     return providers.find((catalog) => catalog.harnessId === harnessId)?.name ?? harnessId
@@ -73,6 +88,7 @@
     draftHarnessId = providers[0]?.harnessId ?? ''
     draftProviderId = ''
     draftModelId = ''
+    draftAccountId = undefined
     draftThinkingLevel = undefined
     draftTimes = []
     draftTimeInput = ''
@@ -86,6 +102,7 @@
     draftHarnessId = config.harnessId
     draftProviderId = config.providerId
     draftModelId = config.modelId
+    draftAccountId = config.accountId
     draftThinkingLevel = config.thinkingLevel
     draftTimes = [...config.times]
     draftTimeInput = ''
@@ -130,6 +147,7 @@
           harnessId: draftHarnessId,
           providerId: draftProviderId,
           modelId: draftModelId,
+          accountId: draftAccountId,
           thinkingLevel: draftThinkingLevel,
           times: draftTimes
         })
@@ -139,6 +157,7 @@
           harnessId: draftHarnessId,
           providerId: draftProviderId,
           modelId: draftModelId,
+          accountId: draftAccountId,
           thinkingLevel: draftThinkingLevel,
           times: draftTimes,
           enabled: true
@@ -156,7 +175,8 @@
       await heartbeatStore.remove(deleteTarget.id)
       deleteTarget = null
     } catch (removeError) {
-      draftError = removeError instanceof Error ? removeError.message : 'Failed to delete heartbeat.'
+      draftError =
+        removeError instanceof Error ? removeError.message : 'Failed to delete heartbeat.'
     }
   }
 
@@ -229,7 +249,11 @@
       {#each heartbeatStore.heartbeats as config (config.id)}
         <div class="flex items-start gap-3 border-b px-4 py-3 last:border-b-0">
           <div class="mt-0.5 rounded-lg bg-primary/10 p-1.5 text-primary">
-            <AgentIcon agentId={config.harnessId} label={providerName(config.harnessId)} size={16} />
+            <AgentIcon
+              agentId={config.harnessId}
+              label={providerName(config.harnessId)}
+              size={16}
+            />
           </div>
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
@@ -269,6 +293,21 @@
             </div>
           </div>
           <div class="flex shrink-0 items-center gap-1">
+            <button
+              class="flex h-7 w-7 items-center justify-center rounded-lg {triggeringId === config.id
+                ? 'text-primary'
+                : 'text-muted'} hover:bg-overlay hover:text-foreground"
+              aria-label="Trigger {config.name} now"
+              title="Trigger {config.name} now — send an immediate ping"
+              disabled={triggeringId !== null}
+              onclick={() => void triggerNow(config.id)}
+            >
+              {#if triggeringId === config.id}
+                <Loader2 size={13} class="animate-spin" />
+              {:else}
+                <Zap size={13} />
+              {/if}
+            </button>
             <Switch
               checked={config.enabled}
               onchange={(enabled) => void heartbeatStore.setEnabled(config.id, enabled)}
@@ -345,6 +384,7 @@
         harnessId={draftHarnessId || providers[0]?.harnessId || DEFAULT_HARNESS}
         providerId={draftProviderId}
         modelId={draftModelId}
+        accountId={draftAccountId}
         favoriteModels={rendererRecovery.favoriteModels}
         recentModels={rendererRecovery.recentModels}
         onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
@@ -352,10 +392,11 @@
         variant="field"
         label={draftModelId ? undefined : 'Choose model'}
         disabled={providers.length === 0}
-        onSelect={(providerId, modelId, harnessId) => {
+        onSelect={(providerId, modelId, harnessId, accountId) => {
           draftHarnessId = harnessId
           draftProviderId = providerId
           draftModelId = modelId
+          draftAccountId = accountId
           // Not every model supports thinking — drop a stale level the new
           // model doesn't offer so saving never carries an invalid value.
           const catalog = providers.find(
@@ -437,6 +478,8 @@
   {/snippet}
   <div class="flex gap-2 text-sm text-muted">
     <AlertTriangle size={16} class="mt-0.5 shrink-0 text-warning" />
-    <p>Delete <strong class="text-foreground">{deleteTarget?.name}</strong>? This can't be undone.</p>
+    <p>
+      Delete <strong class="text-foreground">{deleteTarget?.name}</strong>? This can't be undone.
+    </p>
   </div>
 </Modal>

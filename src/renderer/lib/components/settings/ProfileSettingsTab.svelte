@@ -9,6 +9,7 @@
     AccountUsageBreakdown,
     LocalProfileAnalytics,
     LocalProfileAnalyticsRange,
+    LocalProfileModelRanking,
     LocalProfileProjectBreakdown,
     LocalProfileRankingModeStats,
     LocalProfileUsageBreakdown,
@@ -23,6 +24,8 @@
 
   type ThinkingFilter = 'all' | ThinkingLevel
   type ShotFilter = 'all' | 'one_shot' | 'multi_shot'
+  type RankingSortKey = 'aggregate' | 'one_shot' | 'multi_shot'
+  type SortDirection = 'desc' | 'asc'
   type RangePreset = 'today' | 'yesterday' | '7d' | '30d' | 'year' | 'custom'
   type ModelRankMetric = 'cost' | 'tokens' | 'runtime'
 
@@ -107,7 +110,7 @@
     generatedAt: 0
   }
 
-  let usage = $state<LocalProfileAnalytics>(EMPTY_USAGE)  // responseDurationMs added below
+  let usage = $state<LocalProfileAnalytics>(EMPTY_USAGE) // responseDurationMs added below
   let accountState = $state<AccountProfileState>({ status: 'signed-out', profile: null })
   let loading = $state(true)
   let errorMessage = $state('')
@@ -265,14 +268,65 @@
 
   let thinkingFilter = $state<ThinkingFilter>('all')
   let shotFilter = $state<ShotFilter>('all')
+  let rankingSort = $state<RankingSortKey>('aggregate')
+  let rankingSortDirection = $state<SortDirection>('desc')
 
-  const filteredRankings = $derived(
-    shotFilter === 'all'
-      ? usage.modelRankings
-      : usage.modelRankings.filter((entry) =>
-          shotFilter === 'one_shot' ? entry.oneShot.samples > 0 : entry.multiShot.samples > 0
-        )
-  )
+  /** Sample-weighted average across both shot categories; null when nothing is ranked yet. */
+  function rankingAggregate(entry: LocalProfileModelRanking): number | null {
+    const oneShotScore = entry.oneShot.averageScore
+    const multiShotScore = entry.multiShot.averageScore
+    const samples = entry.oneShot.samples + entry.multiShot.samples
+    if (samples === 0) return null
+    const weighted =
+      (oneShotScore === null ? 0 : oneShotScore * entry.oneShot.samples) +
+      (multiShotScore === null ? 0 : multiShotScore * entry.multiShot.samples)
+    const scoredSamples =
+      (oneShotScore === null ? 0 : entry.oneShot.samples) +
+      (multiShotScore === null ? 0 : entry.multiShot.samples)
+    return scoredSamples === 0 ? null : weighted / scoredSamples
+  }
+
+  function rankingSortValue(entry: LocalProfileModelRanking, key: RankingSortKey): number | null {
+    if (key === 'aggregate') return rankingAggregate(entry)
+    const stats = key === 'one_shot' ? entry.oneShot : entry.multiShot
+    return stats.samples === 0 ? null : stats.averageScore
+  }
+
+  function toggleRankingSort(key: RankingSortKey): void {
+    if (rankingSort === key) {
+      rankingSortDirection = rankingSortDirection === 'desc' ? 'asc' : 'desc'
+      return
+    }
+    rankingSort = key
+    rankingSortDirection = 'desc'
+  }
+
+  const filteredRankings = $derived.by(() => {
+    const rows =
+      shotFilter === 'all'
+        ? usage.modelRankings
+        : usage.modelRankings.filter((entry) =>
+            shotFilter === 'one_shot' ? entry.oneShot.samples > 0 : entry.multiShot.samples > 0
+          )
+    const direction = rankingSortDirection === 'desc' ? -1 : 1
+    return [...rows].sort((left, right) => {
+      const leftValue = rankingSortValue(left, rankingSort)
+      const rightValue = rankingSortValue(right, rankingSort)
+      // Unranked configurations (null) always sink below scored ones.
+      if (leftValue === null || rightValue === null) {
+        if (leftValue === rightValue) return right.updatedAt - left.updatedAt
+        return leftValue === null ? 1 : -1
+      }
+      const difference = (leftValue - rightValue) * direction
+      if (difference !== 0) return difference
+      const sampleDifference =
+        left.oneShot.samples +
+        left.multiShot.samples -
+        (right.oneShot.samples + right.multiShot.samples)
+      if (sampleDifference !== 0) return sampleDifference * -1
+      return right.updatedAt - left.updatedAt
+    })
+  })
   const shotFilterOptions: { value: ShotFilter; label: string }[] = [
     { value: 'all', label: 'All' },
     { value: 'one_shot', label: 'One-shot' },
@@ -326,7 +380,7 @@
     usage.models.filter((model) =>
       thinkingFilter === 'all' ? true : model.thinkingLevel === thinkingFilter
     )
- )
+  )
 
   function thinkingLevelLabel(level: ThinkingLevel): string {
     return (
@@ -347,6 +401,28 @@
   function rankingDurationLabel(stats: LocalProfileRankingModeStats): string {
     if (stats.samples === 0 || stats.averageDurationMs === null) return '—'
     return formatDuration(stats.averageDurationMs)
+  }
+
+  function rankingAggregateLabel(entry: LocalProfileModelRanking): string {
+    const aggregate = rankingAggregate(entry)
+    return aggregate === null ? '—' : `${aggregate.toFixed(1)}/10`
+  }
+
+  function rankingTotalSamplesLabel(entry: LocalProfileModelRanking): string {
+    const total = entry.oneShot.samples + entry.multiShot.samples
+    return total === 1 ? '1 conversation' : `${total} conversations`
+  }
+
+  function rankingSortLabel(key: RankingSortKey): string {
+    if (rankingSort !== key) return 'Sort by this column'
+    return rankingSortDirection === 'desc'
+      ? 'Sorted high to low, click for low to high'
+      : 'Sorted low to high, click for high to low'
+  }
+
+  function rankingAriaSort(key: RankingSortKey): 'descending' | 'ascending' | 'none' {
+    if (rankingSort !== key) return 'none'
+    return rankingSortDirection === 'desc' ? 'descending' : 'ascending'
   }
 
   function localDateKey(date: Date): string {
@@ -1135,7 +1211,9 @@
         </div>
         {#if peakDay}
           <div class="text-right">
-            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Peak day</p>
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+              Peak day
+            </p>
             <p class="mt-0.5 text-xs font-semibold tabular-nums">
               {formatUsageDate(peakDay.date)} · {formatNumber(peakDay.tokens)}
             </p>
@@ -1195,7 +1273,10 @@
           </div>
         {/each}
       </div>
-      <div class="mt-2 grid grid-cols-4 text-[0.625rem] tabular-nums text-dimmed" aria-hidden="true">
+      <div
+        class="mt-2 grid grid-cols-4 text-[0.625rem] tabular-nums text-dimmed"
+        aria-hidden="true"
+      >
         <span>12 AM</span><span class="text-center">6 AM</span><span class="text-center">12 PM</span
         ><span class="text-right">6 PM</span>
       </div>
@@ -1492,11 +1573,7 @@
         </p>
       {/if}
     </div>
-    <div
-      class="border-b px-4 py-2"
-      role="group"
-      aria-label="Filter rankings by shot category"
-    >
+    <div class="border-b px-4 py-2" role="group" aria-label="Filter rankings by shot category">
       <div class="flex flex-wrap items-center gap-1">
         {#each shotFilterOptions as option (option.value)}
           <button
@@ -1513,6 +1590,24 @@
         {/each}
       </div>
     </div>
+    {#snippet sortableHeader(label: string, key: RankingSortKey)}
+      <th scope="col" class="px-4 py-2 font-medium" aria-sort={rankingAriaSort(key)}>
+        <button
+          type="button"
+          class="flex items-center gap-1 uppercase tracking-wide {rankingSort === key
+            ? 'text-foreground'
+            : 'text-muted hover:text-foreground'}"
+          title={rankingSortLabel(key)}
+          aria-label={`${label}: ${rankingSortLabel(key)}`}
+          onclick={() => toggleRankingSort(key)}
+        >
+          {label}
+          {#if rankingSort === key}
+            <ChevronDown size={11} class={rankingSortDirection === 'asc' ? 'rotate-180' : ''} />
+          {/if}
+        </button>
+      </th>
+    {/snippet}
     {#if filteredRankings.length > 0}
       <div class="overflow-x-auto">
         <table class="w-full text-left text-xs">
@@ -1520,11 +1615,12 @@
             <tr class="border-b text-[0.6875rem] uppercase tracking-wide text-muted">
               <th scope="col" class="px-4 py-2 font-medium">Configuration</th>
               {#if shotFilter !== 'multi_shot'}
-                <th scope="col" class="px-4 py-2 font-medium">One-shot</th>
+                {@render sortableHeader('One-shot', 'one_shot')}
               {/if}
               {#if shotFilter !== 'one_shot'}
-                <th scope="col" class="px-4 py-2 font-medium">Multi-shot</th>
+                {@render sortableHeader('Multi-shot', 'multi_shot')}
               {/if}
+              {@render sortableHeader('Total', 'aggregate')}
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -1548,7 +1644,9 @@
                   </span>
                   <span class="mt-1 flex flex-wrap items-center gap-1 text-[0.625rem] text-muted">
                     {#if entry.thinkingLevel}
-                      <span class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 capitalize">
+                      <span
+                        class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 capitalize"
+                      >
                         <Brain size={9} />
                         {entry.thinkingLevel}
                       </span>
@@ -1563,7 +1661,9 @@
                 </td>
                 {#if shotFilter !== 'multi_shot'}
                   <td class="px-4 py-3 tabular-nums">
-                    <div class="font-semibold text-foreground">{rankingScoreLabel(entry.oneShot)}</div>
+                    <div class="font-semibold text-foreground">
+                      {rankingScoreLabel(entry.oneShot)}
+                    </div>
                     <div class="mt-0.5 text-[0.6875rem] text-dimmed">
                       {rankingSamplesLabel(entry.oneShot)}
                       {#if entry.oneShot.samples > 0}
@@ -1574,7 +1674,9 @@
                 {/if}
                 {#if shotFilter !== 'one_shot'}
                   <td class="px-4 py-3 tabular-nums">
-                    <div class="font-semibold text-foreground">{rankingScoreLabel(entry.multiShot)}</div>
+                    <div class="font-semibold text-foreground">
+                      {rankingScoreLabel(entry.multiShot)}
+                    </div>
                     <div class="mt-0.5 text-[0.6875rem] text-dimmed">
                       {rankingSamplesLabel(entry.multiShot)}
                       {#if entry.multiShot.samples > 0}
@@ -1583,6 +1685,12 @@
                     </div>
                   </td>
                 {/if}
+                <td class="px-4 py-3 tabular-nums">
+                  <div class="font-semibold text-foreground">{rankingAggregateLabel(entry)}</div>
+                  <div class="mt-0.5 text-[0.6875rem] text-dimmed">
+                    {rankingTotalSamplesLabel(entry)}
+                  </div>
+                </td>
               </tr>
             {/each}
           </tbody>

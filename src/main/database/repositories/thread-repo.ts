@@ -31,6 +31,7 @@ interface ThreadRow {
   context_usage: string | null
   session_id: string | null
   session_harness_id: string | null
+  session_account_id: string | null
   dismissed_spec_id: string | null
   dismissed_spec_version: number | null
   audit_state: string | null
@@ -145,6 +146,7 @@ function rowToThread(row: ThreadRow): Thread {
       : undefined,
     sessionId: row.session_id ?? undefined,
     sessionHarnessId: row.session_harness_id ?? undefined,
+    sessionAccountId: row.session_account_id ?? undefined,
     dismissedSpecId: row.dismissed_spec_id ?? undefined,
     dismissedSpecVersion: row.dismissed_spec_version ?? undefined,
     auditState: (row.audit_state as Thread['auditState']) ?? undefined,
@@ -281,13 +283,13 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   id, project_id, provider_id, title, title_source, status,
   pinned, pinned_at, sort_order, scope_sort_order, archived, read,
   branch, feature_slug, scope_bucket_id, settings, context_usage,
-  session_id, session_harness_id, dismissed_spec_id, dismissed_spec_version,
+  session_id, session_harness_id, session_account_id, dismissed_spec_id, dismissed_spec_version,
   audit_state, loop_iteration, active_audit_id, active_audit_version,
   assignment_id, assignment_role, assignment_task_id,
   coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
   independent_audit, independent_audit_initialized,
   created_at, updated_at, last_activity, working_directory
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -306,6 +308,7 @@ ON CONFLICT(id) DO UPDATE SET
   context_usage=excluded.context_usage,
   session_id=excluded.session_id,
   session_harness_id=excluded.session_harness_id,
+  session_account_id=excluded.session_account_id,
   dismissed_spec_id=excluded.dismissed_spec_id,
   dismissed_spec_version=excluded.dismissed_spec_version,
   audit_state=excluded.audit_state,
@@ -347,6 +350,7 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.contextUsage ? JSON.stringify(thread.contextUsage) : null,
     thread.sessionId ?? null,
     thread.sessionHarnessId ?? null,
+    thread.sessionAccountId ?? null,
     thread.dismissedSpecId ?? null,
     thread.dismissedSpecVersion ?? null,
     thread.auditState ?? null,
@@ -630,6 +634,8 @@ export class ThreadRepo {
     const quotas = await this.projectQuotasViaWorker()
     // Per-project quotas default to the callback value; the inbox project
     // overrides it with its configured thread_limit (the Chats bucket size).
+    // Unread threads bypass the quota entirely: a stale-but-unread row must
+    // never be hidden from the first-paint slice, whatever its age.
     const cases = [...quotas.entries()]
       .filter(([id]) => quotaByProject(id) === Number.MAX_SAFE_INTEGER)
       .map(([id, quota]) => `WHEN project_id = '${id.replace(/'/g, "''")}' THEN ${quota}`)
@@ -649,7 +655,7 @@ export class ThreadRepo {
            AND achievement_role IS NOT 'auditor'
            AND coordinator_thread_id IS NULL
            AND assignment_id IS NULL
-       ) WHERE rn <= ${quotaExpr}
+       ) WHERE rn <= ${quotaExpr} OR read = 0
        ORDER BY pinned DESC, pinned_at DESC, last_activity DESC, id ASC`,
       [],
       0
@@ -661,11 +667,7 @@ export class ThreadRepo {
 
   /** Per-project thread quotas: project rows are few, read them wholesale. */
   private async projectQuotasViaWorker(): Promise<Map<string, number>> {
-    const result = await this.db.queryViaWorker(
-      'SELECT id, thread_limit FROM projects',
-      [],
-      0
-    )
+    const result = await this.db.queryViaWorker('SELECT id, thread_limit FROM projects', [], 0)
     const quotas = new Map<string, number>()
     if (!result.ok) return quotas
     for (const row of result.rows) {

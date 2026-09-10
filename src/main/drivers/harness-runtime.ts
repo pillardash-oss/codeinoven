@@ -640,6 +640,14 @@ export async function prepareHarnessTerminalHandoff(
     )
   }
   if (runtime.target.kind === 'native') {
+    // node-pty cannot execute a `.cmd`/`.bat` shim directly (ConPTY needs a real
+    // executable image) — spawning one opens a blank terminal that never exits.
+    // Route those through the same PowerShell shim invocation the structured
+    // runner uses, so `pi update` & co. actually start on Windows.
+    if (commandRequiresShell(runtime.executable)) {
+      const shim = prepareNativeInvocation(runtime, args, buildProcessEnvironment())
+      return { command: shim.command, args: shim.args, runtime }
+    }
     return { command: runtime.executable, args, runtime }
   }
   return {

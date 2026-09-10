@@ -1,8 +1,4 @@
-import { createRequire } from 'node:module'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { bundledPiVendorDir } from '../drivers/harness-runtime'
+import { importPiAiProvidersRegistry } from './pi-ai-registry'
 
 /**
  * Headless sign-in for any provider in Pi's built-in registry, running the
@@ -12,9 +8,8 @@ import { bundledPiVendorDir } from '../drivers/harness-runtime'
  * flows, and select prompts all come from Pi itself, so an in-app login
  * produces credentials byte-compatible with what Pi's own TUI writes.
  *
- * The library is resolved from dev node_modules first, then from the vendored
- * copy shipped next to the bundled Pi harness — the packaged app does not
- * contain pi-ai in its own node_modules.
+ * The module is loaded by `importPiAiProvidersRegistry` — see
+ * `pi-ai-registry.ts` for the resolution strategy and fallbacks.
  */
 
 /** Events surfaced to the UI while a sign-in flow runs. */
@@ -67,26 +62,16 @@ interface RegistryModule {
 let registryModulePromise: Promise<RegistryModule> | null = null
 
 async function registryModule(): Promise<RegistryModule> {
-  registryModulePromise ??= (async () => {
-    const require = createRequire(import.meta.url)
-    const candidates: string[] = []
-    try {
-      candidates.push(require.resolve('@earendil-works/pi-ai/dist/providers/all.js'))
-    } catch {
-      // Not installed in this context — fall through to the vendored copy.
-    }
-    const vendor = bundledPiVendorDir()
-    if (vendor) {
-      const vendored = join(vendor, 'pi-ai/dist/providers/all.js')
-      if (existsSync(vendored)) candidates.push(vendored)
-    }
-    const resolved = candidates[0]
-    if (!resolved) {
-      throw new Error('Pi sign-in flows are unavailable in this installation.')
-    }
-    return (await import(pathToFileURL(resolved).href)) as RegistryModule
-  })()
-  return registryModulePromise
+  // A failed import must never be cached — see pi-catalog.ts for the rationale.
+  registryModulePromise ??= importPiAiProvidersRegistry(
+    'Pi sign-in flows'
+  ) as Promise<RegistryModule>
+  try {
+    return await registryModulePromise
+  } catch (error) {
+    registryModulePromise = null
+    throw error
+  }
 }
 
 /** Which sign-in methods Pi defines for a catalog provider. */

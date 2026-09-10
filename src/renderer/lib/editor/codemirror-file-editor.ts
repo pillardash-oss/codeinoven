@@ -45,6 +45,8 @@ export interface FileEditorController {
   setShowLineNumbers(show: boolean): void
   setSpellcheck(enabled: boolean): void
   setFind(query: string, activeIndex: number): void
+  replaceOne(query: string, replacement: string, activeIndex: number): boolean
+  replaceAll(query: string, replacement: string): number
   getValue(): string
   replaceRange(from: number, to: number, text: string, userEvent?: string): void
   resolveConflictRange(
@@ -360,6 +362,28 @@ export async function createFileEditor(
       })
     },
     setFind,
+    replaceOne(query: string, replacement: string, activeIndex: number): boolean {
+      const text = view.state.doc.toString()
+      const matches = findMatches(text, query)
+      if (matches.length === 0) return false
+      const [from, to] = matches[Math.max(0, Math.min(activeIndex, matches.length - 1))]
+      view.dispatch({
+        changes: { from, to, insert: replacement },
+        scrollIntoView: true,
+        userEvent: 'input.replace'
+      })
+      return true
+    },
+    replaceAll(query: string, replacement: string): number {
+      const text = view.state.doc.toString()
+      const matches = findMatches(text, query)
+      if (matches.length === 0) return 0
+      view.dispatch({
+        changes: matches.map(([from, to]) => ({ from, to, insert: replacement })),
+        userEvent: 'input.replace'
+      })
+      return matches.length
+    },
     getValue(): string {
       return view.state.doc.toString()
     },

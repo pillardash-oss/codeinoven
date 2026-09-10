@@ -147,7 +147,8 @@ DEV_VERSION="$(pkg_version dev)"
 # Semver-correct: stable 0.5.51 -> nightly 0.5.52-nightly-1 must be > stable.
 # dev must be one patch ahead of nightly (first nightly after stable),
 # or equal for subsequent nightlies on same base.
-# Only auto-bump when dev==nightly AND nightly equals stable (main) — i.e. first nightly after a stable.
+# Only auto-bump when dev==nightly AND nightly equals stable (main) — i.e. the
+# first nightly after a stable release (stable 0.5.52 -> dev/nightly 0.5.53).
 if ! BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$NIGHTLY_VERSION" \
     CURRENT_VERSION="$DEV_VERSION" bun scripts/validate-release-promotion.ts >/dev/null 2>&1; then
   if [ "$DEV_VERSION" = "$NIGHTLY_VERSION" ]; then

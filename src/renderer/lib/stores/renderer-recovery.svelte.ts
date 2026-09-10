@@ -166,8 +166,10 @@ export class RendererRecoveryStore {
     this.activeView = view
     // Track the last content view so returning from Settings/Scope — even
     // across a restart made on a Settings page — lands back on the same view.
-    if (view === 'projects' || view === 'chats' || view === 'threads') {
-      this.lastContentView = view
+    // 'projects-scope' renders the same workspace page as 'projects' (just
+    // with the scope sidebar focused), so it records as the projects view.
+    if (view === 'projects' || view === 'projects-scope' || view === 'chats' || view === 'threads') {
+      this.lastContentView = view === 'projects-scope' ? 'projects' : view
     }
     // Remember the last non-settings view for the Settings back button.
     if (!isSettingsView(view)) {

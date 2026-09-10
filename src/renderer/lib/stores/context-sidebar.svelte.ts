@@ -113,6 +113,8 @@ export interface BrowserContextTab {
   threadId: string
   url: string
   surface: 'page' | 'console'
+  /** Live page favicon (data URL) from the browser panel, if reported. */
+  favicon?: string
 }
 
 export interface ThreadNoteContextTab {
@@ -1014,11 +1016,15 @@ class ContextSidebarState {
     return id
   }
 
-  updateBrowserTab(tabId: string, url: string, title?: string): void {
+  updateBrowserTab(tabId: string, url: string, title?: string, favicon?: string | null): void {
     const tab = this.browserTabs.find((candidate) => candidate.id === tabId)
     if (!tab) return
     tab.url = url
     if (title?.trim()) tab.title = title.trim()
+    if (favicon !== undefined) {
+      if (favicon) tab.favicon = favicon
+      else delete tab.favicon
+    }
     this.persistBrowserTabs()
   }
 
