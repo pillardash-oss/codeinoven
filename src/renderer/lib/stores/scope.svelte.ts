@@ -1,4 +1,4 @@
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
 import { getProjectIcon } from '$lib/project-icons'
@@ -245,6 +245,43 @@ class ScopeState {
   worktreeProgress = $state<ScopeWorktreeProgress>({ stage: 'none' })
   private loadSequence = 0
   private saveSequence = 0
+  /** Projects whose full non-archived thread list has been merged into memory. */
+  private fullyHydratedProjects: SvelteSet<string> = $state(new SvelteSet())
+  private hydratingProjects = new Set<string>()
+
+  /** Whether a project's full thread list has been merged into `allScopeThreads`. */
+  isProjectFullyHydrated(projectId: string): boolean {
+    return this.fullyHydratedProjects.has(projectId)
+  }
+
+  /**
+   * Merge a project's complete non-archived thread list into memory. The
+   * first-paint hydration is a bounded per-project recent slice, so a read
+   * thread older than that slice would never appear in scoped board views
+   * (a scope shows exactly the threads of its bucket). Runs once per project;
+   * on failure nothing is marked hydrated and the next open retries.
+   */
+  async ensureProjectThreadsLoaded(projectId: string): Promise<void> {
+    if (projectId === '' || this.fullyHydratedProjects.has(projectId)) return
+    if (this.hydratingProjects.has(projectId)) return
+    this.hydratingProjects.add(projectId)
+    try {
+      const threads = await invoke('thread:list', projectId)
+      for (const thread of threads) {
+        if (thread.archived || isOrchestrationChildThread(thread)) continue
+        if (this.allScopeThreads.some((existing) => existing.id === thread.id)) {
+          this.updateThread(thread)
+        } else {
+          this.allScopeThreads = [...this.allScopeThreads, thread]
+        }
+      }
+      this.fullyHydratedProjects.add(projectId)
+    } catch {
+      // Keep the bounded slice; the next open of this scope retries.
+    } finally {
+      this.hydratingProjects.delete(projectId)
+    }
+  }
 
   get projectBadges(): SvelteMap<string, ProjectBadge> {
     const badges = new SvelteMap<string, ProjectBadge>()
@@ -587,6 +624,7 @@ class ScopeState {
     if (thread.projectId !== this.activeProjectId) {
       void this.activateProject(thread.projectId)
     }
+    void this.ensureProjectThreadsLoaded(thread.projectId)
     this.sidebarContext = {
       projectId: thread.projectId,
       bucketId: bucketId ?? thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID,
@@ -603,6 +641,7 @@ class ScopeState {
     if (projectId !== this.activeProjectId) {
       void this.activateProject(projectId)
     }
+    void this.ensureProjectThreadsLoaded(projectId)
     this.sidebarContext = {
       projectId,
       bucketId: this.lastBucketForProject(projectId),

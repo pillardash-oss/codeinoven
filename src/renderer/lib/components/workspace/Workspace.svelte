@@ -2016,10 +2016,21 @@
     }
   })
 
-  /** Composer scope shoe: on an existing thread, clicking the scope toggles the
-   *  projects view with the scope sidebar focused on this thread. Mirrors what
-   *  the former header scope badge did. */
+  /** View the shoe toggles back to — whatever the user was on right before the
+   *  scoped projects view was opened via the shoe. */
+  let scopeShoeReturnView: MainView = 'threads'
+
+  /** Composer scope shoe: on an existing thread, clicking the scope toggles between
+   *  the last view the user was on and the scoped projects view (sidebar focused
+   *  on this thread). */
   async function openThreadScopeView(thread: Thread): Promise<void> {
+    // Already on the scoped view for a thread: bounce back to the view the user
+    // came from when the shoe opened it (second half of the toggle).
+    if (rendererRecovery.activeView === 'projects') {
+      navigate(scopeShoeReturnView)
+      return
+    }
+    scopeShoeReturnView = rendererRecovery.activeView
     navigate('projects')
     const allThreads: Thread[] = await invoke('thread:listAll')
     scopeState.setThreads(allThreads)
@@ -2308,6 +2319,14 @@
       // Non-fatal — keep the current lists on failure.
     }
   }
+
+  /** The scoped board renders only threads held in memory for its project.
+   *  First-paint hydration is a bounded recent slice, so every open or restore
+   *  of a scope hydrates that project's full thread list in the background. */
+  $effect(() => {
+    const projectId = scopeState.sidebarContext?.projectId
+    if (projectId) void scopeState.ensureProjectThreadsLoaded(projectId)
+  })
 
   let wasActive: boolean | null = null
   $effect(() => {
@@ -3437,7 +3456,9 @@
                       No threads in this slice
                     </p>
                   {/each}
-                  {#if scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length > 0 && projectHasMoreInDb(scopeContext.projectId)}
+                  {#if scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length > 0 &&
+                    projectHasMoreInDb(scopeContext.projectId) &&
+                    !scopeState.isProjectFullyHydrated(scopeContext.projectId)}
                     <div class="flex justify-center border-t py-1.5">
                       <button
                         class="flex items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
