@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { type Component } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { toast } from 'svelte-sonner'
   import { projectIconOnError, getProjectIcon } from '$lib/project-icons'
@@ -34,12 +35,16 @@
     ChevronLeft,
     ChevronRight,
     FileText,
+    FolderKanban,
     GitBranch,
     GitMergeConflict,
     GitPullRequest,
     Globe,
     Kanban,
-    Loader2
+    Loader2,
+    MessageSquare,
+    SquareDashedKanban,
+    Timeline
   } from '@lucide/svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
@@ -50,7 +55,10 @@
   import ProjectInfoDropdown from '$lib/components/shared/ProjectInfoDropdown.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
+  import { viewActions } from '$lib/stores/view-actions.svelte'
+  import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
+  import { DropdownMenu } from 'bits-ui'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
@@ -64,7 +72,6 @@
     type ScopeBucket
   } from '$shared/types'
   import { SvelteSet } from 'svelte/reactivity'
-  import { shortcutHint } from '$lib/shortcut-hint'
 
   type View = MainView
 
@@ -299,6 +306,85 @@
       sidebarState.toggle()
     }
   }
+
+  // ─── View switcher dropdown (app header) ─────────────────────────────
+  // One dropdown exposes every primary view. "Projects / Threads / Chats"
+  // navigate; "Scoped threads" toggles the scope board sidebar over the
+  // Projects view; "Scope Board" opens the full-page scope view and acts as
+  // a toggle back to the last primary view.
+  type HeaderViewOptionId = 'projects' | 'threads' | 'scoped-threads' | 'scope-board' | 'chats'
+  interface HeaderViewOption {
+    id: HeaderViewOptionId
+    label: string
+    icon: Component
+    keys: readonly string[]
+    select: () => void
+  }
+
+  async function toggleScopedThreads(): Promise<void> {
+    if (activeView === 'projects' && scopeState.sidebarContext) {
+      scopeState.clearSidebarContext()
+      return
+    }
+    await openProjectWithScopeState()
+  }
+
+  function headerViewOptions(): HeaderViewOption[] {
+    return [
+      {
+        id: 'projects',
+        label: 'Projects',
+        icon: FolderKanban,
+        keys: ['mod', '1'],
+        select: () => {
+          if (scopeState.sidebarContext) scopeState.clearSidebarContext()
+          void onPrimaryNavClick('projects')
+        }
+      },
+      {
+        id: 'threads',
+        label: 'Threads',
+        icon: Timeline,
+        keys: ['mod', '2'],
+        select: () => void onPrimaryNavClick('threads')
+      },
+      {
+        id: 'scoped-threads',
+        label: 'Scoped threads',
+        icon: SquareDashedKanban,
+        keys: ['mod', '3'],
+        select: () => void toggleScopedThreads()
+      },
+      {
+        id: 'scope-board',
+        label: 'Scope Board',
+        icon: Kanban,
+        keys: ['mod', '4'],
+        select: () => void onPrimaryNavClick('scope')
+      },
+      {
+        id: 'chats',
+        label: 'Chats',
+        icon: MessageSquare,
+        keys: ['mod', '0'],
+        select: () => void onPrimaryNavClick('chats')
+      }
+    ]
+  }
+
+  /** The currently active option is shown with brighter text in the menu. */
+  let activeHeaderViewOption = $derived.by((): HeaderViewOptionId => {
+    if (activeView === 'scope') return 'scope-board'
+    if (activeView === 'projects' && scopeState.sidebarContext) return 'scoped-threads'
+    if (activeView === 'threads') return 'threads'
+    if (activeView === 'chats') return 'chats'
+    return 'projects'
+  })
+
+  let activeHeaderViewLabel = $derived.by(() => {
+    const option = headerViewOptions().find((candidate) => candidate.id === activeHeaderViewOption)
+    return option?.label ?? 'Projects'
+  })
 
   /** Cmd/Ctrl+3 — Projects view with the scope sidebar active for the current
    *  thread (or project). Idempotent: never turns scope state off. */
@@ -547,29 +633,74 @@
       </button>
     </div>
 
-    <!-- Scope — the only remaining project view entry in the header; the
-         other project views live in the sidebar's title dropdown -->
-    <button
-      class="flex h-7 items-center gap-1.5 rounded-md px-2.5 transition-colors duration-150 {activeView ===
-      'scope'
-        ? 'bg-foreground text-app'
-        : 'text-muted hover:bg-elevated hover:text-foreground'} {activeView === 'scope' &&
-      sidebarState.collapsed
-        ? 'opacity-60'
-        : ''}"
-      use:shortcutHint={{ keys: ['mod', '4'] }}
-      aria-label={activeView === 'scope' ? 'Return to previous view' : 'Open scope board'}
-      title="Scope Board"
-      onmouseenter={() => {
-        preloadNavigationThreads('projects')
-        preloadScopeChunk()
-      }}
-      onclick={() => void onPrimaryNavClick('scope')}
-      data-onboarding="view-switcher"
-    >
-      <Kanban size={14} strokeWidth={1.8} />
-      <span class="header-control-label text-[0.6875rem] font-medium">Scope Board</span>
-    </button>
+    <!-- View switcher dropdown + per-view quick actions -->
+    <div class="flex items-center gap-0.5">
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger
+          class="flex h-7 items-center gap-1 rounded-md px-1.5 text-[0.6875rem] font-medium text-foreground transition-colors duration-150 hover:bg-elevated"
+          aria-label="Switch view"
+          title="Switch view"
+          data-onboarding="view-switcher"
+        >
+          <span class="truncate">{activeHeaderViewLabel}</span>
+          <ChevronDown size={12} class="shrink-0 text-muted" />
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            side="bottom"
+            align="start"
+            sideOffset={6}
+            collisionPadding={8}
+            class="z-50 w-56 overflow-hidden rounded-md border bg-surface p-1 shadow-lg"
+          >
+            {#each headerViewOptions() as option (option.id)}
+              {@const Icon = option.icon}
+              {@const isSelected = option.id === activeHeaderViewOption}
+              <DropdownMenu.Item
+                class={[
+                  'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors',
+                  isSelected ? 'text-foreground' : 'text-muted hover:bg-elevated focus:bg-elevated'
+                ]}
+                onpointerenter={() => {
+                  if (option.id === 'chats') {
+                    preloadNavigationThreads('chats')
+                  } else {
+                    preloadNavigationThreads('projects')
+                  }
+                  if (option.id === 'scope-board' || option.id === 'scoped-threads')
+                    preloadScopeChunk()
+                }}
+                onSelect={option.select}
+              >
+                <Icon size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
+                <span class="flex-1 whitespace-nowrap">{option.label}</span>
+                <ShortcutHint keys={option.keys} />
+              </DropdownMenu.Item>
+            {/each}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+
+      <!-- Per-view quick actions, registered by the workspace store -->
+      <div class="flex items-center gap-0.5">
+        {#each viewActions.items as item (item.id)}
+          {#if item.component}
+            {@const ActionControl = item.component}
+            <ActionControl {...item.props ?? {}} />
+          {:else if item.icon && item.run}
+            {@const ActionIcon = item.icon}
+            <button
+              class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+              aria-label={item.ariaLabel ?? item.title ?? 'Action'}
+              title={item.title}
+              onclick={() => item.run?.()}
+            >
+              <ActionIcon size={14} />
+            </button>
+          {/if}
+        {/each}
+      </div>
+    </div>
   </nav>
 
   <!-- Scope view header area — separator, scrollable tabs, sticky tools -->
