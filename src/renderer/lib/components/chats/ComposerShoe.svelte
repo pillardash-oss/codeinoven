@@ -293,7 +293,7 @@
       disabled={!isNewThread}
       side="top"
       align="start"
-      class="flex items-center gap-2 justify-start"
+      class="shoe-project flex max-w-48 min-w-0 items-center gap-2 justify-start"
       ariaLabel={isNewThread
         ? 'Change the project of this new thread'
         : `Project: ${project.name}`}
@@ -305,9 +305,9 @@
       {/if}
       <ProjectIdentity
         {project}
-        class="min-w-0 max-w-48"
+        class="shoe-identity min-w-0"
         nameClass="text-xs font-medium text-foreground"
-        locationClass="text-[0.5625rem] text-dimmed"
+        locationClass="shoe-identity-location text-[0.5625rem] text-dimmed"
         showLocation={hasProjectNameCollision(project, scopeState.projectRecords)}
       />
     </ProjectSwitch>
@@ -348,3 +348,29 @@
     onClose={() => (createModalOpen = false)}
   />
 {/if}
+
+<style>
+  /* The shoe card is the container: as the conversation screen shrinks (e.g.
+     a very wide right sidebar), give the truncating stages room in order —
+     project name first, then location, connection label, and finally only the
+     icons remain. */
+  @container (max-width: 400px) {
+    .shoe-project {
+      max-width: 8rem;
+    }
+
+    .shoe-identity :global(.shoe-identity-location) {
+      display: none;
+    }
+  }
+
+  @container (max-width: 320px) {
+    .shoe-project {
+      max-width: 1.25rem;
+    }
+
+    .shoe-identity {
+      display: none;
+    }
+  }
+</style>

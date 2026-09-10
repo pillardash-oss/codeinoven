@@ -34,5 +34,5 @@
       <Pin size={size === 'xs' ? 9 : 11} />
     </span>
   {/if}
-  {bucket.name}
+  <span class="min-w-0 max-w-40 truncate">{bucket.name}</span>
 </code>

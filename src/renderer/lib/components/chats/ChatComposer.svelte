@@ -2679,7 +2679,7 @@
 {#if scopeShoe}
   <div class="composer-shoe relative -mt-4 flex w-full justify-center px-6 pt-3 pb-2">
     <div
-      class="flex w-[80%] min-w-0 items-center justify-center border bg-surface px-2 pt-2.5 pb-1 shadow-md"
+      class="composer-shoe-card flex w-[80%] min-w-0 items-center justify-center border bg-surface px-2 pt-2.5 pb-1 shadow-md @container"
     >
         <ComposerShoe
           projectId={scopeShoe.projectId}
@@ -2733,6 +2733,14 @@
 
     .pending-stop-icon {
       display: block;
+    }
+  }
+
+  /* Shoe stays at 80% width; expands up to 95% as the conversation screen
+     shrinks (e.g. a very wide right sidebar), so its content keeps fitting. */
+  @container (max-width: 640px) {
+    .composer-shoe-card {
+      width: 95%;
     }
   }
 </style>
