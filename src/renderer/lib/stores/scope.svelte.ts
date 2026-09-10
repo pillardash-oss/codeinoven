@@ -1,4 +1,5 @@
 import { SvelteMap } from 'svelte/reactivity'
+import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import { APP_SLUG } from '$shared/brand'
@@ -742,6 +743,57 @@ class ScopeState {
       this.error = error instanceof Error ? error.message : 'The worktree could not be created.'
       throw error
     }
+  }
+
+  /**
+   * Kick the full new-scope creation off in the background so the app stays
+   * usable while git + setup commands run. Progress is shown as a persistent
+   * docked toast; it flips to a success check on completion (auto-dismisses)
+   * or an error toast that stays until dismissed.
+   */
+  beginWorktreeCreation(
+    projectId: string,
+    input: {
+      title: string
+      /** Whether an isolated worktree is requested; shared-directory scopes skip setup entirely. */
+      isolated: boolean
+      runSetup: boolean
+      environmentMode: ScopeEnvironmentMode
+      baseBranch?: string
+      setupCommands?: ScopeSetupCommandSpec[]
+    },
+    options: { existingBucketId?: string | null; onCreated?: (bucketId: string) => void } = {}
+  ): void {
+    const creation = (async (): Promise<string> => {
+      let bucketId = options.existingBucketId ?? null
+      if (!bucketId) {
+        const bucket = await this.createBucketForProject(projectId, input.title)
+        bucketId = bucket?.id ?? null
+        if (!bucketId) throw new Error('The scope could not be created')
+      }
+      if (input.isolated) {
+        // Persist the entered configuration as project defaults BEFORE creating
+        // so the saved defaults can never race ahead of this worktree.
+        await this.setWorktreeDefaults(projectId, {
+          setupCommands: input.setupCommands ?? [],
+          runSetupByDefault: input.runSetup,
+          environmentMode: input.environmentMode
+        })
+        await this.createWorktree(projectId, bucketId, input)
+      }
+      options.onCreated?.(bucketId)
+      return input.title
+    })().catch((cause: unknown) => {
+      const message = cause instanceof Error ? cause.message : 'The scope could not be created.'
+      // Never let an unhandled rejection surface: the toast already reports it.
+      return Promise.reject(new Error(message))
+    })
+    void toast.promise(creation, {
+      loading: `Creating “${input.title}”…`,
+      success: `“${input.title}” is ready`,
+      error: (cause: unknown) =>
+        cause instanceof Error ? cause.message : 'The scope could not be created.'
+    })
   }
 
   /** Inspect the source checkout before creating a worktree. */
