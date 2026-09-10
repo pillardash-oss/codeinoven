@@ -2739,9 +2739,11 @@
 <!-- Scope shoe — floats underneath the composer as its own inset bar,
      centered at 80% of the composer width; project mode only. It slides up
      behind the composer (z below it) so the shoe's top edge is tucked under
-     the composer's bottom border — only the lower half shows, like a shoe. -->
+     the composer's bottom border — only the lower half shows, like a shoe.
+     No z-index on the wrapper: the composer (z-10) paints over the card, but
+     the shoe's dropdown (z-40 inside) still opens above the composer. -->
 {#if scopeShoe}
-  <div class="composer-shoe relative z-0 -mt-4 flex w-full justify-center px-6 pt-3 pb-2">
+  <div class="composer-shoe relative -mt-4 flex w-full justify-center px-6 pt-3 pb-2">
     <div
       class="flex w-[80%] min-w-0 items-center justify-center rounded-b-xl rounded-t-lg border bg-surface px-2 pt-2.5 pb-1 shadow-md"
     >
