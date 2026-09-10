@@ -1918,7 +1918,7 @@
 {/if}
 
 <div
-  class="chat-composer border bg-surface shadow-sm"
+  class="chat-composer relative z-10 border bg-surface shadow-sm"
   data-onboarding="composer"
   data-voice-trigger-root
 >
@@ -2737,9 +2737,11 @@
 </div>
 
 <!-- Scope shoe — floats underneath the composer as its own inset bar,
-     centered at 80% of the composer width; project mode only -->
+     centered at 80% of the composer width; project mode only. It slides up
+     behind the composer (z below it) so the shoe's top edge is tucked under
+     the composer's bottom border — only the lower half shows, like a shoe. -->
 {#if scopeShoe}
-  <div class="composer-shoe relative z-10 -mt-2 flex w-full justify-center px-6 pb-2">
+  <div class="composer-shoe relative z-0 -mt-4 flex w-full justify-center px-6 pt-5 pb-2">
     <div
       class="flex w-[80%] min-w-0 items-center justify-center rounded-xl border bg-surface px-2 py-1 shadow-md"
     >
