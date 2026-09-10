@@ -49,6 +49,7 @@
     "speech:build-coreml": "bun scripts/build-coreml-speech-worker.ts",
     "speech:build-native-capture": "bun scripts/build-native-speech-capture.ts",
     "harness:build-pi": "bun scripts/build-pi-harness.ts",
+    "ci:local": "bun scripts/ci-local.ts",
     "verify": "bun run check && bun run lint . && bun run test && bun audit",
     "verify:release": "bun run verify && bun run build:production && bun run check:bundle",
     "version:bump": "bun scripts/bump-version.ts",
