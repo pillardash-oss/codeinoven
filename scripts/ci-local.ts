@@ -15,7 +15,12 @@
  *   bun run ci:local --only check,test
  *   bun run ci:local --skip audit,package
  *   bun run ci:local --no-install    # reuse node_modules (skips frozen install)
+ *   bun run ci:local --gate          # deploy gate: keep running past failures and
+ *                                    # report each failed stage to .cio/git/ci/<unix-ts>/
  */
+
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join, relative } from 'node:path'
 
 type SmokeTarget = 'linux' | 'mac' | 'win'
 
@@ -33,10 +38,18 @@ interface StageOptions {
   install: boolean
   skip: Set<string>
   only: Set<string> | null
+  /** Gate mode: never abort mid-run; capture failing stages into .cio/git/ci/<unix-ts>/. */
+  gate: boolean
 }
 
 const projectRoot = process.cwd()
 const isCI = process.env.CI === 'true'
+
+/**
+ * When set, runStep pipes/tees each command's output into this capture instead
+ * of straight inheritance (used by gate mode to record failing stage output).
+ */
+let activeCapture: Capture | null = null
 
 function fail(message: string): never {
   process.stderr.write(`[ci-local] ${message}\n`)
@@ -57,12 +70,16 @@ function parseTarget(): SmokeTarget {
 }
 
 function parseArgs(argv: string[]): StageOptions {
-  const options: StageOptions = { install: true, skip: new Set(), only: null }
+  const options: StageOptions = { install: true, skip: new Set(), only: null, gate: false }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === '--list') continue
     if (argument === '--no-install') {
       options.install = false
+      continue
+    }
+    if (argument === '--gate') {
+      options.gate = true
       continue
     }
     if (argument !== '--only' && argument !== '--skip') fail(`Unknown argument: ${argument}`)
@@ -86,15 +103,32 @@ function parseArgs(argv: string[]): StageOptions {
 }
 
 async function runStep(command: string[], label: string, env: Record<string, string> = {}): Promise<number> {
+  const capture = activeCapture
   const startedAt = performance.now()
   process.stdout.write(`\n[ci-local] ▶ ${label}\n`)
   const child = Bun.spawn(command, {
     cwd: projectRoot,
     env: { ...process.env, ...env },
-    stderr: 'inherit',
-    stdin: 'inherit',
-    stdout: 'inherit'
+    stderr: capture ? 'pipe' : 'inherit',
+    stdin: capture ? 'ignore' : 'inherit',
+    stdout: capture ? 'pipe' : 'inherit'
   })
+  if (capture) {
+    capture.output = ''
+    const decoder = new TextDecoder()
+    const sink = async (stream: ReadableStream<Uint8Array> | null): Promise<void> => {
+      if (!stream) return
+      for await (const chunk of stream) {
+        const text = decoder.decode(chunk, { stream: true })
+        capture.output += text
+        process.stdout.write(text)
+      }
+    }
+    await Promise.all([
+      sink(child.stdout as ReadableStream<Uint8Array>),
+      sink(child.stderr as ReadableStream<Uint8Array>)
+    ])
+  }
   const exitCode = await child.exited
   const seconds = ((performance.now() - startedAt) / 1000).toFixed(1)
   if (exitCode === 0) {
@@ -122,19 +156,28 @@ function buildEnv(): Record<string, string> {
   return env
 }
 
-async function stage(
-  id: string,
-  label: string,
-  command: string[],
-  hint?: string,
-  env: Record<string, string> = {}
-): Promise<Stage> {
+async function stage(id: string, label: string, command: string[], hint?: string, env: Record<string, string> = {}): Promise<Stage> {
   return {
     id,
     hint,
     label,
     run: () => runStep(command, label, env)
   }
+}
+
+interface Capture {
+  output: string
+}
+
+interface Capture {
+  output: string
+}
+
+interface GateFailure {
+  id: string
+  label: string
+  exitCode: number
+  output: string
 }
 
 interface SmokeStageConfig {
@@ -289,11 +332,56 @@ function select(stages: Stage[], options: StageOptions): Stage[] {
   })
 }
 
+async function writeGateReports(
+  reportDir: string,
+  failures: GateFailure[],
+  target: SmokeTarget,
+  startedAt: number,
+  stageCount: number
+): Promise<void> {
+  await mkdir(reportDir, { recursive: true })
+  for (const failure of failures) {
+    const content = [
+      `# CI failure: ${failure.label}`,
+      '',
+      `- Stage: \`${failure.id}\``,
+      `- Host platform: ${target}`,
+      `- Exit code: ${failure.exitCode}`,
+      `- Started at (unix): ${startedAt}`,
+      '- Mirrors: the same-named job(s) in `.github/workflows/quality.yml`, `security.yml`, `nightly.yml`',
+      '',
+      '## Output',
+      '',
+      '```',
+      failure.output.trimEnd(),
+      '```',
+      ''
+    ].join('\n')
+    await writeFile(join(reportDir, `${failure.id}.md`), `${content}\n`, 'utf8')
+  }
+  const summary = [
+    '# Local CI gate summary',
+    '',
+    `- Started at (unix): ${startedAt}`,
+    `- Host platform: ${target}`,
+    `- Stages run: ${stageCount}, failed stages: ${failures.length}`,
+    '',
+    ...failures.map(
+      (failure) => `- \`${failure.id}\` — ${failure.label} (exit ${failure.exitCode}) → [report](${failure.id}.md)`
+    ),
+    ''
+  ].join('\n')
+  await writeFile(join(reportDir, 'summary.md'), `${summary}\n`, 'utf8')
+}
+
 async function main(): Promise<void> {
   const argv = Bun.argv.slice(2)
   const listOnly = argv.includes('--list')
   const options = parseArgs(argv)
   const target = parseTarget()
+
+  const gateStartedAt = Math.floor(Date.now() / 1000)
+  const gateFailures: GateFailure[] = []
 
   const plan = await buildStagePlan(options, target)
   const selected = select(plan, options)
@@ -321,11 +409,38 @@ async function main(): Promise<void> {
   }
 
   const failures: string[] = []
+  activeCapture = options.gate ? { output: '' } : null
   for (const stage of selected) {
+    if (activeCapture) activeCapture.output = ''
     const exitCode = await stage.run()
-    if (exitCode !== 0) {
+    if (exitCode === 0) continue
+    if (activeCapture) {
+      gateFailures.push({
+        id: stage.id,
+        label: stage.label,
+        exitCode,
+        output: activeCapture.output
+      })
+    } else {
       failures.push(`${stage.id} (${stage.label}) — exit ${exitCode}`)
     }
+  }
+  activeCapture = null
+
+  if (options.gate) {
+    if (gateFailures.length === 0) {
+      process.stdout.write('\n[ci-local] gate passed ✅ — local run mirrors CI green; safe to deploy\n')
+      return
+    }
+    const reportDir = join(projectRoot, '.cio', 'git', 'ci', String(gateStartedAt))
+    await writeGateReports(reportDir, gateFailures, target, gateStartedAt, selected.length)
+    process.stderr.write(
+      '\n[ci-local] ::error:: ' +
+      `${gateFailures.length} CI stage(s) failed:\n  - ${gateFailures.map((failure) => failure.id).join('\n  - ')}\n` +
+      `[ci-local] reports: ${relative(projectRoot, reportDir)}\n` +
+      '[ci-local] Deployment is blocked until every stage passes.\n'
+    )
+    process.exit(1)
   }
 
   if (failures.length > 0) {
