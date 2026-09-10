@@ -1862,6 +1862,41 @@
       viewActions.set('none', [])
       return
     }
+    // Scope Board page: new scope, cross-scope search, new project — replacing
+    // the old far-right toolbar of the scope view header.
+    if (scopeViewActive) {
+      const scopeBoardActions: ViewActionItem[] = [
+        {
+          id: 'new-scope',
+          component: ScopeCreateControl as unknown as ViewActionItem['component'],
+          props: { title: 'New scope' }
+        },
+        {
+          id: 'search',
+          component: ThreadSearchControl as unknown as ViewActionItem['component'],
+          props: {
+            threads: scopeState.allScopeThreads,
+            contextLabel: 'threads across all scopes',
+            title: 'Search threads across all scopes',
+            onOpen: openThreadFromScopeSearch,
+            fts: {}
+          }
+        },
+        {
+          id: 'new-project',
+          component: ProjectCreateControl as unknown as ViewActionItem['component'],
+          props: {
+            projects,
+            onProjectCreated: handleProjectCreated,
+            onExisting: (project: Project) => void scopeState.activateProject(project.id),
+            triggerAddProject: projectCreateTrigger,
+            triggerKind: projectCreateTriggerKind
+          }
+        }
+      ]
+      viewActions.set('scope', scopeBoardActions)
+      return
+    }
     if (mode === 'threads') {
       const actions: ViewActionItem[] = [
         { id: 'sort', component: ThreadSortMenu as unknown as ViewActionItem['component'] },
@@ -1920,14 +1955,8 @@
       ]
       viewActions.set('chats', chatsActions)
     } else if (mode === 'projects' && scopeState.sidebarContext) {
+      // Same paradigm as every other view: search first, then new thread.
       const scopedActions: ViewActionItem[] = [
-        {
-          id: 'new-thread',
-          icon: Plus,
-          ariaLabel: 'New thread in this scope',
-          title: 'New thread in this scope',
-          run: () => newThreadInScopeContext()
-        },
         {
           id: 'search',
           component: ThreadSearchControl as unknown as ViewActionItem['component'],
@@ -1943,6 +1972,13 @@
             onOpen: (thread: Thread) => void openScopedThread(thread),
             fts: {}
           }
+        },
+        {
+          id: 'new-thread',
+          icon: Plus,
+          ariaLabel: 'New thread in this scope',
+          title: 'New thread in this scope',
+          run: () => newThreadInScopeContext()
         },
         {
           id: 'new-scope',
@@ -1986,6 +2022,20 @@
     const project = projects.find((candidate) => candidate.id === context?.projectId)
     if (!context || !project) return
     void createThreadInProject(project, context.bucketId)
+  }
+
+  /** Open a thread from the Scope Board cross-scope search: land back in the
+   *  project view, select it, hydrate its board and mark it read (mirrors the
+   *  former app-shell openScopeThread flow). */
+  async function openThreadFromScopeSearch(thread: Thread): Promise<void> {
+    navigate('projects')
+    const project =
+      scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
+    workspaceState.openThread(thread, project)
+    void scopeState.ensureBoardLoaded(thread.projectId)
+    const updated = await invoke('thread:markRead', thread.projectId, thread.id)
+    scopeState.updateThread(updated)
+    workspaceState.updateThread(updated)
   }
 
   // The scope-state sidebar board reads its data from the active project's board

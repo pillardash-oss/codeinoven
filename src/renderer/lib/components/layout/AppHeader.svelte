@@ -5,7 +5,6 @@
   import { projectIconOnError, getProjectIcon } from '$lib/project-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
-  import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -18,11 +17,8 @@
     isSettingsView,
     type MainView
   } from '$lib/stores/renderer-recovery.svelte'
-  import ProjectCreateControl from '$lib/components/shared/ProjectCreateControl.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { preloadScopeChunk } from '$lib/page-preload'
-  import ScopeCreateControl from '$lib/components/shared/ScopeCreateControl.svelte'
-  import ThreadSearchControl from '$lib/components/shared/ThreadSearchControl.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gatewayState } from '$lib/stores/gateway.svelte'
   import type { EditorId, Project, Thread } from '$shared/types'
@@ -80,18 +76,9 @@
     navigate: (view: View) => void
     goBack: () => void
     goForward: () => void
-    onProjectCreated?: (project: Project) => void | Promise<void>
-    onScopeThreadOpen?: (thread: Thread) => void | Promise<void>
   }
 
-  let {
-    activeView,
-    navigate,
-    goBack,
-    goForward,
-    onProjectCreated = () => undefined,
-    onScopeThreadOpen = () => undefined
-  }: Props = $props()
+  let { activeView, navigate, goBack, goForward }: Props = $props()
 
   function threadWorkingForIndicator(thread: Thread): boolean {
     return agentRuns.hasSettled(thread.projectId, thread.id)
@@ -293,18 +280,16 @@
   async function onPrimaryNavClick(
     view: 'projects' | 'chats' | 'scope' | 'threads'
   ): Promise<void> {
-    const isCurrent = view === activeView
-    // The Scope Board header button is a toggle: while the scope view is
-    // already open, clicking it returns to the last primary view.
-    if (view === 'scope' && isCurrent) {
+    // Scope Board keeps its toggle behaviour: already open → last view.
+    if (view === 'scope' && view === activeView) {
       await navigateToView(lastViewBeforeScope)
       return
     }
+    // Selecting the view already open from the dropdown is a no-op — in
+    // particular, scoped threads → projects must simply close the board (the
+    // caller clears it) without hiding the sidebar.
+    if (view === activeView) return
     await navigateToView(view)
-    // The primary nav button toggles the sidebar when already on a view.
-    if (isCurrent) {
-      sidebarState.toggle()
-    }
   }
 
   // ─── View switcher dropdown (app header) ─────────────────────────────
@@ -419,10 +404,13 @@
     }
   }
 
-  function openScopeThread(thread: Thread): void {
-    scopeState.showSidebarForThread(thread)
-    void onScopeThreadOpen(thread)
-  }
+  /** True while any project thread is actively being worked on — a gentle
+   *  pulse on the view switcher title. */
+  let anyProjectWorking = $derived(
+    scopeState.allScopeThreads.some(
+      (t) => !t.archived && t.projectId !== INBOX_PROJECT_ID && threadWorkingForIndicator(t)
+    )
+  )
 
   $effect(() => {
     memoryProposalState.setContext(workspaceState.selectedThread?.projectId ?? null)
@@ -642,7 +630,9 @@
           title="Switch view"
           data-onboarding="view-switcher"
         >
-          <span class="truncate">{activeHeaderViewLabel}</span>
+          <span class="truncate" class:animate-pulse={anyProjectWorking}
+            >{activeHeaderViewLabel}</span
+          >
           <ChevronDown size={12} class="shrink-0 text-muted" />
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
@@ -753,23 +743,6 @@
             </button>
           {/each}
         </div>
-      </div>
-
-      <div class="ml-2 flex shrink-0 items-center gap-0.5 bg-surface">
-        <ProjectCreateControl
-          projects={scopeState.projectRecords}
-          {onProjectCreated}
-          onExisting={(project) => switchProject(project.id)}
-          title="Add project"
-        />
-        <ThreadSearchControl
-          threads={scopeState.currentProjectThreads}
-          contextLabel="threads in this project"
-          title="Search threads in this project"
-          onOpen={openScopeThread}
-          fts={{ projectId: scopeState.activeProjectId ?? undefined }}
-        />
-        <ScopeCreateControl title="New scope" />
       </div>
     </div>
   {:else}

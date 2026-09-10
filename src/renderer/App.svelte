@@ -1273,17 +1273,6 @@
     navigate('settings-harnesses')
   }
 
-  async function openScopeThread(thread: Thread): Promise<void> {
-    navigate('projects')
-    const project =
-      scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
-    workspaceState.openThread(thread, project)
-    void scopeState.ensureBoardLoaded(thread.projectId)
-    const updated = await invoke('thread:markRead', thread.projectId, thread.id)
-    scopeState.updateThread(updated)
-    workspaceState.updateThread(updated)
-  }
-
   /**
    * Open a thread from a notification while preserving the current view:
    * - Regular project view → stay there (no scope sidebar).
@@ -1700,8 +1689,10 @@
     // remap side buttons to on macOS, since there's no native OS-level
     // back/forward gesture API for non-Apple mice. Alt+Left/Alt+Right mirrors
     // the same convention on Windows/Linux.
-    if ((isMac && e.metaKey && (e.key === '[' || e.key === ']')) ||
-      (!isMac && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))) {
+    if (
+      (isMac && e.metaKey && (e.key === '[' || e.key === ']')) ||
+      (!isMac && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))
+    ) {
       e.preventDefault()
       if (e.repeat) return
       if (e.key === '[' || e.key === 'ArrowLeft') void goBack()
@@ -1825,14 +1816,7 @@
 </script>
 
 <div class="flex h-screen flex-col bg-app">
-  <AppHeader
-    {activeView}
-    {navigate}
-    {goBack}
-    {goForward}
-    onProjectCreated={handleProjectCreated}
-    onScopeThreadOpen={openScopeThread}
-  />
+  <AppHeader {activeView} {navigate} {goBack} {goForward} />
 
   <main class="flex-1 overflow-hidden">
     <!-- One shell for all views — the workspace (and the open thread) stays
