@@ -8,6 +8,7 @@ import type {
   BrowserPageState,
   BrowserPermissionDecision,
   BrowserPermissionRequest,
+  BrowserSiteDataScope,
   BrowserViewBounds
 } from '../../lib/ipc-contract'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
@@ -95,6 +96,21 @@ function validateDownloadId(value: unknown): string {
     throw new TypeError('Browser download ID is invalid')
   }
   return value
+}
+
+const SITE_DATA_SCOPES: readonly BrowserSiteDataScope[] = ['site-data', 'cache', 'permissions']
+
+function validateSiteDataScopes(value: unknown): BrowserSiteDataScope[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > SITE_DATA_SCOPES.length) {
+    throw new TypeError('Browser site data scopes must be a non-empty array')
+  }
+  const unique = new Set(value)
+  for (const scope of unique) {
+    if (!SITE_DATA_SCOPES.includes(scope as BrowserSiteDataScope)) {
+      throw new TypeError(`Browser site data scope is invalid: ${String(scope)}`)
+    }
+  }
+  return [...unique]
 }
 
 /** Reduce a server-suggested filename to a safe, absolute-path-free basename. */
@@ -288,6 +304,13 @@ export class BrowserService {
     })
     ipcMain.handle('browser:clearData', async (_event, rawProjectId) => {
       await this.clearProjectData(validateProjectId(rawProjectId))
+    })
+    ipcMain.handle('browser:clearSiteData', (_event, rawProjectId, rawScopes) => {
+      const projectId = validateProjectId(rawProjectId)
+      const scopes = validateSiteDataScopes(rawScopes)
+      void this.clearSiteData(projectId, scopes).catch((error: unknown) => {
+        Logger.error('Browser site data could not be cleared:', error)
+      })
     })
     ipcMain.handle('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)
@@ -762,6 +785,36 @@ export class BrowserService {
     const browserSession = this.sessionForProject(projectId)
     await Promise.all([browserSession.clearStorageData(), browserSession.clearCache()])
     await browserSession.closeAllConnections()
+    for (const tab of this.tabs.values()) {
+      if (tab.projectId === projectId && tab.initialNavigationStarted) tab.view.webContents.reload()
+    }
+  }
+
+  /** Clear only the requested scopes for the project's browser session. Tabs of
+   *  the project reload afterwards so cleared state takes effect immediately. */
+  private async clearSiteData(projectId: string, scopes: BrowserSiteDataScope[]): Promise<void> {
+    if (scopes.includes('permissions')) {
+      for (const [requestId, pending] of this.pendingPermissions) {
+        if (pending.request.projectId === projectId) {
+          this.resolvePermission(requestId, permissionResolutions.dismiss, false)
+        }
+      }
+      const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
+      this.permissionGrants.get(partition)?.clear()
+      this.permissionDenies.get(partition)?.clear()
+    }
+    const browserSession = this.sessionForProject(projectId)
+    const work: Promise<unknown>[] = []
+    if (scopes.includes('site-data')) {
+      work.push(browserSession.clearStorageData())
+    }
+    if (scopes.includes('cache')) {
+      work.push(browserSession.clearCache())
+    }
+    if (work.length > 0) {
+      await Promise.all(work)
+      await browserSession.closeAllConnections()
+    }
     for (const tab of this.tabs.values()) {
       if (tab.projectId === projectId && tab.initialNavigationStarted) tab.view.webContents.reload()
     }

@@ -4,9 +4,13 @@
   import {
     ArrowLeft,
     ArrowRight,
+    Cookie,
+    Eraser,
     Lock,
+    LockOpen,
     LoaderCircle,
     RotateCw,
+    ShieldOff,
     SquareTerminal,
     X
   } from '@lucide/svelte'
@@ -14,11 +18,13 @@
   import { normalizeBrowserUrl } from '$shared/local-development-url'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
   import type {
+    BrowserSiteDataScope,
     BrowserConsoleEntry,
     BrowserConsoleLevel,
     BrowserPageState,
     BrowserViewBounds
   } from '$shared/ipc-contract'
+  import Modal from '../ui/Modal.svelte'
 
   interface Props {
     tab: BrowserContextTab
@@ -77,8 +83,106 @@
   let consoleToggleLabel = $derived(
     activeSurface === 'console' ? 'Show browser page' : 'Show browser console'
   )
-  /** Show a padlock only for https origins; http gets no icon at all. */
+  /** Show a closed padlock for https origins; open padlock for everything else. */
   let secure = $derived(pageState.url.startsWith('https:'))
+  /** The site menu and its confirmation modal are DOM, while the page itself is a
+   *  native WebContentsView that floats above every DOM surface — the view must
+   *  stay hidden whenever either layer is open. */
+  let siteMenuOpen = $state(false)
+  let pendingClearScope = $state<BrowserSiteDataScope | null>(null)
+  let clearingSiteData = $state(false)
+  let siteDataError = $state('')
+
+  let siteHost = $derived.by(() => {
+    try {
+      return new URL(pageState.url).host
+    } catch {
+      return ''
+    }
+  })
+
+  interface ClearAction {
+    scope: BrowserSiteDataScope
+    label: string
+    icon: typeof Lock
+    detail: string
+  }
+
+  const clearActions: readonly ClearAction[] = [
+    {
+      scope: 'site-data',
+      label: 'Clear cookies and site data',
+      icon: Cookie,
+      detail: 'Cookies, storage and sessions for sites visited in this browser will be deleted.'
+    },
+    {
+      scope: 'cache',
+      label: 'Clear cache',
+      icon: Eraser,
+      detail: 'Cached files for sites visited in this browser will be deleted.'
+    },
+    {
+      scope: 'permissions',
+      label: 'Reset permissions',
+      icon: ShieldOff,
+      detail: 'Remembered camera, microphone and other permission choices for sites visited in this browser will be forgotten.'
+    }
+  ]
+  let pendingClearAction = $derived(
+    clearActions.find((action) => action.scope === pendingClearScope) ?? null
+  )
+
+  async function openSiteMenu(): Promise<void> {
+    siteDataError = ''
+    siteMenuOpen = true
+    try {
+      await invoke('browser:hide', tabId)
+    } catch {
+      // Tab already destroyed.
+    }
+  }
+
+  async function restoreNativeView(): Promise<void> {
+    if (siteMenuOpen || pendingClearScope !== null) return
+    await tick()
+    await showAtCurrentBounds().catch(() => {})
+  }
+
+  function closeSiteMenu(): void {
+    siteMenuOpen = false
+    void restoreNativeView()
+  }
+
+  function chooseClear(scope: BrowserSiteDataScope): void {
+    siteDataError = ''
+    siteMenuOpen = false
+    pendingClearScope = scope
+  }
+
+  function cancelClear(): void {
+    if (clearingSiteData) return
+    pendingClearScope = null
+    void restoreNativeView()
+  }
+
+  async function runClear(): Promise<void> {
+    const scope = pendingClearScope
+    if (!scope || clearingSiteData) return
+    clearingSiteData = true
+    try {
+      await invoke('browser:clearSiteData', tabProjectId, [scope])
+      pendingClearScope = null
+      await restoreNativeView()
+    } catch (error) {
+      siteDataError =
+        error instanceof Error && error.message
+          ? error.message
+          : 'Browser site data could not be cleared.'
+      void restoreNativeView()
+    } finally {
+      clearingSiteData = false
+    }
+  }
 
   const attachContentElement: Attachment<HTMLDivElement> = (element) => {
     contentElement = element
@@ -297,14 +401,23 @@
         <RotateCw size={13} />
       {/if}
     </button>
-    <label class="relative min-w-0 flex-1">
+    <div class="relative min-w-0 flex-1">
       <span class="sr-only">Browser address</span>
-      {#if secure}
-        <Lock
-          size={13}
-          class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
-        />
-      {/if}
+      <button
+        type="button"
+        class="absolute left-1.5 top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        title={secure ? 'Site settings' : 'Connection is not secure'}
+        aria-label={secure ? 'Site settings' : 'Connection is not secure'}
+        aria-haspopup="menu"
+        aria-expanded={siteMenuOpen}
+        onclick={() => (siteMenuOpen ? closeSiteMenu() : void openSiteMenu())}
+      >
+        {#if secure}
+          <Lock size={13} />
+        {:else}
+          <LockOpen size={13} />
+        {/if}
+      </button>
       <input
         class="h-7 w-full rounded-lg border border-border bg-elevated pl-8 pr-8 text-xs text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary"
         class:border-danger={addressError !== ''}
@@ -320,7 +433,37 @@
           class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 animate-spin text-primary"
         />
       {/if}
-    </label>
+      {#if siteMenuOpen}
+        <button
+          type="button"
+          class="fixed inset-0 z-30 cursor-default"
+          title="Close site settings"
+          aria-label="Close site settings"
+          onclick={closeSiteMenu}
+        ></button>
+        <div
+          class="absolute left-0 top-full z-40 mt-1 w-64 rounded-lg border bg-surface p-1 shadow-lg"
+          role="menu"
+          aria-label="Site settings"
+        >
+          <p class="truncate px-2.5 py-1.5 font-medium text-foreground" title={siteHost}>
+            {siteHost || 'This page'}
+          </p>
+          {#each clearActions as action (action.scope)}
+            <button
+              type="button"
+              class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated"
+              role="menuitem"
+              title={action.label}
+              onclick={() => chooseClear(action.scope)}
+            >
+              <action.icon size={14} class="shrink-0 text-dimmed" />
+              <span class="flex-1">{action.label}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
     <button
       type="button"
       class={[
@@ -355,6 +498,13 @@
       role="alert"
     >
       {addressError}
+    </p>
+  {:else if siteDataError}
+    <p
+      class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-1 text-[0.6875rem] text-danger"
+      role="alert"
+    >
+      {siteDataError}
     </p>
   {/if}
   <div
@@ -397,3 +547,35 @@
     {/each}
   </div>
 </div>
+
+<Modal
+  open={pendingClearAction !== null}
+  title={pendingClearAction ? `${pendingClearAction.label}?` : ''}
+  onClose={cancelClear}
+  closeOnBackdrop={!clearingSiteData}
+>
+  {#if pendingClearAction}
+    <p class="text-sm leading-relaxed text-muted">{pendingClearAction.detail}</p>
+  {/if}
+
+  {#snippet footer()}
+    <button
+      type="button"
+      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:opacity-50"
+      title="Keep site data"
+      disabled={clearingSiteData}
+      onclick={cancelClear}
+    >
+      Cancel
+    </button>
+    <button
+      type="button"
+      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger-hover disabled:opacity-50"
+      title={pendingClearAction ? pendingClearAction.label : ''}
+      disabled={clearingSiteData}
+      onclick={() => void runClear()}
+    >
+      {clearingSiteData ? 'Clearing…' : pendingClearAction ? pendingClearAction.label : ''}
+    </button>
+  {/snippet}
+</Modal>
