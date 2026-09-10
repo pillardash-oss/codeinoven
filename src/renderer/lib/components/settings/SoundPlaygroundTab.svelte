@@ -61,7 +61,6 @@
     text: string
   }
 
-  const READ_MESSAGE_ID = 'playground-read'
   let readingBlocks = $state<ReadBlock[]>([])
   let readingDraft = $state('')
   let readingImporting = $state(false)
@@ -76,19 +75,24 @@
       hasInstalledTts = false
     })
 
-  const combinedReadingText = $derived(readingBlocks.map((block) => block.text).join('\n\n'))
-  const readingActive = $derived.by(() => {
+  /**
+   * The block currently being read, if any. Each block owns its playback
+   * session, so reading one block never disturbs the others.
+   */
+  const activeReadingBlockId = $derived.by(() => {
     const playback = speechController.playback
-    return (
-      'messageId' in playback &&
-      playback.messageId === READ_MESSAGE_ID &&
-      (playback.state === 'preparing' ||
-        playback.state === 'playing' ||
-        playback.state === 'paused')
-    )
+    if (
+      !('messageId' in playback) ||
+      !['preparing', 'playing', 'paused'].includes(playback.state)
+    ) {
+      return null
+    }
+    return readingBlocks.some((block) => block.id === playback.messageId)
+      ? playback.messageId
+      : null
   })
-  const readingOverlayLive = $derived(
-    readingActive &&
+  const activeOverlayLive = $derived(
+    activeReadingBlockId !== null &&
       speechController.activeSegments !== null &&
       speechController.activeSegments.length > 0 &&
       speechController.readingOverlayActive
@@ -611,7 +615,7 @@
           aloud. Nothing is saved — blocks and playback state are cleared when you leave the page.
         </p>
       </div>
-      {#if readingBlocks.length > 0 && !readingActive}
+      {#if readingBlocks.length > 0}
         <button
           type="button"
           class="inline-flex shrink-0 items-center gap-1 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
@@ -630,97 +634,95 @@
       </p>
     {/if}
 
-    {#if !readingActive}
-      <label class="block">
-        <span class="sr-only">Text to read aloud</span>
-        <textarea
-          class="h-56 w-full resize-y rounded-lg border bg-elevated/40 px-3 py-2 text-sm leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-          placeholder="Paste a block of text to read aloud…"
-          bind:value={readingDraft}
-          aria-label="Text to read aloud"></textarea>
-      </label>
-      <div class="mt-2 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          class="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-on-primary hover:bg-primary/90 disabled:opacity-50"
-          title="Add the pasted text as a block"
-          aria-label="Add the pasted text"
-          disabled={!readingDraft.trim()}
-          onclick={addReadingDraft}
-        >
-          <FileAudio size={14} aria-hidden="true" /> Add text
-        </button>
-        <button
-          type="button"
-          class="inline-flex items-center gap-2 rounded-lg border bg-elevated px-3 py-2 text-sm font-medium text-foreground hover:bg-overlay disabled:opacity-50"
-          title="Import a text or PDF file"
-          aria-label="Import a text or PDF file"
-          disabled={readingImporting}
-          onclick={() => void importReadingFile()}
-        >
-          {#if readingImporting}
-            <LoaderCircle size={14} class="animate-spin" aria-hidden="true" />
-          {:else}
-            <FileAudio size={14} aria-hidden="true" />
-          {/if}
-          Import file
-        </button>
-      </div>
-    {/if}
+    <label class="block">
+      <span class="sr-only">Text to read aloud</span>
+      <textarea
+        class="h-56 w-full resize-y rounded-lg border bg-elevated/40 px-3 py-2 text-sm leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+        placeholder="Paste a block of text to read aloud…"
+        bind:value={readingDraft}
+        aria-label="Text to read aloud"></textarea>
+    </label>
+    <div class="mt-2 flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        class="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-on-primary hover:bg-primary/90 disabled:opacity-50"
+        title="Add the pasted text as a block"
+        aria-label="Add the pasted text"
+        disabled={!readingDraft.trim()}
+        onclick={addReadingDraft}
+      >
+        <FileAudio size={14} aria-hidden="true" /> Add text
+      </button>
+      <button
+        type="button"
+        class="inline-flex items-center gap-2 rounded-lg border bg-elevated px-3 py-2 text-sm font-medium text-foreground hover:bg-overlay disabled:opacity-50"
+        title="Import a text or PDF file"
+        aria-label="Import a text or PDF file"
+        disabled={readingImporting}
+        onclick={() => void importReadingFile()}
+      >
+        {#if readingImporting}
+          <LoaderCircle size={14} class="animate-spin" aria-hidden="true" />
+        {:else}
+          <FileAudio size={14} aria-hidden="true" />
+        {/if}
+        Import file
+      </button>
+    </div>
 
-    {#if readingOverlayLive}
-      <div
-        class="mt-3 h-[70dvh] min-h-[28rem] overflow-y-auto rounded-lg border bg-elevated/40 p-3"
-      >
-        <ReadAlongOverlay
-          segments={speechController.activeSegments!}
-          activeIndex={speechController.visibleSegmentIndex}
-          spokenProgress={speechController.activeSegmentProgress}
-          textClass="text-sm"
-        />
-      </div>
-    {:else if readingActive && speechController.playback.state === 'preparing'}
-      <p
-        class="mt-3 flex items-center gap-2 rounded-lg border border-dashed border-info/40 bg-info/5 px-3 py-3 text-xs text-muted"
-      >
-        <LoaderCircle size={13} class="animate-spin" aria-hidden="true" /> Preparing spoken response…
-      </p>
-    {:else if readingBlocks.length > 0}
+    {#if readingBlocks.length > 0}
       <div
         class="mt-3 h-[70dvh] min-h-[28rem] divide-y divide-border overflow-y-auto rounded-lg border bg-elevated/40"
       >
         {#each readingBlocks as block (block.id)}
-          <div class="flex items-start justify-between gap-3 px-3 py-2.5">
-            <div class="min-w-0">
-              <p class="text-xs font-semibold" title={block.label}>{block.label}</p>
-              <p class="tabular-nums text-[0.625rem] text-dimmed">{block.text.length} chars</p>
-              <p class="mt-1 text-xs leading-relaxed text-muted">{block.text}</p>
+          {@const isBeingRead = activeReadingBlockId === block.id}
+          <div class="px-3 py-2.5">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-xs font-semibold" title={block.label}>{block.label}</p>
+                <p class="tabular-nums text-[0.625rem] text-dimmed">{block.text.length} chars</p>
+              </div>
+              <button
+                type="button"
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-transparent text-dimmed hover:border-border hover:bg-surface hover:text-muted disabled:opacity-50"
+                title={`Remove ${block.label}`}
+                aria-label={`Remove ${block.label}`}
+                disabled={isBeingRead}
+                onclick={() => removeReadingBlock(block.id)}
+              >
+                <X size={12} aria-hidden="true" />
+              </button>
             </div>
-            <button
-              type="button"
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-transparent text-dimmed hover:border-border hover:bg-surface hover:text-muted"
-              title={`Remove ${block.label}`}
-              aria-label={`Remove ${block.label}`}
-              onclick={() => removeReadingBlock(block.id)}
-            >
-              <X size={12} aria-hidden="true" />
-            </button>
+            {#if isBeingRead && speechController.activeSegments && activeOverlayLive}
+              <div class="mt-2">
+                <ReadAlongOverlay
+                  segments={speechController.activeSegments}
+                  activeIndex={speechController.visibleSegmentIndex}
+                  spokenProgress={speechController.activeSegmentProgress}
+                  textClass="text-xs"
+                />
+              </div>
+            {:else if isBeingRead && speechController.playback.state === 'preparing'}
+              <p
+                class="mt-2 flex items-center gap-2 rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-2 text-xs text-muted"
+              >
+                <LoaderCircle size={12} class="animate-spin" aria-hidden="true" /> Preparing…
+              </p>
+            {:else}
+              <p class="mt-2 text-xs leading-relaxed text-muted">{block.text}</p>
+            {/if}
+            <div class="mt-2 flex items-center gap-2 text-[0.6875rem] text-dimmed">
+              <SpeechPlaybackButton messageId={block.id} markdown={block.text} />
+            </div>
           </div>
         {/each}
       </div>
     {/if}
 
-    <div class="mt-2 flex flex-wrap items-center gap-2 text-[0.6875rem] text-dimmed">
-      <SpeechPlaybackButton
-        messageId={READ_MESSAGE_ID}
-        markdown={combinedReadingText}
-        disabled={readingBlocks.length === 0}
-      />
-      {#if hasInstalledTts === false}
-        <span>Read-aloud needs a text-to-speech model — download one in the Models tab.</span>
-      {:else if readingBlocks.length === 0}
-        <span>Add a text block to enable read aloud.</span>
-      {/if}
-    </div>
+    {#if hasInstalledTts === false && readingBlocks.length > 0}
+      <p class="mt-2 text-[0.6875rem] text-dimmed">
+        Read-aloud needs a text-to-speech model — download one in the Models tab.
+      </p>
+    {/if}
   </section>
 {/if}
