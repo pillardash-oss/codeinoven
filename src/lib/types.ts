@@ -785,7 +785,7 @@ export interface ProviderAccountAuthEntry {
 export interface HarnessAccount {
   id: string
   harnessId: string
-  /** Provider authenticated inside the container. Empty for the legacy default account. */
+  /** Provider authenticated by this account. */
   providerId: string
   /** Display name reported by the harness for this provider. */
   providerName: string

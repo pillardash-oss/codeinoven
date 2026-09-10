@@ -3716,13 +3716,17 @@ export class ChatEngine {
   async refreshAccountUsage(overrides?: AgentAccountUsageOverrides): Promise<AgentAccountUsage[]> {
     const harnessId = overrides?.harnessId
     if (!harnessId) return []
-    const account = await this.accountRegistry.resolve(harnessId, overrides?.accountId)
+    const providerId = overrides?.providerId ?? harnessId
+    const account = await this.accountRegistry.resolveForProvider(
+      harnessId,
+      providerId,
+      overrides?.accountId
+    )
     const driver = await this.driverForAccount(harnessId, account.id).catch(() => undefined)
     if (!driver) {
       Logger.dev(`On-demand account usage refresh: unknown harness "${harnessId}"`)
       return []
     }
-    const providerId = overrides?.providerId ?? harnessId
     // Quota reads never depend on where a conversation lives. Read against the
     // shared chats working directory so every surface gets the same answer.
     let projectPath: string
@@ -3831,7 +3835,13 @@ export class ChatEngine {
     if (!thread) return null
     const harnessId = thread.settings?.harnessId
     if (!harnessId) return null
-    const accountId = (await this.accountRegistry.resolve(harnessId, thread.settings?.accountId)).id
+    const accountId = (
+      await this.accountRegistry.resolveForProvider(
+        harnessId,
+        thread.settings?.providerId,
+        thread.settings?.accountId
+      )
+    ).id
     const { driver, projectPath } = await this.resolve(
       projectIdSafe,
       harnessId,
@@ -4446,7 +4456,11 @@ export class ChatEngine {
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
 
     const driverId = requestedDriverId ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
-    const account = await this.accountRegistry.resolve(driverId, thread.settings?.accountId)
+    const account = await this.accountRegistry.resolveForProvider(
+      driverId,
+      thread.settings?.providerId,
+      thread.settings?.accountId
+    )
     const accountId = account.id
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
 
@@ -7210,11 +7224,17 @@ export class ChatEngine {
     }
 
     const driverId = settings.harnessId || DEFAULT_HARNESS
+    const selectedAccount = await this.accountRegistry.resolveForProvider(
+      driverId,
+      settings.providerId,
+      settings.accountId
+    )
+    settings = { ...settings, accountId: selectedAccount.id }
     const { driver, projectPath } = await this.resolve(
       projectId,
       driverId,
       threadId,
-      settings.accountId
+      selectedAccount.id
     )
     // Branch metadata must use the same resolved cwd as the harness. Relative
     // thread directories are anchored to the project root by resolveThreadPath.
@@ -8017,7 +8037,13 @@ export class ChatEngine {
         }
       }
       const driverId = settings.harnessId || DEFAULT_HARNESS
-      const accountId = (await this.accountRegistry.resolve(driverId, settings.accountId)).id
+      const accountId = (
+        await this.accountRegistry.resolveForProvider(
+          driverId,
+          settings.providerId,
+          settings.accountId
+        )
+      ).id
       const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
       const isolated =
         driver instanceof OpenCodeDriver
@@ -9091,11 +9117,16 @@ export class ChatEngine {
     request: ImageDescriptorExecutorRequest,
     selection: AgentModelSelection
   ): Promise<ImageDescriptorBatchCapability> {
+    const account = await this.accountRegistry.resolveForProvider(
+      selection.harnessId,
+      selection.providerId,
+      selection.accountId
+    )
     const { driver } = await this.resolve(
       request.projectId,
       selection.harnessId,
       request.threadId,
-      selection.accountId
+      account.id
     )
     if (!driver.capabilities) {
       return { supportsBatch: false, maxImages: IMAGE_DESCRIPTOR_BATCH_MAX_IMAGES }
@@ -9118,15 +9149,20 @@ export class ChatEngine {
     parentTurnId: string | undefined,
     featureCallId: string
   ): Promise<unknown> {
+    const account = await this.accountRegistry.resolveForProvider(
+      selection.harnessId,
+      selection.providerId,
+      selection.accountId
+    )
     const { driver } = await this.resolve(
       request.projectId,
       selection.harnessId,
       request.threadId,
-      selection.accountId
+      account.id
     )
     const settings: ThreadSettings = {
       harnessId: selection.harnessId,
-      accountId: selection.accountId ?? legacyHarnessAccountId(selection.harnessId),
+      accountId: account.id,
       providerId: selection.providerId,
       modelId: selection.modelId,
       thinkingLevel: 'low',
@@ -9479,15 +9515,15 @@ export class ChatEngine {
     attempt: number,
     parentTurnId?: string
   ): Promise<string> {
-    const { driver } = await this.resolve(
-      projectId,
+    const account = await this.accountRegistry.resolveForProvider(
       selection.harnessId,
-      threadId,
+      selection.providerId,
       selection.accountId
     )
+    const { driver } = await this.resolve(projectId, selection.harnessId, threadId, account.id)
     const settings: ThreadSettings = {
       harnessId: selection.harnessId,
-      accountId: selection.accountId ?? legacyHarnessAccountId(selection.harnessId),
+      accountId: account.id,
       providerId: selection.providerId,
       modelId: selection.modelId,
       thinkingLevel: 'low',
@@ -17795,7 +17831,12 @@ export class ChatEngine {
       throw new Error('Select a model before compacting this thread')
     }
     const driverId = thread.settings.harnessId ?? DEFAULT_HARNESS
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    const account = await this.accountRegistry.resolveForProvider(
+      driverId,
+      thread.settings.providerId,
+      thread.sessionAccountId ?? thread.settings.accountId
+    )
+    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, account.id)
     if (!driver.capabilities?.compaction || !driver.compactSession) {
       throw new Error(`${driver.name} does not support manual compaction`)
     }

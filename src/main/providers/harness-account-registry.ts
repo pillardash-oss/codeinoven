@@ -120,6 +120,23 @@ export class HarnessAccountRegistry {
     throw new Error('The selected account no longer exists.')
   }
 
+  /** Resolve an account only from credentials belonging to the selected provider. */
+  async resolveForProvider(
+    harnessId: string,
+    providerId: string | undefined,
+    accountId?: string
+  ): Promise<HarnessAccount> {
+    if (!providerId) return this.resolve(harnessId, accountId)
+    const providerAccounts = (await this.list(harnessId)).filter(
+      (account) => account.providerId === providerId
+    )
+    if (providerAccounts.length === 1) return providerAccounts[0]
+    const selected = providerAccounts.find((account) => account.id === accountId)
+    if (selected) return selected
+    if (providerAccounts.length > 0) return providerAccounts[0]
+    return this.virtualLegacyAccount(harnessId, providerId)
+  }
+
   /** Reserve an isolated home without making it visible as an account. */
   async prepare(harnessId: string, providerId = ''): Promise<PendingHarnessAccount> {
     const pending: PendingHarnessAccount = {
@@ -327,6 +344,20 @@ export class HarnessAccountRegistry {
           }))
         }
       : { schemaVersion: 1, accounts: [] }
+  }
+
+  private virtualLegacyAccount(harnessId: string, providerId = ''): HarnessAccount {
+    const now = Date.now()
+    return {
+      id: legacyHarnessAccountId(harnessId),
+      harnessId,
+      providerId,
+      providerName: providerId,
+      label: 'Default',
+      containerKind: 'legacy-default',
+      createdAt: now,
+      updatedAt: now
+    }
   }
 
   private async write(registry: AccountRegistryFile): Promise<void> {

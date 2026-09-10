@@ -42,7 +42,7 @@
     harnessId: string
     providerId: string
     modelId: string
-    /** Credential container used by the selected harness. Missing means Default. */
+    /** Credential container used by the selected provider. Missing means its default. */
     accountId?: string
     favoriteModels?: string[]
     recentModels?: string[]
@@ -194,16 +194,20 @@
       effectiveThinkingPresets[0]?.label ??
       ''
   )
-  let harnessAccounts = $derived(accounts.filter((account) => account.harnessId === harnessId))
+  let providerAccounts = $derived(
+    accounts.filter(
+      (account) => account.harnessId === harnessId && account.providerId === providerId
+    )
+  )
   let effectiveAccountId = $derived(
-    accountId && harnessAccounts.some((account) => account.id === accountId)
+    accountId && providerAccounts.some((account) => account.id === accountId)
       ? accountId
-      : (harnessAccounts[0]?.id ?? `${harnessId}.default`)
+      : (providerAccounts[0]?.id ?? `${harnessId}.default`)
   )
   let selectedAccount = $derived(
-    harnessAccounts.find((account) => account.id === effectiveAccountId)
+    providerAccounts.find((account) => account.id === effectiveAccountId)
   )
-  let showAccountPicker = $derived(!multiSelect && harnessAccounts.length > 1)
+  let showAccountPicker = $derived(!multiSelect && providerAccounts.length > 1)
   /**
    * Snapshot fallback so the trigger renders instantly, before any harness
    * catalog resolves: the thread's stored harness icon is always available, and
@@ -804,7 +808,11 @@
     void providerCatalog.refresh(projectId, true)
   }
 
-  function choose(nextProviderId: string, nextModelId: string, nextHarnessId: string): void {
+  async function choose(
+    nextProviderId: string,
+    nextModelId: string,
+    nextHarnessId: string
+  ): Promise<void> {
     if (multiSelect) {
       const nextKey = modelKey(nextHarnessId, nextProviderId, nextModelId)
       const nextKeys = selectedModelKeysSet.has(nextKey)
@@ -817,10 +825,23 @@
       findModelEntry(displayProviders, nextProviderId, nextModelId, nextHarnessId) ??
       findModelEntry(cachedProviders, nextProviderId, nextModelId, nextHarnessId)
     close()
+    let availableAccounts = nextHarnessId === harnessId ? accounts : []
+    if (nextHarnessId !== harnessId) {
+      try {
+        availableAccounts = await harnessAccountCache.list(nextHarnessId)
+      } catch {
+        availableAccounts = []
+      }
+    }
+    const matchingAccounts = availableAccounts.filter(
+      (account) => account.harnessId === nextHarnessId && account.providerId === nextProviderId
+    )
     const nextAccountId =
-      nextHarnessId === harnessId ? effectiveAccountId : `${nextHarnessId}.default`
+      matchingAccounts.find((account) => account.id === accountId)?.id ??
+      matchingAccounts[0]?.id ??
+      `${nextHarnessId}.default`
     onSelect(nextProviderId, nextModelId, nextHarnessId, nextAccountId)
-    if (nextHarnessId !== harnessId) void loadAccounts(nextHarnessId)
+    if (nextHarnessId !== harnessId) accounts = availableAccounts
     // Thinking level depends on the model: resolve a level the new model
     // actually offers and surface it right after the model change, so parents
     // never keep a stale level the model no longer supports.
@@ -840,20 +861,7 @@
   }
 
   function chooseAccount(account: HarnessAccount): void {
-    const accountProvider = account.providerId
-      ? displayProviders.find(
-          (provider) =>
-            provider.harnessId === account.harnessId && provider.id === account.providerId
-        )
-      : selectedProvider
-    const nextModel =
-      accountProvider?.models.find((model) => model.id === modelId) ?? accountProvider?.models[0]
-    onSelect(
-      accountProvider?.id ?? providerId,
-      nextModel?.id ?? modelId,
-      account.harnessId,
-      account.id
-    )
+    onSelect(providerId, modelId, harnessId, account.id)
     onSelectAccount?.(account)
   }
 
@@ -1036,7 +1044,7 @@
               {#if accountLoading}
                 <div class="px-2 py-2 text-xs text-muted">Loading accounts…</div>
               {:else}
-                {#each harnessAccounts as account (account.id)}
+                {#each providerAccounts as account (account.id)}
                   {@const active = account.id === effectiveAccountId}
                   <DropdownMenu.Item
                     class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
@@ -1053,11 +1061,6 @@
                       <span class="w-[11px] shrink-0" aria-hidden="true"></span>
                     {/if}
                     <span class="min-w-0 flex-1 truncate">{account.label}</span>
-                    {#if account.providerId}
-                      <span class="max-w-20 truncate font-mono text-[0.625rem] text-dimmed">
-                        {account.providerId}
-                      </span>
-                    {/if}
                   </DropdownMenu.Item>
                 {/each}
               {/if}
@@ -1432,7 +1435,7 @@
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
-    onclick={() => choose(entry.provider.id, entry.model.id, entry.provider.harnessId)}
+    onclick={() => void choose(entry.provider.id, entry.model.id, entry.provider.harnessId)}
     onkeydown={(event: KeyboardEvent) => {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
@@ -1463,7 +1466,7 @@
       }
       if (event.key === 'Enter') {
         event.preventDefault()
-        choose(entry.provider.id, entry.model.id, entry.provider.harnessId)
+        void choose(entry.provider.id, entry.model.id, entry.provider.harnessId)
         return
       }
       // Editing intent: left/right moves the caret and characters/backspace edit
