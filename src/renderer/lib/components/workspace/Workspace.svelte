@@ -39,6 +39,7 @@
     ShieldQuestion,
     SquareTerminal,
     StickyNote,
+    ChevronDown
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
   import WelcomeStart from './WelcomeStart.svelte'
@@ -127,7 +128,6 @@
     findEmptyNewThread,
     threadVisitKey
   } from '$lib/stores/workspace.svelte'
-  import type { ThreadSortMode } from '$lib/stores/workspace.svelte'
   import { threadSortState } from '$lib/stores/thread-sort.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
@@ -1635,8 +1635,6 @@
     if (!project) return null
     return getProjectIcon(project, projectIcons.get(project.id))
   }
-
-
 
   // ─── Data loading ────────────────────────────────────────────────────────
 
