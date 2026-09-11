@@ -1079,21 +1079,17 @@
                 <p class="text-center text-[0.625rem] text-dimmed">— or paste an API key —</p>
                 {@render apiKeyField(selectedProvider.name)}
               {:else}
-                <p class="text-[0.6875rem] font-medium text-foreground">
+                <div class="text-[0.6875rem] font-medium text-foreground text-center">
                   Connect to {selectedProvider.name}
-                </p>
-                <p class="text-[0.625rem] text-dimmed">
-                  {harness.name}'s own sign-in flow runs right here — answer its prompts and the
-                  credential is stored in {harness.name}'s credential file.
-                </p>
-                <button
-                  class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                  type="button"
-                  title="Connect to {selectedProvider.name}"
-                  onclick={() => void startProviderSignIn()}
-                >
-                  <KeyRound size={13} /> Connect
-                </button>
+                  <button
+                    class="flex h-9 mx-auto mt-2 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                    type="button"
+                    title="Connect to {selectedProvider.name}"
+                    onclick={() => void startProviderSignIn()}
+                  >
+                    <KeyRound size={13} /> Connect
+                  </button>
+                </div>
               {/if}
             </div>
           {/if}
