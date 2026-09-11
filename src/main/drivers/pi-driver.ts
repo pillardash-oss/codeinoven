@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, createReadStream, watch } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
 import { createInterface } from 'node:readline'
@@ -184,6 +184,37 @@ function mapPiCost(value: unknown): number | undefined {
   return undefined
 }
 
+/**
+ * Matches the error pi's `get_session_stats` RPC returns when its stats walk
+ * crashes on an assistant history entry that carries no `usage` object
+ * (pi's addUsageToTotals reads `usage.input` unguarded, pi 0.85.1 and
+ * earlier). In such sessions the RPC fails identically on every call, so the
+ * driver falls back to mirrored per-message accounting instead of retrying.
+ */
+function isUsagelessAssistantStatsError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /cannot read properties of undefined \(reading 'input'\)/iu.test(error.message)
+  )
+}
+
+/** Sum the per-message cost mirrored into a session's assistant messages so
+ *  sessions with a broken native stats RPC still receive cumulative cost. */
+function mirroredSessionCost(session: PersistentCliSession): number | undefined {
+  let total: number | undefined
+  let unmirrored = false
+  for (const message of session.messages) {
+    if (message.role !== 'assistant') continue
+    if (typeof message.cost === 'number') total = (total ?? 0) + message.cost
+    else unmirrored = true
+  }
+  // Costless assistant turns (aborted, errored, or pre-usage mirrors) make a
+  // partial sum misleading but still better than nothing; both stay falsy
+  // when nothing was reported at all.
+  if (unmirrored && total === undefined) return undefined
+  return total
+}
+
 function errorText(value: Record<string, unknown>): string {
   return (
     stringValue(value['errorMessage']) ??
@@ -253,7 +284,7 @@ function windowFromHeaders(
 
 /**
  * The pi provider id the captured headers came from, taken from the usage
- * extension's payload (`ctx.model.provider` — the same id space as thread
+ * extension's payload (`ctx.model.provider`   the same id space as thread
  * settings' providerId). Used to key persisted windows per provider.
  */
 function piUsageProviderId(payload: unknown): string | undefined {
@@ -278,7 +309,7 @@ export function mapPiRateLimitHeaders(payload: unknown): AgentRateLimitWindow[] 
   }
   const windows: AgentRateLimitWindow[] = []
 
-  // Anthropic subscription unified windows — the quota Claude Pro/Max usage
+  // Anthropic subscription unified windows   the quota Claude Pro/Max usage
   // bars show. Status and overage fields live on the 5-hour window, matching
   // how Claude Code surfaces them.
   const unifiedStatus = stringHeaders['anthropic-ratelimit-unified-5h-status']
@@ -366,7 +397,7 @@ function messageTimestamp(value: Record<string, unknown>): number {
  * True when a Pi failure is a finish-reason flake the model can recover from by
  * simply being asked to continue. pi's provider adapter maps any unrecognized
  * provider `finish_reason` to `stopReason: "error"` with the message
- * `Provider finish_reason: <reason>` — a transient stream/provider issue, not a
+ * `Provider finish_reason: <reason>`   a transient stream/provider issue, not a
  * terminal outcome. `content_filter` is the exception: re-prompting past a
  * moderation stop is wrong, so it stays a real error.
  */
@@ -379,8 +410,8 @@ export function isContinuableFinishReasonError(error: string): boolean {
  * True when a provider rejected the request because the serialized body exceeds
  * a hard byte limit (e.g. "Upstream request failed: [invalid_request_error]
  * Request body exceeds the 4.5 MiB limit."). Token-based auto-compaction never
- * sees this coming — images and large tool results blow the byte budget long
- * before the token window fills — so the driver recovers by compacting the
+ * sees this coming   images and large tool results blow the byte budget long
+ * before the token window fills   so the driver recovers by compacting the
  * transcript (which replaces bulky history with a summary) and re-prompting.
  */
 export function isOversizedRequestError(error: string): boolean {
@@ -490,7 +521,7 @@ function subagentActivityFromPayload(
 /**
  * Activity patch for a spawn call whose tool result is a plain failure object
  * (`{ spawned: false, error }`) instead of a `cio-subagent:` marker payload.
- * Failed spawns carry no agentId, so subagentActivityFromPayload skips them —
+ * Failed spawns carry no agentId, so subagentActivityFromPayload skips them  
  * without this patch the driver would mark the card 'completed' with no error,
  * hiding why the sub-agent never ran.
  */
@@ -515,8 +546,8 @@ function spawnFailurePatch(output: string | undefined): AgentSubagentActivity | 
  * (`acceptingUpdates` is false after execute resolves), so the extension's
  * terminal marker payload can never arrive through the tool channel and the
  * card would stay "Working" forever. The extension therefore rides the
- * completion notification — a display:false custom message the model still
- * needs for its final output — with the structured payload in `details`.
+ * completion notification   a display:false custom message the model still
+ * needs for its final output   with the structured payload in `details`.
  */
 function spawnDoneCustomEvent(
   message: Record<string, unknown>,
@@ -658,7 +689,7 @@ interface PiTurnState {
  * `message.part.updated` before its first delta. Pi's RPC stream emits
  * `message.part.delta` records without ever publishing the part they append
  * to (`message_start` carries no parts), and every downstream mirror drops
- * deltas for a part that does not exist yet — so pi's streaming text and
+ * deltas for a part that does not exist yet   so pi's streaming text and
  * reasoning never appeared live and the working trace stayed empty until
  * `message_end`, with the final output often beating any visible trace.
  * The claude-code and codex drivers announce parts up front
@@ -707,7 +738,7 @@ interface PiSilentContinueState {
   attempts: number
   owed: boolean
   lastError: string
-  /** The failure was an oversized request body — compact before continuing. */
+  /** The failure was an oversized request body   compact before continuing. */
   compactFirst?: boolean
 }
 
@@ -1115,13 +1146,13 @@ export function mapPiRecord(
     const finalError =
       stringValue(entry['finalError']) ?? stringValue(entry['errorMessage']) ?? 'Pi retries failed'
     // An oversized request body is claimed by the driver's compact-and-continue
-    // recovery (armed stripping + re-prompt) — surfacing it here would flash an
+    // recovery (armed stripping + re-prompt)   surfacing it here would flash an
     // error card on every recovery attempt before the turn resumes. The
     // terminal failure after the recovery cap still surfaces via the claimed
     // message.completed error, so nothing is hidden permanently.
     if (isOversizedRequestError(finalError)) return { events: [] }
     // When the retries were exhausted against a usage window, the final error
-    // still classifies as a reset wait — surface it with a concrete retryAt so
+    // still classifies as a reset wait   surface it with a concrete retryAt so
     // the engine converts it into the will-retry card and auto-resumes later,
     // instead of parking the thread on a terminal error.
     const kind = classifyProviderIssue(finalError)
@@ -1296,7 +1327,7 @@ async function findNativePiSessionFile(
  * Wait for pi to flush a sub-agent's native session transcript. pi creates
  * the .jsonl in one synchronous write when the session's first assistant
  * message completes, so watching the directory for its creation is the
- * reliable signal — no polling. Resolves the file path, or null on timeout
+ * reliable signal   no polling. Resolves the file path, or null on timeout
  * or if the directory cannot be watched.
  */
 async function waitForNativePiSessionFile(
@@ -1341,7 +1372,7 @@ function nativeUserMessageText(message: Record<string, unknown>): string | undef
 }
 
 /**
- * Serialize CodeInOven mirror messages into native pi session JSONL entries —
+ * Serialize CodeInOven mirror messages into native pi session JSONL entries  
  * the inverse of `parseNativePiSession` at conversation granularity. Only text
  * content is carried over: tool calls and reasoning blocks are execution
  * detail the resumed model does not need, and fabricating toolResult entries
@@ -1522,7 +1553,7 @@ interface ComposedPiAttachments {
 
 /**
  * Materialize attachments for a pi turn. Images are sent both as inline base64
- * blocks (for vision-capable models) and as a path text reference — when a
+ * blocks (for vision-capable models) and as a path text reference   when a
  * provider or text-only model registration drops the image block, the model
  * still knows where the file lives and can read it with its file tools.
  */
@@ -1589,10 +1620,20 @@ export class PiDriver extends PersistentCliDriver {
   private turnStates = new Map<string, PiTurnState>()
   private rpcClients = new Map<string, PiRpcClient>()
   /**
+   * Sessions whose native `get_session_stats` RPC is known to crash. Pi's
+   * `AgentSession.getSessionStats` reads `usage.input` unguarded on assistant
+   * history entries that carry no `usage` (pi 0.85.1 and earlier), so legacy
+   * or interrupted transcripts make the RPC fail with "Cannot read properties
+   * of undefined (reading 'input')" on every call. After the first failure the
+   * driver stops calling it for that session and falls back to accounting
+   * mirrored from per-message usage events.
+   */
+  private sessionStatsBroken = new Set<string>()
+  /**
    * Model/thinking-level last applied to each session's live pi RPC process.
    * Pi's own interactive mode only sends `set_model`/`set_thinking_level`
    * when the user actually changes them (see interactive-mode.js), never
-   * before every prompt — re-sending them unconditionally on every turn adds
+   * before every prompt   re-sending them unconditionally on every turn adds
    * two blocking RPC round-trips with no progress signal, which is what left
    * follow-up turns stuck on the bare spinner. Cleared whenever the RPC
    * client is disposed so a freshly spawned process still gets an explicit
@@ -1608,7 +1649,7 @@ export class PiDriver extends PersistentCliDriver {
    * Session-keyed endpoints published before the gateway extension was materialized.
    * On the first turn of a fresh session, publishUtilityGatewayEndpoint runs before
    * sendPrompt spawns Pi and materializes the handoff file, so the endpoint must be
-   * held here and flushed by materializeCioCoreToolsExtension — otherwise every first
+   * held here and flushed by materializeCioCoreToolsExtension   otherwise every first
    * cio_util_* call fails with `new URL(route, '')` → "Invalid URL".
    */
   private pendingGatewayEndpoints = new Map<string, { url: string; token: string }>()
@@ -1639,7 +1680,7 @@ export class PiDriver extends PersistentCliDriver {
   >()
   /** Latest windows per pi provider id, persisted to storage so hovers after
    *  an app restart (no live RPC session, no in-memory cache) still show bars
-   *  — and so the same provider used across multiple projects shares them. */
+   *    and so the same provider used across multiple projects shares them. */
   private persistedRateLimits: Map<string, AgentRateLimitWindow[]> | null = null
   private persistedRateLimitsWrite: Promise<void> | null = null
   private static readonly USAGE_WINDOWS_PATH = 'runtime/pi-usage/windows.json'
@@ -1650,7 +1691,7 @@ export class PiDriver extends PersistentCliDriver {
    * The extension's `before_agent_start` hook reads this fresh on every agent
    * loop start and appends it to Pi's own system prompt as a real system-role
    * field. This exists so that content is sent once per request via the
-   * system prompt, not re-concatenated into every user turn's text — doing
+   * system prompt, not re-concatenated into every user turn's text   doing
    * the latter made every fresh turn replay the same multi-kilobyte block
    * inside "user" content, which models can (and did) mistake for injected
    * or duplicated content.
@@ -1782,7 +1823,7 @@ export class PiDriver extends PersistentCliDriver {
    * `~/.pi/agent/models.json` (keyed catalog providers and keyless local
    * servers alike), and CodeInOven-managed base-URL providers injected through
    * the discovery overlay. Returns `null` when the connected set cannot be
-   * determined reliably — callers then keep the catalog unfiltered rather than
+   * determined reliably   callers then keep the catalog unfiltered rather than
    * wrongly hiding every provider behind a transient read failure.
    */
   private async connectedProviderIds(): Promise<Set<string> | null> {
@@ -1943,7 +1984,7 @@ export class PiDriver extends PersistentCliDriver {
     void _settings
     const session = await this.requireSession(projectPath, sessionId)
     // An idle thread has no live RPC process (app restart, idle dispose, crash
-    // cleanup all evict clients). Boot one on demand — ensureRpcClient resumes
+    // cleanup all evict clients). Boot one on demand   ensureRpcClient resumes
     // the persisted native transcript so compaction sees the full history.
     const client = await this.ensureRpcClient(projectPath, sessionId)
     // pi's `compact` RPC aborts any active run and then compacts, so it works
@@ -1976,7 +2017,7 @@ export class PiDriver extends PersistentCliDriver {
     // A live turn owns this session (silent continue, auto-retry, an idle race
     // between the harness and the chat-engine status). Throwing here surfaced a
     // second user-facing error on top of a turn that is still producing output
-    // — the user clicks retry and is told the session already has an active
+    //   the user clicks retry and is told the session already has an active
     // turn. Instead, re-anchor provenance with the incoming settings and
     // deliver the prompt through pi's steer channel so the live working trace
     // simply continues.
@@ -2055,9 +2096,9 @@ export class PiDriver extends PersistentCliDriver {
   /**
    * Only send `set_model`/`set_thinking_level` when the session's live pi
    * process doesn't already have them applied. Each is a full RPC round-trip
-   * with no progress event, so paying for both on every turn — as opposed to
+   * with no progress event, so paying for both on every turn   as opposed to
    * only when the user actually changes a setting, which is what pi's own
-   * interactive mode does — left follow-up turns stuck on a bare spinner for
+   * interactive mode does   left follow-up turns stuck on a bare spinner for
    * however long those round-trips took.
    */
   private async applyPiSettingsIfChanged(
@@ -2108,7 +2149,7 @@ export class PiDriver extends PersistentCliDriver {
     }
     // A live turn must be registered before steering. When it is not, the
     // session may still be busy inside pi's own lifecycle (auto-compaction,
-    // retry windows) that CodeInOven reports as "working" — pi's docs treat
+    // retry windows) that CodeInOven reports as "working"   pi's docs treat
     // compaction/retry as part of the running trace, so never reject user
     // input there. `follow_up` is accepted in exactly those states: pi queues
     // it and runs it as the continuation of the same session, whether the
@@ -2157,7 +2198,7 @@ export class PiDriver extends PersistentCliDriver {
     try {
       await client.abort()
     } catch {
-      // The abort RPC failed — the pi process is wedged or already gone, so a
+      // The abort RPC failed   the pi process is wedged or already gone, so a
       // graceful abort can never land. Kill the process so the run actually
       // stops instead of silently continuing; the exit event finalizes the
       // session state and a fresh run spawns a new process on demand.
@@ -2207,18 +2248,20 @@ export class PiDriver extends PersistentCliDriver {
     const client = sessionId ? this.rpcClients.get(sessionId) : undefined
     const persisted = await this.loadPersistedRateLimits()
     const sessionCache = sessionId !== undefined ? this.latestRateLimits.get(sessionId) : undefined
-    // Provider-keyed windows win; the live session's latest capture answers
+    // Account/provider-keyed windows win; the live session's latest capture answers
     // only when it matches the requested provider (or no provider was given).
     const providerWindows = providerId
-      ? (persisted.get(providerId) ??
+      ? (persisted.get(this.rateLimitStorageKey(providerId)) ??
         (sessionCache && (sessionCache.providerId === providerId || !sessionCache.providerId)
           ? sessionCache.windows
           : undefined))
       : (sessionCache?.windows ?? [...persisted.values()].at(-1))
-    const providerUsage = providerId ? await fetchPiProviderUsage(providerId) : null
+    const providerUsage = providerId
+      ? await fetchPiProviderUsage(providerId, this.accountEnvironment)
+      : null
     const windows = providerWindows?.length ? providerWindows : (providerUsage?.rateLimits ?? [])
     const credits = providerUsage?.credits
-    if (!client) {
+    if (!client || (sessionId !== undefined && this.sessionStatsBroken.has(sessionId))) {
       return windows.length > 0 || credits ? { rateLimits: windows, credits } : null
     }
     try {
@@ -2240,6 +2283,9 @@ export class PiDriver extends PersistentCliDriver {
         ...(contextUsed !== undefined ? { contextUsed } : {})
       }
     } catch (error) {
+      if (sessionId !== undefined && isUsagelessAssistantStatsError(error)) {
+        this.sessionStatsBroken.add(sessionId)
+      }
       Logger.dev('Pi account usage read failed:', error)
       return windows.length > 0 || credits ? { rateLimits: windows, credits } : null
     }
@@ -2393,7 +2439,7 @@ export class PiDriver extends PersistentCliDriver {
   /**
    * Live probe of the pi session's streaming state (`get_state` →
    * `isStreaming`), used by restart recovery to avoid resuming a turn the
-   * surviving pi process is still executing — the same role OpenCode's
+   * surviving pi process is still executing   the same role OpenCode's
    * session-status probe plays for its shared server.
    */
   /** Whether the driver still tracks a live turn for this session. The engine's
@@ -2520,7 +2566,7 @@ export class PiDriver extends PersistentCliDriver {
    * Continue a previously persisted native pi session in the freshly spawned
    * RPC process by loading pi's own transcript file. Without this, every
    * driver-side process replacement (app restart, idle dispose, crash) made
-   * the next turn a cold session — the engine's history recap was the only
+   * the next turn a cold session   the engine's history recap was the only
    * context carrier, and models that see their prior work restated without
    * tool evidence treat it as fabricated and refuse to continue.
    *
@@ -2549,8 +2595,8 @@ export class PiDriver extends PersistentCliDriver {
 
   /** Mirror the native pi session id so driver records stay addressable. */
   /**
-   * Load messages for an app-managed session, or — for sub-agent worker
-   * threads — the native pi session transcript persisted on disk by the
+   * Load messages for an app-managed session, or   for sub-agent worker
+   * threads   the native pi session transcript persisted on disk by the
    * in-process sub-agent session.
    *
    * The native transcript is authoritative whenever it exists and the live RPC
@@ -2568,7 +2614,7 @@ export class PiDriver extends PersistentCliDriver {
         if (native) return native
         if (record.nativeSessionId) {
           // The session was bound to a native pi session whose transcript is
-          // gone — the next turn starts a fresh session, so report no native
+          // gone   the next turn starts a fresh session, so report no native
           // history and let the engine replay the durable mirror instead.
           return []
         }
@@ -2599,7 +2645,7 @@ export class PiDriver extends PersistentCliDriver {
    * Restore this session's native pi transcript binding from the most recent
    * resumable session record for the thread. Called when a thread returns to
    * pi after a harness switch: the thread's session slot now belongs to the
-   * other harness, but pi still holds the real transcript on disk — without
+   * other harness, but pi still holds the real transcript on disk   without
    * this the returning turn cold-starts on the engine's history recap, which
    * weaker models read as injected fiction and freeze on.
    */
@@ -2634,8 +2680,8 @@ export class PiDriver extends PersistentCliDriver {
   /**
    * Seed a fresh session with the thread's edited history as a native pi
    * transcript. Used after the user edits a session (delete/truncate/collapse):
-   * instead of replaying the remaining mirror as a history recap — which weak
-   * models read as injected fiction and stall on — the next RPC spawn resumes
+   * instead of replaying the remaining mirror as a history recap   which weak
+   * models read as injected fiction and stall on   the next RPC spawn resumes
    * this synthetic transcript natively, exactly as if the conversation had
    * happened in pi itself.
    */
@@ -2672,7 +2718,7 @@ export class PiDriver extends PersistentCliDriver {
    * Carry a replaced session's native pi transcript binding over to the
    * replacement record. When the engine mints a replacement app session (the
    * stored session became unreachable), the fresh record starts without a
-   * nativeSessionId — without this transfer the thread's real native
+   * nativeSessionId   without this transfer the thread's real native
    * transcript is orphaned and every later turn degrades to the engine's
    * history recap, which models can misread as fabricated context.
    */
@@ -2732,7 +2778,7 @@ export class PiDriver extends PersistentCliDriver {
     sessionId: string
   ): Promise<AgentMessage[] | null> {
     // The chat engine captures a sub-agent's transcript the moment the spawn
-    // tool reports its childSessionId — but pi defers a new session's first
+    // tool reports its childSessionId   but pi defers a new session's first
     // disk write until its first assistant message completes
     // (SessionManager._persist), so the .jsonl can appear seconds later.
     // React to the file's creation instead of polling: watch the session
@@ -2836,7 +2882,7 @@ export class PiDriver extends PersistentCliDriver {
               state.attempts = 0
               this.silentContinues.set(session.id, state)
             }
-            // The provider accepted a request again — stand the oversized
+            // The provider accepted a request again   stand the oversized
             // recovery context stripping down so future turns send full media.
             void this.publishOversizedRecovery(session.id, false)
           }
@@ -2890,7 +2936,7 @@ export class PiDriver extends PersistentCliDriver {
           // compaction run itself finishing, not the end of the logical turn:
           // pi still owes the user a retry of the aborted prompt. Register the
           // compaction turn so its streaming and finalization are tracked like
-          // any other turn, and never finalize here — the compaction's own
+          // any other turn, and never finalize here   the compaction's own
           // `agent_settled` finalizes the whole turn.
           if (this.turnStates.get(session.id)?.compacting) return
           if (this.beginSilentContinue(session)) return
@@ -2950,7 +2996,7 @@ export class PiDriver extends PersistentCliDriver {
   /**
    * Recover an oversized-request-body failure: compact the transcript so the
    * replayed history collapses into a summary and the next request fits the
-   * provider's byte limit, then re-prompt. The turn stays active throughout —
+   * provider's byte limit, then re-prompt. The turn stays active throughout  
    * the compaction run's own `agent_settled` is swallowed by the `compacting`
    * turn-state flag, and the continuation run finalizes the turn normally.
    */
@@ -2989,15 +3035,15 @@ export class PiDriver extends PersistentCliDriver {
     // continuation run owns the turn from there.
     const settled = this.turnStates.get(session.id)
     if (settled) this.turnStates.set(session.id, { ...settled, compacting: false })
-    // `prompt` — not `followUp` — is the only correct continuation here. pi's
+    // `prompt`   not `followUp`   is the only correct continuation here. pi's
     // `compact` RPC aborts the run and settles to idle before summarizing, and
     // queued follow-ups are drained exclusively at the end of an active run,
     // so a follow-up queued into an idle session is never delivered (the turn
-    // silently stalls — pi's own TUI re-prompts after compaction for the same
+    // silently stalls   pi's own TUI re-prompts after compaction for the same
     // reason). A fresh prompt starts the new run when idle.
     // Arm the oversized-recovery extension before the continuation: the
     // compaction kept the recent transcript tail intact, and that tail is
-    // exactly where multi-hundred-KB base64 image tool results live —
+    // exactly where multi-hundred-KB base64 image tool results live
     // compaction alone cannot bring the request body under the provider's
     // byte limit. While armed, the extension's `context` hook strips image
     // parts and oversized text from the REQUEST copy only; the transcript
@@ -3013,7 +3059,7 @@ export class PiDriver extends PersistentCliDriver {
 
   /** Rewrite the session's oversized-recovery arm/disarm flag file. A missing
    *  materialized path (extension failed to load) means the next provider
-   *  request goes out unmodified — never blocks the turn. */
+   *  request goes out unmodified   never blocks the turn. */
   private async publishOversizedRecovery(sessionId: string, armed: boolean): Promise<void> {
     const path = this.cioOversizedFlagPaths.get(sessionId)
     if (!path) return
@@ -3222,8 +3268,9 @@ export class PiDriver extends PersistentCliDriver {
     windows: AgentRateLimitWindow[]
   ): Promise<void> {
     const map = await this.loadPersistedRateLimits()
-    map.delete(providerId)
-    map.set(providerId, windows)
+    const storageKey = this.rateLimitStorageKey(providerId)
+    map.delete(storageKey)
+    map.set(storageKey, windows)
     while (map.size > PiDriver.USAGE_WINDOWS_MAX_PROVIDERS) {
       const oldest = map.keys().next().value
       if (oldest === undefined) break
@@ -3238,6 +3285,18 @@ export class PiDriver extends PersistentCliDriver {
         this.persistedRateLimitsWrite = null
       })
     await this.persistedRateLimitsWrite
+  }
+
+  /**
+   * Managed Pi accounts share CodeInOven's runtime storage, so provider-only
+   * keys would let one account's captured windows appear for another account.
+   * The legacy account keeps the historical provider key for compatibility.
+   */
+  private rateLimitStorageKey(providerId: string): string {
+    const agentDirectory = this.accountEnvironment['PI_CODING_AGENT_DIR']?.trim()
+    if (!agentDirectory) return providerId
+    const accountKey = createHash('sha256').update(agentDirectory).digest('hex').slice(0, 16)
+    return `account:${accountKey}:${providerId}`
   }
 
   private handleUiRequest(record: Record<string, unknown>, sessionId: string): void {
@@ -3432,8 +3491,31 @@ export class PiDriver extends PersistentCliDriver {
       return message.role === 'assistant'
     })
     if (!lastAssistant) return
+    let stats: Record<string, unknown> | null = null
+    if (!this.sessionStatsBroken.has(session.id)) {
+      try {
+        stats = record(await client.getSessionStats())
+      } catch (error) {
+        if (isUsagelessAssistantStatsError(error)) {
+          // Pi's stats walk crashes on a usage-less assistant entry; remember
+          // that so no later refresh re-raises it, and account from the
+          // per-message usage already mirrored in this session instead.
+          this.sessionStatsBroken.add(session.id)
+          stats = null
+        } else {
+          // A disposed client means the session was torn down mid-refresh   an
+          // expected race at turn end, not a failure worth surfacing.
+          if (error instanceof Error && error.message === 'Pi process disposed') return
+          Logger.dev('Pi session stats refresh failed:', error)
+          return
+        }
+      }
+    }
+    if (stats === null) {
+      this.applyMirroredUsage(session, lastAssistant)
+      return
+    }
     try {
-      const stats = record(await client.getSessionStats())
       const contextUsage = record(stats?.['contextUsage'])
       const cost =
         typeof stats?.['cost'] === 'number' ? (stats['cost'] as number) : mapPiCost(stats)
@@ -3452,7 +3534,7 @@ export class PiDriver extends PersistentCliDriver {
         type: 'usage.updated',
         sessionId: session.id,
         messageId: lastAssistant.id,
-        // Session stats are CUMULATIVE across the whole session — attaching
+        // Session stats are CUMULATIVE across the whole session   attaching
         // them as the message's `tokens` made per-message output counts (and
         // any derived tokens/second rate) wildly inflated. Per-message usage
         // was already reported by the message.completed event; this refresh
@@ -3464,21 +3546,178 @@ export class PiDriver extends PersistentCliDriver {
       }
       this.applyEventToSession(session, event)
       this.emit(event)
-    } catch (error) {
-      // A disposed client means the session was torn down mid-refresh — an
-      // expected race at turn end, not a failure worth surfacing.
-      if (error instanceof Error && error.message === 'Pi process disposed') return
-      Logger.dev('Pi session stats refresh failed:', error)
+    } catch {
+      // Stats-only application cannot fail for a live session; keep the
+      // refresh contract non-throwing regardless of malformed stats payloads.
     }
   }
 
+  /** Emit cumulative cost and rate-limit windows for a session whose native
+   *  stats RPC is broken, using the per-message accounting the turn events
+   *  already mirrored into `session.messages`. Context occupancy cannot be
+   *  mirrored this way, so it is simply absent for these sessions. */
+  private applyMirroredUsage(
+    session: PersistentCliSession,
+    lastAssistant: AgentMessage | undefined
+  ): void {
+    if (!lastAssistant) return
+    const cost = mirroredSessionCost(session)
+    const rateLimits = this.latestRateLimits.get(session.id)?.windows ?? []
+    if (cost === undefined && rateLimits.length === 0) return
+    const event: SessionAgentEvent = {
+      type: 'usage.updated',
+      sessionId: session.id,
+      messageId: lastAssistant.id,
+      ...(cost !== undefined ? { cost } : {}),
+      ...(rateLimits.length > 0 ? { rateLimits } : {})
+    }
+    this.applyEventToSession(session, event)
+    this.emit(event)
+  }
+
   private async finishTurn(session: PersistentCliSession): Promise<void> {
+    // Reconcile compactions against pi's durable session transcript before
+    // persisting: the live RPC event stream loses compaction records on
+    // process exit, watchdog finalization, and between-turn compactions, but
+    // pi itself always wrote them durably to the session JSONL.
+    try {
+      await this.reconcileNativeCompactions(session)
+    } catch (error) {
+      Logger.dev('Pi compaction reconciliation failed:', error)
+    }
     try {
       await this.persistSession(session)
     } catch (error) {
       Logger.error('Pi session persistence failed:', error)
     }
     this.emit({ type: 'session.idle', sessionId: session.id })
+  }
+
+  /**
+   * Driver contract hook (`reconcileSession`): recover compaction reporting
+   * from pi's durable session transcript when a session settled without
+   * driver finalization, so the engine's finalization and the next turn's
+   * history replay see the recovered boundary.
+   */
+  async reconcileSession(projectPath: string, sessionId: string): Promise<void> {
+    const session = await this.requireSession(projectPath, sessionId)
+    await this.reconcileNativeCompactions(session)
+    await this.persistSession(session)
+  }
+
+  /**
+   * Post-turn compaction reconciliation (see `finishTurn`).
+   *
+   * Compaction reporting normally rides the live RPC event stream
+   * (`compaction_end` / `auto_compaction_end` records). That stream is lost
+   * when pi exits during or right after a compaction, when the engine
+   * finalizes a settled session through the synthetic-idle watchdog, or when
+   * pi compacts between turns. In all three cases the compaction is already
+   * written durably to pi's own session JSONL, so this pass reads that
+   * transcript once and:
+   *
+   * 1. Backfills `firstKeptCreatedAt` onto mirrored compaction parts whose
+   *    boundary timestamp lookup raced the session-id sync, so recap and fork
+   *    boundaries never silently discard the compaction.
+   * 2. Mirrors compaction entries that never arrived as events, using the
+   *    same message shape as `parseNativePiSession`, deduplicated against
+   *    what was already reported by retained-boundary id or summary text.
+   */
+  private async reconcileNativeCompactions(session: PersistentCliSession): Promise<void> {
+    const projectPath = this.sessionProjects.get(session.id)
+    const nativeSessionId = session.nativeSessionId
+    if (!projectPath || !nativeSessionId) return
+    const file = await findNativePiSessionFile(projectPath, nativeSessionId)
+    if (!file) return
+    const compactionEntries: {
+      summary: string
+      firstKeptEntryId?: string
+      createdAt: number
+    }[] = []
+    const entryTimes = new Map<string, number>()
+    const input = createReadStream(file)
+    const lines = createInterface({ input, crlfDelay: Infinity })
+    try {
+      for await (const line of lines) {
+        const entry = parseRecord(line)
+        if (!entry) continue
+        if (entry['type'] === 'compaction') {
+          const summary = stringValue(entry['summary'])
+          if (summary?.trim()) {
+            compactionEntries.push({
+              summary,
+              firstKeptEntryId: stringValue(entry['firstKeptEntryId']),
+              createdAt: Date.parse(String(entry['timestamp'])) || Date.now()
+            })
+          }
+          continue
+        }
+        if (entry['type'] === 'message') {
+          const id = entry['id']
+          const nativeMessage = parseRecord(entry['message'])
+          if (typeof id === 'string' && nativeMessage) {
+            entryTimes.set(id, messageTimestamp(nativeMessage))
+          }
+        }
+      }
+    } finally {
+      lines.close()
+      input.destroy()
+    }
+    let patched = false
+    for (const message of session.messages) {
+      for (const part of message.parts) {
+        if (part.type !== 'compaction') continue
+        if (part.firstKeptCreatedAt !== undefined || !part.firstKeptEntryId) continue
+        const retainedAt = entryTimes.get(part.firstKeptEntryId)
+        if (retainedAt !== undefined) {
+          part.firstKeptCreatedAt = retainedAt
+          patched = true
+        }
+      }
+    }
+    const recovered: AgentMessage[] = []
+    for (const entry of compactionEntries) {
+      const alreadyMirrored = session.messages.some((message) =>
+        message.parts.some(
+          (part) =>
+            part.type === 'compaction' &&
+            ((entry.firstKeptEntryId && part.firstKeptEntryId === entry.firstKeptEntryId) ||
+              (part.summary?.trim() ?? '') === entry.summary)
+        )
+      )
+      if (alreadyMirrored) continue
+      const retainedAt = entry.firstKeptEntryId ? entryTimes.get(entry.firstKeptEntryId) : undefined
+      const createdAt = retainedAt ?? entry.createdAt
+      const id = `pi-${session.id}-compaction-native-${createdAt}`
+      recovered.push({
+        id,
+        role: 'assistant',
+        origin: 'compaction',
+        visibility: 'working_trace',
+        createdAt,
+        parts: [
+          {
+            type: 'compaction',
+            id: `${id}:compaction`,
+            messageID: id,
+            auto: true,
+            summary: entry.summary,
+            ...(entry.firstKeptEntryId && retainedAt !== undefined
+              ? {
+                  firstKeptEntryId: entry.firstKeptEntryId,
+                  firstKeptCreatedAt: retainedAt
+                }
+              : {})
+          }
+        ]
+      })
+    }
+    if (recovered.length === 0 && !patched) return
+    if (recovered.length > 0) this.mergeMessages(session, recovered)
+    Logger.dev(
+      `Pi compaction reconciliation: ${recovered.length} recovered, boundary backfill ${patched ? 'applied' : 'not needed'}`
+    )
   }
 
   /**
@@ -3492,11 +3731,11 @@ export class PiDriver extends PersistentCliDriver {
    * handoff file. The extension registers the gateway tools at pi spawn, while
    * the handoff is rewritten per turn by `publishUtilityGatewayEndpoint`;
    * this method only guarantees both files exist. The extension embeds the
-   * absolute handoff path, so both files are session-keyed — concurrent
+   * absolute handoff path, so both files are session-keyed   concurrent
    * sessions never overwrite each other's turn credentials.
    */
   /**
-   * Materialize the single app-owned "cio-core-tools" extension for a session —
+   * Materialize the single app-owned "cio-core-tools" extension for a session  
    * status, usage, the utility gateway, and the core tools composed into one
    * self-contained module (see pi-cio-core-tools-extension.ts) so pi's boot
    * loads one extension instead of four. The gateway handoff file and the
@@ -3565,7 +3804,7 @@ export class PiDriver extends PersistentCliDriver {
   /** Rewrite the session's CIO system-prompt handoff file so the extension's
    *  `before_agent_start` hook picks it up on the next agent loop start. A
    *  missing materialized path (extension failed to load) means the turn
-   *  falls back to Pi's own system prompt only — never blocks the turn. */
+   *  falls back to Pi's own system prompt only   never blocks the turn. */
   private async publishCioSystemPrompt(sessionId: string, systemPrompt: string): Promise<void> {
     const path = this.cioSystemPromptPaths.get(sessionId)
     if (!path) return

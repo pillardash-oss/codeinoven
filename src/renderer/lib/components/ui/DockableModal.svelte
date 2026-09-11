@@ -18,7 +18,7 @@
     /**
      * Whether the close (X) affordance is available. When false the header shows
      * only the minimize button, Escape minimizes, and there is no backdrop to
-     * dismiss — the panel floats and the app stays usable behind it.
+     * dismiss   the panel floats and the app stays usable behind it.
      */
     closable: boolean
     onMinimize: () => void
@@ -63,7 +63,7 @@
   const MIN_PANEL_WIDTH = 360
   const MAX_PANEL_WIDTH = 640
   const MIN_PANEL_HEIGHT = 240
-  /** The chat composer's `max-w-2xl` — the panel must never cover it by default. */
+  /** The chat composer's `max-w-2xl`   the panel must never cover it by default. */
   const CHAT_MAX_WIDTH = 672
 
   interface PanelSnapshot {
@@ -88,7 +88,7 @@
 
   /**
    * The gap between the right edge of the chat composer and the right edge of
-   * the window (with the left sidebar docked) — the panel's default max width so
+   * the window (with the left sidebar docked)   the panel's default max width so
    * it never covers the chat by default.
    */
   function preferredWidth(): number {
@@ -177,7 +177,7 @@
 
   function onHeaderPointerDown(event: PointerEvent): void {
     if (minimized || event.button !== 0) return
-    // Let the header's own buttons keep their click behavior — never start a drag.
+    // Let the header's own buttons keep their click behavior   never start a drag.
     if (event.target instanceof Element && event.target.closest('button')) return
     dragging = true
     dragStart = { x: event.clientX, y: event.clientY }
@@ -253,7 +253,7 @@
 {#if open}
   <!--
     The panel stays mounted in the SAME tree position whether minimized or not so
-    its embedded terminal PTYs are never torn down — minimize only hides it while
+    its embedded terminal PTYs are never torn down   minimize only hides it while
     the bottom-right dock keeps the run badges live. The dock renders as a sibling.
   -->
   <div

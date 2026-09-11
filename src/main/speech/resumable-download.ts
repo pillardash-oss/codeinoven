@@ -10,8 +10,8 @@ const DOWNLOAD_MAX_ATTEMPTS = 6
 
 /**
  * A download failure that retrying cannot fix (HTTP status, oversize payload,
- * checksum mismatch). Everything else — dropped connections, terminated
- * bodies, socket resets — is transient and worth resuming.
+ * checksum mismatch). Everything else   dropped connections, terminated
+ * bodies, socket resets   is transient and worth resuming.
  */
 class PermanentDownloadError extends Error {}
 

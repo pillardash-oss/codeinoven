@@ -12,7 +12,7 @@ export interface PendingRetryRecord {
   retryAt?: number
   /** Provider-reported retry attempt when the reset was surfaced. */
   attempt?: number
-  /** Provider-neutral failure kind — drives how the restored card renders. */
+  /** Provider-neutral failure kind   drives how the restored card renders. */
   issueKind: AgentProviderIssueKind
   /** Human-readable failure message persisted for the restored warning card. */
   issueMessage: string
@@ -39,7 +39,7 @@ const RETRY_TICK_MS = 15_000
  * provider failure message is short; before the textual usage-limit detection
  * was structurally guarded, an agent's entire final message could be persisted
  * here as the issue and would re-create the splashed card on every launch.
- * Reject overlong legacy records on load — the dropped prose is meaningless,
+ * Reject overlong legacy records on load   the dropped prose is meaningless,
  * and a still-paused thread falls back to the generic restored card.
  */
 const MAX_SAVED_ISSUE_MESSAGE_LENGTH = 1_000
@@ -48,7 +48,7 @@ const MAX_SAVED_ISSUE_MESSAGE_LENGTH = 1_000
 const PERSISTENCE_FILE = 'scheduler/retry-scheduler.json'
 
 /**
- * RetrySchedulerService — remembers every thread whose turn ended in a
+ * RetrySchedulerService   remembers every thread whose turn ended in a
  * quota/rate-limit reset, then automatically resumes the thread once a known
  * reset time passes while the app is open. Records without a reset time remain
  * persisted for restart recovery but are never fired automatically. Listeners
@@ -115,7 +115,7 @@ export class RetrySchedulerService {
       automatic: this.enabled && record.retryAt !== undefined
     })
     this.refreshTimer()
-    // The reset may already have passed — fire without waiting.
+    // The reset may already have passed   fire without waiting.
     this.tick()
     this.notifyChange()
     return this.enabled
@@ -270,7 +270,7 @@ export class RetrySchedulerService {
   private async fire(record: PendingRetryRecord): Promise<void> {
     const callback = this.continueThread
     if (!callback) {
-      Logger.info('Auto-resume skipped — chat engine not attached', {
+      Logger.info('Auto-resume skipped   chat engine not attached', {
         sessionId: record.sessionId
       })
       return

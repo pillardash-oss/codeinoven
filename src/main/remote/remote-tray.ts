@@ -26,7 +26,7 @@ export interface RemoteTray {
 const PHASE_LABELS: Record<RemoteModeStatus['phase'], string> = {
   IDLE: 'Remote mode off',
   KEEP_ALIVE_ARMED: 'Ready for remote',
-  KEEP_ALIVE_ACTIVE: 'Away — accepting remote sessions',
+  KEEP_ALIVE_ACTIVE: 'Away   accepting remote sessions',
   REMOTE_SESSION_LIVE: 'Remote session live'
 }
 
@@ -81,7 +81,7 @@ export function createRemoteTray(
       { type: 'separator' },
       {
         label: 'Quit',
-        // Closing the app always fully quits — the Tray never blocks it.
+        // Closing the app always fully quits   the Tray never blocks it.
         enabled: true,
         click: () => {
           if (callbacks.onQuit()) app.quit()
@@ -89,7 +89,7 @@ export function createRemoteTray(
       }
     ])
     tray.setContextMenu(menu)
-    tray.setToolTip(`CodeInOven — ${PHASE_LABELS[status.phase]}`)
+    tray.setToolTip(`CodeInOven   ${PHASE_LABELS[status.phase]}`)
   }
 
   tray.on('click', () => callbacks.onRestore())

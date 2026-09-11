@@ -38,7 +38,7 @@
     )
   )
 
-  /** Harnesses selectable in the filter — only harnesses that already have at
+  /** Harnesses selectable in the filter   only harnesses that already have at
    *  least one custom base-URL provider. */
   let filterHarnesses = $derived.by(() => {
     const seen: Record<string, true> = {}
@@ -56,7 +56,7 @@
   let selectedHarnesses = new SvelteSet<string>()
 
   /** Providers sharing an id are the same logical provider linked across
-   *  harnesses — collapse them into one row backed by every member record. */
+   *  harnesses   collapse them into one row backed by every member record. */
   let groupedProviders = $derived.by(() => {
     const groups = new SvelteMap<string, BaseUrlProvider[]>()
     for (const candidate of baseUrlProviderStore.providers) {
@@ -64,7 +64,7 @@
       if (group) group.push(candidate)
       else groups.set(candidate.id, [candidate])
     }
-    // Most recently updated first — adding or editing one at the bottom of a
+    // Most recently updated first   adding or editing one at the bottom of a
     // long list is easy to miss, and a saved edit should resurface it too.
     return [...groups.values()].sort(
       (left, right) =>
@@ -147,23 +147,6 @@
 </script>
 
 <section class="space-y-4">
-  <div class="flex items-start justify-between">
-    <div>
-      <p class="text-xs text-muted">
-        Add custom OpenAI-compatible providers by base URL. Models are ready in the picker as soon
-        as you save.
-      </p>
-    </div>
-    <button
-      class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-      title="Refresh base URL providers"
-      disabled={baseUrlProviderStore.loading}
-      onclick={() => void baseUrlProviderStore.load()}
-    >
-      <RefreshCw size={13} class={baseUrlProviderStore.loading ? 'animate-spin' : ''} /> Refresh
-    </button>
-  </div>
-
   {#if baseUrlProviderStore.error}
     <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {baseUrlProviderStore.error}
@@ -173,64 +156,71 @@
   <div>
     <div class="mb-2 flex items-center justify-between">
       <div>
-        <h3 class="text-sm font-semibold">Custom providers</h3>
-        <p class="text-[0.6875rem] text-dimmed">API keys stay in secure storage.</p>
-      </div>
-      <button
-        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
-        title="Add base URL provider"
-        onclick={openCreate}
-      >
-        <Plus size={13} /> Add provider
-      </button>
-    </div>
-
-    {#if filterHarnesses.length > 1}
-      <div
-        class="mb-2 flex flex-wrap items-center gap-1"
-        role="group"
-        aria-label="Filter by harness"
-      >
-        <button
-          type="button"
-          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
-            ? 'border-primary bg-primary text-on-primary'
-            : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-          aria-pressed={!harnessFilterActive}
-          title="Show providers for all harnesses"
-          onclick={clearHarnessFilter}
-        >
-          <ListFilter size={11} class="shrink-0" />
-          All
-        </button>
-        {#each filterHarnesses as harness (harness.id)}
-          <button
-            type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {selectedHarnesses.has(
-              harness.id
-            )
-              ? 'border-primary bg-primary text-on-primary'
-              : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-            aria-pressed={selectedHarnesses.has(harness.id)}
-            title={`Filter providers by ${harness.name}`}
-            onclick={() => toggleHarnessFilter(harness.id)}
+        {#if filterHarnesses.length > 1}
+          <div
+            class="mb-2 flex flex-wrap items-center gap-1"
+            role="group"
+            aria-label="Filter by harness"
           >
-            <AgentIcon agentId={harness.id} label={harness.name} size={14} />
-            <span class="truncate">{harness.name}</span>
-          </button>
-        {/each}
-        {#if harnessFilterActive}
-          <button
-            type="button"
-            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
-            title="Clear harness filter"
-            onclick={clearHarnessFilter}
-          >
-            <X size={11} /> Clear
-          </button>
+            <button
+              type="button"
+              class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
+                ? 'border-primary bg-primary text-on-primary'
+                : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+              aria-pressed={!harnessFilterActive}
+              title="Show providers for all harnesses"
+              onclick={clearHarnessFilter}
+            >
+              <ListFilter size={11} class="shrink-0" />
+              All
+            </button>
+            {#each filterHarnesses as harness (harness.id)}
+              <button
+                type="button"
+                class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {selectedHarnesses.has(
+                  harness.id
+                )
+                  ? 'border-primary bg-primary text-on-primary'
+                  : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+                aria-pressed={selectedHarnesses.has(harness.id)}
+                title={`Filter providers by ${harness.name}`}
+                onclick={() => toggleHarnessFilter(harness.id)}
+              >
+                <AgentIcon agentId={harness.id} label={harness.name} size={14} />
+                <span class="truncate">{harness.name}</span>
+              </button>
+            {/each}
+            {#if harnessFilterActive}
+              <button
+                type="button"
+                class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
+                title="Clear harness filter"
+                onclick={clearHarnessFilter}
+              >
+                <X size={11} /> Clear
+              </button>
+            {/if}
+          </div>
         {/if}
       </div>
-    {/if}
+      <div class="flex gap-2">
+        <button
+          class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          title="Refresh base URL providers"
+          disabled={baseUrlProviderStore.loading}
+          onclick={() => void baseUrlProviderStore.load()}
+        >
+          <RefreshCw size={13} class={baseUrlProviderStore.loading ? 'animate-spin' : ''} /> Refresh
+        </button>
+        <button
+          class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
+          title="Add base URL provider"
+          onclick={openCreate}
+        >
+          <Plus size={13} /> Add provider
+        </button>
+      </div>
+    </div>
 
     {#if baseUrlProviderStore.loading && baseUrlProviderStore.providers.length === 0}
       <div class="rounded-xl border border-dashed p-6 text-center">
@@ -367,7 +357,7 @@
       {#if deleteTarget && deleteTarget.length > 1}
         It's linked to {deleteTarget.length} harnesses ({deleteTarget
           .map((p) => providerName(p.harnessId))
-          .join(', ')}) — all of them will be removed. Its
+          .join(', ')})   all of them will be removed. Its
       {:else}
         Its
       {/if}

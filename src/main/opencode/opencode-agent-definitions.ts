@@ -10,7 +10,7 @@ import { APP_NAME } from '../../lib/brand'
  * catch-all sits first; the per-key `allow` entries come after it (last-match
  * wins), guaranteeing nothing unknown leaks into the mode's assembled prompt.
  *
- * Engineering/implement modes never reference these agents — they keep the
+ * Engineering/implement modes never reference these agents   they keep the
  * full built-in opencode experience.
  */
 
@@ -120,7 +120,7 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
       `You are a general-purpose web chat assistant inside ${APP_NAME}.`,
       'This chat has no file-system access. Do not traverse, read, search, or modify local files.',
       'When you do not know an answer, search the internet with the web search and web fetch tools instead of inspecting files.',
-      'Cite external sources as Markdown links (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`) — never a bare URL.'
+      'Cite external sources as Markdown links (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL.'
     ].join(' '),
     permission: chatPermission
   },
@@ -144,7 +144,7 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
     prompt: [
       `You are answering inside a temporary, read-only ${APP_NAME} chat.`,
       'Answer questions and explain findings using the supplied conversation context.',
-      'The context includes an index of files the conversation changed — before answering questions about code, behavior, or changes, read the relevant files and verify specifics against the actual code rather than answering from memory or general knowledge.',
+      'The context includes an index of files the conversation changed   before answering questions about code, behavior, or changes, read the relevant files and verify specifics against the actual code rather than answering from memory or general knowledge.',
       'Ground every answer in concrete evidence: quote or cite the specific code, file paths, or findings you relied on.',
       'You may inspect project files and use read-only research tools.',
       'Do not modify files, create specifications or plans, run tests, execute shell commands, or perform any other mutating action.'

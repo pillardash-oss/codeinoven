@@ -15,7 +15,7 @@ A plain chat message sent while the lifecycle is parked is answered normally in 
 
 ## Stage behavior
 
-Dependencies cascade when a switch is enabled: **Assignment and Achievement both imply Spec**, so enabling either one leaves the Spec switch on. Achievement is a loop mode and never enables Assignment. Turning on PRD or Spec never turns on Brainstorm — instead, PRD and Spec require context, so the **engineer entry card** ("Brainstorm first | Jump directly into PRD/Spec") is shown at the point of sending a message, never when the switch is toggled. Jumping in still lets the Sr. Engineer ask alignment questions; it simply skips the Brainstorm document and generates the PRD or Spec from the message instead.
+Dependencies cascade when a switch is enabled: **Assignment and Achievement both imply Spec**, so enabling either one leaves the Spec switch on. Achievement is a loop mode and never enables Assignment. Turning on PRD or Spec never turns on Brainstorm   instead, PRD and Spec require context, so the **engineer entry card** ("Brainstorm first | Jump directly into PRD/Spec") is shown at the point of sending a message, never when the switch is toggled. Jumping in still lets the Sr. Engineer ask alignment questions; it simply skips the Brainstorm document and generates the PRD or Spec from the message instead.
 
 Single-stage runs stop after their selected stage. PRD finalization does not select Spec. Spec approval does not start implementation on its own. Assignment and Achievement require an approved Spec.
 
@@ -23,7 +23,7 @@ After a Brainstorm session, the studio offers a **Next step** menu instead of a 
 
 ### Auto Pilot
 
-Auto Pilot replaces the old "Run all" toggle. It is a full-autonomy mode: the lifecycle runs `brainstorm → prd → spec → assignment → achievement` and keeps the achievement audit/rework loop active until the goal passes or reaches a hard terminal failure. Auto Pilot generates only what the pipeline needs — the Brainstorm may be skipped, the message is used as input (alignment questions are still allowed), a Spec is generated, worker tasks are assigned to the re-used workers from the last run or the agent defaults, and the run proceeds without waiting for human intervention.
+Auto Pilot replaces the old "Run all" toggle. It is a full-autonomy mode: the lifecycle runs `brainstorm → prd → spec → assignment → achievement` and keeps the achievement audit/rework loop active until the goal passes or reaches a hard terminal failure. Auto Pilot generates only what the pipeline needs   the Brainstorm may be skipped, the message is used as input (alignment questions are still allowed), a Spec is generated, worker tasks are assigned to the re-used workers from the last run or the agent defaults, and the run proceeds without waiting for human intervention.
 
 ## Stage behavior (original single-run notes)
 

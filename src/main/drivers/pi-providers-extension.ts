@@ -31,7 +31,7 @@ export function piCustomProvidersExtension(providers: BaseUrlProvider[]): string
             name: model.name || model.id,
             reasoning: model.reasoning,
             // Unset `vision` is treated as capable everywhere else in this
-            // codebase — this was hardcoded to text-only regardless, silently
+            // codebase   this was hardcoded to text-only regardless, silently
             // dropping image attachments for every vision-capable model.
             input: model.vision === false ? ['text'] : ['text', 'image'],
             contextWindow: model.contextWindow ?? 128000,

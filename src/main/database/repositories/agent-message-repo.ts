@@ -87,8 +87,8 @@ export interface PersistedMessageRow {
 
 /**
  * Stable content fingerprint of a persisted agent message row. The delta sync
- * compares this hash against the stored `content_hash` so unchanged messages —
- * identical JSON, search text, and metadata — are never re-stringified or
+ * compares this hash against the stored `content_hash` so unchanged messages  
+ * identical JSON, search text, and metadata   are never re-stringified or
  * rewritten on a transcript sync.
  */
 export function hashPersistedRow(row: PersistedMessageRow): string {
@@ -466,7 +466,7 @@ export function writeEncodedMessage(
 
 /**
  * Atomic replace of a thread's conversation mirror: delete conversation rows
- * and any provider cursors, then upsert every message — as a statement batch
+ * and any provider cursors, then upsert every message   as a statement batch
  * runnable on the worker's `transaction` command or on the primary connection.
  */
 export function buildSaveMessagesStatements(
@@ -494,7 +494,7 @@ export function buildSaveMessagesStatements(
  * message against the persisted `content_hash`, so in-place edits to any
  * message are detected and persisted. Only new or changed messages are written,
  * and every write is batched inside a single transaction. When nothing changed
- * (a true noop) the database is not written to at all — not even the cursor row.
+ * (a true noop) the database is not written to at all   not even the cursor row.
  *
  * `sessionId` is the thread's current harness session and keys the cursor.
  */
@@ -552,7 +552,7 @@ export function runProviderDeltaSync(
     writes.push(encoded)
   }
 
-  // True noop: nothing changed, so write nothing — not even the cursor row.
+  // True noop: nothing changed, so write nothing   not even the cursor row.
   if (writes.length === 0 && collisions === 0) {
     return {
       applied: 0,
@@ -777,7 +777,7 @@ export class AgentMessageRepo {
 
   /**
    * Load a contiguous window of conversation history centered on an arbitrary
-   * message id — half older and half newer around the anchor. Used to jump to a
+   * message id   half older and half newer around the anchor. Used to jump to a
    * message far outside the currently loaded window.
    */
   loadPageAroundByThread(threadId: string, anchorId: string, limit: number): ThreadMessagePage {
@@ -909,7 +909,7 @@ export function mapUserMessageRows(rows: unknown[]): UserMessageSummary[] {
   })
 }
 
-/** ASC cursor condition: strictly after (created_at, id) — for paged loops. */
+/** ASC cursor condition: strictly after (created_at, id)   for paged loops. */
 function afterCursor(after: ThreadMessageCursor | undefined): string {
   return after ? ` AND (created_at > ? OR (created_at = ? AND id > ?))` : ''
 }

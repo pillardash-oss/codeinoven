@@ -1045,7 +1045,7 @@ export class AssignmentEngine {
 
     // A failed task (worker crash / rejected deliverable) is re-dispatchable:
     // clear its stale report, review, worker name, and thread so a fresh worker
-    // thread is created for the retry — never reuse the crashed worker's thread.
+    // thread is created for the retry   never reuse the crashed worker's thread.
     // The abandoned thread is unlinked from the Assignment so a late harness
     // session error on it cannot report as this task's current worker.
     const replacingWorker = task.status === 'failed' || retryingStoppedTask

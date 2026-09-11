@@ -85,7 +85,7 @@
   /** Container ids selected in the picker for a batch add. */
   let selectedContainerIds = new SvelteSet<string>()
 
-  /** Providers that have at least one account attached to this project — only
+  /** Providers that have at least one account attached to this project   only
    *  these can have containers monitored, since resolving needs an account. */
   let attachedProviderKinds = $derived(
     (
@@ -695,7 +695,7 @@
               <span>Account name</span>
               <input
                 class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
-                placeholder="e.g. Coolify — Personal or Coolify — Company"
+                placeholder="e.g. Coolify   Personal or Coolify   Company"
                 autocomplete="off"
                 spellcheck="false"
                 bind:value={accountLabel}
@@ -947,7 +947,7 @@
           <span>Label</span>
           <input
             class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
-            placeholder="e.g. API server (optional — defaults to the container name)"
+            placeholder="e.g. API server (optional   defaults to the container name)"
             bind:value={containerLabel}
           />
         </label>

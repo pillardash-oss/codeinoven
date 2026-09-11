@@ -1,7 +1,7 @@
 /**
  * Network-layer base URL contract for self-hosted providers, led by Coolify.
  *
- * The base URL MUST be an explicit, verified URL supplied by the user — never
+ * The base URL MUST be an explicit, verified URL supplied by the user   never
  * invented, guessed, or derived from NODE_ENV. `localhost` is permitted only as
  * a development/test mock. There is no default and no production host is
  * hardcoded here; callers that need the resolved value must read the public
@@ -138,7 +138,7 @@ export function isDevelopmentEnvironment(env: NodeJS.ProcessEnv = process.env): 
 /**
  * Resolve the Coolify base URL from the environment, honoring the explicit
  * verified-URL contract. Returns the normalized base URL or null when unset or
- * invalid — never an invented fallback.
+ * invalid   never an invented fallback.
  */
 export function resolveCoolifyBaseUrl(env: NodeJS.ProcessEnv = process.env): string | null {
   const result = validateBaseUrl(env[COOLIFY_BASE_URL_ENV] ?? '', {

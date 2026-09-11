@@ -7,7 +7,7 @@
   interface Props {
     part: Extract<AgentPart, { type: 'reasoning' }>
     active?: boolean
-    /** True only while a live session is streaming — gates the ticking clock. */
+    /** True only while a live session is streaming   gates the ticking clock. */
     live?: boolean
     onCiteFile?: (path: string, line?: number) => void
   }

@@ -7,10 +7,10 @@
     label: string
     /** Omit in favor of `countLabel` for items that show a number instead of an icon. */
     icon?: Component
-    /** Renders as plain text instead of `icon` — e.g. the message-history count. */
+    /** Renders as plain text instead of `icon`   e.g. the message-history count. */
     countLabel?: string
     active: boolean
-    /** Renders a small status dot on the icon — e.g. pending memory proposals. */
+    /** Renders a small status dot on the icon   e.g. pending memory proposals. */
     badge?: 'completed' | 'attention' | 'error'
     /** Accessible description for the badge, required whenever `badge` is set. */
     badgeTitle?: string
@@ -23,7 +23,7 @@
     /**
      * A floating flyout (e.g. a dropdown) docked to this specific item. Rendered
      * as a sibling of the trigger button inside a shared `position: relative`
-     * wrapper, so it anchors to the item itself — immune to the item's position
+     * wrapper, so it anchors to the item itself   immune to the item's position
      * shifting within the rail. Content is responsible for its own `absolute`
      * positioning (typically `right-full` to dock to the left of the rail).
      */

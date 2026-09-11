@@ -2,13 +2,13 @@
  * Reads account quota telemetry from a custom provider's user-defined usage
  * route (`BaseUrlProvider.usagePath`).
  *
- * Providers backed by a subscription expose very different status contracts —
+ * Providers backed by a subscription expose very different status contracts  
  * `new-api`/`one-api` deployments answer `${baseURL}/status` with quota
  * objects, OpenAI-compatible gateways answer `${baseURL}/usage` with data
  * arrays, and bespoke proxies answer with flat objects. Rather than rejecting
  * everything that is not one exact schema, this reader recognizes the common
  * shapes and maps whatever it can into `AgentRateLimitWindow`s. A route that
- * parses to nothing yields `null` — the UI simply shows no bars.
+ * parses to nothing yields `null`   the UI simply shows no bars.
  */
 import type { AgentRateLimitWindow, AgentUsageCredits, CustomProviderUsage } from '../../lib/types'
 import { Logger } from '../system/logger'

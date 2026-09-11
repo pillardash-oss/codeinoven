@@ -521,7 +521,7 @@ export class SpeechService {
       })
       this.emit({ kind: 'history', attemptId, stage: 'completed' })
       this.touch('asr')
-      // Cleanup provenance may have touched cleanup model — also refresh cleanup timer if local cleanup used
+      // Cleanup provenance may have touched cleanup model   also refresh cleanup timer if local cleanup used
       if (
         cleanupMode.kind === 'local' &&
         cleanupProvenance.mode === 'local' &&
@@ -964,7 +964,7 @@ export class SpeechService {
         wasNormalized,
         runtime: 'mlx',
         code: 'valid',
-        reason: `Supported model found — MLX ${cap.toUpperCase()} — ready to import.`,
+        reason: `Supported model found   MLX ${cap.toUpperCase()}   ready to import.`,
         detectedExtension: '.mlx',
         parsedIdentity: parsedFor(
           'mlx' as unknown as import('../../lib/speech/types').SpeechRuntime | null
@@ -999,7 +999,7 @@ export class SpeechService {
         wasNormalized,
         runtime: 'gguf',
         code: 'valid',
-        reason: 'Supported model found — GGUF (LLM / Cleanup) — ready to import.',
+        reason: 'Supported model found   GGUF (LLM / Cleanup)   ready to import.',
         detectedExtension: '.gguf',
         parsedIdentity: parsedFor(
           'gguf' as unknown as import('../../lib/speech/types').SpeechRuntime | null
@@ -1036,7 +1036,7 @@ export class SpeechService {
         wasNormalized,
         runtime: 'coreml',
         code: 'valid',
-        reason: 'Supported model found — Core ML ASR bundle — ready to import.',
+        reason: 'Supported model found   Core ML ASR bundle   ready to import.',
         detectedExtension: lower.endsWith('.mlpackage') ? '.mlpackage' : '.mlmodelc',
         parsedIdentity: parsedFor(
           'coreml' as unknown as import('../../lib/speech/types').SpeechRuntime | null
@@ -1057,7 +1057,7 @@ export class SpeechService {
         wasNormalized,
         runtime: 'sherpa-onnx',
         code: 'valid',
-        reason: 'Supported model found — sherpa-onnx (.onnx) — ready to import.',
+        reason: 'Supported model found   sherpa-onnx (.onnx)   ready to import.',
         detectedExtension: '.onnx',
         parsedIdentity: parsedFor(
           'sherpa-onnx' as unknown as import('../../lib/speech/types').SpeechRuntime | null
@@ -1113,7 +1113,7 @@ export class SpeechService {
         if (!allowed.includes('coreml')) {
           return forbid(
             'coreml',
-            `That folder contains a Core ML bundle — only valid for ASR, not ${cap.toUpperCase()}. ${hint}`
+            `That folder contains a Core ML bundle   only valid for ASR, not ${cap.toUpperCase()}. ${hint}`
           )
         }
         const target = this.platformTarget()
@@ -1139,7 +1139,7 @@ export class SpeechService {
           wasNormalized,
           runtime: 'coreml',
           code: 'valid',
-          reason: 'Supported model found — folder containing Core ML ASR bundle — ready to import.',
+          reason: 'Supported model found   folder containing Core ML ASR bundle   ready to import.',
           detectedExtension: '.mlmodelc',
           parsedIdentity: parsedFor(
             'coreml' as unknown as import('../../lib/speech/types').SpeechRuntime | null
@@ -1150,7 +1150,7 @@ export class SpeechService {
         if (!allowed.includes('gguf')) {
           return forbid(
             'gguf',
-            `That folder contains .gguf — only valid for LLM / Cleanup, not ${cap.toUpperCase()}. ${hint}`
+            `That folder contains .gguf   only valid for LLM / Cleanup, not ${cap.toUpperCase()}. ${hint}`
           )
         }
         return {
@@ -1160,7 +1160,7 @@ export class SpeechService {
           wasNormalized,
           runtime: 'gguf',
           code: 'valid',
-          reason: 'Supported model found — folder containing .gguf — ready to import.',
+          reason: 'Supported model found   folder containing .gguf   ready to import.',
           detectedExtension: '.gguf',
           parsedIdentity: parsedFor(
             'gguf' as unknown as import('../../lib/speech/types').SpeechRuntime | null
@@ -1171,7 +1171,7 @@ export class SpeechService {
         if (!allowed.includes('sherpa-onnx')) {
           return forbid(
             'sherpa-onnx',
-            `That folder contains .onnx — not valid for ${cap.toUpperCase()}. ${hint}`
+            `That folder contains .onnx   not valid for ${cap.toUpperCase()}. ${hint}`
           )
         }
         // Heuristic: sherpa-onnx ASR/TTS expects tokens.txt sibling; warn but still accept
@@ -1184,7 +1184,7 @@ export class SpeechService {
             runtime: 'sherpa-onnx',
             code: 'valid',
             reason:
-              'Found sherpa-onnx model (.onnx) — missing tokens.txt; may still import but verify the directory is a full sherpa model.',
+              'Found sherpa-onnx model (.onnx)   missing tokens.txt; may still import but verify the directory is a full sherpa model.',
             detectedExtension: '.onnx',
             parsedIdentity: parsedFor(
               'sherpa-onnx' as unknown as import('../../lib/speech/types').SpeechRuntime | null
@@ -1198,7 +1198,7 @@ export class SpeechService {
           wasNormalized,
           runtime: 'sherpa-onnx',
           code: 'valid',
-          reason: `Supported model found — sherpa-onnx ${cap.toUpperCase()} folder — ready to import.`,
+          reason: `Supported model found   sherpa-onnx ${cap.toUpperCase()} folder   ready to import.`,
           detectedExtension: '.onnx',
           parsedIdentity: parsedFor(
             'sherpa-onnx' as unknown as import('../../lib/speech/types').SpeechRuntime | null
@@ -1411,7 +1411,7 @@ export class SpeechService {
         })
         if (remote !== null) return remote
       } catch {
-        // Route unavailable — fall through to the local instruct model.
+        // Route unavailable   fall through to the local instruct model.
       }
     }
     return this.learnLessonsLocally(
@@ -1777,13 +1777,13 @@ export class SpeechService {
     const delay = unloadMs(option)
     if (delay === null) return
     if (last !== undefined && Date.now() - last < delay - 250) {
-      // Activity happened sooner than expected — reschedule
+      // Activity happened sooner than expected   reschedule
       this.scheduleEvict(capability)
       return
     }
     if (this.isCapabilityBusy(capability)) {
       // Defer while busy; will be rescheduled on next touch
-      Logger.dev('Speech auto-evict deferred — capability busy', { capability })
+      Logger.dev('Speech auto-evict deferred   capability busy', { capability })
       return
     }
     const runtimes = CAPABILITY_RUNTIME_MAP[capability]

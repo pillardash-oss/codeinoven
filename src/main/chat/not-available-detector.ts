@@ -52,7 +52,7 @@ export function detectUnavailableToolCall(
  * Prose-level detection is deliberately much tighter than the tool-call one.
  * An earlier broad prose scanner (removed in cca98f43) produced false
  * positives, so this one only accepts narrow, high-confidence availability
- * conclusions: tool-shaped capability nouns (no models/providers/APIs/SDKs —
+ * conclusions: tool-shaped capability nouns (no models/providers/APIs/SDKs  
  * those drove the old false positives), sentence-scoped with the noun and the
  * denial phrase near each other, a session-context qualifier for copula and
  * "no <noun>" forms, artifact-noun and requirement-qualifier guards, and a

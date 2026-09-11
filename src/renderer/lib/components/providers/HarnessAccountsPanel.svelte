@@ -15,6 +15,7 @@
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import type { HarnessAccount, ProviderConnectionInfo } from '$shared/types'
+  import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
   import Modal from '../ui/Modal.svelte'
 
   interface Props {
@@ -35,6 +36,28 @@
   let saving = $state(false)
   let disconnectTarget = $state<HarnessAccount | null>(null)
   let disconnecting = $state(false)
+
+  type AccountSortKey = 'harness' | 'provider' | 'label'
+
+  const accountColumns: DataTableColumn<HarnessAccount, AccountSortKey>[] = [
+    {
+      key: 'harness',
+      header: 'Harness',
+      sortValue: (account) =>
+        (harnessFor(account.harnessId)?.name ?? account.harnessId).toLocaleLowerCase('en-US')
+    },
+    {
+      key: 'provider',
+      header: 'Provider',
+      sortValue: (account) => providerLabel(account).toLocaleLowerCase('en-US')
+    },
+    {
+      key: 'label',
+      header: 'Label',
+      sortValue: (account) => account.label.toLocaleLowerCase('en-US')
+    },
+    { key: null, header: 'Actions', headerClass: 'sr-only' }
+  ]
 
   let filterHarnesses = $derived.by(() => {
     const seen: Record<string, true> = {}
@@ -83,7 +106,8 @@
   }
 
   function sortAccounts(nextAccounts: HarnessAccount[]): HarnessAccount[] {
-    return nextAccounts.toSorted((left, right) => left.createdAt - right.createdAt)
+    // Newest created accounts appear first by default.
+    return nextAccounts.toSorted((left, right) => right.createdAt - left.createdAt)
   }
 
   function accountGroups(seed: HarnessAccount[]): SvelteMap<string, HarnessAccount[]> {
@@ -339,20 +363,19 @@
       {/if}
     </div>
   {:else}
-    <div class="overflow-x-auto rounded-xl border bg-surface">
-      <div
-        class="grid grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)_minmax(10rem,1.3fr)_auto] gap-3 border-b bg-elevated px-4 py-2 text-[0.625rem] font-medium uppercase tracking-wide text-dimmed"
-      >
-        <span>Harness</span>
-        <span>Provider</span>
-        <span>Label</span>
-        <span class="sr-only">Actions</span>
-      </div>
-      {#each filteredAccounts as account (account.id)}
+    <DataTable
+      rows={filteredAccounts}
+      columns={accountColumns}
+      getRowId={(account) => account.id}
+      label="Harness accounts"
+      clearable
+    >
+      {#snippet cell(
+        account: HarnessAccount,
+        column: DataTableColumn<HarnessAccount, AccountSortKey>
+      )}
         {@const harness = harnessFor(account.harnessId)}
-        <div
-          class="grid grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)_minmax(10rem,1.3fr)_auto] items-center gap-3 border-b px-4 py-3 last:border-b-0"
-        >
+        {#if column.key === 'harness'}
           <div class="flex min-w-0 items-center gap-2">
             <AgentIcon
               agentId={account.harnessId}
@@ -361,12 +384,13 @@
             />
             <span class="truncate text-xs font-medium">{harness?.name ?? account.harnessId}</span>
           </div>
-          <span class="truncate font-mono text-xs text-muted" title={providerLabel(account)}>
+        {:else if column.key === 'provider'}
+          <span class="block truncate font-mono text-xs text-muted" title={providerLabel(account)}>
             {providerLabel(account)}
           </span>
-          <div class="flex min-w-0 items-center gap-2">
-            <span class="truncate text-xs">{account.label}</span>
-          </div>
+        {:else if column.key === 'label'}
+          <span class="block truncate text-xs">{account.label}</span>
+        {:else}
           <div class="flex items-center gap-1">
             <button
               type="button"
@@ -387,9 +411,9 @@
               <Unplug size={12} />
             </button>
           </div>
-        </div>
-      {/each}
-    </div>
+        {/if}
+      {/snippet}
+    </DataTable>
   {/if}
 </div>
 

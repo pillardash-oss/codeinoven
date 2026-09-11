@@ -30,7 +30,7 @@ export class UpdaterService {
   private deferredInstallPoll: ReturnType<typeof setInterval> | null = null
   private installPending = false
   private installApproved = false
-  /** True while the user explicitly asked for a check (Settings) — its failure is reportable. */
+  /** True while the user explicitly asked for a check (Settings)   its failure is reportable. */
   private explicitCheckInFlight = false
   /** True while a check initiated by this service is still resolving. */
   private checkInFlight = false
@@ -94,7 +94,7 @@ export class UpdaterService {
     autoUpdater.on('error', (error) => {
       Logger.error('Updater error:', error.message)
       // During a check, the rejected check promise settles the state (see
-      // `settleCheckFailure`) — the event must not race it into a sticky error.
+      // `settleCheckFailure`)   the event must not race it into a sticky error.
       // Idle/checking states mean the failure came from a background check, so
       // a transient network issue must not leave a sticky sidebar badge.
       if (
@@ -196,7 +196,7 @@ export class UpdaterService {
   private settleCheckFailure(error: unknown): void {
     if (this._status.state === 'downloaded' || this._status.state === 'downloading') return
     if (!this.explicitCheckInFlight) {
-      // Transient (often offline) background failure — keep the sidebar calm
+      // Transient (often offline) background failure   keep the sidebar calm
       // and never clobber a meaningful state (available/waiting/downloaded).
       if (this._status.state === 'checking' || this._status.state === 'error') {
         this.updateState({ state: 'idle' })
@@ -265,7 +265,7 @@ export class UpdaterService {
   }
 
   /**
-   * Install once all sessions are idle — the safe, non-forced install path.
+   * Install once all sessions are idle   the safe, non-forced install path.
    * Keeps waiting (polling) until every activity source reports idle, then
    * installs exactly once. There is no timeout and no forced quit.
    */

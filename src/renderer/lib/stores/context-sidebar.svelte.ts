@@ -112,7 +112,6 @@ export interface BrowserContextTab {
   projectId: string
   threadId: string
   url: string
-  surface: 'page' | 'console'
   /** Live page favicon (data URL) from the browser panel, if reported. */
   favicon?: string
 }
@@ -344,10 +343,7 @@ function loadBrowserTabs(snapshot: Record<string, unknown>): BrowserContextTab[]
       title,
       projectId,
       threadId,
-      url: parsed.href,
-      // Restored tabs stay inert until the user opens the project's browser.
-      // Start on the page so that explicit action is the only load trigger.
-      surface: 'page'
+      url: parsed.href
     })
   }
   return restored
@@ -392,6 +388,11 @@ class ContextSidebarState {
    *  hide while any is active, because a native view floats above every DOM
    *  modal. Tracked as a keyed set so nested/overlapping surfaces are safe. */
   private fullscreenSurfaceKeys = new SvelteSet<string>()
+  /** True while the DOM Ctrl+Tab thread switcher dialog is open. The browser's
+   *  native WebContentsView floats above every DOM surface, so it must stay
+   *  detached (suspended) for the dialog's whole lifetime and be re-attached
+   *  when the dialog closes. */
+  private browserSwitcherSuspended = $state(false)
   private activeProjectId: string | null = $state(null)
   private activeThreadId: string | null = $state(null)
   private notificationsVisible = $state(false)
@@ -444,18 +445,28 @@ class ContextSidebarState {
     else this.fullscreenSurfaceKeys.delete(key)
   }
 
+  /** Whether the browser's native view is suspended for the DOM Ctrl+Tab
+   *  switcher. */
+  get browserSwitcherSuspendsView(): boolean {
+    return this.browserSwitcherSuspended
+  }
+
+  /** Suspend/resume the browser's native view while the DOM Ctrl+Tab switcher
+   *  dialog is open. Panels re-attach their views automatically when this
+   *  clears (the same path used for full-window DOM surfaces). */
+  setBrowserSwitcherSuspended(suspended: boolean): void {
+    this.browserSwitcherSuspended = suspended
+  }
+
   /**
    * Whether the native browser view is currently on screen from the right
-   * sidebar (a visible browser tab whose surface is the page). The native
-   * Ctrl+Tab overlay is only needed while this is true.
+   * sidebar (a visible browser tab).
    */
   get sidebarBrowserNativeVisible(): boolean {
     if (this.fullscreenSuppression) return false
     if (!this.browserVisible) return false
-    const active =
-      this.activeBrowserTabs.find((tab) => tab.id === this.browserActiveTabId) ??
-      this.activeBrowserTabs.at(-1)
-    return active?.surface === 'page'
+    const activeId = this.browserActiveTabId
+    return this.activeBrowserTabs.some((tab) => tab.id === activeId)
   }
 
   /** The browser tab to focus when the browser workspace is revealed: the
@@ -1007,7 +1018,7 @@ class ContextSidebarState {
     }
     this.browserTabs = [
       ...this.browserTabs,
-      { id, kind: 'browser', title, projectId, threadId, url, surface: 'page' }
+      { id, kind: 'browser', title, projectId, threadId, url }
     ]
     this.persistBrowserTabs()
     if (reveal && this.activeProjectId === projectId && this.activeThreadId === threadId) {
@@ -1026,14 +1037,6 @@ class ContextSidebarState {
       else delete tab.favicon
     }
     this.persistBrowserTabs()
-  }
-
-  updateBrowserSurface(tabId: string, surface: BrowserContextTab['surface']): void {
-    const tab = this.browserTabs.find((candidate) => candidate.id === tabId)
-    if (tab) {
-      tab.surface = surface
-      this.persistBrowserTabs()
-    }
   }
 
   removeProjectBrowsers(projectId: string): string[] {

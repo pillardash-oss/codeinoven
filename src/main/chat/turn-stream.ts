@@ -43,13 +43,13 @@ export type TurnStreamEvent =
  * log is folded (used for tests and unbounded reads).
  *
  * Events persisted with an empty `turnId` (emitted while the session's active
- * turn was unbound — pre-registration setup, teardown, silent continues) belong
+ * turn was unbound   pre-registration setup, teardown, silent continues) belong
  * to no specific turn. They are folded into whichever turn is requested (or the
  * whole-log fold) so real working parts never disappear from a rehydrated trace
  * just because their turn anchor was unbound at emit time.
  *
  * When `minTs` is supplied, a part is only included in the output if its most
- * recent activity (snapshot or delta) happened at or after that timestamp —
+ * recent activity (snapshot or delta) happened at or after that timestamp  
  * i.e. the boundary filters by last activity, never by snapshot time. This
  * matters for steered turns: the user's steer message moves the turn boundary
  * to mid-turn, and part snapshots streamed before the steer must still fold
@@ -57,7 +57,7 @@ export type TurnStreamEvent =
  * the trace built up before it.
  *
  * When `minTs` is supplied, every event streamed before that timestamp is
- * dropped — bound or unbound. The log is thread-wide, and neither the steer
+ * dropped   bound or unbound. The log is thread-wide, and neither the steer
  * continuation (which keeps the original turn's anchor) nor a legacy unbound
  * segment may pull earlier turns' parts into the newest trace; callers derive
  * `minTs` from the mirror's newest real user message, the start of the current

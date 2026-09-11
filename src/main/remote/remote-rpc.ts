@@ -5,8 +5,8 @@
  * renderer, but instead of Electron IPC the calls arrive over the encrypted
  * WebSocket bridge. This dispatcher resolves each channel to the SAME service
  * used by the desktop IPC handlers (ThreadManager, ProjectManager,
- * ChatEngine), so the phone sees an identical data surface — threads, messages,
- * settings, permissions — and can stream live `agent:event` updates.
+ * ChatEngine), so the phone sees an identical data surface   threads, messages,
+ * settings, permissions   and can stream live `agent:event` updates.
  *
  * Security: only channels in `REMOTE_ALLOWED_CHANNELS` are ever dispatched;
  * anything else is rejected before touching a service.
@@ -206,7 +206,7 @@ export interface RemoteRpcServices {
     | 'returnAchievementAuditToOffer'
     | 'submitAssignmentAuditFeedback'
   >
-  /** Storage engine — needed for config and the memory/spec/assignment engines. */
+  /** Storage engine   needed for config and the memory/spec/assignment engines. */
   storage?: StorageEngine
   projectManager?: ProjectManager
   /**
@@ -312,7 +312,7 @@ export class RemoteRpcDispatcher {
       return { ok: false, message: `Channel not allowed over the remote bridge: ${invoke.channel}` }
     }
     // Fail closed: when device identity is configured, no invocation executes
-    // without an authenticated device — the cloud relay cannot bypass device
+    // without an authenticated device   the cloud relay cannot bypass device
     // authorization by calling the dispatcher without a device context.
     if (!invoke.device && this.credentials) {
       this.credentials.audit({
@@ -342,7 +342,7 @@ export class RemoteRpcDispatcher {
     }
     try {
       // The remote bridge transports args as JSON, which cannot represent
-      // `undefined` — an omitted optional argument (e.g. `presentation`,
+      // `undefined`   an omitted optional argument (e.g. `presentation`,
       // `specAction`) arrives as `null`. Normalize so optional parameters
       // behave exactly as they do on the desktop IPC path.
       const args = invoke.args.map((arg) => (arg === null ? undefined : arg))
@@ -423,7 +423,7 @@ export class RemoteRpcDispatcher {
       }
     }
     // Per-invoke revalidation: revocation, expiry, idle expiry, and key/scope
-    // rotation take effect immediately — a bound session is never trusted
+    // rotation take effect immediately   a bound session is never trusted
     // statelessly even after the handshake succeeded.
     if (this.credentials && !this.credentials.isDeviceActive(device.deviceId, device.authVersion)) {
       this.credentials.audit({
@@ -2031,7 +2031,7 @@ export class RemoteRpcDispatcher {
       case 'github:authStatus':
         return this.githubAuthService.status()
 
-      // ─── Electron-only helpers — the phone cannot use these, but the
+      // ─── Electron-only helpers   the phone cannot use these, but the
       //     shared components call them; return a graceful no-op. ─────────
       case 'dialog:pickFile':
       case 'clipboard:saveImage':
@@ -2253,7 +2253,7 @@ export class RemoteRpcDispatcher {
 
   /**
    * A checkout/create-branch/reset moves the branch, so keep every owned
-   * thread whose working directory is this project coherent — mirroring the
+   * thread whose working directory is this project coherent   mirroring the
    * desktop git IPC handler.
    */
   private async syncBranchAfterCheckout<T>(projectId: string, result: T): Promise<T> {

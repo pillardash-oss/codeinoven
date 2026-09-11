@@ -34,7 +34,7 @@ import type {
 } from '../git/git-provider.interface'
 import { Logger } from '../system/logger'
 
-/** Default provider base URL — the public GitHub.com REST API the app already calls. */
+/** Default provider base URL   the public GitHub.com REST API the app already calls. */
 export const GITHUB_API_BASE_URL = 'https://api.github.com'
 
 /** Env var for self-hosted GitHub/GitLab API base URLs (deferred; must be explicit). */
@@ -412,8 +412,8 @@ export class GitHubProvider implements GitProvider {
   /**
    * CI state for the PR head.
    *
-   * GitHub exposes two independent systems — modern check runs and classic commit
-   * statuses — and a repository can use either, so both are merged here.
+   * GitHub exposes two independent systems   modern check runs and classic commit
+   * statuses   and a repository can use either, so both are merged here.
    */
   async getPullRequestChecks(input: PullRequestTarget): Promise<PullRequestChecks> {
     const detail = await this.request(this.pullPath(input), { method: 'GET' })
@@ -471,7 +471,7 @@ export class GitHubProvider implements GitProvider {
     return { state: this.rollUpChecks(checks), checks }
   }
 
-  /** Files and patches for one commit — powers commit drill-down in the sidebar. */
+  /** Files and patches for one commit   powers commit drill-down in the sidebar. */
   async getCommitFiles(
     input: { owner: string; repo: string },
     sha: string
@@ -708,7 +708,7 @@ export class GitHubProvider implements GitProvider {
         const anonymousResponse = await this.fetch(path, init, null, controller.signal)
         // Only prefer the anonymous retry when it actually succeeds or still reports
         // "not found". An anonymous 403 just means the resource requires auth (e.g. a
-        // private repo's job logs) — that must not clobber the original 404, which is
+        // private repo's job logs)   that must not clobber the original 404, which is
         // usually the accurate "not available yet" status (e.g. logs not generated yet).
         if (anonymousResponse.ok || anonymousResponse.status === 404) {
           response = anonymousResponse
@@ -765,7 +765,7 @@ export class GitHubProvider implements GitProvider {
         const anonymousResponse = await this.fetch(path, init, null, controller.signal)
         // Only prefer the anonymous retry when it actually succeeds or still reports
         // "not found". An anonymous 403 just means the resource requires auth (e.g. a
-        // private repo's job logs) — that must not clobber the original 404, which is
+        // private repo's job logs)   that must not clobber the original 404, which is
         // usually the accurate "not available yet" status (e.g. logs not generated yet).
         if (anonymousResponse.ok || anonymousResponse.status === 404) {
           response = anonymousResponse
@@ -824,7 +824,7 @@ export class GitHubProvider implements GitProvider {
       }
       if (typeof body['message'] === 'string') return body['message'].slice(0, 500)
     } catch {
-      // Non-JSON error body — fall through to the status-only message.
+      // Non-JSON error body   fall through to the status-only message.
     }
     return ''
   }
@@ -984,7 +984,7 @@ export class GitHubProvider implements GitProvider {
     }
   }
 
-  /** Failure wins over pending, pending over success — the same order GitHub shows. */
+  /** Failure wins over pending, pending over success   the same order GitHub shows. */
   private rollUpChecks(checks: PullRequestCheck[]): PullRequestChecks['state'] {
     if (checks.length === 0) return 'none'
     const failing = checks.some(

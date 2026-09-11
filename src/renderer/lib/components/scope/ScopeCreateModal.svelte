@@ -13,15 +13,17 @@
     onClose: () => void
     /** Present when creating a worktree for an existing custom scope. */
     existingBucketId?: string | null
+    /** Pre-fills the display name — e.g. from a failed scope search. */
+    initialName?: string
     onCreated?: (bucketId: string) => void
   }
 
-  let { open, projectId, onClose, existingBucketId = null, onCreated }: Props = $props()
+  let { open, projectId, onClose, existingBucketId = null, initialName = '', onCreated }: Props = $props()
 
   const componentId = $props.id()
   const formId = `${componentId}-create-scope-form`
 
-  let name = $state('')
+  let name = $state(initialName)
   let isolated = $state(true)
   let runSetup = $state(true)
   let environmentMode = $state<'copy' | 'symlink'>('copy')
@@ -219,7 +221,7 @@
                   {sourceInfo.dirtyFiles.length} uncommitted change{sourceInfo.dirtyFiles.length ===
                   1
                     ? ''
-                    : 's'} in this checkout will not be included — commit them first if they belong in
+                    : 's'} in this checkout will not be included   commit them first if they belong in
                   this feature.
                 </span>
               </div>

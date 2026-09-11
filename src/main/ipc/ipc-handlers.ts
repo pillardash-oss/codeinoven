@@ -6,7 +6,7 @@ import { cp, lstat, readFile, writeFile, mkdir, rename, rm, stat } from 'fs/prom
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../lib/native-skill-paths'
@@ -2196,7 +2196,7 @@ function validateHeartbeatTimes(value: unknown): string[] {
 }
 
 /**
- * Heartbeat thinking levels are optional — not every model supports thinking.
+ * Heartbeat thinking levels are optional   not every model supports thinking.
  * Absent, null, or unrecognized levels (including driver-specific preset ids
  * outside the standard set) simply omit the level instead of failing the save;
  * the driver then applies its own default for the selected model.
@@ -2503,7 +2503,7 @@ export function registerIpcHandlers(
           .map((project) => project.path)
           .filter((path): path is string => typeof path === 'string' && path.length > 0)
         // Healthy managed worktrees live beneath the config root and are added
-        // individually — never by approving the whole config directory.
+        // individually   never by approving the whole config directory.
         for (const project of projects) {
           const board = scopeManager.getBoard(project.id)
           for (const bucket of board.buckets) {
@@ -4519,7 +4519,7 @@ export function registerIpcHandlers(
     return false
   })
 
-  // Read a file from disk and return it as a data URL — used for local previews
+  // Read a file from disk and return it as a data URL   used for local previews
   // without persisting anything to project storage. Only scoped paths are read.
   const MIME_MAP: Record<string, string> = {
     '.png': 'image/png',
@@ -4537,7 +4537,7 @@ export function registerIpcHandlers(
   // constrained to registered project, config-root, or user-selected scopes.
   // Read a pasted-file source for the Sound Playground's read-aloud section:
   // plain text files directly, and rich documents (PDF, Word, PowerPoint, Excel,
-  // OpenDocument, RTF, EPUB) through the `@firecrawl/anydoc` Rust library —
+  // OpenDocument, RTF, EPUB) through the `@firecrawl/anydoc` Rust library  
   // fully local, no network, OCR never invoked. Only scoped paths (e.g. a file
   // the user just picked from the system dialog) are read.
   // Text is capped below the prepared-playback text limit.
@@ -4604,7 +4604,7 @@ export function registerIpcHandlers(
             parseError.message.includes('NeedsOcr')
           ) {
             throw new RangeError(
-              'This PDF appears to be scanned — no local OCR is performed in the playground.',
+              'This PDF appears to be scanned   no local OCR is performed in the playground.',
               { cause: parseError }
             )
           }
@@ -4839,7 +4839,7 @@ export function registerIpcHandlers(
         'code' in error &&
         (error as NodeJS.ErrnoException).code === 'ENOENT'
       ) {
-        // Destination does not exist — git clone will create it
+        // Destination does not exist   git clone will create it
       } else {
         throw error
       }
@@ -5025,44 +5025,83 @@ export function registerIpcHandlers(
       return project
     }
   )
-  ipcMain.handle('project:delete', async (_, projectId: string) => {
-    // Never orphan a registered managed worktree silently: refuse deletion
-    // until every managed association in this project is detached/removed
-    // through the guarded lifecycle (dirty and unpushed work is protected).
-    const board = scopeManager.getBoard(projectId)
-    const managedBuckets = board.buckets.filter((bucket) => bucket.root.kind === 'worktree')
-    if (managedBuckets.length > 0) {
-      throw new Error(
-        `Cannot delete the project while ${managedBuckets.length} managed worktree scope(s) exist; remove them first`
-      )
-    }
-    // Delete every thread through the same path as `thread:delete` (session
-    // teardown, DB row cleanup for FK-less tables, disk artifact removal) so
-    // project deletion can never fall behind that logic or leave orphans.
-    await threadManager.deleteAllThreadsInProject(projectId)
-    await projectManager.deleteProject(projectId)
-    projectFilesService.disposeProject(projectId)
-    // Remove app-owned scratch data keyed by this project id (spec-context
-    // attachments, any leftover per-thread directories) that isn't tied to
-    // an individual thread and so isn't covered by the per-thread cleanup
-    // above. Best-effort: the DB rows are already gone either way.
-    await rm(join(getConfigRoot(), 'projects', projectId), { recursive: true, force: true }).catch(
-      () => {}
-    )
-    // Mass deletion just freed potentially thousands of pages. Reclaim the
-    // file space off-main via the maintenance worker — this also converts
-    // pre-existing databases to `auto_vacuum = INCREMENTAL` so future
-    // incremental vacuums work. Fire-and-forget: the IPC result must not wait
-    // on an O(database-size) operation, and a concurrent WAL transaction may
-    // make VACUUM fail (fine to retry next time).
-    void database.fullVacuum().then((result) => {
-      if (result.ok && (result.freedPages ?? 0) > 0) {
-        Logger.info(`Vacuum after project deletion reclaimed ${result.freedPages} pages`)
-      } else if (!result.ok) {
-        Logger.dev(`Post-deletion vacuum skipped/failed: ${result.error}`)
+  ipcMain.handle(
+    'project:delete',
+    async (_, projectId: string, options?: { deleteFolder?: boolean }) => {
+      // Optional folder erasure runs FIRST and gates the CodeInOven-side
+      // removal: if the filesystem delete fails, nothing below executes and
+      // the project stays fully intact in CodeInOven (the renderer restores
+      // it). Only after the folder is gone does the app data removal begin.
+      if (options?.deleteFolder === true) {
+        const project = await projectManager.getProject(projectId)
+        if (!project?.path || !isAbsolute(project.path)) {
+          throw new Error('This project has no local folder on disk to delete')
+        }
+        const target = resolve(project.path)
+        const homeDir = resolve(app.getPath('home'))
+        const configRoot = resolve(getConfigRoot())
+        const managedClonesRoot = resolve(join(configRoot, 'projects-gh'))
+        const isInside = (child: string, parent: string): boolean => child.startsWith(parent + sep)
+        // Refuse obviously dangerous targets: the filesystem root, the home
+        // directory (or any ancestor of it), and anything inside the app
+        // config root. This makes an accidental catastrophic rm impossible.
+        // The one exception is a project folder strictly inside the managed
+        // `projects-gh/` clones directory: those clones are app-owned project
+        // folders the user registered, so erasing one on removal is legitimate
+        // (the clones root itself stays protected so sibling clones survive).
+        const isManagedClone = isInside(target, managedClonesRoot)
+        if (
+          target === sep ||
+          target === homeDir ||
+          isInside(homeDir, target) ||
+          target === configRoot ||
+          (isInside(target, configRoot) && !isManagedClone)
+        ) {
+          throw new Error('Refusing to delete a protected directory')
+        }
+        // `force` treats an already-missing folder as deleted; real failures
+        // (permissions, path is a file, ...) still throw and abort below.
+        await rm(target, { recursive: true, force: true })
       }
-    })
-  })
+      // Never orphan a registered managed worktree silently: refuse deletion
+      // until every managed association in this project is detached/removed
+      // through the guarded lifecycle (dirty and unpushed work is protected).
+      const board = scopeManager.getBoard(projectId)
+      const managedBuckets = board.buckets.filter((bucket) => bucket.root.kind === 'worktree')
+      if (managedBuckets.length > 0) {
+        throw new Error(
+          `Cannot delete the project while ${managedBuckets.length} managed worktree scope(s) exist; remove them first`
+        )
+      }
+      // Delete every thread through the same path as `thread:delete` (session
+      // teardown, DB row cleanup for FK-less tables, disk artifact removal) so
+      // project deletion can never fall behind that logic or leave orphans.
+      await threadManager.deleteAllThreadsInProject(projectId)
+      await projectManager.deleteProject(projectId)
+      projectFilesService.disposeProject(projectId)
+      // Remove app-owned scratch data keyed by this project id (spec-context
+      // attachments, any leftover per-thread directories) that isn't tied to
+      // an individual thread and so isn't covered by the per-thread cleanup
+      // above. Best-effort: the DB rows are already gone either way.
+      await rm(join(getConfigRoot(), 'projects', projectId), {
+        recursive: true,
+        force: true
+      }).catch(() => {})
+      // Mass deletion just freed potentially thousands of pages. Reclaim the
+      // file space off-main via the maintenance worker   this also converts
+      // pre-existing databases to `auto_vacuum = INCREMENTAL` so future
+      // incremental vacuums work. Fire-and-forget: the IPC result must not wait
+      // on an O(database-size) operation, and a concurrent WAL transaction may
+      // make VACUUM fail (fine to retry next time).
+      void database.fullVacuum().then((result) => {
+        if (result.ok && (result.freedPages ?? 0) > 0) {
+          Logger.info(`Vacuum after project deletion reclaimed ${result.freedPages} pages`)
+        } else if (!result.ok) {
+          Logger.dev(`Post-deletion vacuum skipped/failed: ${result.error}`)
+        }
+      })
+    }
+  )
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:getIcon', (_, projectId: string) =>
       projectManager.getIconDataUrl(projectId)
@@ -5344,7 +5383,7 @@ export function registerIpcHandlers(
             : validateEntityId(scopeBucketId, 'Scope bucket ID')
         )
         .then((result) => {
-          // The user saved this file themselves — record it so a concurrent
+          // The user saved this file themselves   record it so a concurrent
           // agent turn's file-changes card never claims their edit.
           chatEngine?.recordUserFileSave(
             validateEntityId(projectId, 'Project ID'),
@@ -6279,7 +6318,7 @@ export function registerIpcHandlers(
         base: safeBase,
         head: safeHead
       }
-      // Warn when an open PR already exists for this exact head→base pair —
+      // Warn when an open PR already exists for this exact head→base pair  
       // GitHub would reject a duplicate creation with a 422. The lookup is
       // advisory and never allowed to block the compare itself.
       let existing = null
@@ -6400,7 +6439,7 @@ export function registerIpcHandlers(
     async (_, projectId: unknown, owner: unknown, repo: unknown, state: unknown, page: unknown) => {
       const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
       const safePage = validatePrPage(page)
-      // An unauthenticated page is NOT an empty page — the renderer must be
+      // An unauthenticated page is NOT an empty page   the renderer must be
       // able to tell "no open PRs" from "GitHub isn't connected yet", or the
       // header conflict indicator would treat a cold start as zero conflicts.
       if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
@@ -6421,7 +6460,7 @@ export function registerIpcHandlers(
             accessError: GITHUB_REPOSITORY_ACCESS_MESSAGE
           }
         }
-        // An unreachable GitHub is a transient state, not a broken feature —
+        // An unreachable GitHub is a transient state, not a broken feature  
         // degrade to an offline page so the renderer keeps its last known data.
         if (isNetworkError(error)) {
           return { items: [], page: safePage, hasMore: false, accessError: GITHUB_OFFLINE_MESSAGE }
@@ -6455,7 +6494,7 @@ export function registerIpcHandlers(
         }
         throw error
       }
-      // The repo either deploys or it doesn't — persist that fact so the
+      // The repo either deploys or it doesn't   persist that fact so the
       // Deployments tab only ever appears when there is something to show.
       const hasDeployments = overview.deployments.length > 0 || overview.workflowRuns.length > 0
       if (hasDeployments) {
@@ -7035,7 +7074,7 @@ export function registerIpcHandlers(
       const [content, stats] = await Promise.all([readFile(reportPath, 'utf-8'), stat(reportPath)])
       return { path: reportPath, content, updatedAt: stats.mtimeMs, threadId }
     } catch {
-      // No report yet — the agent hasn't finished (or hasn't been asked).
+      // No report yet   the agent hasn't finished (or hasn't been asked).
       return { path: reportPath, content: '', updatedAt: null, threadId }
     }
   })
@@ -7441,7 +7480,7 @@ export function registerIpcHandlers(
     // detection finalize in the background. Only the send path awaits
     // `threadCreation.awaitReady`, so a message sent in this window renders
     // instantly and is queued behind the finalization before reaching the
-    // harness — thread creation never waits on the database, and neither does
+    // harness   thread creation never waits on the database, and neither does
     // typing, reading, or switching threads.
     const { thread, finalize } = threadManager.prepareCreateThread(validated, {
       onEvictionError: (error) =>
@@ -7454,7 +7493,7 @@ export function registerIpcHandlers(
       thread.id,
       async () => {
         await finalize()
-        // Broadcast immediately so the new thread opens instantly — the git
+        // Broadcast immediately so the new thread opens instantly   the git
         // branch settles through a detached task below and arrives via a later
         // broadcast, never blocking typing, voice, or "Loading conversation...".
         broadcastThreadUpdate(thread)
@@ -7479,7 +7518,7 @@ export function registerIpcHandlers(
     // on the initial paint path. Wait only when this exact thread is still
     // being finalized so background hydration never races durable ownership.
     // A thread whose creation-time settle never completed (restart or a
-    // transient git failure) heals lazily on its next open — off this read's
+    // transient git failure) heals lazily on its next open   off this read's
     // critical path, deduped while in flight.
     ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
       const ids = await waitForThreadReady(projectId, threadId)
@@ -7550,7 +7589,7 @@ export function registerIpcHandlers(
     return threadManager.searchThreads(safeQuery, safeOptions)
   })
   if (!options.hydrationHandlersRegistered) {
-    // Mirror-only transcript reads — fast disk access, never touches a harness
+    // Mirror-only transcript reads   fast disk access, never touches a harness
     // driver. Hydration registers these before the renderer's first document
     // so a conversation page never waits for optional feature services.
     ipcMain.handle(

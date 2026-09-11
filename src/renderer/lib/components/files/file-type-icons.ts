@@ -21,7 +21,7 @@ const inlineFolderCache = new Map<string, string>()
 
 /**
  * Resolve a VSCode Icons data-URI for a file path (matched by exact filename or
- * extension), or `null` when only the generic file icon applies — letting the
+ * extension), or `null` when only the generic file icon applies   letting the
  * caller fall back to a category-based Lucide icon.
  */
 export async function getFileTypeIconDataUri(path: string): Promise<string | null> {
@@ -38,7 +38,7 @@ export async function getFileTypeIconDataUri(path: string): Promise<string | nul
 /**
  * Resolve a VSCode Icons data-URI for a folder name (matched by folder name,
  * e.g. `node_modules`, `src`, `api`), or `null` when only the generic folder
- * icon applies — letting the caller fall back to a Lucide folder icon.
+ * icon applies   letting the caller fall back to a Lucide folder icon.
  */
 export async function getFolderTypeIconDataUri(name: string, open = false): Promise<string | null> {
   if (name.toLowerCase() === '.cio') {

@@ -35,7 +35,7 @@ function record(overrides: Partial<PendingRetryRecord> = {}): PendingRetryRecord
     harnessId: 'opencode',
     retryAt: Date.now() + 60_000,
     issueKind: 'quota',
-    issueMessage: 'Usage limit reached — retry after reset.',
+    issueMessage: 'Usage limit reached   retry after reset.',
     ...overrides
   }
 }

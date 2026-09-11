@@ -264,7 +264,7 @@ describe('RemoteGateway', () => {
     }
   })
 
-  it('serves only allow-listed PWA assets — never the whole renderer bundle', async () => {
+  it('serves only allow-listed PWA assets   never the whole renderer bundle', async () => {
     const { gateway, port, staticRoot } = await makeGateway()
     try {
       await writeFile(join(staticRoot, 'index.html'), '<h1>desktop app</h1>', 'utf8')
@@ -287,7 +287,7 @@ describe('RemoteGateway', () => {
   it('serves the PWA asset closure from remote.html (code-split shared chunks)', async () => {
     const { gateway, port } = await makeGateway(SECRET, {}, async (root) => {
       // Mimic a Vite build: remote.html references an entry chunk that imports
-      // a shared chunk plus a stylesheet — all hashed, unrelated names.
+      // a shared chunk plus a stylesheet   all hashed, unrelated names.
       await writeFile(
         join(root, 'remote.html'),
         '<script type="module" src="./assets/remote-abc123.js"></script>' +
@@ -595,7 +595,7 @@ describe('RemoteGateway', () => {
       })
       await expect(second.connect()).resolves.toBe('open')
 
-      // Exactly one live device for the shared id — the old socket was replaced.
+      // Exactly one live device for the shared id   the old socket was replaced.
       const live = gateway.listDevices()
       expect(live).toHaveLength(1)
       expect(live[0]?.id).toBe('phone-1')
@@ -918,7 +918,7 @@ describe('RemoteGateway', () => {
   })
 })
 
-describe('RemoteGateway — device proof of possession (A-04)', () => {
+describe('RemoteGateway   device proof of possession (A-04)', () => {
   it('enrolls a phone from a single-use bootstrap and authenticates its reconnect by signature', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeinoven-gateway-pop-'))
     const staticRoot = join(dir, 'renderer')
@@ -1019,7 +1019,7 @@ describe('RemoteGateway — device proof of possession (A-04)', () => {
       expect(assignedId.length).toBeGreaterThan(0)
       expect(service.listDevices()).toHaveLength(1)
 
-      // The bootstrap is single-use — a second enrollment with it fails.
+      // The bootstrap is single-use   a second enrollment with it fails.
       const second = createLanTransport({
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: bootstrap.value,

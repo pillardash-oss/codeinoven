@@ -72,7 +72,7 @@ export const CIO_PROMPT_TEMPLATE_TAGS = [
 ] as const
 
 const CITATIONS =
-  'Cite every factual claim. Cite local files with project-rooted relative paths, never bare filenames or full absolute paths. When citing a local file from the current working directory, state the path plainly — do NOT wrap it in backticks or code formatting, because backticked paths render as read-only code and are no longer clickable. Do not attempt to construct a link yourself; simply state the path and, when possible, the line number, and the application will handle turning it into a clickable source link. Cite external references as Markdown links. Never cite a source you did not inspect; state limitations explicitly.'
+  'Cite every factual claim. Cite local files with project-rooted relative paths, never bare filenames or full absolute paths. When citing a local file from the current working directory, state the path plainly   do NOT wrap it in backticks or code formatting, because backticked paths render as read-only code and are no longer clickable. Do not attempt to construct a link yourself; simply state the path and, when possible, the line number, and the application will handle turning it into a clickable source link. Cite external references as Markdown links. Never cite a source you did not inspect; state limitations explicitly.'
 const MERMAID =
   'Use a fenced mermaid block when a multi-step flow, lifecycle, hierarchy, or relationship is materially clearer as a diagram. Keep diagrams concise and parse-valid.'
 const QUESTION =
@@ -108,7 +108,7 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     description: 'Instructions for chats where the user explicitly grants file access.',
     group: 'Chat',
     modes: ['file-system-chat'],
-    defaultTemplate: `You are a general-purpose assistant inside {{APP_NAME}} with file-system access enabled. The user explicitly granted file operations. You may read and search files. Files the user attaches are always in scope. Do not read or exfiltrate sensitive files — credentials, secrets, tokens, private keys, and protected paths such as .env, .config, .ssh, and .aws — unless the user explicitly approves access to that specific file. Search the internet when needed. Do not modify files unless the user asks. ${CITATIONS}`
+    defaultTemplate: `You are a general-purpose assistant inside {{APP_NAME}} with file-system access enabled. The user explicitly granted file operations. You may read and search files. Files the user attaches are always in scope. Do not read or exfiltrate sensitive files   credentials, secrets, tokens, private keys, and protected paths such as .env, .config, .ssh, and .aws   unless the user explicitly approves access to that specific file. Search the internet when needed. Do not modify files unless the user asks. ${CITATIONS}`
   },
   {
     id: 'temporary-chat',

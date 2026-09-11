@@ -37,7 +37,7 @@ describe('mayReanchorToLatest', () => {
     expect(mayReanchorToLatest(false)).toBe(true)
   })
 
-  it('never moves the viewport once the reader scrolled up — no fighting, no jumping', () => {
+  it('never moves the viewport once the reader scrolled up   no fighting, no jumping', () => {
     expect(mayReanchorToLatest(true)).toBe(false)
   })
 })

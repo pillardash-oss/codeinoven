@@ -98,6 +98,6 @@ export function sessionStatusLabel(snapshot: SessionSnapshot): string {
     case 'RELAY_CONNECTED':
       return 'Connected through cloud relay'
     case 'DISCONNECTED':
-      return snapshot.route.reason ? `Disconnected — ${snapshot.route.reason}` : 'Disconnected'
+      return snapshot.route.reason ? `Disconnected   ${snapshot.route.reason}` : 'Disconnected'
   }
 }

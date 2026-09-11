@@ -226,7 +226,7 @@ export class PermissionPolicy {
     }
 
     // File-System-OFF chats only auto-approve reads confined to the attached
-    // files. Shell commands, writes, and reads elsewhere must ask — the agent
+    // files. Shell commands, writes, and reads elsewhere must ask   the agent
     // must not reach the broader file system (or the shell) unprompted.
     if (this.restrictToAllowed) {
       const confinedRead =
@@ -264,7 +264,7 @@ export class PermissionPolicy {
     return this.createDecision(
       'auto_review',
       true,
-      'Auto Review — every permission that is not explicitly denied is auto-approved.',
+      'Auto Review   every permission that is not explicitly denied is auto-approved.',
       risk,
       scope
     )
@@ -286,7 +286,7 @@ export class PermissionPolicy {
     return this.createDecision(
       'full_access',
       true,
-      'Full Access — yolo mode, every operation is auto-approved.',
+      'Full Access   yolo mode, every operation is auto-approved.',
       risk,
       scope
     )
@@ -327,8 +327,8 @@ export class PermissionPolicy {
   }
 
   /** Whether a resolved path is inside the attachment allowlist (or the allowlist
-   *  requirement does not apply). A matching path — or any path below a directory
-   *  that was attached — is always permitted. */
+   *  requirement does not apply). A matching path   or any path below a directory
+   *  that was attached   is always permitted. */
   private isAllowedPath(path: string): boolean {
     return this.allowedPaths.some((allowed) => {
       return allowed === path || isWithinDirectory(allowed, path)

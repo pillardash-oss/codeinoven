@@ -326,13 +326,17 @@ export class CodexDriver extends PersistentCliDriver {
     contextUsage: true,
     compaction: true,
     subagents: true,
-    nativeUtilities: ['web_search', 'web_fetch']
+    nativeUtilities: ['web_search', 'web_fetch', 'computer_use']
   }
   private activeTurns = new Map<string, CodexAppServerTurn>()
   private utilityEndpoints = new Map<string, { url: string; token: string }>()
   private modelsWithoutReasoningSummaries = new Set<string>()
   private compactionsByThreadId = new Map<string, CodexCompactionRun>()
   private contextUsageByThreadId = new Map<string, CodexContextUsageWaiter>()
+  /** Last session that bound each native codex thread, so auto-compaction
+   *  item notifications that arrive outside any registered turn (between
+   *  turns, at resume/turn-start) can still reach the owning session. */
+  private threadSessionsByNativeId = new Map<string, { sessionId: string; projectPath: string }>()
   /** Resident app-server hosts keyed by project working directory so the
    *  chats inbox (`chats-cwd`) runs on its own isolated app-server. */
   private hostsByProjectPath = new Map<string, CodexAppServerHost>()
@@ -585,6 +589,7 @@ export class CodexDriver extends PersistentCliDriver {
       if (!nativeThreadId) throw new Error('Codex app-server did not return a thread ID')
       active.nativeThreadId = nativeThreadId
       session.nativeSessionId = nativeThreadId
+      this.threadSessionsByNativeId.set(nativeThreadId, { sessionId: session.id, projectPath })
       await this.persistSession(session)
 
       const turnParams: Record<string, unknown> = {
@@ -1137,7 +1142,10 @@ export class CodexDriver extends PersistentCliDriver {
       }
     }
     const active = this.activeTurnForNotification(params)
-    if (!active) return
+    if (!active) {
+      this.reportBetweenTurnCompaction(method, params)
+      return
+    }
     if (active.waitingForRetry && isCodexRetryRecoveryActivity(method)) {
       active.waitingForRetry = false
       this.emit({
@@ -1241,7 +1249,7 @@ export class CodexDriver extends PersistentCliDriver {
     // A prior `error` notification (e.g. a usage-limit hit with
     // `willRetry: false`) already captured `active.failure`/`active.failureIssue`
     // before the turn tore down. The app-server can report that teardown as a
-    // non-`'failed'` terminal status (e.g. `'interrupted'`) — falling through to
+    // non-`'failed'` terminal status (e.g. `'interrupted'`)   falling through to
     // `undefined` here would silently drop the captured failure and let the
     // turn look like a clean success.
     const message =
@@ -1472,6 +1480,39 @@ export class CodexDriver extends PersistentCliDriver {
         error instanceof Error ? error.message : 'Codex fallback turn could not start'
       )
     }
+  }
+
+  /**
+   * Between-turn auto-compaction reporting.
+   *
+   * Codex emits `contextCompaction` item notifications outside any registered
+   * turn (for example an automatic compaction running between turns or right
+   * at resume/turn-start, before `turn/start` registers the turn). The
+   * active-turn gate would drop those notifications, so this reconciliation
+   * routes them to the session that last bound the native thread, producing
+   * the same compaction message the in-turn parser produces.
+   */
+  private reportBetweenTurnCompaction(method: string, params: Record<string, unknown>): void {
+    if (method !== 'item/started' && method !== 'item/completed') return
+    const threadId = notificationThreadId(params)
+    if (!threadId) return
+    const mapping = this.threadSessionsByNativeId.get(threadId)
+    if (!mapping) return
+    const item = normalizeAppServerItem(recordValue(params['item']))
+    if (!item || stringValue(item['type']) !== 'contextCompaction') return
+    void this.requireSession(mapping.projectPath, mapping.sessionId)
+      .then((session) => {
+        const parsed = parseItem(item, method === 'item/completed', session.id)
+        if (!parsed) return
+        if (parsed.messages) this.mergeMessages(session, parsed.messages)
+        for (const event of parsed.events ?? []) {
+          this.applyEventToSession(session, event)
+          this.emit(event)
+        }
+        session.updatedAt = Date.now()
+        return this.persistSession(session)
+      })
+      .catch((error) => Logger.dev('Codex between-turn compaction report failed:', error))
   }
 
   private activeTurnForNotification(
@@ -2281,7 +2322,7 @@ function isCodexDynamicQuestionItem(item: Record<string, unknown>): boolean {
 }
 
 // `turn/started` fires the instant Codex's own retry loop begins its next
-// attempt, before that attempt has round-tripped to the provider at all — it
+// attempt, before that attempt has round-tripped to the provider at all   it
 // is not evidence the retry succeeded. Treating it as recovery flipped the UI
 // to "working" moments before the same still-exhausted quota failed the
 // attempt again, bouncing the thread between waiting and working. Only

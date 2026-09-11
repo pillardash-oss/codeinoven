@@ -1,5 +1,5 @@
 /**
- * Traffic-light window controls — shared by the main process, the preload
+ * Traffic-light window controls   shared by the main process, the preload
  * bridge, and the renderer.
  *
  * Surfaces that double as a draggable title bar (the app header and the
@@ -7,7 +7,7 @@
  * in-content window controls so headings and buttons never sit underneath them.
  *
  * macOS always draws its traffic lights inset on the left. Windows draws a
- * native frame with its own controls — nothing to reserve. Linux also uses its
+ * native frame with its own controls   nothing to reserve. Linux also uses its
  * native frame; GTK's button layout does not imply renderer-owned controls.
  */
 
@@ -27,7 +27,7 @@ export interface TrafficLightInfo {
  *  breathing gap without pushing the first nav icon far past the buttons). */
 export const TRAFFIC_LIGHT_OFFSET = 80
 
-/** No in-content window controls — nothing to reserve. */
+/** No in-content window controls   nothing to reserve. */
 export const NO_TRAFFIC_LIGHT: TrafficLightInfo = { present: false, side: null, offset: 0 }
 
 /** Command-line flag carrying the resolved layout into the renderer process. */

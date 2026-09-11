@@ -70,7 +70,7 @@ export class InstanceRegistry {
       try {
         this.pruneStaleEntries()
       } catch {
-        // Pruning is hygiene only — never block startup over it.
+        // Pruning is hygiene only   never block startup over it.
       }
       this.writeEntry()
       this.startWatcher()
@@ -92,7 +92,7 @@ export class InstanceRegistry {
     try {
       rmSync(join(this.dir, `${this.selfEntry.pid}.json`), { force: true })
     } catch {
-      // Best effort — the file may already be gone.
+      // Best effort   the file may already be gone.
     }
   }
 
@@ -173,7 +173,7 @@ export class InstanceRegistry {
         return true
       }
     } catch {
-      // Registry unreadable — assume we are the only instance.
+      // Registry unreadable   assume we are the only instance.
     }
     return false
   }
@@ -299,7 +299,7 @@ export class InstanceRegistry {
       process.kill(pid, 0)
       return true
     } catch (error) {
-      // ESRCH: no such process. EPERM: exists but owned by another user — alive.
+      // ESRCH: no such process. EPERM: exists but owned by another user   alive.
       return error instanceof Error && 'code' in error && error.code === 'EPERM'
     }
   }

@@ -30,7 +30,7 @@ describe('bounded tool output policy', () => {
     if (capped.type !== 'tool') return
     expect(capped.state.output!.length).toBeLessThan(TOOL_OUTPUT_PERSIST_CAP)
     expect(capped.state.output).toContain(`${big.length} bytes total`)
-    expect(capped.state.output.startsWith('x')).toBe(true)
+    expect(capped.state.output!.startsWith('x')).toBe(true)
   })
 
   it('caps oversized metadata strings', () => {

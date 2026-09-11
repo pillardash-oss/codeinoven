@@ -21,7 +21,7 @@
 
   interface Props {
     variant?: 'settings' | 'sidebar'
-    /** The active settings tab — 'projects' or 'chats'. */
+    /** The active settings tab   'projects' or 'chats'. */
     scope?: 'projects' | 'chats'
     projectId?: string
     threadId?: string
@@ -319,7 +319,7 @@
    * staged entries). Entries the panel does not manage are preserved so a
    * partial load can never wipe a sibling file's entries, and so is any
    * managed-scope entry that landed on disk after this panel's own load
-   * (e.g. a global memory approved from another window) — only entries this
+   * (e.g. a global memory approved from another window)   only entries this
    * panel actually loaded can be dropped by omission, which is what makes a
    * deletion here take effect.
    */
@@ -363,7 +363,7 @@
     const entryScope = availableScopes[0]?.value ?? 'global'
     const placeholderSuffix = Math.random().toString(36).slice(2, 6)
     const label = 'Untitled memory'
-    const content = `New memory — ${Date.now()}-${placeholderSuffix}`
+    const content = `New memory   ${Date.now()}-${placeholderSuffix}`
     error = ''
     saving = true
     try {

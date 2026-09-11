@@ -3,7 +3,7 @@ import type { InferenceMode, ThreadSettings } from './types'
 /**
  * Display metadata for a fast-inference variant.
  *
- * Availability is NOT decided here — it comes from the harness catalog
+ * Availability is NOT decided here   it comes from the harness catalog
  * (`ProviderModel.fastSupported`), so opencode shows the picker for any model
  * whose catalog lists a `*-fast` sibling and auto-hides it when the vendor
  * deprecates the fast tier. This module only resolves the display label and
@@ -85,7 +85,7 @@ export function fastVariantForModelId(modelId: string): FastInferenceVariant | n
  * cannot run fast inference. Model switches across operators (composer picker,
  * provider-error card, audit/spec cards, worker settings) all commit settings
  * independently, so a harness-safe fast mode for one model must never leak
- * into a subsequent model that has no fast tier — otherwise the resolved
+ * into a subsequent model that has no fast tier   otherwise the resolved
  * `*-fast` model id targets a model that does not exist.
  */
 export function normalizeFastInference(

@@ -96,7 +96,7 @@ describe('Remote channel authorization registry', () => {
   })
 })
 
-describe('DeviceCredentialService — pairing bootstrap', () => {
+describe('DeviceCredentialService   pairing bootstrap', () => {
   it('issues a single-use bootstrap that expires within five minutes', async () => {
     const now = 1_000_000
     const db = makeTestDb()
@@ -149,7 +149,7 @@ describe('DeviceCredentialService — pairing bootstrap', () => {
   })
 })
 
-describe('DeviceCredentialService — enrollment', () => {
+describe('DeviceCredentialService   enrollment', () => {
   it('enrolls a device with a valid bootstrap, keys, and proof of possession', async () => {
     const db = makeTestDb()
     const service = new DeviceCredentialService(db)
@@ -266,7 +266,7 @@ describe('DeviceCredentialService — enrollment', () => {
   })
 })
 
-describe('DeviceCredentialService — authentication and revocation', () => {
+describe('DeviceCredentialService   authentication and revocation', () => {
   async function enrollPhone(
     service: DeviceCredentialService,
     name = 'Phone'
@@ -385,7 +385,7 @@ describe('DeviceCredentialService — authentication and revocation', () => {
   })
 })
 
-describe('DeviceCredentialService — step-up approval', () => {
+describe('DeviceCredentialService   step-up approval', () => {
   it('approves then consumes a single-use approval bound to the exact request', async () => {
     const db = makeTestDb()
     const service = new DeviceCredentialService(db)
@@ -528,7 +528,7 @@ describe('DeviceCredentialService — step-up approval', () => {
   })
 })
 
-describe('RemoteRpcDispatcher — capability-aware authorization', () => {
+describe('RemoteRpcDispatcher   capability-aware authorization', () => {
   const mockProjectManager = {
     listProjects: async () => [],
     getProject: async () => null,
@@ -618,7 +618,7 @@ describe('RemoteRpcDispatcher — capability-aware authorization', () => {
 
   it('rejects device-less invocations when a credential service is configured', async () => {
     const { dispatcher } = await buildContext()
-    // The cloud relay dispatches RPC without any device context — this must
+    // The cloud relay dispatches RPC without any device context   this must
     // fail closed instead of executing as the trusted desktop path.
     const outcome = await dispatcher.dispatch({
       id: 99,

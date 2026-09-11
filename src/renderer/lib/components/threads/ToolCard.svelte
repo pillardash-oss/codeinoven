@@ -15,6 +15,7 @@
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { AgentPart } from '$shared/types'
+  import LongTextBlock from '../markdown/LongTextBlock.svelte'
   import InlineToolDiff from './InlineToolDiff.svelte'
   import {
     checkpointPathsForTool,
@@ -26,7 +27,7 @@
   interface Props {
     part: Extract<AgentPart, { type: 'tool' }>
     /** True only while a live session is streaming this call. Historical or
-     *  restored traces must never tick — their durations are frozen snapshots. */
+     *  restored traces must never tick   their durations are frozen snapshots. */
     live?: boolean
     projectId?: string
     threadId?: string
@@ -34,7 +35,14 @@
     checkpointPaths?: string[]
   }
 
-  let { part, live = false, projectId, threadId, checkpointId = null, checkpointPaths = [] }: Props = $props()
+  let {
+    part,
+    live = false,
+    projectId,
+    threadId,
+    checkpointId = null,
+    checkpointPaths = []
+  }: Props = $props()
 
   let open = $state(false)
   let userToggled = $state(false)
@@ -153,6 +161,27 @@
     const s = seconds % 60
     return s > 0 ? `${m}m ${s}s` : `${m}m`
   }
+
+  /** Display-side threshold for giant tool strings. Mirrors the persistence
+   *  cap in the main process (64KB head+tail), so every string that reaches
+   *  the renderer at full length is a candidate for DOM cost. Below the
+   *  threshold the plain <pre> keeps the historical look; above it the
+   *  LongTextBlock collapses the run until the user asks for the full text. */
+  const GIANT_TOOL_STRING_CHARS = 64 * 1024
+  /** LongTextBlock collapse length for tool strings: more context than the
+   *  conversational default so terminal-style output stays recognizable. */
+  const TOOL_BLOCK_COLLAPSED_CHARS = 4_000
+
+  const inputJson = $derived(
+    Object.keys(part.state.input).length > 0 ? JSON.stringify(part.state.input, null, 2) : ''
+  )
+  const giantOutput = $derived(
+    (part.state.output?.length ?? 0) > GIANT_TOOL_STRING_CHARS ? (part.state.output ?? '') : null
+  )
+  const giantError = $derived(
+    (part.state.error?.length ?? 0) > GIANT_TOOL_STRING_CHARS ? (part.state.error ?? '') : null
+  )
+  const giantInput = $derived(inputJson.length > GIANT_TOOL_STRING_CHARS ? inputJson : null)
 </script>
 
 <div class="overflow-hidden rounded-lg border bg-surface">
@@ -197,7 +226,9 @@
       <span class="tabular-nums text-[0.625rem] text-dimmed">{formatDuration(elapsed)}</span>
     {/if}
     {#if !open && inputPreview}
-      <span class="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-dimmed">{inputPreview}</span>
+      <span class="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-dimmed"
+        >{inputPreview}</span
+      >
     {:else}
       <span class="flex-1"></span>
     {/if}
@@ -211,31 +242,48 @@
     <div class="space-y-2 border-t px-3 py-2">
       {#if displayDiffs.length > 0}
         <InlineToolDiff diffs={displayDiffs} />
+      {:else if giantInput !== null}
+        <div>
+          <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+            Input
+          </p>
+          <LongTextBlock text={giantInput} collapsedChars={TOOL_BLOCK_COLLAPSED_CHARS} />
+        </div>
       {:else if Object.keys(part.state.input).length > 0}
         <div>
-          <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Input</p>
+          <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+            Input
+          </p>
           <pre
-            class="max-h-40 overflow-auto rounded-md bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted">{JSON.stringify(
-              part.state.input,
-              null,
-              2
-            )}</pre>
+            class="max-h-40 overflow-auto rounded-md bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted">{inputJson}</pre>
         </div>
       {/if}
       {#if displayDiffs.length === 0 && part.state.output}
         <div>
-          <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Output</p>
-          <pre
-            class="max-h-40 overflow-auto rounded-md bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-foreground">{part
-              .state.output}</pre>
+          <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+            Output
+          </p>
+          {#if giantOutput !== null}
+            <LongTextBlock text={giantOutput} collapsedChars={TOOL_BLOCK_COLLAPSED_CHARS} />
+          {:else}
+            <pre
+              class="max-h-40 overflow-auto rounded-md bg-elevated p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-foreground">{part
+                .state.output}</pre>
+          {/if}
         </div>
       {/if}
       {#if part.state.error}
         <div>
-          <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Error</p>
-          <pre
-            class="max-h-40 overflow-auto rounded-md bg-danger/5 p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-danger">{part
-              .state.error}</pre>
+          <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+            Error
+          </p>
+          {#if giantError !== null}
+            <LongTextBlock text={giantError} collapsedChars={TOOL_BLOCK_COLLAPSED_CHARS} />
+          {:else}
+            <pre
+              class="max-h-40 overflow-auto rounded-md bg-danger/5 p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-danger">{part
+                .state.error}</pre>
+          {/if}
         </div>
       {/if}
     </div>

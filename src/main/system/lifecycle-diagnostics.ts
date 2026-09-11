@@ -8,7 +8,7 @@ import type { StartupTelemetry } from './startup-telemetry'
  * Owns the deterministic, privacy-preserving response to fatal startup and
  * runtime failures, structured lifecycle spans, and the logger-drain contract
  * that must precede resource teardown. Every diagnostic only records phase
- * names, durations, and sanitized error text — never paths, user content, or
+ * names, durations, and sanitized error text   never paths, user content, or
  * credentials.
  */
 
@@ -135,7 +135,7 @@ export async function handleFatalStartupFailure(
   }
 
   // The error box copy tells the user to export diagnostics, which reads the
-  // durable log — so flush the logger before anything else can fail.
+  // durable log   so flush the logger before anything else can fail.
   let logged = false
   try {
     await Logger.flush()
@@ -192,7 +192,7 @@ export async function handleFatalStartupFailure(
       exited = true
     } catch {
       // process.exit does not normally throw; if it somehow does, there is
-      // nothing more this process can do — the outcome still records it.
+      // nothing more this process can do   the outcome still records it.
       exited = false
     }
   }

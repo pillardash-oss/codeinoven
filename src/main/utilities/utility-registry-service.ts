@@ -21,8 +21,8 @@ import { RETRIEVE_MCP_HOST_TOOL_NAME } from '../../lib/gateway-tools'
 import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 // Sourced from the shared `lib/utility-ids` module (and re-exported here for
-// existing consumers) so browser-bound renderer code — which imports these ids
-// from `lib/agent-behavior` — never pulls this main-process service (and its
+// existing consumers) so browser-bound renderer code   which imports these ids
+// from `lib/agent-behavior`   never pulls this main-process service (and its
 // `fs`-importing `utils` dependency) into client bundles.
 import { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID } from '../../lib/utility-ids'
 export { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID }

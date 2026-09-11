@@ -561,7 +561,7 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
   })
 })
 
-describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
+describe('CloudRelayClient   relay device proof of possession (A-04)', () => {
   function makeRawDatabase(): Database {
     const raw = new DatabaseConstructor(':memory:')
     raw.pragma('foreign_keys = ON')
@@ -946,7 +946,7 @@ describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
     const { harness, socket, dispose } = await makeRelayHarness(credentials)
     const issued = await challengeNonceOf(socket)
 
-    // Sign a transcript over a DIFFERENT nonce — the desktop recomputes the
+    // Sign a transcript over a DIFFERENT nonce   the desktop recomputes the
     // canonical transcript from ITS challenge, so the signature must not verify.
     const frame = await authFrame('stale-nonce-123', { deviceId: null, authVersion: undefined })
     void issued
@@ -1063,7 +1063,7 @@ describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
     expect(stale.ok).toBe(false)
 
     // A reconnect auth (same key, same device, fresh challenge) must NOT fire
-    // the enrollment callback again — only the initial enrollment rotates.
+    // the enrollment callback again   only the initial enrollment rotates.
     // The consumed challenge mismatches, so the desktop re-challenges first.
     await receivedData(
       socket,

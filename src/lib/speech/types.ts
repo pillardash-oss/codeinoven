@@ -282,7 +282,7 @@ export interface SpeechLessonExample {
 /**
  * A structured lesson derived by the local instruct LLM from comparing the raw
  * ASR transcript with the text the user actually sent. Lessons are natural
- * instructions with examples — never regex patterns — and are applied by the
+ * instructions with examples   never regex patterns   and are applied by the
  * LLM itself during future cleanup.
  */
 export interface SpeechLesson {
@@ -449,7 +449,7 @@ export interface VoiceRecordingShortcut {
   doubleTap: boolean
 }
 
-/** Keys produced purely by holding a single modifier — the only legal double-tap targets. */
+/** Keys produced purely by holding a single modifier   the only legal double-tap targets. */
 export const MODIFIER_KEY_CODES: ReadonlySet<string> = new Set([
   'AltLeft',
   'AltRight',

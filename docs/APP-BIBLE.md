@@ -1,6 +1,6 @@
-# CodeInOven — The App Bible
+# CodeInOven   The App Bible
 
-This is the canonical reference for the principles, philosophies, design language, and engineering standards of **CodeInOven**. Every contributor — human or agent — must read this document before making changes. When any other document conflicts with this one, this document wins. Project Engineering agents receive their operational behavior from the application prompt layer and its editable Agent behavior setting.
+This is the canonical reference for the principles, philosophies, design language, and engineering standards of **CodeInOven**. Every contributor   human or agent   must read this document before making changes. When any other document conflicts with this one, this document wins. Project Engineering agents receive their operational behavior from the application prompt layer and its editable Agent behavior setting.
 
 ---
 
@@ -16,7 +16,7 @@ specify → review → approve → implement
 
 ### Core philosophies
 
-1. **Determinism over vibes.** Every agent run must be reproducible. Context is assembled explicitly (system, project, skills, MCPs, checklist, history) — never implicitly accumulated. If a run cannot be replayed from persisted state, it is a bug.
+1. **Determinism over vibes.** Every agent run must be reproducible. Context is assembled explicitly (system, project, skills, MCPs, checklist, history)   never implicitly accumulated. If a run cannot be replayed from persisted state, it is a bug.
 2. **The human reviews; the agent implements by default.** Engineering specifications stay editable through inline and section annotations, require explicit approval, and then guide implementation in the same thread. **Achievement** is the explicit project-mode exception: once enabled, it owns specification approval, recommended decisions, permission replies within the selected permission tier, implementation, and independent audit/rework cycles until the goal passes or reaches a hard terminal failure. Achievement never converts an internal question, specification, or audit into a human approval gate.
 3. **Never touch what isn't yours.** CodeInOven persists all of its own state under its config directory (`~/.config/pillardash/codeinoven`). It never writes uninvited into the user's repository. Agents working _on_ CodeInOven follow the same ethic: surgical changes, never revert others' work, never reset blindly.
 4. **Everything is auditable.** Atomic filesystem writes (`.tmp` then `rename`), chunked history, checkpoints, per-thread branches, and change tracking exist so that any session can be inspected, diffed, and rolled back.
@@ -27,7 +27,7 @@ specify → review → approve → implement
 
 - **Electron main process** (`src/main`): storage engine, CLI drivers, PTY/terminal service, chat engine, checkpoint manager, permission & scope policies, diagnostics, memory service, restart recovery.
 - **Shared engines** (`src/lib`): project/thread managers, spec engine, plan engine, history engine, and provider adapters.
-- **Renderer** (`src/renderer`): Svelte 5 UI — workspace shell, chat, terminal, stores — talking to main exclusively through the typed, validated IPC contract (`src/lib/ipc-contract.ts`).
+- **Renderer** (`src/renderer`): Svelte 5 UI   workspace shell, chat, terminal, stores   talking to main exclusively through the typed, validated IPC contract (`src/lib/ipc-contract.ts`).
 
 The IPC contract is a hard boundary. Renderer code never reaches into Node APIs; main-process code never assumes renderer state. All messages are validated on both sides.
 
@@ -56,7 +56,7 @@ A restrained workspace aesthetic:
 - Soft app canvas, raised surfaces, thin borders for structure.
 - **Obsidian `#081825`** as the primary color.
 - **Ivory `#F7F6F2`** as the light background.
-- **Auric `#D4AF37`** as accent only — **under 5% of any screen** (badges, highlights).
+- **Auric `#D4AF37`** as accent only   **under 5% of any screen** (badges, highlights).
 - Strong numeric hierarchy with `tabular-nums`.
 - **Satoshi** as the product typeface.
 - **Lucide** icons (`@lucide/svelte`) for actions and module cues.
@@ -80,7 +80,7 @@ Use the semantic Tailwind v4 tokens defined in the app stylesheet. **Never hardc
 | `text-dimmed`                 | Tertiary hints, shortcuts, metadata                      |
 | `bg-primary` / `text-primary` | Brand color                                              |
 | `text-on-primary`             | Text/icons on primary actions                            |
-| `bg-accent` / `text-accent`   | Auric gold — accent only, <5% usage                      |
+| `bg-accent` / `text-accent`   | Auric gold   accent only, <5% usage                      |
 | `bg-danger` / `text-danger`   | Destructive actions                                      |
 
 Every new UI element must work in **both** light and dark themes through tokens, never one-off colors.
@@ -124,7 +124,7 @@ Reuse before you create:
 - Lucide icons inside action buttons when the action benefits from a recognizable symbol.
 - **Icon-only controls require accessible labels (`aria-label`).**
 - `rounded-lg`/`rounded-xl` normally; fully-rounded reserved for avatars, circular icon buttons, and pills.
-- Boolean Svelte props use the shorthand: `<Button active>` — never `active={true}`.
+- Boolean Svelte props use the shorthand: `<Button active>`   never `active={true}`.
 - Use standard Tailwind classes where they exist: `z-10`, never `z-[10]`.
 
 ### 3.7 Overlays and navigation
@@ -132,7 +132,7 @@ Reuse before you create:
 - Desktop modals: centered, tokenized surfaces, thin borders, subtle ring, short scale/fade transitions.
 - Side sheets for focused editing and detail workflows.
 - Backdrops use tokenized overlays with light blur where established.
-- Navigation is instant and app-like — never full page reloads for in-app actions.
+- Navigation is instant and app-like   never full page reloads for in-app actions.
 - Route/view metadata should live in a central registry; header titles derive from the active view, never hardcoded copies that can drift.
 
 ### 3.8 Motion
@@ -177,8 +177,8 @@ Accessibility is part of the design system, not an afterthought:
 - Layout shift when filters, selections, or optional controls appear.
 - Deprecated Svelte patterns, `any`, `as any`, or `console.*`.
 - Redundant/conflicting Tailwind classes (e.g., two text color utilities on one element).
-- Checkbox inputs or checkbox semantics for on/off controls — always the reusable `Switch`.
-- Relying on the native `title` tooltip — all tooltips go through the custom tooltip system.
+- Checkbox inputs or checkbox semantics for on/off controls   always the reusable `Switch`.
+- Relying on the native `title` tooltip   all tooltips go through the custom tooltip system.
 
 ---
 
@@ -187,8 +187,8 @@ Accessibility is part of the design system, not an afterthought:
 ### 4.1 Toolchain
 
 - **Bun only for CodeInOven development.** Repository installs, scripts, checks, builds, and releases go through `bun`. This is a contributor toolchain rule, never an assumption that a packaged-app user's GUI environment contains Bun.
-- **TypeScript everywhere**, strict. The type `any` is forbidden — including `variable as any`. Model the type properly or fix the design.
-- **Svelte 5 (runes) + Tailwind v4** in the renderer. Always use current Svelte 5 idioms and consult the latest Svelte documentation (via the Svelte MCP) — no deprecated patterns.
+- **TypeScript everywhere**, strict. The type `any` is forbidden   including `variable as any`. Model the type properly or fix the design.
+- **Svelte 5 (runes) + Tailwind v4** in the renderer. Always use current Svelte 5 idioms and consult the latest Svelte documentation (via the Svelte MCP)   no deprecated patterns.
 - Never import SvelteKit-only modules (`$app/*`) into shared utilities, domain modules, or anything bundled outside the app runtime. For runtime detection in shared code, use platform-safe checks (`typeof window !== 'undefined'`) or inject the value from an entrypoint.
 
 ### 4.2 Logging
@@ -210,17 +210,17 @@ Unless explicitly asked to run against the whole project:
 - **Never run `bun run dev`** as a verification step; use `bun run check` instead.
 - Only check/lint/format/test the files you worked on and the files that import them.
 - Run existing tests **before** changing code (baseline) and **after** (regression check).
-- Test output goes to `agent-out/test-result/` named `(feature)-baseline.txt`, `(feature)-(n).txt`, or `(feature)-final.txt`. Grep out only the failures/warnings you need — do not flood context with full logs.
+- Test output goes to `agent-out/test-result/` named `(feature)-baseline.txt`, `(feature)-(n).txt`, or `(feature)-final.txt`. Grep out only the failures/warnings you need   do not flood context with full logs.
 - Do not write new tests unless explicitly asked.
 - Before declaring any work done: run the applicable check, lint, format, and test commands and fix all errors.
 
 ### 4.4 Architecture rules
 
 - Respect the layer boundaries: renderer ↔ typed IPC contract ↔ main process. No shortcuts around IPC validation.
-- All persistent writes are atomic (write `.tmp`, then `rename`) via the storage engine — never ad-hoc `fs.writeFile` for state.
+- All persistent writes are atomic (write `.tmp`, then `rename`) via the storage engine   never ad-hoc `fs.writeFile` for state.
 - Drivers implement `driver.interface.ts`; adapters implement `adapter.interface.ts`. New providers plug in via those contracts, never via special-cased branches.
 - CodeInOven's own state lives under its config directory only. Never write into a user's repository from app code.
-- Model-ranking data retention is intentional and asymmetric: `model_ranking_snapshots` is a transient grading queue whose rows are hard-deleted the moment their 0–10 judge score is applied to the permanent `model_rankings` aggregate (never deleted unscored — judge failures stay parked as `failed` for recovery). Historical reconstruction of deleted snapshots is deliberately unavailable; the aggregate stays auditable through `rubric_version`, `calc_version`, and per-category sample counts instead. Do not add archival copies or rebuild mechanisms for processed snapshots.
+- Model-ranking data retention is intentional and asymmetric: `model_ranking_snapshots` is a transient grading queue whose rows are hard-deleted the moment their 0–10 judge score is applied to the permanent `model_rankings` aggregate (never deleted unscored   judge failures stay parked as `failed` for recovery). Historical reconstruction of deleted snapshots is deliberately unavailable; the aggregate stays auditable through `rubric_version`, `calc_version`, and per-category sample counts instead. Do not add archival copies or rebuild mechanisms for processed snapshots.
 
 ### 4.5 External process and package-manager invariant
 
@@ -239,7 +239,7 @@ Direct `spawn('bun', ...)`, `spawn('node', ...)`, `spawn('npm', ...)`, ad-hoc `P
 
 ### 4.6 Scopes own workspace roots
 
-Scopes — not threads, renderer state, or individual services — are the single
+Scopes   not threads, renderer state, or individual services   are the single
 authority for a repository root.
 
 - Every scope persists a **root descriptor** on its version 2 board. The Default
@@ -279,16 +279,16 @@ These rules bind every AI agent contributing to this repository. The operational
 
 - Before starting a task: write a plan file with the current phase declared at the top, checkbox tasks, and mark items in-progress/completed as you go.
 - After finishing: update the progress file with what was done and what's next.
-- All documentation output (plan*.md, progress*.md, test output, walkthroughs) lives in `agent-out/` — never pollute the repo root.
+- All documentation output (plan*.md, progress*.md, test output, walkthroughs) lives in `agent-out/`   never pollute the repo root.
 - If plan/progress files were overwritten by someone else since your last edit, create `plan-[feature].md` / `progress-[feature].md` instead. Never destroy another agent's records.
-- Work phases to exhaustion — don't stop halfway through a declared phase.
+- Work phases to exhaustion   don't stop halfway through a declared phase.
 - If confused at any point, **ask clarifying questions. Never assume.**
 
 ### 5.2 Git discipline
 
 - Commit contextually when a plan/unit of work is done, so work can be rolled back.
 - Prefix commits with your agent name: `(MODEL_NAME) feat: ...`.
-- Commit **only the files you worked on** — never `git commit .` or `git commit -A`.
+- Commit **only the files you worked on**   never `git commit .` or `git commit -A`.
 - Never commit ignored files.
 - **Never `git push`**, regardless of how many commits behind the branch is.
 - **Never `git reset` blindly.** To revert, list files individually. Never cause anyone to lose changes.
@@ -296,7 +296,7 @@ These rules bind every AI agent contributing to this repository. The operational
 
 ### 5.3 Reporting
 
-When work is complete, deliver a brief report: what was done, what went wrong and how it was fixed, all files changed, and the commit hash — one clean, auditable summary.
+When work is complete, deliver a brief report: what was done, what went wrong and how it was fixed, all files changed, and the commit hash   one clean, auditable summary.
 
 ### 5.4 Tooling
 
@@ -310,7 +310,7 @@ Before shipping any change to CodeInOven:
 
 1. Read this bible.
 2. Reuse existing components, tokens, engines, and contracts before creating new ones.
-3. Keep the lifecycle deterministic and auditable — no silent side effects.
+3. Keep the lifecycle deterministic and auditable   no silent side effects.
 4. Verify in both themes and at both desktop densities where UI is touched.
 5. Run the scoped check/lint/format/test commands and fix everything.
 6. Commit only your own files, contextually, with your name on it.

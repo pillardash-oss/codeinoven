@@ -53,7 +53,7 @@ interface ThreadRow {
   working_directory: string
 }
 
-/** Safe JSON read for optional blob columns — a corrupt row must not break a thread list. */
+/** Safe JSON read for optional blob columns   a corrupt row must not break a thread list. */
 function parseStoredJson(raw: string): unknown {
   try {
     return JSON.parse(raw)
@@ -227,7 +227,7 @@ export interface ThreadListOptions {
    * - `default`: pinned (newest pinned first), then manual `sort_order`, then
    *   `last_activity`. Manual reordering can push an active thread beyond a
    *   bounded `limit`, so a "recent" hydration query must use `activity` instead.
-   * - `activity`: pinned (newest pinned first), then `last_activity` descending —
+   * - `activity`: pinned (newest pinned first), then `last_activity` descending  
    *   guarantees the most recently active threads are always loaded regardless
    *   of `sort_order`.
    */
@@ -837,9 +837,11 @@ export class ThreadRepo {
   /**
    * Full-text thread search across titles and conversation content.
    *
-   * Title matches (substring, case-insensitive) rank first, then message
-   * matches ordered by FTS5 relevance (bm25). Message matches surface user
-   * messages and the agent's final output from conversation-scoped records.
+   * Search across titles and conversation content. Results are deduped by
+   * thread and ranked by threaded recency (most recently active thread
+   * first); for title matches the title kind wins the snippet metadata.
+   * Message matches surface user messages and the agent's final output
+   * from conversation-scoped records.
    */
   search(query: string, options: ThreadSearchOptions = {}): ThreadSearchResult[] {
     const raw = query.trim()
@@ -906,39 +908,62 @@ export function buildThreadSearchSql(
   return { title, fts, limit }
 }
 
-/** Merge title + message matches, dedup by thread, and build snippets. */
+/**
+ * Merge title + message matches, dedup by thread, and build snippets.
+ *
+ * Results are ranked primarily by threaded recency: message matches arrive
+ * per-message ordered by bm25, so we dedupe to the best-scoring message per
+ * thread (for the snippet) and then re-sort all threads by `last_activity`
+ * descending. A title match counts as the stronger result kind for a given
+ * thread and wins the tiebreak so exact title hits surface their role.
+ */
 export function mergeThreadSearchResults(
   titleRows: unknown[],
   messageRows: unknown[],
   raw: string,
   limit: number
 ): ThreadSearchResult[] {
-  const results: ThreadSearchResult[] = []
-  const seen = new Set<string>()
-  for (const row of titleRows) {
+  const byThread = new Map<string, { result: ThreadSearchResult; titleKind: boolean; activity: number }>()
+  const consume = (row: unknown, titleKind: boolean) => {
     const threadRow = row as ThreadRow
-    if (seen.has(threadRow.id)) continue
-    seen.add(threadRow.id)
-    results.push({ thread: rowToThread(threadRow), kind: 'title' })
-    if (results.length >= limit) return results
-  }
-  for (const row of messageRows) {
-    const threadRow = row as ThreadRow
-    if (seen.has(threadRow.id)) continue
-    if (results.length >= limit) break
-    seen.add(threadRow.id)
+    if (byThread.has(threadRow.id)) {
+      const entry = byThread.get(threadRow.id)!
+      // An exact title hit beats a message hit for the same thread.
+      if (titleKind && !entry.titleKind) {
+        entry.titleKind = true
+        entry.result.kind = 'title'
+        entry.result.role = undefined
+        entry.result.snippet = undefined
+        entry.result.timestamp = undefined
+      }
+      return
+    }
+    const thread = rowToThread(threadRow)
+    if (titleKind) {
+      byThread.set(threadRow.id, { result: { thread, kind: 'title' }, titleKind: true, activity: thread.lastActivity })
+      return
+    }
     const meta = row as {
       match_role?: unknown
       snippet_text?: unknown
       snippet_timestamp?: unknown
     }
-    results.push({
-      thread: rowToThread(threadRow),
-      kind: 'message',
-      role: String(meta.match_role) === 'assistant' ? 'assistant' : 'user',
-      snippet: buildSnippet(String(meta.snippet_text ?? ''), raw),
-      timestamp: Number(meta.snippet_timestamp)
+    byThread.set(threadRow.id, {
+      result: {
+        thread,
+        kind: 'message',
+        role: String(meta.match_role) === 'assistant' ? 'assistant' : 'user',
+        snippet: buildSnippet(String(meta.snippet_text ?? ''), raw),
+        timestamp: Number(meta.snippet_timestamp)
+      },
+      titleKind: false,
+      activity: thread.lastActivity
     })
   }
-  return results
+  for (const row of messageRows) consume(row, false)
+  for (const row of titleRows) consume(row, true)
+  return [...byThread.values()]
+    .sort((a, b) => b.activity - a.activity || Number(b.titleKind) - Number(a.titleKind))
+    .slice(0, limit)
+    .map((entry) => entry.result)
 }

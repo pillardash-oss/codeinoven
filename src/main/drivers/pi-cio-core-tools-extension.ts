@@ -16,7 +16,7 @@
  * names across extensions cannot collide), `export default function` becomes
  * the factory's `return`, and the merged module's default export invokes the
  * factories in order. A generator that grows a new import is picked up
- * automatically by the import parser — a source that stops parsing fails
+ * automatically by the import parser   a source that stops parsing fails
  * materialization loudly instead of silently dropping behavior.
  *
  * Per-session paths are embedded through the same placeholders as before:
@@ -26,7 +26,7 @@
  *
  * The MCP bridge extension (utility-runtime overlay) and the custom-providers
  * extension (disposable model-discovery overlay) are intentionally NOT part of
- * this module — they are conditional overlays, not part of the always-on set.
+ * this module   they are conditional overlays, not part of the always-on set.
  */
 
 import { piCoreToolsExtension } from './pi-core-tools-extension'
@@ -138,7 +138,7 @@ function mergeGeneratedImports(groups: GeneratedImport[][]): string {
 /**
  * Turn one generated module body into a scoped factory. The body's top-level
  * constants become factory locals (no cross-extension identifier collisions)
- * and its `export default function` — rewritten to a `return` — becomes the
+ * and its `export default function`   rewritten to a `return`   becomes the
  * factory's result, later invoked with the shared ExtensionAPI.
  */
 function scopedExtensionFactory(factoryName: string, body: string): string {
@@ -172,7 +172,7 @@ ${factories}
 export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void {
   // Each factory is zero-argument and RETURNS the extension function; invoke
   // it with the shared ExtensionAPI here. Calling the factory with pi instead
-  // discards the returned function — pi then boots with no app tools and no
+  // discards the returned function   pi then boots with no app tools and no
   // before_agent_start hook (the regression the single-module merge
   // introduced and this invocation fixed).
   __cioStatusExtension()(pi)
@@ -202,7 +202,7 @@ __CIO_STRIP_BUILTINS__  })
     )
     // One-shot sessions also drop pi's own built-in tools (read, bash, ...):
     // setActiveTools([]) is documented to cover built-in tools, so the model
-    // request carries no tool schemas at all — only the prompt.
+    // request carries no tool schemas at all   only the prompt.
     .replaceAll(
       '__CIO_STRIP_BUILTINS__',
       options.oneShot === true ? '' : '// '

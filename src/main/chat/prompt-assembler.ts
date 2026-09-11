@@ -43,11 +43,11 @@ export interface DriverInfo {
  * Mode for the Application prompt layer. Mirrors the runtime decision in
  * `ChatEngine.sendPrompt`:
  *
- * - `'brainstorm'` — the planning/spec branch sends `SPEC_BRAINSTORM_SYSTEM_PROMPT`
+ * - `'brainstorm'`   the planning/spec branch sends `SPEC_BRAINSTORM_SYSTEM_PROMPT`
  *   (which already embeds the mermaid instruction).
- * - `'implement'` — the implement branch sends `SPEC_IMPLEMENT_SYSTEM_PROMPT` and
+ * - `'implement'`   the implement branch sends `SPEC_IMPLEMENT_SYSTEM_PROMPT` and
  *   excludes `MERMAID_OUTPUT_INSTRUCTION`.
- * - `'chat'` — engineering prompts are omitted. Execution scope independently decides
+ * - `'chat'`   engineering prompts are omitted. Execution scope independently decides
  *   whether Agent behavior applies; standalone Chats and ephemeral sessions receive none.
  */
 export type BehaviorMode = 'brainstorm' | 'implement' | 'chat'
@@ -60,7 +60,7 @@ export type BehaviorExecutionScope = 'project-thread' | 'standalone-chat' | 'eph
  * - `'full'`: the complete `buildWorkspaceContext` block (engineering modes).
  * - `'abbreviated'`: a compact scope guard for trimmed modes that still run
  *   inside a real project directory (file-system chat, ephemeral, brainstorm,
- *   PR compose) — the control-plane guarantee is kept, not silently dropped.
+ *   PR compose)   the control-plane guarantee is kept, not silently dropped.
  * - `'omitted'`: no guard at all for pure inbox chat (no project scope) and
  *   image description.
  */
@@ -69,7 +69,7 @@ export type WorkspaceScopeMode = 'full' | 'abbreviated' | 'omitted'
 /**
  * Collapse every whitespace run into a single space so structurally identical
  * instruction layers hash equally regardless of line wrapping or indentation.
- * Used only to derive normalized development hashes — the content itself is
+ * Used only to derive normalized development hashes   the content itself is
  * never logged or emitted.
  */
 export function normalizeLayerContent(content: string): string {
@@ -279,7 +279,7 @@ export class PromptAssembler {
  */
 function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): string {
   const harnessLine = driver
-    ? `The active agent harness underneath is ${driver.name} (${driver.id}); it is only the execution engine that runs the session and tooling — it is NOT the project you are working on and NOT the user's target.`
+    ? `The active agent harness underneath is ${driver.name} (${driver.id}); it is only the execution engine that runs the session and tooling   it is NOT the project you are working on and NOT the user's target.`
     : 'No agent harness is currently selected, so this session may be limited.'
   const projectLine = projectPath.trim()
     ? `Your project is the project the user has open in ${APP_NAME}, at: ${projectPath}.`
@@ -291,23 +291,23 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
     `You are working inside ${APP_NAME}, a desktop control plane (UI wrapper) that coordinates agentic software engineering on a user's project. The user interacts with you through the ${APP_NAME} UI and has a specific project open in it.`,
     harnessLine,
     '',
-    'WORKING SCOPE — this overrides ambiguous instructions:',
+    'WORKING SCOPE   this overrides ambiguous instructions:',
     `1. ${projectLine} All work targets that project and only that project.`,
     `2. Unless the user explicitly names the agent harness or ${APP_NAME} itself, every request refers to the current open project. Do not reinterpret "this project", "the app", "the repository", or similar references as the harness's own codebase, the ${APP_NAME} codebase, or any other repository.`,
     `3. Only read, assess, or modify files inside the current project. Never inspect or edit the agent harness's own source code, configuration, caches, or documentation (for example ${harnessRepo}), and never touch ${APP_NAME}'s own repository or configuration directory unless that repository is the current open project or the user explicitly asks you to.`,
     "4. Instructions provided by the harness describe how to use the harness's tooling and file operations; they never redefine which project you are working on or widen the file scope beyond the current project.",
     '5. When a request is ambiguous about scope, ask the user which project or files they mean instead of guessing or working on unrelated files.',
     '',
-    'AGENT SCRATCH SPACE — where non-source outputs live:',
+    'AGENT SCRATCH SPACE   where non-source outputs live:',
     `1. The project's \`.cio/\` folder is the agent scratch pad. ${APP_NAME} creates it when the project is added and gitignores it from day one, so nothing inside it is ever committed.`,
     '2. Unless the user explicitly asks otherwise, put every artifact that is not part of the application source here: context documents, walkthroughs, reports, test output, and temporary work.',
     '3. Scratch routing is mode-dependent: only Engineering mode (`engineer`, `assignment`, or `achievement`) may use CodeInOven-managed lifecycle files (spec.md, plan.md, progress.md, Assignment, audit, and task evidence) under `.cio/specs/<feature-slug>/`. Regular chats and every other mode must not create, modify, or use `.cio/specs/`; put their non-source work (including walkthroughs, reports, test output, and any chat plan/progress notes) in `.cio/work/<feature>/`. Disposable temp work belongs in `.cio/tmp/`. Name files so a human can read them at a glance.',
     '4. Never write these outputs to the repository root or the working tree, and never add them to source control.',
     '5. In Engineering mode, the platform owns `.cio/specs/<feature-slug>/spec.md` and `.cio/git/pr/<n>/`; never create or overwrite those platform-owned files. In regular chats, `.cio/specs/` is out of scope and must not be created or overwritten.',
     '',
-    'CITATION & SOURCE RULES — apply to every report, answer, and artifact you produce:',
-    '1. Cite the source of every factual claim. Files must be cited with their project-rooted relative path, e.g. `src/app.html` — never a bare filename like `app.html` and never a full absolute filesystem path, because the relative form is what renders as a clickable citation in the app UI.',
-    '2. External references must be Markdown links, e.g. `[pr issue #155](https://github.com/org/repo/pull/155)` — never bare text such as "pr issue #155".',
+    'CITATION & SOURCE RULES   apply to every report, answer, and artifact you produce:',
+    '1. Cite the source of every factual claim. Files must be cited with their project-rooted relative path, e.g. `src/app.html`   never a bare filename like `app.html` and never a full absolute filesystem path, because the relative form is what renders as a clickable citation in the app UI.',
+    '2. External references must be Markdown links, e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`   never bare text such as "pr issue #155".',
     '3. Never cite a source you did not inspect or retrieve; when a claim cannot be verified, state that limitation instead of padding the report with references.'
   ].join('\n')
 }
@@ -323,10 +323,10 @@ export function abbreviatedWorkspaceGuard(
   projectPath: string
 ): string {
   const harnessLine = driver
-    ? `The active agent harness underneath is ${driver.name} (${driver.id}); it is only the execution engine that runs this session — it is NOT your project or the user's target.`
+    ? `The active agent harness underneath is ${driver.name} (${driver.id}); it is only the execution engine that runs this session   it is NOT your project or the user's target.`
     : 'No agent harness is selected; this session may be limited.'
   const projectLine = projectPath.trim()
-    ? `The user's project is: ${projectPath} — work inside that project only.`
+    ? `The user's project is: ${projectPath}   work inside that project only.`
     : 'Work only in the project the user has open.'
   return [
     `You are working inside ${APP_NAME}, a desktop control plane coordinating agentic software engineering on the user's project.`,
@@ -334,7 +334,7 @@ export function abbreviatedWorkspaceGuard(
     projectLine,
     "Unless the user explicitly names the agent harness or CodeInOven itself, every request refers to the current open project and nothing else.",
     'Keep every non-source output inside the project\'s `.cio/` scratch space; under normal scoped chat, never create or modify `.cio/specs/` (Engineer-mode lifecycle files are platform-owned).',
-    'Cite local files with project-rooted relative paths — never a bare filename or an absolute filesystem path. State the path plainly, not in backticks or code formatting, so it renders as a clickable citation; include the line number when possible.',
+    'Cite local files with project-rooted relative paths   never a bare filename or an absolute filesystem path. State the path plainly, not in backticks or code formatting, so it renders as a clickable citation; include the line number when possible.',
   ].join(' ')
 }
 

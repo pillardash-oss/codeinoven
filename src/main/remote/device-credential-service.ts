@@ -8,7 +8,7 @@
  * expiry, rotation, human revocation with tombstones, in-process local step-up
  * approval, and a bounded security audit log.
  *
- * The desktop stores only public JWKs and fingerprints — never a device
+ * The desktop stores only public JWKs and fingerprints   never a device
  * private key. Handshake proof is an ECDSA P-256 signature over the exact
  * transcript the desktop presented, so copying a credential record, a QR
  * value, or a frame is never sufficient to authenticate.
@@ -136,7 +136,7 @@ export async function sha256Hex(input: string): Promise<string> {
   return Buffer.from(digest).toString('hex')
 }
 
-/** SHA-256 fingerprint of a public JWK — the stable public identifier. */
+/** SHA-256 fingerprint of a public JWK   the stable public identifier. */
 export async function fingerprintPublicKey(jwk: JsonWebKey): Promise<string> {
   return sha256Hex(JSON.stringify(jwk))
 }
@@ -578,7 +578,7 @@ export class DeviceCredentialService {
   /**
    * Whether the enrolled device record is currently valid for a given
    * authVersion. Consulted on every high-level authorization so revocation,
-   * expiry, idle expiry, and key/scope rotation take effect immediately —
+   * expiry, idle expiry, and key/scope rotation take effect immediately  
    * a bound session is never trusted statelessly.
    */
   isDeviceActive(deviceId: string, authVersion: number): boolean {

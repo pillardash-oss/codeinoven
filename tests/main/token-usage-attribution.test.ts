@@ -8,7 +8,7 @@ import {
 
 /**
  * Dev-only attribution contract: episodes carry ONLY normalized hashes,
- * character counts, and heuristic token estimates — never prompt content.
+ * character counts, and heuristic token estimates   never prompt content.
  */
 describe('token-usage attribution', () => {
   it('produces content-free layer reports (hashes/characters/estimates only)', () => {

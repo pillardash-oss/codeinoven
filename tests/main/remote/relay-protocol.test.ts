@@ -14,7 +14,7 @@ import { encryptPayload } from '../../../src/renderer/lib/remote/session-securit
 
 /**
  * End-to-end protocol coverage that exercises the REAL production relay hub
- * (`services/remote-control/relay-hub.ts` — the routing logic the remote-control
+ * (`services/remote-control/relay-hub.ts`   the routing logic the remote-control
  * server's `relayMessage` handler delegates to) between a real desktop
  * (CloudRelayClient) and a real mobile (account-relay client). Delivery is
  * confirmed END TO END: the hub retains each frame until the RECEIVER
@@ -562,7 +562,7 @@ describe('RelayHub loss-safety unit semantics', () => {
     }
   }
 
-  it('does not ack on server acceptance — only on receiver confirmation', () => {
+  it('does not ack on server acceptance   only on receiver confirmation', () => {
     const hub = new RelayHub()
     const sender = recordingSocket()
     const receiver = recordingSocket()
@@ -643,7 +643,7 @@ describe('RelayHub loss-safety unit semantics', () => {
     expect(receiver.sent).toEqual([])
   })
 
-  it('never lets a sender self-ACK — the ACK must come from the intended receiver', () => {
+  it('never lets a sender self-ACK   the ACK must come from the intended receiver', () => {
     const hub = new RelayHub()
     const sender = recordingSocket()
     const receiver = recordingSocket()

@@ -36,7 +36,7 @@
     revealPath = $state<string | null>(null)
     revealNonce = $state(0)
     checkpoints = $state<TurnCheckpointSummary[]>([])
-    /** The running turn's live change summary — absent once the turn completes. */
+    /** The running turn's live change summary   absent once the turn completes. */
     liveTurn = $state<TurnCheckpointSummary | null>(null)
     liveRevision = $state(0)
     selectedCheckpointId = $state<string | null>(null)
@@ -138,7 +138,7 @@
         this.liveTurn = next
         if (next) this.liveRevision += 1
         if (finished) {
-          // The turn just completed — pull its authoritative checkpoint in.
+          // The turn just completed   pull its authoritative checkpoint in.
           void this.refresh(this.selectedCheckpointId)
         } else if (next && !this.selectedCheckpointId) {
           this.selectedCheckpointId = next.id
@@ -388,7 +388,7 @@
   let { projectId, threadId, checkpointId, revealPath = null, revealNonce = 0 }: Props = $props()
 
   // One owner per mounted instance. Each $effect runs whenever its prop changes
-  // and syncs that prop into the controller through a direct field write — the
+  // and syncs that prop into the controller through a direct field write   the
   // identity re-seed happens inside the controller itself, so prop changes reach
   // the correct thread's state without mutating during a derived evaluation.
   const controller = new DiffSidebarController()
@@ -532,7 +532,7 @@
           <div class="space-y-2">
             {#if checkpoint.status === 'active'}
               <p class="px-1 pb-1 text-[0.625rem] leading-relaxed text-dimmed">
-                Live changes — this turn is still running.
+                Live changes   this turn is still running.
               </p>
             {/if}
             {#if checkpoint.failure}
@@ -654,7 +654,7 @@
                 {/if}
                 {#if checkpoint.status === 'active'}
                   <p class="px-3 py-1.5 text-[0.625rem] leading-relaxed text-dimmed">
-                    This turn is still running — files update here as the agent edits them.
+                    This turn is still running   files update here as the agent edits them.
                   </p>
                 {/if}
                 {#if checkpoint.changes.length === 0}

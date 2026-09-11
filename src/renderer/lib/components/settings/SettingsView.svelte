@@ -203,7 +203,7 @@
     flashElement(element)
   }
 
-  // Sidebar tabs come from the settings search registry — the same source the
+  // Sidebar tabs come from the settings search registry   the same source the
   // spotlight searches, so a page can never be navigable but not searchable.
   const tabs: Array<{
     id: SettingsSection
@@ -215,7 +215,7 @@
     icon: entry.icon
   }))
 
-  // The header mirrors the section on screen — cleared when Settings closes.
+  // The header mirrors the section on screen   cleared when Settings closes.
   $effect(() => {
     let activeLabel: string | null = null
     for (const tab of tabs) {
@@ -369,7 +369,7 @@
     const unsubscribePermissionStatus = subscribe('notification:permissionStatus', (status) => {
       notificationPermission = status
     })
-    // The user may have just toggled notifications in System Settings —
+    // The user may have just toggled notifications in System Settings  
     // returning to the app must re-derive the state instead of showing a
     // stale warning.
     const onWindowFocus = (): void => {
@@ -417,7 +417,7 @@
 <svelte:window onkeydown={escHandler} />
 
 <div class="flex h-full">
-  <!-- Settings navigation — the shared sidebar, pinned so it can never be hidden here -->
+  <!-- Settings navigation   the shared sidebar, pinned so it can never be hidden here -->
   <CollapsibleSidebar title="Back" pinned>
     {#snippet titlePrefix()}
       <button

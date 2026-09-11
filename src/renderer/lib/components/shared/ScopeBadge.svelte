@@ -10,7 +10,7 @@
 
   let { bucket, size = 'xs' }: Props = $props()
 
-  /** Scopes are identified by colour only — no icons. The deterministic picked
+  /** Scopes are identified by colour only   no icons. The deterministic picked
    *  colour is the fallback when no explicit bucket colour is persisted. */
   let color = $derived(bucket.color ?? pickColorForSeed(bucket.id))
   /** Washed-out tint of the scope colour. */

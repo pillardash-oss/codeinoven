@@ -8,7 +8,7 @@ import { layerDevHash, layerSize } from './prompt-assembler'
  * Records a content-free accounting of every composed prompt and its paired
  * provider-reported usage so lightweight ChatEngine modes can be measured and
  * tightened. Episodes and totals carry ONLY normalized hashes, character
- * counts, and heuristic token estimates — never layer content. Recording is
+ * counts, and heuristic token estimates   never layer content. Recording is
  * inert in production builds and logs exclusively through `Logger.dev`.
  */
 
@@ -93,7 +93,7 @@ export function episodeFromPieces(input: {
 
 /**
  * Inert in production: dev-only attribution must never run in packaged builds.
- * There is intentionally no environment override — `NODE_ENV=production`
+ * There is intentionally no environment override   `NODE_ENV=production`
  * always disables recording.
  */
 export function attributionEnabled(): boolean {

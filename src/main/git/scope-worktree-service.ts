@@ -33,7 +33,7 @@ const SLUG_LIMIT = 48
 
 /** Minimal structural view of agent processes that may hold worktree files. */
 export interface ActiveProcessProbe {
-  /** Whether threads in the project — optionally one scope — own live processes. */
+  /** Whether threads in the project   optionally one scope   own live processes. */
   hasActiveProcessesFor(projectId: string, scopeBucketId?: string): Promise<boolean> | boolean
 }
 
@@ -821,7 +821,7 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
    * Adopt an existing raw Git worktree as a managed scope root: its checkout
    * is moved beneath the canonical config-root location via `git worktree
    * move`, then attached to the scope with environment propagation and an
-   * optional setup run — exactly like a freshly created managed worktree.
+   * optional setup run   exactly like a freshly created managed worktree.
    */
   async adoptWorktree(
     target: ScopeTarget,
@@ -1137,8 +1137,8 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
 
   /**
    * Consume a delete-scope token and fully remove a managed scope: the
-   * worktree checkout, the scope bucket, and — unless `deleteBranch` is false
-   * — the `cio/` branch. This is the single destructive entry point for
+   * worktree checkout, the scope bucket, and   unless `deleteBranch` is false
+   *   the `cio/` branch. This is the single destructive entry point for
    * deleting a worktree-backed scope (the renderer handles the thread choice,
    * delete or move to Default, before calling it). Always forceful: the user
    * already confirmed the preflight that reported dirty/unpushed work.
@@ -1187,7 +1187,7 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
           timeoutMs: 120_000
         })
       } catch {
-        // The directory is already gone or the registration is stale — prune
+        // The directory is already gone or the registration is stale   prune
         // clears dead metadata; a live dirty worktree keeps blocking below.
         await runGit(['worktree', 'prune'], { cwd: project.path, timeoutMs: 60_000 }).catch(
           () => undefined

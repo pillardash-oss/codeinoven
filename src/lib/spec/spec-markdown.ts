@@ -33,7 +33,7 @@ function block(value: unknown): string {
 export function exportEngineeringSpecMarkdown(spec: EngineeringSpec): string {
   const { content } = spec
   return [
-    `# ${spec.id} — Specification v${spec.version}`,
+    `# ${spec.id}   Specification v${spec.version}`,
     '',
     '## TL;DR',
     '',

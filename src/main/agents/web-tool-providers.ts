@@ -212,7 +212,7 @@ export function webSourceIndex(text: string): string {
       const url = asString(entry['url'])
       if (!url) return ''
       const title = asString(entry['title'])
-      return `${index + 1}. ${title ? `${title} — ` : ''}${url}`
+      return `${index + 1}. ${title ? `${title}   ` : ''}${url}`
     })
     .filter(Boolean)
   return sources.length > 0 ? `Sources:\n${sources.join('\n')}` : ''

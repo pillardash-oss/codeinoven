@@ -46,11 +46,18 @@
     accountId?: string
     favoriteModels?: string[]
     recentModels?: string[]
-    /** True while the picker is open — opening it refreshes the catalog. */
+    /** True while the picker is open   opening it refreshes the catalog. */
     open?: boolean
     /** True while the thinking-level dropdown is open. Lets a parent open the
      *  thinking selector directly (e.g. from the `/thinking` slash action). */
     thinkingMenuOpen?: boolean
+    /** True while the account dropdown is open. Lets a parent open the account
+     *  selector directly (e.g. from the `/account` slash action). */
+    accountMenuOpen?: boolean
+    /** Reports whether the account picker is rendered (more than one account
+     *  for the current provider). Lets a parent conditionally surface actions
+     *  such as the `/account` slash command. */
+    onAccountPickerVisibleChange?: (visible: boolean) => void
     /** Project whose harness catalog this picker displays. When provided, opening
      *  the picker lazily fetches that project's catalog (network only when stale). */
     projectId?: string | null
@@ -68,22 +75,22 @@
     visionOnly?: boolean
     /** Current thinking level. Whenever the selected model declares thinking
      *  presets, the trigger shows the level badge and the popover exposes the
-     *  presets — no opt-in beyond passing the current value is needed. */
+     *  presets   no opt-in beyond passing the current value is needed. */
     thinkingLevel?: ThinkingLevel | null
     /** Thinking presets to display. Defaults to the selected model's declared
-     *  presets — when the model declares none, thinking controls stay hidden. */
+     *  presets   when the model declares none, thinking controls stay hidden. */
     thinkingPresets?: ThinkingPreset[]
     onSelect: (providerId: string, modelId: string, harnessId: string, accountId?: string) => void
     /** Reports the full account record when the account segment changes. */
     onSelectAccount?: (account: HarnessAccount) => void
     onSelectMultiple?: (modelKeys: string[]) => void
-    /** Fired when the thinking level changes — either from an explicit preset
+    /** Fired when the thinking level changes   either from an explicit preset
      *  click, or automatically when a newly selected model no longer supports
      *  the previous level. */
     onSelectThinking?: (level: ThinkingLevel) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Removes a model from the caller's recently-used history; when provided,
-     *  recent rows show a small "x" next to the favorite star. No confirmation —
+     *  recent rows show a small "x" next to the favorite star. No confirmation  
      *  removing from history is trivially re-triggered by using the model. */
     onRemoveRecent?: (modelKey: string) => void
     /** Reorders a favorite relative to another favorite; position in display order. */
@@ -104,6 +111,7 @@
     recentModels = [],
     open = $bindable(false),
     thinkingMenuOpen = $bindable(false),
+    accountMenuOpen = $bindable(false),
     projectId = null,
     side = 'top',
     disabled = false,
@@ -117,6 +125,7 @@
     thinkingPresets,
     onSelect,
     onSelectAccount,
+    onAccountPickerVisibleChange,
     onSelectMultiple,
     onSelectThinking,
     onToggleFavorite,
@@ -168,11 +177,11 @@
   /**
    * Thinking presets offered by the selected model. Callers may override them
    * (e.g. the composer falls back to the standard presets while the catalog is
-   * still cold); otherwise the model's declared presets decide — none declared
+   * still cold); otherwise the model's declared presets decide   none declared
    * means the model does not reason and the thinking controls stay hidden.
    */
   let effectiveThinkingPresets = $derived(thinkingPresets ?? selectedModel?.thinkingPresets ?? [])
-  /** Thinking controls appear whenever the selected model declares presets —
+  /** Thinking controls appear whenever the selected model declares presets  
    *  the thinking level depends on the model, not on the caller's opt-in. */
   let supportsThinking = $derived(effectiveThinkingPresets.length > 0)
   /**
@@ -208,6 +217,10 @@
     providerAccounts.find((account) => account.id === effectiveAccountId)
   )
   let showAccountPicker = $derived(!multiSelect && providerAccounts.length > 1)
+
+  $effect(() => {
+    onAccountPickerVisibleChange?.(showAccountPicker)
+  })
   /**
    * Snapshot fallback so the trigger renders instantly, before any harness
    * catalog resolves: the thread's stored harness icon is always available, and
@@ -223,7 +236,7 @@
             : `${selectedModelKeys.length} model${selectedModelKeys.length === 1 ? '' : 's'} selected`))
       : (label ?? selectedModel?.name ?? (modelId || 'Model'))
   )
-  /** Keep the trigger readable — long names (e.g. Claude Code's default-model
+  /** Keep the trigger readable   long names (e.g. Claude Code's default-model
    *  description) would otherwise swallow the composer's bottom bar. */
   let selectedLabelDisplay = $derived(truncateLabel(selectedLabel))
   /** Peak/off-peak state of the currently selected model, for the trigger badge. */
@@ -237,8 +250,8 @@
   )
   /**
    * Harnesses present in the current catalog, ordered by the canonical harness
-   * registry (via `providerStore.providers`) so omitting a harness — or a custom
-   * provider being appended to the catalog tail — never reshuffles the chips.
+   * registry (via `providerStore.providers`) so omitting a harness   or a custom
+   * provider being appended to the catalog tail   never reshuffles the chips.
    */
   let harnessOptions = $derived(
     Array.from(
@@ -326,7 +339,7 @@
           (words.length === 0 && provider.catalogStatus === 'unavailable')
       )
   })
-  /** Visual shell of the trigger — it hosts the model button and, when the
+  /** Visual shell of the trigger   it hosts the model button and, when the
    *  selected model reasons, the thinking-level badge as a split control. */
   let triggerClasses = $derived(
     variant === 'field'
@@ -355,7 +368,7 @@
 
   /**
    * Whether a row is the currently selected model. The selected model is fully
-   * identified by the (harnessId, providerId, modelId) triple — never by modelId
+   * identified by the (harnessId, providerId, modelId) triple   never by modelId
    * alone, since different providers (e.g. DeepSeek vs OpenCode Go) can expose
    * models sharing the same id.
    */
@@ -577,7 +590,7 @@
         entry: ModelEntry
         favoriteKey?: string
         /** Stored recently-used key of the row, when the row comes from the
-         *  "Recently used" section — enables the remove-from-history "x". */
+         *  "Recently used" section   enables the remove-from-history "x". */
         recentKey?: string
         draggable: boolean
       }
@@ -585,7 +598,7 @@
   let pickerListScrollTop = $state(0)
   let pickerViewport = $state(240)
   /** True right after an arrow-key press, until the mouse physically moves.
-   *  CSS `:hover` is geometric — it re-fires on whatever row ends up under a
+   *  CSS `:hover` is geometric   it re-fires on whatever row ends up under a
    *  stationary cursor once the virtual list auto-scrolls for keyboard nav.
    *  While this is true, rows go pointer-events: none so a parked mouse can't
    *  paint a stale `:hover`; a real `mousemove` clears it and hands control
@@ -841,7 +854,17 @@
       matchingAccounts[0]?.id ??
       `${nextHarnessId}.default`
     onSelect(nextProviderId, nextModelId, nextHarnessId, nextAccountId)
-    if (nextHarnessId !== harnessId) accounts = availableAccounts
+    if (nextHarnessId !== harnessId) {
+      // Invalidate any in-flight loadAccounts for the previous harness before
+      // assigning the cross-harness list. A popover-open reload (forced, and
+      // potentially slow because it re-syncs harness auth) that resolves after
+      // this point would otherwise overwrite `accounts` with the previous
+      // harness's list, emptying `providerAccounts` and hiding the account
+      // segment for a provider that does have accounts.
+      accountLoadGeneration++
+      accounts = availableAccounts
+      accountLoading = false
+    }
     // Thinking level depends on the model: resolve a level the new model
     // actually offers and surface it right after the model change, so parents
     // never keep a stale level the model no longer supports.
@@ -932,7 +955,7 @@
       <Popover.Trigger
         class={modelButtonClasses}
         aria-label={`${multiSelect ? 'Select models' : 'Select model'}, currently ${selectedLabel}`}
-        title={`${multiSelect ? 'Select models' : 'Select model'} — ${selectedLabel}`}
+        title={`${multiSelect ? 'Select models' : 'Select model'}   ${selectedLabel}`}
         {disabled}
       >
         {#if selectedProvider}
@@ -1022,7 +1045,7 @@
         </DropdownMenu.Root>
       {/if}
       {#if showAccountPicker}
-        <DropdownMenu.Root>
+        <DropdownMenu.Root bind:open={accountMenuOpen}>
           <DropdownMenu.Trigger
             class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
             aria-label={`Account: ${selectedAccount?.label ?? 'Default'}`}
@@ -1101,7 +1124,7 @@
                 event.preventDefault()
                 keyboardNavActive = true
                 // Anchor the first arrow-key press on the active model so nav
-                // starts from what's selected, not the top of the list — but
+                // starts from what's selected, not the top of the list   but
                 // once the user has typed a search, "top of the results" is
                 // the more useful anchor.
                 const targetKey = search ? undefined : pickerKeyForSelectedModel()

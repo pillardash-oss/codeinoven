@@ -15,6 +15,7 @@ import type {
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 import { antigravityModelSlugs } from '../drivers/antigravity-model-output'
 import {
+  HarnessCommandError,
   prepareHarnessTerminalHandoff,
   readHarnessHomeFile,
   runHarnessCommand,
@@ -39,8 +40,11 @@ const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'gu')
 const CLINE_SETTINGS_DIR = join(homedir(), '.cline', 'data', 'settings')
 /** Pi keeps configured providers in models.json; the CLI has no status subcommand. */
 const PI_AGENT_DIR = join(homedir(), '.pi', 'agent')
-/** OpenCode's global config file — hiding providers edits disabled_providers here. */
+/** OpenCode's global config file   hiding providers edits disabled_providers here. */
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
+/** OpenCode's credential store; its keys are the real provider ids the CLI expects. */
+const OPENCODE_AUTH_PATH = join(homedir(), '.local', 'share', 'opencode', 'auth.json')
+const OPENCODE_AUTH_RELATIVE_PATH = '.local/share/opencode/auth.json'
 const OPENCODE_CONFIG_FORMAT = { tabSize: 2, insertSpaces: true, eol: '\n' }
 /** Muse Code stores OAuth credentials here (or $XDG_CONFIG_HOME/muse/auth.json). */
 const MUSE_AUTH_PATH = join(homedir(), '.config', 'muse', 'auth.json')
@@ -56,6 +60,11 @@ interface AuthDefinition {
   loginArgs(options: HarnessLoginOptions): string[]
   /** CLI arguments that remove a provider's stored credentials. */
   logoutArgs?(providerId?: string): string[]
+  /**
+   * Maps a stored slug id (and optionally the account's display name) to the
+   * credential identifier the harness CLI actually accepts at logout time.
+   */
+  resolveLogoutTarget?(providerId: string, providerHint?: string): Promise<string | undefined>
   /**
    * Whether the bare login command shows the harness's own interactive provider
    * picker (so the UI skips its in-app provider list and lets the user choose).
@@ -78,6 +87,8 @@ interface CommandResult {
   stdout: string
   stderr: string
   error?: string
+  /** Set when a spawned CLI exited non-zero (as opposed to failing to spawn). */
+  exitCode?: number
 }
 
 const READ_AND_HANDOFF_ONLY: HarnessAuthCapabilities = {
@@ -166,6 +177,39 @@ function parseClaudeStatus(output: string, succeeded: boolean): HarnessAuthStatu
     accounts: [],
     detail: 'Claude Code did not report a recognizable authentication status.'
   }
+}
+
+/** Real credential keys from OpenCode's own auth store (empty when unreadable). */
+async function readOpencodeCredentialKeys(): Promise<string[]> {
+  const remote = await readHarnessHomeFile('opencode', OPENCODE_AUTH_RELATIVE_PATH)
+  const content = typeof remote === 'string' ? remote : await readConfigOrEmpty(OPENCODE_AUTH_PATH)
+  try {
+    const parsed = JSON.parse(content) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return []
+    return Object.keys(parsed as Record<string, unknown>)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Stored opencode account ids are slugs of the catalog display label
+ * ('Z.AI' -> 'z-ai'), while the CLI accepts only real credential keys
+ * ('zai') or catalog names. Resolve through the auth store first, then
+ * fall back to the display name, which the CLI resolves itself.
+ */
+async function resolveOpencodeLogoutTarget(
+  providerId: string,
+  providerHint?: string
+): Promise<string | undefined> {
+  const keys = await readOpencodeCredentialKeys()
+  const lowered = providerId.toLowerCase()
+  const exact = keys.find((key) => key.toLowerCase() === lowered)
+  if (exact) return exact
+  const slugged = keys.find((key) => accountId(key) === lowered)
+  if (slugged) return slugged
+  const hint = providerHint?.trim()
+  return hint || undefined
 }
 
 function parseCodexStatus(output: string, succeeded: boolean): HarnessAuthStatus {
@@ -299,7 +343,7 @@ async function readClineStatus(projectPath?: string): Promise<HarnessAuthStatus>
 /**
  * Pi stores configured providers in `~/.pi/agent/models.json` and credentials
  * (api keys and OAuth tokens written by both the TUI and CodeInOven) in
- * `auth.json` — a record keyed by provider id. A provider is reported as an
+ * `auth.json`   a record keyed by provider id. A provider is reported as an
  * authenticated account when its models.json entry carries an API key or a
  * credential exists in auth.json; credentials without a models.json entry are
  * still connected providers and must be listed.
@@ -375,7 +419,7 @@ async function readPiStatus(
     })
     connected += 1
   }
-  // A fresh install with nothing configured is honestly "unauthenticated" —
+  // A fresh install with nothing configured is honestly "unauthenticated"
   // reporting `unknown` here made the status pill look permanently stuck and
   // the re-check button appear dead. `unknown` is reserved for installs where
   // Pi's config file could not be read at all.
@@ -401,7 +445,7 @@ function record(value: unknown): Record<string, unknown> | null {
  * `$XDG_CONFIG_HOME/muse/auth.json`) and honors a `META_API_KEY` env var that
  * takes priority over a logged-in session. The CLI exposes no `auth status`
  * subcommand, so the auth file is read directly. Its shape is
- * `{ schema_version, providers: { <id>: { access_token, api_key, ... } } }` —
+ * `{ schema_version, providers: { <id>: { access_token, api_key, ... } } }`  
  * a provider is authenticated when it carries an `access_token` or `api_key`.
  */
 async function readMuseStatus(
@@ -546,6 +590,7 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
       ...(options.providerId ? ['--provider', options.providerId] : [])
     ],
     logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
+    resolveLogoutTarget: resolveOpencodeLogoutTarget,
     pickerLogin: true
   },
   {
@@ -613,7 +658,7 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
 /**
  * Account status, offered-provider catalogs, and explicit login/logout flows
  * for local harnesses. Login and logout commands are handed to the UI, which
- * runs them inside a user-visible embedded terminal — CodeInOven never mutates
+ * runs them inside a user-visible embedded terminal   CodeInOven never mutates
  * a harness credential store on its own.
  */
 export class ProviderAccountOrchestrator {
@@ -663,12 +708,12 @@ export class ProviderAccountOrchestrator {
 
   /**
    * Start a fully in-app sign-in for a Pi catalog provider by running the
-   * provider's own `login()` from pi-ai — OAuth browser/device flows for the
+   * provider's own `login()` from pi-ai   OAuth browser/device flows for the
    * providers that define them, and the provider's real multi-field API-key
    * flow (e.g. Cloudflare's key + account id + gateway id) otherwise. Events
    * and prompts are broadcast to the UI; answers arrive via
    * {@link respondOAuthPrompt}; the resulting credential is stored in Pi's own
-   * auth store. Mirrors what Pi's TUI does — without the TUI.
+   * auth store. Mirrors what Pi's TUI does   without the TUI.
    */
   async beginOAuthLogin(
     harnessId: string,
@@ -806,7 +851,8 @@ export class ProviderAccountOrchestrator {
   async logout(
     harnessId: string,
     providerId?: string,
-    environment: NodeJS.ProcessEnv = {}
+    environment: NodeJS.ProcessEnv = {},
+    providerHint?: string
   ): Promise<void> {
     const definition = this.requireDefinition(harnessId)
     const piAgentDir = environment['PI_CODING_AGENT_DIR']
@@ -825,22 +871,34 @@ export class ProviderAccountOrchestrator {
         `${harnessId} does not expose a logout command. Remove the credential in the harness itself.`
       )
     }
+    let target = providerId
+    if (definition.resolveLogoutTarget && providerId !== undefined) {
+      target = (await definition.resolveLogoutTarget(providerId, providerHint)) ?? providerId
+    }
     const result = await this.run(
       definition.command,
-      definition.logoutArgs(providerId),
+      definition.logoutArgs(target),
       homedir(),
       environment
     )
     if (!result.succeeded) {
-      const detail = result.error ?? (result.stderr.trim() || result.stdout.trim())
-      throw new Error(`Logout failed: ${detail || 'unknown error'}`)
+      const detail = stripAnsi(
+        result.exitCode === undefined
+          ? (result.error ?? 'unknown error')
+          : result.stderr.trim() || result.stdout.trim()
+      )
+      throw new Error(
+        result.exitCode === undefined
+          ? `Logout failed: ${detail || 'unknown error'}`
+          : `Logout failed (${definition.command} exited with code ${result.exitCode}): ${detail || 'no error output'}`
+      )
     }
   }
 
   /**
    * The providers a harness offers for connection, surfaced from its catalog.
    * OpenCode's bare login (`opencode auth login`) presents its own interactive
-   * picker of every known provider, so there is nothing to enumerate here — the
+   * picker of every known provider, so there is nothing to enumerate here   the
    * honestly reportable set is whatever the harness is already connected to.
    * The others are small enough to enumerate from their own configuration.
    */
@@ -917,7 +975,7 @@ export class ProviderAccountOrchestrator {
       catalog = await listPiCatalogProviders()
     } catch (catalogError) {
       Logger.info(
-        '[provider-accounts] Pi catalog unavailable — falling back to configured accounts:',
+        '[provider-accounts] Pi catalog unavailable   falling back to configured accounts:',
         catalogError
       )
       return native.accounts.map((account) => ({
@@ -1016,11 +1074,21 @@ export class ProviderAccountOrchestrator {
       })
       return { succeeded: true, ...result }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (error instanceof HarnessCommandError) {
+        return {
+          succeeded: false,
+          stdout: error.stdout,
+          stderr: error.stderr,
+          ...(error.exitCode === undefined ? {} : { exitCode: error.exitCode }),
+          error: message
+        }
+      }
       return {
         succeeded: false,
         stdout: '',
         stderr: '',
-        error: error instanceof Error ? error.message : String(error)
+        error: message
       }
     }
   }

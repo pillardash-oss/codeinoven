@@ -1,5 +1,6 @@
 <script lang="ts">
   import { type Component } from 'svelte'
+  import { fade } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
   import { toast } from 'svelte-sonner'
   import { projectIconOnError, getProjectIcon } from '$lib/project-icons'
@@ -130,12 +131,12 @@
     threads: 'Threads'
   }
 
-  /** Settings takes over the header — no thread title or thread controls. */
+  /** Settings takes over the header   no thread title or thread controls. */
   let onSettings = $derived(isSettingsView(activeView))
 
   let onScope = $derived(activeView === 'scope')
 
-  /** Chats must feel like chat — no editor, spec, or terminal controls. */
+  /** Chats must feel like chat   no editor, spec, or terminal controls. */
   let chatMode = $derived(activeView === 'chats')
 
   /** Git controls and polling exist only for local projects configured for Git tracking. */
@@ -232,16 +233,16 @@
   let lastViewBeforeScope: PrimaryView = $state('projects')
   $effect(() => {
     if (
-      activeView === 'projects'
-      || activeView === 'projects-scope'
-      || activeView === 'threads'
-      || activeView === 'chats'
+      activeView === 'projects' ||
+      activeView === 'projects-scope' ||
+      activeView === 'threads' ||
+      activeView === 'chats'
     ) {
       lastViewBeforeScope = activeView === 'projects-scope' ? 'projects' : activeView
     }
   })
 
-  /** Navigate to a primary view without any sidebar toggling — used by the
+  /** Navigate to a primary view without any sidebar toggling   used by the
    *  Cmd/Ctrl+0-4 view shortcuts so they always land on the requested view. */
   async function navigateToView(view: 'projects' | 'chats' | 'scope' | 'threads'): Promise<void> {
     if (view === 'chats') preloadNavigationThreads('chats')
@@ -261,7 +262,7 @@
         workspaceState.clearThread()
       }
     } else if (view === 'projects' && activeView === 'chats') {
-      // Coming from chats — remember the chat thread and restore the project thread
+      // Coming from chats   remember the chat thread and restore the project thread
       scopeState.stashedChatThreadId = workspaceState.selectedThread?.id ?? null
       if (scopeState.stashedProjectThreadId) {
         void restoreThread(scopeState.stashedProjectThreadId)
@@ -287,7 +288,7 @@
       await navigateToView(lastViewBeforeScope)
       return
     }
-    // Selecting the view already open from the dropdown is a no-op — in
+    // Selecting the view already open from the dropdown is a no-op   in
     // particular, scoped threads → projects must simply close the board (the
     // caller clears it) without hiding the sidebar.
     if (view === activeView) return
@@ -309,8 +310,11 @@
   }
 
   async function toggleScopedThreads(): Promise<void> {
-    if (activeView === 'projects-scope' || (activeView === 'projects' && scopeState.sidebarContext)) {
-      // Off: land on the plain projects view — navigate() closes the sidebar.
+    if (
+      activeView === 'projects-scope' ||
+      (activeView === 'projects' && scopeState.sidebarContext)
+    ) {
+      // Off: land on the plain projects view   navigate() closes the sidebar.
       await navigateToView('projects')
       return
     }
@@ -363,7 +367,10 @@
   /** The currently active option is shown with brighter text in the menu. */
   let activeHeaderViewOption = $derived.by((): HeaderViewOptionId => {
     if (activeView === 'scope') return 'scope-board'
-    if (activeView === 'projects-scope' || (activeView === 'projects' && scopeState.sidebarContext)) {
+    if (
+      activeView === 'projects-scope' ||
+      (activeView === 'projects' && scopeState.sidebarContext)
+    ) {
       return 'scoped-threads'
     }
     if (activeView === 'threads') return 'threads'
@@ -371,17 +378,56 @@
     return 'projects'
   })
 
+  /** Views whose header maps to a real view-switcher option. Settings, remote
+   *  and other takeover views must not, or the trigger would flash "Projects". */
+  let showsPrimaryOption = $derived(
+    activeView === 'projects' ||
+      activeView === 'projects-scope' ||
+      activeView === 'threads' ||
+      activeView === 'chats' ||
+      activeView === 'scope'
+  )
+
+  /** Last option shown while a primary view was active. */
+  let lastPrimaryHeaderViewOption = $state<HeaderViewOptionId>('projects')
+  $effect(() => {
+    if (showsPrimaryOption) lastPrimaryHeaderViewOption = activeHeaderViewOption
+  })
+
+  /** The option the trigger and menu reflect: live on primary views, the last
+   *  primary option while settings/remote take over the header. */
+  let shownHeaderViewOption = $derived(
+    showsPrimaryOption ? activeHeaderViewOption : lastPrimaryHeaderViewOption
+  )
+
   let activeHeaderViewLabel = $derived.by(() => {
-    const option = headerViewOptions().find((candidate) => candidate.id === activeHeaderViewOption)
+    const option = headerViewOptions().find((candidate) => candidate.id === shownHeaderViewOption)
     return option?.label ?? 'Projects'
   })
 
-  /** Cmd/Ctrl+3 — Projects view with the scope sidebar active for the current
+  let activeHeaderViewIcon = $derived(
+    headerViewOptions().find((candidate) => candidate.id === shownHeaderViewOption)?.icon ??
+      FolderKanban
+  )
+
+  /** Rendered width of the current trigger label. Measured after every label
+   *  swap so the wrapper can animate its width instead of snapping. */
+  let labelWidth = $state<number | null>(null)
+  let measureLabel: HTMLSpanElement | undefined = $state(undefined)
+
+  $effect(() => {
+    // Track the label so this re-runs after each swap, once the measuring
+    // span already holds the new text.
+    void activeHeaderViewLabel
+    if (measureLabel) labelWidth = measureLabel.offsetWidth
+  })
+
+  /** Cmd/Ctrl+3   Projects view with the scope sidebar active for the current
    *  thread (or project). Idempotent: never turns scope state off. */
   async function openProjectWithScopeState(): Promise<void> {
     if (activeView !== 'projects' && activeView !== 'projects-scope') {
       await navigateToView('projects')
-      // Coming back from another view — restore a stashed scope context first.
+      // Coming back from another view   restore a stashed scope context first.
       if (scopeState.stashedSidebarContext) {
         scopeState.restoreStashedSidebarContext()
         if (scopeState.stashedProjectThreadId) {
@@ -409,7 +455,7 @@
     }
   }
 
-  /** True while any project thread is actively being worked on — a gentle
+  /** True while any project thread is actively being worked on   a gentle
    *  pulse on the view switcher title. */
   let anyProjectWorking = $derived(
     scopeState.allScopeThreads.some(
@@ -454,7 +500,7 @@
 
   async function openGatewayDashboard(): Promise<void> {
     if (!gatewayDashboardUrl) {
-      toast.error('Gateway dashboard is not available — start the gateway first')
+      toast.error('Gateway dashboard is not available   start the gateway first')
       return
     }
     const opened = await gatewayState.openDashboard(gatewayDashboardUrl)
@@ -471,7 +517,7 @@
       return
     }
     // Activation + refresh are event-driven by the workspace store
-    // (`notifyThreadOpened` on every thread open) — this effect only subscribes
+    // (`notifyThreadOpened` on every thread open)   this effect only subscribes
     // to agent checkpoints for the active project.
     gitState.ensureProjectEvents(thread.projectId)
   })
@@ -610,14 +656,41 @@
     <div class="flex items-center gap-0.5">
       <DropdownMenu.Root>
         <DropdownMenu.Trigger
-          class="flex h-7 items-center gap-1 rounded-md px-1.5 text-[0.6875rem] font-medium text-foreground transition-colors duration-150 hover:bg-elevated"
+          class="flex h-7 items-center gap-1 rounded-md px-1.5 text-[0.625rem] font-medium text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
           aria-label="Switch view"
           title="Switch view"
           data-onboarding="view-switcher"
         >
-          <span class="truncate" class:animate-pulse={anyProjectWorking}
-            >{activeHeaderViewLabel}</span
+          <!-- Active view icon: crossfades between views instead of popping. -->
+          <span class="grid h-4 w-4 shrink-0 place-items-center">
+            {#key shownHeaderViewOption}
+              {@const ActiveViewIcon = activeHeaderViewIcon}
+              <span
+                class="col-start-1 row-start-1 flex items-center justify-center"
+                in:fade={{ duration: 150 }}
+                out:fade={{ duration: 100 }}
+              >
+                <ActiveViewIcon size={14} strokeWidth={1.8} />
+              </span>
+            {/key}
+          </span>
+          <!-- Label wrapper: width is measured from the hidden mirror span and
+               transitions, so the switcher and the action buttons beside it
+               glide when the view changes instead of jumping. -->
+          <span
+            class="relative overflow-hidden text-left whitespace-nowrap transition-[width] duration-200 ease-out motion-reduce:transition-none"
+            class:animate-pulse={anyProjectWorking}
+            style:width={labelWidth === null ? undefined : `${labelWidth}px`}
           >
+            {activeHeaderViewLabel}
+            <span
+              class="absolute top-0 left-0 invisible whitespace-nowrap"
+              bind:this={measureLabel}
+              aria-hidden="true"
+            >
+              {activeHeaderViewLabel}
+            </span>
+          </span>
           <ChevronDown size={12} class="shrink-0 text-muted" />
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
@@ -630,7 +703,7 @@
           >
             {#each headerViewOptions() as option (option.id)}
               {@const Icon = option.icon}
-              {@const isSelected = option.id === activeHeaderViewOption}
+              {@const isSelected = option.id === shownHeaderViewOption}
               <DropdownMenu.Item
                 class={[
                   'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors',
@@ -647,7 +720,11 @@
                 }}
                 onSelect={option.select}
               >
-                <Icon size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
+                <Icon
+                  size={14}
+                  strokeWidth={1.8}
+                  class="shrink-0 {isSelected ? 'text-foreground' : 'text-muted'}"
+                />
                 <span class="flex-1 whitespace-nowrap">{option.label}</span>
                 <ShortcutHint keys={option.keys} />
               </DropdownMenu.Item>
@@ -670,7 +747,7 @@
               title={item.title}
               onclick={() => item.run?.()}
             >
-              <ActionIcon size={14} />
+              <ActionIcon size={15} strokeWidth={1.8} />
             </button>
           {/if}
         {/each}
@@ -678,7 +755,7 @@
     </div>
   </nav>
 
-  <!-- Scope view header area — separator, scrollable tabs, sticky tools -->
+  <!-- Scope view header area   separator, scrollable tabs, sticky tools -->
   {#if onScope}
     <div class="titlebar-no-drag flex min-w-0 flex-1 items-center self-stretch pl-3">
       <!-- Visual separator between nav buttons and scope tabs -->
@@ -746,6 +823,7 @@
           coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)}
         {@const isRetryPaused = isThreadRetryPaused(thread)}
         {@const activeRunActivity = agentRuns.activity(thread.projectId, thread.id)}
+        {@const activeRunActivityDetail = agentRuns.activityDetail(thread.projectId, thread.id)}
         <div class="titlebar-no-drag relative flex min-w-0 max-w-full items-center gap-2">
           {#if !chatMode && thread.projectId !== INBOX_PROJECT_ID}
             {@const headerProject =
@@ -800,7 +878,9 @@
                     : isRetryPaused
                       ? 'Waiting to retry'
                       : activeRunActivity === 'brainstorm_report'
-                        ? 'Refreshing report'
+                        ? activeRunActivityDetail?.phase === 'create'
+                          ? 'Generating report'
+                          : 'Refreshing report'
                         : 'Working'}
                 </span>
               </span>
@@ -887,19 +967,19 @@
   {/if}
 
   <div class="titlebar-no-drag ml-auto flex shrink-0 items-center gap-1">
-    <!-- Gateway dashboard — global browser entry, visible when gateway is ready -->
+    <!-- Gateway dashboard   global browser entry, visible when gateway is ready -->
     {#if hasGateway && gatewayDashboardUrl}
       <button
         class="flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
         aria-label="Open gateway dashboard"
-        title="Open gateway dashboard — {gatewayDashboardUrl}"
+        title="Open gateway dashboard   {gatewayDashboardUrl}"
         onclick={() => void openGatewayDashboard()}
       >
         <Globe size={16} />
       </button>
     {/if}
 
-    <!-- Editor preference — hidden in chat mode, scope view, and when no project is selected -->
+    <!-- Editor preference   hidden in chat mode, scope view, and when no project is selected -->
     {#if !chatMode && !onScope && workspaceState.activeProject}
       <div class="relative flex items-center">
         <button
@@ -965,7 +1045,7 @@
       </div>
     {/if}
 
-    <!-- Spec studio — only for an existing document or an eligible final-response retry -->
+    <!-- Spec studio   only for an existing document or an eligible final-response retry -->
     {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && workspaceState.specStudioAvailable}
       <button
         class="flex h-8 items-center gap-1.5 px-2 transition-colors duration-150 {workspaceState.specStudioOpen
@@ -1007,7 +1087,7 @@
       </button>
     {/if}
 
-    <!-- Git status chip — only when a thread is open in a project view -->
+    <!-- Git status chip   only when a thread is open in a project view -->
     {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && gitAvailable}
       <button
         class={[
@@ -1023,7 +1103,7 @@
         ]}
         aria-label="Open Git panel"
         title={gitState.activePrConflictCount > 0
-          ? `${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution — open Git panel`
+          ? `${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution   open Git panel`
           : 'Open Git panel'}
         onclick={openGitPanel}
       >
@@ -1067,7 +1147,7 @@
       </button>
     {/if}
 
-    <!-- Notification bell — available in all views -->
+    <!-- Notification bell   available in all views -->
     <button
       class="relative flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground {notificationsPanelActive
         ? 'bg-elevated text-foreground'

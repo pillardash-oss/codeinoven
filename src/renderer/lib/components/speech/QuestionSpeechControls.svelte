@@ -54,7 +54,7 @@
     // Commit the value captured while scrubbing, not `input.value`: the
     // pointerup handler clears `scrubbing` before `change` dispatches, which
     // makes the reactive binding overwrite the input with the current playhead
-    // — reading it here would seek right back to where playback already is.
+    //   reading it here would seek right back to where playback already is.
     scrubbing = false
     void speechController.seekPlayback(scrubValue)
   }

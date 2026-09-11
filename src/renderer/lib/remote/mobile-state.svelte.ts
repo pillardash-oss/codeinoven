@@ -126,7 +126,7 @@ class MobileState {
   /** The message the history sheet asked the transcript to scroll to. */
   jumpTarget = $state<MobileJumpTarget | null>(null)
 
-  /** Mobile-owned attention counter — bumped when a thread update pushes an
+  /** Mobile-owned attention counter   bumped when a thread update pushes an
    *  awaiting-approval or unread thread into the list. No desktop stores. */
   attentionCount = $state(0)
 
@@ -227,7 +227,7 @@ class MobileState {
         this.projectIcons.set(projectId, iconUrl)
       }
     } catch (error) {
-      // A background refresh must not discard data the phone already shows —
+      // A background refresh must not discard data the phone already shows  
       // keep the last-known list and surface the failure only on first paint.
       if (!background || !hasData) {
         this.projects = []
@@ -534,7 +534,7 @@ class MobileState {
 
 export const mobileState = new MobileState()
 
-/** Whether two project names collide — used to show locations on folder rows. */
+/** Whether two project names collide   used to show locations on folder rows. */
 export function mobileHasProjectNameCollision(
   project: Pick<Project, 'name'>,
   projects: readonly Pick<Project, 'name'>[]

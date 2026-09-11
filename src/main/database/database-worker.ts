@@ -1,13 +1,13 @@
 /**
- * Typed database worker boundary — the single owner of SQLite maintenance and
+ * Typed database worker boundary   the single owner of SQLite maintenance and
  * FTS maintenance.
  *
  * The `DatabaseWorker` spawns a dedicated `worker_threads` Worker
  * (`database-worker-thread.ts`) that opens a second WAL connection to the same
- * database file and runs every O(database-size) operation — passive WAL
+ * database file and runs every O(database-size) operation   passive WAL
  * checkpoints, integrity checks, size telemetry, online backup/restore,
  * VACUUM, FTS optimize/integrity/rebuild, bounded retention, and
- * corruption/full-disk detection and recovery — so that no maintenance work
+ * corruption/full-disk detection and recovery   so that no maintenance work
  * ever blocks the Electron main process. The primary read/write connection
  * stays in the main process; WAL locking coordinates the two connections.
  *
@@ -298,7 +298,7 @@ export class DatabaseWorker {
 
     // Register the exit listener BEFORE sending the shutdown request so a fast
     // worker exit (ack + port close) can never fire before the listener is
-    // attached — otherwise the clean exit is missed and we would force-terminate.
+    // attached   otherwise the clean exit is missed and we would force-terminate.
     let exitedCleanly = false
     const cleanExit = new Promise<void>((resolve) => {
       const onExit = () => {
@@ -321,7 +321,7 @@ export class DatabaseWorker {
     await cleanExit
 
     if (!exitedCleanly) {
-      // Bounded forced termination — only when the worker did not exit cleanly.
+      // Bounded forced termination   only when the worker did not exit cleanly.
       this.logger.dev('Database maintenance worker did not exit cleanly; force-terminating')
       await worker.terminate().catch(() => undefined)
     }
@@ -401,7 +401,7 @@ export class DatabaseWorker {
   }
 
   /**
-   * Bounded read decoded straight to `AgentMessage[]` on the worker thread —
+   * Bounded read decoded straight to `AgentMessage[]` on the worker thread  
    * the `parts` JSON (and its legacy oversized tool outputs) is parsed and
    * capped there, so a multi-megabyte string never crosses the worker port.
    */
@@ -479,7 +479,7 @@ export class DatabaseWorker {
 
   /**
    * Serialize a thread's conversation into a Markdown transcript on the worker
-   * thread and write it atomically to `destinationPath` — the heavy read/build
+   * thread and write it atomically to `destinationPath`   the heavy read/build
    * never touches the main process. Returns the written path on success.
    */
   async exportTranscript(

@@ -945,7 +945,7 @@ export class HarnessUsageRepo {
    * Accumulate one completed turn into the snapshot table. Called at the end of
    * each agent turn (success or failure). Each assistant message is counted once
    * (guarded by the harness_usage_messages ledger), so cost/tokens/duration are
-   * added to whatever the thread's harness row already holds — never double
+   * added to whatever the thread's harness row already holds   never double
    * counted across retries, compaction, or restart.
    *
    * Only candidate ids from this turn are checked against the ledger, on the

@@ -1126,7 +1126,13 @@ class ThreadMessagesStore {
   /** Apply Brainstorm lifecycle events by thread identity so navigation never drops them. */
   #applyBrainstormTrace(projectId: string, threadId: string, update: BrainstormTraceUpdate): void {
     if (update.type === 'refresh.started') {
-      agentRuns.setBackgroundBusy(projectId, threadId, 'brainstorm_report', update.startedAt)
+      agentRuns.setBackgroundBusy(
+        projectId,
+        threadId,
+        'brainstorm_report',
+        update.startedAt,
+        update.phase ? { phase: update.phase, version: update.version } : undefined
+      )
       return
     }
     if (update.type === 'refresh.completed') {

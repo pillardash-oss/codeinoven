@@ -170,7 +170,7 @@ describe('ChatEngine scope-owned roots', () => {
     const resolve = resolveThreadPathFn(engine)
     const threads = threadCreator(engine)
 
-    // A thread in a healthy managed scope resolves to the worktree root —
+    // A thread in a healthy managed scope resolves to the worktree root  
     // the same funnel drivers, session registries, change tracking, and
     // checkpoints all use.
     const scoped = await threads.createThread({

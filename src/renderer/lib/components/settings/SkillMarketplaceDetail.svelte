@@ -506,7 +506,7 @@
             </p>
             <p class="mt-1 font-mono text-sm tabular-nums">
               {detail?.githubStars === null || detail?.githubStars === undefined
-                ? '—'
+                ? ' '
                 : detail.githubStars.toLocaleString()}
             </p>
           </div>
@@ -516,7 +516,7 @@
             >
               <CalendarDays size={11} /> First seen
             </p>
-            <p class="mt-1 font-mono text-xs">{detail?.firstSeen ?? '—'}</p>
+            <p class="mt-1 font-mono text-xs">{detail?.firstSeen ?? ' '}</p>
           </div>
           <div>
             <p

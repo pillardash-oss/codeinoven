@@ -26,11 +26,11 @@ Chromium's MediaRecorder output is decoded to mono 16 kHz WAV by the pinned pack
 
 The initial families are:
 
-- Parakeet TDT 0.6B v2 (English-optimized) and v3 (multilingual) for local ASR through sherpa-onnx — ranked first in the ASR tab, with **Best for English** (v2) and **Best for Multilingual** (v3) badges.
-- Whisper Base for local ASR through MLX or sherpa-onnx — ranked after Parakeet, with platform badges and Hugging Face links.
-- Kokoro English for local TTS through MLX or sherpa-onnx — shown in the TTS tab with **MLX / ONNX** runtime badges and Hugging Face links.
+- Parakeet TDT 0.6B v2 (English-optimized) and v3 (multilingual) for local ASR through sherpa-onnx   ranked first in the ASR tab, with **Best for English** (v2) and **Best for Multilingual** (v3) badges.
+- Whisper Base for local ASR through MLX or sherpa-onnx   ranked after Parakeet, with platform badges and Hugging Face links.
+- Kokoro English for local TTS through MLX or sherpa-onnx   shown in the TTS tab with **MLX / ONNX** runtime badges and Hugging Face links.
 - Qwen3 1.7B and 0.6B official GGUF Q8_0 quantizations for local **instruct** cleanup and lesson learning.
-- superwhisper **S1 mini** GGUF Q4_K_M — a purpose-trained English dictation normalizer (punctuation, truecasing, filler removal, inverse text normalization). It speaks a fixed control-line protocol rather than free instructions: CodeInOven sends its exact trained system prompt plus `[Styling: semi-formal] [Structure: prose] [Context: general]`, and never injects lessons into it. S1 mini performs **cleanup only**; lesson learning runs through the conversation provider's cheapest model (title-route), with the Qwen3 instruct models as the offline fallback.
+- superwhisper **S1 mini** GGUF Q4_K_M   a purpose-trained English dictation normalizer (punctuation, truecasing, filler removal, inverse text normalization). It speaks a fixed control-line protocol rather than free instructions: CodeInOven sends its exact trained system prompt plus `[Styling: semi-formal] [Structure: prose] [Context: general]`, and never injects lessons into it. S1 mini performs **cleanup only**; lesson learning runs through the conversation provider's cheapest model (title-route), with the Qwen3 instruct models as the offline fallback.
 
 Both families run through a llama.cpp `llama-server` process that is either discovered on the machine or downloaded at the user's request; see the llama.cpp runtime section below. The server is always started with `--jinja --chat-template-kwargs '{"enable_thinking":false}'` because every supported cleanup model was trained with thinking off.
 
@@ -57,15 +57,15 @@ Run `bun run speech:catalog` during development to validate the manifest and lis
 
 ### User model import
 
-Sound → **Models** is a tabbed surface with three sub-tabs — **ASR**, **TTS**, and **LLM** (cleanup) — each showing its artifacts as individual cards in a fixed-height, internally scrollable container (`max-h-[520px] overflow-y-auto`). Cards are ranked: Parakeet TDT v2 (**Best for English**) then v3 (**Best for Multilingual**) first in ASR, followed by Whisper variants; Kokoro variants in TTS; Qwen MLX then sherpa punctuation in LLM. Each card shows a **runtime badge** (MLX / ONNX / GGUF), a ranking/best-for badge where applicable, size, license, qualification, languages, and a **Hugging Face link** (`sourcePageUrl`). Each card has its **own Import and Paste Path buttons** (in addition to per-sub-tab header buttons), so the user can paste and import directly from any card; a fixed-height scroll keeps the section bounded. Users can import their own models by pointing at a local folder or file via **Import** (native file picker) or **Paste Path** (paste a filesystem path). Both actions share the same validation and registration path. Import registers a **user-owned external reference** only — CodeInOven never copies or deletes the referenced files. A `.mlx` model is registered to the MLX runtime and is gated to Apple Silicon; a `.gguf` model is registered to the GGUF/llama.cpp runtime (either a single `.gguf` file or a folder containing `.gguf` files); anything else is rejected with an unsupported-format error. Unregistering an imported model removes the reference only and never touches the external files on disk. Imported models appear under an “Imported models” group within the Models tab.
+Sound → **Models** is a tabbed surface with three sub-tabs   **ASR**, **TTS**, and **LLM** (cleanup)   each showing its artifacts as individual cards in a fixed-height, internally scrollable container (`max-h-[520px] overflow-y-auto`). Cards are ranked: Parakeet TDT v2 (**Best for English**) then v3 (**Best for Multilingual**) first in ASR, followed by Whisper variants; Kokoro variants in TTS; Qwen MLX then sherpa punctuation in LLM. Each card shows a **runtime badge** (MLX / ONNX / GGUF), a ranking/best-for badge where applicable, size, license, qualification, languages, and a **Hugging Face link** (`sourcePageUrl`). Each card has its **own Import and Paste Path buttons** (in addition to per-sub-tab header buttons), so the user can paste and import directly from any card; a fixed-height scroll keeps the section bounded. Users can import their own models by pointing at a local folder or file via **Import** (native file picker) or **Paste Path** (paste a filesystem path). Both actions ... (very long line, trimmed to 1000 chars)
 
-Pasting a path opens **Paste model path** — a modal with a focused input that validates live on paste and on edit. The modal trims surrounding whitespace and matching outer quotes before validation and shows when normalization occurred. Validation runs in the main process (filesystem access never leaves the renderer) and is debounced to avoid blocking the UI. The modal shows:
+Pasting a path opens **Paste model path**   a modal with a focused input that validates live on paste and on edit. The modal trims surrounding whitespace and matching outer quotes before validation and shows when normalization occurred. Validation runs in the main process (filesystem access never leaves the renderer) and is debounced to avoid blocking the UI. The modal shows:
 
-- **Supported model found** (with detected type: MLX or GGUF) — Import enabled.
-- **Empty** — guidance with supported formats.
-- **Not found** — no file or folder exists at that path.
-- **Permission denied** — the path cannot be read.
-- **Unsupported format / platform** — wrong extension, directory vs file mismatch (e.g. a `.gguf` directory), or MLX on non-Apple Silicon.
+- **Supported model found** (with detected type: MLX or GGUF)   Import enabled.
+- **Empty**   guidance with supported formats.
+- **Not found**   no file or folder exists at that path.
+- **Permission denied**   the path cannot be read.
+- **Unsupported format / platform**   wrong extension, directory vs file mismatch (e.g. a `.gguf` directory), or MLX on non-Apple Silicon.
 
 Import remains disabled until validation passes. The modal is fully keyboard-accessible: focus lands on the input when opened, **Escape** closes it, **Enter** imports when valid, and tab order is trapped by the shared modal behavior. No network download is performed from the paste flow; it only validates and registers a local path.
 
@@ -73,13 +73,13 @@ Pasting also shows a **detected model breakup** directly from the filesystem pat
 
 ### Active model and single-resident policy
 
-Each capability — **ASR**, **TTS**, and **LLM (cleanup)** — has at most **one active model** at a time (`sound.asrArtifactId`, `sound.ttsArtifactId`, `sound.cleanupArtifactId` in `src/lib/speech/types.ts`). The Sound → Models header shows the current active for the selected sub-tab (e.g. “Active for ASR: Parakeet TDT 0.6B v2 — only this model stays resident”) and a **Clear** action; when no active is set the UI explains that the first qualified installed model is used. Each catalog card that is installed shows **Set Active** (which displaces the previous active for that capability) or an **Active** badge and highlight when it is the active model; imported models show the same parsed identity breakup and an **Active** toggle per capability. Activating a model for a capability implicitly displaces the previous one — only the active model is considered resident in memory — and the selection is persisted in app config (`src/main/ipc/ipc-handlers.ts`). Catalog and imported models share the same activation path; imported models are validated contextually per tab (`src/main/speech/speech-service.ts:validateModelPath`) and registered with their capability (`speech:importModel`).
+Each capability   **ASR**, **TTS**, and **LLM (cleanup)**   has at most **one active model** at a time (`sound.asrArtifactId`, `sound.ttsArtifactId`, `sound.cleanupArtifactId` in `src/lib/speech/types.ts`). The Sound → Models header shows the current active for the selected sub-tab (e.g. “Active for ASR: Parakeet TDT 0.6B v2   only this model stays resident”) and a **Clear** action; when no active is set the UI explains that the first qualified installed model is used. Each catalog card that is installed shows **Set Active** (which displaces the previous active for that capability) or an **Active** badge and highlight when it is the active model; imported models show the same parsed identity breakup and an **Active** toggle per capability. Activating a model for a capability implicitly displaces the previous one   only the active model is considered resident in memory   and the selection is persisted in app config (`src/main/ipc/ipc-handlers.ts`). Catalog and imported models shar ... (very long line, trimmed to 1000 chars)
 
 IPC: `speech:validateModelPath` (main-process filesystem validation, returns `ModelPathValidationResult`) and `speech:importModel` (shared registration for both picker and paste, now `speech:importModel(path, capability)`). See `src/lib/speech/model-path-validation.ts` for the shared normalization and extension allowlist, and `src/main/speech/speech-service.ts` for the main-process validation and registration logic.
 
 ### History retention
 
-Speech history defaults to 30 attempts (1–500) and evicts oldest-first at the configured limit, removing the evicted attempt's app-owned audio. Every attempt — success or failure — records the audio plus its raw transcript and cleaned transcript; retries append results without duplicating retained audio. Explicit deletion always requires confirmation.
+Speech history defaults to 30 attempts (1–500) and evicts oldest-first at the configured limit, removing the evicted attempt's app-owned audio. Every attempt   success or failure   records the audio plus its raw transcript and cleaned transcript; retries append results without duplicating retained audio. Explicit deletion always requires confirmation.
 
 Apple Silicon packages build the pinned Swift worker with `bun run speech:build-mlx`. Packaging copies that executable and the checksum-verified MLX Metal library into the application resources; model weights remain separate downloads. Whisper Base and Kokoro BF16 are qualified on an Apple M1 Pro with the exact measurements recorded in the catalog. Kokoro's verified English G2P resources are part of its downloadable artifact so first synthesis does not perform a hidden network fetch.
 
@@ -111,11 +111,11 @@ The mic is hidden on machines with no installed local speech-to-text model unles
 
 Local cleanup is enabled by default. The cleanup system prompt is assembled from three user-facing behavior toggles (Sound → Preferences → Cleanup behavior) plus the user's enabled learned lessons for the current scope:
 
-- **Smart cleanup** — remove disfluencies ("um", "uh") and filler phrases, add punctuation and capitalization.
-- **Self-correction** — drop "no wait / scratch that" retracts and keep only the final intent.
-- **Preserve technical** — keep code identifiers and paths exact; dictate `index dot tsx` → `index.tsx`, `src slash components` → `src/components`.
+- **Smart cleanup**   remove disfluencies ("um", "uh") and filler phrases, add punctuation and capitalization.
+- **Self-correction**   drop "no wait / scratch that" retracts and keep only the final intent.
+- **Preserve technical**   keep code identifiers and paths exact; dictate `index dot tsx` → `index.tsx`, `src slash components` → `src/components`.
 
-Before any model sees the transcript, CodeInOven deterministically collapses ASR loop artifacts — pathological repetitions like "URL URL URL…" or "thanks for watching" repeated six or more times, including CJK loops — which small refine models otherwise truncate around and larger ones echo verbatim. Rhetorical repetition below the threshold is preserved.
+Before any model sees the transcript, CodeInOven deterministically collapses ASR loop artifacts   pathological repetitions like "URL URL URL…" or "thanks for watching" repeated six or more times, including CJK loops   which small refine models otherwise truncate around and larger ones echo verbatim. Rhetorical repetition below the threshold is preserved.
 
 The instruct model then applies the assembled prompt and the scoped style lessons; there is no rule or pattern-matching correction layer. If no cleanup model is installed (or the runtime is unavailable), CodeInOven inserts the raw transcript unchanged, records `modelMissing` in the attempt provenance, and the Sound → Models page shows a prominent download call-to-action. Cleanup failure never switches backend or contacts a remote model.
 
@@ -129,9 +129,9 @@ Speech models are kept resident so later use is instant, and are unloaded after 
 
 ## Lesson learning
 
-When the user edits a dictation before sending it, CodeInOven compares the inserted transcript with the sent text. Whitespace-only differences are ignored. For a real edit, an instruct LLM receives both texts and distills what changed — vocabulary substitutions, punctuation habits, phrasing rewrites, formatting or stylistic transforms — into **structured lessons**: a short imperative instruction plus concrete example pairs. This is deliberately not regex substitution and never fine-tunes model weights.
+When the user edits a dictation before sending it, CodeInOven compares the inserted transcript with the sent text. Whitespace-only differences are ignored. For a real edit, an instruct LLM receives both texts and distills what changed   vocabulary substitutions, punctuation habits, phrasing rewrites, formatting or stylistic transforms   into **structured lessons**: a short imperative instruction plus concrete example pairs. This is deliberately not regex substitution and never fine-tunes model weights.
 
-Lesson extraction runs through `provideCheapModel` — the same reusable cheap-model utility as thread title generation: a single self-contained prompt, no conversation history, per-candidate timeout, run in a disposable session against the active conversation provider's cheapest available model (`speech_lesson` auxiliary feature, tracked in diagnostics). The transcript already leaves the machine when the user sends the message, so this adds no new privacy exposure. If the harness or provider cannot run the auxiliary completion, extraction falls back to the local instruct cleanup model (Qwen3), when installed. S1 mini never extracts or consumes lessons — it is a single-purpose normalizer with frozen weights and a fixed prompt protocol.
+Lesson extraction runs through `provideCheapModel`   the same reusable cheap-model utility as thread title generation: a single self-contained prompt, no conversation history, per-candidate timeout, run in a disposable session against the active conversation provider's cheapest available model (`speech_lesson` auxiliary feature, tracked in diagnostics). The transcript already leaves the machine when the user sends the message, so this adds no new privacy exposure. If the harness or provider cannot run the auxiliary completion, extraction falls back to the local instruct cleanup model (Qwen3), when installed. S1 mini never extracts or consumes lessons   it is a single-purpose normalizer with frozen weights and a fixed prompt protocol.
 
 Lessons are bucketed per mode: lessons learned while dictating inside a project apply only in that project's views, lessons learned in chat/inbox apply across chats, and the store also allows a global layer for universal habits (caps: 500 global, 200 per context; disabled/lowest-confidence/oldest-reinforced lessons are evicted first). Reinforcing an existing lesson raises its confidence toward 0.99.
 

@@ -13,7 +13,7 @@
 
   let { open, chatMode, onClose, onExport }: Props = $props()
 
-  /** Include the working trace (reasoning, tool calls, sub-agents) — off by default. */
+  /** Include the working trace (reasoning, tool calls, sub-agents)   off by default. */
   let includeTrace = $state(false)
   let busy = $state(false)
 
@@ -55,7 +55,7 @@
       class="flex items-start gap-1.5 rounded-lg bg-elevated px-3 py-2 text-[0.6875rem] leading-snug text-muted"
     >
       <Loader2 size={12} class="mt-0.5 shrink-0 animate-spin text-accent" />
-      The transcript is exported in the background on a worker thread — the app stays fully responsive
+      The transcript is exported in the background on a worker thread   the app stays fully responsive
       and you can keep working while it runs. You'll get a notification when it's ready.
     </p>
   </div>

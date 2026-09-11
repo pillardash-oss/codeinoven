@@ -476,7 +476,7 @@ export interface Thread {
 
 /**
  * A private, user-only note attached to a thread. Notes are never included in
- * agent context or prompts — they exist so the user can remind themselves what
+ * agent context or prompts   they exist so the user can remind themselves what
  * they intended to do on a thread and return to it later. Deleting the thread
  * deletes its note (ON DELETE CASCADE).
  */
@@ -1165,7 +1165,7 @@ export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'm
 
 /**
  * Inference speed contract for a turn. `fast` requests the harness's
- * speed-prioritizing tier under the hood — for opencode that is a `*-fast`
+ * speed-prioritizing tier under the hood   for opencode that is a `*-fast`
  * model id, for codex a `service_tier = "fast"` config override. Only models
  * the harness catalog marks fast-capable expose the choice. Defaults to `normal`.
  */
@@ -1219,7 +1219,7 @@ export interface ThreadSettings {
   assignmentMode?: boolean
   /** Enable Achievement's automatic implementation-audit correction cycle. */
   loopMode?: boolean
-  /** Chat-only: grant the thread file-operation tools. Off by default — plain chats are web-only. */
+  /** Chat-only: grant the thread file-operation tools. Off by default   plain chats are web-only. */
   fileSystemMode?: boolean
   /** Independent model selected for Achievement audits. */
   loopAuditor?: AgentModelSelection
@@ -1252,7 +1252,7 @@ export interface HeartbeatLastRun {
 /**
  * A scheduled "keep the usage window warm" ping. At each configured time of
  * day, an ephemeral thread sends `Simply respond pong` to the selected model
- * and discards the reply — the same disposable-session mechanism title
+ * and discards the reply   the same disposable-session mechanism title
  * generation uses, just to touch the provider's usage window early.
  */
 export interface HeartbeatConfig extends AgentModelSelection {
@@ -1481,7 +1481,7 @@ export interface AgentToolCatalog {
 export type UtilityKind =
   'mcp' | 'skill' | 'web_search' | 'web_fetch' | 'computer_use' | 'provider' | 'image_descriptor'
 
-/** Every `UtilityKind` as a runtime array — single source for schema enums and validation sets. */
+/** Every `UtilityKind` as a runtime array   single source for schema enums and validation sets. */
 export const UTILITY_KIND_VALUES: readonly UtilityKind[] = [
   'mcp',
   'skill',
@@ -2132,7 +2132,7 @@ export interface AgentHarnessUsage {
 }
 
 /** Optional harness/provider the quota read should answer for when no thread
- *  row (or live temporary session) exists yet — e.g. the inbox "Start a new
+ *  row (or live temporary session) exists yet   e.g. the inbox "Start a new
  *  chat" composer before its first turn. */
 export interface AgentAccountUsageOverrides {
   harnessId?: string
@@ -2157,7 +2157,7 @@ export interface AgentAccountUsage {
 
 /**
  * Quota telemetry read from one custom provider's user-defined usage route.
- * The route is the provider author's contract — CodeInOven accepts the common
+ * The route is the provider author's contract   CodeInOven accepts the common
  * OpenAI/`new-api`-style `{ data: [...] }` envelope plus flat quota objects
  * and maps whatever it can recognize into rate-limit windows.
  */
@@ -2665,7 +2665,7 @@ export interface AgentMessage {
   /** Reasoning effort in effect when this message's turn ran, when known. */
   thinkingLevel?: ThinkingLevel
   /** Duration in milliseconds from the first streamed output part (the model's
-   *  first token) to turn end — excludes pre-generation tool/setup time, so a
+   *  first token) to turn end   excludes pre-generation tool/setup time, so a
    *  tokens/second rate derived from it reflects actual generation. */
   generationMs?: number
   createdAt: number
@@ -2727,7 +2727,7 @@ export interface TranscriptExportOptions {
 export interface TranscriptExportResult {
   /** Absolute path of the written Markdown file. */
   path: string
-  /** Where the transcript was stored — project scratch vs. chat temp dir. */
+  /** Where the transcript was stored   project scratch vs. chat temp dir. */
   location: 'project' | 'chat'
 }
 
@@ -2785,7 +2785,7 @@ export type BrainstormTraceUpdate =
   | { type: 'part.updated'; messageId: string; part: AgentPart }
   | { type: 'part.delta'; messageId: string; partId: string; field: string; delta: string }
   | { type: 'completed'; messages: AgentMessage[] }
-  | { type: 'refresh.started'; startedAt: number }
+  | { type: 'refresh.started'; startedAt: number; phase?: 'create' | 'refresh'; version?: number }
   | { type: 'refresh.completed' }
   | { type: 'refresh.failed'; error: string; harnessId: string }
 
@@ -3004,7 +3004,7 @@ export type SessionAgentEvent = Exclude<
 /**
  * Driver-internal marker on a `message.completed` event: the turn hit a
  * recoverable finish-reason flake and the driver intends to silently continue
- * instead of surfacing the error. Never broadcast to renderers — drivers strip
+ * instead of surfacing the error. Never broadcast to renderers   drivers strip
  * it before emitting events to the engine.
  */
 export interface AgentSilentContinueMarker {
@@ -3513,7 +3513,7 @@ export type BrainstormPrototypeIntent = 'none' | 'lofi' | 'hifi' | 'both'
 export interface EngineeringLifecycleSelectionInput {
   /** Independent stage switches that are enabled (canonical, no duplicates).
    *  Cascade dependencies (Assignment/Achievement imply Spec) are applied by the
-   *  engine — the client sends the raw request and the engine normalizes it. */
+   *  engine   the client sends the raw request and the engine normalizes it. */
   stages: EngineeringLifecycleStage[]
   /** Auto Pilot runs the full brainstorm→spec→assignment→achievement loop without
    *  human gates. When true, the per-stage set is ignored. */
@@ -4290,7 +4290,7 @@ export interface GitConflictAnalysis {
   path: string
   /** True when the file has binary content and cannot be resolved in the panel. */
   binary: boolean
-  /** True when the file is too large to safely reassemble — resolve in the editor. */
+  /** True when the file is too large to safely reassemble   resolve in the editor. */
   truncated: boolean
   /** The raw working-tree content (may still contain conflict markers). */
   content: string
@@ -4399,7 +4399,7 @@ export interface PullRequestSummary {
    */
   mergeable?: boolean | null
   /**
-   * GitHub's `mergeable_state` from list payloads — `dirty` means the PR has
+   * GitHub's `mergeable_state` from list payloads   `dirty` means the PR has
    * conflicts even when `mergeable` hasn't been computed yet (it is frequently
    * null in list responses). `clean` | `dirty` | `behind` | `unstable` |
    * `draft` | `unknown`.
@@ -4587,7 +4587,7 @@ export interface GitRepositoryIdentity {
   repo: string
 }
 
-/** Result of a provider credential status query — presence only, never plaintext. */
+/** Result of a provider credential status query   presence only, never plaintext. */
 export interface GitCredentialStatus {
   configured: boolean
   secureStorageAvailable: boolean
@@ -4623,7 +4623,7 @@ export interface GitHubUser {
   login: string
   name: string | null
   /**
-   * Avatar as a `data:` URL — the renderer's CSP blocks remote image hosts, so
+   * Avatar as a `data:` URL   the renderer's CSP blocks remote image hosts, so
    * the main process downloads and inlines it. Null when the download failed;
    * the UI falls back to the GitHub mark.
    */
@@ -4685,7 +4685,7 @@ export interface GitHubDeploymentOverviewResult extends GitHubDeploymentOverview
   accessError?: string
 }
 
-/** One step inside a workflow run job — the granular "why did it fail" data. */
+/** One step inside a workflow run job   the granular "why did it fail" data. */
 export interface GitHubDeploymentJobStep {
   number: number
   name: string
@@ -4734,7 +4734,7 @@ export interface GitHubWorkflowRunDetail {
 export type CloudDeploymentProviderKind =
   'coolify' | 'netlify' | 'railway' | 'vercel' | 'dokploy' | 'custom'
 
-/** Every `CloudDeploymentProviderKind` as a runtime array — single source for schema enums. */
+/** Every `CloudDeploymentProviderKind` as a runtime array   single source for schema enums. */
 export const CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES: readonly CloudDeploymentProviderKind[] = [
   'coolify',
   'netlify',
@@ -4811,7 +4811,7 @@ export interface CloudDeploymentContainer {
 export interface CloudDeploymentProviderAccount {
   /** Stable account identity, unique across the whole registry. */
   id: string
-  /** User-supplied label shown in the panel (e.g. 'Coolify — Personal'). */
+  /** User-supplied label shown in the panel (e.g. 'Coolify   Personal'). */
   label: string
   /** Provider this account authenticates. */
   providerKind: CloudDeploymentProviderKind

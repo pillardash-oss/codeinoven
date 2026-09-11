@@ -6,6 +6,7 @@
 import type { Project, Thread } from '$shared/types'
 import { SvelteSet } from 'svelte/reactivity'
 import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
+import { threadStatusPolicy } from '$shared/thread-status-policy'
 import type { AgentSource } from '$lib/agent-sources'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { rendererRecovery } from './renderer-recovery.svelte'
@@ -439,23 +440,23 @@ export function pinnedThreadSort(
   return a.id.localeCompare(b.id)
 }
 
-/** Sort modes for the Threads view. */
-export type ThreadSortMode = 'default' | 'status' | 'time'
-
 export function threadStatusSortKey(
   t: Thread,
   draftThreadKeys?: ReadonlySet<string> | null
 ): number {
   if (draftThreadKeys?.has(threadVisitKey(t))) return -1
-  // Todo first, then unread, then spec-ready artifacts, then other attention, then done.
+  // Unsent drafts and the empty "New Thread" placeholder stay at the very top.
   if (t.status === 'created') return 0
-  if (!t.read) return 1
-  if (t.status === 'spec') return 2
-  if (t.status !== 'completed') return 3
-  return 4
+  // To-do stays at the top; done always sinks to the bottom; everything in
+  // between (working, spec, error, needs attention, ...) is one pool ordered
+  // purely by last activity   last action wins. Read state and project never
+  // influence the order. Ambiguity inside a group is resolved by lastActivity
+  // in threadStatusSort.
+  if (threadStatusPolicy(t.status).scopeSlice === 'done') return 2
+  return 1
 }
 
-/** Threads view sort grouped by attention status, most recent activity first within each group. */
+/** Threads view sort: to-do first, then everything by last activity, done last. */
 export function threadStatusSort(
   a: Thread,
   b: Thread,
@@ -464,7 +465,9 @@ export function threadStatusSort(
   const ka = threadStatusSortKey(a, draftThreadKeys)
   const kb = threadStatusSortKey(b, draftThreadKeys)
   if (ka !== kb) return ka - kb
-  return b.lastActivity - a.lastActivity
+  const activityDiff = b.lastActivity - a.lastActivity
+  if (activityDiff !== 0) return activityDiff
+  return a.id.localeCompare(b.id)
 }
 
 /**

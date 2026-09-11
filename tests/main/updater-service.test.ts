@@ -318,7 +318,7 @@ describe('UpdaterService session-safe install', () => {
     expect(first.status.state).toBe('waiting')
     first.stop()
 
-    // Fresh service shares the same storage — the pending install is resumed.
+    // Fresh service shares the same storage   the pending install is resumed.
     const resumed = new UpdaterService(storage)
     resumed.setChatEngine(makeChatEngine(() => 0))
     resumed.start()

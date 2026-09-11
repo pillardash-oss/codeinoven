@@ -1027,7 +1027,7 @@ export function validateChecklistItemStatus(value: unknown): ChecklistItemStatus
 export function validateThreadSettings(value: unknown): ThreadSettings {
   const input = assertRecord(value, 'Thread settings')
   // Settings persisted before the legacy `engineeringMode` flag was scrubbed
-  // still carry it — tolerate and drop it instead of rejecting the payload.
+  // still carry it   tolerate and drop it instead of rejecting the payload.
   const { engineeringMode: _legacyEngineeringMode, ...rest } = input
   rejectUnknownFields(rest, THREAD_SETTINGS_FIELDS, 'thread settings')
 
@@ -1492,7 +1492,7 @@ export interface PrivilegedScopeResolvers {
   /** Registered local project root directories, resolved lazily. */
   projectRoots: () => Promise<readonly string[]> | readonly string[]
   /** Concrete app-owned artifact directories (per project) that reveal/preview
-   *  may target — never the whole config root, which holds secrets. */
+   *  may target   never the whole config root, which holds secrets. */
   appArtifactRoots: () => Promise<readonly string[]> | readonly string[]
   /** Exact canonical files previously persisted as user-authored attachments. */
   isApprovedFile?: (canonicalPath: string) => Promise<boolean> | boolean
@@ -1556,7 +1556,7 @@ export class PrivilegedIpcValidator {
   /**
    * Whether the IPC sender frame is the app's own trusted main frame. Only the
    * top-level frame (no parent) may invoke privileged IPC, and its document URL
-   * must exactly match one of the app's own renderer URLs — never a foreign or
+   * must exactly match one of the app's own renderer URLs   never a foreign or
    * arbitrary same-origin document.
    */
   isTrustedSenderFrame(frame: TrustedFrameCandidate | null | undefined): boolean {

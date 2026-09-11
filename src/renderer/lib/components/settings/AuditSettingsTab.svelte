@@ -406,7 +406,7 @@
           </p>
         {:else if sameModel(defaults.imageDescriptor, defaults.imageDescriptorFallback)}
           <p class="mt-1 text-[0.6875rem] text-danger">
-            Same model as the primary — it cannot act as a fallback.
+            Same model as the primary   it cannot act as a fallback.
           </p>
         {/if}
       </div>

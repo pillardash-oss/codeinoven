@@ -20,6 +20,7 @@
     /** Overall thread state used to render the approval stage row. */
     threadState?:
       | 'unread'
+      | 'temporary-unread'
       | 'read'
       | 'todo'
       | 'completed'
@@ -107,7 +108,7 @@
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Repository</dt>
       <dd class="min-w-0 break-words text-muted" title={remoteOriginUrl ?? project.path}>
-        {remoteOriginUrl ? remoteOriginLabel(remoteOriginUrl) : '—'}
+        {remoteOriginUrl ? remoteOriginLabel(remoteOriginUrl) : ' '}
       </dd>
     </div>
   {/if}

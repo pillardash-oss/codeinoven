@@ -153,8 +153,8 @@ describe.skipIf(process.platform === 'win32')('ScopeWorktreeService', () => {
     await nestedGit.commit('init')
 
     const git = simpleGit(repoPath)
-    // Register a real gitlink (mode 160000) in the index — the authoritative
-    // "tracked submodule" signal — plus a matching .gitmodules entry.
+    // Register a real gitlink (mode 160000) in the index   the authoritative
+    // "tracked submodule" signal   plus a matching .gitmodules entry.
     const nestedHead = (await nestedGit.revparse(['HEAD'])).trim()
     await git.raw(['update-index', '--add', '--cacheinfo', `160000,${nestedHead},lib`])
     writeFileSync(

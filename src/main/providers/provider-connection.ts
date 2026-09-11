@@ -38,10 +38,10 @@ function isOpenCodeV2(version: string): boolean {
 }
 
 /**
- * ProviderConnectionService — detects local AI harnesses by resolving their
+ * ProviderConnectionService   detects local AI harnesses by resolving their
  * binaries on an augmented PATH and verifying they respond to a version probe.
  * Broadcasts live status to all renderer windows over IPC. The harness list is
- * sourced from the harness registry — the single source of truth.
+ * sourced from the harness registry   the single source of truth.
  */
 export class ProviderConnectionService {
   private statuses = new Map<string, ProviderConnectionInfo>()
@@ -174,7 +174,7 @@ export class ProviderConnectionService {
 
   /**
    * Record a settled (non-probing) result and fire `onStatusesChanged` when the
-   * harness's install state or version differs from the last settled probe —
+   * harness's install state or version differs from the last settled probe  
    * e.g. pi was just installed or upgraded while the app is running.
    */
   private noteSettled(info: ProviderConnectionInfo): void {

@@ -1047,8 +1047,8 @@ export class RemoteModeController {
       const credentials = this.credentials
       if (signature && credentials) {
         // The canonical LAN transcript is recomputed server-side from the
-        // desktop-issued challenge nonce plus the identity/bootstraps — never
-        // taken from the peer — so a captured proof cannot be replayed.
+        // desktop-issued challenge nonce plus the identity/bootstraps   never
+        // taken from the peer   so a captured proof cannot be replayed.
         if (bootstrap && signingPublicJwk && agreementPublicJwk) {
           const transcript = handshakeTranscript({ nonce, bootstrap, context: 'lan' })
           // First-time enrollment: the single-use pairing bootstrap from the QR
@@ -1332,7 +1332,7 @@ export class RemoteModeController {
 
   /**
    * Revalidate a cached profile from the network without disturbing the state
-   * already served. Network failures are deliberately swallowed — the cached
+   * already served. Network failures are deliberately swallowed   the cached
    * signed-in identity stays until a successful fetch or an explicit sign-out.
    */
   private refreshAccountProfileInBackground(): Promise<void> {
@@ -1353,7 +1353,7 @@ export class RemoteModeController {
     try {
       const state = await this.fetchAccountProfile()
       if (generation !== this.accountProfileGeneration) return
-      // A background probe must never drop a cached identity — only a successful
+      // A background probe must never drop a cached identity   only a successful
       // fetch (or an explicit sign-out) changes what the user sees.
       if (state.status !== 'signed-in') {
         Logger.dev('Account profile revalidation is not signed in; keeping the cached profile')
@@ -1679,7 +1679,7 @@ export class RemoteModeController {
       const syncState = await readMemorySyncState(this.storage)
       const localIds = local.globalMemories.map((entry) => entry.id)
       // Entries that were part of the last synced snapshot but are gone locally
-      // now were deleted — record a tombstone so the deletion sticks server-side.
+      // now were deleted   record a tombstone so the deletion sticks server-side.
       const newTombstones = syncState
         ? tombstonesForDeletions(syncState.lastSnapshotIds, localIds, now)
         : []
@@ -2286,7 +2286,7 @@ export class RemoteModeController {
         this.toggleRemoteMode(enabled)
       },
       onQuit: () => {
-        // Closing the app always fully quits — nothing is kept alive.
+        // Closing the app always fully quits   nothing is kept alive.
         return true
       },
       onRestore: () => this.restoreWindow()

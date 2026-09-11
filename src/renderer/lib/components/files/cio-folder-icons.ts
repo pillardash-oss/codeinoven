@@ -1,4 +1,4 @@
-// Generated from src/renderer/static/icon.svg — the app mark is inlined
+// Generated from src/renderer/static/icon.svg   the app mark is inlined
 // (two-tone preserved: Obsidian #081825 for the white parts, the orange smoke
 // + handle kept as-is; thickened with a matching stroke so it stays legible at
 // file-tree sizes) and the real logo artwork is preserved verbatim, never

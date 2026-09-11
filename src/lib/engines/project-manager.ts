@@ -82,7 +82,7 @@ const ICON_SCAN_DEPTH = 5
 // an icon, so huge repositories can't stall project creation.
 const ICON_MAX_SCAN_DIRS = 2_000
 
-// Ranked icon filenames — earlier entries win. Names are matched
+// Ranked icon filenames   earlier entries win. Names are matched
 // case-insensitively so `Icon.PNG`, `FAVICON.ico`, etc. are all recognized.
 const ICON_CANDIDATE_NAMES = [
   'favicon.png',
@@ -331,7 +331,7 @@ export class ProjectManager {
     try {
       await ensureProjectScratchSpace(projectPath)
     } catch {
-      // Best-effort — never fail project registration over scratch space.
+      // Best-effort   never fail project registration over scratch space.
     }
   }
 

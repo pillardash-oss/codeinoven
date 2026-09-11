@@ -2,7 +2,7 @@
   import MarkdownView from './MarkdownView.svelte'
 
   interface Props {
-    /** Markdown source — may be an incomplete, still-streaming message. */
+    /** Markdown source   may be an incomplete, still-streaming message. */
     text: string
     /**
      * True while this content is still receiving streamed deltas. While true,
@@ -35,13 +35,13 @@
     if (!streaming) return text
     const revealed = revealedText
     // A shrinking or non-appending change (part replaced, fork, history
-    // reload, final snapshot rewinding the stream) cannot be smoothed — snap
+    // reload, final snapshot rewinding the stream) cannot be smoothed   snap
     // to the end so stale characters never linger and old text never re-runs.
     if (revealed.length > text.length || !text.startsWith(revealed)) return text
     return revealed
   })
 
-  // Scheduling effect only — the reveal itself advances inside the rAF loop,
+  // Scheduling effect only   the reveal itself advances inside the rAF loop,
   // which needs imperative timing state that $derived cannot express.
   $effect(() => {
     if (!streaming) return

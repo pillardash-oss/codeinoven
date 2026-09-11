@@ -5,7 +5,7 @@
  * email, usage, global memories) so an app restart or an offline window keeps
  * the signed-in identity without a network round-trip. The row is replaced only
  * when a fresh profile is fetched and removed only when the user explicitly
- * signs out. No secrets are ever stored here — the session token stays in the
+ * signs out. No secrets are ever stored here   the session token stays in the
  * OS-backed vault.
  */
 

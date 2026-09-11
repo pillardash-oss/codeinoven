@@ -74,7 +74,7 @@
   function handleClose(): void {
     if (busy && !showTerminal) return
     if (showTerminal && exitCode === undefined) {
-      // Let the clone keep running in background minimized — minimize instead of closing
+      // Let the clone keep running in background minimized   minimize instead of closing
       minimized = true
       return
     }
@@ -245,10 +245,10 @@
       {/if}
       <p class="text-[0.6875rem] text-dimmed">
         {exitCode === undefined
-          ? 'Clone is running — you can minimize and keep working. Errors appear in the terminal.'
+          ? 'Clone is running   you can minimize and keep working. Errors appear in the terminal.'
           : exitCode === 0
             ? 'Project will be added automatically.'
-            : 'Clone failed — check the terminal output above, then close and retry.'}
+            : 'Clone failed   check the terminal output above, then close and retry.'}
       </p>
     </div>
   </DockableModal>

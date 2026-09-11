@@ -376,7 +376,7 @@ export class EngineeringLifecycleEngine {
     }
     // Manual mode: a completed circle turns its switch OFF and drops the thread to
     // implementation mode. Selected stages remaining (e.g. PRD after Brainstorm) do NOT
-    // auto-advance — the user continues by pressing the designated Next-step/Review/
+    // auto-advance   the user continues by pressing the designated Next-step/Review/
     // Implement/Approve buttons. Achievement keeps the chained loop behavior: its audit/
     // rework cycle is what drives the pipeline forward.
     if (current.selectedStages.includes('achievement')) {

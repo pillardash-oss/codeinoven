@@ -3,7 +3,7 @@
  *  `modelsPath`) when the model picker forces a catalog refresh.
  *
  *  Semantics: a successful, non-empty endpoint response replaces the stored
- *  model list; an error — or an empty response — preserves the existing list
+ *  model list; an error   or an empty response   preserves the existing list
  *  so a flaky endpoint can never wipe a working provider. Linked records that
  *  share a provider id across harnesses are refreshed once and applied to all
  *  of them. Failures are per-provider and never abort the sweep. */
@@ -13,11 +13,11 @@ import type { BaseUrlProviderService } from './base-url-provider-service'
 import type { SecretVault } from '../storage/secret-vault'
 
 /** Model IDs routinely include slashes/at-signs (LM Studio `org/model`,
- *  HF `org/model@precision`) — anything else cannot be persisted. */
+ *  HF `org/model@precision`)   anything else cannot be persisted. */
 const SAFE_MODEL_ID = /^[a-zA-Z0-9@][a-zA-Z0-9._:/@+-]*$/u
 /** Matches the service's per-provider persistence cap. */
 const MAX_MODELS = 128
-/** Concurrent endpoint probes — bounded so a sweep never hammers the machine. */
+/** Concurrent endpoint probes   bounded so a sweep never hammers the machine. */
 const REFRESH_CONCURRENCY = 4
 
 /**
@@ -30,7 +30,7 @@ export async function refreshCustomProviderModels(
   vault: SecretVault
 ): Promise<number> {
   const all = await providers.listProviders()
-  // Linked harness records share an id (and baseURL) — refresh each once.
+  // Linked harness records share an id (and baseURL)   refresh each once.
   const distinct = new Map<string, BaseUrlProvider>()
   for (const provider of all) {
     if (!provider.enabled) continue
@@ -80,7 +80,7 @@ async function refreshOne(
         id: model.id,
         name: (model.name || model.id).slice(0, 256),
         // Most current models can reason; a missing flag isn't evidence
-        // they can't — matches the editor's save behavior.
+        // they can't   matches the editor's save behavior.
         reasoning: true,
         ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
       }))
@@ -93,7 +93,7 @@ async function refreshOne(
     }
     return true
   } catch {
-    // Endpoint unreachable or malformed — the old list stays in place.
+    // Endpoint unreachable or malformed   the old list stays in place.
     return false
   }
 }

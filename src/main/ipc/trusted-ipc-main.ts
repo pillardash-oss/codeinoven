@@ -16,11 +16,18 @@ interface TrustedIpcMainFacade {
 /** Exact main-renderer documents that may invoke Electron IPC. */
 export function appRendererNavigationTargets(): string[] {
   const isProduction = app?.isPackaged === true || process.env['NODE_ENV'] === 'production'
-  if (!isProduction && process.env['ELECTRON_RENDERER_URL']) {
-    return [process.env['ELECTRON_RENDERER_URL']]
-  }
   const appPath = typeof app?.getAppPath === 'function' ? app.getAppPath() : process.cwd()
-  return [pathToFileURL(join(appPath, 'out', 'renderer', 'index.html')).href]
+  if (!isProduction && process.env['ELECTRON_RENDERER_URL']) {
+    const devUrl = process.env['ELECTRON_RENDERER_URL'].replace(/\/$/u, '')
+    return [process.env['ELECTRON_RENDERER_URL'], `${devUrl}/browser-popup.html`]
+  }
+  const rendererRoot = join(appPath, 'out', 'renderer')
+  return [
+    pathToFileURL(join(rendererRoot, 'index.html')).href,
+    // The frameless browser permission popup (a first-party static document
+    // sharing the app preload) is trusted to resolve permissions and nothing else.
+    pathToFileURL(join(rendererRoot, 'browser-popup.html')).href
+  ]
 }
 
 let senderValidator: PrivilegedIpcValidator | null = null

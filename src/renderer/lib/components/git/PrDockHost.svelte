@@ -32,7 +32,7 @@
 </script>
 
 <!--
-  Global PR dock — mirrors `HarnessRunModal` in `src/renderer/App.svelte:1638`.
+  Global PR dock   mirrors `HarnessRunModal` in `src/renderer/App.svelte:1638`.
   Mounted at the app root so each `GitPullRequestSheet` stays alive regardless
   of thread / project / view or whether the git sidebar is visible. One sheet
   per `PrDraft` (hence per project scope by default) gives the same multi-entry
@@ -49,7 +49,7 @@
     onView={(pullRequest) => void revealPullRequest(draft.projectId, draft.threadId, pullRequest)}
     storageKey={store.storageKeyFor(draft.id)}
     onCreated={() => {
-      // The per-panel prListRefresh signal is intentionally not wired here —
+      // The per-panel prListRefresh signal is intentionally not wired here  
       // the panel refetches on next open. Global drafts still create the PR
       // via `gitState.createPullRequest`.
     }}
@@ -75,7 +75,7 @@
       {#if draft.minimized}
         <button
           class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
-          title={`${dock.projectName || 'Project'} — ${dock.title}`}
+          title={`${dock.projectName || 'Project'}   ${dock.title}`}
           aria-label={`Expand ${dock.projectName ? `${dock.projectName} ` : ''}${dock.title}`}
           onclick={() => store.expand(draft.id)}
         >

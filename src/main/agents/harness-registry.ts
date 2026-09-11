@@ -8,8 +8,8 @@ export type HarnessManifestBehavior = 'loadsAgentsMd' | 'manualCompaction'
 
 /**
  * Declarative, versioned behavior manifest for one harness. This is the
- * reliable default: what the harness is known to do. Runtime observations —
- * probing the installed CLI, user confirmation in Settings — are stored by
+ * reliable default: what the harness is known to do. Runtime observations  
+ * probing the installed CLI, user confirmation in Settings   are stored by
  * `HarnessManifestService` and override these declarations without mutating
  * them, keeping reliability (declared baseline) and flexibility (confirmed
  * reality) separate.
@@ -23,7 +23,7 @@ export interface HarnessManifest {
  * Canonical identity of a coding harness CodeInOven can detect and drive.
  * This is the single source of truth for which harnesses exist, how they are
  * probed, and the order they appear in (model picker, providers settings
- * page). Do not duplicate harness identity elsewhere — consume `listHarnesses`.
+ * page). Do not duplicate harness identity elsewhere   consume `listHarnesses`.
  */
 export interface HarnessDescriptor {
   id: string
@@ -128,7 +128,7 @@ const HARNESSES: readonly HarnessDescriptor[] = [
   }
 ]
 
-/** The canonical ordered harness list — the single source of truth. */
+/** The canonical ordered harness list   the single source of truth. */
 export function listHarnesses(): readonly HarnessDescriptor[] {
   return HARNESSES
 }

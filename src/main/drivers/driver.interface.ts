@@ -305,7 +305,7 @@ export interface SteerPromptOptions {
 }
 
 /**
- * HarnessDriver — the contract every AI harness must fulfill to participate
+ * HarnessDriver   the contract every AI harness must fulfill to participate
  * in CodeInOven's chat engine. Each driver encapsulates the harness's headless
  * communication strategy (HTTP+SSE, subprocess JSONL, WebSocket, etc.) and
  * translates raw harness output into the unified AgentEvent stream.
@@ -378,7 +378,7 @@ export interface HarnessDriver {
    * Ask the harness whether a session currently has a live agent loop. Used by
    * restart recovery: the engine's in-memory session-status map is empty after
    * a restart, but the harness process may have survived and still be running
-   * the pre-restart turn — resuming such a session spawns a second concurrent
+   * the pre-restart turn   resuming such a session spawns a second concurrent
    * run that interleaves outputs and derails both turns. Drivers without a
    * status probe simply omit this; callers treat `false`/throwaway errors as
    * "not busy" to keep the legacy behavior.
@@ -524,8 +524,8 @@ export interface HarnessDriver {
 
   /**
    * Fetch the account's current quota telemetry on demand (rate-limit windows,
-   * prepaid credits). Used by the battery popover so old threads — whose turns
-   * predate quota capture — can still show live quota. Returns null when the
+   * prepaid credits). Used by the battery popover so old threads   whose turns
+   * predate quota capture   can still show live quota. Returns null when the
    * harness cannot report quota without a turn.
    */
   readAccountUsage?(
@@ -541,7 +541,7 @@ export interface HarnessDriver {
 
   /**
    * Redeem one banked rate-limit reset credit, when the harness supports
-   * banking (currently Codex). This is destructive and irreversible — it
+   * banking (currently Codex). This is destructive and irreversible   it
    * resets the account's active usage windows and consumes one banked
    * credit. Returns the refreshed quota telemetry, or null if unsupported.
    */
@@ -571,6 +571,15 @@ export interface HarnessDriver {
 
   /** Compact the conversation context when supported by the harness. */
   compactSession?(projectPath: string, sessionId: string, settings: ThreadSettings): Promise<void>
+
+  /**
+   * Reconcile harness-side durable state (for example auto-compactions pi
+   * wrote to its session transcript without emitting reportable events) with
+   * the mirrored session. Best-effort backstop for finalization gaps: the
+   * engine calls it when a session settled without driver finalization so
+   * recovered state is persisted before the next turn replays history.
+   */
+  reconcileSession?(projectPath: string, sessionId: string): Promise<void>
 
   /**
    * Reply to a pending permission request. When `message` is provided alongside a

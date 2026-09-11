@@ -220,7 +220,7 @@ export class ProjectFileIndexService {
 
   /** Build the index for a project in the background and keep it fresh by
    *  watching the root. Fire-and-forget from callers; failures are swallowed
-   *  here so an unwatchable project never breaks the app — `search` rebuilds
+   *  here so an unwatchable project never breaks the app   `search` rebuilds
    *  on demand and surfaces real errors there. */
   async prewarm(projectId: string, root: string): Promise<void> {
     this.ensureWatcher(projectId, root)

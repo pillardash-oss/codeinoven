@@ -133,8 +133,8 @@ export class LlamaRuntimeService {
    * force-quit, then clear the journal. A journaled PID is only killed when
    * every check passes: the live process is orphaned (dead parent) AND its
    * command line still contains the exact executable path the app spawned it
-   * from. Any uncertainty — recycled PID running an unrelated copy, no journal
-   * entry at all — skips the kill. A user's own llama-server is never journaled,
+   * from. Any uncertainty   recycled PID running an unrelated copy, no journal
+   * entry at all   skips the kill. A user's own llama-server is never journaled,
    * so it is never touched. Must run before any server spawn on this launch.
    */
   async recoverOrphans(): Promise<{ killed: number[]; skipped: number[] }> {

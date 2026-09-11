@@ -1,7 +1,7 @@
 export interface ProjectSvgIcon {
   key: string
   label: string
-  /** SVG path data (the `d` attribute of a `<path>` element) — always 16×16, 1.5px stroke. */
+  /** SVG path data (the `d` attribute of a `<path>` element)   always 16×16, 1.5px stroke. */
   path: string
 }
 

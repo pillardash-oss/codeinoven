@@ -41,7 +41,7 @@
     refreshing?: boolean
     /** 'popover' (default) is the small battery trigger with a hover-revealed
      *  detail panel, for desktop composer toolbars. 'panel' renders just the
-     *  detail content, always visible, filling its container — for hosts
+     *  detail content, always visible, filling its container   for hosts
      *  (e.g. a mobile bottom sheet) that provide their own trigger and open
      *  state since hover has no touch equivalent. */
     layout?: 'popover' | 'panel'
@@ -94,7 +94,7 @@
       : `${Math.round(efficiencyKpis.cacheHitRatio * 100)}%`
   )
 
-  /** Collapsed harness sections — sections are open by default. */
+  /** Collapsed harness sections   sections are open by default. */
   const collapsedHarnesses = new SvelteSet<string>()
   function toggleHarness(id: string): void {
     if (collapsedHarnesses.has(id)) collapsedHarnesses.delete(id)
@@ -262,7 +262,7 @@
     <button
       type="button"
       class="mt-2.5 flex h-6 w-full items-center justify-center gap-1.5 rounded-md border border-border text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
-      title="Redeem one banked reset — this immediately resets your usage windows"
+      title="Redeem one banked reset   this immediately resets your usage windows"
       disabled={!onActivateBankedReset}
       onclick={onActivateBankedReset}
     >

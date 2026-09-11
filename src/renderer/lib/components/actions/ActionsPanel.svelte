@@ -332,7 +332,7 @@
         </span>
       </div>
       <p class="mt-1.5 text-[0.6875rem] text-muted">
-        The colour shows as the entry's left border — group similar scripts together.
+        The colour shows as the entry's left border   group similar scripts together.
       </p>
     </div>
     <div>

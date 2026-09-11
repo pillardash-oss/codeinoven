@@ -26,7 +26,7 @@ export interface KeymapRegistry {
   categories: KeymapCategory[]
 }
 
-/** The full shortcut catalog — single source of truth for the app's keymap. */
+/** The full shortcut catalog   single source of truth for the app's keymap. */
 export const KEYMAP: KeymapRegistry = keymapData as unknown as KeymapRegistry
 
 export function isMacPlatform(): boolean {

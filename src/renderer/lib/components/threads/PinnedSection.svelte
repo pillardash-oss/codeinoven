@@ -7,7 +7,7 @@
   interface Props {
     /** Which persisted fold-state section this block belongs to. */
     sectionKey: PinnedSectionKey
-    /** Explicit label, e.g. "Pinned Threads" — distinguishes pinned rows of
+    /** Explicit label, e.g. "Pinned Threads"   distinguishes pinned rows of
      *  different kinds when several pinned blocks are visible at once. */
     label: string
     /** All pinned visible tasks, already in global pin order. */

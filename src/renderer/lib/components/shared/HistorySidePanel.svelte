@@ -12,7 +12,7 @@
 
   interface Props {
     messages: HistoryEntry[]
-    /** A turn is running — destructive actions are disabled. */
+    /** A turn is running   destructive actions are disabled. */
     busy?: boolean
     /** Id currently being forked. */
     forkingId?: string | null
@@ -36,7 +36,7 @@
 <!--
   Full-height history side panel docked left of the context dock rail. User
   messages form the trunk; the work trace of each turn hangs beneath its
-  message as children. Fork and the three delete scopes live here — the
+  message as children. Fork and the three delete scopes live here   the
   conversation screen itself is untouched.
 -->
 <section

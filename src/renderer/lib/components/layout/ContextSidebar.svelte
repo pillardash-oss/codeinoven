@@ -85,7 +85,7 @@
   $effect(() => faviconState.ensureResolved(browserTabUrls))
 
   // Every other tool opens from the context dock rail and owns the whole panel,
-  // so only these kinds get a tab strip — the rest get a plain titled header.
+  // so only these kinds get a tab strip   the rest get a plain titled header.
   // Sub-agents share one panel toggle, so their tabs stay together here rather
   // than competing with the other context tools.
   const TABBED_KINDS = new Set<ContextSidebarTab['kind']>([
@@ -96,7 +96,7 @@
   ])
 
   // These tools are opened and closed from their own rail icon, and each one
-  // already owns its full-height content — the generic title-and-close header
+  // already owns its full-height content   the generic title-and-close header
   // was a redundant layer stacked on top of a panel that either has its own
   // internal toolbar (files, diff, debugger) or needs no title at all (sources,
   // memory, cloud deployment). Terminal keeps its header because it needs tabs.
@@ -115,7 +115,7 @@
   ])
 
   /** Files are headerless like the other single-panel tools right up until a
-   *  second file is open — then a real tab strip is the only way back to the
+   *  second file is open   then a real tab strip is the only way back to the
    *  first one, so it earns the same tabbed treatment as terminals. */
   let openFilesCount = $derived(tabs.filter((tab) => tab.kind === 'files').length)
   let tabbedMode = $derived(
@@ -136,7 +136,7 @@
   let siblingTabs = $derived(
     activeTab && !tabbedMode ? tabs.filter((tab) => tab.kind === activeTab.kind) : []
   )
-  /** Temporary chats close from their own tab, so they need no header cluster —
+  /** Temporary chats close from their own tab, so they need no header cluster  
    *  rendering it anyway would leave a stray divider on the right edge. */
   let showHeaderControls = $derived(
     terminalMode || browserMode || (activeTab !== null && !tabbedMode)

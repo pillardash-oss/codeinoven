@@ -22,6 +22,7 @@
   import type {
     BaseUrlProvider,
     OfferedProvider,
+    ProviderAccountAuthEntry,
     ProviderAccountAuthStatus,
     ProviderAccountLoginHandoff,
     ProviderConnectionInfo,
@@ -38,7 +39,7 @@
     onAddCustom: (harnessId: string) => void
     /** Hand the user off to the custom base-URL editor to edit an existing provider. */
     onEditCustom: (provider: BaseUrlProvider) => void
-    /** Tab shown on open — e.g. 'custom' when returning here via the editor's Back button. */
+    /** Tab shown on open   e.g. 'custom' when returning here via the editor's Back button. */
     initialTab?: AddTab
   }
 
@@ -99,7 +100,7 @@
 
   /**
    * Harness credentials are file-backed here (Pi): pick any catalog provider
-   * and paste an API key — the whole flow stays in-app, no terminal handoff.
+   * and paste an API key   the whole flow stays in-app, no terminal handoff.
    */
   let apiKeyEntry = $derived(authStatus?.capabilities?.apiKeyEntry === true)
   let apiKey = $state('')
@@ -130,12 +131,27 @@
     oauthStarting = false
   }
 
+  /**
+   * Sign-in events can reach the renderer before the `beginOAuthLogin` invoke
+   * resolves and assigns `oauthLoginId`   the main process starts the flow
+   * immediately and key-entry prompts arrive within microseconds. Buffer
+   * payloads received while `oauthLoginId` is still unknown and replay them
+   * once it is set, so the first prompt of a flow is never silently dropped.
+   */
+  let earlyOAuthEvents: Array<Record<string, unknown>> = []
+  const EARLY_OAUTH_EVENT_LIMIT = 50
+
   function handleOAuthPayload(payload: unknown): void {
-    if (
-      payload === null ||
-      typeof payload !== 'object' ||
-      (payload as Record<string, unknown>)['loginId'] !== oauthLoginId
-    ) {
+    if (payload === null || typeof payload !== 'object') {
+      return
+    }
+    if (oauthLoginId === null) {
+      if (earlyOAuthEvents.length < EARLY_OAUTH_EVENT_LIMIT) {
+        earlyOAuthEvents.push(payload as Record<string, unknown>)
+      }
+      return
+    }
+    if ((payload as Record<string, unknown>)['loginId'] !== oauthLoginId) {
       return
     }
     const data = payload as Record<string, unknown>
@@ -143,7 +159,7 @@
       const event = data['event'] as Record<string, unknown> | undefined
       if (!event) return
       if (event['type'] === 'auth_url') {
-        oauthStatus = 'A browser window opened — finish signing in there.'
+        oauthStatus = 'A browser window opened   finish signing in there.'
         void openInBrowser(String(event['url']))
       } else if (event['type'] === 'device_code') {
         oauthDeviceCode = {
@@ -199,6 +215,7 @@
     notice = ''
     oauthStarting = true
     oauthStatus = 'Starting sign-in…'
+    earlyOAuthEvents = []
     try {
       const account = await preparePendingAccount(selectedProvider.id)
       oauthLoginId = await invoke(
@@ -207,6 +224,13 @@
         selectedProvider.id,
         account.id
       )
+      const buffered = earlyOAuthEvents
+      earlyOAuthEvents = []
+      for (const bufferedPayload of buffered) {
+        handleOAuthPayload(bufferedPayload)
+      }
+      // The flow may have already finished while the invoke was in flight.
+      if (oauthLoginId === null) return
     } catch (startError) {
       actionError =
         startError instanceof Error ? startError.message : 'The sign-in could not be started.'
@@ -513,9 +537,14 @@
     }
   }
 
-  function accountForProvider(providerId: string): HarnessAccount | undefined {
-    return knownAccounts.find(
-      (account) => account.containerKind === 'legacy-default' && account.providerId === providerId
+  /** Resolve the registered account behind one connected-provider row. Every
+   * row is a dedicated account: container rows carry their account id as a
+   * suffix (`<entryId>.<accountId>`), legacy rows match exactly. */
+  function accountForConnected(connected: ProviderAccountAuthEntry): HarnessAccount | undefined {
+    return (
+      knownAccounts.find((account) => account.id === connected.id) ??
+      knownAccounts.find((account) => connected.id.endsWith(`.${account.id}`)) ??
+      knownAccounts.find((account) => account.providerId === connected.providerId)
     )
   }
 
@@ -586,12 +615,12 @@
   })
 </script>
 
-<Modal open size="lg" title={`Add provider — ${harness.name}`} onClose={() => void closeModal()}>
+<Modal open size="lg" title={`Add provider   ${harness.name}`} onClose={() => void closeModal()}>
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-4">
       {#if tab === 'custom'}
         <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-          Add any OpenAI-compatible endpoint by base URL — Ollama, LM Studio, llama.cpp, or a hosted
+          Add any OpenAI-compatible endpoint by base URL Ollama, LM Studio, llama.cpp, or a hosted
           gateway. Models are ready in the picker as soon as you save.
         </p>
       {:else if antigravityConnected}
@@ -600,18 +629,18 @@
         </p>
       {:else if apiKeyEntry && canSignIn}
         <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-          Pick any provider from {harness.name}’s catalog and paste its API key — stored in
+          Pick any provider from {harness.name}’s catalog and paste its API key stored in
           {harness.name}’s own credential file.
         </p>
       {:else if pickerLogin}
         <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-          Runs {harness.name}’s own interactive provider picker in a built-in terminal — choose any
+          Runs {harness.name}’s own interactive provider picker in a built-in terminal choose any
           provider there and follow the flow it shows (API key or OAuth).
         </p>
       {:else if canSignIn}
         <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
           Runs {harness.name}’s own sign-in flow in a built-in terminal rooted at your home
-          directory — a browser window opens so you can authenticate.
+          directory a browser window opens so you can authenticate.
         </p>
       {:else}
         <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
@@ -768,8 +797,7 @@
             >
               Connected providers
             </div>
-            {#each authStatus.accounts.filter((account) => account.active !== false) as connected (connected.providerId)}
-              {@const account = accountForProvider(connected.providerId)}
+            {#each authStatus.accounts.filter((account) => account.active !== false) as connected (connected.id)}
               <div class="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
                 <CheckCircle2 size={14} class="shrink-0 text-success" />
                 <div class="min-w-0 flex-1">
@@ -779,12 +807,12 @@
                       · {connected.method}{/if}
                   </p>
                 </div>
-                {#if account}
+                {#if accountForConnected(connected)}
                   <button
                     type="button"
                     class="flex h-7 items-center gap-1 rounded-lg px-2 text-[0.6875rem] font-medium text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
                     title={`Disconnect ${connected.label}`}
-                    onclick={() => (disconnectTarget = account)}
+                    onclick={() => (disconnectTarget = accountForConnected(connected) ?? null)}
                   >
                     <Unplug size={11} /> Disconnect
                   </button>
@@ -961,8 +989,7 @@
               }}
             />
             <p class="text-[0.625rem] text-dimmed">
-              Stored by CodeInOven in {harness.name}’s own credential file — never sent anywhere
-              else.
+              Stored by CodeInOven in {harness.name}’s own credential file never sent anywhere else.
             </p>
           {/snippet}
 
@@ -1065,8 +1092,8 @@
                   Sign in to {selectedProvider.name}
                 </p>
                 <p class="text-[0.625rem] text-dimmed">
-                  A browser window opens, you approve access, and this app finishes the rest — no
-                  key pasting needed.
+                  A browser window opens, you approve access, and this app finishes the rest no key
+                  pasting needed.
                 </p>
                 <button
                   class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
@@ -1076,24 +1103,20 @@
                 >
                   <KeyRound size={13} /> Sign in with browser
                 </button>
-                <p class="text-center text-[0.625rem] text-dimmed">— or paste an API key —</p>
+                <p class="text-center text-[0.625rem] text-dimmed">or paste an API key</p>
                 {@render apiKeyField(selectedProvider.name)}
               {:else}
-                <p class="text-[0.6875rem] font-medium text-foreground">
+                <div class="text-[0.6875rem] font-medium text-foreground text-center">
                   Connect to {selectedProvider.name}
-                </p>
-                <p class="text-[0.625rem] text-dimmed">
-                  {harness.name}'s own sign-in flow runs right here — answer its prompts and the
-                  credential is stored in {harness.name}'s credential file.
-                </p>
-                <button
-                  class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                  type="button"
-                  title="Connect to {selectedProvider.name}"
-                  onclick={() => void startProviderSignIn()}
-                >
-                  <KeyRound size={13} /> Connect
-                </button>
+                  <button
+                    class="flex h-9 mx-auto mt-2 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                    type="button"
+                    title="Connect to {selectedProvider.name}"
+                    onclick={() => void startProviderSignIn()}
+                  >
+                    <KeyRound size={13} /> Connect
+                  </button>
+                </div>
               {/if}
             </div>
           {/if}
@@ -1109,13 +1132,13 @@
           {:else if pickerLogin}
             <p class="text-[0.6875rem] text-muted">
               Click <strong class="font-medium text-foreground">Connect provider</strong> below to
-              open {harness.name}’s own provider picker in the built-in terminal — choose the
-              provider you want there.
+              open {harness.name}’s own provider picker in the built-in terminal choose the provider
+              you want there.
             </p>
           {:else}
             <p class="text-[0.6875rem] text-muted">
               Click <strong class="font-medium text-foreground">Connect provider</strong> below to pick
-              a provider and sign in from here — no copying commands.
+              a provider and sign in from here no copying commands.
             </p>
           {/if}
         </div>

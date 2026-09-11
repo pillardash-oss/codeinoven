@@ -145,7 +145,7 @@
     )
   }
 
-  /** Re-position once the callout has rendered — the initial placement uses a
+  /** Re-position once the callout has rendered   the initial placement uses a
    *  height estimate, the real card can be taller and must not overflow. */
   $effect(() => {
     if (!activeSpotlight) return

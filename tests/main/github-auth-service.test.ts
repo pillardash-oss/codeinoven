@@ -169,7 +169,7 @@ describe('GitHubAuthService', () => {
         avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4'
       })
     )
-    // Avatar download — inlined as a data URL because the renderer CSP blocks
+    // Avatar download   inlined as a data URL because the renderer CSP blocks
     // remote image hosts.
     fetchMock.mockResolvedValueOnce({
       ok: true,

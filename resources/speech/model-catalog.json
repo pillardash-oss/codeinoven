@@ -6,7 +6,7 @@
       "id": "parakeet",
       "capability": "asr",
       "label": "Parakeet",
-      "description": "NVIDIA NeMo Parakeet TDT transducer models — compact, accurate streaming ASR with separately qualified variants.",
+      "description": "NVIDIA NeMo Parakeet TDT transducer models   compact, accurate streaming ASR with separately qualified variants.",
       "artifactIds": [
         "parakeet-tdt-v2-sherpa-onnx-int8",
         "parakeet-tdt-v3-sherpa-onnx-int8",
@@ -48,7 +48,7 @@
       "id": "s1-cleanup",
       "capability": "cleanup",
       "label": "S1 mini normalizer",
-      "description": "superwhisper S1 mini — a 0.6B ASR-output text normalizer (punctuation, truecasing, filler removal, inverse text normalization) with a fixed control-line protocol. Cleanup only; it cannot perform lesson learning.",
+      "description": "superwhisper S1 mini   a 0.6B ASR-output text normalizer (punctuation, truecasing, filler removal, inverse text normalization) with a fixed control-line protocol. Cleanup only; it cannot perform lesson learning.",
       "artifactIds": [
         "s1-mini-cleanup-gguf-q4"
       ]
@@ -61,7 +61,7 @@
       "capability": "asr",
       "runtime": "sherpa-onnx",
       "label": "Parakeet TDT 0.6B v2 · sherpa-onnx int8",
-      "description": "English-optimized transducer. Best for English — fast, accurate, streaming-capable.",
+      "description": "English-optimized transducer. Best for English   fast, accurate, streaming-capable.",
       "tier": "quality",
       "version": "v2-0.6b",
       "repositoryRevision": "1ab9323565ddb038682214b292f588070a538ce2",

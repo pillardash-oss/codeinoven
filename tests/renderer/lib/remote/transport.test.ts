@@ -103,7 +103,7 @@ describe('browser WebSocket default', () => {
   })
 })
 
-describe('createLanTransport — proof of possession (A-04)', () => {
+describe('createLanTransport   proof of possession (A-04)', () => {
   it('signs the challenge instead of deriving a shared-secret token on first enrollment', async () => {
     const socket = new FakeSocket()
     const events: TransportEvent[] = []

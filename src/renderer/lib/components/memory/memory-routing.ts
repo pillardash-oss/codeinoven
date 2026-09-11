@@ -98,8 +98,8 @@ export interface MemorySaveGroup {
 /**
  * Group a panel's current entries by destination file for saving.
  *
- * Includes every location the panel's original load touched — even one that
- * now has zero managed entries — so deleting the last entry in a scope still
+ * Includes every location the panel's original load touched   even one that
+ * now has zero managed entries   so deleting the last entry in a scope still
  * reaches its file instead of silently no-op'ing. `loadedIds` lets the
  * caller distinguish "the user deleted this" (was loaded, now absent) from
  * "this appeared elsewhere after load" (never loaded, still on disk), which

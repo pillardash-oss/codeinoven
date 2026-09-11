@@ -67,7 +67,7 @@ export type GatewayStateListener = (status: GatewayStatus) => void
  * Owns the full lifecycle of managed local gateway processes: app-owned
  * installation via an available package manager, supervised launch on a loopback port, health gating,
  * model-catalog discovery, and syncing the discovered catalog into the harness
- * custom-provider store. CodeInOven — never the gateway — owns restarts,
+ * custom-provider store. CodeInOven   never the gateway   owns restarts,
  * ports, and cleanup; the root PID is journaled for crash reaping.
  */
 export class GatewaySupervisorService {
@@ -171,8 +171,8 @@ export class GatewaySupervisorService {
    * the journal. A journaled PID is only killed when every check passes: the
    * live process is orphaned (dead parent), its command still matches the
    * gateway package, AND its working directory resolves to the journaled cwd
-   * (the app-owned install directory). Any uncertainty — recycled PID running
-   * an unrelated copy, undeterminable cwd — skips the kill. Must run before
+   * (the app-owned install directory). Any uncertainty   recycled PID running
+   * an unrelated copy, undeterminable cwd   skips the kill. Must run before
    * any start on this launch.
    */
   async recoverOrphans(): Promise<{ killed: number[]; skipped: number[] }> {
@@ -472,7 +472,7 @@ export class GatewaySupervisorService {
       await access(markerPath)
       return dir
     } catch {
-      // Not installed yet — fall through to the install path.
+      // Not installed yet   fall through to the install path.
     }
     await mkdir(dir, { recursive: true })
     await writeFile(
@@ -507,7 +507,7 @@ export class GatewaySupervisorService {
    * Download the pinned version's tarball through the registry metadata so the
    * UI can show a true byte percentage, and verify its integrity digest before
    * handing it to the package manager. Returns null when the registry is
-   * unreachable — callers then fall back to a direct `add pkg@version`.
+   * unreachable   callers then fall back to a direct `add pkg@version`.
    */
   private async downloadPinnedTarball(
     pluginId: string,
@@ -853,7 +853,7 @@ export async function fetchPackageMetadata(
 /**
  * The registry omits both dist.size and Content-Length for many packages, so
  * a 1-byte range request is used to learn the exact total for the progress
- * percentage. Returns undefined when the probe fails — progress then degrades
+ * percentage. Returns undefined when the probe fails   progress then degrades
  * to indeterminate rather than showing a wrong percentage.
  */
 async function probeTarballSize(tarballUrl: string): Promise<number | undefined> {
@@ -927,7 +927,7 @@ const execFileAsync = promisify(execFile)
 /**
  * Run a read-only inspection binary through the app's process-resolution
  * boundary (App-Bible rule for every PATH-based main-process command).
- * Returns null when the binary is unavailable or fails — callers must treat
+ * Returns null when the binary is unavailable or fails   callers must treat
  * that as "cannot verify" and never guess.
  */
 async function runInspectionCommand(command: string, args: string[]): Promise<string | null> {
@@ -967,7 +967,7 @@ async function processSnapshot(): Promise<ProcessSnapshot | null> {
 
 /**
  * Resolve the working directory of a live PID via lsof. Returns null when it
- * cannot be determined — callers must skip rather than kill on uncertainty.
+ * cannot be determined   callers must skip rather than kill on uncertainty.
  */
 async function processWorkingDirectory(pid: number): Promise<string | null> {
   const stdout = await runInspectionCommand('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'])

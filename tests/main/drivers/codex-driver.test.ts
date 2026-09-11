@@ -629,7 +629,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
   it('retries after a short cooldown when the time-only reset just passed', async () => {
     // Right after an auto-resume fires, the still-limited provider re-reports
     // the same reset time a few seconds in the past. That is propagation lag,
-    // not tomorrow's window — the retry must land in minutes, not a day out.
+    // not tomorrow's window   the retry must land in minutes, not a day out.
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(2026, 7, 19, 9, 32, 0, 0))
     const driver = new CodexDriver(await storage())

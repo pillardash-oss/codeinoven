@@ -4,7 +4,7 @@ import type { AgentProviderIssue, AgentProviderIssueKind, AgentRateLimitWindow }
  * True when a provider issue represents a usage/rate-limit reset wait rather
  * than a terminal failure. This is the app-wide contract: such issues always
  * surface as a `waiting` provider card with a retry time, and the retry
- * scheduler resumes the thread once the reset passes — for every harness,
+ * scheduler resumes the thread once the reset passes   for every harness,
  * whether or not the harness schedules its own provider retry.
  */
 export function isUsageResetWaitIssue(
@@ -19,7 +19,7 @@ export function isUsageResetWaitIssue(
  * Provider errors frequently arrive as a driver-formatted string wrapping a raw
  * JSON error body, e.g. `429: {"message":"You've reached your weekly usage
  * limit...","type":"rate_limit_error","code":"RATE_LIMITED"}`. Surfacing that
- * blob verbatim as the "friendly" message is a recurring UI bug — unwrap it
+ * blob verbatim as the "friendly" message is a recurring UI bug   unwrap it
  * once here so every caller (classification and display) works off the actual
  * message/type/code rather than the raw transport string.
  */
@@ -45,13 +45,13 @@ export function extractProviderErrorEnvelope(raw: string): ProviderErrorEnvelope
       return { message, ...(type === undefined ? {} : { type }), ...(code === undefined ? {} : { code }) }
     }
   } catch {
-    // Not a JSON envelope (or malformed) — treat the whole string as the message.
+    // Not a JSON envelope (or malformed)   treat the whole string as the message.
   }
   return { message: raw }
 }
 
 /**
- * A harness-emitted usage-cap notice is a short, plain-text system message —
+ * A harness-emitted usage-cap notice is a short, plain-text system message  
  * anything longer or formatted is agent prose, not a notice.
  */
 const USAGE_LIMIT_NOTICE_MAX_LENGTH = 300
@@ -71,7 +71,7 @@ const USAGE_LIMIT_NOTICE_SENTENCE_SPLIT = /[.!?\n]/
  * Some harnesses (opencode observed in the wild) emit their usage-cap notice
  * as a completed assistant message ("5-hour usage limit reached. Resets in
  * 1hr 53min."), which the chat engine re-classifies into a retry wait. But an
- * agent's ordinary answer can also talk about usage limits at length — and
+ * agent's ordinary answer can also talk about usage limits at length   and
  * classifying that prose as a limit notice splashes the entire agent output
  * into the usage-limit card. A genuine notice is short, unformatted text whose
  * limit phrasing leads the message; agent prose is long, markdown-formatted,
@@ -205,7 +205,7 @@ export function classifyProviderIssue(
   const normalized = envelope.message.replaceAll(/[_-]+/gu, ' ').toLowerCase()
   const normalizedType = (envelope.type ?? '').replaceAll(/[_-]+/gu, ' ').toLowerCase()
   // A provider-load 429 ("overloaded_error", "temporarily unavailable") is a
-  // transient condition, not a usage/rate cap — check it before the blanket
+  // transient condition, not a usage/rate cap   check it before the blanket
   // `statusCode === 429` branch below, or it always loses to `rate_limit` and
   // gets treated as a long usage-reset wait instead of a short retry.
   if (

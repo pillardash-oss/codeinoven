@@ -79,7 +79,7 @@ afterEach(() => {
   identityOverride.current = null
 })
 
-describe('RemoteSessionStore — relay device auth gating', () => {
+describe('RemoteSessionStore   relay device auth gating', () => {
   it('starts a fresh device challenge when an initially offline desktop reconnects', async () => {
     vi.useFakeTimers()
     relayOutcome.current = 'offline'

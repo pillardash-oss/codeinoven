@@ -8,7 +8,7 @@ import { Logger } from '../system/logger'
  * lazy capacity eviction) is finalized in the background, serialized so
  * concurrent creates never overlap their evictions. Only the send path
  * (`session:ensure`, `agent:send`) awaits finalization via `awaitReady`
- * before dispatching a prompt — typing, switching threads, and every read
+ * before dispatching a prompt   typing, switching threads, and every read
  * never wait. A message sent in the window between create and finalize is
  * rendered optimistically by the renderer and queued here behind the
  * finalization before it reaches the harness.
@@ -30,7 +30,7 @@ export class ThreadCreationCoordinator {
    * Schedule `work` to run serialized with every other finalization. This is
    * the readiness-gated lane: `awaitReady` resolves only after these tasks for
    * a thread have settled, and every consumer (send path, `thread:get`, and
-   * thread-scoped engine reads) waits on it. Keep this lane deliberately small —
+   * thread-scoped engine reads) waits on it. Keep this lane deliberately small  
    * persist the row and broadcast. Anything slow or optional (git branch
    * detection) must move to `beginDetached` so it can never gate a read.
    */
@@ -50,7 +50,7 @@ export class ThreadCreationCoordinator {
     void run
       .catch((error) => {
         Logger.error('Thread finalization failed', { threadId, error: String(error) })
-        // Remember the failure so scoped reads can report the real cause —
+        // Remember the failure so scoped reads can report the real cause  
         // without a persisted row they would otherwise surface as a
         // misleading "thread does not belong to the project".
         this.failed.add(threadId)
@@ -66,7 +66,7 @@ export class ThreadCreationCoordinator {
    * a thread's finalization, in the same serialized lane. Unlike `begin`, this
    * task is never awaited by `awaitReady`: it runs strictly after the gated
    * work for the thread but resolves its result purely via a later broadcast.
-   * `work` receives `aborted` — true when the thread's gated finalization
+   * `work` receives `aborted`   true when the thread's gated finalization
    * failed, so callers can skip work that assumes a persisted row.
    */
   beginDetached(

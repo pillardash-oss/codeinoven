@@ -99,7 +99,7 @@
           "id": "chat-send",
           "keys": ["mod", "enter"],
           "label": "Send message",
-          "description": "Sends the message, or queues it while the agent is busy. Enter is never a send key — plain Enter always makes a new line or list item.",
+          "description": "Sends the message, or queues it while the agent is busy. Enter is never a send key   plain Enter always makes a new line or list item.",
           "scenario": "Chat composer, message editing, and remote conversation composer."
         },
         {
@@ -127,7 +127,7 @@
           "id": "chat-voice-dictation",
           "keys": ["alt", "alt"],
           "label": "Dictate with voice",
-          "description": "Starts voice dictation in whatever input with a microphone is on view — the chat composer, a selection comment, the temporary chat, or an open editor. Defaults to double-pressing the left Alt key (Option on macOS) and can be remapped in Sound > Preferences; Escape stops an active recording.",
+          "description": "Starts voice dictation in whatever input with a microphone is on view   the chat composer, a selection comment, the temporary chat, or an open editor. Defaults to double-pressing the left Alt key (Option on macOS) and can be remapped in Sound > Preferences; Escape stops an active recording.",
           "scenario": "Anywhere a microphone input is visible."
         },
         {
@@ -265,7 +265,7 @@
           "id": "git-commit",
           "keys": ["mod", "enter"],
           "label": "Commit staged changes",
-          "description": "Commits the staged files from the message box. Enter never commits — multi-line messages are safe.",
+          "description": "Commits the staged files from the message box. Enter never commits   multi-line messages are safe.",
           "scenario": "Git status panel composer or the Commit dialog."
         },
         {
@@ -511,7 +511,7 @@
           "id": "ui-modal-primary-action",
           "keys": ["mod", "enter"],
           "label": "Run modal primary action",
-          "description": "Activates the topmost open modal's primary action — start, save, merge, confirm, and so on — even when a text field inside the modal has focus.",
+          "description": "Activates the topmost open modal's primary action   start, save, merge, confirm, and so on   even when a text field inside the modal has focus.",
           "scenario": "A modal overlay is open."
         },
         {

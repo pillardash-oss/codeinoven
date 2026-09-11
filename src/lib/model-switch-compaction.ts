@@ -32,7 +32,7 @@ export interface ModelSwitchCompactionDecision {
 /**
  * Compact when the thread's last-known native usage already fills >=80% of the
  * new model's context window. Missing or invalid signals never trigger a
- * compaction — without a known window the app cannot judge a mismatch, and
+ * compaction   without a known window the app cannot judge a mismatch, and
  * without known usage it could over-compact a short conversation.
  */
 export function decideModelSwitchCompaction(

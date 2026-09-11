@@ -25,7 +25,7 @@ const THINKING_LEVELS = new Set<ThinkingLevel>([
 /**
  * A model's default thinking level is a CodeInOven-only picker convenience
  * (pre-selects the thread's thinking level the first time the model is
- * chosen) — neither opencode's nor pi's own schema has a concept for it. This
+ * chosen)   neither opencode's nor pi's own schema has a concept for it. This
  * writes/reads it under a clearly CodeInOven-owned key rather than dropping
  * it, so it survives a save/reload round trip like every other model field.
  */
@@ -41,7 +41,7 @@ export function hasNativeProviderCatalog(harnessId: string): boolean {
 }
 
 /**
- * Provider ids the user configured natively in Pi's `~/.pi/agent/models.json` —
+ * Provider ids the user configured natively in Pi's `~/.pi/agent/models.json`  
  * explicit connect targets regardless of whether their entry carries an API
  * key (keyless local servers are legitimate).
  */
@@ -53,10 +53,10 @@ export async function piNativeProviderIds(): Promise<Set<string>> {
 
 /**
  * Provider ids the user configured natively in opencode's
- * `~/.config/opencode/opencode.json` (`provider` entries — explicit connect
+ * `~/.config/opencode/opencode.json` (`provider` entries   explicit connect
  * targets regardless of whether their entry carries an API key), minus ids the
  * user disabled via `disabled_providers`. Returns `null` when the config exists
- * but cannot be parsed — callers then keep their catalog unfiltered rather
+ * but cannot be parsed   callers then keep their catalog unfiltered rather
  * than wrongly hiding every provider behind a read failure.
  */
 export async function opencodeNativeProviderIds(): Promise<Set<string> | null> {
@@ -72,6 +72,15 @@ export async function opencodeNativeProviderIds(): Promise<Set<string> | null> {
 
 /** Reads and surgically edits harness-owned custom provider catalogs. */
 export class NativeProviderConfigService {
+  /** Read a native Pi provider key for main-process usage probes only. */
+  async readApiKey(harnessId: string, providerId: string): Promise<string | undefined> {
+    if (harnessId !== 'pi') return undefined
+    const config = await readJsoncObject(PI_MODELS_PATH)
+    const provider = record(record(config['providers'])?.[providerId])
+    const apiKey = stringValue(provider?.['apiKey'])
+    return apiKey && apiKey !== 'none' ? apiKey : undefined
+  }
+
   async listProviders(): Promise<BaseUrlProvider[]> {
     const [openCode, pi] = await Promise.all([this.listOpenCodeProviders(), this.listPiProviders()])
     return [...openCode, ...pi]
@@ -280,7 +289,7 @@ function openCodeModel(providerId: string, id: string, value: unknown): BaseUrlP
       ? { maxOutputTokens: positiveInteger(limit?.['output']) }
       : {}),
     reasoning: model['reasoning'] === true || variants !== undefined,
-    // opencode's variant *key* is a free-form label — the level it actually
+    // opencode's variant *key* is a free-form label   the level it actually
     // dispatches with is `thinkingLevel` inside the value (falls back to the
     // key for older/hand-written configs that don't set it).
     ...(variants
@@ -331,7 +340,7 @@ function piModel(providerId: string, value: unknown): BaseUrlProviderModel | nul
 
 function serializeOpenCodeModel(model: BaseUrlProviderModel): Record<string, unknown> {
   // Either bound is meaningful on its own (e.g. discovery often reports only
-  // context_length) — requiring both dropped a known context window whenever
+  // context_length)   requiring both dropped a known context window whenever
   // the output limit was missing.
   const limit = {
     ...(model.contextWindow ? { context: model.contextWindow } : {}),
@@ -343,7 +352,7 @@ function serializeOpenCodeModel(model: BaseUrlProviderModel): Record<string, unk
     ...(Object.keys(limit).length > 0 ? { limit } : {}),
     // opencode dispatches by passing the thread's thinking level straight
     // through as the variant key (see opencode-driver's `variant:` field), so
-    // the key must equal the level it selects — the value's `thinkingLevel`
+    // the key must equal the level it selects   the value's `thinkingLevel`
     // is what opencode itself reads to know which effort to actually request.
     ...(model.thinkingPresets?.length
       ? {

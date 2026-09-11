@@ -37,7 +37,7 @@
   let rendering = $state(true)
   let sourceVisible = $state(false)
   let svg = $state('')
-  /** Bumped to force the attachment to re-run — an in-place retry after a
+  /** Bumped to force the attachment to re-run   an in-place retry after a
    *  transient failure, so the user never has to switch threads to recover. */
   let retryKey = $state(0)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
@@ -50,7 +50,7 @@
   })
 
   // The same snippet renders both the inline and fullscreen diagram, so
-  // bind:this can't target one instance only — use an attachment instead.
+  // bind:this can't target one instance only   use an attachment instead.
   function bindFullscreenViewport(el: HTMLDivElement): () => void {
     fullscreenViewport = el
     return () => {
@@ -96,7 +96,7 @@
         } catch (reason) {
           if (disposed || renderNumber !== currentRender) return
           // A re-render failure must never destroy an already-rendered
-          // diagram — keep the last good SVG on screen.
+          // diagram   keep the last good SVG on screen.
           if (svg) return
           error = 'This Mermaid diagram could not be rendered.'
           errorDetail = reason instanceof Error ? reason.message : String(reason)
@@ -127,7 +127,7 @@
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copied = false), 1500)
     } catch {
-      // Clipboard unavailable — the button simply stays idle.
+      // Clipboard unavailable   the button simply stays idle.
     }
   }
 </script>

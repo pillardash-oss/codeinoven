@@ -328,7 +328,7 @@ export class UtilityOrchestrationService {
 
   /**
    * Register a listener invoked whenever a computer-use utility is called with
-   * a target pid — used by the PiP monitor to latch onto the app a thread's
+   * a target pid   used by the PiP monitor to latch onto the app a thread's
    * agent is driving.
    */
   onCuaActivity(listener: (pid: number, threadId: string, sessionId?: string) => void): void {
@@ -429,7 +429,7 @@ export class UtilityOrchestrationService {
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
     const toolInstructions = [
-      `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally — never call the gateway through the shell, and never print or persist tokens.`,
+      `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       ...(hasOnDemand
         ? [
             'A search result reports an explicit `notFound` boolean and may return project-aware candidates (`matchType: "candidates"`) to evaluate semantically. Before concluding that any capability (MCP, skill, tool, utility) is unavailable or does not exist, call ' +
@@ -551,7 +551,7 @@ export class UtilityOrchestrationService {
   private async runDiagnostics(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
     if (state.request.allowManagement !== true) {
       throw new Error(
-        'App diagnostics require an explicit @cio-utility turn — tell the user to re-send their request starting with @cio-utility.'
+        'App diagnostics require an explicit @cio-utility turn   tell the user to re-send their request starting with @cio-utility.'
       )
     }
     state.diagnostics ??= new CioDiagnosticsService(requiredDatabase(this.database), () =>
@@ -1512,7 +1512,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Build the stdio MCP gateway script. The tool list and the tools/call route
  *  map are generated from `GATEWAY_TOOLS`, so the agent-facing contract always
- *  matches the catalog — no hand-synchronized copy to drift. */
+ *  matches the catalog   no hand-synchronized copy to drift. */
 function buildUtilityGatewayScript(gatewayTools = GATEWAY_TOOLS): string {
   const tools = gatewayTools.map(({ name, description, inputSchema }) => ({
     name,

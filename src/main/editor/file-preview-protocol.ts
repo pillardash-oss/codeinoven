@@ -192,9 +192,9 @@ function decodeSegments(pathname: string): string[] {
  * can preview images and PDFs with a real `src` URL instead of a base64 IPC
  * dump. Two URL shapes are supported:
  *
- * - `appfile://project/<projectId>/<relativePath>` — resolved against the
+ * - `appfile://project/<projectId>/<relativePath>`   resolved against the
  *   project root through {@link ProjectFilesService#resolveForExternalEditor}
- * - `appfile://attachment/<projectId>/<attachmentId>?name=<label>` — an
+ * - `appfile://attachment/<projectId>/<attachmentId>?name=<label>`   an
  *   out-of-project attachment copied into CodeInOven storage
  *
  * The handler is installed via a lazy {@link ProjectFilesService} resolver so

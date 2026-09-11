@@ -436,7 +436,7 @@
       <div>
         <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Transcribe</h2>
         <p class="mt-1 text-[0.6875rem] text-dimmed">
-          Record your voice or import an audio file and transcribe it. Nothing is saved — the audio
+          Record your voice or import an audio file and transcribe it. Nothing is saved   the audio
           and transcript live only while this page is open.
         </p>
       </div>
@@ -553,7 +553,7 @@
         </button>
         {#if !cleanupReady}
           <span class="text-[0.6875rem] text-dimmed">
-            Cleanup needs a local cleanup model — download one in the Models tab.
+            Cleanup needs a local cleanup model   download one in the Models tab.
           </span>
         {/if}
       </div>
@@ -612,7 +612,7 @@
         <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Read out</h2>
         <p class="mt-1 text-[0.6875rem] text-dimmed">
           Paste text or import a text, PDF, or Office document, then have the local text-to-speech
-          model read it aloud. Nothing is saved — blocks and playback state are cleared when you
+          model read it aloud. Nothing is saved   blocks and playback state are cleared when you
           leave the page.
         </p>
       </div>
@@ -722,7 +722,7 @@
 
     {#if hasInstalledTts === false && readingBlocks.length > 0}
       <p class="mt-2 text-[0.6875rem] text-dimmed">
-        Read-aloud needs a text-to-speech model — download one in the Models tab.
+        Read-aloud needs a text-to-speech model   download one in the Models tab.
       </p>
     {/if}
   </section>

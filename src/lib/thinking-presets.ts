@@ -5,7 +5,7 @@ import type { ThinkingPreset, ThinkingLevel } from './types'
  *
  * Drivers usually report these per model through their catalog, but that only
  * arrives after the harness resolves. The composer falls back to this list so
- * the thread's stored `thinkingLevel` snapshot renders immediately — the
+ * the thread's stored `thinkingLevel` snapshot renders immediately   the
  * control never disappears just because the catalog is still loading.
  */
 export const STANDARD_THINKING_PRESETS: ThinkingPreset[] = [
@@ -44,7 +44,7 @@ export const THINKING_LEVEL_ORDER: readonly ThinkingLevel[] = [
  * Resolve the thinking level applied when a model is first selected.
  *
  * The previously used thinking level is inherited whenever the newly selected
- * model still offers it — that keeps continuity for the same model and for
+ * model still offers it   that keeps continuity for the same model and for
  * models that share its reasoning levels. Only when the last-used level is not
  * offered does the model's explicitly declared `defaultThinkingLevel` apply,
  * and as a final fallback the lowest preset the model offers is used, so a

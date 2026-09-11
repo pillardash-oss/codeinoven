@@ -11,7 +11,7 @@ interface LogRecord {
 
 /**
  * Structured main-process logger.
- * The application Agent behavior contract forbids `console.*` — all logging goes through this class.
+ * The application Agent behavior contract forbids `console.*`   all logging goes through this class.
  * `Logger.dev` is for development-only diagnostics.
  *
  * Besides the machine-readable `main.jsonl` sink, every log line is mirrored into

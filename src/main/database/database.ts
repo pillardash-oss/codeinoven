@@ -45,7 +45,7 @@ import { buildBoundedQuery } from './bounded-query'
 export const MAIN_THREAD_DATABASE_WARNING_MS = 16.7
 
 /**
- * Database — synchronous SQLite wrapper for the Electron main process.
+ * Database   synchronous SQLite wrapper for the Electron main process.
  *
  * - WAL journal mode for concurrent reads
  * - busy_timeout to prevent SQLITE_BUSY
@@ -70,7 +70,7 @@ export class Database {
 
     // On a fresh install the config root does not exist yet and
     // `storage.initialize()` runs concurrently with this call, so create the
-    // parent directory first — otherwise SQLite aborts with
+    // parent directory first   otherwise SQLite aborts with
     // "cannot open database because the directory does not exist".
     mkdirSync(dirname(this.path), { recursive: true })
 
@@ -251,7 +251,7 @@ export class Database {
     return join(dirname(this.path), 'backups')
   }
 
-  /** Passive WAL checkpoint — returns an explicit result. */
+  /** Passive WAL checkpoint   returns an explicit result. */
   async passiveCheckpoint(): Promise<WorkerCheckpointResult> {
     return (
       this.maintenanceWorker?.passiveCheckpoint() ?? { ok: false, error: 'no maintenance worker' }
@@ -308,7 +308,7 @@ export class Database {
    *   never cleared early); the worker's `restore` op closes its own connection
    *   before the atomic swap, so no handle survives onto the pre-restore file.
    * - Typed `shutdown` (when used) is sent and awaited before the handle is
-   *   cleared — see `DatabaseWorker.shutdown`.
+   *   cleared   see `DatabaseWorker.shutdown`.
    * - Failure kinds (`source_invalid` / `verify_failed` / `io`) are preserved
    *   on the returned result.
    */
@@ -337,7 +337,7 @@ export class Database {
     }
     if (result.ok) {
       // Reopen the primary connection on the restored inode. If the reopen
-      // fails, the restore must be reported as failed — a restored database
+      // fails, the restore must be reported as failed   a restored database
       // the app cannot open is not a successful restore.
       try {
         await this.init()
@@ -801,7 +801,7 @@ export class Database {
 
   /**
    * Databases created before claim-token tagging carry a `claim_token`-less
-   * snapshot queue. Add the column in place (nullable, no backfill needed —
+   * snapshot queue. Add the column in place (nullable, no backfill needed  
    * unclaimed rows are NULL by definition). Idempotent and safe to re-run.
    */
   migrateModelRankingSnapshotClaimToken(connection?: DatabaseType): void {
@@ -820,7 +820,7 @@ export class Database {
   /**
    * Rows persisted before the legacy `engineeringMode` settings flag was
    * scrubbed still carry it inside their settings JSON. Rewrite affected rows
-   * without the flag — the Engineering lifecycle selection is the single
+   * without the flag   the Engineering lifecycle selection is the single
    * source of truth now. Idempotent and safe to re-run. Malformed rows are
    * left untouched; the read-path sanitizer in the thread repository still
    * guards them.
@@ -828,7 +828,7 @@ export class Database {
   /**
    * Rebuild missing `main` usage events from the durable agent_messages ledger.
    * `INSERT OR IGNORE` against the `message:<id>` primary key makes this
-   * idempotent — rows already recorded by the live recorder are skipped, so
+   * idempotent   rows already recorded by the live recorder are skipped, so
    * only lost turns (mirrored sessions, recorder outages) are inserted.
    */
   migrateThreadSettingsLegacyEngineeringFlag(connection?: DatabaseType): void {
@@ -902,7 +902,7 @@ export class Database {
   }
 
   /** Existing databases predate the per-message generation duration used by
-   *  tokens-per-second rates. Nullable — messages persisted before the column
+   *  tokens-per-second rates. Nullable   messages persisted before the column
    *  have no generation window recorded and fall back to wall-clock rates. */
   private migrateAgentMessageGenerationColumn(connection: DatabaseType): void {
     const columns = new Set<string>(

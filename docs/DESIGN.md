@@ -4,7 +4,7 @@ This document captures the current visual and interaction language of CodeInOven
 
 ## Product Personality
 
-CodeInOven is a precision instrument for professionals running coordinated agentic software engineering. The UI is calm and confident: high information density with unmistakable hierarchy, never shouting. Copy is operator-first and verb-driven (`New thread`, `Approve plan`, `Run checks`) with no marketing language inside the app. The product must feel trustworthy — state transitions are visible, destructive actions are explicit, and nothing happens silently. The brand tone is restrained luxury: Obsidian and Ivory with a whisper of Auric gold, saying "serious tool," not "SaaS landing page." See `APP-BIBLE.md` for the full philosophy.
+CodeInOven is a precision instrument for professionals running coordinated agentic software engineering. The UI is calm and confident: high information density with unmistakable hierarchy, never shouting. Copy is operator-first and verb-driven (`New thread`, `Approve plan`, `Run checks`) with no marketing language inside the app. The product must feel trustworthy   state transitions are visible, destructive actions are explicit, and nothing happens silently. The brand tone is restrained luxury: Obsidian and Ivory with a whisper of Auric gold, saying "serious tool," not "SaaS landing page." See `APP-BIBLE.md` for the full philosophy.
 
 ## Visual Direction
 
@@ -150,13 +150,13 @@ Toasts are the app's transient feedback surface. They are rendered by the shared
 
 - Status is communicated by color first: each toast carries a status-tinted background wash, a status-tinted hairline border, a status-colored title, a tinted icon chip, and a solid status-colored left accent border. Success uses `--color-success`, warning `--color-warning`, error `--color-danger`, info `--color-info`. The color must read instantly, before the words do.
 
-- The accent is a real `border-left` on the toast, never a `::before`/absolutely-positioned pseudo-element — pseudo-element decorations detach and float during drag, dismissal, and scale transitions.
+- The accent is a real `border-left` on the toast, never a `::before`/absolutely-positioned pseudo-element   pseudo-element decorations detach and float during drag, dismissal, and scale transitions.
 
 - Toast layout is strictly row-based: icon and title share the header row (icon left, title immediately beside it), the description gets its own full-width row underneath, and all action buttons share the bottom row side by side. Nothing else sits side by side.
 
 - Action buttons render as a shared full-width row at the bottom of the toast, never beside the text. Error toasts always include a `Copy` action (`reportError` / `reportErrorWithDetails` in `src/renderer/lib/stores/app-errors.svelte.ts` copy the message plus details/stack to the clipboard); any additional action sits next to it on the same row.
 
-- Layout rules must win the cascade over svelte-sonner's internal `[data-styled='true']` selectors — match that specificity and use `!important` deliberately inside `Toaster.svelte` for structural properties.
+- Layout rules must win the cascade over svelte-sonner's internal `[data-styled='true']` selectors   match that specificity and use `!important` deliberately inside `Toaster.svelte` for structural properties.
 
 - Do not remove `richColors`; the brand theming intentionally replaces it. Keep the memory-proposal custom toast (`toast.custom(MemoryToastComponent)`) as the only custom-component toast.
 

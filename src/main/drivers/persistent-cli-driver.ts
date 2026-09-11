@@ -193,7 +193,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   private deletedSessions = new Set<string>()
   /** Sessions whose provider stream already supplied a structured terminal issue. */
   private structuredProcessIssues = new Set<string>()
-  /** Model/provider/thinking level of the running turn — CLIs do not echo them back per message. */
+  /** Model/provider/thinking level of the running turn   CLIs do not echo them back per message. */
   private turnProvenance = new Map<
     string,
     { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }
@@ -448,7 +448,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     )
   }
 
-  /** Ping the exact configured model — no cheap-candidate substitution. */
+  /** Ping the exact configured model   no cheap-candidate substitution. */
   async sendHeartbeatPing(
     projectPath: string,
     options: SendHeartbeatPingOptions
@@ -508,7 +508,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     // A previous turn can leave a lingering process behind (e.g. a CLI hung on
     // a dead socket after a network failure) while the chat engine already
     // considers the session idle and dispatches a retry here. Replace the
-    // orphaned turn — stop its process and drain its settlement — instead of
+    // orphaned turn   stop its process and drain its settlement   instead of
     // rejecting the retry with "A turn is already active".
     const orphan = this.activeProcesses.get(session.id)
     if (orphan) {
@@ -819,8 +819,8 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   /**
    * Cheap liveness probe for the session watchdog: true while this session's
    * child process is still running. Persistent-CLI drivers (claude-code among
-   * them) never emit an explicit error when their process dies mid-turn — the
-   * stream just goes silent — so without this the watchdog can never tell a
+   * them) never emit an explicit error when their process dies mid-turn   the
+   * stream just goes silent   so without this the watchdog can never tell a
    * dead process from a long-running one and extends the "working" state
    * forever, leaving the turn stuck until the user ends it manually.
    */
@@ -1411,7 +1411,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   /**
    * Stamp the owning thread onto a session record. The engine calls this when
-   * binding a session so the driver can relocate the thread's sessions later —
+   * binding a session so the driver can relocate the thread's sessions later  
    * e.g. after a harness switch moved the thread's session slot elsewhere.
    */
   async tagSessionThread(projectPath: string, sessionId: string, threadId: string): Promise<void> {

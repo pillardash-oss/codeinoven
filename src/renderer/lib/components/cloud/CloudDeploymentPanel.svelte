@@ -361,7 +361,7 @@
    * Hand the selected failing deployment to an agent for diagnosis and proposed
    * fix. v1 is strictly read-only: the thread is preloaded with the failing log
    * and provider context, and the prompt asks the agent to diagnose and propose
-   * a fix — never to redeploy, trigger, or auto-fix.
+   * a fix   never to redeploy, trigger, or auto-fix.
    */
   async function startAgentRemediation(logText: string): Promise<void> {
     const container = selectedContainer
@@ -766,8 +766,8 @@ ${fence}`
           class="ml-1 h-7"
           aria-label="Toggle live status updates"
           title={liveUpdates
-            ? 'Live updates on — refreshing every minute'
-            : 'Live updates paused — refresh manually'}
+            ? 'Live updates on   refreshing every minute'
+            : 'Live updates paused   refresh manually'}
         />
       </div>
     </div>

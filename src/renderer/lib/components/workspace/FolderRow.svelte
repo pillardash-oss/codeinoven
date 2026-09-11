@@ -101,7 +101,7 @@
   ondragleave={handleDragLeave}
   oncontextmenu={(e: MouseEvent) => onContextMenu?.(e, project.id)}
 >
-  <!-- Stable drop indicator — always rendered, opacity toggled to avoid layout shift -->
+  <!-- Stable drop indicator   always rendered, opacity toggled to avoid layout shift -->
   <div
     class="pointer-events-none absolute left-0 right-0 top-0 h-[2px] transition-opacity duration-100 {dropIndicator ===
     'before'
@@ -120,7 +120,7 @@
     title={`${expanded ? 'Collapse' : 'Expand'} ${projectIdentityTitle(project)}`}
     onclick={onToggle}
   >
-    <!-- Project icon ↔ chevron — one slot, chevron only while hovering -->
+    <!-- Project icon ↔ chevron   one slot, chevron only while hovering -->
     <span class="relative h-4 w-4 shrink-0">
       <span
         class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover:opacity-0"

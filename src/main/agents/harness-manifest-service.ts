@@ -35,8 +35,8 @@ function isKnownBehavior(behavior: string): behavior is HarnessManifestBehavior 
  *
  * Every harness declares its behavior in a versioned manifest (`HarnessManifest`
  * in `harness-registry.ts`). That declaration is the reliable baseline. When a
- * harness is actually used — and its real behavior is confirmed by the user or
- * observed at runtime — the confirmed value is persisted here and takes
+ * harness is actually used   and its real behavior is confirmed by the user or
+ * observed at runtime   the confirmed value is persisted here and takes
  * precedence over the declaration, giving flexibility without mutating the
  * shipped manifest.
  */
@@ -89,7 +89,7 @@ export class HarnessManifestService {
 
   /**
    * Record that a harness actually ran a turn. Without an explicit user
-   * override, the declared behavior becomes a `runtime` confirmation — the
+   * override, the declared behavior becomes a `runtime` confirmation   the
    * harness has been validated in practice. A user override always wins.
    */
   async recordInUse(harnessId: string): Promise<void> {

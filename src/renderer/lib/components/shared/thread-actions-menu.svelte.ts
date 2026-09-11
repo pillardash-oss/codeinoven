@@ -6,7 +6,7 @@ import { copyText } from '$lib/copy-text'
 import type { Thread } from '$shared/types'
 
 export interface ThreadActionsMenuConfig {
-  /** Resolved on every access — callers pass a getter so the menu tracks the current thread. */
+  /** Resolved on every access   callers pass a getter so the menu tracks the current thread. */
   getThread: () => Thread | null | undefined
   onRename: (thread: Thread, newName: string) => Promise<void>
   onTogglePin: (thread: Thread) => void | Promise<void>
@@ -19,7 +19,7 @@ export interface ThreadActionsMenuConfig {
   showCopyId?: () => boolean
 }
 
-/** One dropdown, one set of modals — shared by the app header and every thread row so the
+/** One dropdown, one set of modals   shared by the app header and every thread row so the
  *  "..." menu can never drift between the two surfaces again. */
 export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
   let showRenameModal = $state(false)

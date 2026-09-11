@@ -116,7 +116,7 @@
   const open = $derived(prState === 'open')
   const draft = $derived(detail?.draft ?? summary.draft)
   const hasBody = $derived(commentBody.trim().length > 0)
-  /** Why merging may not be a good idea right now — shown next to the button. */
+  /** Why merging may not be a good idea right now   shown next to the button. */
   const mergeBlocker = $derived.by(() => {
     if (!open) return ''
     if (gitState.hasPrIssue(identity.owner, identity.repo, number)) {
@@ -129,7 +129,7 @@
 
   /**
    * Conversation as one chronological stream: the PR description, issue
-   * comments, submitted reviews, and inline code comments — the same context
+   * comments, submitted reviews, and inline code comments   the same context
    * GitHub shows, so a merge decision never needs the browser.
    */
   const conversation = $derived.by(() => {
@@ -195,7 +195,7 @@
     return 'comment'
   }
 
-  /** Badge colour — approvals and change requests read at a glance. */
+  /** Badge colour   approvals and change requests read at a glance. */
   function kindClass(kind: EntryKind, meta?: string): string {
     if (kind === 'review' && meta === 'approved') return 'bg-success/10 text-success'
     if (kind === 'review' && meta === 'changes requested') return 'bg-warning/10 text-warning'
@@ -815,7 +815,7 @@
   <!--
     Everything that consumes what you write lives here, under the editor.
     Approve and Request changes used to sit in a bar at the top of the panel,
-    far from the text they submit — which is why requesting changes with an
+    far from the text they submit   which is why requesting changes with an
     empty box only failed once GitHub rejected it.
   -->
   <div class="shrink-0 border-t border-border">
@@ -872,7 +872,7 @@
             ? 'This pull request is no longer open'
             : hasBody
               ? 'Request changes on this pull request'
-              : 'Write what needs to change first — GitHub requires a comment'}
+              : 'Write what needs to change first   GitHub requires a comment'}
           disabled={!open || reviewing || !hasBody}
           onclick={() => void submitReview('REQUEST_CHANGES')}
         >
@@ -888,7 +888,7 @@
     </div>
 
     <!--
-      Merging is a repo operation, not a review — a tinted, separate zone
+      Merging is a repo operation, not a review   a tinted, separate zone
       keeps it from reading as one more button in the toolbar above. The
       method picker and close action live behind dropdowns (matching
       EditorOpenControl's split-button pattern) instead of a bare <select>
@@ -1072,7 +1072,7 @@
       {:else if prState === 'merged'}
         <span class="flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
           <Merge size={10} class="shrink-0" />
-          <span class="truncate">Merged — nothing more to do</span>
+          <span class="truncate">Merged   nothing more to do</span>
         </span>
       {/if}
     </div>

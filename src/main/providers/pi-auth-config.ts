@@ -37,7 +37,7 @@ export const piAuthFileIo: PiAuthFileIo = {
 
 /**
  * One stored credential in Pi's auth store (`~/.pi/agent/auth.json`),
- * keyed by provider id — the exact shape `@earendil-works/pi-ai`'s
+ * keyed by provider id   the exact shape `@earendil-works/pi-ai`'s
  * CredentialStore persists and the TUI's OAuth flows write.
  */
 interface PiCredential {
@@ -60,7 +60,7 @@ export interface PiAuthFileIo {
 /**
  * Headless access to Pi's own credential store. Writes are atomic replace-file
  * (never in-place truncation), so a pi process reading auth.json concurrently
- * sees either the old or the new document — matching the durability semantics
+ * sees either the old or the new document   matching the durability semantics
  * pi itself relies on for the same file.
  */
 export class PiAuthConfigService {
@@ -118,7 +118,7 @@ export class PiAuthConfigService {
 
   /**
    * Store a full OAuth credential (refresh/access/expiry plus any extra token
-   * fields) — the same shape Pi's own TUI sign-in persists.
+   * fields)   the same shape Pi's own TUI sign-in persists.
    */
   async setOAuthCredential(providerId: string, credential: Record<string, unknown>): Promise<void> {
     assertProviderId(providerId)

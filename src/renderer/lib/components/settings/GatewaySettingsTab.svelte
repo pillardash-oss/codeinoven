@@ -153,7 +153,7 @@
 
   async function openDashboard(url: string): Promise<void> {
     const opened = await gatewayState.openDashboard(url)
-    if (!opened) toast.error('No project context — open a project first, or the dashboard will open externally.')
+    if (!opened) toast.error('No project context   open a project first, or the dashboard will open externally.')
   }
 
   function hasUpdate(gateway: GatewayStatus): boolean {
@@ -242,7 +242,7 @@
           <div class="rounded-xl bg-elevated px-3 py-2.5">
             <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Port</p>
             <p class="mt-1 text-sm font-medium tabular-nums">
-              {gateway.port ?? '—'}
+              {gateway.port ?? ' '}
             </p>
           </div>
           <div class="rounded-xl bg-elevated px-3 py-2.5">

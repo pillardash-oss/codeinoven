@@ -39,7 +39,7 @@ function createLockDirPath(name: string): string {
 /**
  * A cross-process mutual-exclusion lock built on atomic directory creation
  * (`mkdir`). Only one process can own the directory at a time, so any CodeInOven
- * instance — or any code sharing the same config root — can serialize against a
+ * instance   or any code sharing the same config root   can serialize against a
  * shared resource without coordinating in memory.
  *
  * This exists to close a gap the in-process auth gate cannot cover: two app
@@ -85,7 +85,7 @@ export class CrossProcessMutex {
         try {
           rmSync(this.dir, { recursive: true, force: true })
         } catch {
-          // Best effort — another process may have cleared it already.
+          // Best effort   another process may have cleared it already.
         }
         continue
       }
@@ -101,7 +101,7 @@ export class CrossProcessMutex {
       try {
         rmSync(this.dir, { recursive: true, force: true })
       } catch {
-        // Best effort — the lock may already be gone.
+        // Best effort   the lock may already be gone.
       }
     }
   }

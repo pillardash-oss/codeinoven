@@ -34,7 +34,7 @@ interface GradingSpendRow {
  * Permanent "best model" aggregate keyed by harness + provider + model +
  * thinking level + rubric version. Every increment adds raw score, duration,
  * and cost sums in one SQL upsert, so averages are always recomputed as
- * sum ÷ count — never averages of averages. Processed snapshots are
+ * sum ÷ count   never averages of averages. Processed snapshots are
  * hard-deleted by design, making this table the single surviving record.
  */
 export class ModelRankingRepo {

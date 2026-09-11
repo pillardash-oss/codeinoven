@@ -178,8 +178,8 @@
 
   /**
    * Force a full refresh of everything shown on the current screen:
-   * the deployment list, the container status, and — when a single deployment
-   * is open — that deployment's log. The refresh button spins while this runs.
+   * the deployment list, the container status, and   when a single deployment
+   * is open   that deployment's log. The refresh button spins while this runs.
    */
   async function refresh(): Promise<void> {
     if (refreshing) return
@@ -621,7 +621,7 @@
                     <span class="font-mono">{deployment.commit.slice(0, 7)}</span>
                     <span> · </span>
                   {/if}
-                  {deployment.updatedAt ? relativeTime(deployment.updatedAt) : '—'}
+                  {deployment.updatedAt ? relativeTime(deployment.updatedAt) : ' '}
                 </span>
               </span>
               {#if deployment.status !== 'unknown'}

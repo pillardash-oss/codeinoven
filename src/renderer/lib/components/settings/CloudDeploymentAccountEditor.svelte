@@ -164,7 +164,7 @@
       <span>Account name</span>
       <input
         class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
-        placeholder="e.g. Coolify — Personal or Coolify — Company"
+        placeholder="e.g. Coolify   Personal or Coolify   Company"
         autocomplete="off"
         spellcheck="false"
         required
@@ -190,7 +190,7 @@
         class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
         type="password"
         placeholder={account && account.configured
-          ? 'Stored securely — enter a new token to replace'
+          ? 'Stored securely   enter a new token to replace'
           : 'Provider API token'}
         autocomplete="off"
         spellcheck="false"

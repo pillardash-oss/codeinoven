@@ -90,7 +90,7 @@ export interface DenyProbeResult {
   reductionInputTokens: number | null
   /** Bash tool-call parts observed on the CONTROL (default build) leg. */
   controlBashToolCalls: number | null
-  /** Bash tool-call parts observed on the LEAN (deny) leg — must be 0. */
+  /** Bash tool-call parts observed on the LEAN (deny) leg   must be 0. */
   leanBashToolCalls: number | null
   note: string
 }
@@ -164,7 +164,7 @@ async function fetchJson(baseUrl: string, path: string, init?: RequestInit): Pro
 }
 
 /** POST and consume a no-content response (`prompt_async` returns 204 with an
- *  empty body — calling `.json()` on it throws `Unexpected end of JSON input`). */
+ *  empty body   calling `.json()` on it throws `Unexpected end of JSON input`). */
 async function postNoContent(baseUrl: string, path: string, body: unknown): Promise<void> {
   const res = await fetch(`${baseUrl}${path}`, {
     method: 'POST',
@@ -275,7 +275,7 @@ async function waitForToolCalls(
 
 /**
  * Run the deny-compliance probe against the installed opencode harness.
- * Not for production use — dev measurement and CI gating only.
+ * Not for production use   dev measurement and CI gating only.
  */
 export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
   const version = openCodeVersion()
@@ -413,7 +413,7 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
     // Behavioral schema-absence legs (P1-cp3): instruct both agents to use the
     // denied `bash` tool. The CONTROL leg proves the instruction is actionable
     // (bash tool-call parts appear); the LEAN leg must show ZERO bash tool
-    // parts — the denied schema is absent from its assembled prompt.
+    // parts   the denied schema is absent from its assembled prompt.
     const bashInstruction =
       'Use the bash tool to run exactly this command: echo cio-deny-probe. You must call the bash tool.'
     const controlBashSession = (await fetchJson(serve.baseUrl, '/session', {
@@ -444,7 +444,7 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
     const reduction = fullUsage.input - leanUsage.input
     // Compliance requires ALL of:
     // 1. Token delta: denied schemas measurably shrink the assembled prompt.
-    // 2. Control leg PROVES the instruction was actionable — bash was actually
+    // 2. Control leg PROVES the instruction was actionable   bash was actually
     //    invoked under the default build agent (>= 1 bash tool-call part).
     // 3. Lean leg shows ZERO bash tool-call parts: the denied schema is absent.
     // A control leg with zero bash calls makes the differential meaningless, so
@@ -484,5 +484,5 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
 /** Human-line summary of the latest probe run for the dev log / progress record. */
 export function formatDenyProbeResult(result: DenyProbeResult): string {
   const verdict = result.compliant ? 'COMPLIANT' : 'NON-COMPLIANT'
-  return `opencode v${result.version} deny compliance: ${verdict} — full=${result.fullInputTokens ?? 'n/a'} lean=${result.leanInputTokens ?? 'n/a'} (reduction=${result.reductionInputTokens ?? 'n/a'}) — bash tool calls control=${result.controlBashToolCalls ?? 'n/a'} lean=${result.leanBashToolCalls ?? 'n/a'} — ${result.note}`
+  return `opencode v${result.version} deny compliance: ${verdict}   full=${result.fullInputTokens ?? 'n/a'} lean=${result.leanInputTokens ?? 'n/a'} (reduction=${result.reductionInputTokens ?? 'n/a'})   bash tool calls control=${result.controlBashToolCalls ?? 'n/a'} lean=${result.leanBashToolCalls ?? 'n/a'}   ${result.note}`
 }

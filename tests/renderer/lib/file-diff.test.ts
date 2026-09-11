@@ -37,7 +37,7 @@ describe('diffDetails', () => {
   })
 
   it('keeps a small edit inside a large file small (regression: whole-file noise)', () => {
-    // ~1,400 lines — well past the old 500k-cell threshold that triggered the
+    // ~1,400 lines   well past the old 500k-cell threshold that triggered the
     // naive prefix/suffix fallback, which used to render this as ~whole-file.
     const before = [...filler(700, 'head'), 'old-line', ...filler(700, 'tail')]
     const after = [...filler(700, 'head'), 'new-line', 'extra-line', ...filler(700, 'tail')]

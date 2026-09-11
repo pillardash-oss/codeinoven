@@ -42,7 +42,7 @@ interface ReplacingNotificationOptions extends NotificationOptions {
 }
 
 class MobileNotifications {
-  /** User opt-in — persisted so it survives reloads. */
+  /** User opt-in   persisted so it survives reloads. */
   enabled = $state(false)
   /** Browser permission for this origin; `unsupported` off the PWA. */
   permission = $state<MobileNotificationPermission>('default')

@@ -201,6 +201,32 @@ export class RendererRecoveryStore {
     return this.entryFor(projectId, threadId).text
   }
 
+  /** Every thread whose composer holds unsent content, as (projectId, threadId)
+   *  refs. Drafts persist only in renderer storage, never the DB, so main's
+   *  SQL hydration cannot include them — the workspace uses this list to fetch
+   *  draft threads that fall outside the bounded first-paint slice. */
+  listDraftThreadRefs(): Array<{ projectId: string; threadId: string }> {
+    const refs: Array<{ projectId: string; threadId: string }> = []
+    for (const key of Object.keys(this.composerDrafts)) {
+      try {
+        const parsed: unknown = JSON.parse(key)
+        if (!Array.isArray(parsed) || parsed.length !== 2) continue
+        const [projectId, threadId] = parsed
+        if (
+          typeof projectId === 'string' &&
+          typeof threadId === 'string' &&
+          isRecoveryIdentifier(projectId) &&
+          isRecoveryIdentifier(threadId)
+        ) {
+          refs.push({ projectId, threadId })
+        }
+      } catch {
+        // Corrupt key — skip it, the draft is unusable anyway.
+      }
+    }
+    return refs
+  }
+
   /** Whether the thread has any unsent composer content (text, attachments, or references). */
   hasDraftContent(projectId: string, threadId: string): boolean {
     const entry = this.entryFor(projectId, threadId)
