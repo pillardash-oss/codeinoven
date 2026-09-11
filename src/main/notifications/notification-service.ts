@@ -381,12 +381,23 @@ export class NotificationService {
    * notifications (including side-chat notifications piped through it) and
    * drops the thread from the app-icon badge. Called whenever the thread is
    * marked read or deleted so the OS notification center stays in sync with
-   * in-app state. Skipped entirely while the app is unfocused: a background
-   * auto-mark-read must never retract a notification the user has not seen.
+   * in-app state.
+   *
+   * Closing the OS notification cards is skipped while the app is unfocused:
+   * a background auto-mark-read must never retract a notification the user
+   * has not seen. The badge, however, always updates regardless of focus:
+   * it is a count of unread threads and must stay in sync with the DB even
+   * when the read/delete happens in the background, otherwise the badge
+   * stays stale until the next restart.
    */
   dismissForThread(projectId: string, threadId: string): void {
-    if (!this.appFocused()) return
     const threadKey = `${projectId}:${threadId}`
+
+    if (this.badgeThreads.delete(threadKey)) {
+      this.updateBadge()
+    }
+
+    if (!this.appFocused()) return
     for (const [key, notification] of this.activeNotifications) {
       if (key === threadKey || key.startsWith(`${threadKey}:temp:`)) {
         this.activeNotifications.delete(key)
@@ -396,10 +407,6 @@ export class NotificationService {
           Logger.dev('OS notification close failed:', error)
         }
       }
-    }
-
-    if (this.badgeThreads.delete(threadKey)) {
-      this.updateBadge()
     }
   }
 
