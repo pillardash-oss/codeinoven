@@ -184,6 +184,37 @@ function mapPiCost(value: unknown): number | undefined {
   return undefined
 }
 
+/**
+ * Matches the error pi's `get_session_stats` RPC returns when its stats walk
+ * crashes on an assistant history entry that carries no `usage` object
+ * (pi's addUsageToTotals reads `usage.input` unguarded, pi 0.85.1 and
+ * earlier). In such sessions the RPC fails identically on every call, so the
+ * driver falls back to mirrored per-message accounting instead of retrying.
+ */
+function isUsagelessAssistantStatsError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /cannot read properties of undefined \(reading 'input'\)/iu.test(error.message)
+  )
+}
+
+/** Sum the per-message cost mirrored into a session's assistant messages so
+ *  sessions with a broken native stats RPC still receive cumulative cost. */
+function mirroredSessionCost(session: PersistentCliSession): number | undefined {
+  let total: number | undefined
+  let unmirrored = false
+  for (const message of session.messages) {
+    if (message.role !== 'assistant') continue
+    if (typeof message.cost === 'number') total = (total ?? 0) + message.cost
+    else unmirrored = true
+  }
+  // Costless assistant turns (aborted, errored, or pre-usage mirrors) make a
+  // partial sum misleading but still better than nothing; both stay falsy
+  // when nothing was reported at all.
+  if (unmirrored && total === undefined) return undefined
+  return total
+}
+
 function errorText(value: Record<string, unknown>): string {
   return (
     stringValue(value['errorMessage']) ??
@@ -1589,6 +1620,16 @@ export class PiDriver extends PersistentCliDriver {
   private turnStates = new Map<string, PiTurnState>()
   private rpcClients = new Map<string, PiRpcClient>()
   /**
+   * Sessions whose native `get_session_stats` RPC is known to crash. Pi's
+   * `AgentSession.getSessionStats` reads `usage.input` unguarded on assistant
+   * history entries that carry no `usage` (pi 0.85.1 and earlier), so legacy
+   * or interrupted transcripts make the RPC fail with "Cannot read properties
+   * of undefined (reading 'input')" on every call. After the first failure the
+   * driver stops calling it for that session and falls back to accounting
+   * mirrored from per-message usage events.
+   */
+  private sessionStatsBroken = new Set<string>()
+  /**
    * Model/thinking-level last applied to each session's live pi RPC process.
    * Pi's own interactive mode only sends `set_model`/`set_thinking_level`
    * when the user actually changes them (see interactive-mode.js), never
@@ -2218,7 +2259,7 @@ export class PiDriver extends PersistentCliDriver {
     const providerUsage = providerId ? await fetchPiProviderUsage(providerId) : null
     const windows = providerWindows?.length ? providerWindows : (providerUsage?.rateLimits ?? [])
     const credits = providerUsage?.credits
-    if (!client) {
+    if (!client || (sessionId !== undefined && this.sessionStatsBroken.has(sessionId))) {
       return windows.length > 0 || credits ? { rateLimits: windows, credits } : null
     }
     try {
@@ -2240,6 +2281,9 @@ export class PiDriver extends PersistentCliDriver {
         ...(contextUsed !== undefined ? { contextUsed } : {})
       }
     } catch (error) {
+      if (sessionId !== undefined && isUsagelessAssistantStatsError(error)) {
+        this.sessionStatsBroken.add(sessionId)
+      }
       Logger.dev('Pi account usage read failed:', error)
       return windows.length > 0 || credits ? { rateLimits: windows, credits } : null
     }
@@ -3432,8 +3476,31 @@ export class PiDriver extends PersistentCliDriver {
       return message.role === 'assistant'
     })
     if (!lastAssistant) return
+    let stats: Record<string, unknown> | null = null
+    if (!this.sessionStatsBroken.has(session.id)) {
+      try {
+        stats = record(await client.getSessionStats())
+      } catch (error) {
+        if (isUsagelessAssistantStatsError(error)) {
+          // Pi's stats walk crashes on a usage-less assistant entry; remember
+          // that so no later refresh re-raises it, and account from the
+          // per-message usage already mirrored in this session instead.
+          this.sessionStatsBroken.add(session.id)
+          stats = null
+        } else {
+          // A disposed client means the session was torn down mid-refresh   an
+          // expected race at turn end, not a failure worth surfacing.
+          if (error instanceof Error && error.message === 'Pi process disposed') return
+          Logger.dev('Pi session stats refresh failed:', error)
+          return
+        }
+      }
+    }
+    if (stats === null) {
+      this.applyMirroredUsage(session, lastAssistant)
+      return
+    }
     try {
-      const stats = record(await client.getSessionStats())
       const contextUsage = record(stats?.['contextUsage'])
       const cost =
         typeof stats?.['cost'] === 'number' ? (stats['cost'] as number) : mapPiCost(stats)
@@ -3464,12 +3531,33 @@ export class PiDriver extends PersistentCliDriver {
       }
       this.applyEventToSession(session, event)
       this.emit(event)
-    } catch (error) {
-      // A disposed client means the session was torn down mid-refresh   an
-      // expected race at turn end, not a failure worth surfacing.
-      if (error instanceof Error && error.message === 'Pi process disposed') return
-      Logger.dev('Pi session stats refresh failed:', error)
+    } catch {
+      // Stats-only application cannot fail for a live session; keep the
+      // refresh contract non-throwing regardless of malformed stats payloads.
     }
+  }
+
+  /** Emit cumulative cost and rate-limit windows for a session whose native
+   *  stats RPC is broken, using the per-message accounting the turn events
+   *  already mirrored into `session.messages`. Context occupancy cannot be
+   *  mirrored this way, so it is simply absent for these sessions. */
+  private applyMirroredUsage(
+    session: PersistentCliSession,
+    lastAssistant: AgentMessage | undefined
+  ): void {
+    if (!lastAssistant) return
+    const cost = mirroredSessionCost(session)
+    const rateLimits = this.latestRateLimits.get(session.id)?.windows ?? []
+    if (cost === undefined && rateLimits.length === 0) return
+    const event: SessionAgentEvent = {
+      type: 'usage.updated',
+      sessionId: session.id,
+      messageId: lastAssistant.id,
+      ...(cost !== undefined ? { cost } : {}),
+      ...(rateLimits.length > 0 ? { rateLimits } : {})
+    }
+    this.applyEventToSession(session, event)
+    this.emit(event)
   }
 
   private async finishTurn(session: PersistentCliSession): Promise<void> {
