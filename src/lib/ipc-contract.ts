@@ -2386,8 +2386,6 @@ export const IPC_INVOKE_CONTRACT = {
   'browser:goForward': {} as Contract<[tabId: string], void>,
   'browser:reload': {} as Contract<[tabId: string], void>,
   'browser:stop': {} as Contract<[tabId: string], void>,
-  'browser:getConsole': {} as Contract<[tabId: string], BrowserConsoleEntry[]>,
-  'browser:clearConsole': {} as Contract<[tabId: string], void>,
   /** Toggle the web page's native DevTools. Returns whether it is now open. */
   'browser:toggleDevTools': {} as Contract<[tabId: string], boolean>,
   'browser:clearData': {} as Contract<[projectId: string], void>,
@@ -3005,7 +3003,6 @@ export const IPC_EVENT_CONTRACT = {
   'gateway:state': [] as unknown as [status: import('./gateway-types').GatewayStatus],
   /** Live provider connection health/status snapshot. */
   'providers:status': [] as unknown as [payload: ProviderConnectionInfo[]],
-  'browser:console': [] as unknown as [entry: BrowserConsoleEntry],
   /** DevTools open state changed for a browser tab (open/closed). */
   'browser:devToolsChanged': [] as unknown as [state: BrowserDevToolsState],
   'browser:openRequested': [] as unknown as [url: string, context?: BrowserOpenRequestContext],

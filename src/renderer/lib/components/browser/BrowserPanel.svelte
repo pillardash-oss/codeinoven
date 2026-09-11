@@ -20,7 +20,6 @@
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
   import type {
     BrowserSiteDataScope,
-    BrowserConsoleEntry,
     BrowserDevToolsState,
     BrowserPageState,
     BrowserViewBounds
@@ -74,8 +73,6 @@
       (fullscreen ||
         (contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.id === tabId))
   )
-  let consoleEntries = $state<BrowserConsoleEntry[]>([])
-  let errorCount = $derived(consoleEntries.filter((entry) => entry.level === 'error').length)
   let devToolsOpen = $state(false)
   /** Show a closed padlock for https origins; open padlock for everything else. */
   let secure = $derived(pageState.url.startsWith('https:'))
@@ -254,22 +251,6 @@
     )
   }
 
-  function mergeConsoleEntries(entries: BrowserConsoleEntry[]): void {
-    const merged = [...consoleEntries]
-    for (const entry of entries) {
-      if (entry.tabId !== tabId) continue
-      const index = merged.findIndex((candidate) => candidate.id === entry.id)
-      if (index >= 0) merged[index] = entry
-      else merged.push(entry)
-    }
-    consoleEntries = merged.sort((left, right) => left.timestamp - right.timestamp).slice(-500)
-  }
-
-  function applyConsoleEntry(entry: BrowserConsoleEntry): void {
-    if (entry.tabId !== tabId) return
-    mergeConsoleEntries([entry])
-  }
-
   async function toggleDevTools(): Promise<void> {
     try {
       devToolsOpen = await invoke('browser:toggleDevTools', tabId)
@@ -286,7 +267,6 @@
   onMount(() => {
     let destroyed = false
     const unsubscribeState = subscribe('browser:state', applyPageState)
-    const unsubscribeConsole = subscribe('browser:console', applyConsoleEntry)
     const unsubscribeDevTools = subscribe('browser:devToolsChanged', applyDevToolsState)
     const observer = new ResizeObserver(() => {
       if (!destroyed) void showAtCurrentBounds().catch(() => {})
@@ -307,22 +287,16 @@
       if (now - startedAt < 260) animationFrame = requestAnimationFrame(followTransition)
     }
     animationFrame = requestAnimationFrame(followTransition)
-    void invoke('browser:getConsole', tabId)
-      .then(mergeConsoleEntries)
-      .catch(() => {})
-
     return () => {
       destroyed = true
       cancelAnimationFrame(animationFrame)
       observer.disconnect()
       window.removeEventListener('resize', onWindowResize)
       unsubscribeState()
-      unsubscribeConsole()
       unsubscribeDevTools()
       void invoke('browser:hide', tabId).catch(() => {})
     }
   })
-
 </script>
 
 <div {@attach panelVisible && manageNativeBrowserView} class="flex h-full min-h-0 flex-col bg-app">
@@ -447,14 +421,6 @@
       <SquareTerminal size={13} />
       {#if fullscreen}
         <span>Console</span>
-        {#if errorCount > 0}
-          <span class="rounded-full bg-danger/15 px-1.5 text-[0.5625rem] font-semibold text-danger">
-            {errorCount}
-          </span>
-        {/if}
-      {:else if errorCount > 0}
-        <span class="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-danger" aria-hidden="true"
-        ></span>
       {/if}
     </button>
   </form>

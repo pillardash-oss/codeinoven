@@ -331,13 +331,6 @@ export class BrowserService {
       contents.openDevTools()
       return true
     })
-    ipcMain.handle('browser:getConsole', (_event, rawTabId) => {
-      const tab = this.tabs.get(validateTabId(rawTabId))
-      return tab ? [...tab.consoleEntries] : []
-    })
-    ipcMain.handle('browser:clearConsole', (_event, rawTabId) => {
-      this.requireTab(validateTabId(rawTabId)).consoleEntries = []
-    })
     ipcMain.handle('browser:clearData', async (_event, rawProjectId) => {
       await this.clearProjectData(validateProjectId(rawProjectId))
     })
@@ -994,9 +987,6 @@ export class BrowserService {
       timestamp: Date.now()
     }
     tab.consoleEntries = [...tab.consoleEntries, entry].slice(-MAX_CONSOLE_ENTRIES)
-    if (!this.window.webContents.isDestroyed()) {
-      sendToRenderer(this.window.webContents, 'browser:console', entry)
-    }
   }
 
   private detachActiveView(): void {
