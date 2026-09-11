@@ -236,6 +236,16 @@ export function buildProcessEnvironment(
     ...base,
     PATH: pathEntries.join(sep)
   }
+  // Git read commands (status, diff) opportunistically refresh the index and
+  // grab `.git/index.lock` to do it. Multiple app-owned processes share one
+  // repository (git service polling, agents committing), so those refreshes
+  // race real writes and surface as transient "index.lock: File exists"
+  // failures. Disabling the opportunistic refresh keeps reads lock-free;
+  // real index writes (add, commit) still take the lock when they must. An
+  // explicit value in the base environment wins.
+  if (base['GIT_OPTIONAL_LOCKS'] === undefined) {
+    environment['GIT_OPTIONAL_LOCKS'] = '0'
+  }
   if (markOwned) environment[OWNED_PROCESS_MARKER] = '1'
   else delete environment[OWNED_PROCESS_MARKER]
   return environment

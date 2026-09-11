@@ -57,6 +57,17 @@ async function pathExists(directory: string, relativePath: string): Promise<bool
 /** Upper bound on a single diff payload so the IPC contract never floods. */
 const MAX_DIFF_BYTES = 500 * 1024
 
+// Git read commands opportunistically refresh the index, which takes
+// `.git/index.lock`. This service shares the repository with agent git CLIs,
+// so every polling status read used to race real writes and occasionally
+// fail them with "index.lock: File exists". Disabling the opportunistic
+// refresh keeps our reads lock-free; index writes (add, commit) still take
+// the lock when they must, and `withIndexLockRetry` backstops those races.
+// simple-git spawns inherit the main process environment, so this covers
+// every git command this service runs. (Harness processes get the same
+// default via buildProcessEnvironment.)
+process.env.GIT_OPTIONAL_LOCKS = process.env.GIT_OPTIONAL_LOCKS ?? '0'
+
 /** Number of commits returned by `git log` by default. */
 const DEFAULT_LOG_LIMIT = 50
 
