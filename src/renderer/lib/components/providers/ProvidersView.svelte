@@ -68,9 +68,6 @@
   /** Tab the Add-provider modal opens on   'custom' when returning there via
    *  the editor's Back button, so the user lands back on the list they left. */
   let addTargetInitialTab = $state<'connect' | 'custom'>('connect')
-  /** Harness id preselected in the accounts tab after the providers modal's
-   * "n accounts" hand-off; cleared on any manual tab switch. */
-  let accountsTabHarnessId = $state('')
   let customEditorFor = $state<string | null>(null)
   /** Provider being edited in the custom base-URL editor, or null when creating one. */
   let customEditorProvider = $state<BaseUrlProvider | null>(null)
@@ -566,10 +563,7 @@
       role="tab"
       aria-selected={activeTab === 'harnesses'}
       title="Show connected harnesses"
-      onclick={() => {
-        activeTab = 'harnesses'
-        accountsTabHarnessId = ''
-      }}
+      onclick={() => (activeTab = 'harnesses')}
     >
       Harnesses
     </button>
@@ -582,10 +576,7 @@
       role="tab"
       aria-selected={activeTab === 'accounts'}
       title="Manage harness accounts"
-      onclick={() => {
-        activeTab = 'accounts'
-        accountsTabHarnessId = ''
-      }}
+      onclick={() => (activeTab = 'accounts')}
     >
       Accounts
     </button>
@@ -598,10 +589,7 @@
       role="tab"
       aria-selected={activeTab === 'custom'}
       title="Manage custom base URL providers"
-      onclick={() => {
-        activeTab = 'custom'
-        accountsTabHarnessId = ''
-      }}
+      onclick={() => (activeTab = 'custom')}
     >
       Base URL providers
       {#if baseUrlProviderStore.providers.length > 0}
@@ -1048,10 +1036,7 @@
       </span>
     </div>
   {:else if activeTab === 'accounts'}
-    <HarnessAccountsPanel
-      providers={providerStore.providers}
-      initialHarnessId={accountsTabHarnessId}
-    />
+    <HarnessAccountsPanel providers={providerStore.providers} />
   {:else}
     <BaseUrlProvidersPanel providers={providerStore.providers} />
   {/if}
@@ -1062,11 +1047,6 @@
     harness={addTarget}
     initialTab={addTargetInitialTab}
     onClose={() => (addTarget = null)}
-    onOpenAccounts={(harnessId) => {
-      accountsTabHarnessId = harnessId
-      addTarget = null
-      activeTab = 'accounts'
-    }}
     onAddCustom={(harnessId) => {
       customEditorReturnTo = addTarget
       customEditorFor = harnessId

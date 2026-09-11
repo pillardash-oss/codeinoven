@@ -20,12 +20,9 @@
 
   interface Props {
     providers: ProviderConnectionInfo[]
-    /** Harness id whose filter is preselected on mount, e.g. a hand-off from
-     * the providers modal's "n accounts" button. */
-    initialHarnessId?: string
   }
 
-  let { providers, initialHarnessId = '' }: Props = $props()
+  let { providers }: Props = $props()
 
   let accounts = $state.raw<HarnessAccount[]>([])
   let loading = $state(true)
@@ -76,10 +73,7 @@
     return harnesses.toSorted((left, right) => left.name.localeCompare(right.name))
   })
 
-  // Intentionally read once: the panel remounts on every tab switch, and the
-  // hand-off seed should apply only at mount, not track later prop changes.
-  // svelte-ignore state_referenced_locally
-  let selectedHarnesses = new SvelteSet<string>(initialHarnessId ? [initialHarnessId] : [])
+  let selectedHarnesses = new SvelteSet<string>()
   let harnessFilterActive = $derived(selectedHarnesses.size > 0)
 
   let filteredAccounts = $derived.by(() => {

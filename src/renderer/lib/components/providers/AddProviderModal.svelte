@@ -2,7 +2,6 @@
   import { onMount } from 'svelte'
   import {
     CheckCircle2,
-    ChevronRight,
     KeyRound,
     Loader2,
     Pencil,
@@ -23,6 +22,7 @@
   import type {
     BaseUrlProvider,
     OfferedProvider,
+    ProviderAccountAuthEntry,
     ProviderAccountAuthStatus,
     ProviderAccountLoginHandoff,
     ProviderConnectionInfo,
@@ -41,18 +41,9 @@
     onEditCustom: (provider: BaseUrlProvider) => void
     /** Tab shown on open   e.g. 'custom' when returning here via the editor's Back button. */
     initialTab?: AddTab
-    /** Open the accounts tab, pre-filtered to this harness, for multi-account disconnects. */
-    onOpenAccounts?: (harnessId: string) => void
   }
 
-  let {
-    harness,
-    onClose,
-    onAddCustom,
-    onEditCustom,
-    initialTab = 'connect',
-    onOpenAccounts
-  }: Props = $props()
+  let { harness, onClose, onAddCustom, onEditCustom, initialTab = 'connect' }: Props = $props()
 
   /** The component is mounted per-open, so the initial prop value is authoritative. */
   function startingTab(): AddTab {
@@ -546,10 +537,15 @@
     }
   }
 
-  /** Registered accounts backing one connected provider; more than one means
-   * a provider-level disconnect is ambiguous and must happen per account. */
-  function accountsForProvider(providerId: string): HarnessAccount[] {
-    return knownAccounts.filter((account) => account.providerId === providerId)
+  /** Resolve the registered account behind one connected-provider row. Every
+   * row is a dedicated account: container rows carry their account id as a
+   * suffix (`<entryId>.<accountId>`), legacy rows match exactly. */
+  function accountForConnected(connected: ProviderAccountAuthEntry): HarnessAccount | undefined {
+    return (
+      knownAccounts.find((account) => account.id === connected.id) ??
+      knownAccounts.find((account) => connected.id.endsWith(`.${account.id}`)) ??
+      knownAccounts.find((account) => account.providerId === connected.providerId)
+    )
   }
 
   async function disconnectProvider(): Promise<void> {
@@ -802,7 +798,6 @@
               Connected providers
             </div>
             {#each authStatus.accounts.filter((account) => account.active !== false) as connected (connected.id)}
-              {@const linkedAccounts = accountsForProvider(connected.providerId)}
               <div class="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
                 <CheckCircle2 size={14} class="shrink-0 text-success" />
                 <div class="min-w-0 flex-1">
@@ -812,22 +807,12 @@
                       · {connected.method}{/if}
                   </p>
                 </div>
-                {#if linkedAccounts.length > 1}
-                  <button
-                    type="button"
-                    class="flex h-7 shrink-0 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                    title="{connected.label} is connected on {linkedAccounts.length} accounts. Open the accounts tab to disconnect a specific one."
-                    onclick={() => onOpenAccounts?.(harness.id)}
-                  >
-                    {linkedAccounts.length} accounts
-                    <ChevronRight size={11} />
-                  </button>
-                {:else if linkedAccounts.length === 1}
+                {#if accountForConnected(connected)}
                   <button
                     type="button"
                     class="flex h-7 items-center gap-1 rounded-lg px-2 text-[0.6875rem] font-medium text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
                     title={`Disconnect ${connected.label}`}
-                    onclick={() => (disconnectTarget = linkedAccounts[0])}
+                    onclick={() => (disconnectTarget = accountForConnected(connected) ?? null)}
                   >
                     <Unplug size={11} /> Disconnect
                   </button>
