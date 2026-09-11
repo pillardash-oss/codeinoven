@@ -378,13 +378,35 @@
     return 'projects'
   })
 
+  /** Views whose header maps to a real view-switcher option. Settings, remote
+   *  and other takeover views must not, or the trigger would flash "Projects". */
+  let showsPrimaryOption = $derived(
+    activeView === 'projects' ||
+      activeView === 'projects-scope' ||
+      activeView === 'threads' ||
+      activeView === 'chats' ||
+      activeView === 'scope'
+  )
+
+  /** Last option shown while a primary view was active. */
+  let lastPrimaryHeaderViewOption = $state<HeaderViewOptionId>('projects')
+  $effect(() => {
+    if (showsPrimaryOption) lastPrimaryHeaderViewOption = activeHeaderViewOption
+  })
+
+  /** The option the trigger and menu reflect: live on primary views, the last
+   *  primary option while settings/remote take over the header. */
+  let shownHeaderViewOption = $derived(
+    showsPrimaryOption ? activeHeaderViewOption : lastPrimaryHeaderViewOption
+  )
+
   let activeHeaderViewLabel = $derived.by(() => {
-    const option = headerViewOptions().find((candidate) => candidate.id === activeHeaderViewOption)
+    const option = headerViewOptions().find((candidate) => candidate.id === shownHeaderViewOption)
     return option?.label ?? 'Projects'
   })
 
   let activeHeaderViewIcon = $derived(
-    headerViewOptions().find((candidate) => candidate.id === activeHeaderViewOption)?.icon ??
+    headerViewOptions().find((candidate) => candidate.id === shownHeaderViewOption)?.icon ??
       FolderKanban
   )
 
@@ -641,7 +663,7 @@
         >
           <!-- Active view icon: crossfades between views instead of popping. -->
           <span class="grid h-4 w-4 shrink-0 place-items-center">
-            {#key activeHeaderViewOption}
+            {#key shownHeaderViewOption}
               {@const ActiveViewIcon = activeHeaderViewIcon}
               <span
                 class="col-start-1 row-start-1 flex items-center justify-center"
@@ -681,7 +703,7 @@
           >
             {#each headerViewOptions() as option (option.id)}
               {@const Icon = option.icon}
-              {@const isSelected = option.id === activeHeaderViewOption}
+              {@const isSelected = option.id === shownHeaderViewOption}
               <DropdownMenu.Item
                 class={[
                   'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors',
