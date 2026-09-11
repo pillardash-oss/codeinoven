@@ -376,6 +376,16 @@
     return option?.label ?? 'Projects'
   })
 
+  /** Longest view label ("Scoped threads"), rendered invisibly in the trigger
+   *  so its reserved width keeps the switcher at a constant size no matter
+   *  which view is active. */
+  let longestViewLabel = $derived(
+    headerViewOptions().reduce((longest, option) => {
+      const label = option.label
+      return label.length > longest.length ? label : longest
+    }, '')
+  )
+
   /** Cmd/Ctrl+3   Projects view with the scope sidebar active for the current
    *  thread (or project). Idempotent: never turns scope state off. */
   async function openProjectWithScopeState(): Promise<void> {
@@ -610,14 +620,19 @@
     <div class="flex items-center gap-0.5">
       <DropdownMenu.Root>
         <DropdownMenu.Trigger
-          class="flex h-7 items-center gap-1 rounded-md px-1.5 text-[0.6875rem] font-medium text-foreground transition-colors duration-150 hover:bg-elevated"
+          class="flex h-7 items-center gap-1 rounded-md px-1.5 text-[0.625rem] font-medium text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
           aria-label="Switch view"
           title="Switch view"
           data-onboarding="view-switcher"
         >
-          <span class="truncate" class:animate-pulse={anyProjectWorking}
-            >{activeHeaderViewLabel}</span
-          >
+          <!-- Stacked grid: the invisible longest label reserves the width so
+               the trigger never changes size across views. -->
+          <span class="grid" class:animate-pulse={anyProjectWorking}>
+            <span class="col-start-1 row-start-1 truncate">{activeHeaderViewLabel}</span>
+            <span class="col-start-1 row-start-1 invisible whitespace-nowrap" aria-hidden="true">
+              {longestViewLabel}
+            </span>
+          </span>
           <ChevronDown size={12} class="shrink-0 text-muted" />
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
@@ -647,7 +662,11 @@
                 }}
                 onSelect={option.select}
               >
-                <Icon size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
+                <Icon
+                  size={14}
+                  strokeWidth={1.8}
+                  class="shrink-0 {isSelected ? 'text-foreground' : 'text-muted'}"
+                />
                 <span class="flex-1 whitespace-nowrap">{option.label}</span>
                 <ShortcutHint keys={option.keys} />
               </DropdownMenu.Item>
