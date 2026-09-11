@@ -2027,7 +2027,7 @@ export const IPC_INVOKE_CONTRACT = {
   'plan:get': {} as Contract<[projectId: string, threadId: string], Plan | null>,
   'plan:save': {} as Contract<[projectId: string, threadId: string, content: string], Plan>,
   'project:create': {} as Contract<[input: CreateProjectInput], Project>,
-  'project:delete': {} as Contract<[projectId: string], void>,
+  'project:delete': {} as Contract<[projectId: string, options?: { deleteFolder?: boolean }], void>,
   'project:ensureInbox': {} as Contract<[], Project>,
   'project:get': {} as Contract<[projectId: string], Project | null>,
   'project:getIcon': {} as Contract<[projectId: string], string | null>,

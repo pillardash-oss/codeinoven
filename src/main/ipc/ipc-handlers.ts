@@ -6,7 +6,7 @@ import { cp, lstat, readFile, writeFile, mkdir, rename, rm, stat } from 'fs/prom
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../lib/native-skill-paths'
@@ -5025,44 +5025,77 @@ export function registerIpcHandlers(
       return project
     }
   )
-  ipcMain.handle('project:delete', async (_, projectId: string) => {
-    // Never orphan a registered managed worktree silently: refuse deletion
-    // until every managed association in this project is detached/removed
-    // through the guarded lifecycle (dirty and unpushed work is protected).
-    const board = scopeManager.getBoard(projectId)
-    const managedBuckets = board.buckets.filter((bucket) => bucket.root.kind === 'worktree')
-    if (managedBuckets.length > 0) {
-      throw new Error(
-        `Cannot delete the project while ${managedBuckets.length} managed worktree scope(s) exist; remove them first`
-      )
-    }
-    // Delete every thread through the same path as `thread:delete` (session
-    // teardown, DB row cleanup for FK-less tables, disk artifact removal) so
-    // project deletion can never fall behind that logic or leave orphans.
-    await threadManager.deleteAllThreadsInProject(projectId)
-    await projectManager.deleteProject(projectId)
-    projectFilesService.disposeProject(projectId)
-    // Remove app-owned scratch data keyed by this project id (spec-context
-    // attachments, any leftover per-thread directories) that isn't tied to
-    // an individual thread and so isn't covered by the per-thread cleanup
-    // above. Best-effort: the DB rows are already gone either way.
-    await rm(join(getConfigRoot(), 'projects', projectId), { recursive: true, force: true }).catch(
-      () => {}
-    )
-    // Mass deletion just freed potentially thousands of pages. Reclaim the
-    // file space off-main via the maintenance worker   this also converts
-    // pre-existing databases to `auto_vacuum = INCREMENTAL` so future
-    // incremental vacuums work. Fire-and-forget: the IPC result must not wait
-    // on an O(database-size) operation, and a concurrent WAL transaction may
-    // make VACUUM fail (fine to retry next time).
-    void database.fullVacuum().then((result) => {
-      if (result.ok && (result.freedPages ?? 0) > 0) {
-        Logger.info(`Vacuum after project deletion reclaimed ${result.freedPages} pages`)
-      } else if (!result.ok) {
-        Logger.dev(`Post-deletion vacuum skipped/failed: ${result.error}`)
+  ipcMain.handle(
+    'project:delete',
+    async (_, projectId: string, options?: { deleteFolder?: boolean }) => {
+      // Optional folder erasure runs FIRST and gates the CodeInOven-side
+      // removal: if the filesystem delete fails, nothing below executes and
+      // the project stays fully intact in CodeInOven (the renderer restores
+      // it). Only after the folder is gone does the app data removal begin.
+      if (options?.deleteFolder === true) {
+        const project = await projectManager.getProject(projectId)
+        if (!project?.path || !isAbsolute(project.path)) {
+          throw new Error('This project has no local folder on disk to delete')
+        }
+        const target = resolve(project.path)
+        const homeDir = resolve(app.getPath('home'))
+        const configRoot = resolve(getConfigRoot())
+        const isInside = (child: string, parent: string): boolean => child.startsWith(parent + sep)
+        // Refuse obviously dangerous targets: the filesystem root, the home
+        // directory (or any ancestor of it), and anything inside the app
+        // config root. This makes an accidental catastrophic rm impossible.
+        if (
+          target === sep ||
+          target === homeDir ||
+          isInside(homeDir, target) ||
+          target === configRoot ||
+          isInside(target, configRoot)
+        ) {
+          throw new Error('Refusing to delete a protected directory')
+        }
+        // `force` treats an already-missing folder as deleted; real failures
+        // (permissions, path is a file, ...) still throw and abort below.
+        await rm(target, { recursive: true, force: true })
       }
-    })
-  })
+      // Never orphan a registered managed worktree silently: refuse deletion
+      // until every managed association in this project is detached/removed
+      // through the guarded lifecycle (dirty and unpushed work is protected).
+      const board = scopeManager.getBoard(projectId)
+      const managedBuckets = board.buckets.filter((bucket) => bucket.root.kind === 'worktree')
+      if (managedBuckets.length > 0) {
+        throw new Error(
+          `Cannot delete the project while ${managedBuckets.length} managed worktree scope(s) exist; remove them first`
+        )
+      }
+      // Delete every thread through the same path as `thread:delete` (session
+      // teardown, DB row cleanup for FK-less tables, disk artifact removal) so
+      // project deletion can never fall behind that logic or leave orphans.
+      await threadManager.deleteAllThreadsInProject(projectId)
+      await projectManager.deleteProject(projectId)
+      projectFilesService.disposeProject(projectId)
+      // Remove app-owned scratch data keyed by this project id (spec-context
+      // attachments, any leftover per-thread directories) that isn't tied to
+      // an individual thread and so isn't covered by the per-thread cleanup
+      // above. Best-effort: the DB rows are already gone either way.
+      await rm(join(getConfigRoot(), 'projects', projectId), {
+        recursive: true,
+        force: true
+      }).catch(() => {})
+      // Mass deletion just freed potentially thousands of pages. Reclaim the
+      // file space off-main via the maintenance worker   this also converts
+      // pre-existing databases to `auto_vacuum = INCREMENTAL` so future
+      // incremental vacuums work. Fire-and-forget: the IPC result must not wait
+      // on an O(database-size) operation, and a concurrent WAL transaction may
+      // make VACUUM fail (fine to retry next time).
+      void database.fullVacuum().then((result) => {
+        if (result.ok && (result.freedPages ?? 0) > 0) {
+          Logger.info(`Vacuum after project deletion reclaimed ${result.freedPages} pages`)
+        } else if (!result.ok) {
+          Logger.dev(`Post-deletion vacuum skipped/failed: ${result.error}`)
+        }
+      })
+    }
+  )
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:getIcon', (_, projectId: string) =>
       projectManager.getIconDataUrl(projectId)

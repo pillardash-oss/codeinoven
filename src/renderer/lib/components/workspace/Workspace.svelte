@@ -717,6 +717,10 @@
   // Remove-project confirmation
   let showRemoveModal = $state(false)
   let removeTarget = $state<Project | null>(null)
+  /** Folder-erasure switch for the remove-project modal. Always starts off. */
+  let removeDeleteFolder = $state(false)
+  /** Second-confirmation modal shown when folder erasure is requested. */
+  let showRemoveFinalConfirm = $state(false)
   /** Project currently being deleted in the background; guards repeat clicks. */
   let deletingProjectId = $state<string | null>(null)
 
@@ -2515,7 +2519,7 @@
     expandedFolders.add(project.id)
   }
 
-  async function deleteProject(projectId: string): Promise<void> {
+  async function deleteProject(projectId: string, deleteFolder = false): Promise<void> {
     if (deletingProjectId !== null) return
     const project = projects.find((p) => p.id === projectId)
     if (!project) return
@@ -2535,7 +2539,7 @@
     // Heavy backend cleanup happens asynchronously; on failure the project
     // is restored so the user can retry.
     try {
-      await invoke('project:delete', projectId)
+      await invoke('project:delete', projectId, { deleteFolder })
       await invoke('browser:destroyProject', projectId)
     } catch (error) {
       projects = [project, ...projects.filter((p) => p.id !== projectId)]
@@ -2666,15 +2670,50 @@
 
   function askRemoveProject(projectId: string): void {
     removeTarget = projects.find((p) => p.id === projectId) ?? null
-    if (removeTarget) showRemoveModal = true
+    if (removeTarget) {
+      // The folder-erasure switch never carries over between opens.
+      removeDeleteFolder = false
+      showRemoveModal = true
+    }
+  }
+
+  function closeRemoveModal(): void {
+    showRemoveModal = false
+    // The switch always rests in the off state; it only ever turns on when
+    // the user explicitly flips it inside the open modal.
+    removeDeleteFolder = false
   }
 
   async function confirmRemoveProject(): Promise<void> {
     const target = removeTarget
     if (!target || deletingProjectId !== null) return
+    if (removeDeleteFolder) {
+      // Folder erasure is destructive beyond the app, so it gets its own
+      // explicit confirmation before anything is deleted.
+      showRemoveModal = false
+      showRemoveFinalConfirm = true
+      return
+    }
     showRemoveModal = false
     removeTarget = null
     await deleteProject(target.id)
+  }
+
+  function cancelRemoveFinalConfirm(): void {
+    // Return to the first modal with the switch still on so the user can
+    // simply turn it off instead of starting over.
+    showRemoveFinalConfirm = false
+    showRemoveModal = true
+  }
+
+  async function confirmRemoveWithFolder(): Promise<void> {
+    const target = removeTarget
+    if (!target || deletingProjectId !== null) return
+    showRemoveFinalConfirm = false
+    showRemoveModal = false
+    removeTarget = null
+    removeDeleteFolder = false
+    await deleteProject(target.id, true)
   }
 
   // ─── Scope bucket actions ──────────────────────────────────────────────────
@@ -4740,12 +4779,27 @@
 </Modal>
 
 <!-- Remove Project Confirmation -->
-<Modal open={showRemoveModal} title="Remove Project" onClose={() => (showRemoveModal = false)}>
+<Modal open={showRemoveModal} title="Remove Project" onClose={closeRemoveModal}>
   <p class="text-sm leading-relaxed text-muted">
     This will remove
     <span class="font-medium text-foreground">{removeTarget?.name}</span>
     and all of its threads from {APP_NAME}. The folder itself will remain on your device.
   </p>
+
+  {#if removeDeleteFolder}
+    <p class="mt-3 text-sm font-medium leading-relaxed text-danger">
+      You have stated that we should delete this project's folder too from your device!
+    </p>
+  {/if}
+
+  <div class="mt-4 flex items-center border-t pt-4">
+    <Switch
+      bind:checked={removeDeleteFolder}
+      title="Also delete this project's folder from your device"
+      aria-label="Also delete this project's folder from your device"
+      label="Also delete the project folder from your device"
+    />
+  </div>
 
   {#snippet footer()}
     <button
@@ -4753,7 +4807,7 @@
       class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:pointer-events-none disabled:opacity-50"
       title="Cancel"
       disabled={deletingProjectId !== null}
-      onclick={() => (showRemoveModal = false)}
+      onclick={closeRemoveModal}
     >
       Cancel
     </button>
@@ -4769,6 +4823,43 @@
         Removing…
       {:else}
         Remove
+      {/if}
+    </button>
+  {/snippet}
+</Modal>
+
+<!-- Remove Project With Folder Erasure: Final Confirmation -->
+<Modal
+  open={showRemoveFinalConfirm}
+  title="Delete Project Folder"
+  onClose={cancelRemoveFinalConfirm}
+>
+  <p class="text-sm leading-relaxed text-muted">
+    Your project will be removed from {APP_NAME} and erased from your device. It cannot be recovered again!
+  </p>
+
+  {#snippet footer()}
+    <button
+      type="button"
+      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:pointer-events-none disabled:opacity-50"
+      title="Go back to the previous step"
+      disabled={deletingProjectId !== null}
+      onclick={cancelRemoveFinalConfirm}
+    >
+      Cancel
+    </button>
+    <button
+      type="button"
+      class="inline-flex items-center gap-2 rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
+      title="Delete this project from {APP_NAME} and erase its folder from your device"
+      disabled={deletingProjectId !== null}
+      onclick={() => void confirmRemoveWithFolder()}
+    >
+      {#if deletingProjectId !== null}
+        <Loader2 size={14} class="animate-spin" />
+        Deleting…
+      {:else}
+        Delete Project and Folder
       {/if}
     </button>
   {/snippet}
