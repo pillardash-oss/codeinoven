@@ -20743,7 +20743,11 @@ export class ChatEngine {
           )
         } catch (error) {
           this.pendingMemoryDecisions.delete(sessionId)
-          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error), rawErrorDetail(error))
+          const issue = this.fallbackProviderIssue(
+            info.driverId,
+            rawErrorMessage(error),
+            rawErrorDetail(error)
+          )
           await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
@@ -20798,7 +20802,11 @@ export class ChatEngine {
             )
           } catch (error) {
             this.pendingMemoryDecisions.delete(sessionId)
-            const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error), rawErrorDetail(error))
+            const issue = this.fallbackProviderIssue(
+              info.driverId,
+              rawErrorMessage(error),
+              rawErrorDetail(error)
+            )
             await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
             await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
           }
@@ -20834,7 +20842,11 @@ export class ChatEngine {
           )
         } catch (error) {
           this.pendingMemoryDecisions.delete(sessionId)
-          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error), rawErrorDetail(error))
+          const issue = this.fallbackProviderIssue(
+            info.driverId,
+            rawErrorMessage(error),
+            rawErrorDetail(error)
+          )
           await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
@@ -20866,7 +20878,11 @@ export class ChatEngine {
           )
         } catch (error) {
           this.pendingMemoryDecisions.delete(sessionId)
-          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error), rawErrorDetail(error))
+          const issue = this.fallbackProviderIssue(
+            info.driverId,
+            rawErrorMessage(error),
+            rawErrorDetail(error)
+          )
           await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
