@@ -507,6 +507,11 @@
   let permissionMenuOpen = $state(false)
   /** Open state of the thinking-level dropdown inside the shared model picker. */
   let thinkingMenuOpen = $state(false)
+  /** Open state of the account dropdown inside the shared model picker. */
+  let accountMenuOpen = $state(false)
+  /** Whether the shared model picker renders the account picker (more than one
+   *  account for the selected provider)   gates the `/account` slash action. */
+  let accountPickerVisible = $state(false)
   let startAfterPickerOpen = $state(false)
   // The composer is remounted by the parent when a restore is required, so
   // capture the persisted dependencies exactly once at construction.
@@ -582,6 +587,7 @@
     inferenceMenuOpen = false
     permissionMenuOpen = false
     thinkingMenuOpen = false
+    accountMenuOpen = false
   }
 
   function openStartAfterPicker(): void {
@@ -637,6 +643,7 @@
     plusMenuOpen = false
     inferenceMenuOpen = false
     thinkingMenuOpen = false
+    accountMenuOpen = false
   }
 
   function showThinkingMenu(): void {
@@ -645,6 +652,16 @@
     plusMenuOpen = false
     modelMenuOpen = false
     inferenceMenuOpen = false
+    accountMenuOpen = false
+  }
+
+  function showAccountMenu(): void {
+    if (!accountPickerVisible) return
+    accountMenuOpen = true
+    plusMenuOpen = false
+    modelMenuOpen = false
+    inferenceMenuOpen = false
+    thinkingMenuOpen = false
   }
 
   function showInferenceMenu(): void {
@@ -653,6 +670,7 @@
     plusMenuOpen = false
     modelMenuOpen = false
     thinkingMenuOpen = false
+    accountMenuOpen = false
   }
 
   // Focus restoration on close for every menu/overlay that steals focus from
@@ -672,6 +690,14 @@
       focusComposerAtSavedCaret()
     }
     thinkingWasOpen = thinkingMenuOpen
+  })
+
+  let accountWasOpen = false
+  $effect(() => {
+    if (accountWasOpen && !accountMenuOpen) {
+      focusComposerAtSavedCaret()
+    }
+    accountWasOpen = accountMenuOpen
   })
 
   let permissionWasOpen = false
@@ -824,6 +850,18 @@
             keywords: ['reasoning', 'effort', ...thinkingPresets.map((p) => p.id)]
           }
         ]
+      : []),
+    ...(accountPickerVisible
+      ? [
+          {
+            id: 'selector:account' as const,
+            title: '/account',
+            description: 'Open the account selector and search',
+            category: 'model' as const,
+            source: composerActionSource,
+            keywords: ['account', 'user', 'profile', 'login', 'credential']
+          }
+        ]
       : [])
   ])
   let slashAvailableActions = $derived([
@@ -961,6 +999,12 @@
     if (action.id === 'selector:thinking') {
       // Thinking level lives in the shared model picker's dropdown   open it directly.
       showThinkingMenu()
+      return
+    }
+
+    if (action.id === 'selector:account') {
+      // The account picker lives in the shared model picker's dropdown   open it directly.
+      showAccountMenu()
       return
     }
 
@@ -2514,6 +2558,10 @@
       {onRemoveRecent}
       bind:open={modelMenuOpen}
       bind:thinkingMenuOpen
+      bind:accountMenuOpen
+      onAccountPickerVisibleChange={(visible) => {
+        accountPickerVisible = visible
+      }}
       onSelect={selectModel}
       onSelectAccount={onAccountSelected}
       {onToggleFavorite}

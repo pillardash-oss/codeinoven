@@ -51,6 +51,13 @@
     /** True while the thinking-level dropdown is open. Lets a parent open the
      *  thinking selector directly (e.g. from the `/thinking` slash action). */
     thinkingMenuOpen?: boolean
+    /** True while the account dropdown is open. Lets a parent open the account
+     *  selector directly (e.g. from the `/account` slash action). */
+    accountMenuOpen?: boolean
+    /** Reports whether the account picker is rendered (more than one account
+     *  for the current provider). Lets a parent conditionally surface actions
+     *  such as the `/account` slash command. */
+    onAccountPickerVisibleChange?: (visible: boolean) => void
     /** Project whose harness catalog this picker displays. When provided, opening
      *  the picker lazily fetches that project's catalog (network only when stale). */
     projectId?: string | null
@@ -104,6 +111,7 @@
     recentModels = [],
     open = $bindable(false),
     thinkingMenuOpen = $bindable(false),
+    accountMenuOpen = $bindable(false),
     projectId = null,
     side = 'top',
     disabled = false,
@@ -117,6 +125,7 @@
     thinkingPresets,
     onSelect,
     onSelectAccount,
+    onAccountPickerVisibleChange,
     onSelectMultiple,
     onSelectThinking,
     onToggleFavorite,
@@ -208,6 +217,10 @@
     providerAccounts.find((account) => account.id === effectiveAccountId)
   )
   let showAccountPicker = $derived(!multiSelect && providerAccounts.length > 1)
+
+  $effect(() => {
+    onAccountPickerVisibleChange?.(showAccountPicker)
+  })
   /**
    * Snapshot fallback so the trigger renders instantly, before any harness
    * catalog resolves: the thread's stored harness icon is always available, and
@@ -1032,7 +1045,7 @@
         </DropdownMenu.Root>
       {/if}
       {#if showAccountPicker}
-        <DropdownMenu.Root>
+        <DropdownMenu.Root bind:open={accountMenuOpen}>
           <DropdownMenu.Trigger
             class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
             aria-label={`Account: ${selectedAccount?.label ?? 'Default'}`}
