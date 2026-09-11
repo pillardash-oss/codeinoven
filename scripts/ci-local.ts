@@ -305,8 +305,30 @@ async function buildStagePlan(options: StageOptions, target: SmokeTarget): Promi
   stages.push(
     await stage(
       'package',
-      `Package unpacked ${target} application`,
-      ['bunx', 'electron-builder', `--${target}`, ...(target === 'mac' ? ['--arm64'] : target === 'win' ? ['--x64'] : ['--x64']), '--dir', '-c.forceCodeSigning=false'],
+      `Package ${target} application`,
+      // Mac mirrors nightly.yml, which ships dmg+zip artifacts —
+      // verify-packaged-app requires them, so a --dir (unpacked-only) run can
+      // never pass the gate. Local run is ad-hoc signed (no identity, no
+      // notarization), mirroring the package:mac script.
+      target === 'mac'
+        ? [
+            'bunx',
+            'electron-builder',
+            '--mac',
+            '--arm64',
+            '-c.forceCodeSigning=false',
+            '-c.mac.identity=-',
+            '-c.mac.hardenedRuntime=false',
+            '-c.mac.notarize=false'
+          ]
+        : [
+            'bunx',
+            'electron-builder',
+            `--${target}`,
+            ...(target === 'win' ? ['--x64'] : ['--x64']),
+            '--dir',
+            '-c.forceCodeSigning=false'
+          ],
       undefined,
       target === 'mac' ? { CSC_IDENTITY_AUTO_DISCOVERY: 'false' } : {}
     )

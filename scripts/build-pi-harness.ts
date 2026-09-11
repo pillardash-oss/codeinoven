@@ -1,6 +1,6 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { dirname, join, relative } from 'node:path'
+import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /**
@@ -46,11 +46,25 @@ await cp(piPackageJsonPath, join(outputDirectory, 'package.json'))
 // Named "vendor", not "node_modules" — electron-builder's extraResources copy
 // silently drops nested `node_modules` directories, so the runtime resolves
 // these via NODE_PATH / direct paths instead of Node's standard walk.
-await cp(jitiPackageDirectory, join(outputDirectory, 'vendor/jiti'), { recursive: true })
-await cp(chordPackageDirectory, join(outputDirectory, 'vendor/@earendil-works/chord'), {
-  recursive: true
+// `.bin` holds build-time-only symlink shims (e.g. esbuild's CLI link). They
+// must not enter the vendored tree: electron-builder's extraResources copy
+// recreates symlinks with a bare `fs.symlink` that throws EEXIST if the
+// destination already exists, and node's `cp` rewrites relative targets into
+// absolute host paths that would be broken links in the packaged app.
+const excludeBuildTimeBin = (source: string): boolean =>
+  !source.split(sep).includes('.bin')
+await cp(jitiPackageDirectory, join(outputDirectory, 'vendor/jiti'), {
+  recursive: true,
+  filter: excludeBuildTimeBin
 })
-await cp(typeboxPackageDirectory, join(outputDirectory, 'vendor/typebox'), { recursive: true })
+await cp(chordPackageDirectory, join(outputDirectory, 'vendor/@earendil-works/chord'), {
+  recursive: true,
+  filter: excludeBuildTimeBin
+})
+await cp(typeboxPackageDirectory, join(outputDirectory, 'vendor/typebox'), {
+  recursive: true,
+  filter: excludeBuildTimeBin
+})
 
 // Rewrites bare runtime imports that esbuild left unbundled to the vendored
 // copies. Per-file relative rewriting is required because the pi bundle is
