@@ -55,7 +55,7 @@
   import ProjectFileViewerMenu from './ProjectFileViewerMenu.svelte'
   import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
   import type { ProjectTextFile } from '$shared/types'
-  import type { ProjectFileInfo } from '$lib/types'
+  import type { ProjectFileInfo } from '$shared/types'
 
   interface Props {
     projectId: string

@@ -240,32 +240,6 @@ export interface BrowserDevToolsState {
   open: boolean
 }
 
-/** One row rendered by the native Ctrl+Tab overlay, fully display-ready. */
-export interface NativeSwitcherThread {
-  id: string
-  title: string
-  projectId: string
-  /** Project icon as a data URL, or null for a fallback mark. */
-  icon: string | null
-  selected: boolean
-}
-
-export type NativeSwitcherTheme = 'light' | 'dark'
-
-/**
- * Display payload for the native Ctrl+Tab overlay. The renderer resolves the
- * visible thread list, highlighting, and theme; the overlay only renders the
- * rows and reports input back through the main process.
- */
-export interface NativeSwitcherPayload {
-  threads: NativeSwitcherThread[]
-  highlightedThreadId: string | null
-  theme: NativeSwitcherTheme
-  /** Width/height (density-independent px) hint for the dialog, unused by the
-   *  full-window overlay page but kept for future sizing. */
-  windowHeight: number
-}
-
 /** Ownership metadata for a browser tab requested by the main process. */
 export interface BrowserOpenRequestContext {
   projectId: string
@@ -2407,11 +2381,6 @@ export const IPC_INVOKE_CONTRACT = {
   'browser:resumeDownload': {} as Contract<[id: string], void>,
   'browser:openDownload': {} as Contract<[id: string], void>,
   'browser:revealDownload': {} as Contract<[id: string], boolean>,
-  /** Open the native Ctrl+Tab overlay above the browser view with a fresh
-   *  display payload. Only used while the native browser view is on screen;
-   *  otherwise the renderer uses the DOM switcher. */
-  'switcher:open': {} as Contract<[payload: NativeSwitcherPayload], void>,
-  'switcher:close': {} as Contract<[], void>,
   'spec:addAnnotation': {} as Contract<
     [
       projectId: string,
@@ -3010,13 +2979,6 @@ export const IPC_EVENT_CONTRACT = {
   'browser:permissionRequested': [] as unknown as [request: BrowserPermissionRequest],
   'browser:permissionResolved': [] as unknown as [requestId: string],
   'browser:download': [] as unknown as [download: BrowserDownload],
-  /** Native Ctrl+Tab overlay asked the renderer to switch to a thread. */
-  'switcher:select': [] as unknown as [threadId: string],
-  /** Native Ctrl+Tab overlay moved its highlight (so the renderer can preload
-   *  that thread's messages). */
-  'switcher:highlight': [] as unknown as [threadId: string],
-  /** Native Ctrl+Tab overlay was dismissed without a selection. */
-  'switcher:closed': [] as [],
   /** Remote-mode status changes from the main process. */
   'remote:status': [] as unknown as [status: RemoteModeStatus],
   /**

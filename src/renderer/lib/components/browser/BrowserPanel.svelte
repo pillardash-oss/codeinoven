@@ -70,6 +70,7 @@
   let panelVisible = $derived(
     !suppressed &&
       !contextSidebarState.fullscreenSuppression &&
+      !contextSidebarState.browserSwitcherSuspendsView &&
       (fullscreen ||
         (contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.id === tabId))
   )

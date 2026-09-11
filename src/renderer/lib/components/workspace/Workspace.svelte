@@ -1338,20 +1338,6 @@
     gitPanelScopeBucketId = thread?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
   })
 
-  /** True when the browser's native WebContentsView is on screen, either from
-   *  the right sidebar or the browser's own fullscreen dialog. The native
-   *  Ctrl+Tab overlay is only needed in this state; otherwise the DOM switcher
-   *  suffices (it already stacks above all non-native panels). */
-  const browserNativeVisible = $derived(
-    !contextSidebarState.fullscreenSuppression &&
-      (contextSidebarState.sidebarBrowserNativeVisible ||
-        (browserFullscreenTabId !== null &&
-          contextSidebarState.tabs.some(
-            (tab) =>
-              tab.id === browserFullscreenTabId && tab.kind === 'browser' && tab.surface === 'page'
-          )))
-  )
-
   // A full-window DOM surface (fullscreen terminal, media previews, fullscreen
   // file editors) covers the workspace. The browser's native view floats above
   // every DOM surface, so it must be hidden while such a surface is open   the
@@ -5025,7 +5011,6 @@
   projects={visibleProjects}
   projectIconUrls={projectIcons}
   selectedThreadId={selectedThread?.id ?? null}
-  nativeAvailable={browserNativeVisible}
   onSelect={openThreadFromSwitcher}
 />
 

@@ -220,7 +220,7 @@ const INSTALL_COMMANDS: Record<
 }
 
 /** Install methods in preference order per platform   native installers first on Windows. */
-const METHOD_PREFERENCE: Record<Platform, HarnessInstallMethod[]> = {
+const METHOD_PREFERENCE: Partial<Record<Platform, HarnessInstallMethod[]>> = {
   win32: ['winget', 'native', 'npm'],
   darwin: ['brew', 'npm'],
   linux: ['npm']
@@ -329,7 +329,9 @@ export class HarnessInstallService {
     const wslTarget = provider?.executionTarget?.kind === 'wsl' ? provider.executionTarget : undefined
     const platform: Platform = wslTarget ? 'linux' : process.platform
     const platformCommands = INSTALL_COMMANDS[harnessId]?.[platform]
-    const method = METHOD_PREFERENCE[platform].find((candidate) => platformCommands?.[candidate])
+    const method = (METHOD_PREFERENCE[platform] ?? ['npm']).find(
+      (candidate) => platformCommands?.[candidate]
+    )
     const command = method ? platformCommands?.[method] : undefined
     if (!method || !command) {
       throw new Error(

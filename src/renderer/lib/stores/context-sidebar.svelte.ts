@@ -388,6 +388,11 @@ class ContextSidebarState {
    *  hide while any is active, because a native view floats above every DOM
    *  modal. Tracked as a keyed set so nested/overlapping surfaces are safe. */
   private fullscreenSurfaceKeys = new SvelteSet<string>()
+  /** True while the DOM Ctrl+Tab thread switcher dialog is open. The browser's
+   *  native WebContentsView floats above every DOM surface, so it must stay
+   *  detached (suspended) for the dialog's whole lifetime and be re-attached
+   *  when the dialog closes. */
+  private browserSwitcherSuspended = $state(false)
   private activeProjectId: string | null = $state(null)
   private activeThreadId: string | null = $state(null)
   private notificationsVisible = $state(false)
@@ -440,10 +445,22 @@ class ContextSidebarState {
     else this.fullscreenSurfaceKeys.delete(key)
   }
 
+  /** Whether the browser's native view is suspended for the DOM Ctrl+Tab
+   *  switcher. */
+  get browserSwitcherSuspendsView(): boolean {
+    return this.browserSwitcherSuspended
+  }
+
+  /** Suspend/resume the browser's native view while the DOM Ctrl+Tab switcher
+   *  dialog is open. Panels re-attach their views automatically when this
+   *  clears (the same path used for full-window DOM surfaces). */
+  setBrowserSwitcherSuspended(suspended: boolean): void {
+    this.browserSwitcherSuspended = suspended
+  }
+
   /**
    * Whether the native browser view is currently on screen from the right
-   * sidebar (a visible browser tab). The native
-   * Ctrl+Tab overlay is only needed while this is true.
+   * sidebar (a visible browser tab).
    */
   get sidebarBrowserNativeVisible(): boolean {
     if (this.fullscreenSuppression) return false

@@ -62,7 +62,6 @@ import { sendToRenderer } from './ipc/renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
 import { BrowserService } from './browser/browser-service'
-import { CtrlTabOverlayService } from './browser/ctrl-tab-overlay-service'
 import { getConfigRoot } from '../lib/utils'
 import type { SpeechService } from './speech/speech-service'
 
@@ -146,7 +145,6 @@ installProcessCrashDiagnostics()
 let mainWindow: BrowserWindow | null = null
 let splashWindow: BrowserWindow | null = null
 let browserService: BrowserService | null = null
-let ctrlTabOverlayService: CtrlTabOverlayService | null = null
 let gatewaySupervisor: GatewaySupervisorService | null = null
 let quitCleanupStarted = false
 let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
@@ -696,8 +694,6 @@ async function bootPostPaintServices(): Promise<void> {
     chatEngine.setBrowserUtilityExecutor((operation, input, context) =>
       service.executeUtility(operation, input, context)
     )
-    ctrlTabOverlayService = new CtrlTabOverlayService(mainWindow)
-    ctrlTabOverlayService.register()
   }
   // Keep the device awake while a scheduled auto-retry is due within the wake
   // window, so a usage-limit reset fires even when the user is away.
@@ -1571,8 +1567,6 @@ async function runShutdownPipeline(): Promise<void> {
   try {
     browserService?.dispose()
     browserService = null
-    ctrlTabOverlayService?.dispose()
-    ctrlTabOverlayService = null
   } catch (error) {
     Logger.error('Browser service cleanup failed during shutdown:', error)
   }

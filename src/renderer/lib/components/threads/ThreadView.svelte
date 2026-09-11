@@ -386,37 +386,6 @@
    *  moment they land   never staged, never evicted from below the reader. */
   let visibleMessages = $derived(hasController ? messages : messages.slice(mountedStartIndex))
 
-  /** True when the thread has no conversation yet   the composer is centered
-   *  with suggested prompts instead of docked at the bottom. */
-  /** Resolved icon for the centered head-start header   same pipeline as the
-   *  project sidebar: stored image, SVG icon type, then initials fallback. */
-  const centeredProjectIconUrl = $derived(
-    project && !chatMode ? getProjectIcon(project, projectIconUrl ?? undefined) : null
-  )
-  /** Display name of the thread's selected model, or null when none is set. */
-  const centeredModelName = $derived.by(() => {
-    if (!settings.modelId) return null
-    const model =
-      allModels.find(
-        (m) =>
-          m.id === settings.modelId &&
-          (!settings.providerId || m.providerId === settings.providerId)
-      ) ?? allModels.find((m) => m.id === settings.modelId)
-    return model?.name ?? settings.modelId
-  })
-  let emptyConversation = $derived(
-    loaded &&
-      visibleMessages.length === 0 &&
-      !busy &&
-      !failureRetryVisible &&
-      pendingPermissions.length === 0 &&
-      pendingQuestionRequests.length === 0
-  )
-
-  /** Centered composer head start: empty conversation AND the workspace
-   *  allows it (sole untouched thread in project mode, always in chat mode). */
-  let centeredComposer = $derived(emptyConversation && allowCenteredComposer)
-
   const projectSuggestedPrompts = [
     'Summarize this project: architecture, key modules, and entry points',
     'Review the codebase and list the top improvement opportunities',
@@ -8092,10 +8061,13 @@
   function addAuditAnnotation(
     section: AuditSectionId,
     body: string,
+    // Mirrors the studio AnnotationAnchor shape: start/endLine are optional in
+    // the declared callback type, so this handler must accept them as optional
+    // too (they are always supplied in practice and default to 0).
     anchor?: {
       quote: string
-      startLine: number
-      endLine: number
+      startLine?: number
+      endLine?: number
       startOffset: number
       endOffset: number
     }
@@ -8113,6 +8085,8 @@
           section,
           body,
           author: 'user',
+          startLine: anchor?.startLine ?? 0,
+          endLine: anchor?.endLine ?? 0,
           ...anchor
         }
       )
@@ -9410,6 +9384,39 @@
   // ─── Message attribution (model + harness) ────────────────────────────
 
   let allModels = $derived(providers.flatMap((p) => p.models))
+
+  /** True when the thread has no conversation yet   the composer is centered
+   *  with suggested prompts instead of docked at the bottom. Declared here,
+   *  after every state it reads (project, busy, pending queues, allModels),
+   *  so the TS7 checker sees no use-before-declaration. */
+  /** Resolved icon for the centered head-start header   same pipeline as the
+   *  project sidebar: stored image, SVG icon type, then initials fallback. */
+  const centeredProjectIconUrl = $derived(
+    project && !chatMode ? getProjectIcon(project, projectIconUrl ?? undefined) : null
+  )
+  /** Display name of the thread's selected model, or null when none is set. */
+  const centeredModelName = $derived.by(() => {
+    if (!settings.modelId) return null
+    const model =
+      allModels.find(
+        (m) =>
+          m.id === settings.modelId &&
+          (!settings.providerId || m.providerId === settings.providerId)
+      ) ?? allModels.find((m) => m.id === settings.modelId)
+    return model?.name ?? settings.modelId
+  })
+  let emptyConversation = $derived(
+    loaded &&
+      visibleMessages.length === 0 &&
+      !busy &&
+      !failureRetryVisible &&
+      pendingPermissions.length === 0 &&
+      pendingQuestionRequests.length === 0
+  )
+
+  /** Centered composer head start: empty conversation AND the workspace
+   *  allows it (sole untouched thread in project mode, always in chat mode). */
+  let centeredComposer = $derived(emptyConversation && allowCenteredComposer)
 
   /** Provider catalog entry the message was answered through, when known. */
   function messageProvider(msg: AgentMessage): ProviderCatalog | undefined {
