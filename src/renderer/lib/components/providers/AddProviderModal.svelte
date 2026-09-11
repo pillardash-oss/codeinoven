@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import {
     CheckCircle2,
+    ChevronRight,
     KeyRound,
     Loader2,
     Pencil,
@@ -40,9 +41,18 @@
     onEditCustom: (provider: BaseUrlProvider) => void
     /** Tab shown on open   e.g. 'custom' when returning here via the editor's Back button. */
     initialTab?: AddTab
+    /** Open the accounts tab, pre-filtered to this harness, for multi-account disconnects. */
+    onOpenAccounts?: (harnessId: string) => void
   }
 
-  let { harness, onClose, onAddCustom, onEditCustom, initialTab = 'connect' }: Props = $props()
+  let {
+    harness,
+    onClose,
+    onAddCustom,
+    onEditCustom,
+    initialTab = 'connect',
+    onOpenAccounts
+  }: Props = $props()
 
   /** The component is mounted per-open, so the initial prop value is authoritative. */
   function startingTab(): AddTab {
@@ -536,10 +546,10 @@
     }
   }
 
-  function accountForProvider(providerId: string): HarnessAccount | undefined {
-    return knownAccounts.find(
-      (account) => account.containerKind === 'legacy-default' && account.providerId === providerId
-    )
+  /** Registered accounts backing one connected provider; more than one means
+   * a provider-level disconnect is ambiguous and must happen per account. */
+  function accountsForProvider(providerId: string): HarnessAccount[] {
+    return knownAccounts.filter((account) => account.providerId === providerId)
   }
 
   async function disconnectProvider(): Promise<void> {
@@ -614,7 +624,7 @@
     <div class="flex w-full items-center justify-between gap-4">
       {#if tab === 'custom'}
         <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-          Add any OpenAI-compatible endpoint by base URL   Ollama, LM Studio, llama.cpp, or a hosted
+          Add any OpenAI-compatible endpoint by base URL Ollama, LM Studio, llama.cpp, or a hosted
           gateway. Models are ready in the picker as soon as you save.
         </p>
       {:else if antigravityConnected}
@@ -623,18 +633,18 @@
         </p>
       {:else if apiKeyEntry && canSignIn}
         <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-          Pick any provider from {harness.name}’s catalog and paste its API key   stored in
+          Pick any provider from {harness.name}’s catalog and paste its API key stored in
           {harness.name}’s own credential file.
         </p>
       {:else if pickerLogin}
         <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-          Runs {harness.name}’s own interactive provider picker in a built-in terminal   choose any
+          Runs {harness.name}’s own interactive provider picker in a built-in terminal choose any
           provider there and follow the flow it shows (API key or OAuth).
         </p>
       {:else if canSignIn}
         <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
           Runs {harness.name}’s own sign-in flow in a built-in terminal rooted at your home
-          directory   a browser window opens so you can authenticate.
+          directory a browser window opens so you can authenticate.
         </p>
       {:else}
         <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
@@ -791,8 +801,8 @@
             >
               Connected providers
             </div>
-            {#each authStatus.accounts.filter((account) => account.active !== false) as connected (connected.providerId)}
-              {@const account = accountForProvider(connected.providerId)}
+            {#each authStatus.accounts.filter((account) => account.active !== false) as connected (connected.id)}
+              {@const linkedAccounts = accountsForProvider(connected.providerId)}
               <div class="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
                 <CheckCircle2 size={14} class="shrink-0 text-success" />
                 <div class="min-w-0 flex-1">
@@ -802,12 +812,22 @@
                       · {connected.method}{/if}
                   </p>
                 </div>
-                {#if account}
+                {#if linkedAccounts.length > 1}
+                  <button
+                    type="button"
+                    class="flex h-7 shrink-0 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                    title="{connected.label} is connected on {linkedAccounts.length} accounts. Open the accounts tab to disconnect a specific one."
+                    onclick={() => onOpenAccounts?.(harness.id)}
+                  >
+                    {linkedAccounts.length} accounts
+                    <ChevronRight size={11} />
+                  </button>
+                {:else if linkedAccounts.length === 1}
                   <button
                     type="button"
                     class="flex h-7 items-center gap-1 rounded-lg px-2 text-[0.6875rem] font-medium text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
                     title={`Disconnect ${connected.label}`}
-                    onclick={() => (disconnectTarget = account)}
+                    onclick={() => (disconnectTarget = linkedAccounts[0])}
                   >
                     <Unplug size={11} /> Disconnect
                   </button>
@@ -984,8 +1004,7 @@
               }}
             />
             <p class="text-[0.625rem] text-dimmed">
-              Stored by CodeInOven in {harness.name}’s own credential file   never sent anywhere
-              else.
+              Stored by CodeInOven in {harness.name}’s own credential file never sent anywhere else.
             </p>
           {/snippet}
 
@@ -1088,8 +1107,8 @@
                   Sign in to {selectedProvider.name}
                 </p>
                 <p class="text-[0.625rem] text-dimmed">
-                  A browser window opens, you approve access, and this app finishes the rest   no
-                  key pasting needed.
+                  A browser window opens, you approve access, and this app finishes the rest no key
+                  pasting needed.
                 </p>
                 <button
                   class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
@@ -1099,7 +1118,7 @@
                 >
                   <KeyRound size={13} /> Sign in with browser
                 </button>
-                <p class="text-center text-[0.625rem] text-dimmed">  or paste an API key  </p>
+                <p class="text-center text-[0.625rem] text-dimmed">or paste an API key</p>
                 {@render apiKeyField(selectedProvider.name)}
               {:else}
                 <div class="text-[0.6875rem] font-medium text-foreground text-center">
@@ -1128,13 +1147,13 @@
           {:else if pickerLogin}
             <p class="text-[0.6875rem] text-muted">
               Click <strong class="font-medium text-foreground">Connect provider</strong> below to
-              open {harness.name}’s own provider picker in the built-in terminal   choose the
-              provider you want there.
+              open {harness.name}’s own provider picker in the built-in terminal choose the provider
+              you want there.
             </p>
           {:else}
             <p class="text-[0.6875rem] text-muted">
               Click <strong class="font-medium text-foreground">Connect provider</strong> below to pick
-              a provider and sign in from here   no copying commands.
+              a provider and sign in from here no copying commands.
             </p>
           {/if}
         </div>
