@@ -12,6 +12,7 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 
   interface Props {
     open: boolean
@@ -69,6 +70,19 @@
     selectedProjectIds = [],
     onSelectedProjectsChange
   }: Props = $props()
+
+  // The dialog-mode palette draws a full-window backdrop (fixed inset-0), and
+  // the browser's native view floats above every DOM surface (see
+  // ContextSidebarState.setFullscreenSurfaceActive), so the view must be
+  // suppressed while the palette is open: the same treatment every Modal
+  // gets. Keyed per instance so stacked palettes don't clear each other's
+  // suppression. Inline mode stays inside the composer column and never
+  // overlaps the sidebar, so it does not suppress.
+  const suppressionKey = `command-palette-${Math.random().toString(36).slice(2)}`
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive(suppressionKey, open && mode === 'dialog')
+    return () => contextSidebarState.setFullscreenSurfaceActive(suppressionKey, false)
+  })
 
   let query = $state('')
   let selectedActionId = $state('')
@@ -317,7 +331,7 @@
                     class="ml-auto flex shrink-0 items-center gap-1.5"
                     title={meta.working && meta.modelId
                       ? meta.modelId
-                      : meta.providerName ?? undefined}
+                      : (meta.providerName ?? undefined)}
                   >
                     {#if meta.working && meta.modelId}
                       {#if meta.providerName}
