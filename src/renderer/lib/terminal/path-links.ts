@@ -1,5 +1,6 @@
 import type { ILink, ILinkProvider } from 'ghostty-web'
 import { invoke } from '$lib/ipc.svelte'
+import { revealFileInAppTree } from '$lib/reveal-file'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 
 /**
@@ -89,7 +90,8 @@ function candidateVariants(matched: string, line: string, index: number): string
  * excluded by its URL regex. This provider reuses the app's citation-path
  * machinery (`projectFiles:resolveCitationPaths`) so that only paths that
  * actually exist inside the owning project are underlined, and cmd/ctrl+click
- * reveals them in the OS file manager (`shell:revealPath`).
+ * actually exist inside the owning project are underlined, and cmd/ctrl+click
+ * reveals them in the in-app project file tree (`revealFileInAppTree`).
  */
 export class FileLinkProvider implements ILinkProvider {
   private readonly validated = new Map<string, ValidationEntry>()
@@ -222,9 +224,28 @@ export class FileLinkProvider implements ILinkProvider {
       range: candidate.range,
       activate: (event: MouseEvent) => {
         if (!(event.ctrlKey || event.metaKey)) return
-        void revealPath(projectId, candidate.resolved)
+        void revealResolvedPath(projectId, candidate.resolved)
       }
     }
+  }
+}
+
+/**
+ * Reveal a validated in-project path in the app's file tree. The IPC info call
+ * resolves the absolute path and doubles as a liveness check: if the entry was
+ * deleted between scan and click, nothing is revealed.
+ */
+async function revealResolvedPath(projectId: string, relativePath: string): Promise<void> {
+  try {
+    const info = await invoke(
+      'projectFiles:info',
+      projectId,
+      relativePath,
+      workspaceState.activeScopeBucketIdFor(projectId)
+    )
+    await revealFileInAppTree(projectId, info.absolutePath)
+  } catch {
+    // The entry may have been deleted between scan and click — nothing to reveal.
   }
 }
 
@@ -233,16 +254,4 @@ const VALIDATION_TTL_MS = 10_000
 /** Upper bound on cached validation results before the whole cache is dropped. */
 const VALIDATION_CACHE_LIMIT = 300
 
-async function revealPath(projectId: string, relativePath: string): Promise<void> {
-  try {
-    const info = await invoke(
-      'projectFiles:info',
-      projectId,
-      relativePath,
-      workspaceState.activeScopeBucketIdFor(projectId)
-    )
-    await invoke('shell:revealPath', info.absolutePath)
-  } catch {
-    // The entry may have been deleted between scan and click — nothing to reveal.
-  }
-}
+
