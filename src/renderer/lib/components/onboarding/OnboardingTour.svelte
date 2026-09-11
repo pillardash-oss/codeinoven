@@ -44,14 +44,16 @@
 
   let { step, onStepChange, onChooseProject, onBrowseHarnesses, onFinish }: Props = $props()
 
+  const isMac = navigator.platform.toUpperCase().includes('MAC')
+  const viewKey = (key: string): string => (isMac ? `⌘${key}` : `Ctrl+${key}`)
+
   const spotlightSteps: SpotlightStep[] = [
     {
       step: 1,
       selector: '[data-onboarding="view-switcher"]',
-      eyebrow: 'Conversation View type',
-      title: 'Projects|Threads|Scope|Chats',
-      description:
-        "Projects groups by folder. Threads shows every project conversation. Scope is for board view and worktrees. Chat is for tasks that don't need a projects for a start."
+      eyebrow: 'View switcher',
+      title: 'One dropdown, every view',
+      description: `This dropdown switches how the workspace is organized. Projects groups conversations by folder (${viewKey('1')}). Threads lists every project conversation (${viewKey('2')}). Scoped threads opens the scope sidebar over Projects (${viewKey('3')}), Scope Board opens the full-page board (${viewKey('4')}), and Chats is for work that does not need a project (${viewKey('0')}).`
     },
     {
       step: 2,
@@ -88,7 +90,6 @@
   ]
 
   const activeSpotlight = $derived(spotlightSteps.find((item) => item.step === step))
-  const isMac = navigator.platform.toUpperCase().includes('MAC')
   const sendShortcut = isMac ? '⌘ Enter' : 'Ctrl + Enter'
   const steerShortcut = isMac ? '⌘ ⇧ Enter' : 'Ctrl + Shift + Enter'
   const spotlightCount = spotlightSteps.length
