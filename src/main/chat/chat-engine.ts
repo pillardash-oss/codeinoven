@@ -569,6 +569,15 @@ function rawErrorMessage(error: unknown): string {
   return fallback
 }
 
+/** Full diagnostic error text for the error card's Raw Error view: the stack
+ *  trace when a real Error object reached us, otherwise the message string
+ *  as-is. Deliberately separate from `rawErrorMessage`, which must stay a
+ *  short single-line message for logging and report fields. */
+function rawErrorDetail(error: unknown): string {
+  if (error instanceof Error && error.stack?.trim()) return error.stack.trim()
+  return rawErrorMessage(error)
+}
+
 /** Parse the assistant's text into the batched descriptor object, tolerating a
  *  surrounding JSON code fence. Throws a clear error when the output is not a
  *  JSON object so the caller can safely fall back to per-image calls instead of
@@ -775,11 +784,11 @@ function historyMirrorFailureMessage(rawError: string): string {
 }
 
 function historyMirrorIssue(error: unknown, harnessId: string): AgentProviderIssue {
-  const rawError = rawErrorMessage(error)
+  const message = rawErrorMessage(error)
   return {
     kind: 'unknown',
-    message: historyMirrorFailureMessage(rawError),
-    rawError,
+    message: historyMirrorFailureMessage(message),
+    rawError: rawErrorDetail(error),
     harnessId,
     retryable: true
   }
@@ -2183,7 +2192,17 @@ export class ChatEngine {
   }
 
   private async driverForAccount(harnessId: string, accountId?: string): Promise<HarnessDriver> {
-    const account = await this.accountRegistry.resolve(harnessId, accountId)
+    // Thread-bound ids can outlive their account: the account may be removed
+    // while the thread keeps a persisted session binding (for example across
+    // an app restart, when no live session-registry entry matches). Fall back
+    // to the harness default account instead of failing every read; explicit
+    // user-selection validation calls accountRegistry.resolve directly and
+    // still reports a missing account loudly.
+    const account = await this.accountRegistry
+      .resolve(harnessId, accountId)
+      .catch((error: unknown) =>
+        accountId === undefined ? Promise.reject(error) : this.accountRegistry.resolve(harnessId)
+      )
     if (account.containerKind === 'legacy-default') {
       const driver = this.drivers.get(harnessId)
       if (!driver) throw new Error(`Harness driver "${harnessId}" is not available.`)
@@ -2232,22 +2251,37 @@ export class ChatEngine {
       })
     )
 
+    const clearedThreads = new Set(
+      ownedSessions.map(([, info]) => `${info.projectId}:${info.threadId}`)
+    )
     const fallbackAccountId =
       (await this.accountRegistry.list(account.harnessId)).find(
         (candidate) => candidate.id !== accountId
       )?.id ?? legacyHarnessAccountId(account.harnessId)
     const affectedThreads = (await this.threadManager.listAllThreads()).filter(
-      (thread) => thread.settings?.accountId === accountId
+      (thread) => thread.settings?.accountId === accountId || thread.sessionAccountId === accountId
     )
     for (let offset = 0; offset < affectedThreads.length; offset += 25) {
       await Promise.all(
-        affectedThreads.slice(offset, offset + 25).map((thread) => {
+        affectedThreads.slice(offset, offset + 25).map(async (thread) => {
           const settings = thread.settings
-          if (!settings) return Promise.resolve(null)
-          return this.threadManager.updateSettings(thread.projectId, thread.id, {
-            ...settings,
-            accountId: fallbackAccountId
-          })
+          const hadSettingsSelection = settings?.accountId === accountId
+          // Threads bound to a session under the removed account with no live
+          // session-registry entry (for example after an app restart) keep a
+          // dead binding. Unbind them so later reads stop chasing the removed
+          // account container.
+          if (
+            thread.sessionAccountId === accountId &&
+            !clearedThreads.has(`${thread.projectId}:${thread.id}`)
+          ) {
+            await this.threadManager.clearSessionId(thread.projectId, thread.id)
+          }
+          if (hadSettingsSelection && settings) {
+            await this.threadManager.updateSettings(thread.projectId, thread.id, {
+              ...settings,
+              accountId: fallbackAccountId
+            })
+          }
         })
       )
     }
@@ -5499,7 +5533,7 @@ export class ChatEngine {
       const issue: AgentProviderIssue = {
         kind: classifyProviderIssue(message),
         message,
-        rawError: message,
+        rawError: rawErrorDetail(error),
         harnessId: owner.driverId,
         retryable: true
       }
@@ -7860,7 +7894,7 @@ export class ChatEngine {
           projectId,
           threadId,
           sessionId,
-          this.fallbackProviderIssue(driverId, rawErrorMessage(error))
+          this.fallbackProviderIssue(driverId, rawErrorMessage(error), rawErrorDetail(error))
         )
         throw error
       }
@@ -7966,7 +8000,7 @@ export class ChatEngine {
         projectId,
         threadId,
         sessionId,
-        this.fallbackProviderIssue(driverId, failure)
+        this.fallbackProviderIssue(driverId, failure, rawErrorDetail(error))
       )
       throw error
     }
@@ -19386,15 +19420,20 @@ export class ChatEngine {
     }
   }
 
-  private fallbackProviderIssue(harnessId: string, message: string): AgentProviderIssue {
+  private fallbackProviderIssue(
+    harnessId: string,
+    message: string,
+    rawError?: string
+  ): AgentProviderIssue {
     const kind = classifyProviderIssue(message)
+    const raw = rawError?.trim() || message
     return {
       kind,
       message:
         kind === 'authentication'
           ? `${this.drivers.get(harnessId)?.name ?? harnessId} sign-in expired. Sign in again, then retry this message.`
           : message,
-      rawError: message,
+      rawError: raw,
       harnessId,
       retryable: kind !== 'billing'
     }
@@ -20704,7 +20743,7 @@ export class ChatEngine {
           )
         } catch (error) {
           this.pendingMemoryDecisions.delete(sessionId)
-          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error), rawErrorDetail(error))
           await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
@@ -20759,7 +20798,7 @@ export class ChatEngine {
             )
           } catch (error) {
             this.pendingMemoryDecisions.delete(sessionId)
-            const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+            const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error), rawErrorDetail(error))
             await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
             await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
           }
@@ -20795,7 +20834,7 @@ export class ChatEngine {
           )
         } catch (error) {
           this.pendingMemoryDecisions.delete(sessionId)
-          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error), rawErrorDetail(error))
           await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
@@ -20827,7 +20866,7 @@ export class ChatEngine {
           )
         } catch (error) {
           this.pendingMemoryDecisions.delete(sessionId)
-          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error), rawErrorDetail(error))
           await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
