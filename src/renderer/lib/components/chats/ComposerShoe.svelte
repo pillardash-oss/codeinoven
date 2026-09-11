@@ -7,6 +7,8 @@
     source?: 'local' | 'ssh'
     host?: string
     isNewThread: boolean
+    /** While the thread is actively working, scope interactions are inert. */
+    isWorking?: boolean
     /** Project identity on the shoe   the project picker stays live only before the first message. */
     project?: ComposerProject
     /** Reassigns the thread's project; only honoured before the first message. */
@@ -29,6 +31,7 @@
   import type { ComposerProject } from '$shared/types'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import ScopeCreateModal from '$lib/components/scope/ScopeCreateModal.svelte'
+  import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import type { ScopeBucket, ScopeEnvironmentMode } from '$shared/types'
 
   interface Props {
@@ -41,6 +44,8 @@
     host?: string
     /** New threads can reassign the scope; existing ones toggle the scope view. */
     isNewThread: boolean
+    /** While the thread is actively working, scope interactions are inert. */
+    isWorking?: boolean
     /** Project identity on the shoe   the project picker stays live only before the first message. */
     project?: ComposerProject
     /** Reassigns the thread's project; only honoured before the first message. */
@@ -49,13 +54,25 @@
     onOpenScopeView?: () => void | Promise<void>
   }
 
-  let { projectId, threadId, bucket, source, host, isNewThread, project, onSwitchProject, onOpenScopeView }: Props =
-    $props()
+  let {
+    projectId,
+    threadId,
+    bucket,
+    source,
+    host,
+    isNewThread,
+    isWorking = false,
+    project,
+    onSwitchProject,
+    onOpenScopeView
+  }: Props = $props()
 
   let menuOpen = $state(false)
   let query = $state('')
   let creatingAuto = $state(false)
   let createModalOpen = $state(false)
+  /** Full change-scope modal, opened by right-clicking the scope badge. */
+  let changeScopeOpen = $state(false)
   let searchInput: HTMLInputElement | undefined = $state(undefined)
 
   /** Ordered board buckets for the project, minus the current scope. */
@@ -160,6 +177,12 @@
         ? `Change the scope of this new thread   currently ${bucket.name}`
         : `Toggle the scoped views for ${bucket.name}`}
       onclick={toggleMenu}
+      oncontextmenu={(event: MouseEvent) => {
+        event.preventDefault()
+        if (isWorking) return
+        changeScopeOpen = true
+      }}
+      aria-disabled={isWorking}
     >
       {#if bucket.root.kind === 'worktree'}
         <span
@@ -178,6 +201,16 @@
         </span>
       {/if}
     </button>
+
+    {#if changeScopeOpen}
+      <ChangeScopeModal
+        open={changeScopeOpen}
+        {projectId}
+        {threadId}
+        currentBucketId={bucket.id}
+        onClose={() => (changeScopeOpen = false)}
+      />
+    {/if}
 
     {#if isNewThread && menuOpen}
       <button

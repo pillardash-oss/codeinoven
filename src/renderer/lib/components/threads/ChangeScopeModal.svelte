@@ -1,6 +1,7 @@
 <script lang="ts">
   import { X, Search, Check, Plus } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
+  import ScopeCreateModal from '../scope/ScopeCreateModal.svelte'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -21,7 +22,8 @@
   let query = $state('')
   let searchInput: HTMLInputElement | undefined = $state(undefined)
   let loadError = $state('')
-  let creating = $state(false)
+  /** Seed for the canonical scope creation modal when the query is a miss. */
+  let createModalOpen = $state(false)
 
   let buckets = $derived(
     (scopeState.boards.get(projectId)?.buckets ?? [])
@@ -50,22 +52,23 @@
     onClose()
   }
 
-  /** Dynamically create a new scope from the typed query, then apply it to the thread. */
-  async function createAndSelectScope(): Promise<void> {
-    if (creating) return
-    creating = true
-    loadError = ''
-    try {
-      const bucket = await scopeState.createBucketForProject(projectId, query)
-      if (bucket) {
-        query = ''
-        await selectBucket(bucket)
-      }
-    } catch (error) {
-      loadError = error instanceof Error ? error.message : 'The scope could not be created.'
-    } finally {
-      creating = false
+  /** Open the canonical new-scope flow (worktree option included) seeded with
+   *  the typed query instead of creating a scope directly. */
+  function openCreateModal(): void {
+    createModalOpen = true
+  }
+
+  /** Apply a freshly created scope from the creation modal to the thread. */
+  async function selectCreatedScope(bucketId: string): Promise<void> {
+    createModalOpen = false
+    const bucket = (scopeState.boards.get(projectId)?.buckets ?? []).find(
+      (candidate) => candidate.id === bucketId
+    )
+    if (!bucket) {
+      loadError = 'The created scope could not be found.'
+      return
     }
+    await selectBucket(bucket)
   }
 </script>
 
@@ -113,8 +116,7 @@
                 class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-primary transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label="Create scope {query.trim()}"
                 title="Create scope {query.trim()}"
-                disabled={creating}
-                onclick={() => void createAndSelectScope()}
+                onclick={openCreateModal}
               >
                 <Plus size={14} strokeWidth={2} />
               </button>
@@ -187,3 +189,11 @@
     </div>
   </Portal>
 {/if}
+
+<ScopeCreateModal
+  open={createModalOpen}
+  {projectId}
+  initialName={query.trim()}
+  onCreated={(bucketId) => void selectCreatedScope(bucketId)}
+  onClose={() => (createModalOpen = false)}
+/>

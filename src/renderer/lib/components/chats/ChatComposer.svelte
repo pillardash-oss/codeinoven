@@ -2690,6 +2690,7 @@
           project={scopeShoe.project}
           onSwitchProject={scopeShoe.onSwitchProject}
           isNewThread={scopeShoe.isNewThread}
+          isWorking={scopeShoe.isWorking}
           onOpenScopeView={scopeShoe.onOpenScopeView}
         />
     </div>

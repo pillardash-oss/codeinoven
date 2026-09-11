@@ -948,6 +948,7 @@
           }
         : undefined,
       isNewThread: messages.length === 0 && !busy,
+      isWorking: busy,
       onOpenScopeView: () => onOpenScopeView?.(thread),
       onSwitchProject: (pid: string) => void switchProject(pid)
     }
