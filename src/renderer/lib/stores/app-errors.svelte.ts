@@ -1,5 +1,6 @@
 import { toast } from 'svelte-sonner'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { copyText } from '$lib/copy-text'
 
 export type AppErrorKind = 'error' | 'warning'
 
@@ -142,7 +143,7 @@ function copyErrorAction(text: string): { label: string; onClick: () => void } {
   return {
     label: 'Copy',
     onClick: () => {
-      void navigator.clipboard.writeText(text)
+      void copyText(text).catch(() => {})
     }
   }
 }
@@ -155,7 +156,10 @@ export function reportError(error: unknown, fallback: string, thread?: AppErrorT
     details,
     thread: thread ?? currentThreadRef()
   })
-  originalError(message, { closeButton: true, action: copyErrorAction(errorText(message, details)) })
+  originalError(message, {
+    closeButton: true,
+    action: copyErrorAction(errorText(message, details))
+  })
 }
 
 /** Surface a preformatted error message (e.g. from the main process) with optional details. */
