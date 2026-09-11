@@ -2544,8 +2544,20 @@
     if (!project) return
     deletingProjectId = projectId
 
-    // Remove the project from the UI immediately (same pattern as thread
-    // deletion) so the sidebar reflects the change without waiting on IPC.
+    // Deletion is transactional: the backend either deletes everything or
+    // nothing (folder erasure runs first and gates every other step). The UI
+    // mirrors the change only after the backend confirms success, so a failed
+    // deletion leaves the sidebar, threads, and icon exactly as they were.
+    try {
+      await invoke('project:delete', projectId, { deleteFolder })
+    } catch (error) {
+      reportError(error, 'The project could not be deleted.')
+      return
+    } finally {
+      deletingProjectId = null
+    }
+
+    // Backend deletion succeeded; now mirror it in the UI state.
     const browserTabIds = contextSidebarState.removeProjectBrowsers(projectId)
     if (browserFullscreenTabId && browserTabIds.includes(browserFullscreenTabId)) {
       browserFullscreenTabId = null
@@ -2554,18 +2566,9 @@
     allThreads = allThreads.filter((t) => t.projectId !== projectId)
     projectIcons.delete(projectId)
     if (selectedThread?.projectId === projectId) workspaceState.clearThread()
-
-    // Heavy backend cleanup happens asynchronously; on failure the project
-    // is restored so the user can retry.
-    try {
-      await invoke('project:delete', projectId, { deleteFolder })
-      await invoke('browser:destroyProject', projectId)
-    } catch (error) {
-      projects = [project, ...projects.filter((p) => p.id !== projectId)]
-      reportError(error, 'The project could not be deleted.')
-    } finally {
-      deletingProjectId = null
-    }
+    // Best-effort teardown of the project's browser sessions. The project is
+    // already gone backend-side, so a failure here must not roll the UI back.
+    void invoke('browser:destroyProject', projectId).catch(() => {})
   }
 
   // ─── Folder ellipsis menu actions ────────────────────────────────────────
