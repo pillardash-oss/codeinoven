@@ -6,6 +6,7 @@
 import type { Project, Thread } from '$shared/types'
 import { SvelteSet } from 'svelte/reactivity'
 import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
+import { threadStatusPolicy } from '$shared/thread-status-policy'
 import type { AgentSource } from '$lib/agent-sources'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { rendererRecovery } from './renderer-recovery.svelte'
@@ -449,15 +450,16 @@ export function threadStatusSortKey(
   if (draftThreadKeys?.has(threadVisitKey(t))) return -1
   // Unsent drafts and the empty "New Thread" placeholder stay at the very top.
   if (t.status === 'created') return 0
-  // Everything that is not done shares one attention group, regardless of
-  // which project it belongs to or whether it has been read   a stale unread
-  // thread from an old project must never displace a fresh active thread.
-  // Ambiguity inside a group is resolved by lastActivity in threadStatusSort.
-  if (t.status !== 'completed') return 1
-  return 2
+  // To-do stays at the top; done always sinks to the bottom; everything in
+  // between (working, spec, error, needs attention, ...) is one pool ordered
+  // purely by last activity   last action wins. Read state and project never
+  // influence the order. Ambiguity inside a group is resolved by lastActivity
+  // in threadStatusSort.
+  if (threadStatusPolicy(t.status).scopeSlice === 'done') return 2
+  return 1
 }
 
-/** Threads view sort: not-done threads first, most recent activity first within each group. */
+/** Threads view sort: to-do first, then everything by last activity, done last. */
 export function threadStatusSort(
   a: Thread,
   b: Thread,
