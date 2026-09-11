@@ -2344,6 +2344,40 @@
     if (tabId) closeContextTab(tabId)
   })
 
+  /** Threads view must not be bounded by the per-project first-paint slices:
+   *  it ranks threads by status and last activity globally, so a project whose
+   *  recent slice simply never included an old done thread would distort the
+   *  order. Switching to Threads view hydrates the global recent list (bounded
+   *  to 500 rows) once per activation, merged into the existing cache; deeper
+   *  history stays available through the existing "Load older threads" pager. */
+  let threadsViewHydrating = false
+  async function ensureThreadsViewFullyLoaded(): Promise<void> {
+    if (threadsViewHydrating) return
+    threadsViewHydrating = true
+    try {
+      const page = await invoke('thread:listRecent', { limit: 500, offset: 0 })
+      const uniqueCurrentThreads = uniqueThreadList(allThreads)
+      const known = new Set(uniqueCurrentThreads.map((thread) => thread.id))
+      const additions = uniqueThreadList(page).filter(
+        (thread) => !known.has(thread.id) && !isOrchestrationChildThread(thread)
+      )
+      for (const thread of page) {
+        if (!thread.archived) scopeState.updateThread(thread)
+      }
+      if (additions.length > 0 || uniqueCurrentThreads.length !== allThreads.length) {
+        allThreads = [...uniqueCurrentThreads, ...additions]
+      }
+      historyOffset = Math.max(historyOffset, page.length)
+      hasMoreHistory = page.length === 500
+    } finally {
+      threadsViewHydrating = false
+    }
+  }
+
+  $effect(() => {
+    if (mode === 'threads' && active) void ensureThreadsViewFullyLoaded()
+  })
+
   /** Explicit timeline expansion. The initial shell intentionally carries
    * only a bounded recent slice; older tasks remain paged and deduped. */
   async function loadHistoryPage(): Promise<void> {
