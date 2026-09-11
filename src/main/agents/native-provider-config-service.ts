@@ -72,6 +72,15 @@ export async function opencodeNativeProviderIds(): Promise<Set<string> | null> {
 
 /** Reads and surgically edits harness-owned custom provider catalogs. */
 export class NativeProviderConfigService {
+  /** Read a native Pi provider key for main-process usage probes only. */
+  async readApiKey(harnessId: string, providerId: string): Promise<string | undefined> {
+    if (harnessId !== 'pi') return undefined
+    const config = await readJsoncObject(PI_MODELS_PATH)
+    const provider = record(record(config['providers'])?.[providerId])
+    const apiKey = stringValue(provider?.['apiKey'])
+    return apiKey && apiKey !== 'none' ? apiKey : undefined
+  }
+
   async listProviders(): Promise<BaseUrlProvider[]> {
     const [openCode, pi] = await Promise.all([this.listOpenCodeProviders(), this.listPiProviders()])
     return [...openCode, ...pi]

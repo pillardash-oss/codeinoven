@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, createReadStream, watch } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
 import { createInterface } from 'node:readline'
@@ -2248,15 +2248,17 @@ export class PiDriver extends PersistentCliDriver {
     const client = sessionId ? this.rpcClients.get(sessionId) : undefined
     const persisted = await this.loadPersistedRateLimits()
     const sessionCache = sessionId !== undefined ? this.latestRateLimits.get(sessionId) : undefined
-    // Provider-keyed windows win; the live session's latest capture answers
+    // Account/provider-keyed windows win; the live session's latest capture answers
     // only when it matches the requested provider (or no provider was given).
     const providerWindows = providerId
-      ? (persisted.get(providerId) ??
+      ? (persisted.get(this.rateLimitStorageKey(providerId)) ??
         (sessionCache && (sessionCache.providerId === providerId || !sessionCache.providerId)
           ? sessionCache.windows
           : undefined))
       : (sessionCache?.windows ?? [...persisted.values()].at(-1))
-    const providerUsage = providerId ? await fetchPiProviderUsage(providerId) : null
+    const providerUsage = providerId
+      ? await fetchPiProviderUsage(providerId, this.accountEnvironment)
+      : null
     const windows = providerWindows?.length ? providerWindows : (providerUsage?.rateLimits ?? [])
     const credits = providerUsage?.credits
     if (!client || (sessionId !== undefined && this.sessionStatsBroken.has(sessionId))) {
@@ -3266,8 +3268,9 @@ export class PiDriver extends PersistentCliDriver {
     windows: AgentRateLimitWindow[]
   ): Promise<void> {
     const map = await this.loadPersistedRateLimits()
-    map.delete(providerId)
-    map.set(providerId, windows)
+    const storageKey = this.rateLimitStorageKey(providerId)
+    map.delete(storageKey)
+    map.set(storageKey, windows)
     while (map.size > PiDriver.USAGE_WINDOWS_MAX_PROVIDERS) {
       const oldest = map.keys().next().value
       if (oldest === undefined) break
@@ -3282,6 +3285,18 @@ export class PiDriver extends PersistentCliDriver {
         this.persistedRateLimitsWrite = null
       })
     await this.persistedRateLimitsWrite
+  }
+
+  /**
+   * Managed Pi accounts share CodeInOven's runtime storage, so provider-only
+   * keys would let one account's captured windows appear for another account.
+   * The legacy account keeps the historical provider key for compatibility.
+   */
+  private rateLimitStorageKey(providerId: string): string {
+    const agentDirectory = this.accountEnvironment['PI_CODING_AGENT_DIR']?.trim()
+    if (!agentDirectory) return providerId
+    const accountKey = createHash('sha256').update(agentDirectory).digest('hex').slice(0, 16)
+    return `account:${accountKey}:${providerId}`
   }
 
   private handleUiRequest(record: Record<string, unknown>, sessionId: string): void {

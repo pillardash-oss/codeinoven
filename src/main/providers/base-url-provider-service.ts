@@ -75,6 +75,12 @@ export class BaseUrlProviderService {
     return provider ? structuredClone(provider) : null
   }
 
+  /** Resolve a native provider key without returning it through renderer IPC. */
+  async readNativeApiKey(harnessId: string, id: string): Promise<string | undefined> {
+    if (!hasNativeProviderCatalog(harnessId)) return undefined
+    return this.nativeProviders.readApiKey(harnessId, id)
+  }
+
   /** Ids already used within a harness   native harnesses keep their own
    *  catalog file, so those must be read live rather than from the store. */
   private async existingIdsFor(

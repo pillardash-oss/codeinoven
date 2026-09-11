@@ -111,6 +111,7 @@ import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { CIO_UTILITY_SETUP_PROMPT, isCioUtilityRequest } from '../utilities/cio-utility-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
 import {
   HarnessAccountRegistry,
   legacyHarnessAccountId
@@ -3794,22 +3795,29 @@ export class ChatEngine {
   }): Promise<AgentAccountUsage | null> {
     const { harnessId, providerId, accountId, accountEnvironment, driver, projectPath } = target
     try {
-      const nativeTelemetry = driver.readAccountUsage
-        ? await driver.readAccountUsage(projectPath, providerId)
-        : null
+      const isCustomProvider = isCodeInOvenCustomProviderId(providerId)
+      const nativeTelemetry =
+        !isCustomProvider && driver.readAccountUsage
+          ? await driver.readAccountUsage(projectPath, providerId)
+          : null
       // OpenUsage is keyed by PROVIDER, not harness: resolve the provider
       // the harness session actually ran against (e.g. a pi thread pointed
-      // at Z.AI queries "z-ai", not "pi").
-      const openUsage = await this.openUsage.readProviderUsage(
-        providerId,
-        harnessId === 'pi' ? ['pi'] : [],
-        accountId,
-        accountEnvironment
-      )
+      // at Z.AI queries "z-ai", not "pi"). CodeInOven custom providers have
+      // their own configured usage route and must not fall through to a
+      // generic Pi/OpenUsage adapter that could report another provider.
+      const openUsage = isCustomProvider
+        ? null
+        : await this.openUsage.readProviderUsage(
+            providerId,
+            harnessId === 'pi' ? ['pi'] : [],
+            accountId,
+            accountEnvironment
+          )
       // A custom provider with a user-defined usage route answers the
       // quota question directly when the harness itself reports nothing.
-      const customUsage =
-        nativeTelemetry?.rateLimits.length || openUsage?.rateLimits.length
+      const customUsage = isCustomProvider
+        ? await this.readCustomProviderUsage(harnessId, providerId)
+        : nativeTelemetry?.rateLimits.length || openUsage?.rateLimits.length
           ? null
           : await this.readCustomProviderUsage(harnessId, providerId)
       const telemetry =
@@ -3904,7 +3912,7 @@ export class ChatEngine {
       if (!provider?.usagePath) return null
       const apiKey = provider.apiKeyRef
         ? await this.secretVault.resolve(provider.apiKeyRef)
-        : undefined
+        : await this.baseUrlProviders.readNativeApiKey(harnessId, providerId)
       return await this.customProviderUsage.read(
         provider.id,
         provider.harnessId,

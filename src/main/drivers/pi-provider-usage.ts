@@ -38,13 +38,14 @@ interface CachedUsage {
 
 const usageCache = new Map<string, CachedUsage>()
 
-function piAuthPath(): string {
-  return join(homedir(), '.pi', 'agent', 'auth.json')
+function piAuthPath(accountEnvironment: NodeJS.ProcessEnv): string {
+  const agentDirectory = accountEnvironment['PI_CODING_AGENT_DIR']?.trim()
+  return join(agentDirectory || join(homedir(), '.pi', 'agent'), 'auth.json')
 }
 
-async function piAuthEntry(providerId: string): Promise<PiAuthEntry | null> {
+async function piAuthEntry(providerId: string, authPath: string): Promise<PiAuthEntry | null> {
   try {
-    const parsed: unknown = JSON.parse(await readFile(piAuthPath(), 'utf8'))
+    const parsed: unknown = JSON.parse(await readFile(authPath, 'utf8'))
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     const entry = (parsed as Record<string, unknown>)[providerId]
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return null
@@ -79,19 +80,23 @@ async function fetchJson(url: string, credential: string): Promise<Record<string
 
 /**
  * Probe one pi provider's account quota and prepaid-credit balance. Cached for
- * 60s per provider so repeated battery hovers never hammer gateway endpoints.
+ * 60s per account container and provider so repeated battery hovers never
+ * hammer gateway endpoints or leak one account's result into another account.
  * Unknown providers resolve to null   the popover simply omits provider usage.
  */
 export async function fetchPiProviderUsage(
-  providerId: string | undefined
+  providerId: string | undefined,
+  accountEnvironment: NodeJS.ProcessEnv = {}
 ): Promise<PiProviderUsage | null> {
   if (!providerId) return null
-  const cached = usageCache.get(providerId)
+  const authPath = piAuthPath(accountEnvironment)
+  const cacheKey = `${authPath}\0${providerId}`
+  const cached = usageCache.get(cacheKey)
   if (cached && Date.now() - cached.fetchedAt < CREDITS_CACHE_TTL_MS) return cached.usage
 
   let credits: AgentUsageCredits | null = null
   const rateLimits: AgentRateLimitWindow[] = []
-  const entry = await piAuthEntry(providerId)
+  const entry = await piAuthEntry(providerId, authPath)
   const credential = entry ? credentialValue(entry) : undefined
   if (credential) {
     if (providerId === 'vercel-ai-gateway') {
@@ -135,6 +140,6 @@ export async function fetchPiProviderUsage(
     rateLimits,
     ...(credits ? { credits } : {})
   }
-  usageCache.set(providerId, { usage, fetchedAt: Date.now() })
+  usageCache.set(cacheKey, { usage, fetchedAt: Date.now() })
   return usage
 }

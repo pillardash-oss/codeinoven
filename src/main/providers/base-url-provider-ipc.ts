@@ -193,7 +193,9 @@ export function registerBaseUrlProviderIpc(
       const id = validateEntityId(rawId, 'Base URL provider ID', 256)
       const provider = await providers.getProvider(harnessId, id)
       if (!provider?.usagePath) return null
-      const apiKey = provider.apiKeyRef ? await vault.resolve(provider.apiKeyRef) : undefined
+      const apiKey = provider.apiKeyRef
+        ? await vault.resolve(provider.apiKeyRef)
+        : await providers.readNativeApiKey(harnessId, id)
       return usageClient.read(
         provider.id,
         provider.harnessId,
