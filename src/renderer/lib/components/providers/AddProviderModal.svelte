@@ -130,12 +130,27 @@
     oauthStarting = false
   }
 
+  /**
+   * Sign-in events can reach the renderer before the `beginOAuthLogin` invoke
+   * resolves and assigns `oauthLoginId` — the main process starts the flow
+   * immediately and key-entry prompts arrive within microseconds. Buffer
+   * payloads received while `oauthLoginId` is still unknown and replay them
+   * once it is set, so the first prompt of a flow is never silently dropped.
+   */
+  let earlyOAuthEvents: Array<Record<string, unknown>> = []
+  const EARLY_OAUTH_EVENT_LIMIT = 50
+
   function handleOAuthPayload(payload: unknown): void {
-    if (
-      payload === null ||
-      typeof payload !== 'object' ||
-      (payload as Record<string, unknown>)['loginId'] !== oauthLoginId
-    ) {
+    if (payload === null || typeof payload !== 'object') {
+      return
+    }
+    if (oauthLoginId === null) {
+      if (earlyOAuthEvents.length < EARLY_OAUTH_EVENT_LIMIT) {
+        earlyOAuthEvents.push(payload as Record<string, unknown>)
+      }
+      return
+    }
+    if ((payload as Record<string, unknown>)['loginId'] !== oauthLoginId) {
       return
     }
     const data = payload as Record<string, unknown>
@@ -199,6 +214,7 @@
     notice = ''
     oauthStarting = true
     oauthStatus = 'Starting sign-in…'
+    earlyOAuthEvents = []
     try {
       const account = await preparePendingAccount(selectedProvider.id)
       oauthLoginId = await invoke(
@@ -207,6 +223,13 @@
         selectedProvider.id,
         account.id
       )
+      const buffered = earlyOAuthEvents
+      earlyOAuthEvents = []
+      for (const bufferedPayload of buffered) {
+        handleOAuthPayload(bufferedPayload)
+      }
+      // The flow may have already finished while the invoke was in flight.
+      if (oauthLoginId === null) return
     } catch (startError) {
       actionError =
         startError instanceof Error ? startError.message : 'The sign-in could not be started.'
