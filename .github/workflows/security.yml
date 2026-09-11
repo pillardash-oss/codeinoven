@@ -26,11 +26,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install Gitleaks
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/scripts/install.sh | bash -s -- -b /usr/local/bin
+
       - name: Scan for secrets with Gitleaks
-        uses: gitleaks/gitleaks-action@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        run: gitleaks detect --redact --verbose --exit-code 1
 
   audit:
     name: Audit dependencies
