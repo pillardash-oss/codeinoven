@@ -12415,7 +12415,12 @@ export class ChatEngine {
         sessionId: refreshSessionId,
         projectId,
         threadId,
-        update: { type: 'refresh.started', startedAt: Date.now() }
+        update: {
+          type: 'refresh.started',
+          startedAt: Date.now(),
+          phase: 'refresh',
+          version
+        }
       })
     }
     try {
@@ -12584,33 +12589,70 @@ export class ChatEngine {
     if (existing) return existing
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.settings) throw new Error('Sr. Engineer settings are missing')
-    const content = await this.generateBrainstormContent(
+    // First-document creation must surface the same live indicators as the
+    // revision refresh: without the trace broadcast the renderer never marks
+    // the thread busy, so the open conversation shows nothing and the sidebar
+    // hover shows no working stage until the final `spec` status lands.
+    const createSessionId = `brainstorm-create-${threadId}-${Date.now()}`
+    const createHarnessId = thread.settings.harnessId || DEFAULT_HARNESS
+    this.broadcast({
+      type: 'brainstorm.trace',
+      sessionId: createSessionId,
       projectId,
       threadId,
-      thread.settings,
-      [
-        'Create the first concise Brainstorm session report from the conversation and verified research.',
-        'Preserve unresolved material choices in Still to Decide rather than inventing answers.',
-        note.trim() ? `Latest user input: ${note.trim()}` : ''
-      ]
-        .filter(Boolean)
-        .join('\n\n'),
-      { announceProgress: false }
-    )
-    const created = await this.brainstormEngine.createDraft({
-      projectId,
-      threadId,
-      content,
-      provenance: {
-        source: 'agent',
-        actor: 'Sr. Engineer',
-        harnessId: thread.settings.harnessId,
-        providerId: thread.settings.providerId,
-        modelId: thread.settings.modelId
-      }
+      update: { type: 'refresh.started', startedAt: Date.now(), phase: 'create', version: 1 }
     })
-    await this.publishBrainstormReady(created, thread.sessionId)
-    return created
+    try {
+      await this.threadManager.setStatus(projectId, threadId, 'planning')
+      const content = await this.generateBrainstormContent(
+        projectId,
+        threadId,
+        thread.settings,
+        [
+          'Create the first concise Brainstorm session report from the conversation and verified research.',
+          'Preserve unresolved material choices in Still to Decide rather than inventing answers.',
+          note.trim() ? `Latest user input: ${note.trim()}` : ''
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+        { announceProgress: false }
+      )
+      const created = await this.brainstormEngine.createDraft({
+        projectId,
+        threadId,
+        content,
+        provenance: {
+          source: 'agent',
+          actor: 'Sr. Engineer',
+          harnessId: thread.settings.harnessId,
+          providerId: thread.settings.providerId,
+          modelId: thread.settings.modelId
+        }
+      })
+      await this.publishBrainstormReady(created, thread.sessionId)
+      return created
+    } catch (error) {
+      this.broadcast({
+        type: 'brainstorm.trace',
+        sessionId: createSessionId,
+        projectId,
+        threadId,
+        update: {
+          type: 'refresh.failed',
+          error: rawErrorMessage(error),
+          harnessId: createHarnessId
+        }
+      })
+      throw error
+    } finally {
+      this.broadcast({
+        type: 'brainstorm.trace',
+        sessionId: createSessionId,
+        projectId,
+        threadId,
+        update: { type: 'refresh.completed' }
+      })
+    }
   }
 
   async generatePrd(

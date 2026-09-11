@@ -480,6 +480,16 @@
   let brainstormReportRefreshing = $derived(
     !hasController && agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report'
   )
+  /** Which Brainstorm document operation is running, for the precise label. */
+  let brainstormActivityDetail = $derived(
+    brainstormReportRefreshing ? agentRuns.activityDetail(thread.projectId, thread.id) : null
+  )
+  let brainstormActivityLabel = $derived.by(() => {
+    if (!brainstormReportRefreshing) return ''
+    return brainstormActivityDetail?.phase === 'create'
+      ? `Generating Brainstorm document v${brainstormActivityDetail.version ?? 1}`
+      : 'Refreshing Brainstorm report'
+  })
   /** Whether the current run is confirmed by live session activity. Persisted
    *  `planning`/`executing` is not enough to make the composer or trace busy. */
   let liveBusy = $derived(controller?.busy ?? agentRuns.isLiveBusy(thread.projectId, thread.id))
@@ -11031,7 +11041,7 @@
               <Loader2 size={14} class="animate-spin text-info" />
               <span>
                 {brainstormReportRefreshing
-                  ? 'Refreshing Brainstorm report'
+                  ? brainstormActivityLabel
                   : delegatedWorkBusy
                     ? delegatedActivityLabel
                     : activityLabel}

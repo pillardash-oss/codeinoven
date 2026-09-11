@@ -7,11 +7,20 @@
 
 export type AgentRunActivity = 'session' | 'brainstorm_report'
 
+/** Extra context for a background activity, e.g. which Brainstorm document
+ *  phase is running so the UI can label it precisely. */
+export interface AgentRunActivityDetail {
+  phase: 'create' | 'refresh'
+  version?: number
+}
+
 interface AgentRunEntry {
   /** True while the agent is processing the current turn. */
   busy: boolean
   /** The operation currently keeping the thread busy. */
   activity: AgentRunActivity
+  /** Optional detail for the active background operation. */
+  activityDetail: AgentRunActivityDetail | null
   /** True once live session activity has confirmed the run (vs an optimistic
    *  restore from a persisted in-flight status). The working trace is only ever
    *  expanded from a live-confirmed run so a stale DB status can't flash it
@@ -47,6 +56,7 @@ class AgentRunsStore {
       entry = {
         busy: false,
         activity: 'session',
+        activityDetail: null,
         live: false,
         busySince: null,
         currentTurnUserMessageId: null,
@@ -69,6 +79,12 @@ class AgentRunsStore {
   activity(projectId: string, threadId: string): AgentRunActivity | null {
     const entry = this.runs.get(threadKey(projectId, threadId))
     return entry?.busy ? entry.activity : null
+  }
+
+  /** Detail for the active background operation, when present. */
+  activityDetail(projectId: string, threadId: string): AgentRunActivityDetail | null {
+    const entry = this.runs.get(threadKey(projectId, threadId))
+    return entry?.busy ? (entry.activityDetail ?? null) : null
   }
 
   /** True only while the interactive harness session owns the busy state. */
@@ -137,11 +153,13 @@ class AgentRunsStore {
     startedAt?: number,
     live = true,
     openTrace = true,
-    activity: AgentRunActivity = 'session'
+    activity: AgentRunActivity = 'session',
+    detail?: AgentRunActivityDetail
   ): void {
     const entry = this.entry(projectId, threadId)
     const previousBusy = entry.busy
     const previousActivity = entry.activity
+    const previousActivityDetail = entry.activityDetail
     const previousLive = entry.live
     const previousBusySince = entry.busySince
     const previousTurnUserMessageId = entry.currentTurnUserMessageId
@@ -162,6 +180,8 @@ class AgentRunsStore {
     entry.busy = busy
     if (busy) entry.activity = activity
     if (busy) entry.live = live
+    if (busy && detail) entry.activityDetail = detail
+    if (!busy) entry.activityDetail = null
 
     if (isNewTurn && turnUserMessageId) {
       entry.currentTurnUserMessageId = turnUserMessageId
@@ -180,6 +200,7 @@ class AgentRunsStore {
     if (
       entry.busy !== previousBusy ||
       entry.activity !== previousActivity ||
+      entry.activityDetail !== previousActivityDetail ||
       entry.live !== previousLive ||
       entry.busySince !== previousBusySince ||
       entry.currentTurnUserMessageId !== previousTurnUserMessageId ||
@@ -195,9 +216,10 @@ class AgentRunsStore {
     projectId: string,
     threadId: string,
     activity: Exclude<AgentRunActivity, 'session'>,
-    startedAt?: number
+    startedAt?: number,
+    detail?: AgentRunActivityDetail
   ): void {
-    this.setBusy(projectId, threadId, true, undefined, startedAt, false, false, activity)
+    this.setBusy(projectId, threadId, true, undefined, startedAt, false, false, activity, detail)
   }
 
   /** Clear a background operation only when it still owns the thread's busy state. */
@@ -231,6 +253,7 @@ class AgentRunsStore {
     const entry = this.entry(projectId, threadId)
     const previousBusy = entry.busy
     const previousActivity = entry.activity
+    const previousActivityDetail = entry.activityDetail
     const previousLive = entry.live
     const previousBusySince = entry.busySince
     const previousTurnUserMessageId = entry.currentTurnUserMessageId
@@ -240,6 +263,7 @@ class AgentRunsStore {
     }
     entry.busy = false
     entry.activity = 'session'
+    entry.activityDetail = null
     entry.live = false
     entry.busySince = null
     entry.currentTurnUserMessageId = null
@@ -249,6 +273,7 @@ class AgentRunsStore {
     if (
       entry.busy !== previousBusy ||
       entry.activity !== previousActivity ||
+      entry.activityDetail !== previousActivityDetail ||
       entry.live !== previousLive ||
       entry.busySince !== previousBusySince ||
       entry.currentTurnUserMessageId !== previousTurnUserMessageId ||

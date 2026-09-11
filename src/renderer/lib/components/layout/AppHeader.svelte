@@ -823,6 +823,7 @@
           coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)}
         {@const isRetryPaused = isThreadRetryPaused(thread)}
         {@const activeRunActivity = agentRuns.activity(thread.projectId, thread.id)}
+        {@const activeRunActivityDetail = agentRuns.activityDetail(thread.projectId, thread.id)}
         <div class="titlebar-no-drag relative flex min-w-0 max-w-full items-center gap-2">
           {#if !chatMode && thread.projectId !== INBOX_PROJECT_ID}
             {@const headerProject =
@@ -877,7 +878,9 @@
                     : isRetryPaused
                       ? 'Waiting to retry'
                       : activeRunActivity === 'brainstorm_report'
-                        ? 'Refreshing report'
+                        ? activeRunActivityDetail?.phase === 'create'
+                          ? 'Generating report'
+                          : 'Refreshing report'
                         : 'Working'}
                 </span>
               </span>
