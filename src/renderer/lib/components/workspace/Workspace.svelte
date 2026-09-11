@@ -1671,7 +1671,12 @@
       upsertThreadInList(updated)
       if (workspaceState.selectedThread?.id === updated.id) {
         workspaceState.updateThread(updated)
-        if (!updated.read) {
+        // Auto-mark the selected thread read only while the window actually
+        // has OS focus. While the user is away, the thread must stay unread:
+        // the badge keeps counting it and the notification card stays up, and
+        // the read transition happens once the user is back and a further
+        // update arrives (or they explicitly open the thread).
+        if (!updated.read && document.hasFocus()) {
           void invoke('thread:markRead', updated.projectId, updated.id)
         }
       }
