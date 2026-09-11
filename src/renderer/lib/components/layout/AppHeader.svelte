@@ -632,8 +632,9 @@
           data-onboarding="view-switcher"
         >
           <!-- Stacked grid: the invisible longest label reserves the width so
-               the trigger never changes size across views. -->
-          <span class="grid" class:animate-pulse={anyProjectWorking}>
+               the trigger never changes size across views. text-left overrides
+               the button's inherited centered text alignment. -->
+          <span class="grid text-left" class:animate-pulse={anyProjectWorking}>
             <span class="col-start-1 row-start-1 truncate">{activeHeaderViewLabel}</span>
             <span class="col-start-1 row-start-1 invisible whitespace-nowrap" aria-hidden="true">
               {longestViewLabel}
