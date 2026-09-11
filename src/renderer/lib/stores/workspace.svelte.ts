@@ -447,15 +447,17 @@ export function threadStatusSortKey(
   draftThreadKeys?: ReadonlySet<string> | null
 ): number {
   if (draftThreadKeys?.has(threadVisitKey(t))) return -1
-  // Todo first, then unread, then spec-ready artifacts, then other attention, then done.
+  // Unsent drafts and the empty "New Thread" placeholder stay at the very top.
   if (t.status === 'created') return 0
-  if (!t.read) return 1
-  if (t.status === 'spec') return 2
-  if (t.status !== 'completed') return 3
-  return 4
+  // Everything that is not done shares one attention group, regardless of
+  // which project it belongs to or whether it has been read   a stale unread
+  // thread from an old project must never displace a fresh active thread.
+  // Ambiguity inside a group is resolved by lastActivity in threadStatusSort.
+  if (t.status !== 'completed') return 1
+  return 2
 }
 
-/** Threads view sort grouped by attention status, most recent activity first within each group. */
+/** Threads view sort: not-done threads first, most recent activity first within each group. */
 export function threadStatusSort(
   a: Thread,
   b: Thread,
@@ -464,7 +466,9 @@ export function threadStatusSort(
   const ka = threadStatusSortKey(a, draftThreadKeys)
   const kb = threadStatusSortKey(b, draftThreadKeys)
   if (ka !== kb) return ka - kb
-  return b.lastActivity - a.lastActivity
+  const activityDiff = b.lastActivity - a.lastActivity
+  if (activityDiff !== 0) return activityDiff
+  return a.id.localeCompare(b.id)
 }
 
 /**
