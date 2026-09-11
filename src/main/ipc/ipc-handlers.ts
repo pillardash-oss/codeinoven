@@ -5040,16 +5040,22 @@ export function registerIpcHandlers(
         const target = resolve(project.path)
         const homeDir = resolve(app.getPath('home'))
         const configRoot = resolve(getConfigRoot())
+        const managedClonesRoot = resolve(join(configRoot, 'projects-gh'))
         const isInside = (child: string, parent: string): boolean => child.startsWith(parent + sep)
         // Refuse obviously dangerous targets: the filesystem root, the home
         // directory (or any ancestor of it), and anything inside the app
         // config root. This makes an accidental catastrophic rm impossible.
+        // The one exception is a project folder strictly inside the managed
+        // `projects-gh/` clones directory: those clones are app-owned project
+        // folders the user registered, so erasing one on removal is legitimate
+        // (the clones root itself stays protected so sibling clones survive).
+        const isManagedClone = isInside(target, managedClonesRoot)
         if (
           target === sep ||
           target === homeDir ||
           isInside(homeDir, target) ||
           target === configRoot ||
-          isInside(target, configRoot)
+          (isInside(target, configRoot) && !isManagedClone)
         ) {
           throw new Error('Refusing to delete a protected directory')
         }
