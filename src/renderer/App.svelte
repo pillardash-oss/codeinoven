@@ -1065,13 +1065,15 @@
         ? (providers.find((provider) => provider.id === providerId)?.name ?? null)
         : null
       const projectLabel = project?.name ?? thread.projectId
-      const createdLabel = relativeThreadTime(thread.createdAt)
+      // Thread rows always surface the thread's last-activity time, never its
+      // creation time, so freshly worked-on threads read as "1h" etc.
+      const activityLabel = relativeThreadTime(thread.lastActivity)
       actions.push({
         id,
         title: thread.title,
         description: snippet
-          ? `${projectLabel} · ${createdLabel} · ${snippet}`
-          : `${projectLabel} · ${createdLabel}`,
+          ? `${projectLabel} · ${activityLabel} · ${snippet}`
+          : `${projectLabel} · ${activityLabel}`,
         category: 'thread',
         source: {
           id: `project:${thread.projectId}`,
