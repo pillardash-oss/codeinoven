@@ -4803,7 +4803,7 @@
 </Modal>
 
 <!-- Remove Project Confirmation -->
-<Modal open={showRemoveModal} title="Remove Project" onClose={closeRemoveModal}>
+<Modal open={showRemoveModal} title="Remove Project" size="lg" onClose={closeRemoveModal}>
   <p class="text-sm leading-relaxed text-muted">
     This will remove
     <span class="font-medium text-foreground">{removeTarget?.name}</span>
@@ -4816,16 +4816,15 @@
     </p>
   {/if}
 
-  <div class="mt-4 flex items-center border-t pt-4">
-    <Switch
-      bind:checked={removeDeleteFolder}
-      title="Also delete this project's folder from your device"
-      aria-label="Also delete this project's folder from your device"
-      label="Also delete the project folder from your device"
-    />
-  </div>
-
   {#snippet footer()}
+    <div class="mr-auto flex items-center">
+      <Switch
+        bind:checked={removeDeleteFolder}
+        title="Delete this project's folder from your device too"
+        aria-label="Delete folder from device"
+        label="Delete folder from device"
+      />
+    </div>
     <button
       type="button"
       class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:pointer-events-none disabled:opacity-50"
