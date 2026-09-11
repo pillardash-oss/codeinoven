@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FolderKanban } from '@lucide/svelte'
+  import { Funnel } from '@lucide/svelte'
   import ProjectSwitch from './ProjectSwitch.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
 
@@ -22,7 +22,7 @@
   class="h-6 w-6 rounded-md {filterActive ? 'text-primary' : 'text-muted'}"
 >
   <span class="relative flex items-center justify-center">
-    <FolderKanban size={14} />
+    <Funnel size={14} />
     {#if filterActive}
       <span
         class="absolute -top-1.5 -right-2 flex min-w-3 items-center justify-center rounded-full bg-primary px-0.5 text-[0.5rem] font-semibold leading-3 tabular-nums text-on-primary"
