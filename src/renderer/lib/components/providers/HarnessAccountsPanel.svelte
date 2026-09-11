@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import {
+    ArrowDown,
+    ArrowUp,
     ListFilter,
     Loader2,
     Pencil,
@@ -36,6 +38,12 @@
   let disconnectTarget = $state<HarnessAccount | null>(null)
   let disconnecting = $state(false)
 
+  type AccountSortKey = 'harness' | 'provider' | 'label'
+  type AccountSortDirection = 'desc' | 'asc'
+
+  let sortKey = $state<AccountSortKey | null>(null)
+  let sortDirection = $state<AccountSortDirection>('desc')
+
   let filterHarnesses = $derived.by(() => {
     const seen: Record<string, true> = {}
     const harnesses: Array<{ id: string; name: string }> = []
@@ -55,7 +63,7 @@
 
   let filteredAccounts = $derived.by(() => {
     const query = search.trim().toLocaleLowerCase('en-US')
-    return accounts.filter((account) => {
+    const matched = accounts.filter((account) => {
       if (harnessFilterActive && !selectedHarnesses.has(account.harnessId)) return false
       if (!query) return true
       const harnessName = harnessFor(account.harnessId)?.name ?? account.harnessId
@@ -63,7 +71,44 @@
         value.toLocaleLowerCase('en-US').includes(query)
       )
     })
+    const activeKey = sortKey
+    if (!activeKey) return matched.toSorted((left, right) => right.createdAt - left.createdAt)
+    const direction = sortDirection === 'desc' ? -1 : 1
+    return matched.toSorted((left, right) => {
+      const leftValue = accountSortValue(left, activeKey)
+      const rightValue = accountSortValue(right, activeKey)
+      return leftValue.localeCompare(rightValue, 'en-US') * direction
+    })
   })
+
+  function accountSortValue(account: HarnessAccount, key: AccountSortKey): string {
+    if (key === 'harness') {
+      return (harnessFor(account.harnessId)?.name ?? account.harnessId).toLocaleLowerCase('en-US')
+    }
+    if (key === 'provider') return providerLabel(account).toLocaleLowerCase('en-US')
+    return account.label.toLocaleLowerCase('en-US')
+  }
+
+  function toggleAccountSort(key: AccountSortKey): void {
+    if (sortKey !== key) {
+      sortKey = key
+      sortDirection = 'desc'
+      return
+    }
+    if (sortDirection === 'desc') {
+      sortDirection = 'asc'
+      return
+    }
+    // Third click on the same column resets to the default newest-first order.
+    sortKey = null
+    sortDirection = 'desc'
+  }
+
+  function accountSortTitle(key: AccountSortKey, label: string): string {
+    if (sortKey !== key) return `Sort by ${label}`
+    if (sortDirection === 'desc') return `${label} sorted high to low, click for low to high`
+    return `${label} sorted low to high, click to reset to newest first`
+  }
 
   function harnessFor(harnessId: string): ProviderConnectionInfo | undefined {
     return providers.find((provider) => provider.id === harnessId)
@@ -83,7 +128,8 @@
   }
 
   function sortAccounts(nextAccounts: HarnessAccount[]): HarnessAccount[] {
-    return nextAccounts.toSorted((left, right) => left.createdAt - right.createdAt)
+    // Newest created accounts appear first by default.
+    return nextAccounts.toSorted((left, right) => right.createdAt - left.createdAt)
   }
 
   function accountGroups(seed: HarnessAccount[]): SvelteMap<string, HarnessAccount[]> {
@@ -343,9 +389,26 @@
       <div
         class="grid grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)_minmax(10rem,1.3fr)_auto] gap-3 border-b bg-elevated px-4 py-2 text-[0.625rem] font-medium uppercase tracking-wide text-dimmed"
       >
-        <span>Harness</span>
-        <span>Provider</span>
-        <span>Label</span>
+        {#each [{ key: 'harness', label: 'Harness' }, { key: 'provider', label: 'Provider' }, { key: 'label', label: 'Label' }] as const as header (header.key)}
+          <button
+            type="button"
+            class="flex items-center gap-1 text-left uppercase tracking-wide transition-colors hover:text-foreground {sortKey ===
+            header.key
+              ? 'text-foreground'
+              : ''}"
+            title={accountSortTitle(header.key, header.label)}
+            onclick={() => toggleAccountSort(header.key)}
+          >
+            {header.label}
+            {#if sortKey === header.key}
+              {#if sortDirection === 'desc'}
+                <ArrowDown size={10} class="shrink-0 text-primary" aria-hidden="true" />
+              {:else}
+                <ArrowUp size={10} class="shrink-0 text-primary" aria-hidden="true" />
+              {/if}
+            {/if}
+          </button>
+        {/each}
         <span class="sr-only">Actions</span>
       </div>
       {#each filteredAccounts as account (account.id)}
