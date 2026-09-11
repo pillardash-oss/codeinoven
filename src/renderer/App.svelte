@@ -1643,6 +1643,11 @@
       // LIFO registry (modal-primary-action.svelte.ts) resolves which modal is
       // in focus; when no modal claims the chord, composers (chat send, git
       // commit, PR sheet) keep their existing focused-element behavior.
+      //
+      // Held chords fire auto-repeat keydowns; without this guard a repeat
+      // that lands after a PR sheet's success screen rendered would re-claim
+      // the chord and click "View PR", closing the modal the user just got.
+      if (e.repeat) return
       if (activateTopModalPrimaryAction()) {
         e.preventDefault()
         return
