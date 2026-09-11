@@ -19,10 +19,10 @@
   selectedIds={threadProjectFilterState.selectedIds}
   onSelectionChange={(ids) => threadProjectFilterState.setSelection(ids)}
   ariaLabel={filterLabel}
-  class="h-6 w-6 rounded-md {filterActive ? 'text-primary' : 'text-muted'}"
+  class="h-7 w-7 rounded-md {filterActive ? 'text-primary' : 'text-muted'}"
 >
   <span class="relative flex items-center justify-center">
-    <Funnel size={14} />
+    <Funnel size={15} strokeWidth={1.8} />
     {#if filterActive}
       <span
         class="absolute -top-1.5 -right-2 flex min-w-3 items-center justify-center rounded-full bg-primary px-0.5 text-[0.5rem] font-semibold leading-3 tabular-nums text-on-primary"

@@ -232,10 +232,10 @@
   let lastViewBeforeScope: PrimaryView = $state('projects')
   $effect(() => {
     if (
-      activeView === 'projects'
-      || activeView === 'projects-scope'
-      || activeView === 'threads'
-      || activeView === 'chats'
+      activeView === 'projects' ||
+      activeView === 'projects-scope' ||
+      activeView === 'threads' ||
+      activeView === 'chats'
     ) {
       lastViewBeforeScope = activeView === 'projects-scope' ? 'projects' : activeView
     }
@@ -309,7 +309,10 @@
   }
 
   async function toggleScopedThreads(): Promise<void> {
-    if (activeView === 'projects-scope' || (activeView === 'projects' && scopeState.sidebarContext)) {
+    if (
+      activeView === 'projects-scope' ||
+      (activeView === 'projects' && scopeState.sidebarContext)
+    ) {
       // Off: land on the plain projects view   navigate() closes the sidebar.
       await navigateToView('projects')
       return
@@ -363,7 +366,10 @@
   /** The currently active option is shown with brighter text in the menu. */
   let activeHeaderViewOption = $derived.by((): HeaderViewOptionId => {
     if (activeView === 'scope') return 'scope-board'
-    if (activeView === 'projects-scope' || (activeView === 'projects' && scopeState.sidebarContext)) {
+    if (
+      activeView === 'projects-scope' ||
+      (activeView === 'projects' && scopeState.sidebarContext)
+    ) {
       return 'scoped-threads'
     }
     if (activeView === 'threads') return 'threads'
@@ -689,7 +695,7 @@
               title={item.title}
               onclick={() => item.run?.()}
             >
-              <ActionIcon size={14} />
+              <ActionIcon size={15} strokeWidth={1.8} />
             </button>
           {/if}
         {/each}

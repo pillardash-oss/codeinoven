@@ -1902,13 +1902,6 @@
     } else if (mode === 'chats') {
       const chatsActions: ViewActionItem[] = [
         {
-          id: 'new-chat',
-          icon: SquarePen,
-          ariaLabel: 'New chat',
-          title: 'New chat',
-          run: startNewChat
-        },
-        {
           id: 'search',
           component: ThreadSearchControl as unknown as ViewActionItem['component'],
           props: {
@@ -1920,6 +1913,13 @@
             onOpen: openThread,
             fts: { projectId: INBOX_PROJECT_ID }
           }
+        },
+        {
+          id: 'new-chat',
+          icon: SquarePen,
+          ariaLabel: 'New chat',
+          title: 'New chat',
+          run: startNewChat
         }
       ]
       viewActions.set('chats', chatsActions)

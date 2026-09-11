@@ -3,10 +3,10 @@
     AlertTriangle,
     Files,
     FolderInput,
+    FolderKanban,
     GitBranch,
     Globe,
-    Loader2,
-    Plus
+    Loader2
   } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import Modal from '../ui/Modal.svelte'
@@ -184,7 +184,7 @@
       aria-label={title}
       {title}
     >
-      <Plus size={15} strokeWidth={1.8} />
+      <FolderKanban size={15} strokeWidth={1.8} />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content

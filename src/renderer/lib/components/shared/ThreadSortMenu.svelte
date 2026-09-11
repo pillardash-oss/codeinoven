@@ -21,14 +21,14 @@
 
 <DropdownMenu.Root>
   <DropdownMenu.Trigger
-    class="flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-elevated hover:text-foreground {threadSortState.mode ===
+    class="flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-elevated hover:text-foreground {threadSortState.mode ===
     'default'
       ? 'text-muted'
       : 'text-primary'}"
     aria-label="Sort threads"
     title="Sort threads   {threadSortLabel}"
   >
-    <ArrowUpDown size={14} />
+    <ArrowUpDown size={15} strokeWidth={1.8} />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
     <DropdownMenu.Content

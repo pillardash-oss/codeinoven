@@ -37,7 +37,7 @@
 
   const triggerClass = $derived(
     size === 'md'
-      ? 'flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground'
+      ? 'flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground'
       : 'flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground'
   )
 
@@ -49,7 +49,7 @@
 
 <Popover.Root {open} {onOpenChange}>
   <Popover.Trigger class={triggerClass} aria-label={ariaLabel} {title}>
-    <Search size={size === 'md' ? 14 : 12} />
+    <Search size={size === 'md' ? 15 : 12} strokeWidth={size === 'md' ? 1.8 : undefined} />
   </Popover.Trigger>
 
   <Popover.Portal>
