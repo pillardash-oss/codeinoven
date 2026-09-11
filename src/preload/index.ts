@@ -8,6 +8,7 @@ import {
   type TrafficLightInfo
 } from '../lib/traffic-light'
 import {
+  IPC_EVENT_CONTRACT,
   IPC_INVOKE_CONTRACT,
   type EventArgs as ContractEventArgs,
   type IpcEventContract,
@@ -27,48 +28,14 @@ const allInvokeChannelsRegistered: [MissingInvokeChannel] extends [never] ? true
 void allInvokeChannelsRegistered
 
 const SEND_CHANNELS = ['pty:resize', 'pty:write', 'terminal:focusState'] as const
-const EVENT_CHANNELS = [
-  'app:featuresReady',
-  'account:profileChanged',
-  'agent:event',
-  'agent:processesChanged',
-  'taskManager:processesChanged',
-  'agent:temporaryChatExpired',
-  'app:toast',
-  'notification:playSound',
-  'notification:show',
-  'notification:threadClicked',
-  'notification:permissionStatus',
-  'providers:status',
-  'thread:deleted',
-  'thread:updated',
-  'thread:branchUpdated',
-  'note:changed',
-  'window:beforeQuit',
-  'window:confirmClose',
-  'window:closeShortcut',
-  'window:newTerminalShortcut',
-  'window:historyBack',
-  'window:historyForward',
-  'updater:status',
-  'updater:waiting-for-threads',
-  'computerUse:pipFrame',
-  'computerUse:pipState',
-  'browser:state',
-  'gateway:state',
-  'browser:console',
-  'browser:openRequested',
-  'browser:permissionRequested',
-  'browser:permissionResolved',
-  'browser:download',
-  'switcher:select',
-  'switcher:highlight',
-  'switcher:closed',
-  'remote:status',
-  'remote:stepUpPending',
-  'speech:progress',
-  'providerAccounts:oauthEvent'
-] as const
+
+/* Every main-to-renderer event channel in the IPC contract is exposed here.
+ * The list is derived from the contract itself, so an event and its
+ * subscription surface can never drift apart. */
+const CONTRACT_EVENT_CHANNELS = Object.keys(
+  IPC_EVENT_CONTRACT
+) as (keyof typeof IPC_EVENT_CONTRACT)[]
+const EVENT_CHANNELS = [...CONTRACT_EVENT_CHANNELS] as const
 
 export type SendChannel = (typeof SEND_CHANNELS)[number]
 export type EventChannel =

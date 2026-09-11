@@ -234,6 +234,17 @@ export interface BrowserPageState {
   canGoForward: boolean
 }
 
+/** Where a browser page's DevTools window is shown. */
+export type BrowserDevToolsDock = 'bottom' | 'right' | 'undocked'
+
+/** Live DevTools placement state for a browser tab. */
+export interface BrowserDevToolsState {
+  tabId: string
+  open: boolean
+  /** Dock position while open; null when closed. */
+  dock: BrowserDevToolsDock | null
+}
+
 /** One row rendered by the native Ctrl+Tab overlay, fully display-ready. */
 export interface NativeSwitcherThread {
   id: string
@@ -2383,7 +2394,13 @@ export const IPC_INVOKE_CONTRACT = {
   'browser:getConsole': {} as Contract<[tabId: string], BrowserConsoleEntry[]>,
   'browser:clearConsole': {} as Contract<[tabId: string], void>,
   /** Toggle the web page's native DevTools window. Returns whether it is now open. */
-  'browser:toggleDevTools': {} as Contract<[tabId: string], boolean>,
+  'browser:toggleDevTools': {} as Contract<[tabId: string, dock?: BrowserDevToolsDock], boolean>,
+  /** Current DevTools placement for a tab, or null when the tab has none. */
+  'browser:getDevToolsState': {} as Contract<[tabId: string], BrowserDevToolsState | null>,
+  /** Change the DevTools dock position for an open (or next open) DevTools window. */
+  'browser:setDevToolsDock': {} as Contract<[tabId: string, dock: BrowserDevToolsDock], void>,
+  /** Position the docked DevTools view inside the app window. */
+  'browser:setDevToolsBounds': {} as Contract<[tabId: string, bounds: BrowserViewBounds], void>,
   'browser:clearData': {} as Contract<[projectId: string], void>,
   'browser:clearSiteData': {} as Contract<
     [projectId: string, scopes: BrowserSiteDataScope[]],
@@ -2927,43 +2944,59 @@ export interface RemoteAuditEventInfo {
   authVersion: number | null
 }
 
-export interface IpcEventContract {
+export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
-  'app:featuresReady': []
+  'app:featuresReady': [] as [],
   /** Emitted after browser sign-in changes the shared desktop account. */
-  'account:profileChanged': [state: import('./types').AccountProfileState]
-  'agent:processesChanged': [projectId: string, threadId: string]
-  'taskManager:processesChanged': []
-  'agent:temporaryChatExpired': [temporaryChatId: string]
-  'thread:deleted': [projectId: string, threadId: string]
+  'account:profileChanged': [] as unknown as [state: import('./types').AccountProfileState],
+  'agent:processesChanged': [] as unknown as [projectId: string, threadId: string],
+  /** Live agent lifecycle/stream event broadcast to every window. */
+  'agent:event': [] as unknown as [event: import('./types').AgentEvent],
+  'taskManager:processesChanged': [] as [],
+  'agent:temporaryChatExpired': [] as unknown as [temporaryChatId: string],
+  'thread:deleted': [] as unknown as [projectId: string, threadId: string],
+  /** Live thread snapshot push so sidebar indicators react without polling. */
+  'thread:updated': [] as unknown as [thread: Thread],
+  /** Branch association changed for a thread. */
+  'thread:branchUpdated': [] as unknown as [projectId: string, threadId: string, branch: string],
   /** Note presence changed for a thread (saved or deleted). */
-  'note:changed': [projectId: string, threadId: string, hasNote: boolean]
-  'notification:playSound': [kind: NotificationSoundKind]
-  'notification:show': [payload: AgentNotificationPayload]
-  'notification:threadClicked': [payload: ThreadClickedPayload]
+  'note:changed': [] as unknown as [projectId: string, threadId: string, hasNote: boolean],
+  'notification:playSound': [] as unknown as [kind: NotificationSoundKind],
+  'notification:show': [] as unknown as [payload: AgentNotificationPayload],
+  /** Transient in-app toast (error/info, optional navigation action). */
+  'app:toast': [] as unknown as [
+    payload: {
+      message: string
+      type: 'error' | 'info'
+      projectId?: string
+      threadId?: string
+      action?: { label: string; projectId: string; threadId: string }
+    }
+  ],
+  'notification:threadClicked': [] as unknown as [payload: ThreadClickedPayload],
   /** macOS notification authorization changed (delivery outcome or re-verification). */
-  'notification:permissionStatus': [status: SystemNotificationPermissionStatus]
+  'notification:permissionStatus': [] as unknown as [status: SystemNotificationPermissionStatus],
   /** Emitted before the main process begins its shutdown disposal chain.
    *  The renderer should unsubscribe from IPC events and release resources. */
-  'window:beforeQuit': []
+  'window:beforeQuit': [] as [],
   /** Emitted when the app is asked to close while threads are still working or
    *  files have unsaved edits. The renderer populates `files` from its editor
    *  state and either confirms the close or shows the confirmation modal. */
-  'window:confirmClose': [payload: CloseConfirmationPayload]
+  'window:confirmClose': [] as unknown as [payload: CloseConfirmationPayload],
   /**
    * Emitted when the user presses Cmd/Ctrl+W. The main process intercepts the
    * key (so the macOS "Close Window" menu accelerator never fires) and asks the
    * renderer to close the active in-app surface — modal, settings page, sidebar
    * panel, or thread. The shortcut never closes the native application window.
    */
-  'window:closeShortcut': []
+  'window:closeShortcut': [] as [],
   /**
    * Emitted when the user presses Cmd/Ctrl+T while a terminal holds focus. The
    * main process intercepts the key (so ghostty-web never feeds it to the
    * shell) and asks the renderer to open a new terminal tab in the terminal
    * panel — right sidebar or bottom dock, whichever is active.
    */
-  'window:newTerminalShortcut': []
+  'window:newTerminalShortcut': [] as [],
   /**
    * Emitted when the user presses the mouse's back side button. Windows and
    * Linux surface it as the `browser-backward` app command in the main process;
@@ -2972,37 +3005,41 @@ export interface IpcEventContract {
    * On macOS the renderer instead sees a raw `mousedown`/`auxclick` with
    * button 3 — handled directly in App.svelte.
    */
-  'window:historyBack': []
+  'window:historyBack': [] as [],
   /** Emitted when the user presses the mouse's forward side button. */
-  'window:historyForward': []
-  'updater:status': [status: UpdaterStatus]
-  'updater:waiting-for-threads': [activeCount: number]
-  'computerUse:pipFrame': [frame: ComputerUsePipFrame]
-  'computerUse:pipState': [state: ComputerUsePipState]
-  'browser:state': [state: BrowserPageState]
-  'gateway:state': [status: import('./gateway-types').GatewayStatus]
-  'browser:console': [entry: BrowserConsoleEntry]
-  'browser:openRequested': [url: string, context?: BrowserOpenRequestContext]
-  'browser:permissionRequested': [request: BrowserPermissionRequest]
-  'browser:permissionResolved': [requestId: string]
-  'browser:download': [download: BrowserDownload]
+  'window:historyForward': [] as [],
+  'updater:status': [] as unknown as [status: UpdaterStatus],
+  'updater:waiting-for-threads': [] as unknown as [activeCount: number],
+  'computerUse:pipFrame': [] as unknown as [frame: ComputerUsePipFrame],
+  'computerUse:pipState': [] as unknown as [state: ComputerUsePipState],
+  'browser:state': [] as unknown as [state: BrowserPageState],
+  'gateway:state': [] as unknown as [status: import('./gateway-types').GatewayStatus],
+  /** Live provider connection health/status snapshot. */
+  'providers:status': [] as unknown as [payload: ProviderConnectionInfo[]],
+  'browser:console': [] as unknown as [entry: BrowserConsoleEntry],
+  /** DevTools placement changed for a browser tab (open/close/re-dock). */
+  'browser:devToolsChanged': [] as unknown as [state: BrowserDevToolsState],
+  'browser:openRequested': [] as unknown as [url: string, context?: BrowserOpenRequestContext],
+  'browser:permissionRequested': [] as unknown as [request: BrowserPermissionRequest],
+  'browser:permissionResolved': [] as unknown as [requestId: string],
+  'browser:download': [] as unknown as [download: BrowserDownload],
   /** Native Ctrl+Tab overlay asked the renderer to switch to a thread. */
-  'switcher:select': [threadId: string]
+  'switcher:select': [] as unknown as [threadId: string],
   /** Native Ctrl+Tab overlay moved its highlight (so the renderer can preload
    *  that thread's messages). */
-  'switcher:highlight': [threadId: string]
+  'switcher:highlight': [] as unknown as [threadId: string],
   /** Native Ctrl+Tab overlay was dismissed without a selection. */
-  'switcher:closed': []
+  'switcher:closed': [] as [],
   /** Remote-mode status changes from the main process. */
-  'remote:status': [status: RemoteModeStatus]
+  'remote:status': [] as unknown as [status: RemoteModeStatus],
   /**
    * Pending single-use local step-up approvals awaiting desktop disposition.
    * Emitted whenever a high-risk remote operation requires local approval.
    */
-  'remote:stepUpPending': [approvals: RemotePendingStepUpApproval[]]
-  'speech:progress': [progress: import('./speech/types').SpeechProgressEvent]
+  'remote:stepUpPending': [] as unknown as [approvals: RemotePendingStepUpApproval[]],
+  'speech:progress': [] as unknown as [progress: import('./speech/types').SpeechProgressEvent],
   /** Live progress/prompt/completion updates for an in-app Pi OAuth sign-in. */
-  'providerAccounts:oauthEvent': [
+  'providerAccounts:oauthEvent': [] as unknown as [
     payload:
       | { loginId: string; kind: 'event'; event: import('../lib/types').PiOAuthUiEvent }
       | {
@@ -3015,6 +3052,9 @@ export interface IpcEventContract {
       | { loginId: string; kind: 'failed'; error: string }
   ]
 }
+
+/** Type-level view of the runtime event contract. */
+export type IpcEventContract = typeof IPC_EVENT_CONTRACT
 
 export type InvokeChannel = keyof IpcInvokeContract
 export type InvokeArgs<Channel extends InvokeChannel> = IpcInvokeContract[Channel]['args']
