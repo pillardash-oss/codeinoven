@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Toaster as Sonner, toast, useSonner } from 'svelte-sonner'
+  import { Toaster as Sonner, toast } from 'svelte-sonner'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { onMount } from 'svelte'
   import { CheckCircle2, AlertTriangle, XCircle, Info } from '@lucide/svelte'
@@ -23,8 +23,7 @@
   // browser-service.ts). svelte-sonner starts dismissing by flagging the toast
   // while its ~200ms exit animation still plays, so the restore is delayed to
   // wait the animation out instead of clipping a fading toast.
-  const sonner = useSonner()
-  let toastActive = $derived(sonner.toasts.length > 0)
+  let toastActive = $derived(toast.getActiveToasts().length > 0)
 
   $effect(() => {
     if (toastActive) {
