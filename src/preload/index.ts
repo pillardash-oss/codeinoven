@@ -497,6 +497,7 @@ const INVOKE_CHANNELS = [
   'browser:stop',
   'browser:getConsole',
   'browser:clearConsole',
+  'browser:toggleDevTools',
   'browser:clearData',
   'browser:clearSiteData',
   'browser:resolvePermission',
