@@ -246,6 +246,13 @@ export class BrowserService {
   private readonly permissionDenies = new Map<string, Set<string>>()
   private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
   private readonly permissionSuspendedTabs = new Set<string>()
+  /** True while a Sonner toast is visible in the renderer. A native
+   *  WebContentsView floats above every DOM surface, so while this is set the
+   *  active browser view stays detached and the DOM toast composites normally. */
+  private toastVisible = false
+  /** True when the toast path (rather than the permission path) currently owns
+   *  the detach of the active view. */
+  private toastSuspended = false
   private readonly downloads = new Map<string, BrowserDownloadRecord>()
   private activeTabId: string | null = null
   private consoleSequence = 0
@@ -280,8 +287,14 @@ export class BrowserService {
           return this.stateFor(tabId, tab)
         }
         if (this.activeTabId !== tabId) {
-          this.window.contentView.addChildView(tab.view)
           this.activeTabId = tabId
+          if (this.toastVisible || this.permissionModalPending()) {
+            // A DOM toast or permission modal is on screen: keep the native
+            // view detached (it would cover the DOM surface). The view is
+            // re-attached when the overlay clears.
+          } else {
+            this.window.contentView.addChildView(tab.view)
+          }
         }
         tab.view.setBounds(bounds)
         if (!tab.initialNavigationStarted) {
@@ -297,6 +310,9 @@ export class BrowserService {
       if (this.activeTabId === tabId) this.detachActiveView()
       // Missing tabs are silently ignored   the renderer may call hide
       // during teardown after the tab was already destroyed.
+    })
+    ipcMain.handle('browser:setToastVisible', (_event, rawVisible) => {
+      this.setToastVisible(rawVisible === true)
     })
     ipcMain.handle('browser:navigate', (_event, rawTabId, rawUrl) => {
       this.load(validateTabId(rawTabId), validateBrowserUrl(rawUrl))
@@ -401,6 +417,8 @@ export class BrowserService {
 
   dispose(): void {
     this.detachActiveView()
+    this.toastVisible = false
+    this.toastSuspended = false
     for (const requestId of [...this.pendingPermissions.keys()]) {
       this.resolvePermission(requestId, permissionResolutions.dismiss, false)
     }
@@ -913,10 +931,16 @@ export class BrowserService {
     ) {
       return
     }
+    this.permissionSuspendedTabs.delete(tabId)
+    if (this.toastVisible) {
+      // A toast is still on screen: it now owns the detach and re-attaches
+      // the view when the last toast clears.
+      this.toastSuspended = true
+      return
+    }
     const tab = this.tabs.get(tabId)
     if (!tab) return
     this.window.contentView.addChildView(tab.view)
-    this.permissionSuspendedTabs.delete(tabId)
   }
 
   private load(tabId: string, url: string): void {
@@ -997,6 +1021,37 @@ export class BrowserService {
     }
     this.permissionSuspendedTabs.delete(this.activeTabId)
     this.activeTabId = null
+  }
+
+  /** Suspend the active native browser view while a toast is on screen. A
+   *  WebContentsView floats above every DOM surface, so toasts would be hidden
+   *  behind it; detaching lets the DOM toast composite normally. When the last
+   *  toast clears, the view is re-attached unless a permission modal (which
+   *  suspends the view itself) is still pending. */
+  private setToastVisible(visible: boolean): void {
+    this.toastVisible = visible
+    if (visible) {
+      if (this.toastSuspended || !this.activeTabId) return
+      const tab = this.tabs.get(this.activeTabId)
+      if (!tab) return
+      if (this.permissionSuspendedTabs.has(this.activeTabId)) {
+        // The permission path already detached the view; keep its ownership.
+        return
+      }
+      this.window.contentView.removeChildView(tab.view)
+      this.toastSuspended = true
+      return
+    }
+    if (!this.toastSuspended) return
+    this.toastSuspended = false
+    const tabId = this.activeTabId
+    const tab = tabId ? this.tabs.get(tabId) : undefined
+    if (!tabId || !tab || this.permissionModalPending()) return
+    // The permission path may have resolved while the toast was still up (its
+    // restore was deferred above); clear its suspension marker so detach/attach
+    // bookkeeping stays consistent for this view.
+    this.permissionSuspendedTabs.delete(tabId)
+    this.window.contentView.addChildView(tab.view)
   }
 
   private destroy(tabId: string): void {

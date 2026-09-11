@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { Toaster as Sonner, toast } from 'svelte-sonner'
-  import { subscribe } from '$lib/ipc.svelte'
+  import { Toaster as Sonner, toast, useSonner } from 'svelte-sonner'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { onMount } from 'svelte'
   import { CheckCircle2, AlertTriangle, XCircle, Info } from '@lucide/svelte'
   import MemoryToastComponent from './MemoryToast.svelte'
@@ -16,6 +16,26 @@
   let theme = $state<'light' | 'dark'>(
     document.documentElement.classList.contains('dark') ? 'dark' : 'light'
   )
+
+  // The in-app browser is a native WebContentsView that composites above every
+  // DOM surface of the window, so it must be detached while a toast is on
+  // screen or it would cover the toast (see `browser:setToastVisible` in
+  // browser-service.ts). svelte-sonner starts dismissing by flagging the toast
+  // while its ~200ms exit animation still plays, so the restore is delayed to
+  // wait the animation out instead of clipping a fading toast.
+  const sonner = useSonner()
+  let toastActive = $derived(sonner.toasts.length > 0)
+
+  $effect(() => {
+    if (toastActive) {
+      void invoke('browser:setToastVisible', true).catch(() => {})
+      return
+    }
+    const restoreTimer = setTimeout(() => {
+      void invoke('browser:setToastVisible', false).catch(() => {})
+    }, 300)
+    return () => clearTimeout(restoreTimer)
+  })
 
   $effect(() => {
     const observer = new MutationObserver(() => {
