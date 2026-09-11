@@ -6588,7 +6588,13 @@ export class ChatEngine {
     ) {
       throw new Error('This Assignment task is locked. Return to its coordinator to continue.')
     }
-    if (this.sessionStatuses.get(activeSessionId)?.state !== 'working') {
+    // A Codex auto-retry (network blip with `willRetry: true`) parks the
+    // session in `waiting` while the native turn stays live. Rejecting a steer
+    // there claims the turn "finished" when it is merely retrying, so accept
+    // `waiting` too when the driver still reports a registered native turn;
+    // the actual delivery then proves liveness and falls back to nothing.
+    const steerSessionState = this.sessionStatuses.get(activeSessionId)?.state
+    if (steerSessionState !== 'working' && steerSessionState !== 'waiting') {
       throw new Error('The harness turn finished before the steer message could be delivered')
     }
     const steerSettings =
@@ -6651,6 +6657,16 @@ export class ChatEngine {
     const resolved =
       activeBrainstorm ?? (await this.resolve(projectId, driverId, threadId, activeAccountId))
     const { driver, projectPath } = resolved
+    // `waiting` is only steerable while the native turn is actually live: a
+    // usage-limit reset wait parks the session in `waiting` with the turn
+    // already torn down, and steering that would lose the message.
+    if (
+      steerSessionState === 'waiting' &&
+      driver.hasActiveTurn !== undefined &&
+      !driver.hasActiveTurn(activeSessionId)
+    ) {
+      throw new Error('The harness turn finished before the steer message could be delivered')
+    }
     if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
       throw new Error(`${driver.name} does not expose native active-turn steering`)
     }
@@ -7492,9 +7508,16 @@ export class ChatEngine {
     // Renderer callers normally use agent:steerPrompt while a turn is active.
     // Keep sendPrompt safe as a second line of defense: an accidental regular
     // USER dispatch must steer the live turn, never reject and poison its task
-    // status. Internal coordinator handoffs are queued above so worker/auditor
+    // status. This also covers a Codex auto-retry: the session parks in
+    // `waiting` while the native turn stays live, and a dispatch there must
+    // reach the retrying turn instead of colliding with it in the driver.
+    // Internal coordinator handoffs are queued above so worker/auditor
     // reports cannot interrupt or confuse the Sr. Engineer's current reasoning.
-    if (activeSessionState === 'working') {
+    const driverReportsLiveTurn =
+      activeSessionState === 'waiting' &&
+      driver.hasActiveTurn !== undefined &&
+      driver.hasActiveTurn(sessionId)
+    if (activeSessionState === 'working' || driverReportsLiveTurn) {
       if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
         throw new Error(`${driver.name} does not expose native active-turn steering`)
       }

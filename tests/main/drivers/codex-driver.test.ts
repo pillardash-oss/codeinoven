@@ -527,6 +527,51 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     expect(fetchMock).toHaveBeenCalledTimes(calls)
   })
 
+  it('delivers a dispatch that lands on a still-registered native turn as a steer', async () => {
+    // A wedged connection can leave the native turn registered after the
+    // engine already believes the session is idle (no `turn/completed` ever
+    // arrives). A new dispatch must reach the live turn, not throw
+    // "A turn is already active".
+    const driver = new CodexDriver(await storage())
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    // No `turn/completed`: the registration survives the network failure.
+    await expect(
+      driver.sendPrompt('/project', { sessionId, settings, text: 'follow-up', attachments: [] })
+    ).resolves.toBeUndefined()
+    const steers = child.requests().filter((request) => request['method'] === 'turn/steer')
+    expect(steers).toHaveLength(1)
+    expect(steers[0]).toMatchObject({
+      method: 'turn/steer',
+      params: expect.objectContaining({
+        threadId: 'native-1',
+        expectedTurnId: 'turn-1',
+        input: [{ type: 'text', text: 'follow-up', text_elements: [] }]
+      })
+    })
+  })
+
+  it('finishes a successfully interrupted turn locally so the session can accept a new prompt', async () => {
+    // The wedged connection that forced the abort may never deliver the
+    // `turn/completed` notification; waiting for it leaves a zombie turn
+    // registration that rejects every later dispatch.
+    const driver = new CodexDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    await driver.abort('/project', sessionId)
+    expect(events).toContainEqual({ type: 'session.idle', sessionId })
+    await expect(
+      driver.sendPrompt('/project', { sessionId, settings, text: 'retry', attachments: [] })
+    ).resolves.toBeUndefined()
+    expect(child.requests().filter((request) => request['method'] === 'turn/start')).toHaveLength(2)
+  })
+
   it('surfaces a Codex usage-limit failure as a quota issue with a retry time', async () => {
     // The message embeds a concrete reset time ("try again at …"). Fake the
     // Date clock only (never setTimeout) so the embedded reset time is always
