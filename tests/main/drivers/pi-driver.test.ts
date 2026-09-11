@@ -468,7 +468,13 @@ describe('PiDriver', () => {
       }
     }
     expect(client.compact).toHaveBeenCalledTimes(3)
-    expect(client.prompt).toHaveBeenCalledTimes(4)
+    // The cap-exhausted failure is surfaced synchronously, but the previous
+    // recovery's continuation prompt is issued only after its compaction
+    // settles and the oversized-recovery flag write completes, so poll for it
+    // instead of asserting synchronously (racy on slow CI file I/O).
+    await vi.waitFor(() => {
+      expect(client.prompt).toHaveBeenCalledTimes(4)
+    })
     await vi.waitFor(() => {
       expect(events).toContainEqual(
         expect.objectContaining({
