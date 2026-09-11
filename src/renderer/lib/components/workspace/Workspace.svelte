@@ -45,7 +45,6 @@
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
   import ProjectIdentity from '../shared/ProjectIdentity.svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
-  import ThreadSortMenu from '../shared/ThreadSortMenu.svelte'
   import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import FolderRow from './FolderRow.svelte'
@@ -128,7 +127,6 @@
     findEmptyNewThread,
     threadVisitKey
   } from '$lib/stores/workspace.svelte'
-  import { threadSortState } from '$lib/stores/thread-sort.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
@@ -1536,17 +1534,13 @@
         t.projectId !== INBOX_PROJECT_ID &&
         threadProjectFilterState.matches(t.projectId)
     )
-    // Pinned threads keep one shared pin-time order regardless of the sort mode;
-    // the chosen mode only applies to unpinned threads.
+    // Pinned threads keep one shared pin-time order; the default status sort
+    // (to-do top, last-activity middle, done last) applies to unpinned threads.
     const pinned = list
       .filter((t) => t.pinned)
       .sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
     const unpinned = list.filter((t) => !t.pinned)
-    if (threadSortState.mode === 'status') {
-      unpinned.sort((a, b) => threadStatusSort(a, b, draftThreadKeys))
-    } else {
-      unpinned.sort((a, b) => b.lastActivity - a.lastActivity)
-    }
+    unpinned.sort((a, b) => threadStatusSort(a, b, draftThreadKeys))
     return [...pinned, ...unpinned]
   })
 
@@ -1892,7 +1886,6 @@
               } satisfies ViewActionItem
             ]
           : []),
-        { id: 'sort', component: ThreadSortMenu as unknown as ViewActionItem['component'] },
         {
           id: 'filter',
           component: ThreadProjectFilterMenu as unknown as ViewActionItem['component']
@@ -2355,15 +2348,19 @@
   /** Threads view must not be bounded by the per-project first-paint slices:
    *  it ranks threads by status and last activity globally, so a project whose
    *  recent slice simply never included an old done thread would distort the
-   *  order. Switching to Threads view hydrates the global recent list (bounded
-   *  to 500 rows) once per activation, merged into the existing cache; deeper
+   *  order. Switching to Threads view hydrates the global recent list, bounded
+   *  to 200 combined rows with last-activity as the source of truth; deeper
    *  history stays available through the existing "Load older threads" pager. */
+  const THREADS_VIEW_HYDRATION_LIMIT = 200
   let threadsViewHydrating = false
   async function ensureThreadsViewFullyLoaded(): Promise<void> {
     if (threadsViewHydrating) return
     threadsViewHydrating = true
     try {
-      const page = await invoke('thread:listRecent', { limit: 500, offset: 0 })
+      const page = await invoke('thread:listRecent', {
+        limit: THREADS_VIEW_HYDRATION_LIMIT,
+        offset: 0
+      })
       const uniqueCurrentThreads = uniqueThreadList(allThreads)
       const known = new Set(uniqueCurrentThreads.map((thread) => thread.id))
       const additions = uniqueThreadList(page).filter(
@@ -2376,7 +2373,7 @@
         allThreads = [...uniqueCurrentThreads, ...additions]
       }
       historyOffset = Math.max(historyOffset, page.length)
-      hasMoreHistory = page.length === 500
+      hasMoreHistory = page.length === THREADS_VIEW_HYDRATION_LIMIT
     } finally {
       threadsViewHydrating = false
     }

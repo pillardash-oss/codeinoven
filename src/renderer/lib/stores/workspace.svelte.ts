@@ -440,9 +440,6 @@ export function pinnedThreadSort(
   return a.id.localeCompare(b.id)
 }
 
-/** Sort modes for the Threads view. */
-export type ThreadSortMode = 'default' | 'status' | 'time'
-
 export function threadStatusSortKey(
   t: Thread,
   draftThreadKeys?: ReadonlySet<string> | null
