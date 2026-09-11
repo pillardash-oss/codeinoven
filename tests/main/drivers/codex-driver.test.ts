@@ -79,11 +79,31 @@ class FakeChild extends EventEmitter {
 }
 
 const roots: string[] = []
+/**
+ * Recursive `rm` is not atomic: a fire-and-forget session write (for example
+ * the failed-turn handler persisting the session after a compaction turn
+ * rejects) can land between the directory listing and the final `rmdir`, which
+ * then fails with ENOTEMPTY. Retry briefly so late writes can settle.
+ */
+async function rmRoot(root: string): Promise<void> {
+  const retriable = new Set(['ENOTEMPTY', 'EBUSY', 'EEXIST'])
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rm(root, { recursive: true, force: true })
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (attempt >= 5 || code === undefined || !retriable.has(code)) throw error
+      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)))
+    }
+  }
+}
+
 afterEach(async () => {
   spawnMock.mockReset()
   vi.restoreAllMocks()
   vi.useRealTimers()
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
+  await Promise.all(roots.splice(0).map((root) => rmRoot(root)))
 })
 
 async function storage(): Promise<StorageEngine> {
