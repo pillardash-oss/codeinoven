@@ -1679,12 +1679,31 @@
         // has OS focus. While the user is away, the thread must stay unread:
         // the badge keeps counting it and the notification card stays up, and
         // the read transition happens once the user is back and a further
-        // update arrives (or they explicitly open the thread).
+        // update arrives (or they explicitly open the thread). The confirmed
+        // snapshot is applied to every sidebar store here so the badge can
+        // never linger on a stale unread state when the backend's own
+        // broadcast is missed.
         if (!updated.read && document.hasFocus()) {
-          void invoke('thread:markRead', updated.projectId, updated.id)
+          void markThreadReadAndApply(updated.projectId, updated.id).catch(() => undefined)
         }
       }
     })
+  })
+
+  // Returning to the window with a thread already open must settle its unread
+  // badge. While the window was unfocused the focus gate above deliberately
+  // left the thread unread, but no further thread:updated may ever arrive once
+  // the turn already finished   so without this the badge would linger green
+  // while the user sits in the conversation reading it. Regaining focus is the
+  // read signal for the open thread; marking read is idempotent.
+  $effect(() => {
+    const onWindowFocus = (): void => {
+      const selected = workspaceState.selectedThread
+      if (!selected || selected.read || isOrchestrationChildThread(selected)) return
+      void markThreadReadAndApply(selected.projectId, selected.id).catch(() => undefined)
+    }
+    window.addEventListener('focus', onWindowFocus)
+    return () => window.removeEventListener('focus', onWindowFocus)
   })
 
   // Git branch settlement is deliberately a separate, lighter broadcast (see
@@ -3079,6 +3098,19 @@
 
   const pendingReadThreads = new SvelteSet<string>()
 
+  /** Mark a thread read and push the confirmed snapshot into every sidebar
+   *  store (regular list, scope board, selected thread) so the row badge
+   *  settles in the same tick instead of waiting on the backend's own
+   *  broadcast round-trip. */
+  async function markThreadReadAndApply(projectId: string, threadId: string): Promise<void> {
+    const updated = await invoke('thread:markRead', projectId, threadId)
+    upsertThreadInList(updated)
+    scopeState.updateThread(updated)
+    if (workspaceState.selectedThread?.id === updated.id) {
+      workspaceState.updateThread(updated)
+    }
+  }
+
   function markThreadReadAfterPaint(thread: Thread): void {
     if (thread.read) return
     const key = `${thread.projectId}:${thread.id}`
@@ -3087,15 +3119,7 @@
     window.requestAnimationFrame(() => {
       window.setTimeout(() => {
         pendingReadThreads.delete(key)
-        void invoke('thread:markRead', thread.projectId, thread.id)
-          .then((updated) => {
-            upsertThreadInList(updated)
-            scopeState.updateThread(updated)
-            if (workspaceState.selectedThread?.id === updated.id) {
-              workspaceState.updateThread(updated)
-            }
-          })
-          .catch(() => undefined)
+        void markThreadReadAndApply(thread.projectId, thread.id).catch(() => undefined)
       }, 0)
     })
   }
