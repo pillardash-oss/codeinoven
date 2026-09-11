@@ -111,7 +111,7 @@ import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { CIO_UTILITY_SETUP_PROMPT, isCioUtilityRequest } from '../utilities/cio-utility-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
-import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
+import { isCodeInOvenCustomProviderId, underlyingProviderId } from '../../lib/custom-provider-id'
 import {
   HarnessAccountRegistry,
   legacyHarnessAccountId
@@ -3796,45 +3796,61 @@ export class ChatEngine {
     const { harnessId, providerId, accountId, accountEnvironment, driver, projectPath } = target
     try {
       const isCustomProvider = isCodeInOvenCustomProviderId(providerId)
-      const nativeTelemetry =
-        !isCustomProvider && driver.readAccountUsage
-          ? await driver.readAccountUsage(projectPath, providerId)
-          : null
-      // OpenUsage is keyed by PROVIDER, not harness: resolve the provider
-      // the harness session actually ran against (e.g. a pi thread pointed
-      // at Z.AI queries "z-ai", not "pi"). CodeInOven custom providers have
-      // their own configured usage route and must not fall through to a
-      // generic Pi/OpenUsage adapter that could report another provider.
-      const openUsage = isCustomProvider
-        ? null
-        : await this.openUsage.readProviderUsage(
-            providerId,
-            harnessId === 'pi' ? ['pi'] : [],
-            accountId,
-            accountEnvironment
-          )
-      // A custom provider with a user-defined usage route answers the
-      // quota question directly when the harness itself reports nothing.
-      const customUsage = isCustomProvider
-        ? await this.readCustomProviderUsage(harnessId, providerId)
-        : nativeTelemetry?.rateLimits.length || openUsage?.rateLimits.length
-          ? null
-          : await this.readCustomProviderUsage(harnessId, providerId)
+      // The driver remains useful for custom providers. Pi's native usage
+      // extension captures response headers from the selected provider, so a
+      // custom provider can report subscription windows even without a custom
+      // usage route. A driver may also return context usage for the live
+      // session, which should remain visible alongside quota data.
+      // OpenUsage is keyed by PROVIDER, not harness. A custom provider ID is a
+      // CodeInOven namespace, so also probe the underlying provider ID. Keep
+      // the Pi fallback for Pi-backed providers when no provider integration
+      // exists in OpenUsage.
+      const openUsageProviderIds = [
+        ...(isCustomProvider ? [underlyingProviderId(providerId)] : []),
+        ...(harnessId === 'pi' ? ['pi'] : [])
+      ].filter((candidate): candidate is string => Boolean(candidate))
+      const [nativeAttempt, openUsageAttempt, customAttempt] = await Promise.allSettled([
+        driver.readAccountUsage
+          ? driver.readAccountUsage(projectPath, providerId)
+          : Promise.resolve(null),
+        this.openUsage.readProviderUsage(
+          providerId,
+          openUsageProviderIds,
+          accountId,
+          accountEnvironment
+        ),
+        this.readCustomProviderUsage(harnessId, providerId)
+      ])
+      const nativeTelemetry = nativeAttempt.status === 'fulfilled' ? nativeAttempt.value : null
+      const openUsage = openUsageAttempt.status === 'fulfilled' ? openUsageAttempt.value : null
+      const customUsage = customAttempt.status === 'fulfilled' ? customAttempt.value : null
+      if (nativeAttempt.status === 'rejected') {
+        Logger.dev('Native account usage read unavailable:', nativeAttempt.reason)
+      }
+      if (openUsageAttempt.status === 'rejected') {
+        Logger.dev('OpenUsage account read unavailable:', openUsageAttempt.reason)
+      }
+      if (customAttempt.status === 'rejected') {
+        Logger.dev('Custom provider usage read unavailable:', customAttempt.reason)
+      }
+      // Custom routes have the highest priority for custom providers. If the
+      // route is missing or returns no usable data, native Pi telemetry and
+      // OpenUsage still get a chance to answer the same request.
+      const orderedTelemetry = isCustomProvider
+        ? [customUsage, nativeTelemetry, openUsage]
+        : [nativeTelemetry, openUsage, customUsage]
+      const rateLimitSource = orderedTelemetry.find(
+        (candidate) => candidate && candidate.rateLimits.length > 0
+      )
+      const creditSource = orderedTelemetry.find((candidate) => candidate?.credits)
       const telemetry =
-        nativeTelemetry || openUsage || customUsage
+        rateLimitSource ||
+        creditSource ||
+        nativeTelemetry?.contextWindow !== undefined ||
+        nativeTelemetry?.contextUsed !== undefined
           ? {
-              rateLimits: nativeTelemetry?.rateLimits.length
-                ? nativeTelemetry.rateLimits
-                : openUsage?.rateLimits.length
-                  ? openUsage.rateLimits
-                  : (customUsage?.rateLimits ?? []),
-              ...(nativeTelemetry?.credits
-                ? { credits: nativeTelemetry.credits }
-                : openUsage?.credits
-                  ? { credits: openUsage.credits }
-                  : customUsage?.credits
-                    ? { credits: customUsage.credits }
-                    : {}),
+              rateLimits: rateLimitSource?.rateLimits ?? [],
+              ...(creditSource?.credits ? { credits: creditSource.credits } : {}),
               ...(nativeTelemetry?.bankedResets
                 ? { bankedResets: nativeTelemetry.bankedResets }
                 : {}),
