@@ -2368,6 +2368,12 @@ export const IPC_INVOKE_CONTRACT = {
     [projectId: string, scopes: BrowserSiteDataScope[]],
     void
   >,
+  /** Open the native site-settings context menu anchored at the given point
+   *  (window-content coordinates in density-independent pixels). */
+  'browser:siteMenu': {} as Contract<
+    [projectId: string, host: string, x: number, y: number],
+    void
+  >,
   'browser:resolvePermission': {} as Contract<
     [requestId: string, decision: BrowserPermissionDecision],
     void
@@ -2976,8 +2982,17 @@ export const IPC_EVENT_CONTRACT = {
   /** DevTools open state changed for a browser tab (open/closed). */
   'browser:devToolsChanged': [] as unknown as [state: BrowserDevToolsState],
   'browser:openRequested': [] as unknown as [url: string, context?: BrowserOpenRequestContext],
-  'browser:permissionRequested': [] as unknown as [request: BrowserPermissionRequest],
-  'browser:permissionResolved': [] as unknown as [requestId: string],
+  /**
+   * Delivered to the native permission-prompt popup window (not the main
+   * renderer): the page permission awaiting a decision, plus how many requests
+   * are queued behind it.
+   */
+  'browser:popup:permission': [] as unknown as [
+    request: BrowserPermissionRequest,
+    context: { queueSize: number }
+  ],
+  /** The native site-settings menu was closed; the panel resets its expanded state. */
+  'browser:siteMenuClosed': [] as unknown as [],
   'browser:download': [] as unknown as [download: BrowserDownload],
   /** Remote-mode status changes from the main process. */
   'remote:status': [] as unknown as [status: RemoteModeStatus],

@@ -36,7 +36,6 @@
     MessageCircleDashed,
     Pause,
     Play,
-    ShieldQuestion,
     SquareTerminal,
     StickyNote,
     ChevronDown
@@ -155,9 +154,7 @@
     AgentHarnessUsage
   } from '$shared/types'
   import type {
-    BrowserDownload,
-    BrowserPermissionDecision,
-    BrowserPermissionRequest
+    BrowserDownload
   } from '$shared/ipc-contract'
 
   interface Props {
@@ -916,19 +913,6 @@
   let showClearBrowserDataConfirm = $state(false)
   let browserDataClearProjectId = $state<string | null>(null)
   let browserDataClearing = $state(false)
-  let browserPermissionRequests = $state<BrowserPermissionRequest[]>([])
-  let activeBrowserPermission = $derived(browserPermissionRequests[0] ?? null)
-
-  function permissionLabel(request: BrowserPermissionRequest): string {
-    if (request.permission === 'media' && request.mediaTypes.length > 0) {
-      return request.mediaTypes
-        .map((mediaType) =>
-          mediaType === 'video' ? 'camera' : mediaType === 'audio' ? 'microphone' : mediaType
-        )
-        .join(' and ')
-    }
-    return request.permission.replaceAll('-', ' ')
-  }
 
   function openBrowserContextMenu(event: MouseEvent): void {
     event.preventDefault()
@@ -948,9 +932,6 @@
     browserDataClearing = true
     try {
       await invoke('browser:clearData', projectId)
-      browserPermissionRequests = browserPermissionRequests.filter(
-        (request) => request.projectId !== projectId
-      )
       showClearBrowserDataConfirm = false
       browserDataClearProjectId = null
     } catch (error) {
@@ -958,17 +939,6 @@
     } finally {
       browserDataClearing = false
     }
-  }
-
-  function resolveBrowserPermission(decision: BrowserPermissionDecision): void {
-    const request = activeBrowserPermission
-    if (!request) return
-    browserPermissionRequests = browserPermissionRequests.filter(
-      (candidate) => candidate.id !== request.id
-    )
-    void invoke('browser:resolvePermission', request.id, decision).catch((error: unknown) => {
-      reportError(error, 'The browser permission response could not be applied.')
-    })
   }
 
   let browserDownloads = $state<BrowserDownload[]>([])
@@ -1768,21 +1738,6 @@
         return
       }
       if (contextSidebarState.openBrowser(url) === null) void invoke('shell:openExternal', url)
-    })
-  })
-
-  $effect(() => {
-    return subscribe('browser:permissionRequested', (request) => {
-      if (browserPermissionRequests.some((candidate) => candidate.id === request.id)) return
-      browserPermissionRequests = [...browserPermissionRequests, request]
-    })
-  })
-
-  $effect(() => {
-    return subscribe('browser:permissionResolved', (requestId) => {
-      browserPermissionRequests = browserPermissionRequests.filter(
-        (request) => request.id !== requestId
-      )
     })
   })
 
@@ -4565,62 +4520,6 @@
       onclick={() => void clearBrowserData()}
     >
       {browserDataClearing ? 'Clearing…' : 'Clear data'}
-    </button>
-  {/snippet}
-</Modal>
-
-<Modal
-  open={activeBrowserPermission !== null}
-  title="Allow browser permission?"
-  onClose={() => resolveBrowserPermission('dismiss')}
-  closeOnBackdrop={false}
->
-  {#if activeBrowserPermission}
-    <div class="flex items-start gap-3">
-      <div
-        class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted"
-      >
-        <ShieldQuestion size={16} />
-      </div>
-      <p class="min-w-0 text-sm leading-relaxed text-muted">
-        <span class="break-all font-mono text-xs text-foreground"
-          >{activeBrowserPermission.origin}</span
-        >
-        wants access to
-        <span class="font-medium text-foreground">{permissionLabel(activeBrowserPermission)}</span>
-        in the browser for
-        <span class="font-medium text-foreground"
-          >{projects.find((project) => project.id === activeBrowserPermission?.projectId)?.name ??
-            'this project'}</span
-        >.
-      </p>
-    </div>
-  {/if}
-
-  {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      title="Refuse and stop asking for this permission on this site"
-      onclick={() => resolveBrowserPermission('deny')}
-    >
-      Don&apos;t allow
-    </button>
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      title="Allow only this one request; ask again next time"
-      onclick={() => resolveBrowserPermission('allow-once')}
-    >
-      Allow once
-    </button>
-    <button
-      type="button"
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-      title="Allow this permission for the site for this app session"
-      onclick={() => resolveBrowserPermission('allow')}
-    >
-      Allow
     </button>
   {/snippet}
 </Modal>

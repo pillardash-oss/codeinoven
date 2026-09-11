@@ -4,14 +4,10 @@
   import {
     ArrowLeft,
     ArrowRight,
-    Cookie,
-    Database,
-    Eraser,
+    LoaderCircle,
     Lock,
     LockOpen,
-    LoaderCircle,
     RotateCw,
-    ShieldOff,
     SquareTerminal,
     X
   } from '@lucide/svelte'
@@ -19,12 +15,10 @@
   import { normalizeBrowserUrl } from '$shared/local-development-url'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
   import type {
-    BrowserSiteDataScope,
     BrowserDevToolsState,
     BrowserPageState,
     BrowserViewBounds
   } from '$shared/ipc-contract'
-  import Modal from '../ui/Modal.svelte'
 
   interface Props {
     tab: BrowserContextTab
@@ -77,13 +71,10 @@
   let devToolsOpen = $state(false)
   /** Show a closed padlock for https origins; open padlock for everything else. */
   let secure = $derived(pageState.url.startsWith('https:'))
-  /** The site menu and its confirmation modal are DOM, while the page itself is a
-   *  native WebContentsView that floats above every DOM surface — the view must
-   *  stay hidden whenever either layer is open. */
+  /** The site menu is a native OS popup composited above the page view, so
+   *  the view never has to detach for it; the open flag only tracks the
+   *  expanded state of the anchor button. */
   let siteMenuOpen = $state(false)
-  let pendingClearScope = $state<BrowserSiteDataScope | null>(null)
-  let clearingSiteData = $state(false)
-  let siteDataError = $state('')
 
   let siteHost = $derived.by(() => {
     try {
@@ -93,95 +84,24 @@
     }
   })
 
-  interface ClearAction {
-    scope: BrowserSiteDataScope
-    label: string
-    icon: typeof Lock
-    detail: string
-  }
-
-  const clearActions: readonly ClearAction[] = [
-    {
-      scope: 'cookies',
-      label: 'Clear cookies',
-      icon: Cookie,
-      detail: 'Cookies for sites visited in this browser will be deleted. You may be signed out.'
-    },
-    {
-      scope: 'site-data',
-      label: 'Clear site data',
-      icon: Database,
-      detail:
-        'Storage, service workers and sessions for sites visited in this browser will be deleted.'
-    },
-    {
-      scope: 'cache',
-      label: 'Clear cache',
-      icon: Eraser,
-      detail: 'Cached files for sites visited in this browser will be deleted.'
-    },
-    {
-      scope: 'permissions',
-      label: 'Reset permissions',
-      icon: ShieldOff,
-      detail:
-        'Remembered camera, microphone and other permission choices for sites visited in this browser will be forgotten.'
-    }
-  ]
-  let pendingClearAction = $derived(
-    clearActions.find((action) => action.scope === pendingClearScope) ?? null
-  )
-
-  async function openSiteMenu(): Promise<void> {
-    siteDataError = ''
+  /** Open the native site-settings menu anchored at the lock button. The main
+   *  process builds an OS context menu (with native destructive-action
+   *  confirmation dialogs) that composites above the page view, so the view
+   *  never detaches for this interaction. */
+  function openSiteMenu(event: MouseEvent): void {
+    const button = event.currentTarget
+    if (!(button instanceof HTMLElement)) return
+    const rect = button.getBoundingClientRect()
     siteMenuOpen = true
-    try {
-      await invoke('browser:hide', tabId)
-    } catch {
-      // Tab already destroyed.
-    }
-  }
-
-  async function restoreNativeView(): Promise<void> {
-    if (siteMenuOpen || pendingClearScope !== null) return
-    await tick()
-    await showAtCurrentBounds().catch(() => {})
-  }
-
-  function closeSiteMenu(): void {
-    siteMenuOpen = false
-    void restoreNativeView()
-  }
-
-  function chooseClear(scope: BrowserSiteDataScope): void {
-    siteDataError = ''
-    siteMenuOpen = false
-    pendingClearScope = scope
-  }
-
-  function cancelClear(): void {
-    if (clearingSiteData) return
-    pendingClearScope = null
-    void restoreNativeView()
-  }
-
-  async function runClear(): Promise<void> {
-    const scope = pendingClearScope
-    if (!scope || clearingSiteData) return
-    clearingSiteData = true
-    try {
-      await invoke('browser:clearSiteData', tabProjectId, [scope])
-      pendingClearScope = null
-      await restoreNativeView()
-    } catch (error) {
-      siteDataError =
-        error instanceof Error && error.message
-          ? error.message
-          : 'Browser site data could not be cleared.'
-      void restoreNativeView()
-    } finally {
-      clearingSiteData = false
-    }
+    void invoke(
+      'browser:siteMenu',
+      tabProjectId,
+      siteHost,
+      Math.max(0, Math.round(rect.left)),
+      Math.max(0, Math.round(rect.bottom + 4))
+    ).catch(() => {
+      siteMenuOpen = false
+    })
   }
 
   const attachContentElement: Attachment<HTMLDivElement> = (element) => {
@@ -266,6 +186,9 @@
   }
 
   onMount(() => {
+    const unsubscribeSiteMenu = subscribe('browser:siteMenuClosed', () => {
+      siteMenuOpen = false
+    })
     let destroyed = false
     const unsubscribeState = subscribe('browser:state', applyPageState)
     const unsubscribeDevTools = subscribe('browser:devToolsChanged', applyDevToolsState)
@@ -293,6 +216,7 @@
       cancelAnimationFrame(animationFrame)
       observer.disconnect()
       window.removeEventListener('resize', onWindowResize)
+      unsubscribeSiteMenu()
       unsubscribeState()
       unsubscribeDevTools()
       void invoke('browser:hide', tabId).catch(() => {})
@@ -351,7 +275,7 @@
         aria-label={secure ? 'Site settings' : 'Connection is not secure'}
         aria-haspopup="menu"
         aria-expanded={siteMenuOpen}
-        onclick={() => (siteMenuOpen ? closeSiteMenu() : void openSiteMenu())}
+        onclick={openSiteMenu}
       >
         {#if secure}
           <Lock size={13} />
@@ -373,36 +297,6 @@
           size={13}
           class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 animate-spin text-primary"
         />
-      {/if}
-      {#if siteMenuOpen}
-        <button
-          type="button"
-          class="fixed inset-0 z-30 cursor-default"
-          title="Close site settings"
-          aria-label="Close site settings"
-          onclick={closeSiteMenu}
-        ></button>
-        <div
-          class="absolute left-0 top-full z-40 mt-1 w-64 rounded-lg border bg-surface p-1 shadow-lg"
-          role="menu"
-          aria-label="Site settings"
-        >
-          <p class="truncate px-2.5 py-1.5 font-medium text-foreground" title={siteHost}>
-            {siteHost || 'This page'}
-          </p>
-          {#each clearActions as action (action.scope)}
-            <button
-              type="button"
-              class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated"
-              role="menuitem"
-              title={action.label}
-              onclick={() => chooseClear(action.scope)}
-            >
-              <action.icon size={14} class="shrink-0 text-dimmed" />
-              <span class="flex-1">{action.label}</span>
-            </button>
-          {/each}
-        </div>
       {/if}
     </div>
     <button
@@ -432,13 +326,6 @@
     >
       {addressError}
     </p>
-  {:else if siteDataError}
-    <p
-      class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-1 text-[0.6875rem] text-danger"
-      role="alert"
-    >
-      {siteDataError}
-    </p>
   {/if}
   <div
     {@attach attachContentElement}
@@ -448,35 +335,3 @@
     aria-label={`Browser content for ${pageState.title || address}`}
   ></div>
 </div>
-
-<Modal
-  open={pendingClearAction !== null}
-  title={pendingClearAction ? `${pendingClearAction.label}?` : ''}
-  onClose={cancelClear}
-  closeOnBackdrop={!clearingSiteData}
->
-  {#if pendingClearAction}
-    <p class="text-sm leading-relaxed text-muted">{pendingClearAction.detail}</p>
-  {/if}
-
-  {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:opacity-50"
-      title="Keep site data"
-      disabled={clearingSiteData}
-      onclick={cancelClear}
-    >
-      Cancel
-    </button>
-    <button
-      type="button"
-      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger-hover disabled:opacity-50"
-      title={pendingClearAction ? pendingClearAction.label : ''}
-      disabled={clearingSiteData}
-      onclick={() => void runClear()}
-    >
-      {clearingSiteData ? 'Clearing…' : pendingClearAction ? pendingClearAction.label : ''}
-    </button>
-  {/snippet}
-</Modal>
