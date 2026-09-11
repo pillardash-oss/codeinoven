@@ -573,6 +573,15 @@ export interface HarnessDriver {
   compactSession?(projectPath: string, sessionId: string, settings: ThreadSettings): Promise<void>
 
   /**
+   * Reconcile harness-side durable state (for example auto-compactions pi
+   * wrote to its session transcript without emitting reportable events) with
+   * the mirrored session. Best-effort backstop for finalization gaps: the
+   * engine calls it when a session settled without driver finalization so
+   * recovered state is persisted before the next turn replays history.
+   */
+  reconcileSession?(projectPath: string, sessionId: string): Promise<void>
+
+  /**
    * Reply to a pending permission request. When `message` is provided alongside a
    * `reject` reply it is delivered to the harness as corrective feedback so the
    * model can continue the current turn instead of the turn being killed.

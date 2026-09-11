@@ -7,19 +7,20 @@
      *  limit. Rendered collapsed by default so neither the markdown parser,
      *  DOMPurify, nor layout ever pay for the full length until asked. */
     text: string
+    /** Collapse threshold in characters. Defaults to the conversational
+     *  run length; callers rendering dense tool output can raise it. */
+    collapsedChars?: number
   }
 
-  let { text }: Props = $props()
+  let { text, collapsedChars = 1_200 }: Props = $props()
 
-  /** Characters shown when collapsed   enough context to recognize the run. */
-  const COLLAPSED_CHARS = 1_200
   const EXPANDED_MAX_HEIGHT = '18rem'
 
   let expanded = $state(false)
   let copied = $state(false)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
-  const head = $derived(text.length > COLLAPSED_CHARS ? text.slice(0, COLLAPSED_CHARS) : text)
+  const head = $derived(text.length > collapsedChars ? text.slice(0, collapsedChars) : text)
   /** 0 when the whole run already fits the collapsed head. */
   const hiddenCount = $derived(text.length - head.length)
 

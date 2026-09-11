@@ -3043,7 +3043,7 @@ export class PiDriver extends PersistentCliDriver {
     // reason). A fresh prompt starts the new run when idle.
     // Arm the oversized-recovery extension before the continuation: the
     // compaction kept the recent transcript tail intact, and that tail is
-    // exactly where multi-hundred-KB base64 image tool results live  
+    // exactly where multi-hundred-KB base64 image tool results live
     // compaction alone cannot bring the request body under the provider's
     // byte limit. While armed, the extension's `context` hook strips image
     // parts and oversized text from the REQUEST copy only; the transcript
@@ -3576,12 +3576,148 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   private async finishTurn(session: PersistentCliSession): Promise<void> {
+    // Reconcile compactions against pi's durable session transcript before
+    // persisting: the live RPC event stream loses compaction records on
+    // process exit, watchdog finalization, and between-turn compactions, but
+    // pi itself always wrote them durably to the session JSONL.
+    try {
+      await this.reconcileNativeCompactions(session)
+    } catch (error) {
+      Logger.dev('Pi compaction reconciliation failed:', error)
+    }
     try {
       await this.persistSession(session)
     } catch (error) {
       Logger.error('Pi session persistence failed:', error)
     }
     this.emit({ type: 'session.idle', sessionId: session.id })
+  }
+
+  /**
+   * Driver contract hook (`reconcileSession`): recover compaction reporting
+   * from pi's durable session transcript when a session settled without
+   * driver finalization, so the engine's finalization and the next turn's
+   * history replay see the recovered boundary.
+   */
+  async reconcileSession(projectPath: string, sessionId: string): Promise<void> {
+    const session = await this.requireSession(projectPath, sessionId)
+    await this.reconcileNativeCompactions(session)
+    await this.persistSession(session)
+  }
+
+  /**
+   * Post-turn compaction reconciliation (see `finishTurn`).
+   *
+   * Compaction reporting normally rides the live RPC event stream
+   * (`compaction_end` / `auto_compaction_end` records). That stream is lost
+   * when pi exits during or right after a compaction, when the engine
+   * finalizes a settled session through the synthetic-idle watchdog, or when
+   * pi compacts between turns. In all three cases the compaction is already
+   * written durably to pi's own session JSONL, so this pass reads that
+   * transcript once and:
+   *
+   * 1. Backfills `firstKeptCreatedAt` onto mirrored compaction parts whose
+   *    boundary timestamp lookup raced the session-id sync, so recap and fork
+   *    boundaries never silently discard the compaction.
+   * 2. Mirrors compaction entries that never arrived as events, using the
+   *    same message shape as `parseNativePiSession`, deduplicated against
+   *    what was already reported by retained-boundary id or summary text.
+   */
+  private async reconcileNativeCompactions(session: PersistentCliSession): Promise<void> {
+    const projectPath = this.sessionProjects.get(session.id)
+    const nativeSessionId = session.nativeSessionId
+    if (!projectPath || !nativeSessionId) return
+    const file = await findNativePiSessionFile(projectPath, nativeSessionId)
+    if (!file) return
+    const compactionEntries: {
+      summary: string
+      firstKeptEntryId?: string
+      createdAt: number
+    }[] = []
+    const entryTimes = new Map<string, number>()
+    const input = createReadStream(file)
+    const lines = createInterface({ input, crlfDelay: Infinity })
+    try {
+      for await (const line of lines) {
+        const entry = parseRecord(line)
+        if (!entry) continue
+        if (entry['type'] === 'compaction') {
+          const summary = stringValue(entry['summary'])
+          if (summary?.trim()) {
+            compactionEntries.push({
+              summary,
+              firstKeptEntryId: stringValue(entry['firstKeptEntryId']),
+              createdAt: Date.parse(String(entry['timestamp'])) || Date.now()
+            })
+          }
+          continue
+        }
+        if (entry['type'] === 'message') {
+          const id = entry['id']
+          const nativeMessage = parseRecord(entry['message'])
+          if (typeof id === 'string' && nativeMessage) {
+            entryTimes.set(id, messageTimestamp(nativeMessage))
+          }
+        }
+      }
+    } finally {
+      lines.close()
+      input.destroy()
+    }
+    let patched = false
+    for (const message of session.messages) {
+      for (const part of message.parts) {
+        if (part.type !== 'compaction') continue
+        if (part.firstKeptCreatedAt !== undefined || !part.firstKeptEntryId) continue
+        const retainedAt = entryTimes.get(part.firstKeptEntryId)
+        if (retainedAt !== undefined) {
+          part.firstKeptCreatedAt = retainedAt
+          patched = true
+        }
+      }
+    }
+    const recovered: AgentMessage[] = []
+    for (const entry of compactionEntries) {
+      const alreadyMirrored = session.messages.some((message) =>
+        message.parts.some(
+          (part) =>
+            part.type === 'compaction' &&
+            ((entry.firstKeptEntryId && part.firstKeptEntryId === entry.firstKeptEntryId) ||
+              (part.summary?.trim() ?? '') === entry.summary)
+        )
+      )
+      if (alreadyMirrored) continue
+      const retainedAt = entry.firstKeptEntryId ? entryTimes.get(entry.firstKeptEntryId) : undefined
+      const createdAt = retainedAt ?? entry.createdAt
+      const id = `pi-${session.id}-compaction-native-${createdAt}`
+      recovered.push({
+        id,
+        role: 'assistant',
+        origin: 'compaction',
+        visibility: 'working_trace',
+        createdAt,
+        parts: [
+          {
+            type: 'compaction',
+            id: `${id}:compaction`,
+            messageID: id,
+            auto: true,
+            summary: entry.summary,
+            ...(entry.firstKeptEntryId && retainedAt !== undefined
+              ? {
+                  firstKeptEntryId: entry.firstKeptEntryId,
+                  firstKeptCreatedAt: retainedAt
+                }
+              : {})
+          }
+        ]
+      })
+    }
+    if (recovered.length === 0 && !patched) return
+    if (recovered.length > 0) this.mergeMessages(session, recovered)
+    Logger.dev(
+      `Pi compaction reconciliation: ${recovered.length} recovered, boundary backfill ${patched ? 'applied' : 'not needed'}`
+    )
   }
 
   /**

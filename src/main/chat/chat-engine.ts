@@ -22565,6 +22565,14 @@ export class ChatEngine {
         }
       )
       this.clearSessionWatchdog(sessionId)
+      // Recover any compaction pi wrote durably during the gap before the
+      // synthetic idle finalizes the turn, so the next history replay starts
+      // at the true post-compaction boundary instead of the full transcript.
+      try {
+        await watchdogDriver.reconcileSession?.(info.projectPath, sessionId)
+      } catch (error) {
+        Logger.dev('Watchdog compaction reconciliation failed:', error)
+      }
       // Route through the driver-event pipeline so every idle consumer
       // (status broadcast, thread finalization, notifications) sees the same
       // synthetic signal it would have seen from a real driver idle event.
