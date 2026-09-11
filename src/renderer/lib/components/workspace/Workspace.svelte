@@ -2383,6 +2383,28 @@
     if (mode === 'threads' && active) void ensureThreadsViewFullyLoaded()
   })
 
+  /** Filter backfill: the 200-row hydration window is unfiltered, so a narrowed
+   *  project filter can render far fewer than 200 rows even though matching
+   *  threads exist beyond the window. The filter must replace hidden rows with
+   *  matching ones, so while the visible (unpinned) count is below the window
+   *  and DB pages remain, keep pulling 50-row history pages. Each page changes
+   *  `allThreads`/`hasMoreHistory` and re-runs this effect, so the loop is
+   *  self-terminating and bounded by the pager's own exhaustion flag. */
+  $effect(() => {
+    if (mode !== 'threads' || !active) return
+    if (threadProjectFilterState.isAll) return
+    if (threadsSearching && threadsSearchQuery.trim()) return
+    const visible = allThreads.filter(
+      (t) =>
+        !t.archived &&
+        !t.pinned &&
+        t.projectId !== INBOX_PROJECT_ID &&
+        threadProjectFilterState.matches(t.projectId)
+    ).length
+    if (visible >= THREADS_VIEW_HYDRATION_LIMIT || !hasMoreHistory) return
+    void loadHistoryPage()
+  })
+
   /** Explicit timeline expansion. The initial shell intentionally carries
    * only a bounded recent slice; older tasks remain paged and deduped. */
   async function loadHistoryPage(): Promise<void> {

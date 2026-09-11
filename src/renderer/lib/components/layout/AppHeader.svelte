@@ -1,5 +1,6 @@
 <script lang="ts">
   import { type Component } from 'svelte'
+  import { fade } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
   import { toast } from 'svelte-sonner'
   import { projectIconOnError, getProjectIcon } from '$lib/project-icons'
@@ -382,15 +383,22 @@
     return option?.label ?? 'Projects'
   })
 
-  /** Longest view label ("Scoped threads"), rendered invisibly in the trigger
-   *  so its reserved width keeps the switcher at a constant size no matter
-   *  which view is active. */
-  let longestViewLabel = $derived(
-    headerViewOptions().reduce((longest, option) => {
-      const label = option.label
-      return label.length > longest.length ? label : longest
-    }, '')
+  let activeHeaderViewIcon = $derived(
+    headerViewOptions().find((candidate) => candidate.id === activeHeaderViewOption)?.icon ??
+      FolderKanban
   )
+
+  /** Rendered width of the current trigger label. Measured after every label
+   *  swap so the wrapper can animate its width instead of snapping. */
+  let labelWidth = $state<number | null>(null)
+  let measureLabel: HTMLSpanElement | undefined = $state(undefined)
+
+  $effect(() => {
+    // Track the label so this re-runs after each swap, once the measuring
+    // span already holds the new text.
+    void activeHeaderViewLabel
+    if (measureLabel) labelWidth = measureLabel.offsetWidth
+  })
 
   /** Cmd/Ctrl+3   Projects view with the scope sidebar active for the current
    *  thread (or project). Idempotent: never turns scope state off. */
@@ -631,13 +639,34 @@
           title="Switch view"
           data-onboarding="view-switcher"
         >
-          <!-- Stacked grid: the invisible longest label reserves the width so
-               the trigger never changes size across views. text-left overrides
-               the button's inherited centered text alignment. -->
-          <span class="grid text-left" class:animate-pulse={anyProjectWorking}>
-            <span class="col-start-1 row-start-1 truncate">{activeHeaderViewLabel}</span>
-            <span class="col-start-1 row-start-1 invisible whitespace-nowrap" aria-hidden="true">
-              {longestViewLabel}
+          <!-- Active view icon: crossfades between views instead of popping. -->
+          <span class="grid h-4 w-4 shrink-0 place-items-center">
+            {#key activeHeaderViewOption}
+              {@const ActiveViewIcon = activeHeaderViewIcon}
+              <span
+                class="col-start-1 row-start-1 flex items-center justify-center"
+                in:fade={{ duration: 150 }}
+                out:fade={{ duration: 100 }}
+              >
+                <ActiveViewIcon size={14} strokeWidth={1.8} />
+              </span>
+            {/key}
+          </span>
+          <!-- Label wrapper: width is measured from the hidden mirror span and
+               transitions, so the switcher and the action buttons beside it
+               glide when the view changes instead of jumping. -->
+          <span
+            class="relative overflow-hidden text-left whitespace-nowrap transition-[width] duration-200 ease-out motion-reduce:transition-none"
+            class:animate-pulse={anyProjectWorking}
+            style:width={labelWidth === null ? undefined : `${labelWidth}px`}
+          >
+            {activeHeaderViewLabel}
+            <span
+              class="absolute top-0 left-0 invisible whitespace-nowrap"
+              bind:this={measureLabel}
+              aria-hidden="true"
+            >
+              {activeHeaderViewLabel}
             </span>
           </span>
           <ChevronDown size={12} class="shrink-0 text-muted" />
