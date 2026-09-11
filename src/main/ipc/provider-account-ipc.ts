@@ -3,6 +3,7 @@ import { isAbsolute } from 'node:path'
 import type { ProviderAccountLoginOptions } from '../../lib/types'
 import type { StorageEngine } from '../storage/storage-engine'
 import { validateEntityId } from './ipc-validation'
+import type { HarnessAuthAccount, HarnessAuthStatus } from '../drivers/driver.interface'
 import { ProviderAccountOrchestrator } from '../providers/provider-account-orchestrator'
 import { HarnessAccountRegistry } from '../providers/harness-account-registry'
 
@@ -110,6 +111,51 @@ export function registerProviderAccountIpc(
       validateEntityId(rawAccountId, 'Account ID', 256)
     )
   )
+  async function mergedAuthStatus(
+    harnessId: string,
+    projectPath?: string
+  ): Promise<HarnessAuthStatus> {
+    const status = await auth.getStatus(harnessId, projectPath)
+    if (status.state === 'error' || status.state === 'unknown') return status
+    // Legacy reconciliation must only see default-home credentials; merged
+    // container entries are display-only for the provider check list.
+    await accounts.reconcileLegacy(harnessId, status.accounts)
+    lastAccountSync.set(harnessId, Date.now())
+    const managed = (await accounts.list(harnessId)).filter(
+      (account) => account.containerKind === 'managed' && account.providerId !== ''
+    )
+    const mergedAccounts: HarnessAuthAccount[] = [...status.accounts]
+    let authenticated = status.state === 'authenticated'
+    for (const account of managed) {
+      const containerStatus = await auth.getStatus(
+        harnessId,
+        projectPath,
+        accounts.environment(account)
+      )
+      if (containerStatus.state === 'authenticated') authenticated = true
+      if (containerStatus.state === 'error' || containerStatus.state === 'unknown') continue
+      for (const entry of containerStatus.accounts) {
+        if (entry.active === false) continue
+        // Two accounts may legitimately hold the same provider; keep both, but
+        // mark the container one with its human label so they stay tellable.
+        const sameProvider = mergedAccounts.some(
+          (candidate) =>
+            candidate.providerId === entry.providerId && candidate.method === entry.method
+        )
+        mergedAccounts.push({
+          ...entry,
+          id: `${entry.id}.${account.id}`,
+          ...(sameProvider && account.label ? { label: `${entry.label} (${account.label})` } : {})
+        })
+      }
+    }
+    return {
+      ...status,
+      state: authenticated ? 'authenticated' : 'unauthenticated',
+      accounts: mergedAccounts
+    }
+  }
+
   ipcMain.handle(
     'providerAccounts:getAuthStatus',
     async (_, rawHarnessId: unknown, rawProjectPath?: unknown) => {
@@ -124,11 +170,7 @@ export function registerProviderAccountIpc(
           detail: `Authentication is not supported for harness: ${harnessId}`
         }
       }
-      const status = await auth.getStatus(harnessId, projectPath)
-      if (status.state !== 'error' && status.state !== 'unknown') {
-        await accounts.reconcileLegacy(harnessId, status.accounts)
-        lastAccountSync.set(harnessId, Date.now())
-      }
+      const status = await mergedAuthStatus(harnessId, projectPath)
       return { capabilities, ...status }
     }
   )
@@ -156,6 +198,19 @@ export function registerProviderAccountIpc(
       const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
       const accountId =
         rawAccountId === undefined ? undefined : validateEntityId(rawAccountId, 'Account ID', 256)
+      if (!accountId && rawProviderId !== undefined) {
+        // Provider-level disconnect is only unambiguous with a single account.
+        const providerId = validateEntityId(rawProviderId, 'Provider ID', 256)
+        const matching = (await accounts.list(harnessId)).filter(
+          (account) => account.providerId === providerId
+        )
+        if (matching.length > 1) {
+          const providerName = matching[0]?.providerName || providerId
+          throw new Error(
+            `${providerName} is connected on ${matching.length} accounts. Disconnect it from the accounts tab to choose which one.`
+          )
+        }
+      }
       const account = accountId
         ? await resolveCredentialAccount(accounts, harnessId, accountId)
         : undefined
