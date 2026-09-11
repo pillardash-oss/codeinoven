@@ -1,4 +1,4 @@
-import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+import { SvelteMap } from 'svelte/reactivity'
 
 /**
  * Tracks temporary (side) chats whose completed response the user has not seen
@@ -8,18 +8,22 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity'
  * thread is deleted). Regular thread unread state (the persisted `thread.read`
  * flag) is untouched: the parent thread's own status never changes when a side
  * chat completes, so this store exists purely for the row badge.
+ *
+ * Each entry also records when the unread state was marked, so the row can
+ * apply "last action wins" between a side chat landing and the parent
+ * thread's own turn settling (see ThreadRow).
  */
 class TemporaryChatUnreadState {
-  #unreadByThread = new SvelteMap<string, SvelteSet<string>>()
+  #unreadByThread = new SvelteMap<string, SvelteMap<string, number>>()
 
   markUnread(projectId: string, threadId: string, temporaryChatId: string): void {
     const key = threadKey(projectId, threadId)
     let chats = this.#unreadByThread.get(key)
     if (!chats) {
-      chats = new SvelteSet<string>()
+      chats = new SvelteMap<string, number>()
       this.#unreadByThread.set(key, chats)
     }
-    chats.add(temporaryChatId)
+    chats.set(temporaryChatId, Date.now())
   }
 
   clear(projectId: string, threadId: string, temporaryChatId: string): void {
@@ -37,6 +41,17 @@ class TemporaryChatUnreadState {
   /** Whether any side chat of this thread is still waiting to be read. */
   hasUnread(projectId: string, threadId: string): boolean {
     return (this.#unreadByThread.get(threadKey(projectId, threadId))?.size ?? 0) > 0
+  }
+
+  /** When the most recent unread side chat of this thread landed, or 0 when
+   *  none is waiting. Used for "last action wins" badge ordering. */
+  lastUnreadAt(projectId: string, threadId: string): number {
+    let latest = 0
+    for (const markedAt of this.#unreadByThread.get(threadKey(projectId, threadId))?.values() ??
+      []) {
+      if (markedAt > latest) latest = markedAt
+    }
+    return latest
   }
 }
 

@@ -25,6 +25,9 @@ interface AgentRunEntry {
   traceOpen: boolean
   /** Whether the user explicitly opened the trace (vs auto-opened by busy state). */
   traceUserOpened: boolean
+  /** When the last busy → idle transition happened, used by the thread row
+   *  badge for "last action wins" ordering against side-chat unread marks. */
+  settledAt: number
 }
 
 function threadKey(projectId: string, threadId: string): string {
@@ -48,7 +51,8 @@ class AgentRunsStore {
         busySince: null,
         currentTurnUserMessageId: null,
         traceOpen: false,
-        traceUserOpened: false
+        traceUserOpened: false,
+        settledAt: 0
       }
       this.#runs.set(key, entry)
       this.runs = new Map(this.#runs)
@@ -95,6 +99,14 @@ class AgentRunsStore {
   /** When the current busy run started, or undefined when idle. */
   busySince(projectId: string, threadId: string): number | undefined {
     return this.runs.get(threadKey(projectId, threadId))?.busySince ?? undefined
+  }
+
+  /** When the last busy → idle transition happened for this thread, or 0 when
+   *  the thread has never settled a run in this window. Used by the thread
+   *  row badge for "last action wins" ordering against side-chat unread
+   *  marks (see temporaryChatUnread.lastUnreadAt). */
+  settledAt(projectId: string, threadId: string): number {
+    return this.runs.get(threadKey(projectId, threadId))?.settledAt ?? 0
   }
 
   /** Whether the working trace is open for the current turn. */
@@ -223,6 +235,9 @@ class AgentRunsStore {
     const previousBusySince = entry.busySince
     const previousTurnUserMessageId = entry.currentTurnUserMessageId
     const previousTraceOpen = entry.traceOpen
+    if (previousBusy) {
+      entry.settledAt = Date.now()
+    }
     entry.busy = false
     entry.activity = 'session'
     entry.live = false

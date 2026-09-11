@@ -20,6 +20,7 @@
     /** Overall thread state used to render the approval stage row. */
     threadState?:
       | 'unread'
+      | 'temporary-unread'
       | 'read'
       | 'todo'
       | 'completed'

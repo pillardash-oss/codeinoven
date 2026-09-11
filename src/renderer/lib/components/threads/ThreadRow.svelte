@@ -287,6 +287,7 @@
 
   type ThreadState =
     | 'unread'
+    | 'temporary-unread'
     | 'read'
     | 'todo'
     | 'completed'
@@ -319,9 +320,15 @@
   /** A finished temporary (side) chat on this thread is still unread   the
    *  parent thread's own `read` flag never changes for side chats, so the
    *  badge comes from the side-chat store instead. */
-  let hasTemporaryChatUnread = $derived(
-    temporaryChatUnread.hasUnread(thread.projectId, thread.id)
+  let hasTemporaryChatUnread = $derived(temporaryChatUnread.hasUnread(thread.projectId, thread.id))
+
+  /** When the most recent unread side chat of this thread landed (0 if none). */
+  let temporaryChatUnreadAt = $derived(
+    temporaryChatUnread.lastUnreadAt(thread.projectId, thread.id)
   )
+
+  /** When the parent thread's own run last settled (0 if never in this window). */
+  let primarySettledAt = $derived(agentRuns.settledAt(thread.projectId, thread.id))
 
   /** Aggregate child activity onto the Sr. Engineer row   the public source of truth. */
   let delegatedWorkActive = $derived(
@@ -389,7 +396,17 @@
     // An unread side chat must surface even while the parent thread itself is
     // still working: the row keeps pulsing (the busy indicator is independent
     // of the badge) but shows the unread dot instead of swallowing it.
-    if (hasTemporaryChatUnread) return 'unread'
+    // Last action wins between the side chat and the parent thread's own turn:
+    // a primary turn that settled after the side chat landed keeps the green
+    // unread dot; otherwise the side-chat unread shows in the working colour
+    // (the temporary-chat icon colour) so it never masquerades as an unread
+    // primary thread. Opening the thread reads the primary turn but leaves the
+    // side chat unread, so the working-coloured dot returns and stays until the
+    // side-chat panel is focused (or the chat expires or is closed).
+    if (hasTemporaryChatUnread) {
+      if (!effectiveRead && primarySettledAt > temporaryChatUnreadAt) return 'unread'
+      return 'temporary-unread'
+    }
     // A scheduled message (queued behind other threads) reads as pending work
     // and shows the timer badge   it is a draft in the sorting/pinning sense but
     // not something still being typed.
@@ -457,6 +474,7 @@
       variant?: 'dot' | 'spinner' | 'icon'
       icon?: Component | null
       animated?: boolean
+      color?: string
     } | null => {
       switch (threadState) {
         case 'unread':
@@ -473,6 +491,11 @@
           return { stage: 'spec' }
         case 'approval':
           return { kind: 'attention', animated: true }
+        case 'temporary-unread':
+          // Same circular dot as the primary unread badge but in the working
+          // colour (the temporary-chat tab icon colour) so the user reads it
+          // as "side chat waiting", not as an unread primary thread.
+          return { stage: 'unread', color: 'var(--color-thread-working)' }
         case 'error':
           return { kind: 'error' }
         default:
@@ -580,8 +603,6 @@
     clearTimeout(popoverTimer)
     showMenu = true
   }
-
-
 </script>
 
 {#if picker}
@@ -605,6 +626,7 @@
             stage={badgeProps.stage}
             tone={badgeProps.tone}
             kind={badgeProps.kind}
+            color={badgeProps.color}
             variant={badgeProps.variant ?? 'dot'}
             icon={badgeProps.icon}
             animated={badgeProps.animated}
@@ -617,7 +639,9 @@
                   ? 'Spec ready'
                   : threadState === 'scheduled'
                     ? 'Scheduled'
-                    : threadState}
+                    : threadState === 'temporary-unread'
+                      ? 'Temporary chat unread'
+                      : threadState}
           />
         {:else}
           <span
@@ -630,7 +654,7 @@
       <span
         class="min-w-0 flex-1 truncate text-[0.75rem] {threadState === 'approval'
           ? 'font-medium text-warning'
-          : threadState === 'unread'
+          : threadState === 'unread' || threadState === 'temporary-unread'
             ? 'font-medium text-foreground'
             : 'text-foreground'}"
       >
@@ -801,6 +825,7 @@
               stage={badgeProps.stage}
               tone={badgeProps.tone}
               kind={badgeProps.kind}
+              color={badgeProps.color}
               variant={badgeProps.variant ?? 'dot'}
               icon={badgeProps.icon}
               animated={badgeProps.animated}
@@ -813,7 +838,9 @@
                     ? 'Spec ready'
                     : threadState === 'scheduled'
                       ? 'Scheduled'
-                      : threadState}
+                      : threadState === 'temporary-unread'
+                        ? 'Temporary chat unread'
+                        : threadState}
             />
           {:else}
             <span
@@ -851,7 +878,7 @@
       <span
         class="min-w-0 flex-1 truncate text-[0.75rem] {threadState === 'approval'
           ? 'font-medium text-warning'
-          : threadState === 'unread'
+          : threadState === 'unread' || threadState === 'temporary-unread'
             ? 'font-medium text-foreground'
             : 'text-foreground'}"
       >
@@ -1027,11 +1054,7 @@
   </div>
 {/if}
 
-<Modal
-  open={actionsMenu.showRenameModal}
-  title="Rename Thread"
-  onClose={actionsMenu.cancelRename}
->
+<Modal open={actionsMenu.showRenameModal} title="Rename Thread" onClose={actionsMenu.cancelRename}>
   <form
     id={renameThreadFormId}
     class="space-y-4"
