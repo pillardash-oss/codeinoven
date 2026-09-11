@@ -46,6 +46,7 @@
   import ProjectIdentity from '../shared/ProjectIdentity.svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import ThreadSortMenu from '../shared/ThreadSortMenu.svelte'
+  import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import FolderRow from './FolderRow.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
@@ -128,6 +129,7 @@
     threadVisitKey
   } from '$lib/stores/workspace.svelte'
   import { threadSortState } from '$lib/stores/thread-sort.svelte'
+  import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
@@ -153,9 +155,7 @@
     ThreadSearchResult,
     AgentHarnessUsage
   } from '$shared/types'
-  import type {
-    BrowserDownload
-  } from '$shared/ipc-contract'
+  import type { BrowserDownload } from '$shared/ipc-contract'
 
   interface Props {
     /** Which sidebar the shell shows   the main content stays mounted across modes. */
@@ -285,7 +285,7 @@
     }
     // Flush Svelte's DOM update (folder expansion / mode switch / re-sort), then
     // wait frames so the browser has final layout, then scroll. Retry over a few
-    // frames because the folder's rows can mount a tick later than expected  
+    // frames because the folder's rows can mount a tick later than expected
     // in Projects mode the row only appears once the folder has expanded and the
     // per-folder row budget has grown to include it.
     await tick()
@@ -422,7 +422,7 @@
    *  else the last project model so a fresh chat starts on the model in use. */
   let chatComposerSettings = $derived(chatEffectiveSettings())
 
-  /** Live account quota for the not-yet-created "Start a new chat" composer  
+  /** Live account quota for the not-yet-created "Start a new chat" composer
    *  the exact same provider-level hover-fetch cache the thread battery uses. */
   const newChatUsage = createAccountUsageCache()
   function revealNewChatUsage(): void {
@@ -1334,7 +1334,7 @@
   // The grid column/row that hosts each panel collapses the instant
   // `sidebarVisible`/`terminalDockVisible` flips, but the panel itself keeps
   // playing its out:fly for PANEL_EXIT_MS. Without this, the closing panel is
-  // orphaned outside the (now single-track) grid for that whole window  
+  // orphaned outside the (now single-track) grid for that whole window
   // a stray gap opens up where its column used to be. Reserving the track
   // until the outro actually finishes keeps the panel inside its cell for
   // the whole animation.
@@ -1526,9 +1526,16 @@
       .sort((a, b) => threadSort(a, b, draftThreadKeys))
   )
 
-  /** Threads mode: all active threads sorted by the selected mode, persisted pins first. */
+  /** Threads mode: active threads of the filtered projects, sorted by the
+   *  selected mode, persisted pins first. An empty project-filter selection
+   *  means all projects. */
   let allThreadsFlat = $derived.by(() => {
-    const list = allThreads.filter((t) => !t.archived && t.projectId !== INBOX_PROJECT_ID)
+    const list = allThreads.filter(
+      (t) =>
+        !t.archived &&
+        t.projectId !== INBOX_PROJECT_ID &&
+        threadProjectFilterState.matches(t.projectId)
+    )
     // Pinned threads keep one shared pin-time order regardless of the sort mode;
     // the chosen mode only applies to unpinned threads.
     const pinned = list
@@ -1857,7 +1864,6 @@
     }
     if (mode === 'threads') {
       const actions: ViewActionItem[] = [
-        { id: 'sort', component: ThreadSortMenu as unknown as ViewActionItem['component'] },
         {
           id: 'search',
           component: SidebarSearchControl as unknown as ViewActionItem['component'],
@@ -1885,7 +1891,12 @@
                 run: () => void createThreadInProject(activeProject)
               } satisfies ViewActionItem
             ]
-          : [])
+          : []),
+        { id: 'sort', component: ThreadSortMenu as unknown as ViewActionItem['component'] },
+        {
+          id: 'filter',
+          component: ThreadProjectFilterMenu as unknown as ViewActionItem['component']
+        }
       ]
       viewActions.set('threads', actions)
     } else if (mode === 'chats') {
@@ -1985,10 +1996,7 @@
     // Already on the registered scoped view (projects board with the scope
     // sidebar focused on this thread): bounce back to the view the user came
     // from when the shoe opened it (second half of the toggle).
-    if (
-      rendererRecovery.activeView === 'projects-scope'
-      && scopeState.sidebarContext !== null
-    ) {
+    if (rendererRecovery.activeView === 'projects-scope' && scopeState.sidebarContext !== null) {
       navigate(scopeShoeReturnView)
       return
     }
@@ -3041,7 +3049,7 @@
     if (thread.projectId === INBOX_PROJECT_ID) navigate('chats')
     else if (mode === 'chats') navigate('projects')
     // The scope store reads its own activeProjectId / sidebarContext, not the
-    // workspace selection, so a cross-project Ctrl+Tab jump must sync it  
+    // workspace selection, so a cross-project Ctrl+Tab jump must sync it
     // otherwise the scope view tabs and the scope-state sidebar stay stuck on
     // the previous project. On the Scope page the view itself follows the
     // thread's project; an active scope-state sidebar follows the thread and
@@ -3482,9 +3490,7 @@
                       No threads in this slice
                     </p>
                   {/each}
-                  {#if scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length > 0 &&
-                    projectHasMoreInDb(scopeContext.projectId) &&
-                    !scopeState.isProjectFullyHydrated(scopeContext.projectId)}
+                  {#if scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length > 0 && projectHasMoreInDb(scopeContext.projectId) && !scopeState.isProjectFullyHydrated(scopeContext.projectId)}
                     <div class="flex justify-center border-t py-1.5">
                       <button
                         class="flex items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
@@ -3600,7 +3606,11 @@
                 />
               {:else}
                 <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
-                  <p class="text-xs text-muted">No threads yet</p>
+                  <p class="text-xs text-muted">
+                    {threadProjectFilterState.isAll
+                      ? 'No threads yet'
+                      : 'No threads in the selected projects'}
+                  </p>
                 </div>
               {/each}
             </div>
@@ -4143,7 +4153,7 @@
             <div class="mb-6 text-center">
               <h1 class="text-[1.375rem] font-semibold tracking-tight">Start a new chat</h1>
               <p class="mt-1 text-[0.875rem] text-muted">
-                Send a message to begin   no project needed
+                Send a message to begin no project needed
               </p>
             </div>
             <div class="w-full max-w-4xl">
