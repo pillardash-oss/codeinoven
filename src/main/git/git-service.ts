@@ -44,6 +44,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolveTimeout) => setTimeout(resolveTimeout, ms))
 }
 
+/** Whether a path exists on disk, symlinks included (broken ones still count). */
+async function pathExists(directory: string, relativePath: string): Promise<boolean> {
+  try {
+    await lstat(resolve(directory, relativePath))
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Upper bound on a single diff payload so the IPC contract never floods. */
 const MAX_DIFF_BYTES = 500 * 1024
 
@@ -335,11 +345,36 @@ export class GitService {
       const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
       if (safePaths.length > 0) {
         await this.wrapError(directory, 'mutation', async () => {
-          await this.client(directory).add(safePaths)
+          await this.stagePaths(directory, safePaths)
         })
       }
       return this.readStatus(directory)
     })
+  }
+
+  /**
+   * Stage the given paths, skipping entries with nothing left to stage.
+   *
+   * `git add <path>` aborts with "pathspec did not match any files" when the
+   * path matches neither the working tree nor the index. That happens when a
+   * deletion is already staged ("Stage all" and batch selections re-send
+   * already-staged paths), and one such entry used to fail the whole batch.
+   * A path is stageable when it exists on disk (modified, untracked, or
+   * deleted-on-disk-but-tracked resolves through the index match) or it is
+   * still an index entry (covers unstaged deletions and unmerged conflicts);
+   * anything else is a harmless no-op and is filtered out before the add.
+   */
+  private async stagePaths(directory: string, safePaths: string[]): Promise<void> {
+    const indexEntries = new Set(
+      (await this.client(directory).raw(['ls-files', '-z', '--', ...safePaths])).split('\0')
+    )
+    const stageable = await Promise.all(
+      safePaths.map(async (path) => indexEntries.has(path) || (await pathExists(directory, path)))
+    )
+    const pending = safePaths.filter((_, index) => stageable[index])
+    if (pending.length > 0) {
+      await this.client(directory).add(pending)
+    }
   }
 
   /**

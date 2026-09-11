@@ -326,7 +326,10 @@
   }
 
   async function stageAll(): Promise<void> {
-    const allPaths = [...new Set(changes.map((change) => change.path))].filter(
+    // Only paths with a worktree-side change (unstaged, untracked, or conflicted
+    // work) can be staged; already-staged entries, such as staged deletions,
+    // are no-ops for git add.
+    const allPaths = [...new Set(changes.filter((change) => !change.staged).map((change) => change.path))].filter(
       (path) => !(gitState.status?.conflicted ?? []).includes(path)
     )
     if (allPaths.length === 0) return
