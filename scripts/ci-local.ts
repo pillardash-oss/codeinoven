@@ -20,6 +20,7 @@
  */
 
 import { mkdir, writeFile } from 'node:fs/promises'
+import { rmSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
 type SmokeTarget = 'linux' | 'mac' | 'win'
@@ -288,6 +289,19 @@ async function buildStagePlan(options: StageOptions, target: SmokeTarget): Promi
   // Packaging + startup smoke mirrors quality.yml windows-runtime/linux-runtime
   // and the per-target build job of nightly.yml. macOS packaging is included so
   // mac contributors catch packaging regressions too.
+  stages.push({
+    id: 'clean-dist',
+    label: 'Clean stale packaged output (dist/)',
+    run: async () => {
+      // Leftover artifacts from earlier builds (stale .bin symlinks, old app
+      // bundles) collide with electron-builder's dependency traversal and fail
+      // packaging with EEXIST, so packaging must always start from a clean
+      // dist/. Build outputs only — never source or node_modules.
+      rmSync(join(projectRoot, 'dist'), { force: true, recursive: true })
+      process.stdout.write('[ci-local] removed stale dist/ packaged output\n')
+      return 0
+    }
+  })
   stages.push(
     await stage(
       'package',

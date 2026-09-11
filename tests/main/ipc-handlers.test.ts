@@ -1182,10 +1182,12 @@ describe('profile analytics model rankings', () => {
       'openai',
       'gpt-5',
       'high',
-      16,
-      2,
-      90_000,
-      0.04,
+      // 4 one-shot + 1 multi-shot samples: analytics() only reports rows with
+      // at least 5 total ranked conversations.
+      32,
+      4,
+      180_000,
+      0.08,
       9,
       1,
       120_000,
@@ -1217,10 +1219,10 @@ describe('profile analytics model rankings', () => {
     expect(ranking?.thinkingLevel).toBe('high')
     expect(ranking?.rubricVersion).toBe('ranking-0to10-v1')
     expect(ranking?.oneShot.averageScore).toBe(8)
-    expect(ranking?.oneShot.samples).toBe(2)
+    expect(ranking?.oneShot.samples).toBe(4)
     expect(ranking?.oneShot.averageDurationMs).toBe(45_000)
     expect(ranking?.multiShot.averageScore).toBe(9)
     expect(ranking?.multiShot.samples).toBe(1)
-    expect(analytics.gradingSpend.costUsd).toBeCloseTo(0.07, 10)
+    expect(analytics.gradingSpend.costUsd).toBeCloseTo(0.11, 10)
   })
 })

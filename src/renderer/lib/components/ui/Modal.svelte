@@ -8,8 +8,7 @@
     registerModalPrimaryAction,
     findPanelPrimaryAction,
     focusOwnsEnter,
-    isFocusableTarget,
-    PRIMARY_BUTTON_SELECTOR
+    isFocusableTarget
   } from '$lib/modal-primary-action.svelte'
 
   const INPUT_FIELD_SELECTOR = [

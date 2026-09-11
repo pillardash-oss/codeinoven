@@ -50,16 +50,41 @@ describe('ModelRankingRepo', () => {
     const db = await createTestDb()
     try {
       const repo = new ModelRankingRepo(db)
-      // Deliberately uneven scores: an average-of-averages would give 8.5.
+      // Deliberately uneven scores and durations across 5 samples (the minimum
+      // analytics() reports): sum ÷ count must reproduce the exact aggregate.
       repo.increment(increment({ score: 10, durationMs: 10_000 }))
       repo.increment(increment({ score: 4, durationMs: 30_000 }))
       repo.increment(increment({ score: 8, durationMs: 20_000 }))
+      repo.increment(increment({ score: 5, durationMs: 40_000 }))
+      repo.increment(increment({ score: 3, durationMs: 50_000 }))
 
       const view = repo.analytics()
       expect(view).toHaveLength(1)
-      expect(view[0]?.oneShot.averageScore).toBeCloseTo(22 / 3, 10)
-      expect(view[0]?.oneShot.averageDurationMs).toBeCloseTo(60_000 / 3, 10)
-      expect(view[0]?.oneShot.samples).toBe(3)
+      expect(view[0]?.oneShot.averageScore).toBeCloseTo(30 / 5, 10)
+      expect(view[0]?.oneShot.averageDurationMs).toBeCloseTo(150_000 / 5, 10)
+      expect(view[0]?.oneShot.samples).toBe(5)
+    } finally {
+      destroyTestDb(db)
+    }
+  })
+
+  it('drops rows below the 5-sample minimum from analytics until they cross it', async () => {
+    const db = await createTestDb()
+    try {
+      const repo = new ModelRankingRepo(db)
+      repo.increment(increment({ score: 10 }))
+      repo.increment(increment({ score: 9 }))
+      repo.increment(increment({ score: 8 }))
+
+      // Thinner aggregates are statistically meaningless and stay hidden.
+      expect(repo.analytics()).toHaveLength(0)
+
+      repo.increment(increment({ score: 7 }))
+      repo.increment(increment({ score: 6 }))
+
+      const view = repo.analytics()
+      expect(view).toHaveLength(1)
+      expect(view[0]?.oneShot.averageScore).toBe(8)
     } finally {
       destroyTestDb(db)
     }
@@ -120,9 +145,13 @@ describe('ModelRankingRepo', () => {
     const db = await createTestDb()
     try {
       const repo = new ModelRankingRepo(db)
-      repo.increment(increment({ shotCategory: 'multi_shot' }))
+      // 5 multi-shot samples make the row reportable while one_shot stays empty.
+      for (let i = 0; i < 5; i += 1) {
+        repo.increment(increment({ shotCategory: 'multi_shot' }))
+      }
 
       const view = repo.analytics()
+      expect(view).toHaveLength(1)
       expect(view[0]?.oneShot.averageScore).toBeNull()
       expect(view[0]?.oneShot.averageDurationMs).toBeNull()
       expect(view[0]?.oneShot.samples).toBe(0)

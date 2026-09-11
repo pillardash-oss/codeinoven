@@ -193,6 +193,13 @@ function aggregateRow(db: Database): Record<string, unknown> | undefined {
   return db.get('SELECT * FROM model_rankings LIMIT 1') as Record<string, unknown> | undefined
 }
 
+function snapshotCount(db: Database): number {
+  const row = db.get('SELECT COUNT(*) AS n FROM model_ranking_snapshots') as
+    | { n: number }
+    | undefined
+  return row?.n ?? 0
+}
+
 describe('ChatEngine model-ranking pipeline', () => {
   it('captures a first_shot snapshot with attribution and timestamps', async () => {
     const engine = await makeEngine(makeFakeDriver([null]))
@@ -501,12 +508,22 @@ describe('ChatEngine model-ranking pipeline', () => {
     const fake = makeFakeDriver([8])
     const engine = await makeEngine(fake)
     const db = temporaryDatabases[0]
-    seedProject(db, 'p1', 't1')
+    // Analytics only reports rows with >= 5 total samples, so the fixture must
+    // produce 5 ranked conversations under one aggregate key (one ranking
+    // window per conversation/thread).
+    const threadIds = ['t1', 't2', 't3', 't4', 't5']
+    for (const threadId of threadIds) seedProject(db, 'p1', threadId)
     const rankingRepo = privateOf<ModelRankingRepo>(engine, 'rankingRepo')
     const repo = privateOf<ModelRankingSnapshotRepo>(engine, 'rankingSnapshotRepo')
-    repo.insert(snapshotInput('t1', { dueAtMs: Date.now() - 1_000 }))
+    for (const threadId of threadIds) {
+      repo.insert(snapshotInput(threadId, { dueAtMs: Date.now() - 1_000 }))
+    }
 
-    await engine.recoverPendingRankingGrades()
+    // The drain claims at most 3 rows per pass; keep draining until the durable
+    // queue is fully processed.
+    while (snapshotCount(db) > 0) {
+      await engine.recoverPendingRankingGrades()
+    }
 
     const view = rankingRepo.analytics()
     expect(view).toHaveLength(1)
@@ -515,10 +532,10 @@ describe('ChatEngine model-ranking pipeline', () => {
     expect(view[0]?.modelId).toBe('gpt-5')
     expect(view[0]?.thinkingLevel).toBe('high')
     expect(view[0]?.oneShot.averageScore).toBe(8)
-    expect(view[0]?.oneShot.samples).toBe(1)
+    expect(view[0]?.oneShot.samples).toBe(5)
     expect(view[0]?.oneShot.averageDurationMs).toBe(45_000)
-    expect(view[0]?.oneShot.costUsd).toBeCloseTo(0.02, 10)
-    expect(rankingRepo.gradingSpend().costUsd).toBeCloseTo(0.02, 10)
+    expect(view[0]?.oneShot.costUsd).toBeCloseTo(0.1, 10)
+    expect(rankingRepo.gradingSpend().costUsd).toBeCloseTo(0.1, 10)
   })
 
 })

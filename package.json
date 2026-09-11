@@ -26,7 +26,9 @@
     "fast-uri": "3.1.7",
     "@codemirror/state": "^6.7.2",
     "@codemirror/view": "^6.43.10",
-    "undici": "6.28.1"
+    "undici": "6.28.1",
+    "hono": "^4.13.7",
+    "js-yaml": "^4.3.2"
   },
   "scripts": {
     "postinstall": "bun scripts/ensure-electron-binary.ts && bun scripts/patch-binary-data.ts && bun scripts/patch-plist-xmldom.ts && bun scripts/patch-mammoth-xmldom.ts && bun scripts/patch-electron-builder-keychain.ts && electron-builder install-app-deps",
@@ -103,6 +105,7 @@
     "@types/node": "^26.4.1",
     "@types/qrcode": "^1.5.6",
     "@types/web-push": "^3.6.4",
+    "@typescript/native": "npm:typescript@7",
     "better-auth": "^1.7.2",
     "bits-ui": "^2.19.0",
     "builder-util": "26.15.3",
