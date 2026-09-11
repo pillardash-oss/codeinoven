@@ -841,7 +841,17 @@
       matchingAccounts[0]?.id ??
       `${nextHarnessId}.default`
     onSelect(nextProviderId, nextModelId, nextHarnessId, nextAccountId)
-    if (nextHarnessId !== harnessId) accounts = availableAccounts
+    if (nextHarnessId !== harnessId) {
+      // Invalidate any in-flight loadAccounts for the previous harness before
+      // assigning the cross-harness list. A popover-open reload (forced, and
+      // potentially slow because it re-syncs harness auth) that resolves after
+      // this point would otherwise overwrite `accounts` with the previous
+      // harness's list, emptying `providerAccounts` and hiding the account
+      // segment for a provider that does have accounts.
+      accountLoadGeneration++
+      accounts = availableAccounts
+      accountLoading = false
+    }
     // Thinking level depends on the model: resolve a level the new model
     // actually offers and surface it right after the model change, so parents
     // never keep a stale level the model no longer supports.
