@@ -310,6 +310,15 @@ export class BrowserService {
     ipcMain.handle('browser:stop', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.stop()
     })
+    ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) => {
+      const contents = this.requireTab(validateTabId(rawTabId)).view.webContents
+      if (contents.isDevToolsOpened()) {
+        contents.closeDevTools()
+        return false
+      }
+      contents.openDevTools({ mode: 'detach' })
+      return true
+    })
     ipcMain.handle('browser:getConsole', (_event, rawTabId) => {
       const tab = this.tabs.get(validateTabId(rawTabId))
       return tab ? [...tab.consoleEntries] : []

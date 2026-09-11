@@ -21,7 +21,6 @@
   import type {
     BrowserSiteDataScope,
     BrowserConsoleEntry,
-    BrowserConsoleLevel,
     BrowserPageState,
     BrowserViewBounds
   } from '$shared/ipc-contract'
@@ -68,9 +67,6 @@
   let address = $state(initialPageState().url)
   let addressError = $state('')
   let pageState = $state<BrowserPageState>(initialPageState())
-  // svelte-ignore state_referenced_locally
-  const initialSurface = tab.surface
-  let activeSurface = $derived((tab as BrowserContextTab | null)?.surface ?? initialSurface)
   let panelVisible = $derived(
     !suppressed &&
       !contextSidebarState.fullscreenSuppression &&
@@ -79,11 +75,8 @@
           contextSidebarState.sidebarActiveTab?.id === tabId))
   )
   let consoleEntries = $state<BrowserConsoleEntry[]>([])
-  let consoleElement = $state<HTMLDivElement>()
   let errorCount = $derived(consoleEntries.filter((entry) => entry.level === 'error').length)
-  let consoleToggleLabel = $derived(
-    activeSurface === 'console' ? 'Show browser page' : 'Show browser console'
-  )
+  let devToolsOpen = $state(false)
   /** Show a closed padlock for https origins; open padlock for everything else. */
   let secure = $derived(pageState.url.startsWith('https:'))
   /** The site menu and its confirmation modal are DOM, while the page itself is a
@@ -199,13 +192,6 @@
     }
   }
 
-  const attachConsoleElement: Attachment<HTMLDivElement> = (element) => {
-    consoleElement = element
-    return () => {
-      if (consoleElement === element) consoleElement = undefined
-    }
-  }
-
   const manageNativeBrowserView: Attachment<HTMLDivElement> = () => {
     void tick().then(() => {
       showAtCurrentBounds().catch(() => {})
@@ -232,8 +218,7 @@
     // `derived_inert` when this is called from ResizeObserver/rAF after
     // the owning render effect has been torn down.
     const visible = untrack(() => panelVisible)
-    const surface = untrack(() => activeSurface)
-    if (!visible || surface !== 'page') return
+    if (!visible) return
     const bounds = contentBounds()
     if (!bounds) return
     try {
@@ -282,53 +267,14 @@
   function applyConsoleEntry(entry: BrowserConsoleEntry): void {
     if (entry.tabId !== tabId) return
     mergeConsoleEntries([entry])
-    if (activeSurface === 'console') {
-      requestAnimationFrame(() => {
-        const element = consoleElement
-        if (element) element.scrollTo({ top: element.scrollHeight })
-      })
-    }
   }
 
-  async function selectSurface(surface: BrowserContextTab['surface']): Promise<void> {
-    if (activeSurface === surface) return
-    contextSidebarState.updateBrowserSurface(tabId, surface)
-    if (surface === 'console') {
-      try {
-        await invoke('browser:hide', tabId)
-      } catch {
-        // Tab already destroyed.
-      }
-      return
-    }
-    await tick()
-    await showAtCurrentBounds()
-  }
-
-  function levelClass(level: BrowserConsoleLevel): string {
-    if (level === 'error') return 'border-danger/20 bg-danger/10 text-danger'
-    if (level === 'warning') return 'border-warning/20 bg-warning/10 text-warning'
-    if (level === 'debug') return 'border-border text-dimmed'
-    return 'border-border text-foreground'
-  }
-
-  function sourceLabel(entry: BrowserConsoleEntry): string {
-    if (!entry.sourceId) return ''
+  async function toggleDevTools(): Promise<void> {
     try {
-      const source = new URL(entry.sourceId)
-      const path = `${source.pathname}${source.search}`
-      return `${source.host}${path === '/' ? '' : path}${entry.lineNumber ? `:${entry.lineNumber}` : ''}`
+      devToolsOpen = await invoke('browser:toggleDevTools', tabId)
     } catch {
-      return `${entry.sourceId}${entry.lineNumber ? `:${entry.lineNumber}` : ''}`
+      // Tab already destroyed.
     }
-  }
-
-  function timeLabel(timestamp: number): string {
-    return new Date(timestamp).toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    })
   }
 
   onMount(() => {
@@ -477,14 +423,14 @@
       class={[
         'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
         fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
-        activeSurface === 'console'
+        devToolsOpen
           ? 'bg-elevated text-foreground'
           : 'text-dimmed hover:bg-elevated hover:text-foreground'
       ]}
-      aria-label={consoleToggleLabel}
-      aria-pressed={activeSurface === 'console'}
-      title={consoleToggleLabel}
-      onclick={() => void selectSurface(activeSurface === 'console' ? 'page' : 'console')}
+      aria-label="Toggle browser DevTools"
+      aria-pressed={devToolsOpen}
+      title="Toggle browser DevTools"
+      onclick={() => void toggleDevTools()}
     >
       <SquareTerminal size={13} />
       {#if fullscreen}
@@ -518,42 +464,10 @@
   <div
     {@attach attachContentElement}
     data-native-browser-content
-    class={['min-h-0 flex-1 bg-surface', activeSurface !== 'page' && 'hidden']}
+    class="min-h-0 flex-1 bg-surface"
     role="document"
     aria-label={`Browser content for ${pageState.title || address}`}
   ></div>
-  <div
-    {@attach attachConsoleElement}
-    class={[
-      'min-h-0 flex-1 overflow-auto bg-app font-mono text-[0.6875rem]',
-      activeSurface !== 'console' && 'hidden'
-    ]}
-    role="region"
-    aria-label="Browser console"
-  >
-    {#each consoleEntries as entry (entry.id)}
-      <div
-        class={['grid grid-cols-[auto_1fr] gap-x-2 border-b px-3 py-2', levelClass(entry.level)]}
-      >
-        <span class="select-none tabular-nums opacity-60">{timeLabel(entry.timestamp)}</span>
-        <div class="min-w-0">
-          <p class="whitespace-pre-wrap break-words">{entry.message}</p>
-          {#if sourceLabel(entry)}
-            <p class="mt-0.5 truncate text-[0.625rem] opacity-55" title={sourceLabel(entry)}>
-              {sourceLabel(entry)}
-            </p>
-          {/if}
-        </div>
-      </div>
-    {:else}
-      <div
-        class="flex h-full min-h-32 flex-col items-center justify-center gap-2 px-6 text-center text-dimmed"
-      >
-        <SquareTerminal size={18} strokeWidth={1.5} />
-        <p class="font-sans text-xs">No messages from this browser tab.</p>
-      </div>
-    {/each}
-  </div>
 </div>
 
 <Modal

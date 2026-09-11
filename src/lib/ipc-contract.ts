@@ -2256,6 +2256,8 @@ export interface IpcInvokeContract {
   'browser:stop': Contract<[tabId: string], void>
   'browser:getConsole': Contract<[tabId: string], BrowserConsoleEntry[]>
   'browser:clearConsole': Contract<[tabId: string], void>
+  /** Toggle the web page's native DevTools window. Returns whether it is now open. */
+  'browser:toggleDevTools': Contract<[tabId: string], boolean>
   'browser:clearData': Contract<[projectId: string], void>
   'browser:clearSiteData': Contract<[projectId: string, scopes: BrowserSiteDataScope[]], void>
   'browser:resolvePermission': Contract<
