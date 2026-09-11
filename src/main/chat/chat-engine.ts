@@ -2138,7 +2138,7 @@ export class ChatEngine {
     this.engineeringLifecycleEngine = new EngineeringLifecycleEngine(database)
     this.auditEngine = new AuditEngine(storage, database)
     this.assignmentEngine = new AssignmentEngine(storage, database)
-    // Register available harness drivers. Order follows the harness registry  
+    // Register available harness drivers. Order follows the harness registry
     // the single source of truth   so the model list and providers settings
     // page agree. Only harnesses with an integrated driver are instantiated.
     const driverFactories: Record<string, () => HarnessDriver> = {
@@ -5333,6 +5333,9 @@ export class ChatEngine {
    * recognized as user edits and excluded from concurrent agent turns.
    */
   recordUserTerminalInput(projectId: string, projectPath: string): void {
+    // Command-backed terminals (harness logins/updates) carry no project id;
+    // there is no checkpoint to attribute their shell commands to.
+    if (!projectId) return
     const existing = this.userTerminalWindows.get(projectId)
     if (existing) {
       existing.lastInput = Date.now()
@@ -6740,7 +6743,7 @@ export class ChatEngine {
       await deliverNow()
     } catch (error) {
       // The turn can settle inside the race window between the working check
-      // above and this delivery (auto-compaction, silent continue, retry)  
+      // above and this delivery (auto-compaction, silent continue, retry)
       // pi considers compaction part of the working trace but the driver's
       // registered turn is already gone. A settled trace must never reject the
       // user's message: deliver it as the next regular turn instead.
@@ -7444,7 +7447,7 @@ export class ChatEngine {
       // or move the turn-start anchor. Only a message after final output
       // starts a new turn; steers are mid-turn follow-ups.
       // Note: steering appends to the LIVE native turn, which still runs under
-      // the model that started it. Do not record the new settings model here  
+      // the model that started it. Do not record the new settings model here
       // that would mask a pending model switch until the following resume.
       const deliverFallbackSteer = (): Promise<void> => {
         const steer = driver.steerPrompt
@@ -8177,7 +8180,7 @@ export class ChatEngine {
         await driver.sendPrompt(temporary.projectPath, request)
       }
       // Snapshot the selection this turn was dispatched with. Temporary
-      // sessions are reused across turns, so this must happen on every send  
+      // sessions are reused across turns, so this must happen on every send
       // completion-time attribution then reads what the turn ran with, never
       // the composer's mid-turn changes.
       this.sessionModelIds.set(temporary.sessionId, {
@@ -9902,7 +9905,7 @@ export class ChatEngine {
       return
     }
 
-    // The user may have renamed the thread while the model was working  
+    // The user may have renamed the thread while the model was working
     // never overwrite a manual title.
     const latest = await this.threadManager.getThread(projectId, threadId)
     if (!latest || latest.titleSource === 'manual') return
@@ -10091,7 +10094,7 @@ export class ChatEngine {
     // in every branch below. It must never also appear as a "restored from
     // history" entry: on a brand-new or forked thread the mirror holds nothing
     // else, and a recap that announces an earlier conversation but only echoes
-    // the question back reads to the model as a fabricated/injected context  
+    // the question back reads to the model as a fabricated/injected context
     // the exact pattern that makes resuming models refuse to continue.
     // Matched by id, not merely by trailing role: an earlier turn that errored
     // out before an assistant reply was persisted (e.g. a rate limit) also
@@ -18418,7 +18421,7 @@ export class ChatEngine {
     }
     // `providerCatalog.updated` is a chat-engine broadcast, never a driver event.
     if (event.type === 'providerCatalog.updated') return
-    // Any live harness activity means the session's project is doing work  
+    // Any live harness activity means the session's project is doing work
     // keep its idle-server clock reset until the stream goes quiet.
     const eventOwner = this.sessionRegistry.get(event.sessionId)
     if (eventOwner) {
@@ -18447,7 +18450,7 @@ export class ChatEngine {
         // Some drivers declare `contextUsage: true` yet carry providers that
         // report no token usage at all (e.g. OpenCode gateways like Console
         // Go). When the event carries no reported occupancy, the composed
-        // request estimate from dispatch is the only signal available  
+        // request estimate from dispatch is the only signal available
         // flagged as estimated so consumers never mistake it for reported.
         event.contextUsed = eventOwner.estimatedContextUsed
         event.contextEstimated = true
@@ -18680,7 +18683,7 @@ export class ChatEngine {
           // A harness can settle a turn while the model is still working (e.g.
           // pi reported a usage-reset settle that proved premature), which
           // finalizes the checkpoint before the last edits landed. A later
-          // file-mutating tool claim then arrives with no active turn  
+          // file-mutating tool claim then arrives with no active turn
           // re-open the just-completed checkpoint so the late work is captured
           // in the same turn's card instead of vanishing.
           const latePaths = changedPathsFromTool(session.projectPath, part)
@@ -20838,7 +20841,7 @@ export class ChatEngine {
       // Claim the pending entry up front: a duplicate idle finalization for the
       // same turn (double `session.idle`/`session.status` delivery after a late
       // part event cleared the idle guard) must not call reviewBrainstorm a
-      // second time while the first refresh still holds the brainstorm lock  
+      // second time while the first refresh still holds the brainstorm lock
       // that race surfaced as a misleading "already updating this Brainstorm"
       // toast even though the first refresh completed fine.
       const pendingBrainstormTurn = this.pendingBrainstormTurns.get(sessionId)
@@ -21861,7 +21864,7 @@ export class ChatEngine {
     const info = this.sessionRegistry.get(sessionId)
     if (!info) return
     if (info.ephemeral) return
-    // A `session.error` event is not proof the underlying turn actually died  
+    // A `session.error` event is not proof the underlying turn actually died
     // e.g. pi's transient extension_error fires while its persistent RPC
     // process keeps running and finishes the turn normally. Probe the live
     // process before tearing anything down so a false alarm doesn't wipe the
@@ -22135,7 +22138,7 @@ export class ChatEngine {
     for (const other of this.sessionRegistry.values()) {
       if (other === self || other.projectId !== self.projectId) continue
       if (other.threadId === self.threadId) continue
-      // Worker sub-agents of this thread are part of the same logical turn  
+      // Worker sub-agents of this thread are part of the same logical turn
       // their claimed paths belong to this turn's card.
       if (ownThreadIds?.has(other.threadId)) continue
       if (!other.activeTurnId) continue

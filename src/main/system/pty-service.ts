@@ -507,12 +507,20 @@ export class PtyService {
     const session = this.sessions.get(id)
     if (!session) return
     if (session.idleTimeoutMs) session.lastActivityAt = Date.now()
+    // The keystroke reaches the PTY first, always: the user-activity hook below
+    // is best-effort and must never be able to swallow terminal input.
+    session.process.write(data)
     // Any user keystroke (including pastes) keeps the user-activity window
     // open so their commands' file writes are never claimed by an agent turn.
-    if (data.length > 0 && this.onUserInput) {
-      this.onUserInput(session.projectId, session.cwd)
+    // Command sessions (harness logins/updates) carry no project, so there is
+    // nothing to attribute and the hook is skipped entirely.
+    if (data.length > 0 && this.onUserInput && session.projectId) {
+      try {
+        this.onUserInput(session.projectId, session.cwd)
+      } catch (error) {
+        Logger.error('user-input activity hook failed:', error)
+      }
     }
-    session.process.write(data)
   }
 
   private resize(id: string, cols: number, rows: number): void {
