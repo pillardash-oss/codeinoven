@@ -1,6 +1,6 @@
 import { app, BrowserWindow, nativeTheme } from 'electron'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { BrowserPermissionRequest } from '../../lib/ipc-contract'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -16,9 +16,13 @@ const POPUP_WIDTH = 360
 const POPUP_HEIGHT = 208
 const POPUP_MARGIN = 8
 
-/** Resolve the app preload bundle (same lookup as the main window). */
+/** Resolve the app preload bundle (same lookup as the main window).
+ *  `import.meta.url` is the compiled main bundle file (which lives in
+ *  `out/main`), so take its directory first; the preload is one level up in
+ *  `out/preload`. Passing the full file path to `join` instead silently
+ *  resolved outside the bundle tree and the popup loaded with no preload. */
 function defaultPreloadPath(): string {
-  const dir = join(fileURLToPath(import.meta.url), '../../preload')
+  const dir = join(dirname(fileURLToPath(import.meta.url)), '../preload')
   for (const name of ['index.mjs', 'index.js', 'index.cjs']) {
     const candidate = join(dir, name)
     if (existsSync(candidate)) return candidate
@@ -54,7 +58,11 @@ export class PermissionPromptWindow {
   ) {}
 
   /** Show (or update) the prompt for `request`; `queueSize` covers queued siblings. */
-  show(request: BrowserPermissionRequest, queueSize: number, contentAnchor: PromptAnchor | null): void {
+  show(
+    request: BrowserPermissionRequest,
+    queueSize: number,
+    contentAnchor: PromptAnchor | null
+  ): void {
     this.anchor = contentAnchor
     this.active = true
     if (this.popup && !this.popup.isDestroyed()) {
@@ -133,10 +141,8 @@ export class PermissionPromptWindow {
       url.searchParams.set('theme', theme)
       return popup.loadURL(url.href).catch(() => {})
     }
-    const document = join(fileURLToPath(import.meta.url), '../../renderer/browser-popup.html')
-    return popup
-      .loadFile(document, { query: { theme } })
-      .catch(() => {})
+    const document = join(dirname(fileURLToPath(import.meta.url)), '../renderer/browser-popup.html')
+    return popup.loadFile(document, { query: { theme } }).catch(() => {})
   }
 
   /** Keep the prompt glued to the parent: reposition on move/resize and hide
