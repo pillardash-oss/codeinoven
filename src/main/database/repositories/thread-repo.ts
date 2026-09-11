@@ -909,13 +909,29 @@ export function buildThreadSearchSql(
 }
 
 /**
+ * Score how strongly a thread title matches the query. All title rows already
+ * contain the full query substring (title LIKE), so this only grades closeness:
+ * exact title > title starting with the query > query appearing mid-title.
+ */
+function titleMatchScore(title: string, raw: string): number {
+  const normalizedTitle = title.toLowerCase()
+  const normalizedQuery = raw.toLowerCase()
+  if (normalizedTitle === normalizedQuery) return 3
+  if (normalizedTitle.startsWith(normalizedQuery)) return 2
+  return 1
+}
+
+/**
  * Merge title + message matches, dedup by thread, and build snippets.
  *
- * Results are ranked primarily by threaded recency: message matches arrive
- * per-message ordered by bm25, so we dedupe to the best-scoring message per
- * thread (for the snippet) and then re-sort all threads by `last_activity`
- * descending. A title match counts as the stronger result kind for a given
- * thread and wins the tiebreak so exact title hits surface their role.
+ * Match quality always outranks recency:
+ * 1. Title matches come before message-only matches. Within title matches,
+ *    closer titles (exact > prefix > contains) rank first.
+ * 2. Message matches keep bm25 relevance order (rows arrive pre-sorted, so the
+ *    first row seen per thread is its best-scoring message and supplies the
+ *    snippet).
+ * 3. `last_activity` is only a tiebreaker inside the same quality tier so
+ *    equally relevant threads surface the most recent one first.
  */
 export function mergeThreadSearchResults(
   titleRows: unknown[],
@@ -923,7 +939,15 @@ export function mergeThreadSearchResults(
   raw: string,
   limit: number
 ): ThreadSearchResult[] {
-  const byThread = new Map<string, { result: ThreadSearchResult; titleKind: boolean; activity: number }>()
+  interface Entry {
+    result: ThreadSearchResult
+    titleKind: boolean
+    titleScore: number
+    /** Lower bm25 is better; only meaningful for message matches. */
+    bm25: number
+    activity: number
+  }
+  const byThread = new Map<string, Entry>()
   const consume = (row: unknown, titleKind: boolean) => {
     const threadRow = row as ThreadRow
     if (byThread.has(threadRow.id)) {
@@ -931,6 +955,7 @@ export function mergeThreadSearchResults(
       // An exact title hit beats a message hit for the same thread.
       if (titleKind && !entry.titleKind) {
         entry.titleKind = true
+        entry.titleScore = titleMatchScore(threadRow.title, raw)
         entry.result.kind = 'title'
         entry.result.role = undefined
         entry.result.snippet = undefined
@@ -940,13 +965,20 @@ export function mergeThreadSearchResults(
     }
     const thread = rowToThread(threadRow)
     if (titleKind) {
-      byThread.set(threadRow.id, { result: { thread, kind: 'title' }, titleKind: true, activity: thread.lastActivity })
+      byThread.set(threadRow.id, {
+        result: { thread, kind: 'title' },
+        titleKind: true,
+        titleScore: titleMatchScore(threadRow.title, raw),
+        bm25: 0,
+        activity: thread.lastActivity
+      })
       return
     }
     const meta = row as {
       match_role?: unknown
       snippet_text?: unknown
       snippet_timestamp?: unknown
+      fts_rank?: unknown
     }
     byThread.set(threadRow.id, {
       result: {
@@ -957,13 +989,21 @@ export function mergeThreadSearchResults(
         timestamp: Number(meta.snippet_timestamp)
       },
       titleKind: false,
+      titleScore: 0,
+      // Rows arrive bm25-ordered, so the first row per thread is its best.
+      bm25: Number(meta.fts_rank ?? 0),
       activity: thread.lastActivity
     })
   }
   for (const row of messageRows) consume(row, false)
   for (const row of titleRows) consume(row, true)
   return [...byThread.values()]
-    .sort((a, b) => b.activity - a.activity || Number(b.titleKind) - Number(a.titleKind))
+    .sort((a, b) => {
+      if (a.titleKind !== b.titleKind) return a.titleKind ? -1 : 1
+      if (a.titleKind && a.titleScore !== b.titleScore) return b.titleScore - a.titleScore
+      if (!a.titleKind && a.bm25 !== b.bm25) return a.bm25 - b.bm25
+      return b.activity - a.activity
+    })
     .slice(0, limit)
     .map((entry) => entry.result)
 }

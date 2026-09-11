@@ -526,8 +526,16 @@ export class CodexDriver extends PersistentCliDriver {
   /** Start a Codex turn through app-server so the same native turn can be steered. */
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
+    // A native turn can still be registered while the engine believes the
+    // session is idle: a network failure tears down the visible turn, but the
+    // `turn/completed` cleanup only arrives when the connection recovers (or
+    // after the request timeout). Rejecting here poisons the thread with
+    // "A turn is already active" on every retry, so a dispatch that lands on a
+    // live native turn is delivered as a steer instead - the driver's turn
+    // registry is authoritative, not the engine's session status.
     if (this.activeTurns.has(session.id)) {
-      throw new Error(`A turn is already active for session ${session.id}`)
+      await this.steerPrompt(projectPath, options)
+      return
     }
 
     if (this.utilityRuntime(session.id)) {
@@ -806,6 +814,12 @@ export class CodexDriver extends PersistentCliDriver {
         threadId: active.nativeThreadId,
         turnId: active.turnId
       })
+      // A successful interrupt does not guarantee Codex's `turn/completed`
+      // notification will arrive: the wedged connection that forced the abort
+      // may stay silent indefinitely, leaving this registration as a zombie
+      // that rejects every later dispatch with "A turn is already active".
+      // Finish the turn locally; the notification path is idempotent.
+      await this.finishAppServerTurn(active)
     } catch (error) {
       await this.finishAppServerTurn(
         active,

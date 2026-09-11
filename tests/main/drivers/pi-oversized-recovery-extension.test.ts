@@ -31,7 +31,10 @@ async function loadExtension(armed: boolean): Promise<{
   // importing the package root outside Pi also loads its optional server SDK.
   const sdk = join(process.cwd(), 'node_modules/@earendil-works/pi-coding-agent/dist/core')
   const source = piCompactionExtension()
-    .replace('__CIO_OVERSIZED_FLAG_PATH__', join(root, 'flag.json'))
+    // JSON-escape like the production composer does: a raw Windows path
+    // contains backslash sequences (\t, \b) that corrupt the generated
+    // string literal and silently disarm the extension.
+    .replace('__CIO_OVERSIZED_FLAG_PATH__', JSON.stringify(join(root, 'flag.json')).slice(1, -1))
     .replace(
       "import { convertToLlm, serializeConversation } from '@earendil-works/pi-coding-agent'",
       `import { convertToLlm } from '${pathToFileURL(join(sdk, 'messages.js')).href}'\nimport { serializeConversation } from '${pathToFileURL(join(sdk, 'compaction/utils.js')).href}'`
