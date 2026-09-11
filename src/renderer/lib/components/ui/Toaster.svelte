@@ -158,8 +158,13 @@
   }
 
   :global([data-sonner-toast][data-styled='true'] [data-button]) {
-    flex: 1 1 0 !important;
-    min-width: 0 !important;
+    /* 100% basis (not 0) so the button ALWAYS wraps to its own bottom row,
+       even when the toast has no description. With basis 0 an action button
+       and a title fit side by side on one row, which is exactly the bug that
+       hit error toasts (title + Copy, no description) while thread toasts
+       (title + description + action) wrapped correctly. One rule, one
+       behaviour, every status. */
+    flex: 1 1 100% !important;
     margin-top: 4px !important;
     justify-content: center !important;
   }
@@ -185,7 +190,6 @@
   :global([data-sonner-toast][data-type='error']),
   :global([data-sonner-toast][data-type='warning']),
   :global([data-sonner-toast][data-type='info']) {
-    --status: transparent;
     position: relative;
   }
 
