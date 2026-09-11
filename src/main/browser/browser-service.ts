@@ -1,5 +1,21 @@
-import { app, BrowserWindow, Menu, MenuItem, dialog, session, shell, WebContentsView, type Session } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  MenuItem,
+  dialog,
+  session,
+  shell,
+  webFrameMain,
+  WebContentsView,
+  type Session,
+  type WebFrameMain
+} from 'electron'
 import { join } from 'node:path'
+import type { Database } from '../database/database'
+import { ProjectRepo } from '../database/repositories/project-repo'
+import { ThreadRepo } from '../database/repositories/thread-repo'
+import type { Project, Thread } from '../../lib/types'
 import type {
   BrowserConsoleEntry,
   BrowserConsoleLevel,
@@ -28,6 +44,9 @@ const PROJECT_ID_PATTERN = /^[a-zA-Z0-9:._-]{1,240}$/u
 const PERMISSION_REQUEST_ID_PATTERN = /^[a-f0-9-]{36}$/u
 const PERMISSION_TIMEOUT_MS = 60_000
 const DOWNLOAD_ID_PATTERN = /^[a-f0-9-]{36}$/u
+/** Character cap for the "<project> - <thread>" context line shown above
+ *  page alert/confirm dialogs, so a long thread title cannot dominate them. */
+const MAX_DIALOG_LABEL_LENGTH = 120
 
 interface BrowserTab {
   view: WebContentsView
@@ -211,6 +230,30 @@ function safeBasename(value: string): string {
   return base
 }
 
+/** Build the injected wrapper that prefixes page alert/confirm messages with
+ *  the owning thread's context line. Escaping goes through `JSON.stringify`,
+ *  so any project or thread name is embedded safely as a JS string literal. */
+function dialogContextScript(label: string): string {
+  return `(() => {
+  const label = ${JSON.stringify(label)};
+  const win = window;
+  if (win.__cioDialogOriginals === undefined) win.__cioDialogOriginals = {};
+  const originals = win.__cioDialogOriginals;
+  for (const [name, kind] of [['alert', 'Alert'], ['confirm', 'Confirm']]) {
+    if (typeof originals[name] !== 'function') {
+      const current = win[name];
+      if (typeof current !== 'function') continue;
+      originals[name] = current.bind(win);
+    }
+    const original = originals[name];
+    win[name] = function (message) {
+      const text = message == null ? '' : String(message);
+      return original(label + ' ' + kind + '\\n\\n' + text);
+    };
+  }
+})()`
+}
+
 function permissionOrigin(value: string): string | null {
   try {
     const parsed = new URL(value)
@@ -295,6 +338,8 @@ export class BrowserService {
   private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
   private readonly downloads = new Map<string, BrowserDownloadRecord>()
   private readonly promptWindow: PermissionPromptWindow
+  private readonly projects: ProjectRepo
+  private readonly threads: ThreadRepo
   private activeTabId: string | null = null
   /** Last known content bounds of the active tab's native view (window-content
    *  coordinates). The permission popup anchors itself to this area so it
@@ -306,8 +351,13 @@ export class BrowserService {
   private toastVisible = false
   private consoleSequence = 0
 
-  constructor(private readonly window: BrowserWindow) {
+  constructor(
+    private readonly window: BrowserWindow,
+    db: Database
+  ) {
     this.promptWindow = new PermissionPromptWindow(window)
+    this.projects = new ProjectRepo(db)
+    this.threads = new ThreadRepo(db)
   }
 
   register(): void {
@@ -328,6 +378,9 @@ export class BrowserService {
         }
         tab.view.setBounds(bounds)
         this.activeTabBounds = bounds
+        // Refresh the alert/confirm context label on every activation so a
+        // renamed project or thread is reflected without waiting for a reload.
+        this.injectDialogContext(tabId)
         if (!tab.initialNavigationStarted) {
           tab.initialNavigationStarted = true
           this.load(tabId, initialUrl)
@@ -612,6 +665,15 @@ export class BrowserService {
     this.tabs.set(tabId, tab)
 
     const publish = (): void => this.publishState(tabId)
+    view.webContents.on('did-finish-load', () => this.injectDialogContext(tabId))
+    view.webContents.on(
+      'did-frame-finish-load',
+      (_event, isMainFrame, frameProcessId, frameRoutingId) => {
+        if (isMainFrame) return
+        const frame = webFrameMain.fromId(frameProcessId, frameRoutingId)
+        if (frame) this.injectDialogContext(tabId, frame)
+      }
+    )
     view.webContents.on('devtools-opened', publish)
     view.webContents.on('devtools-closed', publish)
     view.webContents.on('did-start-loading', publish)
@@ -1011,6 +1073,67 @@ export class BrowserService {
   private promptAnchor(): { x: number; y: number; width: number } | null {
     const bounds = this.activeTabBounds
     return bounds ? { x: bounds.x, y: bounds.y, width: bounds.width } : null
+  }
+
+  /** Resolve the "<project> - <thread>" context line for a tab's dialogs, or
+   *  null when either record is missing (native dialog then stays untouched). */
+  private dialogLabel(tab: BrowserTab): string | null {
+    let project: Project | null
+    let thread: Thread | null
+    try {
+      project = this.projects.get(tab.projectId)
+      thread = this.threads.get(tab.threadId)
+    } catch (error: unknown) {
+      Logger.error('Browser dialog context lookup failed:', error)
+      return null
+    }
+    if (!project || !thread) return null
+    const name = project.name.trim()
+    const title = thread.title.trim()
+    if (!name || !title) return null
+    const label = `${name} - ${title}`
+    return label.length > MAX_DIALOG_LABEL_LENGTH
+      ? `${label.slice(0, MAX_DIALOG_LABEL_LENGTH)}…`
+      : label
+  }
+
+  /** Install the labeled alert/confirm shim into a document's JS context.
+   *  Chromium renders page dialogs as native windows parented to the app
+   *  window and carries no context about which CodeInOven thread owns the
+   *  page, so every loaded frame gets a wrapper that prefixes the dialog
+   *  message with "<project> - <thread> <Alert|Confirm>" followed by the
+   *  page's own text. Injection is idempotent per document: re-injection
+   *  (after thread renames or replays) rewraps the same original callables
+   *  instead of stacking prefixes. `prompt()` is left untouched because
+   *  Electron never renders it. */
+  private injectDialogContext(tabId: string, frame?: WebFrameMain): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    const label = this.dialogLabel(tab)
+    if (!label) return
+    const script = dialogContextScript(label)
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) return
+    if (frame) {
+      this.runDialogScript(frame, script)
+      return
+    }
+    let frames: readonly WebFrameMain[]
+    try {
+      frames = contents.mainFrame.framesInSubtree
+    } catch {
+      // Between documents there is no frame tree to inject into.
+      return
+    }
+    for (const candidate of frames) this.runDialogScript(candidate, script)
+  }
+
+  private runDialogScript(frame: WebFrameMain, script: string): void {
+    if (frame.isDestroyed()) return
+    void frame.executeJavaScript(script).catch(() => {
+      // Frames can be replaced mid-navigation; the shim installs on the next
+      // frame load, so a failed injection here is harmless.
+    })
   }
 
   private load(tabId: string, url: string): void {

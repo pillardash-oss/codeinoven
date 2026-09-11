@@ -688,7 +688,7 @@ async function bootPostPaintServices(): Promise<void> {
     }).origin
   })
   if (mainWindow && !mainWindow.isDestroyed()) {
-    const service = new BrowserService(mainWindow)
+    const service = new BrowserService(mainWindow, database)
     browserService = service
     service.register()
     chatEngine.setBrowserUtilityExecutor((operation, input, context) =>
@@ -1200,7 +1200,7 @@ function createWindow(): BrowserWindow {
   })
 
   // Renderer freeze/crash diagnostics. On a slow machine (e.g. M1) the renderer
-  // can seize up or be torn down in ways that never surface as a JS exception  
+  // can seize up or be torn down in ways that never surface as a JS exception
   // the OS shows "not responding" while nothing lands in the log. These
   // webContents lifecycle events record the freeze/crash deterministically even
   // though the renderer's own JS can no longer run to log it.
