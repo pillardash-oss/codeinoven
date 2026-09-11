@@ -21,7 +21,7 @@ const IDLE_RELEASE_DELAY_MS = 5_000
 const SCHEDULED_RETRY_WAKE_WINDOW_MS = 6 * 60 * 60 * 1_000
 
 /**
- * PowerWakeService — prevents the system and display from sleeping while
+ * PowerWakeService   prevents the system and display from sleeping while
  * work is in progress, while a scheduled auto-retry (usage/rate-limit reset) is
  * due within six hours, or while a remote phone has opened the desktop
  * workspace. Thread/retry work and remote sessions have independent persisted
@@ -126,7 +126,7 @@ export class PowerWakeService {
   }
 
   /**
-   * True when a pending auto-resume will fire within the keep-awake window —
+   * True when a pending auto-resume will fire within the keep-awake window  
    * the app can retry it unattended, so the device must not sleep through it.
    */
   private hasScheduledRetry(): boolean {

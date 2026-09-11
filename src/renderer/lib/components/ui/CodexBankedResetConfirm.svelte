@@ -4,7 +4,7 @@
   interface Props {
     /** Whether the confirmation dialog is visible. */
     open: boolean
-    /** Percent of the current usage window already consumed, when known —
+    /** Percent of the current usage window already consumed, when known  
      *  shown as an extra warning so a reset isn't spent while usage is low. */
     usedPercent?: number
     onClose: () => void
@@ -34,7 +34,7 @@
   </p>
   {#if usedPercent !== undefined && usedPercent < 50}
     <p class="mt-2 text-sm leading-relaxed text-warning">
-      You've only used {Math.round(usedPercent)}% of your current window — activating now wastes
+      You've only used {Math.round(usedPercent)}% of your current window   activating now wastes
       most of the reset's value.
     </p>
   {/if}

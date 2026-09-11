@@ -26,7 +26,7 @@
       ? 'text-muted'
       : 'text-primary'}"
     aria-label="Sort threads"
-    title="Sort threads — {threadSortLabel}"
+    title="Sort threads   {threadSortLabel}"
   >
     <ArrowUpDown size={14} />
   </DropdownMenu.Trigger>

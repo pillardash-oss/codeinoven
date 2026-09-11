@@ -129,7 +129,7 @@ vi.mock('../../../src/main/drivers/pi-rpc-client', () => ({
 
 // The connected-provider filter reads the real user-level pi credential and
 // native-provider stores, which are non-hermetic inputs. Stub both so the
-// connected set cannot be determined and catalogs stay unfiltered — the
+// connected set cannot be determined and catalogs stay unfiltered   the
 // documented behavior for unreliable reads.
 vi.mock('../../../src/main/providers/pi-auth-config', async () => {
   const actual = await vi.importActual<typeof import('../../../src/main/providers/pi-auth-config')>(
@@ -276,7 +276,7 @@ describe('PiDriver', () => {
     const client = rpcMock.clients[0]
     expect(client).toBeDefined()
     const [promptText] = client.prompt.mock.calls[0] as [string, undefined]
-    // The system prompt must not be duplicated into the user turn's text —
+    // The system prompt must not be duplicated into the user turn's text  
     // it is delivered as a real system-role field via the core-tools
     // extension's before_agent_start hook, which reads the handoff file
     // below. Re-sending it in every turn's text made models mistake the

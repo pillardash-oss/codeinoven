@@ -8,7 +8,7 @@
  * rename that phone independently.
  *
  * Since the 2026-08-08 remediation (A-04) the phone also owns two
- * NON-EXPORTABLE Web Crypto key pairs — an ECDSA P-256 signing key and an
+ * NON-EXPORTABLE Web Crypto key pairs   an ECDSA P-256 signing key and an
  * ECDH P-256 agreement key. Only the public halves are ever shared; the
  * private `CryptoKey` objects live in IndexedDB (structured-cloneable) so a
  * shared QR secret or a caller-supplied device id is never durable authority.
@@ -182,7 +182,7 @@ export async function loadDeviceIdentity(
     id = storage.getItem(DEVICE_ID_KEY) ?? ''
     name = storage.getItem(DEVICE_NAME_KEY) ?? ''
   } catch {
-    // Storage unavailable — fall through to the page-lifetime identity.
+    // Storage unavailable   fall through to the page-lifetime identity.
   }
   const fallback = id ? null : volatileIdentity
   if (!id) {

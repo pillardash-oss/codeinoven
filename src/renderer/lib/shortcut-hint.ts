@@ -1,7 +1,7 @@
 import { formatKeyCombo } from '$lib/keymap/keymap'
 
 export interface ShortcutHintOptions {
-  /** Symbolic key tokens, e.g. ['mod', '1'] — rendered platform-aware. */
+  /** Symbolic key tokens, e.g. ['mod', '1']   rendered platform-aware. */
   keys: readonly string[]
   /** Vertical offset from the element's top edge. Defaults to -8px (above). */
   top?: string
@@ -85,6 +85,6 @@ export function shortcutHint(node: HTMLElement, options: ShortcutHintOptions) {
   }
 }
 
-/** Shared badge styling — muted kbd chip that lifts above the control. */
+/** Shared badge styling   muted kbd chip that lifts above the control. */
 export const shortcutHintBadgeClass =
   'absolute z-20 inline-flex h-4 min-w-4 items-center justify-center rounded border border-border bg-surface px-1 font-mono text-[0.5625rem] leading-none text-dimmed shadow-sm transition-opacity duration-150'

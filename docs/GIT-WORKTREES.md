@@ -103,9 +103,9 @@ state.
 
 ## 6a. Git panel is worktree-aware
 
-Every Git-panel operation — status, diff, stage, unst-age, commit, branch
+Every Git-panel operation   status, diff, stage, unst-age, commit, branch
 list/checkout/create/delete, fetch, pull, push, merge, rebase, stash,
-discard/ignore, reset, amend, log, and PR create/compare — resolves its
+discard/ignore, reset, amend, log, and PR create/compare   resolves its
 repository root through the **active scope**. When the panel is attached to a
 managed worktree scope, these operations run against the worktree checkout and
 its `cio/` branch, not the project root:
@@ -173,9 +173,9 @@ stale or mismatched IDs are rejected.
 
 - **Remove worktree (keep scope):** removes the worktree checkout and
   re-points the scope to the project directory. The scope, its threads and the
-  branch are all kept — only the isolated checkout is gone. Refused when the
+  branch are all kept   only the isolated checkout is gone. Refused when the
   worktree is dirty or unpushed.
-- **Delete scope:** full cleanup for a managed scope — removes the worktree
+- **Delete scope:** full cleanup for a managed scope   removes the worktree
   checkout, deletes the scope bucket and the `cio/` branch in one confirmed
   action. The dialog also offers to permanently delete the scope's threads
   (otherwise they return to the Default scope). Deleting a project-rooted

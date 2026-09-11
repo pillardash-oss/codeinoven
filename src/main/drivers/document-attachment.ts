@@ -18,7 +18,7 @@ const CSV_MIME = 'text/csv'
 const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
 const MAX_EXTRACTED_CHARACTERS = 200_000
 const MAX_PREVIEW_CHARACTERS = 4_000_000
-/** Maximum sheet rows rendered per sheet and sheets rendered per workbook —
+/** Maximum sheet rows rendered per sheet and sheets rendered per workbook  
  *  keeps untrusted-workbook HTML inside the preview budget. */
 const MAX_SHEET_ROWS = 5_000
 const MAX_SHEET_COLUMNS = 200
@@ -578,7 +578,7 @@ async function readPptxSlideRels(
     const id = relationship.getAttribute('Id')
     const target = relationship.getAttribute('Target')
     if (!id || !target) continue
-    // Targets are relative to ppt/slides/ — normalize `../media/x` to a zip path.
+    // Targets are relative to ppt/slides/   normalize `../media/x` to a zip path.
     targets.set(id, `ppt/slides/${target}`.split('/').reduce<string[]>((acc, part) => {
       if (part === '..') acc.pop()
       else if (part !== '.' && part !== '') acc.push(part)

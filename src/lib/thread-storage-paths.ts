@@ -26,7 +26,7 @@ export function threadAttachmentDirectory(
 
 /**
  * Every directory this thread could have written to, app-owned config-root
- * data only (never a location inside a local project's own working tree —
+ * data only (never a location inside a local project's own working tree  
  * that belongs to the user, not app scratch space). Callers should remove
  * these with `{ recursive: true, force: true }` since most will not exist
  * for any given thread.

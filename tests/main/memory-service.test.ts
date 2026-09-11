@@ -147,7 +147,7 @@ describe('MemoryService', () => {
   })
 })
 
-const ASSISTANT = 'Done — the change is applied and verified.'
+const ASSISTANT = 'Done   the change is applied and verified.'
 
 /** Representative completed turns for the ≥80% skip-rate acceptance check. */
 const REPRESENTATIVE_TURNS: Array<{ user: string; durable: boolean }> = [

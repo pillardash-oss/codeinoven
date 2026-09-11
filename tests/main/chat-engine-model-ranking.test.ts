@@ -472,7 +472,7 @@ describe('ChatEngine model-ranking pipeline', () => {
     const open = repo.openForThread('t1')
     repo.registerCompletedExchange(open?.id ?? '', 'late follow-up', Date.now(), Date.now() + 86_400_000)
 
-    // The stale pre-follow-up judge result resolves — it must not score.
+    // The stale pre-follow-up judge result resolves   it must not score.
     releases[0]?.(3)
     await drain1
     expect(aggregateRow(db)).toBeUndefined()

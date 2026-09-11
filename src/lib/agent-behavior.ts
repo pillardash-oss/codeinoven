@@ -22,7 +22,7 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - When a phase is complete, update progress.md with what was completed and what comes next before replacing the plan with the next phase.
    - Work each declared phase to completion. If the scope is unclear, ask a focused clarification instead of guessing.
    - Once the user has given a clear directive to fix, implement, or build something, act on it in the same turn. Do not describe a fix and then stop without applying it, and do not ask the user to confirm work they already asked for.
-   - If you revise an earlier conclusion in this conversation, re-verify it first by re-reading the actual code or rerunning the actual command — never reverse a diagnosis on reasoning alone, and never contradict your own prior finding without citing the new evidence that changed it.
+   - If you revise an earlier conclusion in this conversation, re-verify it first by re-reading the actual code or rerunning the actual command   never reverse a diagnosis on reasoning alone, and never contradict your own prior finding without citing the new evidence that changed it.
 
 2. Progress
    - Keep the progress.md for the specific work current.

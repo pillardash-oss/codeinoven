@@ -390,7 +390,7 @@
   }
 
   function rankingScoreLabel(stats: LocalProfileRankingModeStats): string {
-    if (stats.samples === 0 || stats.averageScore === null) return '—'
+    if (stats.samples === 0 || stats.averageScore === null) return ' '
     return `${stats.averageScore.toFixed(1)}/10`
   }
 
@@ -399,13 +399,13 @@
   }
 
   function rankingDurationLabel(stats: LocalProfileRankingModeStats): string {
-    if (stats.samples === 0 || stats.averageDurationMs === null) return '—'
+    if (stats.samples === 0 || stats.averageDurationMs === null) return ' '
     return formatDuration(stats.averageDurationMs)
   }
 
   function rankingAggregateLabel(entry: LocalProfileModelRanking): string {
     const aggregate = rankingAggregate(entry)
-    return aggregate === null ? '—' : `${aggregate.toFixed(1)}/10`
+    return aggregate === null ? ' ' : `${aggregate.toFixed(1)}/10`
   }
 
   function rankingTotalSamplesLabel(entry: LocalProfileModelRanking): string {

@@ -56,7 +56,7 @@ describe('payload size limits', () => {
   })
 
   it('lets the raw oversized check win over the malformed check', async () => {
-    // No colons at all, so this payload is malformed — but the raw string
+    // No colons at all, so this payload is malformed   but the raw string
     // length check runs first and must reject it as oversized.
     const oversized = 'x'.repeat(MAX_RAW_PAYLOAD_CHARS + 1)
     await expect(decryptPayload('shared-secret', oversized)).rejects.toThrow(

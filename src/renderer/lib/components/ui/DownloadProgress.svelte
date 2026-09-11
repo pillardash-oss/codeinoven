@@ -15,7 +15,7 @@
     /** Called when user clicks Cancel (×). Omit to hide cancel. */
     onCancel?: () => void
     cancelLabel?: string
-    /** Pause/resume — only for resumable transports (e.g. browser downloads) */
+    /** Pause/resume   only for resumable transports (e.g. browser downloads) */
     onPause?: () => void
     onResume?: () => void
     paused?: boolean

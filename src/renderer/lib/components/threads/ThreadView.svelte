@@ -258,7 +258,7 @@
 
   interface Props {
     thread: Thread
-    /** True on the Chats tab — hides engineering tooling. */
+    /** True on the Chats tab   hides engineering tooling. */
     chatMode?: boolean
     /** Called with the new thread after a fork from a message succeeds. */
     onForked?: (forked: Thread) => void
@@ -288,7 +288,7 @@
      *  project mode only for a project's sole, untouched thread. */
     allowCenteredComposer?: boolean
     /** Opens the scoped projects view with the sidebar focused on this thread
-     *  (composer scope shoe — existing threads). */
+     *  (composer scope shoe   existing threads). */
     onOpenScopeView?: (thread: Thread) => void
   }
 
@@ -326,7 +326,7 @@
   /** The conversation identity for held-steer tracking: temporary chats use
    *  their own id, threads use the thread id. */
   let conversationId = $derived(controller?.conversationId ?? thread.id)
-  // Intentional initial-value captures — Workspace keys this view by thread ID.
+  // Intentional initial-value captures   Workspace keys this view by thread ID.
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
   let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
@@ -345,12 +345,12 @@
   /** Id of the first mounted message while the reader is scrolled up. With an
    *  anchor pinned, the window runs from what the reader is reading all the
    *  way to the live tail and GROWS with the stream instead of sliding with
-   *  it — a working turn appending trace entries can never unmount the
+   *  it   a working turn appending trace entries can never unmount the
    *  message and trace the reader is steering against. Null = follow the
    *  tail with the newest `mountedCount` messages. */
   let windowStartId = $state<string | null>(null)
   /** Absolute index of the first mounted message. If the anchored message
-   *  left the store (truncated/deleted), fall back without touching state —
+   *  left the store (truncated/deleted), fall back without touching state  
    *  deriveds must stay pure. A minimum of TWO pages is always mounted: the
    *  current working page ([prompt][trace][output]) and the previous page,
    *  even when it sits out of the viewport. */
@@ -378,17 +378,17 @@
   })
   /** The mounted window: everything from the reader's anchor (or the newest
    *  `mountedCount` messages) to the live tail. The message store may hold
-   *  hundreds of merged pages, but only this window mounts — remounting a
+   *  hundreds of merged pages, but only this window mounts   remounting a
    *  whole multi-megabyte transcript on every thread switch was the
    *  switch-back delay. History beyond the window mounts only when the
    *  reader scrolls up (or jumps to it), never automatically. The window
    *  always extends to the tail, so streaming trace entries render the
-   *  moment they land — never staged, never evicted from below the reader. */
+   *  moment they land   never staged, never evicted from below the reader. */
   let visibleMessages = $derived(hasController ? messages : messages.slice(mountedStartIndex))
 
-  /** True when the thread has no conversation yet — the composer is centered
+  /** True when the thread has no conversation yet   the composer is centered
    *  with suggested prompts instead of docked at the bottom. */
-  /** Resolved icon for the centered head-start header — same pipeline as the
+  /** Resolved icon for the centered head-start header   same pipeline as the
    *  project sidebar: stored image, SVG icon type, then initials fallback. */
   const centeredProjectIconUrl = $derived(
     project && !chatMode ? getProjectIcon(project, projectIconUrl ?? undefined) : null
@@ -420,7 +420,7 @@
   const projectSuggestedPrompts = [
     'Summarize this project: architecture, key modules, and entry points',
     'Review the codebase and list the top improvement opportunities',
-    'Find and fix a bug — explain the root cause as you go'
+    'Find and fix a bug   explain the root cause as you go'
   ]
 
   const chatSuggestedPrompts = [
@@ -434,7 +434,7 @@
   /** Auto-fill the mounted window up to HISTORY_WINDOW_SIZE after the first
    *  paint, one batch per frame. Batches mount above the viewport only, so
    *  content-visibility keeps them layout-free and a reader at the bottom
-   *  never sees a step. This is the only automatic fill-in — nothing beyond
+   *  never sees a step. This is the only automatic fill-in   nothing beyond
    *  the window mounts without the reader scrolling up. */
   function beginInitialPaintReveal(): void {
     if (!alive || hasController) return
@@ -543,12 +543,12 @@
    *  screen yet (the agent is still connecting/assembling, or the hydrated
    *  turn carries no visible reasoning/tool/sub-agent parts), the bottom
    *  working placeholder must keep showing so the user never stares at a blank
-   *  conversation. Uses the raw busy flag — delegated work is covered by the
+   *  conversation. Uses the raw busy flag   delegated work is covered by the
    *  placeholder's `delegatedWorkBusy` term instead of a forward reference.
    *
    *  An unanswered follow-up/steer is the key empty window: the thread is busy
    *  working on that trailing user message, but `lastTurnStartIndex` still
-   *  points at the previous (already rendered) assistant turn — whose parts
+   *  points at the previous (already rendered) assistant turn   whose parts
    *  must not be mistaken for the current work. Count nothing in that window
    *  so the bottom working placeholder keeps showing instead of a blank tail. */
   let latestTurnRenderableParts = $derived.by(() => {
@@ -579,13 +579,13 @@
         return since && since > 0 ? since : undefined
       })()
   )
-  // Intentional initial-value capture — view is remounted (keyed) per thread.
+  // Intentional initial-value capture   view is remounted (keyed) per thread.
   // svelte-ignore state_referenced_locally
   let sessionId = $state(thread.sessionId ?? '')
   // Ephemeral sessions this thread spawned (spec/brainstorm drafting) carry
   // their own sessionId, distinct from the thread's main `sessionId` above.
   // Track them so permission events raised on those sessions aren't silently
-  // dropped by the exact-match gate below — that used to require leaving and
+  // dropped by the exact-match gate below   that used to require leaving and
   // returning to the thread (forcing a remount) before the permission card
   // would appear.
   // Non-reactive bookkeeping: only read inside event handlers, never in the template.
@@ -596,7 +596,7 @@
   const liveTokenRate = new LiveTokenRate()
   /** Finalized per-message rates, recorded when a live turn settles. */
   let finalizedTokenRates = $state<Record<string, number>>({})
-  // Feed the live rate tracker from real usage reports only — the streamed-text
+  // Feed the live rate tracker from real usage reports only   the streamed-text
   // estimate was too crude to display and has been removed with the live rate.
   // The tracker remains for the finalized end-of-turn rate.
   $effect(() => {
@@ -612,7 +612,7 @@
       break
     }
   })
-  // Intentional initial-value capture — the view is remounted (keyed) per thread.
+  // Intentional initial-value capture   the view is remounted (keyed) per thread.
   // For controller-driven conversations, the controller owns the settings proxy.
   // svelte-ignore state_referenced_locally
   let settings = $state<ThreadSettings>(
@@ -656,7 +656,7 @@
     const autopilot = pending.autopilot === true
     const selectedStages = autopilot ? [] : normalizeLifecycleStages(pending.stages)
     // When the staged selection turns everything off, the toolbox must read as
-    // off too — a stale `startedAt` marker from a previous run would keep the
+    // off too   a stale `startedAt` marker from a previous run would keep the
     // icon lit after the user toggled the modes off.
     const cleared = !autopilot && selectedStages.length === 0
     return {
@@ -676,9 +676,9 @@
 
   /** Toolbox icon activity mirrors the staged selection, not the persisted
    *  settings: toggles are intent-only until send, so the icon must dim or
-   *  light the moment a switch flips — not after the next message.
+   *  light the moment a switch flips   not after the next message.
    *  Without a staged selection the persisted lifecycle stays authoritative. */
-  /** Whether the thread currently runs any Engineering lifecycle stage — a
+  /** Whether the thread currently runs any Engineering lifecycle stage   a
    *  staged (intent-only) selection wins over the persisted lifecycle state. */
   const engineeringOn = $derived.by(() => {
     const pending = pendingLifecycleSelection
@@ -721,7 +721,7 @@
   function selectEngineeringLifecycle(input: EngineeringLifecycleSelectionInput): void {
     pendingLifecycleSelection = input
     // Persist the staged intent so the switches stay exactly where the user
-    // left them across thread switches and app restarts — a send must never
+    // left them across thread switches and app restarts   a send must never
     // steer a different prompt than the one the switches currently show.
     saveLifecycleIntent(thread.projectId, thread.id, input)
   }
@@ -736,7 +736,7 @@
     )
     lifecycleCancelModalOpen = false
     pendingLifecycleSelection = null
-    // The staged intent was either applied or discarded by this confirmation —
+    // The staged intent was either applied or discarded by this confirmation  
     // it must not resurface on the next mount.
     clearLifecycleIntent(thread.projectId, thread.id)
     if (replacement.stages.length > 0 || replacement.autopilot) {
@@ -785,7 +785,7 @@
         ? ` The previous attempt failed with: ${current.failure.trim()}`
         : ''
       if (stage === 'brainstorm') {
-        // Retry always continues the same stage in the same conversation — the
+        // Retry always continues the same stage in the same conversation   the
         // agent has the full history, so never shortcut to the stale document.
         await sendMessage(
           `Retry the persisted Brainstorm stage using the existing conversation and project context.${failureNote}`,
@@ -826,7 +826,7 @@
   }
 
   /** Stop the Engineering lifecycle from the prominent failure card. The failed
-   *  stage already ended, so no in-flight turn needs the replacement guard —
+   *  stage already ended, so no in-flight turn needs the replacement guard  
    *  cancelling reveals the normal card for the stage underneath. */
   async function cancelEngineeringFailure(): Promise<void> {
     try {
@@ -846,8 +846,8 @@
    *  trace belongs to the module that produced it: composer controls may change
    *  the next-turn settings freely while a turn runs, but they must never
    *  re-label work that already happened. The snapshot is only overwritten when
-   *  a new turn is actually sent — never cleared by waiting, error, or idle
-   *  transitions — so resumed turns keep their original attribution. */
+   *  a new turn is actually sent   never cleared by waiting, error, or idle
+   *  transitions   so resumed turns keep their original attribution. */
   let liveWorkingSelection = $state<WorkingModelSelection | null>(null)
   let harnessAccounts = $state.raw<HarnessAccount[]>([])
 
@@ -878,7 +878,7 @@
   let imageDescriptorAskAgain = $state(false)
   /** Whether the app auto-resumes threads after a usage/rate-limit reset. */
   let autoRetryAfterReset = $state(true)
-  /** Reactive provider catalog for this thread's project — seeded from the
+  /** Reactive provider catalog for this thread's project   seeded from the
    *  cache and kept current when the model picker lazily refreshes the store. */
   let providers = $derived(providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached())
 
@@ -925,7 +925,7 @@
 
   let commands = $state<ScopedHarnessCommand[]>([])
   /** Native "switch to API usage credits" command, when the active harness's
-   *  driver exposes one (Claude Code today) — drives the composer's dedicated
+   *  driver exposes one (Claude Code today)   drives the composer's dedicated
    *  flame-icon shortcut instead of only being reachable via the slash menu. */
   let usageCreditsCommand = $derived(commands.find((command) => command.name === 'usage-credits'))
   /** Skills visible to the thread's active harness: harness-native, global-layer,
@@ -954,7 +954,7 @@
   let activeTodo = $derived(latestAgentTodo(todoMessages))
   let project = $state<Project | null>(null)
   let projectIconUrl = $state<string | null>(null)
-  /** Composer scope shoe data — project mode only (ChatComposer hides it in chat mode). */
+  /** Composer scope shoe data   project mode only (ChatComposer hides it in chat mode). */
   let scopeShoe = $derived.by((): ComposerScopeShoe | undefined => {
     if (chatMode) return undefined
     const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
@@ -1071,7 +1071,7 @@
   /** Harness that actually produced the visible provider issue. When it differs
    *  from the thread's current harness (e.g. a Codex usage-limit card still on
    *  screen while the user already switched the thread to OpenCode), the badge
-   *  must attribute the card to the harness that reported it — never to the
+   *  must attribute the card to the harness that reported it   never to the
    *  harness that happens to be selected now. */
   const statusCardProviderName = $derived(
     visibleProviderStatus?.issue?.harnessId
@@ -1080,7 +1080,7 @@
   )
   /** Settings frozen at the moment the visible provider status card appeared.
    *  The composer must not mutate anything already on the conversation screen:
-   *  an error card keeps showing — and retrying from "Change" affects — the
+   *  an error card keeps showing   and retrying from "Change" affects   the
    *  configuration of the failed attempt until a new message is actually sent.
    *  The snapshot is refreshed only when the card's identity changes, when the
    *  user explicitly picks a model from the card itself, or when it clears. */
@@ -1249,12 +1249,12 @@
     }
 
     // Orchestration child threads (workers, auditors) are driven by their
-    // coordinator — they can never enable engineering mode themselves, so the
+    // coordinator   they can never enable engineering mode themselves, so the
     // stage toggles and Auto Pilot are not offered to them.
     if (!chatMode && !orchestrationChild) {
       // Engineering is a set of lifecycle stages, not one switch: expose every
       // stage as its own toggle so "turn engineering on/off" is never ambiguous.
-      // Each action stages the selection exactly like the Engineering Toolbox —
+      // Each action stages the selection exactly like the Engineering Toolbox  
       // intent only, applied when the next message is sent.
       const lifecycle = effectiveLifecycleSelection
       for (const stage of engineeringStageActions) {
@@ -1278,7 +1278,7 @@
       })
     }
 
-    // Chat mode only surfaces permission levels once File System is enabled —
+    // Chat mode only surfaces permission levels once File System is enabled  
     // chats run with auto permission review until the user opts into files.
     if (!chatMode || settings.fileSystemMode === true) {
       for (const permission of actionPermissionLevels) {
@@ -1287,7 +1287,7 @@
           title: `Permissions: ${permission.label}`,
           description:
             permission.id === 'full_access'
-              ? 'Run in yolo mode — every operation auto-approved'
+              ? 'Run in yolo mode   every operation auto-approved'
               : 'Auto-run every permission unless it is explicitly denied',
           category: 'mode',
           source: applicationActionSource,
@@ -1312,8 +1312,8 @@
 
     // Quick chat is anchored at the last agent turn, so it only makes sense once
     // the agent has responded. It deliberately stays usable while the agent is
-    // working — no busy/commandExecuting disabledReason.
-    // Controller-driven views (quick chats) never offer it — a quick chat
+    // working   no busy/commandExecuting disabledReason.
+    // Controller-driven views (quick chats) never offer it   a quick chat
     // cannot open another quick chat from its own last turn.
     if (!hasController && messages.some((message) => message.role === 'assistant')) {
       actions.push({
@@ -1339,13 +1339,13 @@
       })
     }
 
-    // CodeInOven utility turn — the slash spelling of the @cio-utility composer
+    // CodeInOven utility turn   the slash spelling of the @cio-utility composer
     // tag. Selecting sends the tag (plus any typed arguments) through the normal
     // send path, so the main-process utility orchestration owns the contract.
     actions.push({
       id: 'command:cio-utility',
       title: '/cio-utility',
-      description: 'Start a CodeInOven utility turn — install utilities or debug the app',
+      description: 'Start a CodeInOven utility turn   install utilities or debug the app',
       category: 'command',
       source: applicationActionSource,
       keywords: ['cio', 'utility', 'utilities', 'setup', 'install', 'skill', 'mcp', 'debug'],
@@ -1355,7 +1355,7 @@
 
     // Skills the thread's harness can see but does not expose as native slash
     // commands: global-layer skills and CodeInOven-registered skills. Harness-
-    // reported skills are skipped — they are already listed above.
+    // reported skills are skipped   they are already listed above.
     const harnessCommandNames = new Set(commands.map((command) => command.name.toLocaleLowerCase()))
     for (const skill of capabilitySkills) {
       if (harnessCommandNames.has(skill.name.toLocaleLowerCase())) continue
@@ -1415,7 +1415,7 @@
       // A compaction summary rewrites the harness's context: occupancy and
       // token totals reported by earlier messages no longer describe the
       // session. Drop them here so the meter never shows a stale
-      // pre-compaction reading (e.g. a stuck "≈100%") — the next reported
+      // pre-compaction reading (e.g. a stuck "≈100%")   the next reported
       // or estimated turn re-seeds the signal from the compacted context.
       if (
         message.origin === 'compaction' ||
@@ -1701,7 +1701,7 @@
     seedContextUsageSnapshot(thread.contextUsage)
   })
 
-  /** Snapshot of usage actually rendered — it settles at the end of a turn or
+  /** Snapshot of usage actually rendered   it settles at the end of a turn or
    *  after a quiet period, and flushes to the latest value on hover. */
   let contextUsageDisplay = $state<AgentContextUsage | undefined>(undefined)
   let contextUsageCommittedAt = 0
@@ -1711,7 +1711,7 @@
    * Fold a fresh usage snapshot over whatever the meter already shows without
    * ever *losing* telemetry. A quota refresh that returns no rate limits, no
    * credits, or no context fields must not erase the bars/value the user is
-   * currently viewing — only a newer, richer snapshot may replace them.
+   * currently viewing   only a newer, richer snapshot may replace them.
    */
   function mergeContextUsage(
     previous: AgentContextUsage | undefined,
@@ -1754,7 +1754,7 @@
       modelId: settings.modelId
     }
     // Persist with the thread so the next mount restores instantly. Fire and
-    // forget — the live value is already displayed; a failed write only delays
+    // forget   the live value is already displayed; a failed write only delays
     // the next seed.
     void invoke('thread:setContextUsage', thread.projectId, thread.id, snapshot).catch(() => {})
   }
@@ -1769,12 +1769,12 @@
     if (contextUsage) commitContextUsage(contextUsage)
     void refreshEfficiencyKpis()
     // Fetch live quota only when the battery is revealed (hover), and only if
-    // the cached copy is stale — never on thread open.
+    // the cached copy is stale   never on thread open.
     if (accountUsageCache.isStale()) void refreshAccountUsageOnDemand()
   }
 
   /** Called when the user stops hovering the usage indicator. Resets the quota
-   *  cache so the *next* hover always fetches fresh data — while the user keeps
+   *  cache so the *next* hover always fetches fresh data   while the user keeps
    *  hovering, no further fetch is scheduled. */
   function hideContextUsage(): void {
     accountUsageCache.markStale()
@@ -1782,7 +1782,7 @@
 
   async function refreshAccountUsageOnDemand(): Promise<void> {
     // Drop a response for a harness selection the user already moved away
-    // from — an out-of-order resolve must not clobber the current selection.
+    // from   an out-of-order resolve must not clobber the current selection.
     const refreshKey = `${settings.harnessId}:${settings.accountId ?? ''}:${settings.providerId}`
     const usageList = await accountUsageCache.refresh(
       {
@@ -1802,7 +1802,7 @@
     if (currentUsage) {
       // Fold the fresh quota over whatever the meter already shows so an empty
       // rate-limit list or missing credits can never erase the bars the user is
-      // viewing — it can only replace them with newer, richer data.
+      // viewing   it can only replace them with newer, richer data.
       const merged = mergeContextUsage(contextUsageDisplay, {
         ...(contextUsageDisplay ?? {
           costUsd: 0,
@@ -2046,7 +2046,7 @@
   function addResponseReference(): void {
     const selection = responseSelection
     if (!selection) return
-    // Temporary chats keep their composer references on the controller — the
+    // Temporary chats keep their composer references on the controller   the
     // thread-scoped store below is invisible to them.
     if (controller?.addSelection) {
       controller.addSelection(selection.text)
@@ -2164,7 +2164,7 @@
   function responseReferenceContext(): string | undefined {
     if (responseReferences.length === 0) return undefined
     return [
-      'The user quoted excerpts from your earlier response as references. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address — if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
+      'The user quoted excerpts from your earlier response as references. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
       ...responseReferences.map((reference) => {
         const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
         return `[${reference.label}]\n${comment}<selection>\n${reference.text}\n</selection>`
@@ -2216,7 +2216,7 @@
     const promptReferences = [...responseReferences]
     clearResponseReferences()
     // The centered head start must never return for this thread once a real
-    // message was sent — even if the messages are deleted right after.
+    // message was sent   even if the messages are deleted right after.
     if (!chatMode) workspaceState.markThreadHeadStartUsed(thread.id)
     void (async () => {
       const staged = pendingLifecycleSelection
@@ -2226,7 +2226,7 @@
           (engineeringLifecycle.activeStage !== undefined ||
             engineeringLifecycle.humanGate !== undefined)
         ) {
-          // Keep the staged choice — confirmLifecycleReplacement reads it.
+          // Keep the staged choice   confirmLifecycleReplacement reads it.
           pendingGuardedSend = {
             text,
             attachments,
@@ -2291,7 +2291,7 @@
     closeResponseSelection()
   }
 
-  /** Open a quick chat anchored at the last agent turn — as if the user had
+  /** Open a quick chat anchored at the last agent turn   as if the user had
    *  selected the latest response, but with no selection attached so it works
    *  even while the agent is still working. */
   function openQuickChatFromLastTurn(): void {
@@ -2419,7 +2419,7 @@
     })
   }
 
-  /** Live trace of the isolated Assignment draft offshoot — mirrors the spec
+  /** Live trace of the isolated Assignment draft offshoot   mirrors the spec
    *  generation trace so the coordinator thread always bubbles up offshoot
    *  sessions while they work. */
   function applyAssignmentGenerationTrace(update: AssignmentGenerationTraceUpdate): void {
@@ -2610,7 +2610,7 @@
   )
   let independentAuditRunning = $derived(independentAuditEnabled && auditBusy)
   /** The switch only exists once the thread has work and no Engineering mode
-   *  is on — a staged (intent-only) Toolbox selection counts as on, so the
+   *  is on   a staged (intent-only) Toolbox selection counts as on, so the
    *  two controls can never be lit at the same time before a send commits
    *  either choice. Fresh threads and empty drafts never show it. */
   let independentAuditAvailable = $derived(
@@ -2894,7 +2894,7 @@
       .catch(() => undefined)
   }
 
-  /** Current activity label — shows agent status only in Engineering. */
+  /** Current activity label   shows agent status only in Engineering. */
   let loopAuditing = $derived(settings.loopMode === true && auditState === 'running')
   let activityLabel = $derived.by((): string => {
     if (loopAuditing) return 'Auditing'
@@ -2918,7 +2918,7 @@
   })
 
   /**
-   * Files uploaded to or produced in this chat — surfaced via the Sources panel.
+   * Files uploaded to or produced in this chat   surfaced via the Sources panel.
    * File citations are only listed when confirmed to exist on disk. Citations
    * inside the project display with their project-relative path (the tail of
    * the path stays visible), while `path` itself is never rewritten so clicks
@@ -2957,14 +2957,14 @@
       })
   })
 
-  /** Jump target for the header's history dropdown — loads a window around the
+  /** Jump target for the header's history dropdown   loads a window around the
    *  target when it lies outside the currently loaded cache, then scrolls to it. */
   async function jumpToMessage(id: string): Promise<void> {
     const { projectId, id: threadId } = thread
     if (jumpLoading) return
     const cachedIndex = messages.findIndex((message) => message.id === id)
     if (cachedIndex >= 0) {
-      // The store holds the target but the mounted window may not — move the
+      // The store holds the target but the mounted window may not   move the
       // anchor back to cover it (plus context) before scrolling.
       if (!hasController && mountedStartIndex > cachedIndex) {
         windowStartId = messages[Math.max(0, cachedIndex - 8)]?.id ?? null
@@ -3002,13 +3002,13 @@
         if (newest) void fillForwardFrom(projectId, threadId, newest.id)
       }
     } catch {
-      // The target could not be located in the mirror — nothing else to do.
+      // The target could not be located in the mirror   nothing else to do.
     } finally {
       jumpLoading = false
     }
   }
 
-  /** Scroll the transcript to a section heading inside a specific message —
+  /** Scroll the transcript to a section heading inside a specific message  
    *  the jump target used by section sources in the Sources panel. Loads a
    *  window around the message when it lies outside the loaded cache. */
   async function scrollToMessageSection(messageId: string, section: string): Promise<void> {
@@ -3077,7 +3077,7 @@
         cursorId = page.messages[page.messages.length - 1].id
       }
     } catch {
-      // Non-fatal — a residual gap can still be filled by scrolling.
+      // Non-fatal   a residual gap can still be filled by scrolling.
     } finally {
       loadingNewerMessages = false
     }
@@ -3110,7 +3110,7 @@
 
   // Feed the header count and Sources sidebar from the persisted conversation.
   // Controller-driven views (temporary chats) are embedded panels, never the
-  // primary conversation surface — they must not publish global header state.
+  // primary conversation surface   they must not publish global header state.
   $effect(() => {
     if (hasController) return
     workspaceState.sources = sources
@@ -3277,7 +3277,7 @@
     const away = !isAtBottom(scrollEl)
     // Pin the window to what the reader is reading the moment they leave the
     // tail, and release it back to the tail-relative window when they return.
-    // While pinned, a streaming turn grows the window instead of sliding it —
+    // While pinned, a streaming turn grows the window instead of sliding it  
     // the message and trace under the reader can never be unmounted by new
     // entries arriving at the tail.
     if (away && !userScrolledAway) {
@@ -3287,7 +3287,7 @@
     }
     userScrolledAway = away
     // Self-heal: the mounted window must never sit at zero while the store
-    // holds messages — a windowed view that collapsed to nothing would leave
+    // holds messages   a windowed view that collapsed to nothing would leave
     // the reader staring at a blank transcript.
     if (!hasController && mountedCount === 0 && messages.length > 0) {
       mountedCount = Math.min(messages.length, HISTORY_WINDOW_SIZE)
@@ -3341,13 +3341,13 @@
     loadingOlderMessages = true
     // Loading history is an explicit request to inspect the past.
     userScrolledAway = true
-    // Pin the window before anything prepends — with an anchor pinned, the
+    // Pin the window before anything prepends   with an anchor pinned, the
     // mounted content cannot change no matter what merges behind it, so the
     // fetch loop needs no scroll compensation at all.
     windowStartId ??= messages[Math.max(0, messages.length - mountedCount)]?.id ?? null
     try {
       // One click loads THREE turn-aligned pages: the store usually already
-      // holds some of them, so fetch only while it does not — each fetch is a
+      // holds some of them, so fetch only while it does not   each fetch is a
       // bounded 40-message page and turns that span more than one page keep
       // it fetching until three deduped turn starts exist before the anchor.
       for (let attempt = 0; attempt < 30; attempt++) {
@@ -3378,7 +3378,7 @@
         await tick()
       }
       // Turn-align the store's oldest boundary: a raw 40-row page can end
-      // mid-turn, cutting that turn's prompt out of the cache entirely — the
+      // mid-turn, cutting that turn's prompt out of the cache entirely   the
       // loaded page would then begin at a working trace with its prompt
       // missing above it. Extend the fetch until the oldest row is a turn's
       // prompt (or the thread truly has nothing older).
@@ -3405,8 +3405,8 @@
         mountedCount += page.messages.length
         await tick()
       }
-      // Move the anchor back three pages — or to the thread's very beginning
-      // when fewer complete pages exist — then keep the reader's viewport
+      // Move the anchor back three pages   or to the thread's very beginning
+      // when fewer complete pages exist   then keep the reader's viewport
       // stable across the mount. The restore is anchored to the first on-screen
       // message element, not a height delta: a height-delta write drifts
       // whenever the newly mounted pages' real laid-out height differs from
@@ -3423,7 +3423,7 @@
           : undefined
       const previousHeight = el?.scrollHeight ?? 0
       const previousTop = el?.scrollTop ?? 0
-      // The anchor must be the start of a turn — a user prompt — never a
+      // The anchor must be the start of a turn   a user prompt   never a
       // trace row. Landing on a trace presented the loaded page cut off at
       // its beginning, with the turn's prompt missing above it.
       const starts = turnStartPromptsBefore(mountedStartIndex, 3)
@@ -3454,7 +3454,7 @@
               after.scrollTop
             after.scrollTop = Math.max(0, contentOffset - viewportOffset)
           } else {
-            // Element anchor unavailable — fall back to the height-delta
+            // Element anchor unavailable   fall back to the height-delta
             // compensation rather than leaving the viewport unmoved.
             after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
           }
@@ -3474,7 +3474,7 @@
 
   // A thread always opens at the live bottom: the latest output, the working
   // trace, the file-changes cards. A saved pixel offset is stale the moment
-  // the conversation grows, so restoring it lands the user mid-list — never
+  // the conversation grows, so restoring it lands the user mid-list   never
   // restore it. This runs once per thread (the view is remounted per thread
   // switch); later arrivals are followed by the resize observer below.
   $effect(() => {
@@ -3492,8 +3492,8 @@
   })
 
   // Follow the live tail without ever fighting the reader. Whenever the
-  // conversation content changes size — messages stream in, markdown and
-  // images finish rendering, cards resolve, a sent message lands — re-anchor
+  // conversation content changes size   messages stream in, markdown and
+  // images finish rendering, cards resolve, a sent message lands   re-anchor
   // to the latest message, but only while the reader is still at the bottom.
   // Their first upward scroll or wheel tick sets `userScrolledAway` and the
   // viewport is never touched again until they jump back. Native browser
@@ -3508,7 +3508,7 @@
     if (!el || !(content instanceof Element)) return
     const observer = new ResizeObserver(() => {
       if (!scrollEl || !mayReanchorToLatest(userScrolledAway)) return
-      // Re-anchor only when the viewport actually drifted from the bottom —
+      // Re-anchor only when the viewport actually drifted from the bottom  
       // a no-op write here would fire a pointless scroll event per resize.
       if (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight > 1) {
         scrollEl.scrollTop = scrollEl.scrollHeight
@@ -3520,7 +3520,7 @@
 
   function scrollToLatest(): void {
     if (!scrollEl) return
-    // Snap instantly — a smooth scroll races the agent's stream: its target
+    // Snap instantly   a smooth scroll races the agent's stream: its target
     // is captured once, so while it animates the bottom keeps growing and the
     // scroll lands short, re-locking the user as "away". Arming the follow
     // lock synchronously and re-anchoring a tick later keeps the tail engaged
@@ -3673,7 +3673,7 @@
         clearTimeout(copyResetTimer)
         cancelAnimationFrame(initialPaintRevealFrame)
         // Controller-driven views never published the global state below, so
-        // their teardown must not clear it either — clearing would clobber the
+        // their teardown must not clear it either   clearing would clobber the
         // values published by the primary conversation view behind the panel.
         if (!controller) {
           workspaceState.sources = []
@@ -3914,7 +3914,7 @@
     const { projectId, id } = thread
     await threadMessages.waitForLoad(projectId, id)
     // New empty thread seeded as loaded before mount must render the
-    // composer instantly — zero IPC on the critical path. All persistence
+    // composer instantly   zero IPC on the critical path. All persistence
     // reads enrich state in the background without ever blocking typing
     // or voice, and never show "Loading conversation...".
     const alreadySeeded = threadMessages.loaded(projectId, id)
@@ -3924,7 +3924,7 @@
       // Every other hydration step is fully async and never blocks typing/voice;
       // git branch arrives later via the thread:update broadcast.
       olderMessagesAvailable = false
-      // Defer all non-composer hydration off the paint — schedule as microtask
+      // Defer all non-composer hydration off the paint   schedule as microtask
       // so the first frame only mounts ChatComposer.
       queueMicrotask(() => {
         if (!alive) return
@@ -3941,7 +3941,7 @@
         restoreQueuedMessage()
         restoreResponseReferences()
       })
-      // Background persistence/config enrichment — never blocks input, never shows loading
+      // Background persistence/config enrichment   never blocks input, never shows loading
       void Promise.all([invoke('thread:get', projectId, id), invoke('config:get')])
         .then(([threadData, config]) => {
           if (!alive) return
@@ -3995,7 +3995,7 @@
       ])
       if (!alive) return
       olderMessagesAvailable = threadMessages.hasOlder(projectId, id)
-      // Cold cache: the bounded preload just landed — stage the first paint
+      // Cold cache: the bounded preload just landed   stage the first paint
       // around the newest tail now. No-op when the warm path already revealed.
       beginInitialPaintReveal()
       if (threadData?.settings) {
@@ -4027,7 +4027,7 @@
       restoreResponseReferences()
     } catch {
       // A single transient failure must not silently drop the settings, mirror,
-      // and status restore — retry once, then degrade gracefully.
+      // and status restore   retry once, then degrade gracefully.
       if (attempt === 0) {
         return loadLocal(1)
       }
@@ -4052,7 +4052,7 @@
     if (controller) return
 
     const { projectId, id } = thread
-    // Independent extras — each lands as it resolves, none block the paint.
+    // Independent extras   each lands as it resolves, none block the paint.
     void refreshCheckpoints()
     void loadProjectContext()
 
@@ -4114,7 +4114,7 @@
       // No live session record means the persisted in-flight status is stale: a
       // genuinely running turn always registers its session status (or a pending
       // spec/retry surfaces it). loadLocal may have optimistically restored busy
-      // off a leftover `planning`/`executing` DB row — clear it so a finished or
+      // off a leftover `planning`/`executing` DB row   clear it so a finished or
       // never-started thread never keeps the composer/rows looking busy after a
       // view switch or refresh. The one exception is persisted evidence of a
       // mid-flight turn: if the saved latest turn has real working parts and no
@@ -4205,7 +4205,7 @@
         fullUserMessageHistory = history
         userMessageHistoryLoaded = true
       } catch {
-        // Non-fatal — the dropdown falls back to the loaded message window.
+        // Non-fatal   the dropdown falls back to the loaded message window.
       } finally {
         userMessageHistoryLoading = null
       }
@@ -4271,7 +4271,7 @@
       .catch(() => {})
   }
 
-  /** Retry after an error or a paused provider retry — replace the live turn first. */
+  /** Retry after an error or a paused provider retry   replace the live turn first. */
   async function retryConnection(): Promise<void> {
     if (providerRetrying) return
     providerRetrying = true
@@ -4280,7 +4280,7 @@
         userRequestedStop = true
         if (controller) {
           // Controller conversations (temporary chats) run on their own
-          // conversation id — abort that, never the parent thread.
+          // conversation id   abort that, never the parent thread.
           await controller.abort()
           providerStatus = null
         } else {
@@ -4480,7 +4480,7 @@
         if (event.error) {
           clearLocalTurn()
           agentRuns.setIdle(thread.projectId, thread.id)
-          // The user intentionally stopped this turn — its abort error is not
+          // The user intentionally stopped this turn   its abort error is not
           // a session failure, so never surface the error banner.
           if (!userRequestedStop) {
             if (event.issue) {
@@ -4668,7 +4668,7 @@
         olderMessagesAvailable ||= page.hasOlder
         syncOpenSubagentTabs()
       } catch {
-        // Non-fatal — keep what we have
+        // Non-fatal   keep what we have
       }
     })()
     refreshMessagesInFlight = loadPromise
@@ -4721,7 +4721,7 @@
   }
 
   /** Load the skills the thread's harness can see (harness-native, global, and
-   *  CodeInOven-registered). Discovery is supplementary — the composer keeps
+   *  CodeInOven-registered). Discovery is supplementary   the composer keeps
    *  working when it fails. */
   async function refreshCapabilitySkills(): Promise<void> {
     const { projectId, id } = thread
@@ -4767,7 +4767,7 @@
       const pending = await invoke('agent:listImageDescriptorErrors', projectId, id)
       pendingImageDescriptorError = pending[0] ?? null
     } catch {
-      // Non-fatal — the card re-appears on the next imageDescriptor.error event.
+      // Non-fatal   the card re-appears on the next imageDescriptor.error event.
     }
   }
 
@@ -4891,10 +4891,10 @@
     }
     // Claim synchronously before sending so the background dispatcher (or any
     // concurrent path) cannot also deliver this same queued message. If we lose
-    // the race, whoever claimed it will send it — never send here.
+    // the race, whoever claimed it will send it   never send here.
     if (!claimQueuedMessage(projectId, id)) return
     try {
-      // Dequeue only the head — remaining queued messages stay FIFO for the
+      // Dequeue only the head   remaining queued messages stay FIFO for the
       // following idle transitions (one message per turn).
       clearQueuedState()
       await sendMessage(
@@ -4993,9 +4993,9 @@
     scheduleResponseHighlightRestore(saved)
   }
 
-  // ─── Message queue & steer —───────────────────────────────────────────────
+  // ─── Message queue & steer  ───────────────────────────────────────────────
 
-  /** Shortcut label for the steer combo — macOS shows ⌘⇧, others Ctrl+Shift+. */
+  /** Shortcut label for the steer combo   macOS shows ⌘⇧, others Ctrl+Shift+. */
   const steerModifierLabel =
     navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘⇧' : 'Ctrl+Shift+'
 
@@ -5045,7 +5045,7 @@
 
   /** The mounted composer, used to focus the editor in place (no remount). */
   let composer: ChatComposer | undefined = $state(undefined)
-  /** Baseline captured at mount so only new requests focus — opening a thread
+  /** Baseline captured at mount so only new requests focus   opening a thread
    *  via the sidebar must not steal focus from wherever the user clicked. */
   let focusComposerEditorBaseline = $state(workspaceState.focusComposerEditorCount)
   $effect(() => {
@@ -5121,12 +5121,12 @@
       errorMessage = ''
       providerStatus = null
       // A stale transport/load error must not keep the provider status card on
-      // screen while the new turn runs — the same rule the thread path follows
+      // screen while the new turn runs   the same rule the thread path follows
       // by clearing cached error state at send time.
       controller.clearError()
       idleAttentionHandled = false
       // Snapshot the selection this turn starts with before anything else can
-      // change it — identical to the thread path, so mid-turn composer edits
+      // change it   identical to the thread path, so mid-turn composer edits
       // never re-label the running trace.
       captureLiveWorkingSelection()
       const payload: SendPayload = {
@@ -5151,8 +5151,8 @@
     const hasTaskReferences = (taskReferences?.length ?? 0) > 0
     const hasPromptReferences = (promptReferences?.length ?? 0) > 0
     const hasPromptContext = Boolean(promptContext)
-    // Allow an empty message when there is attached context — a user comment on
-    // a response selection, files, or references — so those alone can be sent.
+    // Allow an empty message when there is attached context   a user comment on
+    // a response selection, files, or references   so those alone can be sent.
     if (
       !msg &&
       !hasAttachments &&
@@ -5184,7 +5184,7 @@
       queuedTaskReferences = taskReferences
       queuedStartAfterThreads = dependencyThreads
       queuedHasContent = true
-      // Append to the thread's FIFO queue — a later queued message sends after
+      // Append to the thread's FIFO queue   a later queued message sends after
       // earlier ones, one per idle turn. The in-memory mirror then follows the
       // store head so the queue card always shows the next message to send.
       rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
@@ -5220,7 +5220,7 @@
 
     // PRD/Spec need context: show the "Brainstorm first | Jump directly into…"
     // card at SEND time, never when the Toolbox switch is toggled. Jumping in
-    // still lets the Sr. Engineer align — it just skips the Brainstorm document.
+    // still lets the Sr. Engineer align   it just skips the Brainstorm document.
     const entryPrd = hasSelectedStage(engineeringLifecycle, 'prd')
     const entrySpec = hasSelectedStage(engineeringLifecycle, 'spec')
     if (
@@ -5297,12 +5297,12 @@
     // Follow the new message only when the reader is already at the tail. A
     // reader scrolled up into history keeps their position: the optimistic
     // message lands at the tail off-screen, and on-screen messages must never
-    // unmount — releasing the tail lock here would re-window and hide them.
+    // unmount   releasing the tail lock here would re-window and hide them.
     idleAttentionHandled = false
 
     // Persist settings as last-used. On the Chats tab this seeds the chat's own
     // store, so the next chat inherits this chat's model, thinking level, and
-    // File System state — never the project view's configuration.
+    // File System state   never the project view's configuration.
     if (chatMode) {
       chatSettings.commit(settings)
     } else {
@@ -5339,7 +5339,7 @@
         taskReferences
       )
       // Wait for the DOM to reflect the optimistic message, then scroll to it
-      // — but only when the reader stayed at the tail. A detached reader is
+      //   but only when the reader stayed at the tail. A detached reader is
       // never yanked; their on-screen messages must stay mounted.
       await tick()
       if (scrollEl && !userScrolledAway) scrollEl.scrollTop = scrollEl.scrollHeight
@@ -5381,12 +5381,12 @@
     }
   }
 
-  /** Stop the in-flight turn — wired to the composer's stop button and double Escape. */
+  /** Stop the in-flight turn   wired to the composer's stop button and double Escape. */
   async function abortRun(): Promise<void> {
     // A scheduled usage-reset retry leaves `busy` false (the session.status
     // 'waiting' handler marks the run idle so the working UI doesn't stick),
     // but the "Stop request" button on the provider card is shown for that
-    // same state — so this must not bail out before invoking the abort.
+    // same state   so this must not bail out before invoking the abort.
     if (!busy && providerStatus?.state !== 'waiting') return
     const { projectId, id } = thread
     userRequestedStop = true
@@ -5452,7 +5452,7 @@
     }
   }
 
-  /** Send a CodeInOven utility turn — the slash spelling of the @cio-utility
+  /** Send a CodeInOven utility turn   the slash spelling of the @cio-utility
    *  composer tag. The main process owns the utility contract for that turn. */
   function triggerCioUtilityTurn(args: string): void {
     const request = args.trim()
@@ -5595,7 +5595,7 @@
     try {
       await threadMessages.discardSteer(thread.projectId, conversationId, msg.id)
       // Threads only: put the undone steer back into the FIFO composer queue
-      // so the text and attachments are not lost — the user can edit and
+      // so the text and attachments are not lost   the user can edit and
       // resend. Temporary chats just drop the message.
       if (conversationId !== thread.id) return
       const text = msg.parts
@@ -5619,7 +5619,7 @@
     }
   }
 
-  /** Steer — send the queued message immediately as an intervention while the agent is working. */
+  /** Steer   send the queued message immediately as an intervention while the agent is working. */
   async function steerQueuedMessage(): Promise<void> {
     const msg = queuedMessage
     const attachments = queuedAttachments
@@ -5649,12 +5649,12 @@
     clearQueuedState()
     showQueueMenu = false
     // The steer opens a fresh trace under the steered message. Drop the
-    // durable fold loaded at mount (and its todo snapshot) — it describes the
+    // durable fold loaded at mount (and its todo snapshot)   it describes the
     // turn the steer is interrupting, and a steered continuation keeps the
     // old turn's stream anchor, so it must never feed the new trace.
     clearStreamParts()
     // The steered message lands at the tail. A reader scrolled up into the
-    // running turn keeps their position and their mounted messages — releasing
+    // running turn keeps their position and their mounted messages   releasing
     // the tail lock here would re-window the conversation and hide on-screen
     // history mid-read. Tail-follow stays engaged only when already at the tail.
     errorMessage = ''
@@ -5783,8 +5783,8 @@
     if (!assistant || assistant.role !== 'assistant') return null
 
     // A checkpoint's turn spans beginTurn (createdAt) → completeTurn
-    // (completedAt). Every message of that turn — including steers,
-    // question-answers, permission prompts, sub-agent spawns, and compaction —
+    // (completedAt). Every message of that turn   including steers,
+    // question-answers, permission prompts, sub-agent spawns, and compaction  
     // falls inside this window, so match the card by time instead of walking
     // back to a "user" message (whose role/shape varies with what the agent
     // did mid-turn). Choosing the most recent window resolves
@@ -5793,7 +5793,7 @@
   }
 
   /** True when `messageIndex` is the final assistant message of `checkpoint`'s
-   *  turn — the single place its file card should render. Keeps a card from
+   *  turn   the single place its file card should render. Keeps a card from
    *  being drawn multiple times when mid-turn question-answer user messages
    *  split the visual turn into several `isTurnEnd` boundaries. */
   function isCheckpointTurnEnd(messageIndex: number, checkpoint: TurnCheckpointSummary): boolean {
@@ -8782,7 +8782,7 @@
         : undefined
     // Fast inference only exists for models that actually support it. A model
     // switch must never carry a `fast` mode into a model (or harness) without
-    // a fast tier — the resolved `*-fast` id would target a nonexistent model.
+    // a fast tier   the resolved `*-fast` id would target a nonexistent model.
     const effectiveIncoming = seniorModelChanged
       ? normalizeFastInference(
           incoming,
@@ -8815,7 +8815,7 @@
       contextUsageDisplay = undefined
       accountUsageCache.markStale()
       // A provider card produced by the previous harness no longer applies once
-      // the user switches to another harness — otherwise the stale issue's
+      // the user switches to another harness   otherwise the stale issue's
       // message and links (e.g. a Codex usage-limit URL) linger under the badge
       // of the newly selected one. Dismiss it so the next send surfaces fresh
       // status for the current configuration.
@@ -8854,7 +8854,7 @@
         })
     } else {
       persistence.catch(() => {
-        // Non-fatal — the send path persists the settings again.
+        // Non-fatal   the send path persists the settings again.
       })
     }
     if (loopJustEnabled && normalized.assignmentMode !== true) {
@@ -8968,7 +8968,7 @@
     const safeName = escapeHtmlForChip(reference.name)
     const safePath = escapeHtmlForChip(reference.path)
     const safeTitle = escapeHtmlForChip(
-      `Tagged ${reference.kind}: ${reference.name} — ${reference.path}`
+      `Tagged ${reference.kind}: ${reference.name}   ${reference.path}`
     )
     const icon =
       reference.kind === 'directory'
@@ -8979,7 +8979,7 @@
 
   function inlineUtilityChipHtml(): string {
     // Inline SVG (not an `<img>` data URI) so the icon's embedded `.dark`
-    // selector can see the theme class on `<html>` — the mark's ink follows
+    // selector can see the theme class on `<html>`   the mark's ink follows
     // the active theme (black on light, white on dark). The chip's
     // `text-[0.75rem]` sets the em box the 1em-sized SVG scales into.
     const icon = getVendorIconSvg(APP_NAME)
@@ -9094,7 +9094,7 @@
       await forkFromMessage(msg)
       return
     }
-    // The message may live outside the loaded window — fork by id directly.
+    // The message may live outside the loaded window   fork by id directly.
     forkingMessageId = id
     try {
       const forked = await invoke(
@@ -9207,7 +9207,7 @@
     }
   }
 
-  /** Edit a user message in place — the bubble itself becomes editable. */
+  /** Edit a user message in place   the bubble itself becomes editable. */
   function editMessage(msg: AgentMessage): void {
     editingMessageId = msg.id
     editingText = messageText(msg)
@@ -9259,11 +9259,11 @@
       // remaining mirrored transcript as context.
       if (controller?.removeAround) {
         // Controller-driven conversations (temporary chats) own their backend
-        // deletion — the thread mirror must never be touched for them.
+        // deletion   the thread mirror must never be touched for them.
         await controller.removeAround(pending.id, pending.mode)
       } else {
         await threadMessages.remove(thread.projectId, thread.id, pending.id, pending.mode)
-        // The persisted user-message history changed — force a reload so the
+        // The persisted user-message history changed   force a reload so the
         // history panel never shows deleted messages.
         userMessageHistoryLoaded = false
         fullUserMessageHistory = []
@@ -9277,7 +9277,7 @@
   }
 
   /**
-   * Send the edited message with the currently selected model — history from
+   * Send the edited message with the currently selected model   history from
    * the edited message downwards is replaced by the new exchange.
    */
   async function submitEditedMessage(msg: AgentMessage): Promise<void> {
@@ -9291,7 +9291,7 @@
         await controller.truncateBefore(msg.id)
       } else {
         await threadMessages.truncate(thread.projectId, thread.id, msg.id)
-        // Truncation discarded the harness session — bind to the fresh one so
+        // Truncation discarded the harness session   bind to the fresh one so
         // the resend's streamed events are not filtered out.
         await prepareSessionForSend()
       }
@@ -9380,7 +9380,7 @@
   }
 
   const EXPLAIN_QUESTION_PROMPT =
-    'Explain this question and all of its options clearly so the user can understand it and make a more informed decision. Base the explanation on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be clear, concise, and neutral — do not recommend a specific answer. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only explanation focused only on this question and its options.'
+    'Explain this question and all of its options clearly so the user can understand it and make a more informed decision. Base the explanation on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be clear, concise, and neutral   do not recommend a specific answer. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only explanation focused only on this question and its options.'
 
   function formatQuestionForTemporaryChat(question: AgentQuestion): string {
     const parts: string[] = []
@@ -9421,7 +9421,7 @@
     return providers.find((p) => p.models.some((m) => m.id === msg.modelId))
   }
 
-  /** Human model name — catalog display name, else the raw model id. */
+  /** Human model name   catalog display name, else the raw model id. */
   function messageModelLabel(msg: AgentMessage): string | null {
     if (!msg.modelId) return null
     const model =
@@ -9429,11 +9429,11 @@
         (m) => m.id === msg.modelId && (!msg.providerId || m.providerId === msg.providerId)
       ) ?? allModels.find((m) => m.id === msg.modelId)
     if (model) return model.name
-    // Fast variants may be absent from harness catalogs — fall back to a derived label.
+    // Fast variants may be absent from harness catalogs   fall back to a derived label.
     return fastVariantForModelId(msg.modelId)?.label ?? msg.modelId
   }
 
-  /** Harness that produced the message — the session's owning harness first
+  /** Harness that produced the message   the session's owning harness first
    *  (stable across mid-run settings switches), then the thread's harness. */
   function messageHarnessId(msg: AgentMessage): string {
     return msg.harnessId ?? thread.sessionHarnessId ?? settings.harnessId
@@ -9442,7 +9442,7 @@
   /** Generation rate (tok/s) to show for a completed message: the rate
    *  finalized at turn end when this view observed the turn live, otherwise
    *  derived from the message's cumulative generated tokens over its own
-   *  duration (approximate — tool waits are included). `null` when the
+   *  duration (approximate   tool waits are included). `null` when the
    *  harness reported no tokens. */
   function messageTokenRate(msg: AgentMessage): number | null {
     const finalized = finalizedTokenRates[msg.id]
@@ -9450,7 +9450,7 @@
     const generated = generatedTokens(msg.tokens)
     if (generated <= 0) return null
     if (msg.id === liveTokenRate.messageId) return liveTokenRate.rate()
-    // Persisted generation window (first output token → turn end) — excludes
+    // Persisted generation window (first output token → turn end)   excludes
     // pre-generation tool/setup time, so it is the accurate history basis.
     if (msg.generationMs !== undefined && msg.generationMs > 0) {
       return generated / (msg.generationMs / 1000)
@@ -9667,8 +9667,8 @@
   }
 
   /** Return the index of the first assistant message of the last turn in the
-   *  list. A trailing steer — a user message the agent has not responded to yet
-   *  — does not end the turn it intervenes in, so the last turn is the one that
+   *  list. A trailing steer   a user message the agent has not responded to yet
+   *    does not end the turn it intervenes in, so the last turn is the one that
    *  contains the last assistant message, regardless of unresponded steers
    *  appended after it. Returns -1 when no assistant message exists. */
   function lastTurnStartIndex(messageList: AgentMessage[]): number {
@@ -9749,7 +9749,7 @@
   }
 
   /** True once the turn starting at `startMsgIndex` produced a completed
-   *  assistant message — the only state in which the working trace may fold. */
+   *  assistant message   the only state in which the working trace may fold. */
   function isTurnCompleted(startMsgIndex: number): boolean {
     let endIndex = startMsgIndex
     while (endIndex + 1 < messages.length) {
@@ -10390,7 +10390,7 @@
                       />
                       <button
                         class="rounded-md bg-primary px-2.5 py-1 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
-                        title="Send the edited message — replaces the conversation from here down"
+                        title="Send the edited message   replaces the conversation from here down"
                         disabled={busy || !editingText.trim()}
                         onclick={() => submitEditedMessage(msg)}
                       >
@@ -10590,8 +10590,8 @@
                         {#if threadMessages.isSteerHeld(thread.projectId, conversationId, msg.id)}
                           <button
                             class="rounded p-1 text-accent transition-colors hover:bg-elevated"
-                            aria-label="Undo steer — the message has not reached the agent yet"
-                            title="Undo — the agent never receives a steered message that is undone"
+                            aria-label="Undo steer   the message has not reached the agent yet"
+                            title="Undo   the agent never receives a steered message that is undone"
                             onclick={() => void undoHeldSteer(msg)}
                           >
                             <Undo2 size={12} />
@@ -10613,7 +10613,7 @@
                           <button
                             class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                             aria-label="Edit message"
-                            title="Edit — resend replaces the conversation from here down"
+                            title="Edit   resend replaces the conversation from here down"
                             disabled={busy}
                             onclick={() => editMessage(msg)}
                           >
@@ -10622,7 +10622,7 @@
                           <button
                             class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
                             aria-label="Delete message"
-                            title="Delete — removes the conversation up to this message"
+                            title="Delete   removes the conversation up to this message"
                             disabled={busy}
                             onclick={() => requestDeleteMessage(msg)}
                           >
@@ -10637,7 +10637,7 @@
                 </div>
               {/if}
             {:else}
-              <!-- Assistant message — single WorkTrace per turn containing ALL parts -->
+              <!-- Assistant message   single WorkTrace per turn containing ALL parts -->
               {@const isTurnStart = isTurnStartIndex(absIndex)}
               {@const isTurnEnd = isTurnEndIndex(absIndex)}
               {@const isLatestTurn = absIndex === latestTurnInfo.startIndex}
@@ -10736,7 +10736,7 @@
                   {/if}
 
                   {#if isTurnEnd}
-                    <!-- Final text output + footer — hide only on the active in-progress turn -->
+                    <!-- Final text output + footer   hide only on the active in-progress turn -->
                     {#if isAssignmentAuditorThread}
                       {#if !conversationBusy || !isLatest || turnAuditReport}
                         {#if turnAuditReport}
@@ -10915,7 +10915,7 @@
                                       class="text-accent"
                                       fill="currentColor"
                                       aria-label="Fast inference"
-                                      title={`Fast inference — ~${fastVariant.multiplier}× usage`}
+                                      title={`Fast inference   ~${fastVariant.multiplier}× usage`}
                                     />
                                   {/if}
                                 </span>
@@ -11088,7 +11088,7 @@
           </div>
         {/each}
 
-        <!-- Provider status — between messages and composer, always visible. A
+        <!-- Provider status   between messages and composer, always visible. A
          matching bubbled worker error is replaced by the attributed card above. -->
         {#if visibleProviderStatus && !coordinatorErrorMatchesAssignmentWorker}
           <div class="conversation-gutter shrink-0 px-6 pb-2">
@@ -11138,7 +11138,7 @@
                   proactiveAuthIssue = null
                   if (controller) {
                     // Controller conversations own their error state in the
-                    // controller's store key — clearing the thread-scoped
+                    // controller's store key   clearing the thread-scoped
                     // backend error would leave the card stuck on screen.
                     controller.clearStatus()
                   } else {
@@ -11150,7 +11150,7 @@
           </div>
         {/if}
 
-        <!-- Gentle notice — an interrupted auto-compaction silently ate the last turn -->
+        <!-- Gentle notice   an interrupted auto-compaction silently ate the last turn -->
         {#if compactionInterruptedNotice}
           <div class="conversation-gutter shrink-0 px-6 pb-2">
             <div class="mx-auto max-w-3xl">
@@ -11175,7 +11175,7 @@
           </div>
         {/if}
 
-        <!-- Queued message card — attached to the top of the composer -->
+        <!-- Queued message card   attached to the top of the composer -->
         {#if (queuedMessage || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread}
           <div class="conversation-gutter shrink-0 px-6 pt-2">
             <div class="mx-auto max-w-3xl">
@@ -11200,7 +11200,7 @@
                     </button>
                     <button
                       class="rounded-md px-2 py-0.5 text-[0.75rem] font-medium text-foreground transition-colors hover:bg-elevated"
-                      title={`Steer — ${steerModifierLabel}Enter — send this message to the agent now`}
+                      title={`Steer   ${steerModifierLabel}Enter   send this message to the agent now`}
                       onclick={() => void steerQueuedMessage()}
                     >
                       Steer
@@ -11352,7 +11352,7 @@
           </div>
         {/if}
 
-        <!-- Composer — always anchored at the bottom. Blocking permission and question
+        <!-- Composer   always anchored at the bottom. Blocking permission and question
        tools replace it until the user responds. -->
         <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
           <div class="mx-auto w-full {centeredComposer ? 'max-w-4xl' : 'max-w-3xl'}">
@@ -11735,9 +11735,9 @@
                           : specFormulating
                             ? 'Formulating specification…'
                             : delegatedWorkBusy
-                              ? `${delegatedActivityLabel} — message the Sr. Engineer`
+                              ? `${delegatedActivityLabel}   message the Sr. Engineer`
                               : busy
-                                ? `${APP_NAME} is working — type to queue a message`
+                                ? `${APP_NAME} is working   type to queue a message`
                                 : 'Send a message...'}
                     disabled={specFormulating}
                     working={busy}
@@ -12164,7 +12164,7 @@
   oncancel={() => {
     lifecycleCancelModalOpen = false
     // The staged Toolbox choice stays staged (the user toggled it deliberately);
-    // only the parked send is discarded — its draft was restored already.
+    // only the parked send is discarded   its draft was restored already.
     pendingGuardedSend = null
   }}
   onconfirm={confirmLifecycleReplacement}

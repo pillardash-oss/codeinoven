@@ -154,7 +154,7 @@ describe('SpecEngine', () => {
       import('fs/promises').then(({ readFile }) =>
         readFile(join(projectRoot, '.cio', 'specs', 'specification-workflow', 'spec.md'), 'utf8')
       )
-    ).resolves.toContain(`# ${spec.id} — Specification v1`)
+    ).resolves.toContain(`# ${spec.id}   Specification v1`)
     await expect(
       import('fs/promises').then(({ access }) =>
         access(

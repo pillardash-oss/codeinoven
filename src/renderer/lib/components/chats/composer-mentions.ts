@@ -17,7 +17,7 @@ export function composerMentionQuery(textBeforeCaret: string): string | null {
 
   const mentionStart = match.index + (match[1]?.length ?? 0)
   // No mention menu inside a block quote, an open double-quoted passage, or an
-  // unclosed inline code span — the @ stays literal there. (Fenced code blocks
+  // unclosed inline code span   the @ stays literal there. (Fenced code blocks
   // and closed inline code never reach this check: the caret-tracking layer
   // already reports them as command-unsupported.)
   if (
@@ -44,8 +44,8 @@ function escapeRegex(value: string): string {
  * Guarantee a single space on either side of every project-reference token
  * (`@path`) when a word is glued to it. Tagged paths are inserted mid-sentence,
  * so when a draft loses the separator the tag can ride into the next word
- * (e.g. `…investment-advisory.webpimage`). This is idempotent — an already
- * separated token is left untouched — and processes longest paths first so a
+ * (e.g. `…investment-advisory.webpimage`). This is idempotent   an already
+ * separated token is left untouched   and processes longest paths first so a
  * directory tag never swallows the tail of a longer child path.
  *
  * Exported so the thread's message rendering can space out already-sent paths.

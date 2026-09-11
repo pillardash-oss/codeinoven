@@ -1,7 +1,19 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-  import type { Attachment } from 'svelte/attachments'
-  import { fade, slide } from 'svelte/transition'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import { copyText } from '$lib/copy-text'
+  import { invoke } from '$lib/ipc.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
+  import { displayShortcutLabel } from '$lib/shortcut-display'
+  import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
+  import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
+  import { providerStore } from '$lib/stores/providers.svelte'
+  import { APP_NAME } from '$shared/brand'
+  import type {
+    BaseUrlProvider,
+    HarnessManifestEntry,
+    ProviderAccountAuthStatus,
+    ProviderConnectionInfo
+  } from '$shared/types'
   import {
     AlertTriangle,
     Check,
@@ -13,36 +25,24 @@
     Download,
     Loader2,
     Plug,
-    Plus,
+    Plug2,
     RefreshCw,
     Search,
     Trash2,
     X
   } from '@lucide/svelte'
-  import { providerStore } from '$lib/stores/providers.svelte'
-  import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
-  import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
-  import { invoke } from '$lib/ipc.svelte'
-  import { openInBrowser } from '$lib/open-in-browser'
-  import { copyText } from '$lib/copy-text'
-  import { displayShortcutLabel } from '$lib/shortcut-display'
+  import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
-  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
-  import { APP_NAME } from '$shared/brand'
-  import type {
-    BaseUrlProvider,
-    ProviderAccountAuthStatus,
-    ProviderConnectionInfo
-  } from '$shared/types'
-  import type { HarnessManifestEntry } from '$shared/types'
-  import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
-  import AddProviderModal from './AddProviderModal.svelte'
-  import BaseUrlProviderEditor from './BaseUrlProviderEditor.svelte'
-  import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
+  import type { Attachment } from 'svelte/attachments'
+  import { fade, slide } from 'svelte/transition'
+  import type { MenuItem } from '../shared/ThreadDropdown.svelte'
+  import ThreadDropdown from '../shared/ThreadDropdown.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
-  import ThreadDropdown from '../shared/ThreadDropdown.svelte'
-  import type { MenuItem } from '../shared/ThreadDropdown.svelte'
+  import AddProviderModal from './AddProviderModal.svelte'
+  import BaseUrlProviderEditor from './BaseUrlProviderEditor.svelte'
+  import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
+  import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
 
   /** Where users can browse existing PRs / open one for a V2 support effort. */
   const OPENCODE_V2_PRS_URL = 'https://github.com/pillardash-oss/codeinoven/pulls'
@@ -65,7 +65,7 @@
 
   let authStatuses = $state.raw<Record<string, ProviderAccountAuthStatus>>({})
   let addTarget = $state<ProviderConnectionInfo | null>(null)
-  /** Tab the Add-provider modal opens on — 'custom' when returning there via
+  /** Tab the Add-provider modal opens on   'custom' when returning there via
    *  the editor's Back button, so the user lands back on the list they left. */
   let addTargetInitialTab = $state<'connect' | 'custom'>('connect')
   let customEditorFor = $state<string | null>(null)
@@ -99,7 +99,7 @@
   let lastCheckedAt = $state<number | null>(null)
   /** Ticks on an interval so the relative "last checked" label stays fresh. */
   let now = $state(Date.now())
-  /** Harness id whose resolved path was just copied — drives the Copy → Check icon swap. */
+  /** Harness id whose resolved path was just copied   drives the Copy → Check icon swap. */
   let copiedPathId = $state<string | null>(null)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -284,7 +284,7 @@
         copiedPathId = null
       }, COPY_FEEDBACK_MS)
     } catch {
-      // Clipboard unavailable — the button simply stays idle.
+      // Clipboard unavailable   the button simply stays idle.
     }
   }
 
@@ -377,7 +377,7 @@
 
   async function requestUninstall(provider: ProviderConnectionInfo): Promise<void> {
     if (harnessLifecycleStore.isRunning(provider.id)) return
-    // Open the confirmation prompt immediately — the command resolves inside it.
+    // Open the confirmation prompt immediately   the command resolves inside it.
     uninstallTarget = provider
     uninstallCommand = ''
     uninstallError = ''
@@ -545,7 +545,7 @@
     <div>
       <h1 class="text-xl font-bold tracking-tight">Harnesses</h1>
       <p class="mt-0.5 text-sm text-muted">
-        Connect the AI coding harnesses you use. {APP_NAME} wraps them — it doesn't replace them.
+        Connect the AI coding harnesses you use. {APP_NAME} wraps them it doesn't replace them.
       </p>
     </div>
   </div>
@@ -805,7 +805,7 @@
                 <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
                   Providers
                 </p>
-                <p class="mt-0.5 text-xs text-dimmed">—</p>
+                <p class="mt-0.5 text-xs text-dimmed"></p>
               {/if}
             </div>
 
@@ -879,7 +879,7 @@
                     addTarget = provider
                   }}
                 >
-                  <Plus size={13} /> Add provider
+                  <Plug2 size={13} /> Manage providers
                 </button>
               {/if}
 

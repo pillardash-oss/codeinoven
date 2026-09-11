@@ -94,7 +94,7 @@
   /**
    * A reset far in the future (e.g. a multi-day weekly usage cap) is not
    * something the app should present as an imminent, live-ticking
-   * auto-resume — that reads as broken when the countdown says "in 6 days".
+   * auto-resume   that reads as broken when the countdown says "in 6 days".
    * It also isn't something the harness's own short-interval retry hint
    * (meant for transient errors) should drive. Once the reset falls inside
    * this window, switch to the live auto-resume countdown.

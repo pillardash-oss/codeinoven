@@ -447,7 +447,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
     await writeFile(join(directory, 'build/out.js'), 'noise\n', 'utf-8')
 
     const afterIgnore = await service.ignore(directory, ['secret.tmp', 'build'])
-    // Only the new .gitignore itself remains untracked — the ignored paths drop out.
+    // Only the new .gitignore itself remains untracked   the ignored paths drop out.
     expect(afterIgnore.untrackedChanges).toBe(1)
     const remaining = afterIgnore.changes.map((change) => change.path)
     expect(remaining).toEqual(['.gitignore'])

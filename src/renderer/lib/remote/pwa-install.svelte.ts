@@ -32,7 +32,7 @@ class PwaInstall {
   installed = $state(false)
   /** True when the browser holds a `beforeinstallprompt` we can fire. */
   canPrompt = $state(false)
-  /** True on iOS Safari — installation goes through the Share menu. */
+  /** True on iOS Safari   installation goes through the Share menu. */
   isIos = $state(false)
 
   private deferredPrompt: BeforeInstallPromptEvent | null = null
@@ -46,7 +46,7 @@ class PwaInstall {
   /**
    * Install when the browser offers a direct prompt. Returns 'unsupported'
    * when the platform needs the manual flow instead (iOS, or a browser that
-   * never fired `beforeinstallprompt` — e.g. an untrusted certificate), so the
+   * never fired `beforeinstallprompt`   e.g. an untrusted certificate), so the
    * caller can fall back to a how-to guide.
    */
   async install(): Promise<'accepted' | 'dismissed' | 'unsupported'> {
@@ -84,7 +84,7 @@ class PwaInstall {
     try {
       if (localStorage.getItem(INSTALLED_KEY) === '1') return true
     } catch {
-      // best-effort — fall through to display-mode detection
+      // best-effort   fall through to display-mode detection
     }
     if ((navigator as StandaloneNavigator).standalone) return true
     return window.matchMedia('(display-mode: standalone)').matches

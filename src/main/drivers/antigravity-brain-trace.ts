@@ -31,7 +31,7 @@ export interface BrainTraceEntry {
 /**
  * Parse one brain transcript JSONL line into the trace join shape. Returns
  * null for anything that is not a settled entry with both a usable step index
- * and thinking text — only what joins confidently is surfaced.
+ * and thinking text   only what joins confidently is surfaced.
  */
 export function parseBrainTraceLine(line: string): BrainTraceEntry | null {
   const trimmed = line.trim()

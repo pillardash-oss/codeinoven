@@ -225,7 +225,7 @@ export class ProjectFilesService {
    * exists on disk as a regular file or directory inside the root. Candidates
    * may be relative (`src/foo.ts`), prefixed with the project CWD (absolute), or
    * `file://` URLs. Anything that does not exist, escapes the root, or is a
-   * symbolic link resolves to `null` — such citations must never become links.
+   * symbolic link resolves to `null`   such citations must never become links.
    */
   async resolveCitationPaths(
     projectId: string,
@@ -249,7 +249,7 @@ export class ProjectFilesService {
    * Existence probe for absolute citation paths that live outside the project
    * root (e.g. Codex `:codex-file-citation` tokens). Returns whether each path
    * exists on disk as a regular file or directory (symlinks resolve to false).
-   * Purely an existence check — no content is read or returned.
+   * Purely an existence check   no content is read or returned.
    */
   async resolveExternalCitationPaths(absolutePaths: string[]): Promise<Record<string, boolean>> {
     const results: Record<string, boolean> = {}

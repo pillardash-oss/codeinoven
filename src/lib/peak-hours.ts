@@ -2,7 +2,7 @@
  * Peak-hours / off-peak pricing schedules for models billed by time of day.
  *
  * Availability of peak billing is NOT reported by the harness catalogs or the
- * llmpricing.dev pricing feed, so it is curated here — exactly like
+ * llmpricing.dev pricing feed, so it is curated here   exactly like
  * `fast-inference.ts` curates fast-tier multipliers. Add a family entry when a
  * vendor moves a model to time-of-day billing (e.g. DeepSeek V4 Flash/Pro,
  * which bills peak vs off-peak from Aug 16 2026).
@@ -48,12 +48,12 @@ export interface PeakHoursBadge {
   /** Compact badge label for the composer trigger: `Peak` / `Off P`. */
   triggerLabel: string
   /** Tooltip/aria text: `Peak: <local time-ranges>`, with the day scope when
-   *  peak billing is not daily — `Peak (Mon–Fri): <local time-ranges>`. */
+   *  peak billing is not daily   `Peak (Mon–Fri): <local time-ranges>`. */
   tooltip: string
 }
 
 /**
- * DeepSeek V4 — peak `01:00–04:00` and `06:00–10:00` UTC, weekdays only
+ * DeepSeek V4   peak `01:00–04:00` and `06:00–10:00` UTC, weekdays only
  * (Monday–Friday); weekends bill off-peak around the clock.
  */
 export const DEEPSEEK_V4_PEAK_HOURS: PeakHoursSchedule = {
@@ -155,8 +155,8 @@ export function peakHoursBadgeFor(modelId: string, now = new Date()): PeakHoursB
   const schedule = peakHoursScheduleFor(modelId)
   if (!schedule) return null
   const peak = isPeakHour(schedule, now)
-  // Day scope rides inside the tooltip — e.g. `Peak (Mon–Fri): 3:00 AM–6:00 AM`
-  // — so daily schedules keep the plain form and weekday-only ones self-explain.
+  // Day scope rides inside the tooltip   e.g. `Peak (Mon–Fri): 3:00 AM–6:00 AM`
+  //   so daily schedules keep the plain form and weekday-only ones self-explain.
   const dayScope = peakHoursDayScope(schedule)
   const scopeSuffix = dayScope ? ` (${dayScope})` : ''
   return {

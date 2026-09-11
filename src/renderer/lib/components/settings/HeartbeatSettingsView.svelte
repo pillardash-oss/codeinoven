@@ -204,7 +204,7 @@
     <div>
       <h1 class="text-xl font-bold tracking-tight">Heartbeat</h1>
       <p class="mt-0.5 text-sm text-muted">
-        Send a lightweight "ping" to a model at set times to start its usage window early — so the
+        Send a lightweight "ping" to a model at set times to start its usage window early   so the
         next 5-hour reset lands before you need it.
       </p>
     </div>
@@ -298,7 +298,7 @@
                 ? 'text-primary'
                 : 'text-muted'} hover:bg-overlay hover:text-foreground"
               aria-label="Trigger {config.name} now"
-              title="Trigger {config.name} now — send an immediate ping"
+              title="Trigger {config.name} now   send an immediate ping"
               disabled={triggeringId !== null}
               onclick={() => void triggerNow(config.id)}
             >
@@ -397,7 +397,7 @@
           draftProviderId = providerId
           draftModelId = modelId
           draftAccountId = accountId
-          // Not every model supports thinking — drop a stale level the new
+          // Not every model supports thinking   drop a stale level the new
           // model doesn't offer so saving never carries an invalid value.
           const catalog = providers.find(
             (candidate) => candidate.harnessId === harnessId && candidate.id === providerId

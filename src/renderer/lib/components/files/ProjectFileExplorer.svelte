@@ -1200,7 +1200,7 @@
   /** For every loaded directory, whether any entry in its subtree matches the
    *  active filter. Computed once bottom-up (deepest folders first, so a
    *  parent's result reuses its children's) per filter change instead of being
-   *  re-derived recursively on every tree render — the recursion ran per row
+   *  re-derived recursively on every tree render   the recursion ran per row
    *  per render and made each directory expansion quadratic. */
   let filterMatchesByDirectory = $derived.by((): Record<string, boolean> => {
     const matches: Record<string, boolean> = {}
@@ -1701,7 +1701,7 @@
           <dd class="capitalize text-foreground">{info.kind}</dd>
           <dt class="text-dimmed">Size</dt>
           <dd class="text-foreground">
-            {info.size === undefined ? '—' : `${info.size.toLocaleString()} bytes`}
+            {info.size === undefined ? ' ' : `${info.size.toLocaleString()} bytes`}
           </dd>
           <dt class="text-dimmed">Modified</dt>
           <dd class="text-foreground">{new Date(info.modifiedAt ?? 0).toLocaleString()}</dd>

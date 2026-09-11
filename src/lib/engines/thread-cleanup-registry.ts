@@ -4,8 +4,8 @@
  * clean these up on its own, so `thread-manager.ts` deletes them explicitly
  * whenever a thread (or every thread in a project) is removed.
  *
- * When a future feature adds a new table keyed by `thread_id` — specs,
- * generated work, anything — register it here instead of hand-writing a
+ * When a future feature adds a new table keyed by `thread_id`   specs,
+ * generated work, anything   register it here instead of hand-writing a
  * `DELETE` statement at the call site. It will automatically be covered by
  * both single-thread deletion and project deletion.
  *

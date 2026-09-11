@@ -143,7 +143,7 @@
           id="thread-note-body"
           value={tab.draftBody}
           onValueChange={(value) => (tab.draftBody = value)}
-          placeholder="Remind yourself what you intended to do here — Markdown supported…"
+          placeholder="Remind yourself what you intended to do here   Markdown supported…"
           ariaLabel="Thread note"
           autofocus
           containerClass="min-h-0 flex-1"

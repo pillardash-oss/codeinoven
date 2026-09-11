@@ -58,7 +58,7 @@ function validateSwitcherPayload(value: unknown): NativeSwitcherPayload {
  * Owns the native Ctrl+Tab switcher overlay view.
  *
  * The browser page is a native `WebContentsView`, so it composes above the whole
- * renderer DOM — a DOM modal can never sit above it. When the browser view is on
+ * renderer DOM   a DOM modal can never sit above it. When the browser view is on
  * screen the renderer therefore drives this service, which shows a second native
  * view (loaded from `switcher.html`) stacked above the browser. The overlay owns
  * its list UI and keyboard input; selection/highlight/dismiss are relayed back

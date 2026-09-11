@@ -1,5 +1,5 @@
 /**
- * Markdown pipeline for chat messages — stream friendly by design.
+ * Markdown pipeline for chat messages   stream friendly by design.
  *
  * The renderer works on `marked` lexer tokens instead of one big HTML string:
  * while a response streams in, only the trailing block token changes, so
@@ -57,7 +57,7 @@ const FOOTNOTE_DEF_SOURCE = /^\[\^([^\]\n]+)\]:(?:[ \t]+|$)(.*(?:\n(?![ \t]*(?:\
 /**
  * Build a parser instance.
  *
- * `breaks` keeps single newlines visible — chat prose relies on them the same
+ * `breaks` keeps single newlines visible   chat prose relies on them the same
  * way the previous `whitespace-pre-wrap` rendering did.
  *
  * With `allowHtml` false the HTML tokenizers are disabled outright, so raw
@@ -157,7 +157,7 @@ function createMarked(allowHtml: boolean): Marked {
       {
         // Section-numbered headings get a stable anchor id (`section-2-3`) plus
         // a `data-section` marker so `§2.3` references and the Sources panel can
-        // resolve the heading deterministically — even when several messages
+        // resolve the heading deterministically   even when several messages
         // carry the same section numbers.
         name: 'heading',
         renderer(token: Tokens.Generic) {
@@ -183,7 +183,7 @@ const markedWithHtml = createMarked(true)
  * Tags that never survive sanitizing, whatever the source.
  *
  * DOMPurify already drops `script` and every event-handler attribute, but its
- * default allow-list still permits `style`, `form`, and form controls — enough
+ * default allow-list still permits `style`, `form`, and form controls   enough
  * to restyle or phish inside the panel. Naming them explicitly documents the
  * threat model and keeps it from drifting with DOMPurify's defaults.
  */
@@ -267,7 +267,7 @@ export function lexMarkdown(text: string, allowHtml = false): Token[] {
  *  immutable, but the lex OUTPUT also depends on the reactive citation-path
  *  state (file citations become links only once their existence is confirmed),
  *  so the cache key folds in the store's revision. Without it, a cache hit
- *  after a resolution bump would return stale, un-linkified tokens forever —
+ *  after a resolution bump would return stale, un-linkified tokens forever  
  *  the reason linkify appeared dead until a thread was left and re-opened.
  *  Entries hold the exact source string as key; callers treat the returned
  *  tokens as read-only (blockHtml already memoizes its output). */
@@ -282,7 +282,7 @@ export function lexMarkdownCached(text: string, allowHtml = false): Token[] {
   const key = `\u0000rev${revision}\u0000${allowHtml ? '\u0000html\u0000' : ''}${text}`
   const cached = lexCache.get(key)
   if (cached) {
-    // Refresh for LRU ordering — most recently used survives eviction.
+    // Refresh for LRU ordering   most recently used survives eviction.
     lexCache.delete(key)
     lexCache.set(key, cached)
     return cached
@@ -388,7 +388,7 @@ function resolveFootnotes(tokens: Token[]): Token[] {
   return body
 }
 
-// Rendered-block cache — every stream delta re-derives all tokens, but only
+// Rendered-block cache   every stream delta re-derives all tokens, but only
 // the last one's `raw` actually changes. Keyed by raw source, bounded so a
 // long session cannot grow it without limit. The favicon version is folded in
 // so a resolved favicon re-renders a link with its icon (plain link before).
@@ -421,7 +421,7 @@ export function blockHtml(token: Token, allowHtml = false): string {
 /**
  * Footnote resolution depends on the whole document (a reference is a link
  * only when its definition exists anywhere). That state changes mid-stream, so
- * it must be part of the cache key — otherwise a paragraph lexed before its
+ * it must be part of the cache key   otherwise a paragraph lexed before its
  * footnote definition arrives would keep the literal `[^2]` forever.
  */
 function footnoteCacheKey(token: Token): string {
@@ -467,11 +467,11 @@ function escapeHtml(value: string): string {
 
 /**
  * Highlight code to HTML. Unknown or missing languages fall back to escaped
- * plain text — no auto-detection, which would jitter between grammars while
+ * plain text   no auto-detection, which would jitter between grammars while
  * a block is still streaming. highlight.js output is escaped text plus
  * `<span class="hljs-*">` wrappers, so it needs no further sanitizing.
  */
-/** Highlighting beyond this budget is skipped — the tail renders as plain
+/** Highlighting beyond this budget is skipped   the tail renders as plain
  *  escaped text inside the same block. Tokenizing a 100KB+ single-line dump
  *  can block the renderer for tens of milliseconds per block, and grammar
  *  coloring past the first screenful adds nothing a reader can perceive. */
@@ -481,7 +481,7 @@ export function highlightCode(code: string, lang?: string): string {
   if (lang && hljs.getLanguage(lang)) {
     // Slice BEFORE highlighting: hljs tokenizes exactly the budgeted text, so
     // every span it emits is balanced. The remainder is appended as escaped
-    // plain text — visually uniform, structurally valid HTML.
+    // plain text   visually uniform, structurally valid HTML.
     const budgeted = code.length > HIGHLIGHT_BUDGET ? code.slice(0, HIGHLIGHT_BUDGET) : code
     try {
       const highlighted = hljs.highlight(budgeted, { language: lang, ignoreIllegals: true }).value
@@ -490,7 +490,7 @@ export function highlightCode(code: string, lang?: string): string {
       }
       return highlighted
     } catch {
-      // Grammar hiccup mid-stream — plain text below is always safe.
+      // Grammar hiccup mid-stream   plain text below is always safe.
     }
   }
   return escapeHtml(code)

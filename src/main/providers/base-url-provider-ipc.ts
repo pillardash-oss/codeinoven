@@ -45,7 +45,7 @@ const UPDATE_FIELDS = new Set([
 ])
 /** Model IDs routinely include slashes/at-signs (LM Studio: `org/model`, HF: `org/model@precision`, Cloudflare: `@cf/org/model`). */
 const SAFE_MODEL_ID = /^[a-zA-Z0-9@][a-zA-Z0-9._:/@+-]*$/u
-/** Thinking presets map to OpenCode variant IDs — keep them conservative. */
+/** Thinking presets map to OpenCode variant IDs   keep them conservative. */
 const SAFE_PRESET_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/u
 const THINKING_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
 const MAX_HEADERS = 32
@@ -543,7 +543,7 @@ function optionalPositiveInteger(value: unknown, label: string): number | undefi
   return value
 }
 
-/** Validate a string with trim — delegates to the shared bounded-string validator. */
+/** Validate a string with trim   delegates to the shared bounded-string validator. */
 function boundedStr(
   value: unknown,
   label: string,
@@ -553,7 +553,7 @@ function boundedStr(
   return validateBoundedString(value, label, minimumLength, maximumLength)
 }
 
-/** Validate a string without trimming — preserves leading/trailing whitespace. */
+/** Validate a string without trimming   preserves leading/trailing whitespace. */
 function preserveStr(
   value: unknown,
   label: string,

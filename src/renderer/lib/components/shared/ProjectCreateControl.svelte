@@ -49,7 +49,7 @@
   /** Highest trigger value already handled. The control unmounts in other modes
    *  (e.g. Chats) and remounts later; re-initialising from the live value keeps
    *  a stale trigger from re-opening the add-project flow on remount. */
-  // Intentional initial-value capture — this is the baseline that later triggers
+  // Intentional initial-value capture   this is the baseline that later triggers
   // are compared against.
   // svelte-ignore state_referenced_locally
   let handledTrigger = triggerAddProject

@@ -124,9 +124,9 @@
               ? 'Review sent to Sr. Engineer'
               : version === undefined
                 ? reworkCycle
-                  ? `Rework ${reworkCycle} complete — audit running again`
+                  ? `Rework ${reworkCycle} complete   audit running again`
                   : 'Audit in progress'
-                : `Report generated — Version ${version}`}
+                : `Report generated   Version ${version}`}
       </h3>
       <p
         class="mt-1 text-xs leading-relaxed {failed ? 'text-danger' : 'text-muted'}"

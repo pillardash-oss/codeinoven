@@ -120,8 +120,8 @@ function registerSignalHandlers(): void {
   const signals = ['SIGTERM', 'SIGINT'] as const
   for (const signal of signals) {
     process.on(signal, () => {
-      Logger.info(`Received ${signal} — shutting down`)
-      // OS-level signals always force the quit — no confirmation gate.
+      Logger.info(`Received ${signal}   shutting down`)
+      // OS-level signals always force the quit   no confirmation gate.
       quitConfirmed = true
       app.quit()
     })
@@ -139,7 +139,7 @@ if (hasNativeSplashHandoff()) startupTelemetry.mark('nativeSplash:active')
 // Electron process entry is marked exactly once at module scope.
 startupTelemetry.mark('process:entry')
 // Privacy-preserving process-wide crash policy: uncaught exceptions and
-// unhandled rejections are logged and never exit the process — a failed
+// unhandled rejections are logged and never exit the process   a failed
 // background operation must never kill the app on the user's behalf.
 installProcessCrashDiagnostics()
 
@@ -171,7 +171,7 @@ let quitConfirmed = false
 function armQuitFailsafe(): void {
   if (shutdownFailsafe) clearTimeout(shutdownFailsafe)
   shutdownFailsafe = setTimeout(() => {
-    Logger.error('Quit failsafe fired — forcing exit')
+    Logger.error('Quit failsafe fired   forcing exit')
     app.exit(0)
   }, 15_000)
 }
@@ -215,7 +215,7 @@ function getActiveThreadProjects(): CloseConfirmationProject[] {
  * to ask) the quit continues immediately; otherwise the renderer is prompted
  * and the quit pauses until `app:confirmClose` arrives.
  *
- * The renderer is always asked — it owns the unsaved-file editor state, which
+ * The renderer is always asked   it owns the unsaved-file editor state, which
  * also gates the close. It replies through `app:confirmClose` immediately when
  * nothing is pending, or shows the confirmation modal otherwise.
  */
@@ -228,7 +228,7 @@ function requestCloseConfirmation(): void {
     return
   }
   // When another live instance can keep a project's threads running, working
-  // threads don't need to gate this instance's close — a surviving instance can
+  // threads don't need to gate this instance's close   a surviving instance can
   // continue them. The renderer still owns the unsaved-file gate, which is
   // reported separately, so closing never silently drops unsaved editor state.
   const working = instanceRegistry.hasOtherLiveInstance() ? [] : getActiveThreadProjects()
@@ -415,7 +415,7 @@ let appfileProjectFiles: import('./editor/project-files-service').ProjectFilesSe
 const threadCreation = new ThreadCreationCoordinator()
 const threadDeletion = new ThreadDeletionCoordinator()
 
-/** Resolve the app icon — static dir in dev, bundled renderer assets in production. */
+/** Resolve the app icon   static dir in dev, bundled renderer assets in production. */
 function getAppIconPath(): string {
   return !isProduction && is.dev
     ? join(app.getAppPath(), 'src/renderer/static/icon.png')
@@ -444,7 +444,7 @@ function getPreloadPath(): string {
 }
 
 /**
- * Frameless splash shown as soon as Electron permits a window — the app `ready`
+ * Frameless splash shown as soon as Electron permits a window   the app `ready`
  * event (a window simply cannot exist before that in Electron). Shown
  * immediately rather than gated on `ready-to-show`; the matching
  * `backgroundColor` means the Obsidian surface paints the instant the window
@@ -787,7 +787,7 @@ async function bootPostPaintServices(): Promise<void> {
         )
       },
       (projectId, projectPath) => {
-        // User typed in a project terminal — open a user-activity window so
+        // User typed in a project terminal   open a user-activity window so
         // their shell-driven edits are excluded from concurrent agent turns.
         chatEngine?.recordUserTerminalInput(projectId, projectPath)
       }
@@ -883,7 +883,7 @@ async function bootPostPaintServices(): Promise<void> {
       reconcileRemoteTransportOwnership
     )
 
-    // Optional IPC — registered only after the services exist.
+    // Optional IPC   registered only after the services exist.
     if (updaterService) {
       updaterService.addActivitySource({
         activeSessionCount: () => ptyService?.activeSessionCount() ?? 0
@@ -1082,7 +1082,7 @@ function createWindow(): BrowserWindow {
       // so the renderer never flashes a wrong inset on first paint.
       additionalArguments: [getTrafficLightArg()],
       // Built-in Chromium PDF plugin (PDFium-backed viewer, annotations,
-      // forms, search) — available in Electron 29+.
+      // forms, search)   available in Electron 29+.
       plugins: true
     }
   })
@@ -1102,8 +1102,8 @@ function createWindow(): BrowserWindow {
   })
 
   window.on('close', (event) => {
-    // Closing the window always closes the app — nothing is kept alive in the
-    // Tray. Gate the close while threads are working — ask the renderer to
+    // Closing the window always closes the app   nothing is kept alive in the
+    // Tray. Gate the close while threads are working   ask the renderer to
     // confirm before letting the window (and with it the app) go away. During
     // an approved quit the flags below let the close pass straight through.
     if (quitConfirmed || quitCleanupStarted) return
@@ -1140,7 +1140,7 @@ function createWindow(): BrowserWindow {
     // before the renderer can decide what should actually close.
     //
     // On non-mac platforms, when a terminal is focused, Ctrl+W is the shell's
-    // delete-word binding — leave it alone so it reaches the shell.
+    // delete-word binding   leave it alone so it reaches the shell.
     if (isCloseShortcut(input) && !(terminalFocused && process.platform !== 'darwin')) {
       event.preventDefault()
       sendToRenderer(window.webContents, 'window:closeShortcut')
@@ -1155,7 +1155,7 @@ function createWindow(): BrowserWindow {
   })
 
   // External links leave the app through the default browser only when they
-  // are safe web URLs. Every popup is denied regardless — the renderer never
+  // are safe web URLs. Every popup is denied regardless   the renderer never
   // spawns a second window.
   window.webContents.setWindowOpenHandler((details) => {
     try {
@@ -1193,7 +1193,7 @@ function createWindow(): BrowserWindow {
   // Mouse side buttons (back/forward). Windows and Linux deliver them as app
   // commands; the renderer walks its own in-app navigation history because the
   // single-page window has no native browser history to navigate. On macOS no
-  // app-command is emitted — the renderer handles the raw buttons directly.
+  // app-command is emitted   the renderer handles the raw buttons directly.
   window.on('app-command', (_event, command) => {
     if (window.isDestroyed() || window.webContents.isDestroyed()) return
     if (command === 'browser-backward') {
@@ -1204,7 +1204,7 @@ function createWindow(): BrowserWindow {
   })
 
   // Renderer freeze/crash diagnostics. On a slow machine (e.g. M1) the renderer
-  // can seize up or be torn down in ways that never surface as a JS exception —
+  // can seize up or be torn down in ways that never surface as a JS exception  
   // the OS shows "not responding" while nothing lands in the log. These
   // webContents lifecycle events record the freeze/crash deterministically even
   // though the renderer's own JS can no longer run to log it.
@@ -1237,7 +1237,7 @@ function createWindow(): BrowserWindow {
 }
 
 function openThreadFromNotification(payload: ThreadClickedPayload): void {
-  // A quit is already in progress — never spawn a window mid-shutdown.
+  // A quit is already in progress   never spawn a window mid-shutdown.
   if (quitCleanupStarted) return
   const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
 
@@ -1282,7 +1282,7 @@ void app
     // Only after the splash is visibly rendered, wire the durable log sink
     // before any fallible startup work. The error
     // dialog tells the user to "export diagnostics after the app opens", which
-    // only works if startup failures are actually persisted — so the log path
+    // only works if startup failures are actually persisted   so the log path
     // must be known before `database.init()` can abort the startup chain.
     mkdirSync(dirname(storage.resolve('logs/main.jsonl')), { recursive: true })
     Logger.initialize(storage.resolve('logs/main.jsonl'))
@@ -1296,7 +1296,7 @@ void app
       installProductionApplicationMenu(APP_NAME)
     }
 
-    // In dev the raw Electron binary lacks a bundled icon — set it explicitly.
+    // In dev the raw Electron binary lacks a bundled icon   set it explicitly.
     // Cosmetic: must never abort the startup chain if the artwork is missing.
     if (process.platform === 'darwin' && app.dock) {
       try {
@@ -1306,7 +1306,7 @@ void app
       }
     }
 
-    // Storage and database warm-up are independent — run them concurrently.
+    // Storage and database warm-up are independent   run them concurrently.
     await Promise.all([
       storage.initialize(),
       database.init(),
@@ -1375,7 +1375,7 @@ void app
     startupTelemetry.mark('window:created')
 
     // Failsafe: never let the splash outlive the app even if the renderer
-    // never paints (e.g. a script error) — dismiss it after the bounded budget.
+    // never paints (e.g. a script error)   dismiss it after the bounded budget.
     // The budget is generous (60s) because on a low-end machine the renderer
     // legitimately takes a long time to boot; closing early would drop the
     // user onto a bare window while it still loads.
@@ -1429,7 +1429,7 @@ void app
 
     app.on('activate', () => {
       // The app always quits when its last window closes, so a dock click
-      // can only land during the shutdown grace period — ignore it then.
+      // can only land during the shutdown grace period   ignore it then.
       if (quitCleanupStarted) return
       if (BrowserWindow.getAllWindows().length === 0) {
         createWindow()
@@ -1441,7 +1441,7 @@ void app
     // Deterministically close resources and quit with a nonzero diagnostic
     // code so a failed boot never leaves a headless process. Logs, flushes the
     // durable log, closes the database (and any other initialized resource),
-    // shows the error box, then exits(1) — falling back to process.exit if the
+    // shows the error box, then exits(1)   falling back to process.exit if the
     // Electron quit callback throws.
     await handleFatalStartupFailure({
       error,
@@ -1510,7 +1510,7 @@ app.on('window-all-closed', () => {
  * 4. Notification service stopped
  * 5. Chat engine / driver processes disposed
  * 6. Log buffer flushed
- * 7. app.quit() — re-enters before-quit, but the guard skips cleanup
+ * 7. app.quit()   re-enters before-quit, but the guard skips cleanup
  *    and Electron proceeds to close windows → will-quit → exit.
  */
 async function runShutdownPipeline(): Promise<void> {
@@ -1619,7 +1619,7 @@ async function runShutdownPipeline(): Promise<void> {
   }
 
   // When another live instance can continue the project's threads, this
-  // instance exits without disposing the chat engine — disposal kills every
+  // instance exits without disposing the chat engine   disposal kills every
   // agent-owned harness process, which would destroy threads the surviving
   // instance is still working on. The threads' durable state lives in the
   // shared DB, so the other instance resumes them seamlessly.
@@ -1685,12 +1685,12 @@ app.on('before-quit', (event) => {
   // Failsafe: if any disposal step hangs, force the process to exit so the app
   // never lingers in the Dock with a stale icon after the user chose to close.
   shutdownFailsafe = setTimeout(() => {
-    Logger.error('Shutdown pipeline timed out — forcing exit')
+    Logger.error('Shutdown pipeline timed out   forcing exit')
     app.exit(0)
   }, 15_000)
 })
 
 app.on('will-quit', () => {
-  // Final synchronous cleanup — the app has committed to terminating.
+  // Final synchronous cleanup   the app has committed to terminating.
   setNotificationService(null)
 })

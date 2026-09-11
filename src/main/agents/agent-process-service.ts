@@ -456,7 +456,7 @@ export class AgentProcessService implements AgentProcessObserver {
    * Reap harness processes left orphaned by an unclean previous run (crash,
    * force-quit, or the shutdown failsafe). Only ever kills processes the app
    * actually spawned: journaled roots verified as owned (marker env present) or
-   * orphaned, plus — on Linux — any orphaned process still carrying the marker
+   * orphaned, plus   on Linux   any orphaned process still carrying the marker
    * so a dev server whose root already died is reclaimed too. A user's own
    * external claude-code/opencode session is never touched.
    */
@@ -491,7 +491,7 @@ export class AgentProcessService implements AgentProcessObserver {
 
     // Linux-only sweep: `/proc/<pid>/environ` lets us read another process's env
     // reliably, so sweep every orphaned process carrying the marker. This reclaims
-    // a dev server whose root already died — including one leaked after a *clean*
+    // a dev server whose root already died   including one leaked after a *clean*
     // shutdown (when the journal is already cleared). On macOS/Windows env is not
     // readable, so we rely on the journaled, orphaned roots above (which covers
     // the common crash-leak of a live `opencode serve` root).
@@ -702,7 +702,7 @@ export class AgentProcessService implements AgentProcessObserver {
    * example, re-parents itself to launchd/init the moment the `adb` client
    * first spawns it, so it never appears under a harness root's descendant
    * tree. Adopt any orphaned process carrying the app's ownership marker so it
-   * stays visible in the task manager, is killable, and — via the journal — is
+   * stays visible in the task manager, is killable, and   via the journal   is
    * reaped if the app closes while it is still running. Attribution uses the
    * session marker stamped into the harness environment, falling back to the
    * only live session, then app scope. On Windows, where the environment of

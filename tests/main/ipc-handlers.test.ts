@@ -655,7 +655,7 @@ describe('git IPC', () => {
       secureStorageAvailable: true
     })
 
-    // The vault store must contain only ciphertext — never the plaintext token.
+    // The vault store must contain only ciphertext   never the plaintext token.
     const vaultRaw = await readFile(join(storageRoot, 'secrets', 'vault.json'), 'utf-8')
     expect(vaultRaw).not.toContain('ghp_plaintext_secret')
 
@@ -713,12 +713,12 @@ describe('cloudDeploy IPC', () => {
     const account = (await create?.(
       trustedEvent(),
       'coolify',
-      'Coolify — Personal',
+      'Coolify   Personal',
       'personal-token',
       'http://localhost:8080'
     )) as CloudDeploymentProviderAccount
     expect(account.id).toBeTruthy()
-    // The secret is never returned to the renderer — only the opaque ref exists in main.
+    // The secret is never returned to the renderer   only the opaque ref exists in main.
     expect(account.secretRef).toBe('')
     expect(account.configured).toBe(true)
     expect(account.enabled).toBe(true)

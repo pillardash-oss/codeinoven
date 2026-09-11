@@ -106,7 +106,7 @@ function isUnbornBranchLogError(failure: unknown): boolean {
 }
 
 /**
- * Main-process git runtime built on `simple-git` — the same thin wrapper over
+ * Main-process git runtime built on `simple-git`   the same thin wrapper over
  * the system `git` binary the app already execs in `repository-service`,
  * `change-tracking-service`, and `project-file-index-service`.
  *
@@ -179,7 +179,7 @@ export class GitService {
   /**
    * Remove an abandoned `.git/index.lock` so a crashed git process cannot wedge
    * every later command forever. Only locks older than the staleness window are
-   * removed — a fresh lock belongs to a live concurrent git write.
+   * removed   a fresh lock belongs to a live concurrent git write.
    * `rev-parse --git-path` resolves the correct location even inside worktrees.
    */
   private async breakStaleIndexLock(directory: string): Promise<void> {
@@ -195,7 +195,7 @@ export class GitService {
       await rm(absolute, { force: true })
       Logger.dev(`Removed stale git index lock: ${absolute}`)
     } catch {
-      // Best effort — the retry loop re-reports the underlying git failure.
+      // Best effort   the retry loop re-reports the underlying git failure.
     }
   }
 
@@ -251,7 +251,7 @@ export class GitService {
     })
   }
 
-  /** Non-queued status read — only safe inside a queued task. */
+  /** Non-queued status read   only safe inside a queued task. */
   private async readStatus(directory: string): Promise<GitStatus> {
     return this.wrapError(directory, 'read', async () => {
       const status = await this.client(directory).status()
@@ -259,7 +259,7 @@ export class GitService {
     })
   }
 
-  /** Non-queued remote list — only safe inside a queued task. */
+  /** Non-queued remote list   only safe inside a queued task. */
   private async readRemotes(directory: string): Promise<GitRemoteInfo[]> {
     return this.wrapError(directory, 'read', async () => {
       const remotes = await this.client(directory).getRemotes(true)
@@ -348,7 +348,7 @@ export class GitService {
    * A merge/rebase leaves the path in an unmerged index state until `git add`
    * is run on it. Editing the working file (the editor's Save) removes the
    * conflict markers on disk, but git still reports the path as conflicted. This
-   * stages the path so git marks it resolved — but only when the working file no
+   * stages the path so git marks it resolved   but only when the working file no
    * longer contains conflict markers, so a partially-resolved file is never
    * staged. Returns fresh status so the renderer can clear the conflicted list.
    */
@@ -511,7 +511,7 @@ export class GitService {
       await this.wrapError(directory, 'mutation', async () => {
         if (hasConflictMarkers(content)) {
           throw new Error(
-            'This file still has unresolved conflict markers — resolve every conflict first.'
+            'This file still has unresolved conflict markers   resolve every conflict first.'
           )
         }
         const target = resolve(directory, safePath)
@@ -540,7 +540,7 @@ export class GitService {
       branch =
         (await this.client(directory).raw(['rev-parse', '--abbrev-ref', 'HEAD'])).trim() || 'HEAD'
     } catch {
-      // Detached or unborn HEAD — fall back to a generic folder.
+      // Detached or unborn HEAD   fall back to a generic folder.
     }
     const safeBranch = branch.replace(/[^A-Za-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '')
     const document = resolve(
@@ -771,14 +771,14 @@ export class GitService {
     }
     for (const path of paths) {
       await git.raw(['worktree', 'remove', path]).catch(async () => {
-        // Path already gone or dirty — prune clears stale registrations; a
+        // Path already gone or dirty   prune clears stale registrations; a
         // live dirty worktree stays registered and the branch delete reports it.
         await git.raw(['worktree', 'prune']).catch(() => undefined)
       })
     }
   }
 
-  /** `offset` skips the N newest commits — pages in older history for infinite scroll. */
+  /** `offset` skips the N newest commits   pages in older history for infinite scroll. */
   async log(
     projectPath: string,
     limit = DEFAULT_LOG_LIMIT,
@@ -950,7 +950,7 @@ export class GitService {
     })
   }
 
-  /** Non-queued identity read — only safe inside a queued task. */
+  /** Non-queued identity read   only safe inside a queued task. */
   private async readIdentity(directory: string): Promise<GitIdentity> {
     return this.wrapError(directory, 'read', async () => {
       const git = this.client(directory)
@@ -999,7 +999,7 @@ export class GitService {
     })
   }
 
-  /** `git remote set-url <name> <url>` — update an existing remote's URL. */
+  /** `git remote set-url <name> <url>`   update an existing remote's URL. */
   async setRemoteUrl(projectPath: string, name: string, url: string): Promise<GitRemoteInfo[]> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
@@ -1030,7 +1030,7 @@ export class GitService {
     })
   }
 
-  /** Updates just one branch's remote-tracking ref — doesn't touch the working tree. */
+  /** Updates just one branch's remote-tracking ref   doesn't touch the working tree. */
   async fetchBranch(projectPath: string, remote: string, branch: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
@@ -1057,7 +1057,7 @@ export class GitService {
    *
    * The push-recovery flow needs to distinguish "pulled cleanly, safe to push"
    * from "stopped on conflicts, hand over to the conflict UI". A conflicted
-   * pull is not an error — it returns the conflicted status so the renderer
+   * pull is not an error   it returns the conflicted status so the renderer
    * can show the merge/rebase conflict banner and never auto-push a half-merged
    * tree. Only genuine failures (network, auth, no upstream) throw.
    */
@@ -1351,7 +1351,7 @@ export class GitService {
    * head as a local branch (`pr-<number>`) and merge the current base into it
    * so the conflicts land in the working tree for the conflict UI to resolve.
    *
-   * A conflicted merge is a normal, expected state — not an error — so the
+   * A conflicted merge is a normal, expected state   not an error   so the
    * refreshed status (with `conflicted` paths and `conflictState: 'merge'`) is
    * returned for the renderer to hand over to the conflict-resolution UI.
    */
@@ -1436,7 +1436,7 @@ export class GitService {
         try {
           existing = await readFile(gitignorePath, 'utf-8')
         } catch {
-          // No .gitignore yet — a new one is created below.
+          // No .gitignore yet   a new one is created below.
         }
         const lines = existing ? existing.replace(/\r\n/gu, '\n').split('\n') : []
         const patterns: string[] = []
@@ -1524,7 +1524,7 @@ export class GitService {
         await unlink(absolute)
       }
     } catch {
-      // Nothing to remove — treat as already gone.
+      // Nothing to remove   treat as already gone.
     }
   }
 
@@ -1832,7 +1832,7 @@ export class GitService {
   /** Map branch short names to the worktree paths that hold them. The entry for the checkout
    *  being operated on (`directory`) is skipped: its branch is the panel's current branch and
    *  already carries `current`, so it must not be double-flagged as a foreign worktree. Every
-   *  other checkout — including the primary repository when viewed from a linked worktree —
+   *  other checkout   including the primary repository when viewed from a linked worktree  
    *  flags its branch, because git refuses checking that branch out anywhere else. */
   private worktreeBranchPaths(raw: string, directory: string): Map<string, string> {
     const entries = parseWorktreePorcelain(raw).entries
@@ -1865,7 +1865,7 @@ export class GitService {
   ): GitBranchInfo[] {
     // `refname:short` disambiguates when a tag shares the branch's name (e.g. a
     // `nightly` tag and `nightly` branch render as `heads/nightly`), so the
-    // operational branch `name` must be derived from the full ref instead —
+    // operational branch `name` must be derived from the full ref instead  
     // `git branch -d heads/nightly` fails with "branch not found".
     const localRefPrefix = 'refs/heads/'
     const remoteRefPrefix = 'refs/remotes/'
@@ -2064,7 +2064,7 @@ export class GitService {
     return { conflicted: [], merged: [], result, aborted: false }
   }
 
-  /** Transient auth header via per-command `-c` config — never persisted, never logged. */
+  /** Transient auth header via per-command `-c` config   never persisted, never logged. */
   private withAuthHeader(directory: string, token: string): SimpleGit {
     return simpleGit(directory, {
       maxConcurrentProcesses: 1,
@@ -2241,7 +2241,7 @@ function parseConflictHunks(content: string): GitConflictHunk[] {
     }
     if (j >= lines.length) {
       i = startLine
-      continue // Malformed block — skip forward so we never loop forever.
+      continue // Malformed block   skip forward so we never loop forever.
     }
     j += 1 // consume `=======`
     while (j < lines.length && !(lines[j] ?? '').startsWith('>>>>>>>')) {
@@ -2250,7 +2250,7 @@ function parseConflictHunks(content: string): GitConflictHunk[] {
     }
     if (j >= lines.length) {
       i = startLine
-      continue // Unclosed block — not a usable hunk.
+      continue // Unclosed block   not a usable hunk.
     }
     const endLine = j + 1
     const theirsLabel = (lines[j] ?? '').replace(/^>{7,}(?: |$)/u, '') || 'theirs'

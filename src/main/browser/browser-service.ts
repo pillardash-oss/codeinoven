@@ -3,7 +3,6 @@ import { join } from 'node:path'
 import type {
   BrowserConsoleEntry,
   BrowserConsoleLevel,
-  BrowserDevToolsDock,
   BrowserDevToolsState,
   BrowserDownload,
   BrowserDownloadState,
@@ -28,16 +27,6 @@ const PROJECT_ID_PATTERN = /^[a-zA-Z0-9:._-]{1,240}$/u
 const PERMISSION_REQUEST_ID_PATTERN = /^[a-f0-9-]{36}$/u
 const PERMISSION_TIMEOUT_MS = 60_000
 const DOWNLOAD_ID_PATTERN = /^[a-f0-9-]{36}$/u
-const DEVTOOLS_DOCKS = ['bottom', 'right', 'undocked'] as const
-const UNDOCKED_DEVTOOLS_WIDTH = 960
-const UNDOCKED_DEVTOOLS_HEIGHT = 640
-
-function validateDevToolsDock(value: unknown): BrowserDevToolsDock {
-  if (typeof value !== 'string' || !(DEVTOOLS_DOCKS as readonly string[]).includes(value)) {
-    throw new TypeError('DevTools dock position is invalid')
-  }
-  return value as BrowserDevToolsDock
-}
 
 interface BrowserTab {
   view: WebContentsView
@@ -47,15 +36,6 @@ interface BrowserTab {
   consoleEntries: BrowserConsoleEntry[]
   /** Favicon data URL from the last `page-favicon-updated`, cleared on navigation. */
   favicon: string | null
-  /** Hosted DevTools surface for the tab's page; exists while DevTools are open. */
-  devTools: BrowserTabDevTools | null
-}
-
-interface BrowserTabDevTools {
-  view: WebContentsView
-  dock: BrowserDevToolsDock
-  /** Populated while docked in a separate window ('undocked' mode). */
-  undockedWindow: BrowserWindow | null
 }
 
 interface PendingBrowserPermission {
@@ -269,8 +249,6 @@ export class BrowserService {
   private readonly downloads = new Map<string, BrowserDownloadRecord>()
   private activeTabId: string | null = null
   private consoleSequence = 0
-  /** Last dock position the user chose; reused when toggling without a choice. */
-  private lastDevToolsDock: BrowserDevToolsDock = 'bottom'
 
   constructor(private readonly window: BrowserWindow) {}
 
@@ -306,15 +284,6 @@ export class BrowserService {
           this.activeTabId = tabId
         }
         tab.view.setBounds(bounds)
-        if (
-          tab.devTools &&
-          tab.devTools.dock !== 'undocked' &&
-          tab.view.webContents.isDevToolsOpened()
-        ) {
-          // The docked DevTools strip is drawn by the renderer; re-attach it
-          // whenever the page view returns (e.g. after a fullscreen modal).
-          this.window.contentView.addChildView(tab.devTools.view)
-        }
         if (!tab.initialNavigationStarted) {
           tab.initialNavigationStarted = true
           this.load(tabId, initialUrl)
@@ -350,37 +319,17 @@ export class BrowserService {
     ipcMain.handle('browser:stop', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.stop()
     })
-    ipcMain.handle('browser:toggleDevTools', (_event, rawTabId, rawDock) => {
-      const tabId = validateTabId(rawTabId)
-      const tab = this.requireTab(tabId)
+    ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) => {
+      const tab = this.requireTab(validateTabId(rawTabId))
       const contents = tab.view.webContents
       if (contents.isDevToolsOpened()) {
         contents.closeDevTools()
         return false
       }
-      const dock = rawDock === undefined ? this.lastDevToolsDock : validateDevToolsDock(rawDock)
-      this.lastDevToolsDock = dock
-      this.openDevTools(tabId, tab, dock)
+      // Plain native behavior: default dock inside the window, resizable
+      // there, fully undockable from DevTools' own controls.
+      contents.openDevTools()
       return true
-    })
-    ipcMain.handle('browser:getDevToolsState', (_event, rawTabId) => {
-      const tabId = validateTabId(rawTabId)
-      const tab = this.tabs.get(tabId)
-      return tab ? this.devToolsStateFor(tabId, tab) : null
-    })
-    ipcMain.handle('browser:setDevToolsDock', (_event, rawTabId, rawDock) => {
-      const tabId = validateTabId(rawTabId)
-      const tab = this.requireTab(tabId)
-      const dock = validateDevToolsDock(rawDock)
-      this.lastDevToolsDock = dock
-      if (tab.devTools) this.moveDevTools(tabId, tab, dock)
-    })
-    ipcMain.handle('browser:setDevToolsBounds', (_event, rawTabId, rawBounds) => {
-      const tabId = validateTabId(rawTabId)
-      const tab = this.tabs.get(tabId)
-      const bounds = validateBounds(rawBounds)
-      if (!tab?.devTools || tab.devTools.dock === 'undocked') return
-      tab.devTools.view.setBounds(bounds)
     })
     ipcMain.handle('browser:getConsole', (_event, rawTabId) => {
       const tab = this.tabs.get(validateTabId(rawTabId))
@@ -606,17 +555,13 @@ export class BrowserService {
       threadId,
       initialNavigationStarted: false,
       consoleEntries: [],
-      favicon: null,
-      devTools: null
+      favicon: null
     }
     this.tabs.set(tabId, tab)
 
     const publish = (): void => this.publishState(tabId)
     view.webContents.on('devtools-opened', publish)
-    view.webContents.on('devtools-closed', () => {
-      this.teardownDevTools(tabId)
-      publish()
-    })
+    view.webContents.on('devtools-closed', publish)
     view.webContents.on('did-start-loading', publish)
     view.webContents.on('did-stop-loading', publish)
     view.webContents.on('did-navigate', () => {
@@ -1025,115 +970,7 @@ export class BrowserService {
   }
 
   private devToolsStateFor(tabId: string, tab: BrowserTab): BrowserDevToolsState {
-    const open = tab.view.webContents.isDevToolsOpened() && tab.devTools !== null
-    return { tabId, open, dock: open ? tab.devTools!.dock : null }
-  }
-
-  /**
-   * Open the page's DevTools hosted in a surface we control: docked as a
-   * WebContentsView sibling of the page view inside the app window, or hosted
-   * by a separate always-on-top-of-nothing OS window ('undocked'). The native
-   * detached mode is deliberately not used — it produces a window Electron
-   * sizes inconsistently and that we cannot dock programmatically.
-   */
-  private openDevTools(tabId: string, tab: BrowserTab, dock: BrowserDevToolsDock): void {
-    const contents = tab.view.webContents
-    if (!tab.devTools) {
-      const view = new WebContentsView({
-        webPreferences: {
-          sandbox: true,
-          contextIsolation: true,
-          nodeIntegration: false,
-          // DevTools renders a trusted bundled UI; the page's project session
-          // must not leak into it, so it uses the default session.
-          devTools: false
-        }
-      })
-      contents.setDevToolsWebContents(view.webContents)
-      tab.devTools = { view, dock, undockedWindow: null }
-    } else {
-      tab.devTools.dock = dock
-    }
-    const devTools = tab.devTools
-    if (dock === 'undocked') {
-      const win = new BrowserWindow({
-        width: UNDOCKED_DEVTOOLS_WIDTH,
-        height: UNDOCKED_DEVTOOLS_HEIGHT,
-        minWidth: 480,
-        minHeight: 320,
-        title: 'DevTools',
-        autoHideMenuBar: true,
-        backgroundColor: '#1e1e1e'
-      })
-      devTools.undockedWindow = win
-      win.contentView.addChildView(devTools.view)
-      const fit = (): void => {
-        if (win.isDestroyed()) return
-        const [width, height] = win.getContentSize()
-        devTools.view.setBounds({ x: 0, y: 0, width, height })
-      }
-      win.on('resize', fit)
-      win.once('ready-to-show', () => {
-        fit()
-        win.show()
-      })
-      win.on('closed', () => {
-        // Distinguish a user-initiated close from our own teardown/move, which
-        // detaches the window before destroying it.
-        if (tab.devTools === devTools && devTools.undockedWindow === win) {
-          devTools.undockedWindow = null
-          if (!tab.view.webContents.isDestroyed()) tab.view.webContents.closeDevTools()
-        }
-      })
-    } else {
-      this.window.contentView.addChildView(devTools.view)
-      // The renderer drives the exact strip bounds via browser:setDevToolsBounds.
-    }
-    contents.openDevTools()
-    devTools.view.webContents.focus()
-  }
-
-  /** Re-dock an open DevTools surface between in-window strip and its own window. */
-  private moveDevTools(tabId: string, tab: BrowserTab, dock: BrowserDevToolsDock): void {
-    const devTools = tab.devTools
-    if (!devTools || devTools.dock === dock) return
-    if (devTools.undockedWindow) {
-      const win = devTools.undockedWindow
-      devTools.undockedWindow = null
-      if (!win.isDestroyed()) {
-        win.contentView.removeChildView(devTools.view)
-        win.close()
-      }
-    }
-    devTools.dock = dock
-    if (dock === 'undocked') {
-      this.window.contentView.removeChildView(devTools.view)
-      this.openDevTools(tabId, tab, dock)
-      return
-    }
-    this.window.contentView.addChildView(devTools.view)
-    // The renderer follows up with browser:setDevToolsBounds for the new strip.
-  }
-
-  /** Remove a tab's docked DevTools view (the page view is being hidden). */
-  private hideDockedDevTools(tab: BrowserTab): void {
-    const devTools = tab.devTools
-    if (!devTools || devTools.dock === 'undocked') return
-    this.window.contentView.removeChildView(devTools.view)
-  }
-
-  /** Fully dispose of a tab's DevTools surface (view, window, webContents). */
-  private teardownDevTools(tabId: string): void {
-    const tab = this.tabs.get(tabId)
-    const devTools = tab?.devTools
-    if (!tab || !devTools) return
-    tab.devTools = null
-    if (devTools.undockedWindow && !devTools.undockedWindow.isDestroyed()) {
-      devTools.undockedWindow.contentView.removeChildView(devTools.view)
-      devTools.undockedWindow.destroy()
-    }
-    this.window.contentView.removeChildView(devTools.view)
-    if (!devTools.view.webContents.isDestroyed()) devTools.view.webContents.close()
+    return { tabId, open: tab.view.webContents.isDevToolsOpened() }
   }
 
   private appendConsoleEntry(
@@ -1167,7 +1004,6 @@ export class BrowserService {
     const tab = this.tabs.get(this.activeTabId)
     if (tab && !this.permissionSuspendedTabs.has(this.activeTabId)) {
       this.window.contentView.removeChildView(tab.view)
-      this.hideDockedDevTools(tab)
     }
     this.permissionSuspendedTabs.delete(this.activeTabId)
     this.activeTabId = null
@@ -1181,7 +1017,6 @@ export class BrowserService {
         this.resolvePermission(requestId, permissionResolutions.dismiss, false)
     }
     if (this.activeTabId === tabId) this.detachActiveView()
-    this.teardownDevTools(tabId)
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     this.tabs.delete(tabId)
     for (const [contextKey, agentTabId] of this.agentTabIds) {

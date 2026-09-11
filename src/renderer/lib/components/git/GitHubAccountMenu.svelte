@@ -40,7 +40,7 @@
   <DropdownMenu.Root bind:open>
     <DropdownMenu.Trigger
       class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
-      title="GitHub account — {user.name ?? user.login} (@{user.login})"
+      title="GitHub account   {user.name ?? user.login} (@{user.login})"
       aria-label="GitHub account for {user.login}"
     >
       {#if user.avatarUrl}

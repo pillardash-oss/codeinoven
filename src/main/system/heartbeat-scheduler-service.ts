@@ -26,7 +26,7 @@ function mostRecentScheduledMoment(times: string[], now: number): number | null 
 }
 
 /**
- * HeartbeatSchedulerService — fires a disposable "ping" completion against a
+ * HeartbeatSchedulerService   fires a disposable "ping" completion against a
  * user-selected model at each configured time of day, keeping that provider's
  * usage window warm. Each config's `lastRun.at` marks the most recent slot
  * already fired; a slot whose scheduled moment is newer than `lastRun.at`
@@ -145,7 +145,7 @@ export class HeartbeatSchedulerService {
   private async fire(config: HeartbeatConfig): Promise<void> {
     const callback = this.pingCallback
     if (!callback) {
-      Logger.info('Heartbeat ping skipped — chat engine not attached', { id: config.id })
+      Logger.info('Heartbeat ping skipped   chat engine not attached', { id: config.id })
       return
     }
     Logger.info('Sending heartbeat ping', {

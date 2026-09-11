@@ -125,7 +125,7 @@ describe('StorageEngine project boundary', () => {
       accounts: [
         {
           id: 'account-1',
-          label: 'Coolify — Personal',
+          label: 'Coolify   Personal',
           providerKind: 'coolify',
           secretRef: 'vault:account-1',
           configured: true,
@@ -139,7 +139,7 @@ describe('StorageEngine project boundary', () => {
     await storage.saveCloudDeploymentAccounts(registry)
     await expect(storage.getCloudDeploymentAccounts()).resolves.toEqual(registry)
 
-    // The registry is global — never inside a project directory.
+    // The registry is global   never inside a project directory.
     await expect(
       access(join(configRoot, 'cloud-deployments', 'accounts.json'))
     ).resolves.toBeUndefined()

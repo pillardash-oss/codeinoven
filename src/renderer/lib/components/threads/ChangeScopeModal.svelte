@@ -178,7 +178,7 @@
               </button>
             {:else}
               <p class="py-8 text-center text-xs text-dimmed">
-                {noMatch ? 'No scopes match — press + to create one' : 'No scopes found'}
+                {noMatch ? 'No scopes match   press + to create one' : 'No scopes found'}
               </p>
             {/each}
           </div>

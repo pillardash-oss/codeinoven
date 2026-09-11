@@ -34,7 +34,7 @@
     /** Render the header icon inside a colored badge to signal a switched mode. */
     headerIconBadge?: boolean
     headerIconBadgeClass?: string
-    /** Results are already filtered/ranked by the server — skip the client re-filter. */
+    /** Results are already filtered/ranked by the server   skip the client re-filter. */
     serverFiltered?: boolean
     /** Render a < Back button in the footer to return to a previous surface. */
     onBack?: () => void
@@ -110,7 +110,7 @@
       onClose()
       return
     }
-    // Alt/Opt+ArrowLeft — go back to the previous surface (e.g. the main Cmd+K).
+    // Alt/Opt+ArrowLeft   go back to the previous surface (e.g. the main Cmd+K).
     // Only the LEFT Alt/Opt key triggers this: right-Option sits next to the arrow
     // keys on many keyboards, and Option+ArrowLeft is word-jump while editing the
     // query, so pressing it must not bounce the user back to the actions list.

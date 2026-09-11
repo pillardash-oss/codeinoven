@@ -4,14 +4,14 @@ Where every secret lives, where to get it, and where to put it. Work top to
 bottom before your first release. Never commit any of these values to the
 repository.
 
-The CodeInOven desktop app has no server component — it is distributed through
+The CodeInOven desktop app has no server component   it is distributed through
 GitHub Releases and self-updates via the built-in auto-updater. The only
 secrets it needs are the ones below (signing + CI). The marketing website's
 secrets live in the `pillardash-oss/codeinoven-site` repository.
 
 ---
 
-## 1. GitHub Actions secrets — release signing (required for the `release.yml` / `nightly.yml` workflows)
+## 1. GitHub Actions secrets   release signing (required for the `release.yml` / `nightly.yml` workflows)
 
 These are stored in **GitHub → repo → Settings → Secrets and variables → Actions**
 for `pillardash-oss/codeinoven`.
@@ -49,7 +49,7 @@ them out of git (`.env*` is gitignored).
 
 | Variable | Where to get it |
 | -------- | --------------- |
-| `CUA_DRIVER_PATH` | Optional — path to a CUA driver binary if it's not on `PATH`. |
+| `CUA_DRIVER_PATH` | Optional   path to a CUA driver binary if it's not on `PATH`. |
 | `CODEINOVEN_UTILITY_BRIDGE_URL` / `CODEINOVEN_UTILITY_BRIDGE_TOKEN` | Only if you run the internal utility bridge service. |
 
 ---
@@ -58,13 +58,13 @@ them out of git (`.env*` is gitignored).
 
 Rotate (generate a new value) whenever a secret may have leaked:
 
-1. **GitHub Actions secrets** — generate a new cert/`.p12`, regenerate the
+1. **GitHub Actions secrets**   generate a new cert/`.p12`, regenerate the
    app-specific password, then `gh secret set` each one again.
-2. **Apple notarization** — if `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD` leak,
+2. **Apple notarization**   if `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD` leak,
    revoke the app-specific password at appleid.apple.com and generate a new one.
 
 > If a secret ever appears in git history, **rotate it first**, then scrub the
-> history before relying on it — the repo is public.
+> history before relying on it   the repo is public.
 
 ---
 

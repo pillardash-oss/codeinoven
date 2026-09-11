@@ -3,8 +3,8 @@
  *
  * Settings and Scope are lazy-loaded chunks (`{#await import(...)}` in
  * App.svelte), so the very first open pays the chunk fetch + module eval.
- * Firing the import on hover — while the mouse is still over the entry
- * button — makes the subsequent click resolve instantly, because the module
+ * Firing the import on hover   while the mouse is still over the entry
+ * button   makes the subsequent click resolve instantly, because the module
  * registry already holds the chunk. Re-invocations are no-ops.
  */
 

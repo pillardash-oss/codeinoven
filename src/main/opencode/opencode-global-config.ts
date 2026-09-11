@@ -134,7 +134,7 @@ export async function mergeLeanAgentsGlobalConfig(
       applied.push(agent.name)
       changed = true
     } else if (deepEqual(existing, agent)) {
-      // Already merged and byte-compatible — idempotent no-op.
+      // Already merged and byte-compatible   idempotent no-op.
     } else {
       skipped.push(agent.name)
     }
@@ -144,7 +144,7 @@ export async function mergeLeanAgentsGlobalConfig(
     await mkdir(dirname(configPath), { recursive: true })
     if (hadFile) {
       // Preserve the ORIGINAL pre-merge file byte-for-byte BEFORE overwriting
-      // so rollback restores the true original — even when a later release
+      // so rollback restores the true original   even when a later release
       // adds another managed agent and merges again. `flag: 'wx'` never
       // overwrites an existing backup with an intermediate, already-modified
       // configuration.
@@ -222,7 +222,7 @@ async function atomicWrite(filePath: string, raw: string): Promise<void> {
   await atomicWriteRaw(filePath, raw.endsWith('\n') ? raw : `${raw}\n`)
 }
 
-/** Atomic byte-exact write: write `.tmp`, then rename — no normalization. */
+/** Atomic byte-exact write: write `.tmp`, then rename   no normalization. */
 async function atomicWriteRaw(filePath: string, raw: string): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true })
   const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`

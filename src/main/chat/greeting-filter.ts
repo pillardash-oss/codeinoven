@@ -7,7 +7,7 @@
  * intentionally conservative: trim, lowercase, strip punctuation, then match
  * the small explicit list below. Mixed messages such as "hi, fix the build"
  * normalize to something outside the list and remain fully eligible.
- * Documented capture semantics — extend the list, never add fuzzy matching.
+ * Documented capture semantics   extend the list, never add fuzzy matching.
  */
 
 /** The explicit greeting list, already normalized (lowercase, no punctuation). */

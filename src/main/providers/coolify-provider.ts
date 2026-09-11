@@ -119,7 +119,7 @@ export class CoolifyProvider implements DeploymentProvider {
       ? deployments.find((deployment) => deployment.id === deploymentId)
       : deployments[0]
     if (target?.log) return target.log
-    // No deployment log available — fall back to the runtime container output.
+    // No deployment log available   fall back to the runtime container output.
     const response = await this.request(
       `/applications/${encodeURIComponent(containerId)}/logs?lines=${DEFAULT_LOG_LINES}`,
       { method: 'GET' }
@@ -279,7 +279,7 @@ export class CoolifyProvider implements DeploymentProvider {
         })
       )
     } catch {
-      // Project resolution is an enrichment only — never fail the container list.
+      // Project resolution is an enrichment only   never fail the container list.
     }
     return resolver
   }
@@ -360,7 +360,7 @@ export class CoolifyProvider implements DeploymentProvider {
       if (typeof body['message'] === 'string') return body['message'].slice(0, 500)
       if (typeof body['error'] === 'string') return body['error'].slice(0, 500)
     } catch {
-      // Non-JSON error body — fall through to the status-only message.
+      // Non-JSON error body   fall through to the status-only message.
     }
     return ''
   }

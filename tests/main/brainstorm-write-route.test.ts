@@ -6,7 +6,7 @@ import {
 import { leanAgentDefinition, leanAgentNameForMode } from '../../src/main/opencode/opencode-agent-definitions'
 
 /**
- * P3-cp4 — the brainstorm document-generation turn must dispatch through a
+ * P3-cp4   the brainstorm document-generation turn must dispatch through a
  * SCOPED-WRITE channel on every driver capable of one:
  *
  * - `readOnly` is false (the write channel is live),
@@ -15,7 +15,7 @@ import { leanAgentDefinition, leanAgentNameForMode } from '../../src/main/openco
  *   scopes `edit` to the feature versions and explicitly requested prototype
  *   directories and denies every other write path (native scoping),
  * - on any other driver that streams `permission.asked` events to the app
- *   (`interactivePermissions: true`), the write route is also enabled — the
+ *   (`interactivePermissions: true`), the write route is also enabled   the
  *   turn always runs at `auto_review`, so the same PermissionPolicy that
  *   governs every other edit already scopes the write (app-side scoping),
  * - a driver with neither channel keeps the read-only sandbox with no `edit`.

@@ -19,7 +19,7 @@ const APP_BACKGROUND: Record<ResolvedTheme, string> = {
  * Apply the resolved theme to the document.
  *
  * Also updates `meta[name="theme-color"]`, which drives the browser chrome and
- * status bar on a phone — a fixed value there leaves the notch area clashing
+ * status bar on a phone   a fixed value there leaves the notch area clashing
  * with the page whenever the theme changes.
  */
 export function applyTheme(theme: ResolvedTheme): void {

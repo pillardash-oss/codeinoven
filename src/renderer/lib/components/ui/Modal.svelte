@@ -53,7 +53,7 @@
 
   // The browser's native view floats above every DOM surface (see
   // ContextSidebarState.setFullscreenSurfaceActive), so this shared modal must
-  // suppress it while open — otherwise a still-visible browser tab covers the
+  // suppress it while open   otherwise a still-visible browser tab covers the
   // dialog's content and footer buttons, making them unclickable. Keyed per
   // instance so stacked modals don't clear each other's suppression.
   const suppressionKey = `modal-${Math.random().toString(36).slice(2)}`

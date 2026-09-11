@@ -26,8 +26,8 @@ export interface FileEditorRangeViewportRect {
 /**
  * The file editor is backed by CodeMirror 6 so selection, scrolling (including
  * native drag-autoscroll) and editing behave exactly like a plain text editor.
- * The previous approach — a transparent `<textarea>` over a scroll-synced
- * highlighted `<pre>` — could not keep the two layers aligned while the user
+ * The previous approach   a transparent `<textarea>` over a scroll-synced
+ * highlighted `<pre>`   could not keep the two layers aligned while the user
  * dragged a selection past the visible page, which made selection appear to
  * break. CodeMirror renders the highlighted tokens, caret and selection in one
  * content layer, so there is nothing to desync.
@@ -603,8 +603,8 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
       '.cm-lineNumbers .cm-gutterElement': {
         // CodeMirror assigns each gutter element the measured height of its
         // code line inline. Flex-centering the number inside that row makes
-        // the alignment structural — independent of line-height ratios, font
-        // metrics and fractional zoom rounding — so digits track their code
+        // the alignment structural   independent of line-height ratios, font
+        // metrics and fractional zoom rounding   so digits track their code
         // line exactly at any user font size or zoom.
         display: 'flex',
         alignItems: 'center',

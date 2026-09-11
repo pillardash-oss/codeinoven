@@ -2,13 +2,13 @@ import type { OfferedProvider } from '../../lib/types'
 import { importPiAiProvidersRegistry } from './pi-ai-registry'
 
 /**
- * Enumerate every provider in Pi's built-in model registry — the full catalog
+ * Enumerate every provider in Pi's built-in model registry   the full catalog
  * (Anthropic, Amazon Bedrock, Azure, Baseten, …), not just the providers that
  * currently hold credentials. `get_available_models` over RPC only reports
  * usable providers, so the connect flow's searchable set reads the same
  * `@earendil-works/pi-ai` registry Pi itself ships.
  *
- * The module is loaded by `importPiAiProvidersRegistry` — see
+ * The module is loaded by `importPiAiProvidersRegistry`   see
  * `pi-ai-registry.ts` for the resolution strategy and fallbacks.
  */
 

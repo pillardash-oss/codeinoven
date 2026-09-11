@@ -55,13 +55,13 @@ export interface ActionDefinition {
 }
 
 export interface ActionThreadMeta {
-  /** Whether the thread is currently working — picks the current model over the history icons. */
+  /** Whether the thread is currently working   picks the current model over the history icons. */
   working: boolean
   /** Distinct harnesses associated with the thread, newest first. */
   harnessIds: readonly string[]
   /** Resolved provider display name for the thread's current model. */
   providerName: string | null
-  /** Provider id of the thread's current model — drives icon resolution. */
+  /** Provider id of the thread's current model   drives icon resolution. */
   providerId: string | null
   /** Model identifier of the thread's current model. */
   modelId: string | null

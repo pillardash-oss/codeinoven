@@ -120,7 +120,7 @@ export class TemporaryChatController implements ConversationController {
     this.#touch()
   }
 
-  /** Drop a message and everything after it — the editing backend for side
+  /** Drop a message and everything after it   the editing backend for side
    *  chats. Destroys the isolated harness session (its transcript still holds
    *  the removed span) and commits the kept conversation into the cache. */
   async truncateBefore(messageId: string): Promise<AgentMessage[]> {
@@ -198,7 +198,7 @@ export class TemporaryChatController implements ConversationController {
     }
 
     if (alreadyStarted) {
-      // Remount hygiene: expire a side chat whose backend counterpart is gone —
+      // Remount hygiene: expire a side chat whose backend counterpart is gone  
       // but never while a turn is in flight, since `sendTemporaryPrompt` only
       // registers the backend chat after assembling the isolated session.
       const temporaryChatId = this.#tab.temporaryChatId
@@ -307,7 +307,7 @@ export class TemporaryChatController implements ConversationController {
           error.message.includes('Temporary chat stopped by user') ||
           error.message.includes('Temporary chat closed'))
       ) {
-        // Expected teardown while the turn was in flight — settle quietly.
+        // Expected teardown while the turn was in flight   settle quietly.
         this.clearError()
         return
       }

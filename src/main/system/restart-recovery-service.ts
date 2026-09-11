@@ -18,7 +18,7 @@ export interface RestartRecoveryResult {
   inspected: number
   /** Threads whose interrupted turns should be re-run on restart. */
   recovered: Thread[]
-  /** Threads whose turns demonstrably completed before the stop — not resumed. */
+  /** Threads whose turns demonstrably completed before the stop   not resumed. */
   completed: Thread[]
   failures: RestartRecoveryFailure[]
 }
@@ -32,7 +32,7 @@ export interface RestartRecoveryResult {
  * as interrupted.
  *
  * Recovery distinguishes a turn that actually stopped before the harness finished
- * from a false positive — a turn whose terminal assistant answer was already
+ * from a false positive   a turn whose terminal assistant answer was already
  * persisted before the app quit. In the latter case the checkpoint is finalized
  * as `completed` (full diff, no interruption error) and the thread is not resumed,
  * so no premature partial file-changes card or "stopped before completion" message

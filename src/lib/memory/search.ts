@@ -107,7 +107,7 @@ export function formatSearchResults(results: SearchResult[]): string {
   for (const result of results) {
     const { entry, score, matchedFields } = result
     lines.push(
-      `- **${entry.label}** (${entry.category}, ${entry.priority}) — ${matchedFields.join(', ')} [score: ${score}]`,
+      `- **${entry.label}** (${entry.category}, ${entry.priority})   ${matchedFields.join(', ')} [score: ${score}]`,
       `  ${entry.content.slice(0, 100)}${entry.content.length > 100 ? '...' : ''}`
     )
   }

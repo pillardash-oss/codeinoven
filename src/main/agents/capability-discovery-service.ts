@@ -199,7 +199,7 @@ export class CapabilityDiscoveryService {
    * Settings-level catalog: every skill and MCP server the app can see across
    * all installed harnesses, the shared global layer, and every registered
    * local project. Entries are attributed with the owning harness/project so
-   * the Utilities page can group by harness, global, or project — entries are
+   * the Utilities page can group by harness, global, or project   entries are
    * intentionally NOT name-deduped here because the same capability may be
    * installed for several harnesses at once.
    */
@@ -268,7 +268,7 @@ export class CapabilityDiscoveryService {
   /**
    * Skill names installed in harness-specific directories (home and project
    * level), mapped to the harnesses claiming them. Consumers use this to keep
-   * harness-exclusive skills out of other harnesses' command menus — a native
+   * harness-exclusive skills out of other harnesses' command menus   a native
    * driver may still report a shared-layer copy as a skill command even though
    * the skill is owned by another harness.
    */
@@ -480,7 +480,7 @@ export class CapabilityDiscoveryService {
         }
       })
     } catch {
-      // Malformed or unsupported config — report nothing rather than failing the panel.
+      // Malformed or unsupported config   report nothing rather than failing the panel.
       return []
     }
   }

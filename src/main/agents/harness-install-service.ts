@@ -17,7 +17,7 @@ type Platform = NodeJS.Platform
 /**
  * Official install/download page for each harness, keyed by OS. Where a
  * harness ships one canonical page that covers every platform (npm package
- * pages, single docs pages), the same URL is used for all three — the page
+ * pages, single docs pages), the same URL is used for all three   the page
  * itself presents the OS-specific instructions. Pages were verified against
  * each harness's real install channels.
  */
@@ -100,7 +100,7 @@ const INSTALL_METHODS: Record<string, Partial<Record<Platform, HarnessInstallMet
 
 /**
  * Documented uninstall commands per install method. CodeInOven never mutates a
- * harness install on its own — these hand off the harness's own documented
+ * harness install on its own   these hand off the harness's own documented
  * removal command to the user-controlled embedded terminal, exactly like the
  * update flow. `~` is expanded to the user's home directory at handoff build
  * time so the direct-spawn PTY gets an absolute path.
@@ -219,7 +219,7 @@ const INSTALL_COMMANDS: Record<
   }
 }
 
-/** Install methods in preference order per platform — native installers first on Windows. */
+/** Install methods in preference order per platform   native installers first on Windows. */
 const METHOD_PREFERENCE: Record<Platform, HarnessInstallMethod[]> = {
   win32: ['winget', 'native', 'npm'],
   darwin: ['brew', 'npm'],
@@ -333,7 +333,7 @@ export class HarnessInstallService {
     const command = method ? platformCommands?.[method] : undefined
     if (!method || !command) {
       throw new Error(
-        `No one-click install is documented for ${definition.name} on this platform — use the install page instead.`
+        `No one-click install is documented for ${definition.name} on this platform   use the install page instead.`
       )
     }
 
@@ -367,7 +367,7 @@ export class HarnessInstallService {
 
   /**
    * Wrap an npm install in the platform's documented Node.js bootstrap when no
-   * Node runtime was found — Windows via winget, macOS via Homebrew. On Linux,
+   * Node runtime was found   Windows via winget, macOS via Homebrew. On Linux,
    * or when no bootstrap channel exists, explain what the user needs instead.
    */
   private withNodeBootstrap(
@@ -410,7 +410,7 @@ export class HarnessInstallService {
 
     const provider = this.providers.getAll().find((candidate) => candidate.id === harnessId)
     if (!provider || provider.status !== 'available') {
-      throw new Error(`${definition.name} is not installed — nothing to uninstall.`)
+      throw new Error(`${definition.name} is not installed   nothing to uninstall.`)
     }
     if (provider.executionTarget?.kind === 'bundled') {
       throw new Error(

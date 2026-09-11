@@ -130,12 +130,12 @@
     threads: 'Threads'
   }
 
-  /** Settings takes over the header — no thread title or thread controls. */
+  /** Settings takes over the header   no thread title or thread controls. */
   let onSettings = $derived(isSettingsView(activeView))
 
   let onScope = $derived(activeView === 'scope')
 
-  /** Chats must feel like chat — no editor, spec, or terminal controls. */
+  /** Chats must feel like chat   no editor, spec, or terminal controls. */
   let chatMode = $derived(activeView === 'chats')
 
   /** Git controls and polling exist only for local projects configured for Git tracking. */
@@ -241,7 +241,7 @@
     }
   })
 
-  /** Navigate to a primary view without any sidebar toggling — used by the
+  /** Navigate to a primary view without any sidebar toggling   used by the
    *  Cmd/Ctrl+0-4 view shortcuts so they always land on the requested view. */
   async function navigateToView(view: 'projects' | 'chats' | 'scope' | 'threads'): Promise<void> {
     if (view === 'chats') preloadNavigationThreads('chats')
@@ -261,7 +261,7 @@
         workspaceState.clearThread()
       }
     } else if (view === 'projects' && activeView === 'chats') {
-      // Coming from chats — remember the chat thread and restore the project thread
+      // Coming from chats   remember the chat thread and restore the project thread
       scopeState.stashedChatThreadId = workspaceState.selectedThread?.id ?? null
       if (scopeState.stashedProjectThreadId) {
         void restoreThread(scopeState.stashedProjectThreadId)
@@ -287,7 +287,7 @@
       await navigateToView(lastViewBeforeScope)
       return
     }
-    // Selecting the view already open from the dropdown is a no-op — in
+    // Selecting the view already open from the dropdown is a no-op   in
     // particular, scoped threads → projects must simply close the board (the
     // caller clears it) without hiding the sidebar.
     if (view === activeView) return
@@ -310,7 +310,7 @@
 
   async function toggleScopedThreads(): Promise<void> {
     if (activeView === 'projects-scope' || (activeView === 'projects' && scopeState.sidebarContext)) {
-      // Off: land on the plain projects view — navigate() closes the sidebar.
+      // Off: land on the plain projects view   navigate() closes the sidebar.
       await navigateToView('projects')
       return
     }
@@ -376,12 +376,12 @@
     return option?.label ?? 'Projects'
   })
 
-  /** Cmd/Ctrl+3 — Projects view with the scope sidebar active for the current
+  /** Cmd/Ctrl+3   Projects view with the scope sidebar active for the current
    *  thread (or project). Idempotent: never turns scope state off. */
   async function openProjectWithScopeState(): Promise<void> {
     if (activeView !== 'projects' && activeView !== 'projects-scope') {
       await navigateToView('projects')
-      // Coming back from another view — restore a stashed scope context first.
+      // Coming back from another view   restore a stashed scope context first.
       if (scopeState.stashedSidebarContext) {
         scopeState.restoreStashedSidebarContext()
         if (scopeState.stashedProjectThreadId) {
@@ -409,7 +409,7 @@
     }
   }
 
-  /** True while any project thread is actively being worked on — a gentle
+  /** True while any project thread is actively being worked on   a gentle
    *  pulse on the view switcher title. */
   let anyProjectWorking = $derived(
     scopeState.allScopeThreads.some(
@@ -454,7 +454,7 @@
 
   async function openGatewayDashboard(): Promise<void> {
     if (!gatewayDashboardUrl) {
-      toast.error('Gateway dashboard is not available — start the gateway first')
+      toast.error('Gateway dashboard is not available   start the gateway first')
       return
     }
     const opened = await gatewayState.openDashboard(gatewayDashboardUrl)
@@ -471,7 +471,7 @@
       return
     }
     // Activation + refresh are event-driven by the workspace store
-    // (`notifyThreadOpened` on every thread open) — this effect only subscribes
+    // (`notifyThreadOpened` on every thread open)   this effect only subscribes
     // to agent checkpoints for the active project.
     gitState.ensureProjectEvents(thread.projectId)
   })
@@ -678,7 +678,7 @@
     </div>
   </nav>
 
-  <!-- Scope view header area — separator, scrollable tabs, sticky tools -->
+  <!-- Scope view header area   separator, scrollable tabs, sticky tools -->
   {#if onScope}
     <div class="titlebar-no-drag flex min-w-0 flex-1 items-center self-stretch pl-3">
       <!-- Visual separator between nav buttons and scope tabs -->
@@ -887,19 +887,19 @@
   {/if}
 
   <div class="titlebar-no-drag ml-auto flex shrink-0 items-center gap-1">
-    <!-- Gateway dashboard — global browser entry, visible when gateway is ready -->
+    <!-- Gateway dashboard   global browser entry, visible when gateway is ready -->
     {#if hasGateway && gatewayDashboardUrl}
       <button
         class="flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
         aria-label="Open gateway dashboard"
-        title="Open gateway dashboard — {gatewayDashboardUrl}"
+        title="Open gateway dashboard   {gatewayDashboardUrl}"
         onclick={() => void openGatewayDashboard()}
       >
         <Globe size={16} />
       </button>
     {/if}
 
-    <!-- Editor preference — hidden in chat mode, scope view, and when no project is selected -->
+    <!-- Editor preference   hidden in chat mode, scope view, and when no project is selected -->
     {#if !chatMode && !onScope && workspaceState.activeProject}
       <div class="relative flex items-center">
         <button
@@ -965,7 +965,7 @@
       </div>
     {/if}
 
-    <!-- Spec studio — only for an existing document or an eligible final-response retry -->
+    <!-- Spec studio   only for an existing document or an eligible final-response retry -->
     {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && workspaceState.specStudioAvailable}
       <button
         class="flex h-8 items-center gap-1.5 px-2 transition-colors duration-150 {workspaceState.specStudioOpen
@@ -1007,7 +1007,7 @@
       </button>
     {/if}
 
-    <!-- Git status chip — only when a thread is open in a project view -->
+    <!-- Git status chip   only when a thread is open in a project view -->
     {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && gitAvailable}
       <button
         class={[
@@ -1023,7 +1023,7 @@
         ]}
         aria-label="Open Git panel"
         title={gitState.activePrConflictCount > 0
-          ? `${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution — open Git panel`
+          ? `${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution   open Git panel`
           : 'Open Git panel'}
         onclick={openGitPanel}
       >
@@ -1067,7 +1067,7 @@
       </button>
     {/if}
 
-    <!-- Notification bell — available in all views -->
+    <!-- Notification bell   available in all views -->
     <button
       class="relative flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground {notificationsPanelActive
         ? 'bg-elevated text-foreground'

@@ -13,7 +13,7 @@ type EncryptedSecretStore = Record<string, EncryptedSecretRecord>
 /**
  * Deterministic SecretVault ref under which a provider account's token is
  * stored. The ref is keyed by the global account id only, so one account's
- * token is shared by every project that attaches it — a provider account is
+ * token is shared by every project that attaches it   a provider account is
  * created once and reused across projects, not duplicated per project.
  */
 function providerTokenRef(accountId: string): string {

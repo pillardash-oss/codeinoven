@@ -219,7 +219,7 @@ function parseFileCitation(value: string, explicitLink = false): ParsedFileCitat
     /^(?:https?:|mailto:|data:|#(?!L\d))/iu.test(target) ||
     target.startsWith('opencode-source:') ||
     // Reject `:name{...}` directive tokens (e.g. backticked codex citations)
-    // — they are markup, not file paths.
+    //   they are markup, not file paths.
     /^:{1,3}[a-z0-9-]+\{/iu.test(target)
   ) {
     return null
@@ -365,8 +365,8 @@ export function linkifyFileCitations(
   const isClickable = (path: string): boolean =>
     isKnownCitation(path, isValidPath) || (isExternalPath?.(path) ?? false)
 
-  // Codex `:codex-file-citation{path="..."}` tokens — fence- and inline-code
-  // aware — become links only when the cited path is known (in the project or
+  // Codex `:codex-file-citation{path="..."}` tokens   fence- and inline-code
+  // aware   become links only when the cited path is known (in the project or
   // an existing external absolute path).
   result = linkifyCodexCitations(result, isClickable)
 

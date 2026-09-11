@@ -263,7 +263,7 @@
 <style>
   /* Size container so header children (nav, version bar, actions) can compact
      via container queries when the right-hand coordinator panel squeezes the
-     studio — the same mechanism AppHeader uses for its toolbar. */
+     studio   the same mechanism AppHeader uses for its toolbar. */
   .studio-header-container {
     container: studio-header / inline-size;
   }

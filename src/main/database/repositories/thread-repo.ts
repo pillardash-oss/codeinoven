@@ -53,7 +53,7 @@ interface ThreadRow {
   working_directory: string
 }
 
-/** Safe JSON read for optional blob columns — a corrupt row must not break a thread list. */
+/** Safe JSON read for optional blob columns   a corrupt row must not break a thread list. */
 function parseStoredJson(raw: string): unknown {
   try {
     return JSON.parse(raw)
@@ -227,7 +227,7 @@ export interface ThreadListOptions {
    * - `default`: pinned (newest pinned first), then manual `sort_order`, then
    *   `last_activity`. Manual reordering can push an active thread beyond a
    *   bounded `limit`, so a "recent" hydration query must use `activity` instead.
-   * - `activity`: pinned (newest pinned first), then `last_activity` descending —
+   * - `activity`: pinned (newest pinned first), then `last_activity` descending  
    *   guarantees the most recently active threads are always loaded regardless
    *   of `sort_order`.
    */

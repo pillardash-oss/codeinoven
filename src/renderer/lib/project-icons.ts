@@ -18,7 +18,7 @@ export interface ProjectIconSource {
  * 1. Stored custom image icon (project.icon file)
  * 2. SVG icon type (project.iconType) with project colour
  * 3. Initials-on-colour-circle fallback using project colour (or deterministic auto-colour)
- * 4. null  — the caller falls back to a generic icon
+ * 4. null    the caller falls back to a generic icon
  */
 export function getProjectIcon(
   project: ProjectIconSource,

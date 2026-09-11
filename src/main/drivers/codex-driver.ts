@@ -1241,7 +1241,7 @@ export class CodexDriver extends PersistentCliDriver {
     // A prior `error` notification (e.g. a usage-limit hit with
     // `willRetry: false`) already captured `active.failure`/`active.failureIssue`
     // before the turn tore down. The app-server can report that teardown as a
-    // non-`'failed'` terminal status (e.g. `'interrupted'`) — falling through to
+    // non-`'failed'` terminal status (e.g. `'interrupted'`)   falling through to
     // `undefined` here would silently drop the captured failure and let the
     // turn look like a clean success.
     const message =
@@ -2281,7 +2281,7 @@ function isCodexDynamicQuestionItem(item: Record<string, unknown>): boolean {
 }
 
 // `turn/started` fires the instant Codex's own retry loop begins its next
-// attempt, before that attempt has round-tripped to the provider at all — it
+// attempt, before that attempt has round-tripped to the provider at all   it
 // is not evidence the retry succeeded. Treating it as recovery flipped the UI
 // to "working" moments before the same still-exhausted quota failed the
 // attempt again, bouncing the thread between waiting and working. Only

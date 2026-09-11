@@ -11,7 +11,7 @@
 
   let { text }: Props = $props()
 
-  /** Characters shown when collapsed — enough context to recognize the run. */
+  /** Characters shown when collapsed   enough context to recognize the run. */
   const COLLAPSED_CHARS = 1_200
   const EXPANDED_MAX_HEIGHT = '18rem'
 
@@ -32,7 +32,7 @@
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copied = false), 1500)
     } catch {
-      // Clipboard unavailable — the button simply stays idle.
+      // Clipboard unavailable   the button simply stays idle.
     }
   }
 </script>

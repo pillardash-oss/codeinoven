@@ -152,7 +152,7 @@ function buildThreadDeletionStatements(
 
   // Pending turn-feedback rows are NOT resolved here: they keep their captured
   // grading payload (their thread reference is SET NULL) and are judged by the
-  // LLM grader immediately after deletion — a lost-cause thread never scores
+  // LLM grader immediately after deletion   a lost-cause thread never scores
   // as a pass just because it was deleted.
 
   if (assignmentValues.length > 0) {
@@ -254,7 +254,7 @@ export class ThreadManager {
    * Per-thread cache of the full user-message jump list (keyed by
    * `${projectId}:${threadId}`), populated on first async worker-backed load
    * and busted only when a new user message is applied to that thread or the
-   * thread is deleted — repeated menu-opens never re-scan the database.
+   * thread is deleted   repeated menu-opens never re-scan the database.
    */
   private readonly userMessageHistoryCache = new Map<string, UserMessageSummary[]>()
 
@@ -285,7 +285,7 @@ export class ThreadManager {
   /**
    * Set by the ChatEngine so deleting a thread closes its open ranking
    * snapshot conversation for immediate grading before the thread foreign
-   * key is detached — deletion is the conversation close signal.
+   * key is detached   deletion is the conversation close signal.
    */
   onThreadsDeletedForRanking?: (projectId: string, threadIds: string[]) => void
 
@@ -497,7 +497,7 @@ export class ThreadManager {
    * `sortOrder ?? lastActivity` descending, so a dragged thread holds its
    * position, while any thread that receives genuinely newer activity (a
    * larger `lastActivity`, since epoch time only grows) naturally sorts above
-   * it — and can be dragged back above again. Unlike the batch reorder, this
+   * it   and can be dragged back above again. Unlike the batch reorder, this
    * touches only the dragged thread and never wipes other threads' anchors.
    */
   async setSortOrder(projectId: string, threadId: string, sortOrder: number): Promise<Thread> {
@@ -511,7 +511,7 @@ export class ThreadManager {
   /**
    * Manual reorder of the pinned threads for a project. This is the single way
    * pin order changes: the first id becomes most-recently pinned (top). Only
-   * pinned_at is rewritten — nothing else, so it stays consistent across every
+   * pinned_at is rewritten   nothing else, so it stays consistent across every
    * surface and a newly pinned thread always lands on top.
    */
   async reorderPinnedThreads(projectId: string, orderedPinnedIds: string[]): Promise<Thread[]> {
@@ -538,8 +538,8 @@ export class ThreadManager {
 
   /**
    * Manual reorder of pinned threads across every project (Threads view). The
-   * first id becomes most-recently pinned (top). Only pinned_at is rewritten —
-   * nothing else — so pin order stays consistent across every surface and a
+   * first id becomes most-recently pinned (top). Only pinned_at is rewritten  
+   * nothing else   so pin order stays consistent across every surface and a
    * newly pinned thread always lands on top.
    */
   async reorderPinnedThreadsGlobal(orderedPinnedIds: string[]): Promise<Thread[]> {
@@ -782,7 +782,7 @@ export class ThreadManager {
    * Delete every thread in a project through the same path as
    * `deleteThread` (session teardown, DB row cleanup, disk artifacts), so
    * project deletion never has to duplicate or fall behind that logic.
-   * Only walks coordinator/standalone threads — orchestration children are
+   * Only walks coordinator/standalone threads   orchestration children are
    * swept as part of their coordinator's deletion.
    */
   async deleteAllThreadsInProject(projectId: string): Promise<void> {
@@ -935,7 +935,7 @@ export class ThreadManager {
   }
 
   /**
-   * Ids of every orchestration descendant of `threadId` — worker sub-agent
+   * Ids of every orchestration descendant of `threadId`   worker sub-agent
    * threads dispatched by this coordinator, transitively. Used to attribute
    * sub-agent checkpoint work to the parent thread's turn.
    */
@@ -1149,7 +1149,7 @@ export class ThreadManager {
    *
    * Enabling requires prior work (a bound session or mirrored conversation),
    * excludes orchestration threads, and is rejected while an Engineering
-   * lifecycle selection is active — the two workflows are mutually exclusive.
+   * lifecycle selection is active   the two workflows are mutually exclusive.
    * Once the first audit run has started (`independentAuditInitialized`), the
    * audit stays enabled for the thread's lifetime. The flag is deliberately a
    * `Thread` field, not a `ThreadSettings` entry, so forks and new threads
@@ -1171,7 +1171,7 @@ export class ThreadManager {
       const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
       if ((lifecycle && lifecycle.selection !== 'none') || lifecycle?.startedAt !== undefined) {
         throw new Error(
-          'Independent audit excludes Engineering modes — turn them off first or fork the thread.'
+          'Independent audit excludes Engineering modes   turn them off first or fork the thread.'
         )
       }
       const hasWork =
@@ -1213,7 +1213,7 @@ export class ThreadManager {
     return updated
   }
 
-  /** Unbind the harness session — the next prompt starts a fresh one. */
+  /** Unbind the harness session   the next prompt starts a fresh one. */
   async clearSessionId(projectId: string, threadId: string): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
@@ -1445,7 +1445,7 @@ export class ThreadManager {
   /**
    * Deterministic thread-capacity view for the current project. Exposes the
    * limit, active/protected counts, and how many threads could be deleted to
-   * make room — so the UI can explain a protected-capacity refusal.
+   * make room   so the UI can explain a protected-capacity refusal.
    */
   async getThreadCapacity(projectId: string): Promise<ThreadCapacity> {
     const project = this.projectRepo.get(projectId)
@@ -1499,7 +1499,7 @@ export class ThreadManager {
 
   /**
    * Fork a thread into a new conversation. When `targetProjectId` is provided
-   * the fork is created in that project instead of the source project — used to
+   * the fork is created in that project instead of the source project   used to
    * continue a standalone chat inside a real project.
    */
   async forkThread(
@@ -1589,7 +1589,7 @@ export class ThreadManager {
             autopilot: sourceLifecycle.autopilot === true
           })
         } catch {
-          // Lifecycle inheritance is cosmetic — never fail the fork on it.
+          // Lifecycle inheritance is cosmetic   never fail the fork on it.
         }
       }
     }

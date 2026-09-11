@@ -280,7 +280,7 @@
             role="button"
             tabindex="0"
             aria-label={`${kindLabel(n.kind)}: ${n.title}. Click to navigate to thread`}
-            title={`${n.title}${n.body ? ` — ${n.body}` : ''}`}
+            title={`${n.title}${n.body ? `   ${n.body}` : ''}`}
             onclick={() => void navigateToNotification(n)}
             onkeydown={(e: KeyboardEvent) => {
               if (e.key === 'Enter' || e.key === ' ') {

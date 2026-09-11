@@ -157,7 +157,7 @@
   let createError = $state('')
   /**
    * Set when the 422 above was GitHub having nothing to compare (`head`
-   * already merged into `base`) rather than a real validation failure — the
+   * already merged into `base`) rather than a real validation failure   the
    * displayed "ahead" count can go stale between compare and submit if
    * another merge lands in between, e.g. an automated promotion PR.
    */
@@ -227,7 +227,7 @@
       ) ??
       null
   )
-  /** An open PR for the exact head→base pair — GitHub rejects a duplicate with a 422. */
+  /** An open PR for the exact head→base pair   GitHub rejects a duplicate with a 422. */
   const existingPr = $derived(compare?.existing ?? null)
   const composeWorking = $derived(composePhase === 'working')
   const composeSucceeded = $derived(composePhase === 'complete' || composePhase === 'recompose')
@@ -265,7 +265,7 @@
 
   // The sheet lives inside `PrDockHost`'s `{#each store.drafts}`, so writing the
   // store from a bare effect would re-render the host, re-run this effect and
-  // write again — a read/write cycle. Reading back the current descriptor and
+  // write again   a read/write cycle. Reading back the current descriptor and
   // writing only when a field actually changed makes the sync idempotent.
   $effect(() => {
     if (!draftId) return
@@ -289,7 +289,7 @@
   })
 
   /**
-   * Whether the local head has commits the remote lacks — a push is only
+   * Whether the local head has commits the remote lacks   a push is only
    * meaningful (and only possible) when this is true. When the head already
    * exists on GitHub and the local copy is up to date (or behind it), pushing
    * would be a pointless non-fast-forward rejection, so creation skips it.
@@ -436,7 +436,7 @@
     try {
       // 1. Commit the current index plus untracked files, leaving unstaged edits
       //    alone. Best-effort by design: a failed stage or commit never blocks
-      //    the push or the pull request itself — the user opted into the commit,
+      //    the push or the pull request itself   the user opted into the commit,
       //    and the working tree stays exactly as it was for a manual retry.
       let commitMade = willCreateCommit
       if (commitMade) {
@@ -453,7 +453,7 @@
         }
       }
       // 2. Push local commits only when the head actually has something the
-      //    remote doesn't — when the branch already exists on GitHub (and the
+      //    remote doesn't   when the branch already exists on GitHub (and the
       //    local copy is behind it, e.g. a remote-to-remote PR), there is
       //    nothing to push and GitHub builds the PR from the remote refs, so
       //    skipping the push avoids a spurious non-fast-forward rejection.
@@ -666,7 +666,7 @@
    * PR copy is a direct virtual task and must never enter an Engineering
    * lifecycle. It is an ephemeral one-shot session, so it always runs in the
    * low-exposure `auto_review` permission mode regardless of what the last-used
-   * or persisted thread-level permission was — never `full_access`.
+   * or persisted thread-level permission was   never `full_access`.
    */
   function composeVirtualTaskSettings(): ThreadSettings | null {
     const selection = prComposeAgentSettings.selection
@@ -1055,7 +1055,7 @@
           {#if sameBranch}
             <CircleSlash size={12} class="shrink-0 text-dimmed" />
             <span class="text-dimmed"
-              >The head and base are the same branch — pick a different head.</span
+              >The head and base are the same branch   pick a different head.</span
             >
           {:else if comparing}
             <Loader2 size={12} class="shrink-0 animate-spin text-dimmed" />
@@ -1074,7 +1074,7 @@
           {:else if compare}
             <CircleCheck size={12} class="shrink-0 text-success" />
             <span class="text-success">
-              {compare.source === 'local' ? 'Local commits will be pushed' : 'Able to merge'} —
+              {compare.source === 'local' ? 'Local commits will be pushed' : 'Able to merge'}  
               {compare.aheadBy} ahead · {compare.behindBy} behind ·
               {compare.totalCommits} commit{compare.totalCommits === 1 ? '' : 's'} ·
               {compare.filesChanged} file{compare.filesChanged === 1 ? '' : 's'} changed
@@ -1090,7 +1090,7 @@
                   A pull request already exists for {head} into {base}
                 </p>
                 <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-dimmed">
-                  #{existingPr.number} — {existingPr.title} GitHub won't allow a second open PR for the
+                  #{existingPr.number}   {existingPr.title} GitHub won't allow a second open PR for the
                   same branches, so creation is disabled.
                 </p>
                 <button
@@ -1117,12 +1117,12 @@
             <TriangleAlert size={14} class="mt-0.5 shrink-0 text-warning" />
             <div class="min-w-0 flex-1">
               <p class="text-[0.625rem] font-semibold text-warning">
-                Push blocked — branch has diverged
+                Push blocked   branch has diverged
               </p>
               <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-dimmed">
                 The remote branch
                 <span class="font-mono text-foreground">{head}</span> has commits you don't have locally,
-                so Git won't let you push over them. Pull the remote changes in first — the pull request
+                so Git won't let you push over them. Pull the remote changes in first   the pull request
                 is created automatically afterwards.
               </p>
               {#if pushErrorDetails}
@@ -1197,7 +1197,7 @@
               <p class="text-[0.625rem] font-semibold text-foreground">Nothing to merge</p>
               <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-dimmed">
                 <span class="font-medium text-foreground">{head}</span> is already up to date with
-                <span class="font-medium text-foreground">{base}</span> — there are no commits left to
+                <span class="font-medium text-foreground">{base}</span>   there are no commits left to
                 open a pull request for. It was likely merged elsewhere while this panel was open.
               </p>
             </div>
@@ -1285,7 +1285,7 @@
                 ? headIsCurrent
                   ? 'Create an uncategorized commit dated at submission time.'
                   : `Check out ${head} before committing files to it.`
-                : 'No staged or untracked files right now — nothing would be committed.'}
+                : 'No staged or untracked files right now   nothing would be committed.'}
             </p>
           </div>
           <Switch

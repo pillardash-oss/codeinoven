@@ -15,7 +15,7 @@
     projects: readonly Project[]
     projectIconUrls: ReadonlyMap<string, string>
     selectedThreadId: string | null
-    /** When true, Ctrl+Tab opens the native overlay instead of the DOM dialog —
+    /** When true, Ctrl+Tab opens the native overlay instead of the DOM dialog  
      *  required whenever the browser's native WebContentsView is on screen,
      *  because a native view stacks above all renderer DOM. */
     nativeAvailable?: boolean
@@ -106,7 +106,7 @@
     open = false
     await onSelect(thread)
     // Focus the new thread's composer editor in place after the dialog is fully
-    // closed — the mount-time autofocus alone loses the race with the closing
+    // closed   the mount-time autofocus alone loses the race with the closing
     // focus scope. Focuses directly; it never remounts the composer.
     workspaceState.requestFocusComposerEditor()
   }

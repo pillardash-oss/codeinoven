@@ -116,11 +116,11 @@
                 : part.type === 'text'
                   ? 'text'
                   : (part.type ?? '?')
-        return `part updated — ${kind}`
+        return `part updated   ${kind}`
       }
       case 'message.part.delta': {
         const d = ev.data as { field?: string; delta?: string }
-        return `delta — ${d.field} (${d.delta?.length ?? 0} chars)`
+        return `delta   ${d.field} (${d.delta?.length ?? 0} chars)`
       }
       case 'message.completed': {
         const d = ev.data as { error?: string }

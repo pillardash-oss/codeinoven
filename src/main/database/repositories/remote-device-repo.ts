@@ -3,7 +3,7 @@
  *
  * Persists per-device scoped credentials, revocation tombstones, the bounded
  * security audit log, and single-use pairing bootstraps. The repository only
- * ever stores public keys, fingerprints, and hashes — never a device private
+ * ever stores public keys, fingerprints, and hashes   never a device private
  * key or the raw shared pairing value.
  */
 
@@ -108,7 +108,7 @@ export interface RemoteAuditEvent {
 
 export interface RemotePairingBootstrap {
   bootstrapId: string
-  /** SHA-256 hash of the raw pairing value — never the value itself. */
+  /** SHA-256 hash of the raw pairing value   never the value itself. */
   hash: string
   issuedAt: number
   expiresAt: number
@@ -158,7 +158,7 @@ interface AuditRow {
   auth_version: number | null
 }
 
-/** Safe JSON read for stored blobs — a corrupt row must never break a device list. */
+/** Safe JSON read for stored blobs   a corrupt row must never break a device list. */
 function parseStoredJson(raw: string): unknown {
   try {
     return JSON.parse(raw)

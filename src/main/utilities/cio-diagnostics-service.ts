@@ -148,7 +148,7 @@ function classifyReadOnlySql(rawSql: string): { sql: string; kind: ReadOnlySqlKi
   }
   sql = sql.replace(/;+\s*$/u, '').trim()
   if (!sql || sql.includes(';')) {
-    throw new TypeError('query_sql accepts exactly one statement — remove the extra ";"')
+    throw new TypeError('query_sql accepts exactly one statement   remove the extra ";"')
   }
   if (sql.includes('\0')) throw new TypeError('sql must not contain a null byte')
   if (DENIED_SQL_FUNCTIONS.test(sql)) {
@@ -158,7 +158,7 @@ function classifyReadOnlySql(rawSql: string): { sql: string; kind: ReadOnlySqlKi
   if (lead === 'select' || lead === 'with') return { sql, kind: 'select' }
   if (lead === 'explain') return { sql, kind: 'explain' }
   if (lead === 'pragma') {
-    // `PRAGMA [schema.]name[= value]` and `PRAGMA name(args)` — read the name
+    // `PRAGMA [schema.]name[= value]` and `PRAGMA name(args)`   read the name
     // before any argument list, then drop an optional schema qualifier, so a
     // quoted table name can never be mistaken for the PRAGMA name.
     const remainder = sql.slice(lead.length).trim()
@@ -396,7 +396,7 @@ export class CioDiagnosticsService {
       tables: matches.map((entry) => {
         const name = String(entry['name'])
         const schema = typeof entry['schema'] === 'string' ? entry['schema'] : 'main'
-        // SQLite accepts `PRAGMA schema.table_info(table)` — the schema is the
+        // SQLite accepts `PRAGMA schema.table_info(table)`   the schema is the
         // PRAGMA qualifier, not an argument, so it cannot go inside the parens.
         const columns = this.runReadOnly(
           `PRAGMA ${quoteIdentifier(schema)}.table_info(${quoteIdentifier(name)})`

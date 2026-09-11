@@ -82,7 +82,7 @@
   }
 
   // The component instance is reused if the caller swaps `attachment`
-  // without unmounting (same `{#if previewFile}` block) — reset zoom/pan so
+  // without unmounting (same `{#if previewFile}` block)   reset zoom/pan so
   // it doesn't carry over onto the next image.
   $effect(() => {
     void attachment.url

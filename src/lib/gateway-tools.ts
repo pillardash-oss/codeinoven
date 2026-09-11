@@ -30,7 +30,7 @@ export interface GatewayToolDefinition {
  * gateway script (tools/list + tools/call routing), the main-process bridge
  * dispatch, and `APPLICATION_AGENT_TOOLS` are all derived from this one array,
  * so a tool added here appears everywhere and a tool removed disappears
- * everywhere — no surface can silently drift out of sync again.
+ * everywhere   no surface can silently drift out of sync again.
  */
 export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {

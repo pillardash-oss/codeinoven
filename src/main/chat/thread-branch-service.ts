@@ -24,7 +24,7 @@ const pending = new Set<string>()
  * and notify through `onSettled`. Creation-time detection is deliberately
  * fire-and-forget, so an app restart or a transient git failure between
  * persistence and detection would otherwise leave the thread branchless
- * forever — every later read re-queues this until the branch is known.
+ * forever   every later read re-queues this until the branch is known.
  * Duplicate work is collapsed per thread while a settle is in flight; calls
  * are no-ops once `branch` is already known or there is no local working
  * directory (standalone inbox chats, SSH projects).

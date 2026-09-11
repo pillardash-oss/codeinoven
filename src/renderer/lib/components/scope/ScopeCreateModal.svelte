@@ -219,7 +219,7 @@
                   {sourceInfo.dirtyFiles.length} uncommitted change{sourceInfo.dirtyFiles.length ===
                   1
                     ? ''
-                    : 's'} in this checkout will not be included — commit them first if they belong in
+                    : 's'} in this checkout will not be included   commit them first if they belong in
                   this feature.
                 </span>
               </div>

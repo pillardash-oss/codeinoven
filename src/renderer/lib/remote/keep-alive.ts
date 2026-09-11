@@ -13,7 +13,7 @@ export type { KeepAlivePhase } from './session-state'
 export interface KeepAliveState {
   phase: KeepAlivePhase
   since: number
-  /** True while a remote session is live — full quit is refused. */
+  /** True while a remote session is live   full quit is refused. */
   blockedQuit: boolean
 }
 

@@ -59,10 +59,10 @@ const SYSTEM_TERMINAL_CANDIDATES =
     ? ['wt.exe']
     : ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xfce4-terminal', 'xterm']
 
-/** Generous timeout — the first `swift` run pays a one-off compile cost (~3-5s). */
+/** Generous timeout   the first `swift` run pays a one-off compile cost (~3-5s). */
 const HARVEST_TIMEOUT_MS = 20_000
 
-/** Base64 PNG output for a dozen apps adds up — allow plenty of stdout. */
+/** Base64 PNG output for a dozen apps adds up   allow plenty of stdout. */
 const HARVEST_MAX_BUFFER = 32 * 1024 * 1024
 
 /**
@@ -71,7 +71,7 @@ const HARVEST_MAX_BUFFER = 32 * 1024 * 1024
  * generic artwork for .app bundles, and apps like Terminal.app ship their icon
  * solely inside Assets.car (there is no .icns to parse).
  *
- * Protocol: one line per result — KIND<TAB>path<TAB>base64png. Passing the
+ * Protocol: one line per result   KIND<TAB>path<TAB>base64png. Passing the
  * `--default-folder-app` flag additionally emits the OS folder handler
  * (usually Finder) as a DEFAULT line.
  */
@@ -112,7 +112,7 @@ for arg in CommandLine.arguments.dropFirst() {
 `
 
 /**
- * EditorService — detects which editors/terminals are installed on this
+ * EditorService   detects which editors/terminals are installed on this
  * machine and launches the user's preferred one against a project folder.
  *
  * Detection strategy:
@@ -132,7 +132,7 @@ export class EditorService {
 
   /** Pre-compile the Swift harvester and fill the icon cache (fire-and-forget). */
   warmUp(): void {
-    // Test harnesses mock the electron module — nothing to warm up there.
+    // Test harnesses mock the electron module   nothing to warm up there.
     if (typeof app.getPath !== 'function') return
     void this.detect().catch((error: unknown) =>
       Logger.error('editor warm-up failed (non-fatal):', error)
@@ -141,7 +141,7 @@ export class EditorService {
 
   /** Detect all known editors, marking which are installed, with native app icons. */
   detect(): Promise<EditorInfo[]> {
-    // Dedupe concurrent calls — warm-up and the UI share a single Swift spawn.
+    // Dedupe concurrent calls   warm-up and the UI share a single Swift spawn.
     this.detectInFlight ??= this.runDetect().finally(() => {
       this.detectInFlight = null
     })
@@ -446,7 +446,7 @@ export class EditorService {
     if (def.id === 'terminal') {
       return (await this.resolveCli(def)) ?? null
     }
-    // CLI-only install — resolve the symlink; it often points inside a .app bundle.
+    // CLI-only install   resolve the symlink; it often points inside a .app bundle.
     if (def.cli) {
       const located = await this.locateBinary(def.cli)
       if (located.found && located.path) {
@@ -489,7 +489,7 @@ export class EditorService {
       const match = /(.+?\.app)\//.exec(real)
       if (match?.[1] && existsSync(match[1])) return match[1]
     } catch {
-      // Symlink resolution failed — treat as bare binary.
+      // Symlink resolution failed   treat as bare binary.
     }
     return null
   }
@@ -642,7 +642,7 @@ export class EditorService {
       const args = needDefault ? ['--default-folder-app', ...pending] : pending
       this.ingestHarvest(await this.runSwift(script, args))
     } catch (error) {
-      Logger.error('icon harvest via swift failed — using Electron fallback:', error)
+      Logger.error('icon harvest via swift failed   using Electron fallback:', error)
     }
 
     // Anything the harvester missed (or a failed spawn) falls back to Electron.
@@ -663,7 +663,7 @@ export class EditorService {
   /**
    * Windows Terminal's PATH entry is a 0-byte app-execution alias that
    * `app.getFileIcon` cannot render. When its icon (or resolution) fails,
-   * fall back to the real `powershell.exe` — the terminal Windows actually
+   * fall back to the real `powershell.exe`   the terminal Windows actually
    * opens in auto mode.
    */
   private windowsTerminalIconFallback(): string | null {
@@ -684,7 +684,7 @@ export class EditorService {
         this.iconCache.set(p, await this.getElectronIcon(p))
       })
     )
-    // Windows Terminal's app-execution alias is unrenderable — use the real shell icon.
+    // Windows Terminal's app-execution alias is unrenderable   use the real shell icon.
     if (process.platform === 'win32') {
       const broken = paths.filter(
         (p) => this.iconCache.get(p) === undefined && /wt\.exe$/iu.test(p)
@@ -904,7 +904,7 @@ export class EditorService {
     try {
       const child = spawn('open', args, { detached: true, stdio: 'ignore' })
       child.on('error', () => {
-        Logger.error(`failed to open "${def.name}" — falling back to system handler`)
+        Logger.error(`failed to open "${def.name}"   falling back to system handler`)
         void shell.openPath(targetPath)
       })
       child.unref()

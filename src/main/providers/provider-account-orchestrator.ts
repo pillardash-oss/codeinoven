@@ -15,6 +15,7 @@ import type {
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 import { antigravityModelSlugs } from '../drivers/antigravity-model-output'
 import {
+  HarnessCommandError,
   prepareHarnessTerminalHandoff,
   readHarnessHomeFile,
   runHarnessCommand,
@@ -41,6 +42,9 @@ const CLINE_SETTINGS_DIR = join(homedir(), '.cline', 'data', 'settings')
 const PI_AGENT_DIR = join(homedir(), '.pi', 'agent')
 /** OpenCode's global config file   hiding providers edits disabled_providers here. */
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
+/** OpenCode's credential store; its keys are the real provider ids the CLI expects. */
+const OPENCODE_AUTH_PATH = join(homedir(), '.local', 'share', 'opencode', 'auth.json')
+const OPENCODE_AUTH_RELATIVE_PATH = '.local/share/opencode/auth.json'
 const OPENCODE_CONFIG_FORMAT = { tabSize: 2, insertSpaces: true, eol: '\n' }
 /** Muse Code stores OAuth credentials here (or $XDG_CONFIG_HOME/muse/auth.json). */
 const MUSE_AUTH_PATH = join(homedir(), '.config', 'muse', 'auth.json')
@@ -56,6 +60,11 @@ interface AuthDefinition {
   loginArgs(options: HarnessLoginOptions): string[]
   /** CLI arguments that remove a provider's stored credentials. */
   logoutArgs?(providerId?: string): string[]
+  /**
+   * Maps a stored slug id (and optionally the account's display name) to the
+   * credential identifier the harness CLI actually accepts at logout time.
+   */
+  resolveLogoutTarget?(providerId: string, providerHint?: string): Promise<string | undefined>
   /**
    * Whether the bare login command shows the harness's own interactive provider
    * picker (so the UI skips its in-app provider list and lets the user choose).
@@ -168,6 +177,39 @@ function parseClaudeStatus(output: string, succeeded: boolean): HarnessAuthStatu
     accounts: [],
     detail: 'Claude Code did not report a recognizable authentication status.'
   }
+}
+
+/** Real credential keys from OpenCode's own auth store (empty when unreadable). */
+async function readOpencodeCredentialKeys(): Promise<string[]> {
+  const remote = await readHarnessHomeFile('opencode', OPENCODE_AUTH_RELATIVE_PATH)
+  const content = typeof remote === 'string' ? remote : await readConfigOrEmpty(OPENCODE_AUTH_PATH)
+  try {
+    const parsed = JSON.parse(content) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return []
+    return Object.keys(parsed as Record<string, unknown>)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Stored opencode account ids are slugs of the catalog display label
+ * ('Z.AI' -> 'z-ai'), while the CLI accepts only real credential keys
+ * ('zai') or catalog names. Resolve through the auth store first, then
+ * fall back to the display name, which the CLI resolves itself.
+ */
+async function resolveOpencodeLogoutTarget(
+  providerId: string,
+  providerHint?: string
+): Promise<string | undefined> {
+  const keys = await readOpencodeCredentialKeys()
+  const lowered = providerId.toLowerCase()
+  const exact = keys.find((key) => key.toLowerCase() === lowered)
+  if (exact) return exact
+  const slugged = keys.find((key) => accountId(key) === lowered)
+  if (slugged) return slugged
+  const hint = providerHint?.trim()
+  return hint || undefined
 }
 
 function parseCodexStatus(output: string, succeeded: boolean): HarnessAuthStatus {
@@ -548,6 +590,7 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
       ...(options.providerId ? ['--provider', options.providerId] : [])
     ],
     logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
+    resolveLogoutTarget: resolveOpencodeLogoutTarget,
     pickerLogin: true
   },
   {
@@ -808,7 +851,8 @@ export class ProviderAccountOrchestrator {
   async logout(
     harnessId: string,
     providerId?: string,
-    environment: NodeJS.ProcessEnv = {}
+    environment: NodeJS.ProcessEnv = {},
+    providerHint?: string
   ): Promise<void> {
     const definition = this.requireDefinition(harnessId)
     const piAgentDir = environment['PI_CODING_AGENT_DIR']
@@ -827,15 +871,17 @@ export class ProviderAccountOrchestrator {
         `${harnessId} does not expose a logout command. Remove the credential in the harness itself.`
       )
     }
+    let target = providerId
+    if (definition.resolveLogoutTarget && providerId !== undefined) {
+      target = (await definition.resolveLogoutTarget(providerId, providerHint)) ?? providerId
+    }
     const result = await this.run(
       definition.command,
-      definition.logoutArgs(providerId),
+      definition.logoutArgs(target),
       homedir(),
       environment
     )
     if (!result.succeeded) {
-      // With a recovered exit code the error text is only the fallback
-      // message, so report the CLI's own output instead.
       const detail = stripAnsi(
         result.exitCode === undefined
           ? (result.error ?? 'unknown error')
@@ -1029,15 +1075,19 @@ export class ProviderAccountOrchestrator {
       return { succeeded: true, ...result }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      // runHarnessCommand folds a non-zero exit code into the thrown message,
-      // but it cannot distinguish "exit 1" from a spawn failure, so recover
-      // the exit code from the message and keep it out of the user detail.
-      const exitMatch = message.match(/exited with code (\d+)/u)
+      if (error instanceof HarnessCommandError) {
+        return {
+          succeeded: false,
+          stdout: error.stdout,
+          stderr: error.stderr,
+          ...(error.exitCode === undefined ? {} : { exitCode: error.exitCode }),
+          error: message
+        }
+      }
       return {
         succeeded: false,
         stdout: '',
         stderr: '',
-        ...(exitMatch ? { exitCode: Number.parseInt(exitMatch[1] ?? '0', 10) } : {}),
         error: message
       }
     }

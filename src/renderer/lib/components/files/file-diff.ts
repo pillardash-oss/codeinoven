@@ -173,7 +173,7 @@ function largeLineDiff(beforeLines: string[], afterLines: string[]): DiffLine[] 
 /**
  * Myers O(ND) forward pass. Returns the per-distance V snapshots needed to
  * backtrack the exact edit script, or null when the edit is too large for the
- * trace memory budget (a genuine rewrite — the caller falls back to the naive
+ * trace memory budget (a genuine rewrite   the caller falls back to the naive
  * diff then).
  */
 function myersTrace(beforeLines: string[], afterLines: string[]): Int32Array[] | null {

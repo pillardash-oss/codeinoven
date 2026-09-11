@@ -767,7 +767,7 @@ export class AntigravityDriver extends PersistentCliDriver {
    * resumed conversation and whatever agy streams back flows through the normal
    * turn machinery. NOTE: verified against `agy --help` (the flag exists to
    * disable expansion, so expansion is the default) but not yet exercised
-   * end-to-end — the account quota was exhausted at implementation time; if agy
+   * end-to-end   the account quota was exhausted at implementation time; if agy
    * ever refuses the command headlessly the turn fails visibly and the session
    * stays usable.
    */

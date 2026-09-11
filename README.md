@@ -18,8 +18,8 @@ Website: [codeinoven.com](https://codeinoven.com) · [Support](SECURITY.md) · [
 <table>
   <tr>
     <td width="50%"><img src="docs/media/start-screen.png" alt="Start Screen"></td>
-    <td width="50%"><img src="docs/media/engineering-toolbox.png" alt="Engineering Toolbox — pick the stages to run: Brainstorm, PRD, Spec, Assignment, Achievement, Auto Pilot"></td>
-    <td width="50%"><img src="docs/media/scopes-board.png" alt="Scopes board — organize threads into Pinned, Todo, Spec, and Done columns across project scopes"></td>
+    <td width="50%"><img src="docs/media/engineering-toolbox.png" alt="Engineering Toolbox   pick the stages to run: Brainstorm, PRD, Spec, Assignment, Achievement, Auto Pilot"></td>
+    <td width="50%"><img src="docs/media/scopes-board.png" alt="Scopes board   organize threads into Pinned, Todo, Spec, and Done columns across project scopes"></td>
   </tr>
 </table>
 <table>
@@ -172,7 +172,7 @@ Release builds are available for:
 
 ### Troubleshooting
 
-- **Windows on ARM:** if `bun install` fails with `ffmpeg-static install failed: No binary found for architecture`, see [Windows on ARM: ffmpeg install note](#windows-on-arm-ffmpeg-install-note) — set `FFMPEG_BIN` to an x64 ffmpeg and run `bun install --ignore-scripts`.
+- **Windows on ARM:** if `bun install` fails with `ffmpeg-static install failed: No binary found for architecture`, see [Windows on ARM: ffmpeg install note](#windows-on-arm-ffmpeg-install-note)   set `FFMPEG_BIN` to an x64 ffmpeg and run `bun install --ignore-scripts`.
 - **Windows on ARM (native build):** `better-sqlite3` has no prebuilt win32-arm64 binary, so `bun install` rebuilds it from source and requires the Visual Studio C++ toolset. If you get `error MSB8020: The build tools for v145 cannot be found`, install the C++ BuildTools workload:
 
   ```powershell
@@ -196,4 +196,4 @@ Release builds are available for:
 
 CodeInOven is licensed under the [PolyForm Noncommercial 1.0.0](LICENSE) license.
 
-You are free to use, modify, and redistribute CodeInOven for **personal, educational, and non-commercial** purposes. Commercial use — including use by companies or organizations in the course of business — requires a separate commercial license from [Pillardash Solutions Limited](mailto:sales@pillardash.com).
+You are free to use, modify, and redistribute CodeInOven for **personal, educational, and non-commercial** purposes. Commercial use   including use by companies or organizations in the course of business   requires a separate commercial license from [Pillardash Solutions Limited](mailto:sales@pillardash.com).

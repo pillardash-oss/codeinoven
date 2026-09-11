@@ -91,8 +91,8 @@
 
   function footerNote(): string {
     return store.finishedCount === store.runs.length
-      ? 'Tasks keep running while you work — click the dock in the bottom-right corner or press Escape to bring them back.'
-      : 'Tasks keep running while you work — click the dock in the bottom-right corner or press Escape to bring them back, and close once all of them finish.'
+      ? 'Tasks keep running while you work   click the dock in the bottom-right corner or press Escape to bring them back.'
+      : 'Tasks keep running while you work   click the dock in the bottom-right corner or press Escape to bring them back, and close once all of them finish.'
   }
 </script>
 

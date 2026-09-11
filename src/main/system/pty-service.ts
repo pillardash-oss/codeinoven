@@ -388,7 +388,7 @@ export class PtyService {
 
   /**
    * Kill single-command sessions (harness self-updates, logins) that have been
-   * completely silent — no output and no input — past their idle timeout, so a
+   * completely silent   no output and no input   past their idle timeout, so a
    * hung update never pins the terminal until the app is restarted.
    */
   private ensureIdleWatchdog(): void {
@@ -401,12 +401,12 @@ export class PtyService {
         Logger.info(
           `[pty] Session ${session.id} (${session.shell}) idle for ${Math.round(
             (now - session.lastActivityAt) / 1000
-          )}s — killing hung process`
+          )}s   killing hung process`
         )
         session.process.write(
           `\r\n\x1b[33m[${APP_NAME}] No activity for ${Math.round(
             session.idleTimeoutMs / 1000
-          )}s — the process appears hung and was stopped automatically.\x1b[0m\r\n`
+          )}s   the process appears hung and was stopped automatically.\x1b[0m\r\n`
         )
         // Give the notice a moment to flush before the PTY goes away.
         setTimeout(() => this.destroy(session.id), 300)
@@ -439,7 +439,7 @@ export class PtyService {
 
     // Resolve the action root through the active thread's scope when one is
     // supplied, so scripts run inside the checked-out worktree instead of the
-    // main project directory — matching interactive terminal behavior.
+    // main project directory   matching interactive terminal behavior.
     const cwd =
       scopeBucketId && this.scopeRoots
         ? await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
@@ -546,7 +546,7 @@ export class PtyService {
     }
   }
 
-  /** Number of live terminal sessions — any of which a forced restart would kill. */
+  /** Number of live terminal sessions   any of which a forced restart would kill. */
   activeSessionCount(): number {
     return this.sessions.size
   }

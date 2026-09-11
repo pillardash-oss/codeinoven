@@ -119,8 +119,8 @@ const CLAUDE_ASYNC_AGENT_CLOSE_GRACE_MS = 10 * 60_000
 /**
  * Absolute ceiling on how long a turn process may be held open by unfinished
  * background agents after its result, regardless of stdout activity. The
- * inactivity grace above resets on every stdout record — including forwarded
- * sub-agent text — so a sub-agent that keeps trickling output (or a CLI that
+ * inactivity grace above resets on every stdout record   including forwarded
+ * sub-agent text   so a sub-agent that keeps trickling output (or a CLI that
  * never finishes its background wait) could otherwise keep the turn process
  * (and the parent turn) alive forever. When this cap fires, stdin is closed
  * unconditionally so the CLI can exit; a still-live agent's task-notification
@@ -952,8 +952,8 @@ function mergeAssistantRecord(existing: AgentMessage, incoming: AgentMessage): A
 
 /**
  * Classify a Claude Code `system`/`api_retry` stream event. The SDK emits this
- * for ANY retryable provider failure — connection errors (no HTTP status),
- * overloaded servers (529), 5xx responses, and 429 rate limiting — so the issue
+ * for ANY retryable provider failure   connection errors (no HTTP status),
+ * overloaded servers (529), 5xx responses, and 429 rate limiting   so the issue
  * kind must come from the event's `error`/`error_status` rather than treating
  * every retry as an exhausted usage limit.
  */
@@ -2074,7 +2074,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /**
    * Close a background-agent turn process's stdin after a silence window so
    * the CLI can exit if the agents never deliver further work. Any stdout
-   * record pushes both the inactivity grace and the hold deadline back out —
+   * record pushes both the inactivity grace and the hold deadline back out  
    * a sub-agent that is genuinely streaming keeps its process alive
    * indefinitely; only true silence (a wedged or dead wait) reaches the cap.
    */
@@ -2166,7 +2166,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /**
    * Claim the credential-refresh window, waiting for any in-flight window to
    * close first. The window covers the CLI's silent OAuth refresh at process
-   * startup — only one first-party spawn may be inside it at a time.
+   * startup   only one first-party spawn may be inside it at a time.
    */
   private async acquireAuthSlot(): Promise<() => void> {
     for (;;) {
@@ -2216,7 +2216,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
 
   /**
    * Hold the credential-refresh window until the guarded session proves
-   * authentication, exits, or the bound expires — the window in which the CLI
+   * authentication, exits, or the bound expires   the window in which the CLI
    * may refresh the shared keychain credential. Resolving early on
    * authentication lets the next concurrent spawn proceed without a refresh.
    */
@@ -2612,7 +2612,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     const result = mapClaudeCodeRecord(value, context)
     // Background-agent bookkeeping: any stdout record proves the turn process
     // is still doing work, so the scheduled stdin close (armed at result time
-    // while background agents run) must be pushed back out — both the
+    // while background agents run) must be pushed back out   both the
     // inactivity grace and the silence cap reset on live activity. A result
     // record re-arms them itself below when background agents remain.
     if (type !== 'result') {

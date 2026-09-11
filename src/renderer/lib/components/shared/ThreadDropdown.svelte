@@ -19,7 +19,7 @@
     title?: string
     ariaLabel?: string
     onOpen?: () => void
-    /** Fired when the menu closes — lets a touch reveal undo itself. */
+    /** Fired when the menu closes   lets a touch reveal undo itself. */
     onClose?: () => void
     open?: boolean
     /** Use a vertical ellipsis for multi-row thread rows; horizontal otherwise. */

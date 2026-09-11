@@ -99,7 +99,7 @@
     <p class="text-sm font-semibold text-foreground">The {stageLabel} stage could not complete</p>
     <p class="text-xs leading-relaxed text-muted">
       {failure?.trim() ||
-        'The stage stopped with an error. Retry it from where it stopped — completed progress and context are preserved.'}
+        'The stage stopped with an error. Retry it from where it stopped   completed progress and context are preserved.'}
     </p>
   </div>
 

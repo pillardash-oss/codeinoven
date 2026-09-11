@@ -201,7 +201,7 @@
       ),
       var(--color-surface) !important;
     border: 1px solid color-mix(in srgb, var(--status) 55%, var(--color-border)) !important;
-    /* Real border instead of a ::before bar — it can never detach or escape
+    /* Real border instead of a ::before bar   it can never detach or escape
        the toast during drag, dismissal or scale transitions. */
     border-left: 3px solid var(--status) !important;
     box-shadow:
@@ -210,7 +210,7 @@
     color: var(--color-foreground) !important;
   }
 
-  /* Status-colored title — the colour reads before the words do */
+  /* Status-colored title   the colour reads before the words do */
   :global(
     [data-sonner-toast][data-type='success'] [data-title],
     [data-sonner-toast][data-type='error'] [data-title],

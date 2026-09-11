@@ -60,7 +60,7 @@ export interface TurnCompletionOptions {
   /** Paths other active sessions' precise file tools touched, path → claimed ms. */
   foreignClaimedPaths?: ReadonlyMap<string, number>
   /**
-   * Thread ids owned by this turn — the thread itself plus its orchestration
+   * Thread ids owned by this turn   the thread itself plus its orchestration
    * descendants (worker sub-agents). Checkpoints completed by these threads
    * during the turn are part of THIS turn's work, never foreign.
    */
@@ -90,7 +90,7 @@ const MAX_LINE_DIFF_WORK = 4_000_000
 /**
  * Maximum user-facing failure text persisted on (and rendered from) a turn
  * checkpoint. A checkpoint failure is a short explanation (interruption notice,
- * capture warning, contract rejection) — never a transcript. The bound also
+ * capture warning, contract rejection)   never a transcript. The bound also
  * heals legacy checkpoints: before the textual usage-limit detection was
  * structurally guarded, an agent's entire final message could be recorded as
  * the failure and then splash into the run-changes card verbatim.
@@ -216,7 +216,7 @@ export class CheckpointManager {
 
   /** Paths whose current content differs from a checkpoint's before-snapshot.
    *  Used to attribute shell-command mutations that arrived as a late claim
-   *  after their turn already settled — the workspace baseline is the turn's
+   *  after their turn already settled   the workspace baseline is the turn's
    *  own before-snapshot, so only this turn's real mutations are returned. */
   async changedPathsSince(
     projectId: string,
@@ -354,7 +354,7 @@ export class CheckpointManager {
       const path = row['path']
       const tid = row['tid']
       if (typeof path === 'string' && !foreign.has(path)) {
-        // Worker sub-agent threads owned by this turn are part of this work —
+        // Worker sub-agent threads owned by this turn are part of this work  
         // their completions must not mark paths as foreign.
         if (own?.has(typeof tid === 'string' ? tid : '')) continue
         foreign.set(path, Number(row['completed_at'] ?? turnStart))
@@ -429,7 +429,7 @@ export class CheckpointManager {
    * Finalize the active turn as completed when restart recovery finds that the
    * harness demonstrably produced a terminal answer before the app stopped.
    * Distinct from `markActiveInterrupted`: no interruption failure text and no
-   * premature partial snapshot — the full `before` → current disk diff is kept.
+   * premature partial snapshot   the full `before` → current disk diff is kept.
    */
   async markActiveCompleted(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
     const active = this.db.get<{ turn_id: string | null }>(
@@ -510,7 +510,7 @@ export class CheckpointManager {
    * exact counts can be recomputed and persisted. Idempotent: repaired
    * checkpoints no longer match the candidate query, and checkpoints whose
    * blobs are genuinely gone keep their honest truncated marker. Only terminal
-   * checkpoints are touched — `active` and `interrupted` rows can still be
+   * checkpoints are touched   `active` and `interrupted` rows can still be
    * finalized by `completeTurn` and must never be rewritten from a read path.
    */
   async repairTruncatedLineStats(): Promise<number> {
@@ -587,7 +587,7 @@ export class CheckpointManager {
    *  Repairs re-point them at the latest conversation-visible user message of
    *  the thread before the checkpoint started. Idempotent: repaired
    *  checkpoints no longer match the candidate query. Only terminal
-   *  checkpoints are touched — active/interrupted rows can still be finalized
+   *  checkpoints are touched   active/interrupted rows can still be finalized
    *  by `completeTurn` and must never be rewritten from a read path. */
   async repairMisattributedInternalCheckpoints(): Promise<number> {
     let rows: Record<string, unknown>[]
@@ -651,9 +651,9 @@ export class CheckpointManager {
     return repaired
   }
 
-  /** Re-open a recently completed checkpoint so late tool claims — edits that
+  /** Re-open a recently completed checkpoint so late tool claims   edits that
    *  landed after the engine settled the turn (e.g. a harness reported a
-   *  usage-reset settle while the model was still working) — are captured in
+   *  usage-reset settle while the model was still working)   are captured in
    *  the same turn's card instead of falling outside every checkpoint. The
    *  reopened turn resumes with its recorded changes and is re-completed by
    *  the next idle finalization. Returns null when no terminal checkpoint is
@@ -703,7 +703,7 @@ export class CheckpointManager {
         encoding: 'utf-8',
         mode: 0o600
       })
-      // Collect referenced hashes in SQL — a full scan used to ship every
+      // Collect referenced hashes in SQL   a full scan used to ship every
       // checkpoint JSON blob across the worker port, which crashed the process
       // on large projects.
       let rows: Record<string, unknown>[]
@@ -885,7 +885,7 @@ export class CheckpointManager {
       throw new Error(`Turn checkpoint is no longer active: ${turnId}`)
     }
     // Unlike persisted diffs (which only serve recorded change paths), a live
-    // turn legitimately creates files absent from its opening snapshot — so
+    // turn legitimately creates files absent from its opening snapshot   so
     // membership is enforced as containment within the project root instead.
     const root = resolve(checkpoint.before.projectRoot)
     const absolutePath = resolve(join(root, path))
@@ -924,7 +924,7 @@ export class CheckpointManager {
   private recoverUnfilteredChanges(projectId: string, checkpoint: TurnCheckpoint): TurnCheckpoint {
     // Read-time heal for legacy poison: checkpoints written before the failure
     // bound could carry an entire agent transcript as `failure`. Overlong
-    // failure text is never a legitimate explanation — strip it so it can
+    // failure text is never a legitimate explanation   strip it so it can
     // never splash into the run-changes card, regardless of when it was saved.
     const healed =
       checkpoint.failure !== undefined && checkpoint.failure.length > MAX_CHECKPOINT_FAILURE_LENGTH
@@ -1080,7 +1080,7 @@ export class CheckpointManager {
   /**
    * Bounded read on the maintenance worker's connection so disk I/O and SQLite
    * iteration never block the Electron main process. A byte-truncated result is
-   * returned as-is — re-running the query unbounded on the primary connection
+   * returned as-is   re-running the query unbounded on the primary connection
    * would move exactly the oversized payload this boundary exists to avoid back
    * onto the main thread. The primary connection is only consulted when the
    * worker is unavailable (e.g. in-memory test databases).
@@ -1203,7 +1203,7 @@ function calculateBoundedLineStats(
   const oldLines = before.slice(prefix, beforeEnd)
   const newLines = after.slice(prefix, afterEnd)
   // The line budget guards the expensive alignment below, which only ever sees
-  // the trimmed changed region — never the full files. Gating on whole-file
+  // the trimmed changed region   never the full files. Gating on whole-file
   // line counts here would reject large files with small edits (the common
   // case) even though computing their exact stats is cheap.
   if (oldLines.length + newLines.length > MAX_LINE_DIFF_LINES) {

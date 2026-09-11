@@ -75,7 +75,7 @@ export class BaseUrlProviderService {
     return provider ? structuredClone(provider) : null
   }
 
-  /** Ids already used within a harness — native harnesses keep their own
+  /** Ids already used within a harness   native harnesses keep their own
    *  catalog file, so those must be read live rather than from the store. */
   private async existingIdsFor(
     harnessId: string,
@@ -645,7 +645,7 @@ function parseDefaultThinkingLevel(value: unknown): BaseUrlProviderModel['defaul
 // ─── Primitives ──────────────────────────────────────────────────────────────
 
 /**
- * Ids are unique per harness, not globally — linking the same provider
+ * Ids are unique per harness, not globally   linking the same provider
  * across harnesses (multi-harness base URL providers) intentionally reuses
  * one id across several `harnessId` records.
  */

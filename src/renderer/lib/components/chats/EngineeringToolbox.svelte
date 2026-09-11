@@ -8,7 +8,7 @@
 
   interface Props {
     lifecycleState: EngineeringLifecycleState | null
-    /** Whether any Engineering lifecycle stage is active for the thread —
+    /** Whether any Engineering lifecycle stage is active for the thread  
      *  either staged (intent-only) or persisted via an inherited selection. */
     active?: boolean
     disabled?: boolean
@@ -57,7 +57,7 @@
   /** Total navigable rows: the lifecycle stages plus the trailing Auto Pilot row. */
   const rowCount = rows.length + 1
 
-  /** Focus the row button at `index` — its own focus ring is the visual
+  /** Focus the row button at `index`   its own focus ring is the visual
    *  highlight; no separate outline is needed on the dropdown itself. */
   async function focusRow(index: number): Promise<void> {
     await tick()
@@ -93,7 +93,7 @@
     panel?.focus()
   }
 
-  /** Shortcut entry point — toggles visibility. Opening hands focus to the
+  /** Shortcut entry point   toggles visibility. Opening hands focus to the
    *  first row so arrow keys navigate immediately. */
   export async function openAndFocus(): Promise<void> {
     if (disabled) return
@@ -122,7 +122,7 @@
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    // Cmd/Ctrl+E is the toolbox toggle — the panel owns focus while open, so
+    // Cmd/Ctrl+E is the toolbox toggle   the panel owns focus while open, so
     // the composer shortcut can't fire; handle closing here instead.
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'e') {
       event.preventDefault()

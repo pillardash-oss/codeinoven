@@ -7,7 +7,7 @@
     source?: 'local' | 'ssh'
     host?: string
     isNewThread: boolean
-    /** Project identity on the shoe — the project picker stays live only before the first message. */
+    /** Project identity on the shoe   the project picker stays live only before the first message. */
     project?: ComposerProject
     /** Reassigns the thread's project; only honoured before the first message. */
     onSwitchProject?: (projectId: string) => void
@@ -36,12 +36,12 @@
     threadId: string
     /** The bucket the thread currently belongs to (default when unset). */
     bucket: ScopeBucket
-    /** Where the project runs — scope work targets that box. */
+    /** Where the project runs   scope work targets that box. */
     source?: 'local' | 'ssh'
     host?: string
     /** New threads can reassign the scope; existing ones toggle the scope view. */
     isNewThread: boolean
-    /** Project identity on the shoe — the project picker stays live only before the first message. */
+    /** Project identity on the shoe   the project picker stays live only before the first message. */
     project?: ComposerProject
     /** Reassigns the thread's project; only honoured before the first message. */
     onSwitchProject?: (projectId: string) => void
@@ -157,7 +157,7 @@
       aria-haspopup="menu"
       aria-expanded={menuOpen}
       title={isNewThread
-        ? `Change the scope of this new thread — currently ${bucket.name}`
+        ? `Change the scope of this new thread   currently ${bucket.name}`
         : `Toggle the scoped views for ${bucket.name}`}
       onclick={toggleMenu}
     >
@@ -317,7 +317,7 @@
   <span
     class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted"
     title={source === 'ssh'
-      ? `Remote project${host ? ` on ${host}` : ''} — the agent will work on this box`
+      ? `Remote project${host ? ` on ${host}` : ''}   the agent will work on this box`
       : 'Project runs locally on this machine'}
   >
     {#if source === 'ssh'}
@@ -351,7 +351,7 @@
 
 <style>
   /* The shoe card is the container: as the conversation screen shrinks (e.g.
-     a very wide right sidebar), give the truncating stages room in order —
+     a very wide right sidebar), give the truncating stages room in order  
      project name first, then location, connection label, and finally only the
      icons remain. */
   @container (max-width: 400px) {

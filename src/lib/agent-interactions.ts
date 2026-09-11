@@ -111,7 +111,7 @@ export function normalizeAgentQuestions(
 }
 
 /**
- * Strip list-marker/typographic artifacts models leak into option labels —
+ * Strip list-marker/typographic artifacts models leak into option labels  
  * most commonly the defining key's colon duplicated into the first array
  * element ("options": [": Option one", ...]), plus stray markdown bullet
  * markers. Returns an empty string when nothing remains.

@@ -54,7 +54,7 @@ export function describeRoute(route: RemoteRoute): string {
     case 'RELAY_CONNECTED':
       return 'Connected through cloud relay'
     case 'DISCONNECTED':
-      return route.reason ? `Disconnected — ${route.reason}` : 'Disconnected'
+      return route.reason ? `Disconnected   ${route.reason}` : 'Disconnected'
   }
 }
 

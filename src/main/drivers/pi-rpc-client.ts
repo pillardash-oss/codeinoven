@@ -160,7 +160,7 @@ export class PiRpcClient {
   }
 
   /** Queue a follow-up message processed after the agent finishes. Unlike
-   *  `steer`, this is accepted while no turn is streaming — pi runs it as the
+   *  `steer`, this is accepted while no turn is streaming   pi runs it as the
    *  continuation of the session (after compaction/retry windows settle). */
   async followUp(message: string, images?: PiRpcImage[]): Promise<void> {
     await this.send(

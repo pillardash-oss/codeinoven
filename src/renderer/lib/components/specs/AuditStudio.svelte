@@ -898,7 +898,7 @@
                       <li class="text-xs leading-5 text-muted">
                         <span class="font-semibold text-foreground">{utility.name}</span>
                         <span class="text-dimmed"> · {utility.status.replace('_', ' ')}</span>
-                        — {utility.evidence}
+                          {utility.evidence}
                       </li>
                     {/each}
                   </ul>

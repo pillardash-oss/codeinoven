@@ -26,7 +26,7 @@
     /** Project whose root the citations resolve against. Defaults to the active project. */
     projectId?: string
     /**
-     * Force the whole wrapped content to act as this citation on right-click —
+     * Force the whole wrapped content to act as this citation on right-click  
      * for elements that are not citation anchors (e.g. agent file chips).
      */
     citation?: CitationTarget

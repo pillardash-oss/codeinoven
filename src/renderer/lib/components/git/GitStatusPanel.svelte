@@ -164,7 +164,7 @@
   /** Invalidated whenever the panel swaps scope buckets, so a history page
    *  fetched for the previous worktree can never land in the new one's list. */
   let historyRequestId = 0
-  /** False once a page comes back shorter than requested — there's nothing older left. */
+  /** False once a page comes back shorter than requested   there's nothing older left. */
   let historyHasMore = $state(true)
   const HISTORY_PAGE_SIZE = 30
   let commitMessage = $state('')
@@ -176,7 +176,7 @@
   let githubConnected = $state(false)
   let githubConfigured = $state(false)
   let githubUser = $state<GitHubUser | null>(null)
-  /** Whether the repo is known to have GitHub deployments — gates the Deployments tab. */
+  /** Whether the repo is known to have GitHub deployments   gates the Deployments tab. */
   let hasDeployments = $state(false)
   /** One PR check-directed workflow run to reveal in the Deployments tab. */
   let requestedWorkflowRunId = $state<number | null>(null)
@@ -187,7 +187,7 @@
   let commitExpanded = $state<Record<string, boolean>>({})
   let loadingCommitDiffFile = $state<Record<string, boolean>>({})
   let commitDiffErrors = $state<Record<string, string | null>>({})
-  /** Directories collapsed by the user in the commit diff's tree view — expanded by default. */
+  /** Directories collapsed by the user in the commit diff's tree view   expanded by default. */
   let commitTreeCollapsedDirs = $state<Record<string, boolean>>({})
   let amendMode = $state(false)
   let resetConfirm = $state<{ mode: GitResetMode; target: string } | null>(null)
@@ -238,7 +238,7 @@
   const untracked = $derived(changes.filter((change) => change.status === 'untracked'))
   const conflicted = $derived(changes.filter((change) => change.status === 'conflicted'))
   const commitTree = $derived(buildCommitTree(commitDiffChanges))
-  /** Local commits not yet on the upstream remote, oldest-first-among-them — matches history order. */
+  /** Local commits not yet on the upstream remote, oldest-first-among-them   matches history order. */
   const unpushedCount = $derived(status?.upstream ? Math.max(0, status.ahead) : 0)
 
   const busy = $derived(gitState.isBusy(['refresh', 'init', 'commit', 'amend', 'reset']))
@@ -252,7 +252,7 @@
     gitState.ensureProjectEvents(projectId)
     await gitState.refresh(projectId)
     // The refresh button must bring the whole panel up to date, including the
-    // History tab — its pages are cached client-side and would otherwise keep
+    // History tab   its pages are cached client-side and would otherwise keep
     // showing stale commits until a mutation happens to reload them.
     if (activeTab === 'history' || commitHistory.length > 0) await reloadHistory()
   }
@@ -394,7 +394,7 @@
     await deleteBranchAction(target, true)
   }
 
-  /** `git fetch <remote> <name>` — updates that branch's tracking ref without touching HEAD. */
+  /** `git fetch <remote> <name>`   updates that branch's tracking ref without touching HEAD. */
   async function fetchBranchAction(branch: GitBranchInfo): Promise<void> {
     const remote = branch.remote
     if (!remote) return
@@ -420,7 +420,7 @@
    * Discover whether the repo has GitHub deployment activity so the Deployments
    * tab can appear on its own. Only meaningful while signed in with a GitHub
    * origin remote. Routes through the store so the probe also warms the overview
-   * cache the Deployments tab reads — first visit renders instantly.
+   * cache the Deployments tab reads   first visit renders instantly.
    */
   async function detectDeployments(): Promise<void> {
     const identity = githubIdentity
@@ -437,7 +437,7 @@
         cacheHasDeployments(projectId, overview.hasDeployments)
       }
     } catch {
-      // Sign-in or network failure — keep the current flag and try again later.
+      // Sign-in or network failure   keep the current flag and try again later.
     } finally {
       detectingDeployments = false
     }
@@ -638,16 +638,16 @@
     if (thread) workspaceState.openThread(thread, project)
   }
 
-  /** The first message the review agent receives — explicit about isolation and output. */
+  /** The first message the review agent receives   explicit about isolation and output. */
   function agentReviewPrompt(pr: PullRequestSummary, reportDirectory: string): string {
     return [
-      `Review pull request #${pr.number} — "${pr.title}" (${pr.headRef} → ${pr.baseRef}) by ${pr.authorLogin}.`,
+      `Review pull request #${pr.number}   "${pr.title}" (${pr.headRef} → ${pr.baseRef}) by ${pr.authorLogin}.`,
       `PR URL: ${pr.url}`,
       '',
       'Work in isolation so my current working tree is never modified:',
       `1. \`git fetch origin pull/${pr.number}/head:pr-${pr.number}\``,
       `2. \`git worktree add ${reportDirectory}/worktree pr-${pr.number}\``,
-      `3. Review the diff against \`${pr.baseRef}\` inside that worktree — correctness, edge cases,`,
+      `3. Review the diff against \`${pr.baseRef}\` inside that worktree   correctness, edge cases,`,
       '   security, test coverage, and anything that would break existing behavior.',
       '4. Run the project checks/tests that are relevant to the changed files.',
       '',
@@ -682,7 +682,7 @@
   /**
    * Resolve a PR's online conflicts with the agent's help: check out the PR head
    * and merge the base in (so conflicts land in the tree), then hand the agent a
-   * thread to resolve the conflict markers and commit. The agent never pushes —
+   * thread to resolve the conflict markers and commit. The agent never pushes  
    * the user finishes with the app's authenticated push to update the PR.
    */
   async function startConflictResolution(pr: PullRequestSummary): Promise<void> {
@@ -724,7 +724,7 @@
   /** The first message the conflict-resolution agent receives. */
   function conflictResolutionPrompt(pr: PullRequestSummary, conflictedPaths: string[]): string {
     return [
-      `Resolve the merge conflicts in pull request #${pr.number} — "${pr.title}" (${pr.headRef} → ${pr.baseRef}).`,
+      `Resolve the merge conflicts in pull request #${pr.number}   "${pr.title}" (${pr.headRef} → ${pr.baseRef}).`,
       `The head branch \`pr-${pr.number}\` is already checked out and \`${pr.baseRef}\` has been merged into it, so the conflicts are in the working tree.`,
       '',
       conflictedPaths.length > 0
@@ -739,7 +739,7 @@
       '1. `git add -A`',
       `2. \`git commit -m "Resolve merge conflicts with ${pr.baseRef}"\``,
       '',
-      'Do NOT push — after committing, the user finishes in the Git panel with the Resolve merge button, which pushes the resolution to the pull request and cleans up the temporary branch.'
+      'Do NOT push   after committing, the user finishes in the Git panel with the Resolve merge button, which pushes the resolution to the pull request and cleans up the temporary branch.'
     ].join('\n')
   }
 
@@ -791,7 +791,7 @@
     }
   }
 
-  /** Infinite scroll for the History tab — the panel's tabs share one scroll container. */
+  /** Infinite scroll for the History tab   the panel's tabs share one scroll container. */
   function handleContentScroll(event: Event): void {
     if (activeTab !== 'history') return
     const el = event.currentTarget as HTMLDivElement
@@ -869,7 +869,7 @@
     files: GitFileChange[]
   }
 
-  /** Groups a flat commit diff into a folder tree — read-only mirror of GitChangesTree's layout. */
+  /** Groups a flat commit diff into a folder tree   read-only mirror of GitChangesTree's layout. */
   function buildCommitTree(files: GitFileChange[]): CommitTreeNode {
     const root: CommitTreeNode = { name: '', path: '', dirs: new Map(), files: [] }
     for (const change of files) {
@@ -1067,7 +1067,7 @@
     if (!gitState.error) {
       commitMessage = ''
       amendMode = false
-      // The committed files have left the panel — drop their selection so the
+      // The committed files have left the panel   drop their selection so the
       // "N selected" counter next to "Stage all" doesn't point at ghosts.
       clearSelection()
       void refreshStatus()
@@ -1076,7 +1076,7 @@
   }
 
   function onCommitMessageKeydown(event: KeyboardEvent): void {
-    // Enter never commits by itself — only Cmd/Ctrl+Enter does, so writing a
+    // Enter never commits by itself   only Cmd/Ctrl+Enter does, so writing a
     // multi-line message can never fire the commit early.
     if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
     event.preventDefault()
@@ -1094,7 +1094,7 @@
    * clear every piece of view state scoped to the previous bucket so its
    * changes, commits, stashes and pending dialogs can never bleed into the
    * new target, then refetch. Repo availability checks and GitHub auth stay
-   * untouched — they belong to the project, not the bucket — which is what
+   * untouched   they belong to the project, not the bucket   which is what
    * keeps scoped thread switches free of a full loading flash.
    */
   function resetForScopeSwap(): void {
@@ -1173,7 +1173,7 @@
   $effect(() => {
     // Claim this project+scope before anything else reads/writes shared state
     // so a previous target's data can never be shown or overwrite this view.
-    // Runs for scope swaps too — the shared git store targets exactly one
+    // Runs for scope swaps too   the shared git store targets exactly one
     // worktree at a time, so switching threads must retarget it even though
     // this component stays mounted.
     gitState.activate(projectId, scopeBucketId)
@@ -1197,13 +1197,13 @@
   let appliedScopeBucketId = ''
   $effect(() => {
     if (appliedProjectId === '') {
-      // First run — the bootstrap effect above owns initial loading.
+      // First run   the bootstrap effect above owns initial loading.
       appliedProjectId = projectId
       appliedScopeBucketId = scopeBucketId
       return
     }
     if (projectId !== appliedProjectId) {
-      // Project change — full reload is handled by the bootstrap effect.
+      // Project change   full reload is handled by the bootstrap effect.
       appliedProjectId = projectId
       appliedScopeBucketId = scopeBucketId
       return
@@ -1238,7 +1238,7 @@
   })
 
   $effect(() => {
-    // The Deployments tab only exists while the flag does — fall back to
+    // The Deployments tab only exists while the flag does   fall back to
     // Changes when it goes (e.g. after switching to a project without them).
     if (activeTab === 'deployments' && !hasDeployments) activeTab = 'changes'
   })
@@ -1296,7 +1296,7 @@
    * effects. A string compares by value and stops the churn here.
    */
   const primaryRemoteUrl = $derived(primaryRemote?.url ?? '')
-  /** `owner/repo` when origin points at GitHub — the PR tab needs it to query. */
+  /** `owner/repo` when origin points at GitHub   the PR tab needs it to query. */
   const githubIdentity = $derived.by(() => {
     const url = primaryRemoteUrl
     const match = /(?:github\.com[:/])([^/]+)\/([^/.]+)(?:\.git)?\/?$/u.exec(url.trim())
@@ -1377,7 +1377,7 @@
       pushConfirm = true
       return
     }
-    // Known divergence from the last fetch — never attempt the doomed push.
+    // Known divergence from the last fetch   never attempt the doomed push.
     if (status.behind > 0) {
       pushDiverged = true
       return
@@ -1540,7 +1540,7 @@
     }
   }
 
-  /** Abort is destructive — always ask before discarding the whole merge/rebase. */
+  /** Abort is destructive   always ask before discarding the whole merge/rebase. */
   let abortConfirmOpen = $state(false)
 
   function requestAbortConflict(): void {
@@ -1714,7 +1714,7 @@
     }
   }
 
-  /** The Stashes tab only exists while stashes do — fall back to Changes when the last one goes. */
+  /** The Stashes tab only exists while stashes do   fall back to Changes when the last one goes. */
   function leaveStashesTabIfEmpty(): void {
     if (activeTab === 'stashes' && gitState.stashes.length === 0) activeTab = 'changes'
   }
@@ -1753,7 +1753,7 @@
         { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
         { id: 'pulls', label: 'Pull requests', icon: GitPullRequest, count: null }
       ]
-      // Stash is just shelved work — it earns a tab only once something is shelved.
+      // Stash is just shelved work   it earns a tab only once something is shelved.
       if (gitState.stashes.length > 0) {
         list.push({
           id: 'stashes',
@@ -2045,7 +2045,7 @@
     </div>
 
     {#if repoState === 'git'}
-      <!-- Tab row — never wraps; scrolls horizontally when the tabs overflow -->
+      <!-- Tab row   never wraps; scrolls horizontally when the tabs overflow -->
       <div class="flex items-center gap-4 overflow-x-auto px-3">
         {#each tabs as tab (tab.id)}
           {@const TabIcon = tab.icon}
@@ -2539,7 +2539,7 @@
                 {/if}
               </div>
 
-              <!-- Staged / working panes — conflicts sit on top; each pane shares the height -->
+              <!-- Staged / working panes   conflicts sit on top; each pane shares the height -->
               <div class="flex h-full min-h-0 flex-col gap-2 px-2 pb-2">
                 {#if conflictSections.length > 0}
                   <div class={paneClass}>
@@ -2996,7 +2996,7 @@
                               title={branch.current
                                 ? undefined
                                 : inWorktree
-                                  ? `Checked out in worktree ${branch.worktreePath ?? ''} — git allows a branch in only one worktree`
+                                  ? `Checked out in worktree ${branch.worktreePath ?? ''}   git allows a branch in only one worktree`
                                   : hasLocalCounterpart
                                     ? `${branch.ref} already has a local branch`
                                     : branch.kind === 'local'
@@ -3286,7 +3286,7 @@
         <div class="flex items-center gap-2 border-b border-border bg-warning/10 px-3 py-1.5">
           <GitCommit size={11} class="shrink-0 text-warning" />
           <p class="min-w-0 flex-1 text-[0.5625rem] leading-relaxed text-warning">
-            Amending the most recent commit — no new commit will be created.
+            Amending the most recent commit   no new commit will be created.
           </p>
           <button
             type="button"
@@ -3352,7 +3352,7 @@
   {/if}
 
   {#if pushDiverged}
-    <Modal open title="Push blocked — branch has diverged" onClose={() => (pushDiverged = false)}>
+    <Modal open title="Push blocked   branch has diverged" onClose={() => (pushDiverged = false)}>
       <div class="space-y-2">
         <p class="text-[0.625rem] leading-relaxed text-muted">
           The remote branch has commits you don't have locally, so Git will not let you push over
@@ -3363,7 +3363,7 @@
             ? `${primaryRemote.name}/${status.branch}`
             : 'Remote branch'}
           {#if (status?.behind ?? 0) > 0 || (status?.ahead ?? 0) > 0}
-            — <span class="font-medium text-muted">{status?.ahead ?? 0} ahead</span> ·
+              <span class="font-medium text-muted">{status?.ahead ?? 0} ahead</span> ·
             <span class="font-medium text-muted">{status?.behind ?? 0} behind</span>
           {/if}
         </p>
@@ -3772,7 +3772,7 @@
           </div>
         {:else}
           <p class="rounded-lg border border-border bg-surface px-3 py-1.5 text-[0.625rem] text-muted">
-            No local changes — should apply cleanly.
+            No local changes   should apply cleanly.
           </p>
         {/if}
         {#if agentTurnActive}
@@ -4170,7 +4170,7 @@
             permanently redirects future <strong class="font-medium text-foreground">pull</strong>
             and <strong class="font-medium text-foreground">push</strong> operations to the new address.
             Your local history is preserved, but the current remote target is replaced. This cannot be
-            undone automatically — make sure this is the repository you want to use.
+            undone automatically   make sure this is the repository you want to use.
           </AlertDialog.Description>
           <div class="mt-5 flex justify-end gap-2">
             <AlertDialog.Cancel

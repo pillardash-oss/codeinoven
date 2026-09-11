@@ -211,7 +211,7 @@
               onclick={() => onOpenSkill(entry)}
             >
               <span class="text-center font-mono text-xs tabular-nums text-dimmed">
-                {searchMode ? '—' : index + 1}
+                {searchMode ? ' ' : index + 1}
               </span>
               <span class="min-w-0">
                 <span class="flex items-center gap-2">

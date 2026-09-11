@@ -164,7 +164,8 @@ export function registerProviderAccountIpc(
         rawProviderId === undefined
           ? undefined
           : validateEntityId(rawProviderId, 'Provider ID', 256),
-        account ? accounts.environment(account) : undefined
+        account ? accounts.environment(account) : undefined,
+        account?.providerName ?? account?.label
       )
     }
   )

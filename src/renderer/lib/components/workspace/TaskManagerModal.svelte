@@ -85,7 +85,7 @@
       pruneSelection()
       void ensureProjectIcons(snapshot.processes)
     } catch {
-      // Background poll failed — keep showing the last snapshot, don't spam errors.
+      // Background poll failed   keep showing the last snapshot, don't spam errors.
     } finally {
       polling = false
     }
@@ -205,7 +205,7 @@
   }
 
   function shortPath(cwd: string | null, max = 44): string {
-    if (!cwd) return '—'
+    if (!cwd) return ' '
     if (cwd.length <= max) return cwd
     const tail = cwd.slice(-Math.floor(max * 0.6))
     const head = cwd.slice(0, Math.floor(max * 0.4) - 1)
@@ -555,8 +555,8 @@
         {#if power.thermalState !== 'unknown' && power.thermalState !== 'nominal'}
           <span
             class="inline-flex shrink-0 items-center gap-1 text-danger"
-            title="Current macOS thermal pressure — {thermalLabel()}"
-            aria-label="Current macOS thermal pressure — {thermalLabel()}"
+            title="Current macOS thermal pressure   {thermalLabel()}"
+            aria-label="Current macOS thermal pressure   {thermalLabel()}"
           >
             <Thermometer size={14} />
           </span>

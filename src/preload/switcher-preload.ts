@@ -5,7 +5,7 @@ import type { NativeSwitcherPayload } from '../lib/ipc-contract'
  * Narrow, overlay-only bridge for the native Ctrl+Tab switcher page.
  *
  * The overlay is a separate sandboxed WebContentsView loaded from our own
- * `switcher.html`. It must NOT receive the full application bridge — only the
+ * `switcher.html`. It must NOT receive the full application bridge   only the
  * handful of channels it needs to render rows and report input back to main,
  * which validates every call against the overlay's own sender identity.
  */

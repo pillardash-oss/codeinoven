@@ -67,7 +67,7 @@ export class ReconnectController {
     this.timer = null
   }
 
-  /** A connection succeeded — stop retrying and reset the backoff. */
+  /** A connection succeeded   stop retrying and reset the backoff. */
   reset(): void {
     this.stop()
     this.attempt = 0

@@ -18,7 +18,7 @@
     title: string
     /** Placeholder text inside the search input. */
     placeholder: string
-    /** Trigger size — 'sm' for dense rows, 'md' for sidebar header toolbars. */
+    /** Trigger size   'sm' for dense rows, 'md' for sidebar header toolbars. */
     size?: 'sm' | 'md'
   }
 

@@ -25,13 +25,13 @@
   }
 
   interface Props {
-    /** Markdown source — may be an incomplete, still-streaming message. */
+    /** Markdown source   may be an incomplete, still-streaming message. */
     text: string
     class?: string
     /**
      * Render raw HTML tags in the source instead of showing them as text.
      * Only for content authored on a provider whose markdown dialect includes
-     * HTML (GitHub pull requests) — never for agent output or user input.
+     * HTML (GitHub pull requests)   never for agent output or user input.
      * Sanitizing still strips scripts, frames, styles, and form controls.
      */
     allowHtml?: boolean
@@ -86,7 +86,7 @@
    *  first paint is synchronous and correct; streaming updates re-lex at most
    *  once per animation frame below, so a burst of chunks coalesces into a
    *  single lex. Completed messages never change text and never re-lex. */
-  // Intentional initial-value capture — the first paint must lex synchronously.
+  // Intentional initial-value capture   the first paint must lex synchronously.
   // svelte-ignore state_referenced_locally
   let lexedText = $state(tagSubstitutions.prepared)
   // svelte-ignore state_referenced_locally
@@ -239,7 +239,7 @@
     const citation = citationFromLink(link)
     if (citation) return `${citation.path}${citation.line ? `:${citation.line}` : ''}`
     const href = link.getAttribute('href')
-    // Fragment links (footnotes, section anchors) stay inside the document —
+    // Fragment links (footnotes, section anchors) stay inside the document  
     // no external destination to preview, so no tooltip.
     if (!href || href.startsWith('#')) return null
     return href
@@ -332,7 +332,7 @@
     }
   }
 
-  /** Mirror of the citation click path — used by the file context menu's
+  /** Mirror of the citation click path   used by the file context menu's
    *  "Open file" action so both interactions behave identically. */
   function openCitationFromMenu(path: string, line?: number): void {
     openCitation(path, line)

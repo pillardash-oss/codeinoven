@@ -15,7 +15,7 @@ const MERGE_OVERRIDE_ENV = 'CIO_OPCODE_MERGE_AGENTS_UNVERIFIED'
  * additive: at most one rewrite happens, later startups are byte-stable
  * no-ops, and user-owned config (plugins, MCP wiring, other agents) is never
  * clobbered. JSONC configs are skipped with a dev-only warning and the merge
- * remains appendable. Failures are non-fatal — the app must boot even when a
+ * remains appendable. Failures are non-fatal   the app must boot even when a
  * harness config is locked down or unwritable.
  *
  * The merge is GATED on a deny-compliance proof for the installed opencode

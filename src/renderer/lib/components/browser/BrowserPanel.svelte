@@ -2,18 +2,14 @@
   import { onMount, tick, untrack } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import {
-    AppWindow,
     ArrowLeft,
     ArrowRight,
-    ChevronDown,
     Cookie,
     Database,
     Eraser,
     Lock,
     LockOpen,
     LoaderCircle,
-    PanelBottom,
-    PanelRight,
     RotateCw,
     ShieldOff,
     SquareTerminal,
@@ -25,7 +21,6 @@
   import type {
     BrowserSiteDataScope,
     BrowserConsoleEntry,
-    BrowserDevToolsDock,
     BrowserDevToolsState,
     BrowserPageState,
     BrowserViewBounds
@@ -82,12 +77,6 @@
   let consoleEntries = $state<BrowserConsoleEntry[]>([])
   let errorCount = $derived(consoleEntries.filter((entry) => entry.level === 'error').length)
   let devToolsOpen = $state(false)
-  /** Where the DevTools surface lives; a user choice, persisted locally. */
-  let devToolsDock = $state<BrowserDevToolsDock>(readStoredDevToolsDock())
-  /** Size (px) of the docked DevTools strip: height for 'bottom', width for 'right'. */
-  let devToolsStripSize = $state(320)
-  let devToolsElement = $state<HTMLDivElement>()
-  let devToolsMenuOpen = $state(false)
   /** Show a closed padlock for https origins; open padlock for everything else. */
   let secure = $derived(pageState.url.startsWith('https:'))
   /** The site menu and its confirmation modal are DOM, while the page itself is a
@@ -204,13 +193,6 @@
     }
   }
 
-  const attachDevToolsElement: Attachment<HTMLDivElement> = (element) => {
-    devToolsElement = element
-    return () => {
-      if (devToolsElement === element) devToolsElement = undefined
-    }
-  }
-
   const manageNativeBrowserView: Attachment<HTMLDivElement> = () => {
     void tick().then(() => {
       showAtCurrentBounds().catch(() => {})
@@ -229,50 +211,6 @@
       y: Math.max(0, Math.round(rect.y)),
       width: Math.max(1, Math.round(rect.width)),
       height: Math.max(1, Math.round(rect.height))
-    }
-  }
-
-  function devToolsBounds(): BrowserViewBounds | null {
-    if (!devToolsElement) return null
-    const rect = devToolsElement.getBoundingClientRect()
-    if (rect.width < 1 || rect.height < 1) return null
-    return {
-      x: Math.max(0, Math.round(rect.x)),
-      y: Math.max(0, Math.round(rect.y)),
-      width: Math.max(1, Math.round(rect.width)),
-      height: Math.max(1, Math.round(rect.height))
-    }
-  }
-
-  async function syncDevToolsBounds(): Promise<void> {
-    // Read reactive sources synchronously so the check stays valid for the
-    // IPC that follows in this tick.
-    const visible = untrack(() => panelVisible && devToolsOpen && devToolsDock !== 'undocked')
-    if (!visible) return
-    const bounds = devToolsBounds()
-    if (!bounds) return
-    await invoke('browser:setDevToolsBounds', tabId, bounds).catch(() => {})
-  }
-
-  const DEVTOOLS_DOCK_STORAGE_KEY = 'cio.browser.devToolsDock'
-
-  function readStoredDevToolsDock(): BrowserDevToolsDock {
-    if (typeof window === 'undefined') return 'bottom'
-    try {
-      const raw = window.localStorage.getItem(DEVTOOLS_DOCK_STORAGE_KEY)
-      if (raw === 'bottom' || raw === 'right' || raw === 'undocked') return raw
-    } catch {
-      // Storage unavailable — fall back to the default dock.
-    }
-    return 'bottom'
-  }
-
-  function storeDevToolsDock(dock: BrowserDevToolsDock): void {
-    if (typeof window === 'undefined') return
-    try {
-      window.localStorage.setItem(DEVTOOLS_DOCK_STORAGE_KEY, dock)
-    } catch {
-      // Storage unavailable — the choice stays session-only.
     }
   }
 
@@ -334,76 +272,15 @@
 
   async function toggleDevTools(): Promise<void> {
     try {
-      devToolsOpen = await invoke('browser:toggleDevTools', tabId, devToolsDock)
+      devToolsOpen = await invoke('browser:toggleDevTools', tabId)
     } catch {
       // Tab already destroyed.
     }
   }
-
-  interface DockOption {
-    dock: BrowserDevToolsDock
-    label: string
-    detail: string
-    icon: typeof PanelBottom
-  }
-
-  const dockOptions: readonly DockOption[] = [
-    {
-      dock: 'bottom',
-      label: 'Dock bottom',
-      detail: 'DevTools fills the lower area of this browser panel.',
-      icon: PanelBottom
-    },
-    {
-      dock: 'right',
-      label: 'Dock right',
-      detail: 'DevTools fills the right area of this browser panel.',
-      icon: PanelRight
-    },
-    {
-      dock: 'undocked',
-      label: 'Separate window',
-      detail: 'DevTools opens in its own movable window.',
-      icon: AppWindow
-    }
-  ]
 
   function applyDevToolsState(state: BrowserDevToolsState): void {
     if (state.tabId !== tabId) return
     devToolsOpen = state.open
-    if (state.open && state.dock) {
-      devToolsDock = state.dock
-      storeDevToolsDock(state.dock)
-    }
-  }
-
-  async function chooseDevToolsDock(dock: BrowserDevToolsDock): Promise<void> {
-    devToolsDock = dock
-    storeDevToolsDock(dock)
-    devToolsMenuOpen = false
-    if (!devToolsOpen) return
-    try {
-      await invoke('browser:setDevToolsDock', tabId, dock)
-    } catch {
-      // Tab already destroyed.
-    }
-  }
-
-  function startDevToolsResize(event: PointerEvent): void {
-    event.preventDefault()
-    const horizontal = devToolsDock === 'right'
-    const startPos = horizontal ? event.clientX : event.clientY
-    const startSize = devToolsStripSize
-    const onMove = (move: PointerEvent): void => {
-      const delta = horizontal ? startPos - move.clientX : startPos - move.clientY
-      devToolsStripSize = Math.min(760, Math.max(140, startSize + delta))
-    }
-    const onUp = (): void => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
   }
 
   onMount(() => {
@@ -433,11 +310,6 @@
     void invoke('browser:getConsole', tabId)
       .then(mergeConsoleEntries)
       .catch(() => {})
-    void invoke('browser:getDevToolsState', tabId)
-      .then((state) => {
-        if (state?.open && !destroyed) applyDevToolsState(state)
-      })
-      .catch(() => {})
 
     return () => {
       destroyed = true
@@ -451,17 +323,6 @@
     }
   })
 
-  // Keep the native DevTools strip aligned with its Svelte element whenever
-  // the strip mounts, resizes or the panel visibility flips.
-  $effect(() => {
-    const element = devToolsElement
-    if (!element) return
-    const devToolsObserver = new ResizeObserver(() => {
-      void syncDevToolsBounds().catch(() => {})
-    })
-    devToolsObserver.observe(element)
-    return () => devToolsObserver.disconnect()
-  })
 </script>
 
 <div {@attach panelVisible && manageNativeBrowserView} class="flex h-full min-h-0 flex-col bg-app">
@@ -596,48 +457,6 @@
         ></span>
       {/if}
     </button>
-    <button
-      type="button"
-      class="flex h-7 w-4 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      aria-label="DevTools placement"
-      title="DevTools placement"
-      aria-haspopup="menu"
-      aria-expanded={devToolsMenuOpen}
-      onclick={() => (devToolsMenuOpen = !devToolsMenuOpen)}
-    >
-      <ChevronDown size={11} />
-    </button>
-    {#if devToolsMenuOpen}
-      <button
-        type="button"
-        class="fixed inset-0 z-30 cursor-default"
-        title="Close DevTools placement menu"
-        aria-label="Close DevTools placement menu"
-        onclick={() => (devToolsMenuOpen = false)}
-      ></button>
-      <div
-        class="absolute right-1 top-full z-40 mt-1 w-64 rounded-lg border bg-surface p-1 shadow-lg"
-        role="menu"
-        aria-label="DevTools placement"
-      >
-        {#each dockOptions as option (option.dock)}
-          <button
-            type="button"
-            class="flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated"
-            role="menuitemradio"
-            aria-checked={devToolsDock === option.dock}
-            title={option.label}
-            onclick={() => void chooseDevToolsDock(option.dock)}
-          >
-            <option.icon size={14} class="mt-0.5 shrink-0 text-dimmed" />
-            <span class="min-w-0">
-              <span class="block font-medium">{option.label}</span>
-              <span class="mt-0.5 block text-dimmed">{option.detail}</span>
-            </span>
-          </button>
-        {/each}
-      </div>
-    {/if}
   </form>
   {#if addressError}
     <p
@@ -654,33 +473,13 @@
       {siteDataError}
     </p>
   {/if}
-  <div class="flex min-h-0 flex-1 {devToolsDock === 'right' ? 'flex-row' : 'flex-col'}">
-    <div
-      {@attach attachContentElement}
-      data-native-browser-content
-      class="min-h-0 min-w-0 flex-1 bg-surface"
-      role="document"
-      aria-label={`Browser content for ${pageState.title || address}`}
-    ></div>
-    {#if devToolsOpen && devToolsDock !== 'undocked'}
-      <div
-        role="separator"
-        class={devToolsDock === 'right'
-          ? 'w-1.5 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary/40'
-          : 'h-1.5 shrink-0 cursor-row-resize bg-border transition-colors hover:bg-primary/40'}
-        title="Resize DevTools"
-        aria-label="Resize DevTools area"
-        aria-orientation={devToolsDock === 'right' ? 'vertical' : 'horizontal'}
-        onpointerdown={startDevToolsResize}
-      ></div>
-      <div
-        {@attach attachDevToolsElement}
-        class="shrink-0 bg-surface"
-        style:height={devToolsDock === 'bottom' ? `${devToolsStripSize}px` : undefined}
-        style:width={devToolsDock === 'right' ? `${devToolsStripSize}px` : undefined}
-      ></div>
-    {/if}
-  </div>
+  <div
+    {@attach attachContentElement}
+    data-native-browser-content
+    class="min-h-0 min-w-0 flex-1 bg-surface"
+    role="document"
+    aria-label={`Browser content for ${pageState.title || address}`}
+  ></div>
 </div>
 
 <Modal

@@ -80,7 +80,7 @@ async function fetchJson(url: string, credential: string): Promise<Record<string
 /**
  * Probe one pi provider's account quota and prepaid-credit balance. Cached for
  * 60s per provider so repeated battery hovers never hammer gateway endpoints.
- * Unknown providers resolve to null — the popover simply omits provider usage.
+ * Unknown providers resolve to null   the popover simply omits provider usage.
  */
 export async function fetchPiProviderUsage(
   providerId: string | undefined

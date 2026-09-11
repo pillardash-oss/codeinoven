@@ -26,7 +26,7 @@
   interface Props {
     part: Extract<AgentPart, { type: 'tool' }>
     /** True only while a live session is streaming this call. Historical or
-     *  restored traces must never tick — their durations are frozen snapshots. */
+     *  restored traces must never tick   their durations are frozen snapshots. */
     live?: boolean
     projectId?: string
     threadId?: string

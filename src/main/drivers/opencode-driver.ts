@@ -278,8 +278,8 @@ function openCodeIssue(
  *
  * OpenCode converts any `AbortError`/`DOMException` from the model layer into
  * `MessageAbortedError` ("The operation was aborted."). For a compaction
- * summary this is transient maintenance noise — the conversation is intact,
- * it simply wasn't compacted — so it must never be surfaced as a session
+ * summary this is transient maintenance noise   the conversation is intact,
+ * it simply wasn't compacted   so it must never be surfaced as a session
  * error or "aborted" banner. The same abort error also arrives via the
  * `session.error` event (from `SessionProcessor.halt`), which is dropped here.
  */
@@ -344,7 +344,7 @@ function recordFromUnknown(value: unknown): Record<string, unknown> | undefined 
         return parsed as Record<string, unknown>
       }
     } catch {
-      // Not JSON — treat as opaque string.
+      // Not JSON   treat as opaque string.
     }
   }
   return undefined
@@ -953,7 +953,7 @@ export function mapOpenCodeEvent(type: string, props: Record<string, unknown>): 
 }
 
 /**
- * OpenCodeDriver — headless harness driver for the OpenCode CLI.
+ * OpenCodeDriver   headless harness driver for the OpenCode CLI.
  *
  * Reuses one application-wide `opencode serve` process. Every request and SSE
  * subscription is scoped with OpenCode's `x-opencode-directory` header, so
@@ -1019,13 +1019,13 @@ export class OpenCodeDriver implements HarnessDriver {
   private static readonly IDLE_SWEEP_INTERVAL_MS = 60_000
   /**
    * A turn registered in `activeSessions` may legitimately emit no events far
-   * longer than the traffic TTL — a long bash command, a download, a silent
+   * longer than the traffic TTL   a long bash command, a download, a silent
    * sub-agent. Mirrors ChatEngine.SILENT_WORK_GRACE_MS: while a turn is this
    * young in silence terms, its server is never reaped, no matter how quiet.
    */
   private static readonly SILENT_TURN_GRACE_MS = 30 * 60_000
   /**
-   * Entries silent past twice that grace are ghosts — a turn that died without
+   * Entries silent past twice that grace are ghosts   a turn that died without
    * a terminal event (for example during an SSE reconnect gap). The engine's
    * own watchdog re-checks silent turns at 30 minutes, so by 60 only ghosts
    * remain; they are dropped so they cannot hold a server open forever.
@@ -1063,7 +1063,7 @@ export class OpenCodeDriver implements HarnessDriver {
 
   private idleMs(port: number): number {
     const at = this.lastServerTrafficAt.get(port)
-    // An unknown port is a freshly spawned server — treat it as brand new so
+    // An unknown port is a freshly spawned server   treat it as brand new so
     // the sweeper can never kill a process between spawn and first request.
     return at === undefined ? 0 : Date.now() - at
   }
@@ -1275,7 +1275,7 @@ export class OpenCodeDriver implements HarnessDriver {
         const models: Record<string, Record<string, unknown>> = {}
         for (const model of custom.models) {
           // Either bound is meaningful on its own (e.g. discovery often
-          // reports only context_length) — requiring both dropped a known
+          // reports only context_length)   requiring both dropped a known
           // context window whenever the output limit was missing.
           const limit = {
             ...(model.contextWindow ? { context: model.contextWindow } : {}),
@@ -1283,7 +1283,7 @@ export class OpenCodeDriver implements HarnessDriver {
           }
           // opencode dispatches by passing the thread's thinking level
           // straight through as the variant key, so the key must equal the
-          // level it selects — `thinkingLevel` in the value is what opencode
+          // level it selects   `thinkingLevel` in the value is what opencode
           // itself reads to know which effort to actually request.
           const variants =
             model.thinkingPresets && model.thinkingPresets.length > 0
@@ -1454,7 +1454,7 @@ export class OpenCodeDriver implements HarnessDriver {
     )
   }
 
-  /** Ping the exact configured model — no cheap-candidate substitution. */
+  /** Ping the exact configured model   no cheap-candidate substitution. */
   async sendHeartbeatPing(
     projectPath: string,
     options: SendHeartbeatPingOptions
@@ -1761,7 +1761,7 @@ export class OpenCodeDriver implements HarnessDriver {
   /**
    * Forcefully terminate the harness process backing a session (SIGTERM).
    * Kills the per-session `opencode serve` process that streams the SSE turn so
-   * the connection is torn down immediately — used when the user confirms a
+   * the connection is torn down immediately   used when the user confirms a
    * forced close. Falls back to a graceful abort when no dedicated turn server
    * exists for the session (the pooled server is left for the app to dispose).
    */
@@ -1897,11 +1897,11 @@ export class OpenCodeDriver implements HarnessDriver {
   /**
    * The providers the user is actually connected to, keyed by the same provider
    * ids `opencode models` reports: credentials in opencode's auth store
-   * (`auth.json` — OAuth logins and stored API keys), providers configured in
+   * (`auth.json`   OAuth logins and stored API keys), providers configured in
    * `~/.config/opencode/opencode.json` (custom base URLs and keyless local
    * servers alike), and CodeInOven-managed base-URL providers injected through
    * the discovery overlay. Returns `null` when the connected set cannot be
-   * determined reliably — callers then keep the catalog unfiltered rather than
+   * determined reliably   callers then keep the catalog unfiltered rather than
    * wrongly hiding every provider behind a transient read failure.
    */
   private async connectedProviderIds(): Promise<Set<string> | null> {
@@ -2160,7 +2160,7 @@ export class OpenCodeDriver implements HarnessDriver {
 
   /**
    * Reuse-only poll: pending questions live in a running server's memory, so
-   * spawning a fresh `opencode serve` could never surface them — it would only
+   * spawning a fresh `opencode serve` could never surface them   it would only
    * boot the full harness. The thread mount calls this on every startup for
    * reconnect recovery, so collect the handles that already exist (pooled +
    * per-turn) and never start one here; a server spawned for real work gets
@@ -2560,7 +2560,7 @@ export class OpenCodeDriver implements HarnessDriver {
     })
   }
 
-  /** GUI apps don't inherit the shell PATH — augment with common install locations. */
+  /** GUI apps don't inherit the shell PATH   augment with common install locations. */
   private buildEnv(runtime?: PreparedUtilityRuntime): NodeJS.ProcessEnv {
     if (!runtime) {
       return buildProcessEnvironment({ ...process.env, ...this.accountEnvironment })
@@ -2861,7 +2861,7 @@ export class OpenCodeDriver implements HarnessDriver {
     }
   }
 
-  /** Model id actually sent for a turn — fast inference appends the `*-fast` suffix. */
+  /** Model id actually sent for a turn   fast inference appends the `*-fast` suffix. */
   private resolvedModel(settings: ThreadSettings): { providerId: string; modelId: string } {
     return {
       providerId: settings.providerId,

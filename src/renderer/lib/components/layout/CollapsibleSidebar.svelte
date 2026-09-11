@@ -10,7 +10,7 @@
     /** Sidebar header title, e.g. "Projects" or "Chats". */
     title: string
     /**
-     * Pinned sidebars are always docked (e.g. Settings) — they ignore the
+     * Pinned sidebars are always docked (e.g. Settings)   they ignore the
      * shared collapsed state but still share the global width.
      */
     pinned?: boolean

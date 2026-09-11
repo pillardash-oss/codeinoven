@@ -29,7 +29,7 @@
     {
       icon: MessageSquarePlus,
       title: 'New chat',
-      description: 'Start a conversation — no project needed',
+      description: 'Start a conversation   no project needed',
       run: () => onNewChat()
     },
     {

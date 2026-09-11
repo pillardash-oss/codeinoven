@@ -62,7 +62,7 @@ describe('RemoteRpcDispatcher', () => {
     for (const channel of coreAllowed) {
       expect(dispatcher.isAllowed(channel)).toBe(true)
     }
-    // The expanded surface — every channel the reused desktop components call.
+    // The expanded surface   every channel the reused desktop components call.
     for (const channel of REMOTE_ALLOWED_CHANNELS) {
       expect(dispatcher.isAllowed(channel)).toBe(true)
     }
@@ -189,7 +189,7 @@ describe('RemoteRpcDispatcher', () => {
     }
   })
 
-  it('rejects git:setCredential over the bridge — the vault stays desktop-only', async () => {
+  it('rejects git:setCredential over the bridge   the vault stays desktop-only', async () => {
     const dispatcher = makeDispatcher()
     const outcome = await dispatcher.dispatch({
       id: 10,

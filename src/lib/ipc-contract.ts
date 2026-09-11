@@ -234,15 +234,10 @@ export interface BrowserPageState {
   canGoForward: boolean
 }
 
-/** Where a browser page's DevTools window is shown. */
-export type BrowserDevToolsDock = 'bottom' | 'right' | 'undocked'
-
-/** Live DevTools placement state for a browser tab. */
+/** DevTools open/closed state for a browser tab. */
 export interface BrowserDevToolsState {
   tabId: string
   open: boolean
-  /** Dock position while open; null when closed. */
-  dock: BrowserDevToolsDock | null
 }
 
 /** One row rendered by the native Ctrl+Tab overlay, fully display-ready. */
@@ -2393,14 +2388,8 @@ export const IPC_INVOKE_CONTRACT = {
   'browser:stop': {} as Contract<[tabId: string], void>,
   'browser:getConsole': {} as Contract<[tabId: string], BrowserConsoleEntry[]>,
   'browser:clearConsole': {} as Contract<[tabId: string], void>,
-  /** Toggle the web page's native DevTools window. Returns whether it is now open. */
-  'browser:toggleDevTools': {} as Contract<[tabId: string, dock?: BrowserDevToolsDock], boolean>,
-  /** Current DevTools placement for a tab, or null when the tab has none. */
-  'browser:getDevToolsState': {} as Contract<[tabId: string], BrowserDevToolsState | null>,
-  /** Change the DevTools dock position for an open (or next open) DevTools window. */
-  'browser:setDevToolsDock': {} as Contract<[tabId: string, dock: BrowserDevToolsDock], void>,
-  /** Position the docked DevTools view inside the app window. */
-  'browser:setDevToolsBounds': {} as Contract<[tabId: string, bounds: BrowserViewBounds], void>,
+  /** Toggle the web page's native DevTools. Returns whether it is now open. */
+  'browser:toggleDevTools': {} as Contract<[tabId: string], boolean>,
   'browser:clearData': {} as Contract<[projectId: string], void>,
   'browser:clearSiteData': {} as Contract<
     [projectId: string, scopes: BrowserSiteDataScope[]],
@@ -3017,7 +3006,7 @@ export const IPC_EVENT_CONTRACT = {
   /** Live provider connection health/status snapshot. */
   'providers:status': [] as unknown as [payload: ProviderConnectionInfo[]],
   'browser:console': [] as unknown as [entry: BrowserConsoleEntry],
-  /** DevTools placement changed for a browser tab (open/close/re-dock). */
+  /** DevTools open state changed for a browser tab (open/closed). */
   'browser:devToolsChanged': [] as unknown as [state: BrowserDevToolsState],
   'browser:openRequested': [] as unknown as [url: string, context?: BrowserOpenRequestContext],
   'browser:permissionRequested': [] as unknown as [request: BrowserPermissionRequest],

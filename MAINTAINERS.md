@@ -9,7 +9,7 @@ contributor-facing rules.
 The `pillardash-oss/maintainers` team owns review and merge rights on the
 `pillardash-oss/codeinoven` repository.
 
-- **@leonardosahon** — project lead, architecture, releases.
+- **@leonardosahon**   project lead, architecture, releases.
 - (Add maintainers here as the team grows.)
 
 ## Triage cadence
@@ -63,14 +63,14 @@ Reusable review replies so maintainers never write the same paragraph twice:
 
 - **Needs baseline tests:** "Thanks for the PR. Please add a test for the
   before state (baseline) and the after state, and run the scoped suite on the
-  files you touched — per CONTRIBUTING.md, a contribution must prove it
+  files you touched   per CONTRIBUTING.md, a contribution must prove it
   causes no regression."
 - **Vanity feature:** "This looks polished, but per CONTRIBUTING.md rule 4,
   features must serve a real shared problem you hit yourself. Can you point to
   the group of users who share this problem? Otherwise let's take it to
   Discussions first."
 - **Perf concern:** "This changes per-message/per-thread work. Please profile
-  before/after and share numbers, or justify why it's free — no perf glitches
+  before/after and share numbers, or justify why it's free   no perf glitches
   per CONTRIBUTING.md."
 - **No `any`/`console.*`:** "Per the engineering standards, `any`/`as any` and
   `console.*` are forbidden. Please model the type properly and use the

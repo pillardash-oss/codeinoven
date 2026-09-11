@@ -4,8 +4,8 @@ import type { AgentPart } from '../../lib/types'
  * Bounded persisted size for one tool part's `state.output`.
  *
  * Tool outputs (file reads, image payloads, command dumps) can reach several
- * megabytes. Persisting them inline — in the SQLite mirror and the per-thread
- * stream log — makes transcript loads, forks, and compaction scans parse
+ * megabytes. Persisting them inline   in the SQLite mirror and the per-thread
+ * stream log   makes transcript loads, forks, and compaction scans parse
  * multi-megabyte JSON rows on the main process, which visibly hangs the app.
  * The bounded representation keeps enough of the payload to stay useful
  * (head + tail + exact byte count) while capping every row far below the
@@ -30,13 +30,13 @@ function isOversized(text: string): boolean {
 
 /** Cap one oversized output string to head + tail + byte-count marker. */
 function capOutput(text: string): string {
-  return `${text.slice(0, HEAD_KEEP)}${TRUNCATION_MARKER}${text.length} bytes total — showing first ${HEAD_KEEP} and last ${TAIL_KEEP}]…\n${text.slice(-TAIL_KEEP)}`
+  return `${text.slice(0, HEAD_KEEP)}${TRUNCATION_MARKER}${text.length} bytes total   showing first ${HEAD_KEEP} and last ${TAIL_KEEP}]…\n${text.slice(-TAIL_KEEP)}`
 }
 
 /**
  * Cap oversized tool-part outputs in an event part before it reaches any
  * durable store (mirror rows, stream log lines). Sub-cap parts pass through
- * by reference — the common case stays allocation-free.
+ * by reference   the common case stays allocation-free.
  */
 export function capPersistedPart(part: AgentPart): AgentPart {
   if (part.type !== 'tool') return part

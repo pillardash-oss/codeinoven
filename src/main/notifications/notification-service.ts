@@ -44,7 +44,7 @@ const PERMISSION_VERIFY_DEDUP_MS = 15_000
 const PERMISSION_VERIFY_TIMEOUT_MS = 4_000
 /**
  * Cooldown covering the alert's duration. Only the first notification of a
- * burst plays a sound — notifications arriving inside this window still show
+ * burst plays a sound   notifications arriving inside this window still show
  * their cards but stay quiet so a burst never machine-guns beeps.
  */
 const NOTIFICATION_SOUND_DEDUP_MS = 2_500
@@ -152,7 +152,7 @@ export class NotificationService {
    * notification-permission query API on macOS, so the OS delivery events are
    * the authoritative signal: a shown notification implies permission, a
    * refused one implies the app is blocked (permission denied or unsigned).
-   * Only a refusal error (`UNErrorNotAllowed` — "not allowed") marks the state
+   * Only a refusal error (`UNErrorNotAllowed`   "not allowed") marks the state
    * as denied: other failures are logged but never flip the state, so a
    * transient error can never permanently lock the app into "blocked".
    */
@@ -213,7 +213,7 @@ export class NotificationService {
    * delivering one verification notification. A successful delivery flips the
    * state back to `granted` (the user re-enabled notifications in System
    * Settings); a refusal keeps it `denied`. If the OS actually still has the
-   * permission prompt pending (fresh install), the request re-prompts — which
+   * permission prompt pending (fresh install), the request re-prompts   which
    * is exactly what the notification settings panel is for. Deduped so
    * repeated settings queries only re-check every few seconds.
    */
@@ -260,11 +260,11 @@ export class NotificationService {
 
   /**
    * macOS notification authorization, inferred from OS delivery outcomes.
-   * 'prompt' means the OS has not delivered nor refused yet — the first
+   * 'prompt' means the OS has not delivered nor refused yet   the first
    * notification (or the Settings test) will decide it. Exposed so the UI can
    * warn when notifications are blocked and deep-link into System Settings.
    * While 'denied', every query re-verifies against the OS so the warning
-   * clears as soon as the user re-enables notifications — it can never stay
+   * clears as soon as the user re-enables notifications   it can never stay
    * stale across Settings visits.
    */
   getPermissionStatus(): SystemNotificationPermissionStatus {
@@ -370,14 +370,14 @@ export class NotificationService {
    * background the renderer can still mark a thread read (e.g. the thread that
    * happens to be selected auto-marks itself read when a live update arrives),
    * which would otherwise close an OS notification the user has not even seen
-   * yet — leaving only the alert sound with no card.
+   * yet   leaving only the alert sound with no card.
    */
   private appFocused(): boolean {
     return BrowserWindow.getAllWindows().some((window) => window.isFocused())
   }
 
   /**
-   * Dismiss every delivered notification for a thread — closes its OS
+   * Dismiss every delivered notification for a thread   closes its OS
    * notifications (including side-chat notifications piped through it) and
    * drops the thread from the app-icon badge. Called whenever the thread is
    * marked read or deleted so the OS notification center stays in sync with
@@ -495,8 +495,8 @@ export class NotificationService {
     if (!NOTIFIABLE_STATUSES.has(thread.status)) return
     if (previous === thread.status) return
     if (thread.read) return
-    // A thread that transitions straight from `failed` to `completed` — without
-    // an intervening working status — is reporting a stale/wrong success: the
+    // A thread that transitions straight from `failed` to `completed`   without
+    // an intervening working status   is reporting a stale/wrong success: the
     // turn never actually re-ran (a fresh run would pass through executing or
     // planning). Emitting a "done" notification right after an error one is
     // exactly the misleading double-notify users have reported, so suppress it.
@@ -712,7 +712,7 @@ export class NotificationService {
         finish({
           status: 'failed',
           message:
-            'macOS did not confirm delivery. Notifications are likely blocked — allow them in System Settings > Notifications (unsigned builds also require app signing).'
+            'macOS did not confirm delivery. Notifications are likely blocked   allow them in System Settings > Notifications (unsigned builds also require app signing).'
         })
       }, 8_000)
 
@@ -797,8 +797,8 @@ export class NotificationService {
     const title = kind === 'completed' ? 'Chat response available' : 'Chat response failed'
     const body =
       kind === 'completed'
-        ? `${thread.title} — your chat response is ready in ${projectName}.`
-        : `${thread.title} — your chat response stopped with an error in ${projectName}.`
+        ? `${thread.title}   your chat response is ready in ${projectName}.`
+        : `${thread.title}   your chat response stopped with an error in ${projectName}.`
     return {
       id: `${APP_SLUG}-${thread.projectId}-${thread.id}-temp-${temporaryChatId}-${Date.now()}`,
       kind: notificationKind,
@@ -827,7 +827,7 @@ export class NotificationService {
    * Dispatch the custom audible alert for a notification. Only the first
    * notification of a burst plays: notifications arriving within the dedup
    * window after the last played sound still show their cards but stay quiet.
-   * The gate lives here in the main process — not the throttled renderer — so
+   * The gate lives here in the main process   not the throttled renderer   so
    * the decision is deterministic and the first sound is dispatched the moment
    * its notification arrives, instead of seconds after the OS card appears.
    */

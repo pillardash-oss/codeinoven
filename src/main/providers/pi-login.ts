@@ -2,13 +2,13 @@ import { importPiAiProvidersRegistry } from './pi-ai-registry'
 
 /**
  * Headless sign-in for any provider in Pi's built-in registry, running the
- * exact `login()` implementations the pinned `@earendil-works/pi-ai` ships —
+ * exact `login()` implementations the pinned `@earendil-works/pi-ai` ships  
  * the same code Pi's TUI executes. Multi-field flows (Cloudflare's key +
  * account id + gateway id, Bedrock's AWS inputs, …), OAuth browser/device
  * flows, and select prompts all come from Pi itself, so an in-app login
  * produces credentials byte-compatible with what Pi's own TUI writes.
  *
- * The module is loaded by `importPiAiProvidersRegistry` — see
+ * The module is loaded by `importPiAiProvidersRegistry`   see
  * `pi-ai-registry.ts` for the resolution strategy and fallbacks.
  */
 
@@ -62,7 +62,7 @@ interface RegistryModule {
 let registryModulePromise: Promise<RegistryModule> | null = null
 
 async function registryModule(): Promise<RegistryModule> {
-  // A failed import must never be cached — see pi-catalog.ts for the rationale.
+  // A failed import must never be cached   see pi-catalog.ts for the rationale.
   registryModulePromise ??= importPiAiProvidersRegistry(
     'Pi sign-in flows'
   ) as Promise<RegistryModule>
@@ -99,7 +99,7 @@ async function findPiProvider(providerId: string): Promise<PiProvider | undefine
 }
 
 /**
- * Run one provider's sign-in to completion — Pi's own `login()` for the
+ * Run one provider's sign-in to completion   Pi's own `login()` for the
  * provider, OAuth flow or multi-field API-key flow alike. Emits browser URLs,
  * device codes and progress through `handlers`, and awaits prompts (paste-
  * the-code, account ids, selects) through `handlers.prompt`. Resolves with

@@ -77,7 +77,7 @@
         message = result.message
         return
       }
-      // Still pending — schedule the next poll after the server-suggested interval.
+      // Still pending   schedule the next poll after the server-suggested interval.
       timer = setTimeout(() => void poll(), device.interval * 1000)
     } finally {
       polling = false

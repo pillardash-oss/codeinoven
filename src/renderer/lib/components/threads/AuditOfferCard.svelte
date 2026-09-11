@@ -71,7 +71,7 @@
     <div class="rounded-lg bg-primary/10 p-2 text-primary"><ShieldCheck size={18} /></div>
     <div class="min-w-0 flex-1">
       <h3 class="text-sm font-semibold">
-        {reworkCycle ? `Rework ${reworkCycle} complete — audit again` : 'Implementation finished'}
+        {reworkCycle ? `Rework ${reworkCycle} complete   audit again` : 'Implementation finished'}
       </h3>
       <p class="mt-1 text-xs text-muted">
         {reworkCycle ? 'Verify the completed corrections for' : 'Audit'} “{threadTitle}” with

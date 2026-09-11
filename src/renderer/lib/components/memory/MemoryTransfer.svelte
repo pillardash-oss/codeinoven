@@ -7,7 +7,7 @@
 
   interface Props {
     variant: 'settings' | 'sidebar'
-    /** The active settings tab — used as the default export scope. */
+    /** The active settings tab   used as the default export scope. */
     scope?: 'projects' | 'chats'
     /** The project this sidebar panel belongs to (kind 'project'). */
     projectId?: string
@@ -132,7 +132,7 @@
     >
       <div class="space-y-3">
         <p class="text-xs text-dimmed">
-          Export memory to a JSON backup, or import one. Merges on import — duplicates are
+          Export memory to a JSON backup, or import one. Merges on import   duplicates are
           skipped.
         </p>
         <div

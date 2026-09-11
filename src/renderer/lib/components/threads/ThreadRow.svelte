@@ -52,7 +52,7 @@
     projectIconUrl?: string | null
     /** Whether "Change Scope" appears in the actions menu. */
     showChangeScope?: boolean
-    /** Hide the scope chip — used when the surrounding view is already scoped. */
+    /** Hide the scope chip   used when the surrounding view is already scoped. */
     hideScope?: boolean
     onOpen?: (t: Thread) => void
     onRename?: (t: Thread, newName: string) => Promise<void>
@@ -85,7 +85,7 @@
   const componentId = $props.id()
   let renameThreadFormId = $derived(`${componentId}-thread-${thread.id}-rename-form`)
 
-  /** Title shown in the UI — the real title once generated, else a draft label. */
+  /** Title shown in the UI   the real title once generated, else a draft label. */
   let displayTitle = $derived(effectiveThreadTitle(thread))
 
   /** How long the "todo" dot is held after a draft is cleared on send, so the
@@ -191,7 +191,7 @@
     return providers.find((provider) => provider.id === providerId)?.name ?? null
   })
 
-  /** Provider id of the thread's current model — ids drive icon resolution so
+  /** Provider id of the thread's current model   ids drive icon resolution so
    *  custom CodeInOven providers (`cio-…`) always render the CodeInOven mark. */
   const currentModelProviderId = $derived(thread.settings?.providerId ?? null)
 
@@ -306,7 +306,7 @@
       speechController.isCapturingThread(thread.id)
   )
 
-  /** A thread with an unsent message scheduled behind other thread(s) — its
+  /** A thread with an unsent message scheduled behind other thread(s)   its
    *  agent has not started yet. Reads as pending/draft state, but gets a timer
    *  badge in the working colour instead of the plain draft dot. */
   let hasStartAfterPending = $derived(
@@ -316,21 +316,21 @@
   /** Orchestration worker/auditor threads stay silent: never presented as unread. */
   let effectiveRead = $derived(isOrchestrationChildThread(thread) || thread.read)
 
-  /** A finished temporary (side) chat on this thread is still unread — the
+  /** A finished temporary (side) chat on this thread is still unread   the
    *  parent thread's own `read` flag never changes for side chats, so the
    *  badge comes from the side-chat store instead. */
   let hasTemporaryChatUnread = $derived(
     temporaryChatUnread.hasUnread(thread.projectId, thread.id)
   )
 
-  /** Aggregate child activity onto the Sr. Engineer row — the public source of truth. */
+  /** Aggregate child activity onto the Sr. Engineer row   the public source of truth. */
   let delegatedWorkActive = $derived(
     coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
   )
 
   /** Once the run state has been settled by a live session check (a ThreadView
    *  mounted for this thread, or its session streamed activity), the live busy
-   *  flag is authoritative — a stale persisted `planning`/`executing` status
+   *  flag is authoritative   a stale persisted `planning`/`executing` status
    *  must not keep the spinner alive after the turn actually finished. Before
    *  anything settles (fresh app start), the persisted status is the only
    *  signal and stands in for genuinely in-flight work. */
@@ -344,12 +344,12 @@
     isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
   )
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
-  /** TTS playing on this thread — shares the recorder's indicator slot. */
+  /** TTS playing on this thread   shares the recorder's indicator slot. */
   // Last action wins between ASR and TTS: recording start cancels playback, so
-  // a transcription can only overlap a TTS that began after it — in that case
+  // a transcription can only overlap a TTS that began after it   in that case
   // the newer TTS takes the slot; otherwise the transcription waveform shows.
   let isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(thread.id))
-  /** The mic has closed but the transcript has not landed yet — same indicator
+  /** The mic has closed but the transcript has not landed yet   same indicator
    *  slot, distinct label, shown only when neither recording nor speaking. */
   let isTranscribing = $derived(
     !isRecording && !isSpeaking && speechController.isTranscribingThread(thread.id)
@@ -391,7 +391,7 @@
     // of the badge) but shows the unread dot instead of swallowing it.
     if (hasTemporaryChatUnread) return 'unread'
     // A scheduled message (queued behind other threads) reads as pending work
-    // and shows the timer badge — it is a draft in the sorting/pinning sense but
+    // and shows the timer badge   it is a draft in the sorting/pinning sense but
     // not something still being typed.
     if (hasStartAfterPending) return 'scheduled'
     // Drafting (or the brief post-send grace) shows the todo dot.
@@ -447,7 +447,7 @@
   /** Status remains visible for pinned threads; hover temporarily reveals the pin action. */
   let pinVisible = $derived(hovered)
 
-  /** Maps ThreadState to StatusBadge props — all colours flow through the
+  /** Maps ThreadState to StatusBadge props   all colours flow through the
    *  canonical StatusBadge component so every indicator stays consistent. */
   let badgeProps = $derived.by(
     (): {
@@ -544,7 +544,7 @@
   function onRowEnter(): void {
     hovered = true
     clearTimeout(popoverTimer)
-    // Warm the cache early — before the popover (550ms) — so the click path
+    // Warm the cache early   before the popover (550ms)   so the click path
     // into the thread is already fast by the time the user acts.
     clearTimeout(preloadTimer)
     preloadTimer = setTimeout(preloadMessages, PRELOAD_DEBOUNCE_MS)
@@ -744,7 +744,7 @@
   onmouseenter={onRowEnter}
   onmouseleave={onRowLeave}
 >
-  <!-- Stable drop indicator — always rendered, opacity toggled to avoid layout shift -->
+  <!-- Stable drop indicator   always rendered, opacity toggled to avoid layout shift -->
   <div
     class="pointer-events-none absolute left-0 right-0 top-0 h-[2px] transition-opacity duration-100 {dropIndicator ===
     'before'
@@ -788,7 +788,7 @@
         <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
       {/if}
 
-      <!-- State indicator / pin toggle — fixed slot, opacity crossfade, zero layout shift -->
+      <!-- State indicator / pin toggle   fixed slot, opacity crossfade, zero layout shift -->
       <span class="relative h-4 w-4 shrink-0">
         <span
           class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 {pinVisible
@@ -892,7 +892,7 @@
           </span>
         {/if}
       {:else}
-        <!-- Current working / last worked model — provider icon alone -->
+        <!-- Current working / last worked model   provider icon alone -->
         {#if currentModelProviderName}
           <span
             class="flex shrink-0 items-center transition-opacity duration-150 {hovered
@@ -981,7 +981,7 @@
       </span>
     {/if}
 
-    <!-- Ellipsis — far right, vertically centered across the whole row, shown on hover -->
+    <!-- Ellipsis   far right, vertically centered across the whole row, shown on hover -->
     <span
       class="absolute right-1 top-1/2 flex -translate-y-1/2 items-center transition-opacity duration-150 {hovered
         ? 'opacity-100'

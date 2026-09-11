@@ -108,7 +108,7 @@
       startAfterThreads?: StartAfterSelection[]
     ) => void
     disabled?: boolean
-    /** True while the agent is running — turns the send button into a stop button. */
+    /** True while the agent is running   turns the send button into a stop button. */
     working?: boolean
     /** Called when the user asks to abort the running turn (stop button / double Escape). */
     onStop?: () => void
@@ -128,7 +128,7 @@
     /** Executes an active-harness slash command with explicit arguments. */
     onSlashCommand?: (commandId: string, args: string) => void | Promise<void>
     /** Id of the harness's native "switch to API usage credits" command, when
-     *  it exposes one. Present only when the harness driver reports it — this
+     *  it exposes one. Present only when the harness driver reports it   this
      *  is what shows the flame icon shortcut in the toolbar. */
     usageCreditsCommandId?: string
     /** Available providers + models from the harness. */
@@ -173,7 +173,7 @@
     onRemoveAllReferences?: () => void
     /** Jump to a reference's highlight and open its comment editor. */
     onEditReference?: (id: string) => void
-    /** False on the Chats tab — plain chats never surface the engineer toggle. */
+    /** False on the Chats tab   plain chats never surface the engineer toggle. */
     showEngineeringMode?: boolean
     engineeringLifecycle?: EngineeringLifecycleState | null
     /** Overrides the settings-derived Engineering activity for the toolbox
@@ -182,7 +182,7 @@
     onEngineeringLifecycleSelect?: (
       input: EngineeringLifecycleSelectionInput
     ) => void | Promise<void>
-    /** True on the Chats tab — surfaces the chat-only Engineering and File System toggles. */
+    /** True on the Chats tab   surfaces the chat-only Engineering and File System toggles. */
     showChatModes?: boolean
     /** Independent (spec-less) audit: the thread has work and the audit was never initialized. */
     independentAuditAvailable?: boolean
@@ -190,10 +190,10 @@
     independentAuditEnabled?: boolean
     /** Called when the user toggles the independent audit switch. */
     onIndependentAuditToggle?: (enabled: boolean) => void | Promise<void>
-    /** Engineering toolbox is hidden (Independent Audit staged or enabled —
+    /** Engineering toolbox is hidden (Independent Audit staged or enabled  
      *  the two controls are mutually exclusive before a send commits either). */
     engineeringToolboxHidden?: boolean
-    /** Hides the permission level selector and forces auto review — chats are
+    /** Hides the permission level selector and forces auto review   chats are
      *  for questions and research, so they always run with auto permissions. */
     hidePermissionSelector?: boolean
     /** Hides mutating controls and file attachment entry points. */
@@ -215,7 +215,7 @@
     ) => void
     /** Model keys (providerId:modelId) the user has recently used, most recent first. */
     recentModels?: string[]
-    /** Called when the user selects a model — for tracking recently used. */
+    /** Called when the user selects a model   for tracking recently used. */
     onModelUsed?: (modelKey: string) => void
     /** Current provider-reported context and account usage. */
     contextUsage?: AgentContextUsage
@@ -247,10 +247,10 @@
     onImageDescriptorAskAgainChange?: (value: boolean) => void
     /** Enables the image-to-text-only-model gate card. Off in side-chats. */
     enableImageDescriptorGate?: boolean
-    /** Hides the inline context-usage indicator — for hosts that surface the
+    /** Hides the inline context-usage indicator   for hosts that surface the
      *  same detail elsewhere (e.g. the mobile header). */
     hideUsageIndicator?: boolean
-    /** Renders the scope shoe — the project scope + project type row at the
+    /** Renders the scope shoe   the project scope + project type row at the
      *  footer of the composer. Only set in project mode. */
     scopeShoe?: ComposerScopeShoe
   }
@@ -331,9 +331,9 @@
     scopeShoe
   }: Props = $props()
 
-  /** Base composer settings — the prop when provided, else the global last-used. */
+  /** Base composer settings   the prop when provided, else the global last-used. */
   const baseSettings = $derived(settings ?? threadSettingsStore.lastUsed)
-  /** Resolved settings — chats run with auto permission review until File System
+  /** Resolved settings   chats run with auto permission review until File System
    *  is enabled, so the level stays pinned to `auto_review` while File System is
    *  off and unlocks (selector visible, up to Full Access) once it is turned on. */
   let resolved = $derived<ThreadSettings>(
@@ -436,7 +436,7 @@
   let gateDirect = $state<boolean | undefined>(undefined)
   // svelte-ignore state_referenced_locally
   const composerEditorId = `chat-composer-${projectId ?? 'no-project'}-${threadId ?? 'none'}`
-  /** macOS shows ⌘; Windows/Linux show Ctrl — matches the global send shortcut. */
+  /** macOS shows ⌘; Windows/Linux show Ctrl   matches the global send shortcut. */
   const sendModifierLabel = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘' : 'Ctrl+'
   let mentionEntries = $state<ComposerMentionEntry[]>([])
   let mentionQuery = $state('')
@@ -517,7 +517,7 @@
   // svelte-ignore state_referenced_locally
   let startAfterEnabled = $state(initialStartAfterThreads.length > 0)
 
-  // Selection slot hover popover — a short grace period keeps it open while the
+  // Selection slot hover popover   a short grace period keeps it open while the
   // pointer travels from the chip across any gap to the popover itself.
   let selectionPopoverOpen = $state(false)
   let selectionPopoverTimer: ReturnType<typeof setTimeout> | undefined
@@ -902,7 +902,7 @@
   }
 
   /** Replace the composer draft with the given text and focus the caret at
-   *  the end — used by external surfaces such as suggested prompts that
+   *  the end   used by external surfaces such as suggested prompts that
    *  should seed a draft instead of sending it. */
   export function setComposerText(text: string): void {
     value = text
@@ -913,7 +913,7 @@
   }
 
   /** Focus the composer editor and place the caret at the start of the first
-   *  line — the fallback when no caret position was ever captured. */
+   *  line   the fallback when no caret position was ever captured. */
   export function focusComposerAtStart(): void {
     void tick().then(() => {
       const editor = document.getElementById(composerEditorId)
@@ -930,7 +930,7 @@
   }
 
   /** Focus the composer editor and restore the caret to the position the user
-   *  last had inside it — published continuously by the rich editor via its
+   *  last had inside it   published continuously by the rich editor via its
    *  selection tracking. Falls back to the end when no position is known.
    *  This is the right default whenever an overlay that stole focus (menu,
    *  attachment preview, picker) closes: typing resumes exactly where it left
@@ -959,7 +959,7 @@
     }
 
     if (action.id === 'selector:thinking') {
-      // Thinking level lives in the shared model picker's dropdown — open it directly.
+      // Thinking level lives in the shared model picker's dropdown   open it directly.
       showThinkingMenu()
       return
     }
@@ -1150,7 +1150,7 @@
     slashQuery = slashMatch?.[2] ?? ''
     slashIndex = 0
     // A query that matches no actions is almost certainly a path being typed
-    // (e.g. `cd /usr/local/bin`), not a command — close the menu so Enter and
+    // (e.g. `cd /usr/local/bin`), not a command   close the menu so Enter and
     // the rest of the text behave normally.
     if (slashOpen && slashActions.length === 0) {
       slashOpen = false
@@ -1290,7 +1290,7 @@
   function selectThinking(preset: ThinkingPreset): void {
     const level = preset.id as ThinkingLevel
     // The picker may re-emit the level it already applied during a model
-    // change — skip the redundant commit.
+    // change   skip the redundant commit.
     if (resolved.thinkingLevel === level) return
     const updated = { ...resolved, thinkingLevel: level }
     if (onSettingsChange) onSettingsChange(updated)
@@ -1694,8 +1694,8 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent): void {
-    // While a surface above this composer owns Escape — a Settings/Scope page
-    // covering the shell, an open modal or palette (spotlight) — or the event
+    // While a surface above this composer owns Escape   a Settings/Scope page
+    // covering the shell, an open modal or palette (spotlight)   or the event
     // was already consumed by such an overlay, stay inert. Reacting here would
     // arm the "Stop?" confirmation invisibly, making the user's next Escape on
     // the thread abort the run without them ever seeing the armed state.
@@ -1742,7 +1742,7 @@
         // The rich editor only submits when the caret sits in a plain paragraph
         // (P/DIV). When the slash is typed after text that renders as a heading,
         // list, code block, etc. the editor's own Enter handler would let the
-        // browser insert a newline instead of running the command — so the slash
+        // browser insert a newline instead of running the command   so the slash
         // menu claims Enter here, in the bubbling phase, before the default
         // action fires. For plain paragraphs the editor already submitted and
         // closed the menu, making this branch a no-op.
@@ -1804,7 +1804,7 @@
       }
     }
     // Global-on-thread toggle: works regardless of what has focus (composer,
-    // toolbox panel, or elsewhere on the thread) — like the voice shortcut.
+    // toolbox panel, or elsewhere on the thread)   like the voice shortcut.
     // The toolbox panel handles Cmd/Ctrl+E itself while open and prevents
     // default, so this won't immediately re-open it.
     if (
@@ -1826,7 +1826,7 @@
       confirmStop()
       return
     }
-    // Idle — Escape only dismisses a stale armed confirmation.
+    // Idle   Escape only dismisses a stale armed confirmation.
     if (pendingStop) cancelStop()
   }
 </script>
@@ -1909,7 +1909,7 @@
           <p class="text-sm font-semibold text-foreground">This model can't see images</p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
             You're about to send an image to a model without vision capability. Image Descriptor is
-            a tool the model can call to describe the image for it — but you need to pick the vision
+            a tool the model can call to describe the image for it   but you need to pick the vision
             model that does the describing.
           </p>
         </div>
@@ -1964,7 +1964,7 @@
       </div>
       {#if !gateVisionSelection}
         <p class="mt-1.5 text-[0.6875rem] text-dimmed">
-          No vision model selected — Continue is disabled until you pick one.
+          No vision model selected   Continue is disabled until you pick one.
         </p>
       {/if}
       <div class="mt-3 flex justify-start">
@@ -2034,7 +2034,7 @@
               <button
                 type="button"
                 class="flex items-center gap-1.5 rounded-l-lg px-2 py-1"
-                title={`Starts after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'} — hover to manage`}
+                title={`Starts after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}   hover to manage`}
                 aria-label={`Starts after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`}
                 aria-expanded={startAfterPopoverOpen}
                 onclick={() => {
@@ -2117,7 +2117,7 @@
             <button
               type="button"
               class="flex items-center gap-1.5 rounded-l-lg px-2 py-1"
-              title={`${references.length} attached ${references.length === 1 ? 'selection' : 'selections'} — hover to manage`}
+              title={`${references.length} attached ${references.length === 1 ? 'selection' : 'selections'}   hover to manage`}
               aria-label={`${references.length} attached ${references.length === 1 ? 'selection' : 'selections'}`}
               aria-expanded={selectionPopoverOpen}
               onclick={toggleSelectionPopover}
@@ -2249,7 +2249,7 @@
 
   <!-- Bottom bar: + menu · model · thinking ··· send -->
   <div class="composer-toolbar flex min-w-0 items-center gap-1 px-3 pb-2 pt-1">
-    <!-- Plus menu — attachments and project scheduling; Engineering lives in Toolbox. -->
+    <!-- Plus menu   attachments and project scheduling; Engineering lives in Toolbox. -->
     {#if !readOnlyMode || allowAttachments || showEngineeringMode}
       <div class="relative">
         <button
@@ -2285,8 +2285,8 @@
                   checked={resolved.fileSystemMode === true}
                   onchange={toggleFileSystemMode}
                   title={resolved.fileSystemMode
-                    ? 'Turn off File System — chat becomes web-only'
-                    : 'Turn on File System — grant this thread file operations'}
+                    ? 'Turn off File System   chat becomes web-only'
+                    : 'Turn on File System   grant this thread file operations'}
                   activeClass="bg-info"
                   class="w-full justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
                 >
@@ -2446,8 +2446,8 @@
             : 'text-muted hover:text-foreground'}"
           aria-label={`Permission level: ${permissionLabels[resolved.permissionLevel]}`}
           title={working
-            ? 'Permission level for the next turn — the current run is unchanged'
-            : 'Permission level — controls how tool-call permissions are handled'}
+            ? 'Permission level for the next turn   the current run is unchanged'
+            : 'Permission level   controls how tool-call permissions are handled'}
           onclick={() => {
             permissionMenuOpen = !permissionMenuOpen
             plusMenuOpen = false
@@ -2484,8 +2484,8 @@
                     : 'font-medium text-foreground'
                   : 'text-muted'}"
                 title={level === 'full_access'
-                  ? 'Full Access — yolo mode, every operation auto-approved'
-                  : 'Auto Review — auto-run any permission that is not explicitly denied'}
+                  ? 'Full Access   yolo mode, every operation auto-approved'
+                  : 'Auto Review   auto-run any permission that is not explicitly denied'}
                 onclick={() => selectPermission(level as PermissionLevel)}
               >
                 {#if level === 'full_access'}
@@ -2501,7 +2501,7 @@
       </div>
     {/if}
 
-    <!-- Shared model selector — model + thinking level in one control -->
+    <!-- Shared model selector   model + thinking level in one control -->
     <ModelPicker
       {providers}
       {projectId}
@@ -2524,7 +2524,7 @@
       onSelectThinking={(level) => selectThinking({ id: level, label: level })}
     />
 
-    <!-- Fast inference — native harness tier or catalog-provided fast variant -->
+    <!-- Fast inference   native harness tier or catalog-provided fast variant -->
     {#if fastVariant}
       <div class="relative">
         <button
@@ -2534,7 +2534,7 @@
             ? 'text-accent'
             : ''}"
           aria-label={`Inference mode: ${inferenceMode === 'fast' ? 'Fast' : 'Normal'}`}
-          title="Inference mode — fast prioritizes speed over cost"
+          title="Inference mode   fast prioritizes speed over cost"
           onclick={toggleInferenceMenu}
         >
           <Zap
@@ -2559,7 +2559,7 @@
                 'normal'
                   ? 'text-primary'
                   : 'text-foreground'}"
-                title="Normal inference — full-cost standard tier"
+                title="Normal inference   full-cost standard tier"
                 onclick={() => selectInference('normal')}
               >
                 Normal
@@ -2569,7 +2569,7 @@
                 'fast'
                   ? 'text-primary'
                   : 'text-foreground'}"
-                title="Fast inference — prioritizes speed over cost"
+                title="Fast inference   prioritizes speed over cost"
                 onclick={() => selectInference('fast')}
               >
                 <span class="flex flex-col">
@@ -2583,7 +2583,7 @@
       </div>
     {/if}
 
-    <!-- API usage credits — native harness command to bill this session's
+    <!-- API usage credits   native harness command to bill this session's
          turns against pay-as-you-go API credits instead of a subscription. -->
     {#if usageCreditsCommandId}
       <button
@@ -2625,9 +2625,9 @@
 
     {#if showSendControl}
       <!-- Send / Queue / Stop button.
-           - Agent idle:       ArrowUp (send) — primary, disabled when empty
-           - Agent working, user typing:  Clock (queue) — primary, always clickable
-           - Agent working, no text:      Square (stop) — danger tint
+           - Agent idle:       ArrowUp (send)   primary, disabled when empty
+           - Agent working, user typing:  Clock (queue)   primary, always clickable
+           - Agent working, no text:      Square (stop)   danger tint
            - Stop confirmation pending:   "Stop?" danger label -->
       <button
         type="button"
@@ -2648,8 +2648,8 @@
           : canStop
             ? 'Stop the running agent'
             : working
-              ? `Queue — ${sendModifierLabel}Enter · Steer — ${sendModifierLabel}⇧Enter`
-              : `Send — ${sendModifierLabel}Enter`}
+              ? `Queue   ${sendModifierLabel}Enter · Steer   ${sendModifierLabel}⇧Enter`
+              : `Send   ${sendModifierLabel}Enter`}
         disabled={disabled || (!working && !hasSendableContent)}
         onclick={() => submit()}
       >
@@ -2670,10 +2670,10 @@
   </div>
 </div>
 
-<!-- Scope shoe — floats underneath the composer as its own inset bar,
+<!-- Scope shoe   floats underneath the composer as its own inset bar,
      centered at 80% of the composer width; project mode only. It slides up
      behind the composer (z below it) so the shoe's top edge is tucked under
-     the composer's bottom border — only the lower half shows, like a shoe.
+     the composer's bottom border   only the lower half shows, like a shoe.
      No z-index on the wrapper: the composer (z-10) paints over the card, but
      the shoe's dropdown (z-40 inside) still opens above the composer. -->
 {#if scopeShoe}

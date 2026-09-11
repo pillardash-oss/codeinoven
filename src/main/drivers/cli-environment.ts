@@ -62,7 +62,7 @@ function installedVersionNames(root: string, platform: NodeJS.Platform): string[
   }
 }
 
-/** Bin dir for a versioned dir — nvm-windows keeps node.exe in the version dir itself. */
+/** Bin dir for a versioned dir   nvm-windows keeps node.exe in the version dir itself. */
 function versionBinDir(root: string, version: string, platform: NodeJS.Platform): string {
   return platform === 'win32' ? join(root, version) : join(root, 'versions', 'node', version, 'bin')
 }
@@ -145,8 +145,8 @@ function preferredNodeBin(base: NodeJS.ProcessEnv, platform: NodeJS.Platform): s
 export const OWNED_PROCESS_MARKER = 'CODEINOVEN_OWNED'
 
 /** Companion marker stamped with the CodeInOven session id that spawned the
- * harness. Inherited by agent-spawned children — including daemons that
- * re-parent to launchd/init (e.g. the adb server) — so the agent process
+ * harness. Inherited by agent-spawned children   including daemons that
+ * re-parent to launchd/init (e.g. the adb server)   so the agent process
  * service can attribute an orphaned daemon back to its owning thread even
  * after the parent harness process is gone. */
 export const OWNED_SESSION_MARKER = 'CODEINOVEN_SESSION'
