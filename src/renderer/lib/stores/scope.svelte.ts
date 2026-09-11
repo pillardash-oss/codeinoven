@@ -248,6 +248,18 @@ class ScopeState {
   /** Projects whose full non-archived thread list has been merged into memory. */
   private fullyHydratedProjects: SvelteSet<string> = $state(new SvelteSet())
   private hydratingProjects = new Set<string>()
+  /** Threads holding unsent composer content. Draft state lives in renderer
+   *  storage only, so it is applied here as an in-memory stage: drafted
+   *  threads slice into 'todo' and return to their DB-derived slice (done)
+   *  the moment the draft is cleared. */
+  draftStageThreadIds: SvelteSet<string> = $state(new SvelteSet())
+
+  setDraftStageThreadIds(ids: readonly string[]): void {
+    const next = new SvelteSet<string>(ids)
+    const current = this.draftStageThreadIds
+    if (next.size === current.size && [...next].every((id) => current.has(id))) return
+    this.draftStageThreadIds = next
+  }
 
   /** Whether a project's full thread list has been merged into `allScopeThreads`. */
   isProjectFullyHydrated(projectId: string): boolean {
@@ -613,6 +625,7 @@ class ScopeState {
   }
 
   stageForThread(thread: Thread): ThreadStage {
+    if (this.draftStageThreadIds.has(thread.id)) return 'todo'
     return threadStage(thread, this.draftThreadId)
   }
 
