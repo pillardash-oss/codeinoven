@@ -8,6 +8,7 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
+  import { mergeStreamedPart } from '$lib/agent-part-merge'
 
   interface Props {
     tab: SubagentContextTab
@@ -96,7 +97,7 @@
   })
   const finalOutput = $derived(tab.activity.output?.trim() ?? '')
   // The captured output is a fallback for when the transcript itself is not
-  // renderable — never a companion to it. While the sub-agent works,
+  // renderable   never a companion to it. While the sub-agent works,
   // activity.output is an accumulating preview that concatenates every
   // assistant message (capped, possibly cut mid-line), so substring checks
   // against the last assistant message fail and the raw wall of text would
@@ -155,7 +156,7 @@
     void tick().then(() => {
       if (!scrollElement || userScrolledAway) return
       // The scroll event lags the user's gesture by a frame, so re-check the
-      // live position before snapping — a queued callback racing a scroll-up
+      // live position before snapping   a queued callback racing a scroll-up
       // would otherwise drag the view back to the bottom mid-gesture.
       if (!isAtBottom(scrollElement)) {
         userScrolledAway = true
@@ -324,7 +325,11 @@
     const parts =
       partIndex < 0
         ? [...message.parts, part]
-        : message.parts.map((candidate, index) => (index === partIndex ? part : candidate))
+        : message.parts.map((candidate, index) =>
+            // A snapshot shorter than what already streamed must never wipe the
+            // streamed text (see mergeStreamedPart).
+            index === partIndex ? mergeStreamedPart(candidate, part) : candidate
+          )
     messages = messages.map((candidate, index) =>
       index === messageIndex ? { ...message, parts } : candidate
     )

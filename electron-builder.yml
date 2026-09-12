@@ -34,12 +34,13 @@ forceCodeSigning: false
 # would make electron-builder target the public native launcher instead.
 mac:
   extraResources:
-    - from: resources/speech/model-catalog.json
-      to: speech/model-catalog.json
+    # The top-level extraResources list already ships model-catalog.json and
+    # harnesses/pi; electron-builder merges top-level and platform lists, so
+    # repeating them here copies the same tree twice. Duplicating any symlink
+    # inside those trees (e.g. a vendored .bin/esbuild) crashes the second copy
+    # pass with EEXIST. Only the darwin-arm64 speech runtime is mac-specific.
     - from: resources/speech/runtime/darwin-arm64
       to: speech
-    - from: resources/harnesses/pi
-      to: harnesses/pi
   hardenedRuntime: true
   notarize: true
   entitlements: build/entitlements.mac.plist

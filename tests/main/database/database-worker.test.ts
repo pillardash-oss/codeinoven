@@ -268,7 +268,7 @@ describe('DatabaseWorker production wrapper', () => {
     expect(noop.noop).toBe(true)
     expect(noop.applied).toBe(0)
 
-    // Same count, same final id — the in-place edit of `a` must still be written.
+    // Same count, same final id   the in-place edit of `a` must still be written.
     const aEdited: AgentMessage = {
       ...a,
       parts: [{ type: 'text', id: 'a-p', messageID: 'a', text: 'edited' }]
@@ -515,7 +515,7 @@ describe('DatabaseWorker production wrapper', () => {
 
     const closePromise = db.close()
     // Synchronously after calling close(), the primary connection is still open
-    // — close() awaits the worker's typed shutdown acknowledgment (and clean
+    //   close() awaits the worker's typed shutdown acknowledgment (and clean
     // exit) before closing the primary. A runShutdownPipeline awaiting
     // database.close() therefore never app.quit()s ahead of the storage teardown.
     expect(db.isOpen()).toBe(true)
@@ -651,7 +651,7 @@ describe('DatabaseWorker production wrapper', () => {
       'SELECT "sequence" FROM history_entries ORDER BY "sequence" ASC'
     )
     expect(sequences).toHaveLength(40)
-    // Distinct, contiguous, ordered sequences — no two concurrent appends ever
+    // Distinct, contiguous, ordered sequences   no two concurrent appends ever
     // allocated the same sequence.
     expect(sequences.map((row) => row.sequence)).toEqual(
       Array.from({ length: 40 }, (_, i) => i + 1)
@@ -703,7 +703,7 @@ describe('DatabaseWorker production wrapper', () => {
 
     expect(await history.count('p1', thread.id)).toBe(total)
 
-    // Full-load API returns every row — no silent 1000-row truncation — while
+    // Full-load API returns every row   no silent 1000-row truncation   while
     // each worker query stays bounded (cursor-paged in chunks).
     const loaded = await history.load('p1', thread.id)
     expect(loaded).toHaveLength(total)

@@ -2,15 +2,15 @@
  * Full DDL schema for CodeInOven's SQLite database.
  *
  * Tables:
- *   projects        — Project entity storage
- *   threads         — Thread entity storage (22+ columns, no JSON blobs)
- *   history_entries — Conversation history per thread, with sequence for truncation
- *   history_fts     — FTS5 virtual table on history_entries.content
- *   project_fts     — FTS5 virtual table on projects.name
- *   agent_messages  — Mirrored agent conversation messages
- *   agent_messages_fts — FTS5 virtual table on agent_messages.search_text
- *   settings        — Global app config (key/value)
- *   db_meta         — Internal database metadata
+ *   projects          Project entity storage
+ *   threads           Thread entity storage (22+ columns, no JSON blobs)
+ *   history_entries   Conversation history per thread, with sequence for truncation
+ *   history_fts       FTS5 virtual table on history_entries.content
+ *   project_fts       FTS5 virtual table on projects.name
+ *   agent_messages    Mirrored agent conversation messages
+ *   agent_messages_fts   FTS5 virtual table on agent_messages.search_text
+ *   settings          Global app config (key/value)
+ *   db_meta           Internal database metadata
  */
 
 export const SCHEMA_SQL = `
@@ -99,6 +99,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   context_usage        TEXT,
   session_id           TEXT,
   session_harness_id   TEXT,
+  session_account_id   TEXT,
   dismissed_spec_id    TEXT,
   dismissed_spec_version INTEGER,
   audit_state          TEXT CHECK(audit_state IN ('offered','running','report_ready','reworking')),
@@ -196,6 +197,8 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   model_id        TEXT,
   provider_id     TEXT,
   harness_id      TEXT,
+  account_id      TEXT,
+  account_label   TEXT,
   thinking_level  TEXT,
   references_json TEXT,
   project_references_json TEXT,
@@ -208,6 +211,8 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   usage_credits_json TEXT,
   context_window  INTEGER,
   context_used    INTEGER,
+  context_estimated INTEGER,
+  generation_ms   INTEGER,
   error           TEXT,
   structured_output TEXT
 );
@@ -223,7 +228,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_analytics
 /**
  * Column definitions for the canonical `harness_usage_models` table.
  * thinking_level is NOT NULL with an empty-string "unknown" sentinel because
- * SQLite treats NULLs as distinct inside a composite PRIMARY KEY — NULL levels
+ * SQLite treats NULLs as distinct inside a composite PRIMARY KEY   NULL levels
  * would fragment one model's usage into a row per message instead of
  * accumulating it.
  */
@@ -247,7 +252,7 @@ export const HARNESS_USAGE_MODELS_COLUMNS_SQL = `
   PRIMARY KEY (thread_id, harness_id, provider_id, model_id, thinking_level)`
 
 /**
- * Column definitions for the canonical `model_rankings` table — the permanent
+ * Column definitions for the canonical `model_rankings` table   the permanent
  * "best model" aggregate. One row per harness + provider + model + thinking
  * level + rubric version combination; distinct attribution values never merge.
  *
@@ -301,7 +306,7 @@ CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_attribution
   ON model_ranking_snapshots(harness_id, provider_id, model_id, thinking_level);`
 
 /**
- * Column definitions for the canonical `model_ranking_snapshots` table — the
+ * Column definitions for the canonical `model_ranking_snapshots` table   the
  * transient grading queue. At most one open snapshot per conversation window
  * (first user message + response, upgraded by one substantive follow-up).
  *
@@ -389,7 +394,7 @@ END;`
 export const REMOTE_DEVICE_SQL = `
 -- ─── Remote device identity (A-04) ──────────────────────────────────────
 -- Per-enrolled-device scoped credentials. Only public keys and fingerprints
--- are stored — never a device private key, a bearer secret, or the raw
+-- are stored   never a device private key, a bearer secret, or the raw
 -- shared pairing value. Revocation writes a tombstone so a copied offline
 -- credential can never reconnect.
 CREATE TABLE IF NOT EXISTS remote_devices (
@@ -745,6 +750,7 @@ export const USAGE_EVENTS_COLUMNS_SQL = `
   attempt               INTEGER NOT NULL CHECK(attempt >= 1),
   feature               TEXT NOT NULL CHECK(feature IN ('main','title','turn_grade','memory','image_descriptor','search_nudge','computer_use','web','audit','assignment')),
   harness_id            TEXT,
+  account_id            TEXT,
   provider_id           TEXT,
   model_id              TEXT,
   thinking_level        TEXT,
@@ -785,7 +791,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
   ON usage_events(feature, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_usage_events_analytics_range
-  ON usage_events(created_at, feature, harness_id, provider_id, model_id, thinking_level);`
+  ON usage_events(created_at, feature, harness_id, account_id, provider_id, model_id, thinking_level);`
 
 export const HARNESS_USAGE_SQL = `
 -- ─── Harness Usage Analytics ────────────────────────────────────────────
@@ -869,7 +875,7 @@ ${MODEL_RANKING_INDEXES_SQL}
 -- insert a row. The cheap-model judge scores the closed conversation 0–10,
 -- the aggregate is updated exactly once, and the row is hard-deleted.
 -- Judge failures retry with bounded backoff and remain as status='failed'
--- for recovery — never deleted unscored. Each claim is tagged with a unique
+-- for recovery   never deleted unscored. Each claim is tagged with a unique
 -- claim_token; score/delete/defer apply only to the current claim generation,
 -- so a stale in-flight judge result can never land on a re-claimed row.
 CREATE TABLE IF NOT EXISTS model_ranking_snapshots (${MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL});
@@ -879,7 +885,7 @@ ${MODEL_RANKING_SNAPSHOT_INDEXES_SQL}`
 /**
  * Private user-only notes attached to threads. The row cascade-deletes with
  * its thread, so deleting a thread always removes its note. Notes are never
- * read by the chat engine or any harness — they are purely user scratch space.
+ * read by the chat engine or any harness   they are purely user scratch space.
  */
 export const THREAD_NOTES_SQL = `
 -- ─── Thread notes (user-only scratch space) ──────────────────────────────

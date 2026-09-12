@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import type { AgentRunningProcess, TaskManagerProcess } from '../../lib/types'
 import type { AgentProcessObserver } from '../drivers/driver.interface'
-import { OWNED_PROCESS_MARKER } from '../drivers/cli-environment'
+import { OWNED_PROCESS_MARKER, OWNED_SESSION_MARKER } from '../drivers/cli-environment'
 import { Logger } from '../system/logger'
 import { OwnedProcessJournal } from '../system/owned-process-journal'
 import { broadcastAgentProcessesChanged } from '../chat/thread-events'
@@ -11,6 +11,8 @@ import { broadcastAgentProcessesChanged } from '../chat/thread-events'
 const execFileAsync = promisify(execFile)
 const PROCESS_EXIT_GRACE_MS = 1_500
 const PORT_SCAN_TIMEOUT_MS = 2_000
+/** Maximum pids per batched `ps -E` ownership probe. */
+const OWNERSHIP_PROBE_CHUNK = 64
 /** Key under which app-wide roots (e.g. the shared opencode server) are tracked. */
 const APP_SCOPE = '__codeinoven_app_scope__'
 
@@ -37,6 +39,13 @@ interface HarnessRoot {
 interface TrackedProcess extends AgentRunningProcess {
   sessionId: string
   cwd: string | null
+}
+
+interface ProcessOwnership {
+  /** App ownership marker present; `null` when the platform cannot tell. */
+  owned: boolean | null
+  /** CodeInOven session id stamped in the process environment, when known. */
+  sessionId: string | null
 }
 export interface ReapOrphansResult {
   killed: number[]
@@ -200,24 +209,14 @@ export class AgentProcessService implements AgentProcessObserver {
         }
       }
     }
-    // App-scoped processes (descendants of a shared/pooled harness like the
-    // opencode server) are surfaced alongside the thread's own processes so the
-    // user can see and kill them, but always labeled `app` so it is clear they
-    // are NOT tied to this thread alone.
-    for (const process of this.tracked.get(APP_SCOPE)?.values() ?? []) {
-      unique.set(process.pid, {
-        pid: process.pid,
-        parentPid: process.parentPid,
-        command: process.command,
-        startedAt: process.startedAt,
-        scope: 'app'
-      })
-    }
     return [...unique.values()].sort((left, right) => left.startedAt - right.startedAt)
   }
 
   async killProcess(projectId: string, threadId: string, pid: number): Promise<void> {
-    if (!this.ownsProcess(pid)) throw new Error(`Process ${pid} is not owned by this app`)
+    const processes = await this.list(projectId, threadId)
+    if (!processes.some((entry) => entry.pid === pid)) {
+      throw new Error(`Process ${pid} is not owned by this thread`)
+    }
     await this.killTree(pid, false)
     await this.scan()
   }
@@ -407,14 +406,9 @@ export class AgentProcessService implements AgentProcessObserver {
   async killThread(projectId: string, threadId: string): Promise<void> {
     const sessionIds = this.sessionsForThread(projectId, threadId)
     const pids = new Set<number>()
-    const appScopedPids = new Set<number>()
     for (const sessionId of sessionIds) {
       for (const process of this.tracked.get(sessionId)?.values() ?? []) pids.add(process.pid)
       for (const root of this.roots.get(sessionId)?.values() ?? []) pids.add(root.pid)
-    }
-    for (const process of this.tracked.get(APP_SCOPE)?.values() ?? []) {
-      appScopedPids.add(process.pid)
-      pids.add(process.pid)
     }
     await Promise.all([...pids].map((pid) => this.killTree(pid)))
     for (const sessionId of sessionIds) {
@@ -424,20 +418,7 @@ export class AgentProcessService implements AgentProcessObserver {
       }
       this.roots.delete(sessionId)
     }
-    const appProcesses = this.tracked.get(APP_SCOPE)
-    for (const pid of appScopedPids) appProcesses?.delete(pid)
-    if (appProcesses?.size === 0) this.tracked.delete(APP_SCOPE)
-
-    const changedOwners = new Map<string, ProcessOwner>()
-    changedOwners.set(`${projectId}:${threadId}`, { projectId, threadId })
-    if (appScopedPids.size > 0) {
-      for (const owner of this.owners.values()) {
-        changedOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
-      }
-    }
-    for (const owner of changedOwners.values()) {
-      broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
-    }
+    broadcastAgentProcessesChanged(projectId, threadId)
   }
 
   async releaseThread(projectId: string, threadId: string): Promise<void> {
@@ -475,7 +456,7 @@ export class AgentProcessService implements AgentProcessObserver {
    * Reap harness processes left orphaned by an unclean previous run (crash,
    * force-quit, or the shutdown failsafe). Only ever kills processes the app
    * actually spawned: journaled roots verified as owned (marker env present) or
-   * orphaned, plus — on Linux — any orphaned process still carrying the marker
+   * orphaned, plus   on Linux   any orphaned process still carrying the marker
    * so a dev server whose root already died is reclaimed too. A user's own
    * external claude-code/opencode session is never touched.
    */
@@ -510,7 +491,7 @@ export class AgentProcessService implements AgentProcessObserver {
 
     // Linux-only sweep: `/proc/<pid>/environ` lets us read another process's env
     // reliably, so sweep every orphaned process carrying the marker. This reclaims
-    // a dev server whose root already died — including one leaked after a *clean*
+    // a dev server whose root already died   including one leaked after a *clean*
     // shutdown (when the journal is already cleared). On macOS/Windows env is not
     // readable, so we rely on the journaled, orphaned roots above (which covers
     // the common crash-leak of a live `opencode serve` root).
@@ -555,19 +536,70 @@ export class AgentProcessService implements AgentProcessObserver {
   }
 
   /**
+   * Best-effort ownership probe for another process's environment. Returns the
+   * app marker state and, when present, the CodeInOven session id that spawned
+   * it. macOS exposes the environment of same-user processes via `ps -E`;
+   * Linux via `/proc/<pid>/environ`; Windows cannot reveal it, so the result is
+   * `null` there.
+   */
+  private async readOwnership(pids: readonly number[]): Promise<Map<number, ProcessOwnership>> {
+    const result = new Map<number, ProcessOwnership>()
+    if (pids.length === 0) return result
+    if (process.platform === 'darwin') {
+      for (let index = 0; index < pids.length; index += OWNERSHIP_PROBE_CHUNK) {
+        const chunk = pids.slice(index, index + OWNERSHIP_PROBE_CHUNK)
+        try {
+          const { stdout } = await execFileAsync(
+            'ps',
+            ['-E', '-p', chunk.map(String).join(',')],
+            { timeout: PORT_SCAN_TIMEOUT_MS }
+          )
+          for (const line of stdout.split(/\r?\n/u)) {
+            const pid = Number(line.trim().split(/\s+/u)[0])
+            if (!Number.isFinite(pid) || pid <= 0 || result.has(pid)) continue
+            result.set(pid, {
+              owned: line.includes(`${OWNED_PROCESS_MARKER}=1`),
+              sessionId: line.match(new RegExp(`${OWNED_SESSION_MARKER}=(\\S+)`, 'u'))?.[1] ?? null
+            })
+          }
+        } catch {
+          // Probes are best-effort; missing rows are treated as unknown.
+        }
+      }
+      return result
+    }
+    if (process.platform !== 'linux') return result
+    const ownerships = await Promise.all(
+      pids.map(async (pid): Promise<[number, ProcessOwnership]> => {
+        try {
+          const environ = await readFile(`/proc/${pid}/environ`, 'utf8')
+          const entries = environ.split('\0')
+          return [
+            pid,
+            {
+              owned: entries.includes(`${OWNED_PROCESS_MARKER}=1`),
+              sessionId:
+                entries
+                  .find((entry) => entry.startsWith(`${OWNED_SESSION_MARKER}=`))
+                  ?.slice(OWNED_SESSION_MARKER.length + 1) ?? null
+            }
+          ]
+        } catch {
+          return [pid, { owned: null, sessionId: null }]
+        }
+      })
+    )
+    return new Map(ownerships)
+  }
+
+  /**
    * Best-effort check for the app's ownership marker in a process environment.
    * Returns `true`/`false` only where another process's environment is reliably
-   * readable (Linux `/proc`); returns `null` when the platform cannot reveal it
-   * (macOS `ps -E`, Windows) so callers fall back to the orphaned-parent check.
+   * readable (macOS `ps -E`, Linux `/proc`); returns `null` on Windows so
+   * callers fall back to the orphaned-parent check.
    */
   private async processHasMarker(pid: number): Promise<boolean | null> {
-    if (process.platform !== 'linux') return null
-    try {
-      const environ = await readFile(`/proc/${pid}/environ`, 'utf8')
-      return environ.split('\0').includes(`${OWNED_PROCESS_MARKER}=1`)
-    } catch {
-      return null
-    }
+    return (await this.readOwnership([pid])).get(pid)?.owned ?? null
   }
 
   private sessionsForThread(projectId: string, threadId: string): string[] {
@@ -609,8 +641,9 @@ export class AgentProcessService implements AgentProcessObserver {
         childrenByParent.set(entry.parentPid, children)
       }
 
+      await this.adoptMarkedOrphans(snapshot, currentByPid)
+
       const changedOwners = new Map<string, ProcessOwner>()
-      let appScopeChanged = false
       const sessionIds = new Set([...this.roots.keys(), ...this.tracked.keys()])
       for (const sessionId of sessionIds) {
         const isAppScope = sessionId === APP_SCOPE
@@ -647,6 +680,7 @@ export class AgentProcessService implements AgentProcessObserver {
             tracked.parentPid = current.parentPid
           } else {
             sessionProcesses.delete(pid)
+            this.journal?.unregister(pid)
             changed = true
           }
         }
@@ -654,24 +688,87 @@ export class AgentProcessService implements AgentProcessObserver {
         if (sessionProcesses.size === 0) this.tracked.delete(sessionId)
         const owner = this.owners.get(sessionId)
         if (changed && owner) changedOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
-        if (changed && isAppScope) appScopeChanged = true
-      }
-      if (appScopeChanged) {
-        // App-scoped processes are shared across every thread, so refresh every
-        // thread's Processes tab whenever the shared server's descendants change.
-        const allOwners = new Map<string, ProcessOwner>()
-        for (const owner of this.owners.values()) {
-          allOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
-        }
-        for (const owner of allOwners.values()) {
-          broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
-        }
       }
       for (const owner of changedOwners.values()) {
         broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
       }
     } catch (error) {
       Logger.dev('Agent process scan failed:', error)
+    }
+  }
+
+  /**
+   * Daemons spawned by a harness can outlive their parent: the adb server, for
+   * example, re-parents itself to launchd/init the moment the `adb` client
+   * first spawns it, so it never appears under a harness root's descendant
+   * tree. Adopt any orphaned process carrying the app's ownership marker so it
+   * stays visible in the task manager, is killable, and   via the journal   is
+   * reaped if the app closes while it is still running. Attribution uses the
+   * session marker stamped into the harness environment, falling back to the
+   * only live session, then app scope. On Windows, where the environment of
+   * another process cannot be read, only the uniquely fingerprintable adb
+   * server daemon is adopted. Live children of a harness (short-lived `adb`
+   * clients, dev servers, etc.) are already tracked as descendants and are
+   * unaffected.
+   */
+  private async adoptMarkedOrphans(
+    snapshot: ProcessSnapshotEntry[],
+    currentByPid: ReadonlyMap<number, ProcessSnapshotEntry>
+  ): Promise<void> {
+    if (currentByPid.size === 0) return
+    const liveSessions = [...this.roots.entries()].flatMap(([sessionId, sessionRoots]) =>
+      [...sessionRoots.keys()].some((pid) => currentByPid.has(pid)) ? [sessionId] : []
+    )
+    const trackedPids = new Set<number>()
+    for (const processes of this.tracked.values()) {
+      for (const pid of processes.keys()) trackedPids.add(pid)
+    }
+    const alive = new Set(currentByPid.keys())
+    const isWindows = process.platform === 'win32'
+    const adbServerPattern = /\badb\b[^\0]*\bfork-server\b/u
+    const candidates = snapshot.filter(
+      (entry) =>
+        !trackedPids.has(entry.pid) &&
+        this.isOrphaned(entry.parentPid, alive) &&
+        // Windows cannot read another process's environment; only adopt the
+        // unambiguously fingerprintable adb server daemon there.
+        (!isWindows || adbServerPattern.test(entry.command))
+    )
+    if (candidates.length === 0) return
+    const ownership = await this.readOwnership(candidates.map((entry) => entry.pid))
+    const adoptedScopes = new Set<string>()
+    for (const entry of candidates) {
+      const owner = ownership.get(entry.pid)
+      if (!owner?.owned) continue
+      const claimed = owner.sessionId !== null && this.owners.has(owner.sessionId)
+      const scope = claimed
+        ? (owner.sessionId as string)
+        : liveSessions.length === 1
+          ? liveSessions[0]
+          : APP_SCOPE
+      let sessionProcesses = this.tracked.get(scope)
+      if (!sessionProcesses) {
+        sessionProcesses = new Map()
+        this.tracked.set(scope, sessionProcesses)
+      }
+      if (sessionProcesses.has(entry.pid)) continue
+      sessionProcesses.set(entry.pid, {
+        pid: entry.pid,
+        parentPid: entry.parentPid,
+        command: entry.command,
+        startedAt: Date.now(),
+        scope: scope === APP_SCOPE ? 'app' : 'thread',
+        sessionId: scope,
+        cwd: null
+      })
+      // Journal the adopted daemon so reapOrphans can still kill it after the
+      // app closes without a clean shutdown.
+      this.journal?.register(entry.pid, entry.command, '')
+      adoptedScopes.add(scope)
+    }
+    for (const scope of adoptedScopes) {
+      const owner = this.owners.get(scope)
+      if (owner) broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
     }
   }
 

@@ -65,7 +65,7 @@ const FOOTNOTE_REF_PATTERN = /\[\^([^\]]+)\]/gu
 const INLINE_LINK_PATTERN = /(?<![!])\[([^\]]+)\]\(([^)\n]+)\)/gu
 const REFERENCE_LINK_PATTERN = /\[([^\]]+)\]\[([^\]]*)\]/gu
 // A shortcut reference `[text]` is only valid when not followed by `(` (inline
-// link) or `[` (an explicit reference label) — otherwise it is plain prose.
+// link) or `[` (an explicit reference label)   otherwise it is plain prose.
 const SHORTCUT_LINK_PATTERN = /\[([^\]]+)\](?!\(|\[)/gu
 
 function normalizeReferenceLabel(label: string): string {
@@ -155,7 +155,7 @@ function renderInline(
     if (!badge.value) continue
     prepared = prepared.replaceAll(badge.value, (match, offset: number, text: string) => {
       // Mentions and other badge values never become badges inside a block
-      // quote, an open double-quoted passage, or an unclosed inline code span —
+      // quote, an open double-quoted passage, or an unclosed inline code span  
       // there the text must stay literal. (Closed inline code and fenced code
       // blocks are already safe: they are stashed or block-rendered before this
       // loop runs.)
@@ -209,7 +209,7 @@ function renderInline(
     return stashToken(html)
   })
 
-  // Shortcut references `[text]` — only when a matching definition exists.
+  // Shortcut references `[text]`   only when a matching definition exists.
   prepared = prepared.replace(SHORTCUT_LINK_PATTERN, (match, text: string) => {
     const reference = context.linkRefs.get(normalizeReferenceLabel(text))
     if (!reference) return match
@@ -646,7 +646,7 @@ function replaceInlineMatch(
   range.insertNode(element)
 
   // A zero-width anchor before the element keeps the caret from getting trapped
-  // when it becomes the first content of its block — without one, browsers refuse
+  // when it becomes the first content of its block   without one, browsers refuse
   // to move the caret left out of the element.
   const block = currentBlock(root, element)
   if (block && isFirstContentInBlock(block, element)) {
@@ -680,7 +680,7 @@ function insertInlineCode(root: HTMLElement, content: string, caretInsideCode: b
   range.insertNode(code)
 
   // A zero-width anchor before the element keeps the caret from getting trapped
-  // when it becomes the first content of its block — without one, browsers refuse
+  // when it becomes the first content of its block   without one, browsers refuse
   // to move the caret left out of the element.
   const block = currentBlock(root, code)
   if (block && isFirstContentInBlock(block, code)) {
@@ -702,7 +702,7 @@ function insertInlineCode(root: HTMLElement, content: string, caretInsideCode: b
 
 /**
  * A non-backtick character landing right after a fresh double backtick (``x)
- * turns ``x into an inline code span with the caret inside — so typing or
+ * turns ``x into an inline code span with the caret inside   so typing or
  * pasting content between the backticks "opens" the span, while the bare pair
  * `` and the triple ``` (a fence) stay literal.
  */
@@ -717,7 +717,7 @@ export function applyEmptyPairCodeRule(root: HTMLElement): boolean {
   const pairContent = prefixText.match(/``([^`\n]+)$/)
   if (!pairContent) return false
   // A pair that is itself preceded by a backtick is the tail of ``` (or more)
-  // — that is a code fence being typed, never an inline span.
+  //   that is a code fence being typed, never an inline span.
   const pairStart = endOffset - pairContent[0].length
   if (pairStart > 0 && prefixText[pairStart - 1] === '`') return false
 
@@ -735,7 +735,7 @@ export function applyEmptyPairCodeRule(root: HTMLElement): boolean {
 function applyInlineRule(root: HTMLElement): boolean {
   const selection = selectionInside(root)
   if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
-  // Markdown inline formatting must never fire inside a code block — code like
+  // Markdown inline formatting must never fire inside a code block   code like
   // `const x = `foo`` or `**not bold**` has to stay literal.
   if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return false
 
@@ -746,7 +746,7 @@ function applyInlineRule(root: HTMLElement): boolean {
 
   // A block whose view is a ``` fence candidate (```lang, or ```…``` across
   // its own text and following sibling blocks for the tag-end-then-open flow)
-  // belongs to the Enter-triggered fence rule — inline rules must never eat
+  // belongs to the Enter-triggered fence rule   inline rules must never eat
   // its backticks while it is typed.
   const fenceBlock = currentBlock(root, selection.anchorNode)
   if (fenceBlock) {
@@ -756,7 +756,7 @@ function applyInlineRule(root: HTMLElement): boolean {
 
   // A non-backtick character typed (or pasted) right after a fresh double
   // backtick starts an inline code span with the caret inside. The bare pair
-  // `` stays literal, and a third backtick never triggers — that is a code
+  // `` stays literal, and a third backtick never triggers   that is a code
   // fence. Skipped while a fence is being built: a trailing triple after the
   // caret means the closing ``` of the tag-end-then-open flow, not content.
   if (!suffix.includes('```') && applyEmptyPairCodeRule(root)) return true
@@ -836,7 +836,7 @@ function createCodeBlockElement(language: string): HTMLElement {
   langSpan.role = 'textbox'
   langSpan.ariaLabel = 'Language'
   // Chromium's macOS autocorrect mangles punctuation in editable fields
-  // (".." -> ellipsis, "??" -> U+2047) — language names must stay literal.
+  // (".." -> ellipsis, "??" -> U+2047)   language names must stay literal.
   langSpan.setAttribute('autocorrect', 'off')
   langSpan.textContent = language || 'text'
 
@@ -858,7 +858,7 @@ function createCodeBlockElement(language: string): HTMLElement {
 }
 
 /** Plain text of a block with soft breaks (`<br>`) as newlines and zero-width
- *  caret anchors stripped — the text the user sees for the whole block. */
+ *  caret anchors stripped   the text the user sees for the whole block. */
 function blockTextWithBreaks(block: HTMLElement): string {
   let text = ''
   const visit = (node: Node): void => {
@@ -887,7 +887,7 @@ interface FenceCandidate {
 /**
  * The fence-relevant text for a block: its own text plus following sibling
  * text blocks, stopping at a sibling that is exactly ``` (the closer) or one
- * that starts with ``` (another opening — not ours). The composer renders
+ * that starts with ``` (another opening   not ours). The composer renders
  * every Enter-separated line as its own block, so the closing ``` the user
  * tagged on at the end usually lives in a sibling, not in the same block.
  */
@@ -932,7 +932,7 @@ function parseFenceCandidateText(text: string): { language: string; content: str
     const after = rest.slice(word.length)
     const next = after[0]
     if (next === undefined || /\s/.test(next)) {
-      // Whitespace-bounded word — the language, unless it hides a shorter
+      // Whitespace-bounded word   the language, unless it hides a shorter
       // lowercase prefix before an uppercase letter ("txtError..." -> "txt").
       const splitAt = word.slice(1).search(/[A-Z]/)
       if (splitAt > -1 && splitAt + 1 <= 5) {
@@ -972,7 +972,7 @@ function parseFenceCandidateText(text: string): { language: string; content: str
  * Enter-triggered code fence. Instead of converting as soon as ```lang is
  * typed, the fence only materializes when Enter is pressed in a block whose
  * text is ```lang, or whose view (own text plus following sibling blocks up
- * to a closing ```) parses as ```lang content ``` / ```content``` — the
+ * to a closing ```) parses as ```lang content ``` / ```content```   the
  * composer puts every Enter-separated line in its own block, so the closing
  * ``` the user tagged on usually lives in a sibling. Never fires inside a
  * blockquote line or an existing code block.

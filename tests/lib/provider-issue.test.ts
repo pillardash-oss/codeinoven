@@ -61,7 +61,7 @@ describe('isUsageLimitNoticeText', () => {
 
   it('rejects long agent prose that merely discusses usage limits', () => {
     const agentAnswer =
-      'Good catch — the gap was real. '.repeat(20) +
+      'Good catch   the gap was real. '.repeat(20) +
       'Root cause: Pi reports its exhausted usage window as a terminal status, so the usage limit card rendered a countdown but no scheduler record was tracked.'
     expect(isUsageLimitNoticeText(agentAnswer)).toBe(false)
   })

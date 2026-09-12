@@ -88,7 +88,8 @@
     role: AgentRole,
     providerId: string,
     modelId: string,
-    nextHarnessId?: string
+    nextHarnessId?: string,
+    accountId?: string
   ): Promise<void> {
     const provider = providers.find(
       (candidate) =>
@@ -99,7 +100,13 @@
     const harnessId = nextHarnessId ?? provider.harnessId
     const next: AgentDefaultsConfig = {
       ...defaults,
-      [role]: { harnessId, providerId, modelId, thinkingLevel: defaults[role]?.thinkingLevel }
+      [role]: {
+        harnessId,
+        providerId,
+        modelId,
+        accountId,
+        thinkingLevel: defaults[role]?.thinkingLevel
+      }
     }
     defaults = next
     rendererRecovery.addRecentModel(modelKey(harnessId, providerId, modelId))
@@ -126,7 +133,8 @@
   async function selectImageDescriptor(
     providerId: string,
     modelId: string,
-    nextHarnessId?: string
+    nextHarnessId?: string,
+    accountId?: string
   ): Promise<void> {
     const provider = providers.find(
       (candidate) =>
@@ -141,6 +149,7 @@
         harnessId,
         providerId,
         modelId,
+        accountId,
         thinkingLevel: defaults.imageDescriptor?.thinkingLevel
       }
     }
@@ -176,14 +185,16 @@
       b !== undefined &&
       a.harnessId === b.harnessId &&
       a.providerId === b.providerId &&
-      a.modelId === b.modelId
+      a.modelId === b.modelId &&
+      a.accountId === b.accountId
     )
   }
 
   async function selectImageDescriptorFallback(
     providerId: string,
     modelId: string,
-    nextHarnessId?: string
+    nextHarnessId?: string,
+    accountId?: string
   ): Promise<void> {
     const provider = providers.find(
       (candidate) =>
@@ -198,6 +209,7 @@
         harnessId,
         providerId,
         modelId,
+        accountId,
         thinkingLevel: defaults.imageDescriptorFallback?.thinkingLevel
       }
     }
@@ -250,7 +262,9 @@
             <h2 class="text-sm font-semibold text-foreground">{role.label}</h2>
             <p class="mt-0.5 text-xs text-muted">{role.description}</p>
             {#if !selection}
-              <p class="mt-1 text-[0.6875rem] text-dimmed">Not set · uses the current thread model</p>
+              <p class="mt-1 text-[0.6875rem] text-dimmed">
+                Not set · uses the current thread model
+              </p>
             {/if}
           </div>
           <div class="flex w-60 shrink-0 items-center gap-1.5">
@@ -261,6 +275,7 @@
                 harnessId={selection?.harnessId ?? providers[0]?.harnessId ?? DEFAULT_HARNESS}
                 providerId={selection?.providerId ?? ''}
                 modelId={selection?.modelId ?? ''}
+                accountId={selection?.accountId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
                 onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
@@ -268,8 +283,8 @@
                 variant="field"
                 label={selection ? undefined : 'Choose model'}
                 disabled={!settingsReady || loading || providers.length === 0}
-                onSelect={(providerId, modelId, harnessId) =>
-                  void selectModel(role.id, providerId, modelId, harnessId)}
+                onSelect={(providerId, modelId, harnessId, accountId) =>
+                  void selectModel(role.id, providerId, modelId, harnessId, accountId)}
                 thinkingLevel={selection?.thinkingLevel}
                 onSelectThinking={(level) => void selectThinking(role.id, level)}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -346,6 +361,7 @@
               DEFAULT_HARNESS}
             providerId={defaults.imageDescriptor?.providerId ?? ''}
             modelId={defaults.imageDescriptor?.modelId ?? ''}
+            accountId={defaults.imageDescriptor?.accountId}
             favoriteModels={rendererRecovery.favoriteModels}
             recentModels={rendererRecovery.recentModels}
             onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
@@ -354,8 +370,8 @@
             variant="field"
             label={defaults.imageDescriptor ? undefined : 'Choose a vision model'}
             disabled={!settingsReady || loading || providers.length === 0}
-            onSelect={(providerId, modelId, harnessId) =>
-              void selectImageDescriptor(providerId, modelId, harnessId)}
+            onSelect={(providerId, modelId, harnessId, accountId) =>
+              void selectImageDescriptor(providerId, modelId, harnessId, accountId)}
             thinkingLevel={defaults.imageDescriptor?.thinkingLevel}
             onSelectThinking={(level) => void selectImageDescriptorThinking(level)}
             onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -385,10 +401,12 @@
           Tried automatically when the primary vision model fails.
         </p>
         {#if !defaults.imageDescriptorFallback}
-          <p class="mt-1 text-[0.6875rem] text-dimmed">Not set · primary failures ask you for a model</p>
+          <p class="mt-1 text-[0.6875rem] text-dimmed">
+            Not set · primary failures ask you for a model
+          </p>
         {:else if sameModel(defaults.imageDescriptor, defaults.imageDescriptorFallback)}
           <p class="mt-1 text-[0.6875rem] text-danger">
-            Same model as the primary — it cannot act as a fallback.
+            Same model as the primary   it cannot act as a fallback.
           </p>
         {/if}
       </div>
@@ -402,6 +420,7 @@
               DEFAULT_HARNESS}
             providerId={defaults.imageDescriptorFallback?.providerId ?? ''}
             modelId={defaults.imageDescriptorFallback?.modelId ?? ''}
+            accountId={defaults.imageDescriptorFallback?.accountId}
             favoriteModels={rendererRecovery.favoriteModels}
             recentModels={rendererRecovery.recentModels}
             onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
@@ -410,8 +429,8 @@
             variant="field"
             label={defaults.imageDescriptorFallback ? undefined : 'Choose fallback model'}
             disabled={!settingsReady || loading || providers.length === 0}
-            onSelect={(providerId, modelId, harnessId) =>
-              void selectImageDescriptorFallback(providerId, modelId, harnessId)}
+            onSelect={(providerId, modelId, harnessId, accountId) =>
+              void selectImageDescriptorFallback(providerId, modelId, harnessId, accountId)}
             thinkingLevel={defaults.imageDescriptorFallback?.thinkingLevel}
             onSelectThinking={(level) => void selectImageDescriptorFallbackThinking(level)}
             onToggleFavorite={(providerId, modelId, harnessId) =>

@@ -81,7 +81,7 @@
   <div class="mt-3 flex items-center justify-between gap-2">
     <p class="flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted">
       <FileText size={12} class="shrink-0" />
-      Jumping in still lets the Sr. Engineer ask alignment questions — it just skips the Brainstorm
+      Jumping in still lets the Sr. Engineer ask alignment questions   it just skips the Brainstorm
       document.
     </p>
     <EngineeringModelSwitch

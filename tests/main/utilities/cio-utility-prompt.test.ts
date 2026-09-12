@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { CIO_UTILITY_SETUP_PROMPT, isCioUtilityRequest } from '../../../src/main/utilities/cio-utility-prompt'
-import { GATEWAY_TOOLS, UTILITY_DIAGNOSTICS_TOOL_NAME, UTILITY_MANAGE_TOOL_NAME } from '../../../src/lib/gateway-tools'
+import {
+  CIO_UTILITY_SETUP_PROMPT,
+  isCioUtilityRequest
+} from '../../../src/main/utilities/cio-utility-prompt'
+import {
+  GATEWAY_TOOLS,
+  UTILITY_DIAGNOSTICS_TOOL_NAME,
+  UTILITY_MANAGE_TOOL_NAME
+} from '../../../src/lib/gateway-tools'
 
 describe('cio-utility contract', () => {
   it('activates on an unquoted @cio-utility tag', () => {
@@ -17,9 +24,24 @@ describe('cio-utility contract', () => {
 
   it('documents the diagnostics actions and read-only guarantee in the prompt', () => {
     expect(CIO_UTILITY_SETUP_PROMPT).toContain(UTILITY_DIAGNOSTICS_TOOL_NAME)
-    for (const action of ['lookup_thread', 'search_threads', 'read_messages', 'read_log']) {
+    const schema = GATEWAY_TOOLS.find((tool) => tool.name === UTILITY_DIAGNOSTICS_TOOL_NAME)
+      ?.inputSchema as { properties: { action: { enum: string[] } } }
+    for (const action of schema.properties.action.enum) {
       expect(CIO_UTILITY_SETUP_PROMPT).toContain(action)
     }
+    for (const action of [
+      'lookup_thread',
+      'search_threads',
+      'read_messages',
+      'read_log',
+      'list_schema',
+      'query_sql'
+    ]) {
+      expect(CIO_UTILITY_SETUP_PROMPT).toContain(action)
+    }
+    // The SQL escape hatch is documented as read-only and bounded.
+    expect(CIO_UTILITY_SETUP_PROMPT).toContain('200 rows')
+    expect(CIO_UTILITY_SETUP_PROMPT).toContain('list_schema first')
     expect(CIO_UTILITY_SETUP_PROMPT).toContain('logs/error.log')
     expect(CIO_UTILITY_SETUP_PROMPT).toContain('read-only')
     expect(CIO_UTILITY_SETUP_PROMPT).toContain('install_bundle')

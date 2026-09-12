@@ -25,6 +25,7 @@
   import PasteModelPathModal from './PasteModelPathModal.svelte'
   import HistoryAudioPlayer from './HistoryAudioPlayer.svelte'
   import VoiceShortcutInput from './VoiceShortcutInput.svelte'
+  import SoundPlaygroundTab from './SoundPlaygroundTab.svelte'
 
   interface Props {
     settings: SpeechSettings
@@ -39,7 +40,7 @@
     isImported?: boolean
   }
 
-  type SoundTab = 'models' | 'history' | 'learning' | 'preferences'
+  type SoundTab = 'models' | 'history' | 'learning' | 'preferences' | 'playground'
   type ModelSubTab = 'asr' | 'tts' | 'llm'
 
   let { settings, settingsReady: _settingsReady, updateConfig }: Props = $props()
@@ -96,7 +97,8 @@
     { id: 'models', label: 'Models' },
     { id: 'history', label: 'History' },
     { id: 'learning', label: 'Learning' },
-    { id: 'preferences', label: 'Preferences' }
+    { id: 'preferences', label: 'Preferences' },
+    { id: 'playground', label: 'Playground' }
   ]
 
   const modelSubTabs: ReadonlyArray<{ id: ModelSubTab; label: string; hint: string }> = [
@@ -392,7 +394,9 @@
 
   {#if activeTab === 'history' || activeTab === 'learning'}
     <label class="relative block">
-      <span class="sr-only">Search {activeTab === 'history' ? 'recording history' : 'learned lessons'}</span>
+      <span class="sr-only"
+        >Search {activeTab === 'history' ? 'recording history' : 'learned lessons'}</span
+      >
       <Search
         size={15}
         class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
@@ -412,8 +416,7 @@
           class="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-dimmed hover:bg-overlay hover:text-foreground"
           title="Clear search"
           aria-label="Clear search"
-          onclick={() => (searchQuery = '')}
-          ><X size={13} aria-hidden="true" /></button
+          onclick={() => (searchQuery = '')}><X size={13} aria-hidden="true" /></button
         >
       {/if}
     </label>
@@ -442,7 +445,8 @@
             }}
           >
             <span class="block text-sm font-semibold leading-none">{sub.label}</span>
-            <span class="block text-[0.625rem] font-normal leading-none opacity-70">{sub.hint}</span>
+            <span class="block text-[0.625rem] font-normal leading-none opacity-70">{sub.hint}</span
+            >
           </button>
         {/each}
       </div>
@@ -496,7 +500,7 @@
       </div>
       {#if !activeIdFor(activeModelSubTab)}
         <p class="rounded-lg border border-dashed px-3 py-2 text-xs text-dimmed">
-          No active model — import or download one and set it active.
+          No active model   import or download one and set it active.
         </p>
       {/if}
 
@@ -506,7 +510,7 @@
       {#if importedForTab.length > 0}
         <div class="space-y-2">
           <p class="text-xs font-semibold uppercase tracking-wide text-muted">
-            Imported · {activeModelSubTab.toUpperCase()} — {importedForTab.length} model{importedForTab.length ===
+            Imported · {activeModelSubTab.toUpperCase()}   {importedForTab.length} model{importedForTab.length ===
             1
               ? ''
               : 's'}
@@ -629,7 +633,8 @@
         <span class="text-[0.6875rem] font-medium text-muted">Filter:</span>
         <button
           type="button"
-          class="rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter === 'all'
+          class="rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter ===
+          'all'
             ? 'bg-primary text-on-primary border-primary'
             : 'bg-elevated text-muted border-border hover:text-foreground'}"
           onclick={() => (runtimeFilter = 'all')}>All</button
@@ -637,7 +642,8 @@
         {#each runtimesForSubTab(activeModelSubTab) as rt (rt)}
           <button
             type="button"
-            class="rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter === rt
+            class="rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter ===
+            rt
               ? 'bg-primary text-on-primary border-primary'
               : 'bg-elevated text-muted border-border hover:text-foreground'}"
             onclick={() => (runtimeFilter = rt)}>{runtimeBadge(rt)}</button
@@ -645,7 +651,7 @@
         {/each}
       </div>
 
-      <!-- Catalog models — no max-height, expands naturally; imported already at top -->
+      <!-- Catalog models   no max-height, expands naturally; imported already at top -->
       <div class="space-y-3">
         {#each sortedForSubTab(activeModelSubTab) as artifact (artifact.id)}
           {@const installed = speech.capabilities?.installedArtifacts.find(
@@ -775,7 +781,7 @@
                   label={isVerifying
                     ? 'Verifying…'
                     : isQueued
-                      ? 'Queued… — waiting to start'
+                      ? 'Queued…   waiting to start'
                       : 'Downloading…'}
                   detail={download.state === 'downloading'
                     ? `${formatBytes(download.bytesReceived)} / ${formatBytes(download.totalBytes)}`
@@ -787,7 +793,7 @@
                   onCancel={() => void speech.cancelDownload(artifact.id)}
                   cancelLabel={`Cancel ${artifact.label} download`}
                   hint={download.state === 'downloading'
-                    ? 'Large models can take a few minutes — you can keep using the app.'
+                    ? 'Large models can take a few minutes   you can keep using the app.'
                     : undefined}
                 />
               </div>
@@ -974,7 +980,7 @@
         </h2>
         <p class="mb-3 text-xs text-dimmed">
           After you edit a transcript before sending, the local instruct model compares what it
-          heard with what you actually wrote and distills reusable style lessons — word choices,
+          heard with what you actually wrote and distills reusable style lessons   word choices,
           punctuation habits, phrasing rewrites. They are applied by the model itself during future
           cleanup, separately per project and per chat context.
         </p>
@@ -1022,6 +1028,10 @@
       </section>
     {/if}
 
+    {#if activeTab === 'playground'}
+      <SoundPlaygroundTab {settings} />
+    {/if}
+
     {#if activeTab === 'preferences'}
       <section id="settings-block-sound-cleanup" class="rounded-xl border bg-surface p-4">
         <h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
@@ -1046,7 +1056,7 @@
             <p class="text-xs font-medium text-muted">Cleanup behavior</p>
             <div class="flex items-center justify-between gap-4">
               <p class="text-xs text-dimmed">
-                Smart cleanup — remove “um, uh” disfluencies and add punctuation
+                Smart cleanup   remove “um, uh” disfluencies and add punctuation
               </p>
               <Switch
                 checked={settings.refinementFlags.smartCleanup}
@@ -1059,7 +1069,7 @@
             </div>
             <div class="flex items-center justify-between gap-4">
               <p class="text-xs text-dimmed">
-                Self-correction — drop “no wait / scratch that” retracts, keep final intent
+                Self-correction   drop “no wait / scratch that” retracts, keep final intent
               </p>
               <Switch
                 checked={settings.refinementFlags.selfCorrection}
@@ -1072,7 +1082,7 @@
             </div>
             <div class="flex items-center justify-between gap-4">
               <p class="text-xs text-dimmed">
-                Preserve technical — keep code identifiers exact; “index dot tsx” → “index.tsx”
+                Preserve technical   keep code identifiers exact; “index dot tsx” → “index.tsx”
               </p>
               <Switch
                 checked={settings.refinementFlags.preserveTechnical}
@@ -1135,7 +1145,7 @@
           <div class="min-w-0">
             <p class="text-sm font-medium">Voice recording shortcut</p>
             <p class="text-xs text-dimmed">
-              Starts dictation in whichever input with a microphone is on view — the chat composer,
+              Starts dictation in whichever input with a microphone is on view   the chat composer,
               a selection comment, the temporary chat, or an open editor. While recording, Escape
               stops it.
             </p>

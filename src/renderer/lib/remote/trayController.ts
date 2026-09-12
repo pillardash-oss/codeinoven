@@ -1,5 +1,5 @@
 /**
- * Desktop Tray controller — implements the phase-1 `tray-contract.md`.
+ * Desktop Tray controller   implements the phase-1 `tray-contract.md`.
  *
  * The renderer cannot construct an Electron `Tray` directly, so the controller
  * renders through an injected `TrayHost` adapter (implemented as a main-process
@@ -50,7 +50,7 @@ export interface TrayControllerOptions {
 export const PHASE_LABELS: Record<KeepAlivePhase, string> = {
   IDLE: 'Remote mode off',
   KEEP_ALIVE_ARMED: 'Ready for remote',
-  KEEP_ALIVE_ACTIVE: 'Away — accepting remote sessions',
+  KEEP_ALIVE_ACTIVE: 'Away   accepting remote sessions',
   REMOTE_SESSION_LIVE: 'Remote session live'
 }
 
@@ -95,7 +95,7 @@ export class TrayController {
   sessionStarted(): void {
     this.keepAlive.dispatch({ type: 'sessionStart' })
     this.sessionDisplay.setKeepAlive('REMOTE_SESSION_LIVE')
-    this.host.setTooltip(`${PHASE_LABELS['REMOTE_SESSION_LIVE']} — quit blocked`)
+    this.host.setTooltip(`${PHASE_LABELS['REMOTE_SESSION_LIVE']}   quit blocked`)
     this.host.notify('Remote session started', 'Your phone is connected to this desktop.')
     this.refresh()
   }
@@ -147,7 +147,7 @@ export class TrayController {
         onClick: () => this.requestQuit()
       }
     ]
-    this.host.create({ title: `CodeInOven — ${PHASE_LABELS[phase]}`, items })
+    this.host.create({ title: `CodeInOven   ${PHASE_LABELS[phase]}`, items })
     this.host.setTooltip(PHASE_LABELS[phase])
   }
 }

@@ -115,6 +115,14 @@
    *  revert them. Search expansions are transient view state: persisting them
    *  would leave huge subtrees (e.g. `.cio`) marked expanded across sessions. */
   let searchExpandedDirectories = new SvelteSet<string>()
+  /** Paths the backend index search matched for the current query. The tree
+   *  filter trusts these instead of re-implementing matching locally, so
+   *  intention-based queries ("settings/", "settings/*") surface the files
+   *  inside a matched directory rather than just an empty folder row. */
+  let searchResultPaths = new SvelteSet<string>()
+  /** The trimmed query the stored search results correspond to; empty when no
+   *  fresh results are available and the local fallback filter applies. */
+  let searchResultsQuery = ''
   let lastAppliedCheckpointId = $state<string | null>(null)
   let inlineEdit = $state<
     | { kind: 'create'; directory: string; value: string }
@@ -250,7 +258,11 @@
     const includeCio = cioSearchVisibility.includeCio
     const requestId = ++searchRequestId
 
-    if (!query) return
+    if (!query) {
+      searchResultsQuery = ''
+      searchResultPaths.clear()
+      return
+    }
 
     const timer = setTimeout(async () => {
       try {
@@ -264,6 +276,10 @@
           )
         ).filter((entry) => includeCio || !isCioScratchPath(entry.path))
         if (requestId !== searchRequestId) return
+
+        searchResultsQuery = query
+        searchResultPaths.clear()
+        for (const result of results) searchResultPaths.add(result.path)
 
         const dirsToLoad = new SvelteSet<string>()
         for (const result of results) {
@@ -1125,6 +1141,20 @@
     return conflictPaths.some((conflictedPath) => conflictedPath.startsWith(prefix))
   }
 
+  /** Directories that contain (or are) a backend search result, derived once
+   *  per result set instead of per row per render. */
+  let searchResultDirectories = $derived.by((): SvelteSet<string> => {
+    const directories = new SvelteSet<string>()
+    for (const resultPath of searchResultPaths) {
+      const segments = resultPath.split('/')
+      segments.pop()
+      for (let index = 1; index <= segments.length; index++) {
+        directories.add(segments.slice(0, index).join('/'))
+      }
+    }
+    return directories
+  })
+
   /** Whether an entry survives the active filter session (search + last turn +
    *  conflicts). Directories survive when any descendant matches. */
   function matchesActiveFilter(
@@ -1150,6 +1180,17 @@
         : directoryContainsConflictFile(entry.path))
     if (!matchesConflicts) return false
     if (!query) return true
+    // Fresh backend results are the source of truth: files match by result
+    // membership, directories by being (or containing) a result. This keeps
+    // intention-based queries ("settings/", "settings/*") showing the files
+    // inside a matched directory, which local name matching would hide.
+    if (searchResultsQuery === query) {
+      return entry.kind === 'file'
+        ? searchResultPaths.has(entry.path)
+        : searchResultPaths.has(entry.path) || searchResultDirectories.has(entry.path)
+    }
+    // Fallback while the backend search is still in flight: match names
+    // locally so the tree does not flash empty between keystrokes.
     return (
       entry.name.toLocaleLowerCase().includes(query) ||
       (entry.kind === 'directory' && (queryMatches[entry.path] ?? false))
@@ -1159,7 +1200,7 @@
   /** For every loaded directory, whether any entry in its subtree matches the
    *  active filter. Computed once bottom-up (deepest folders first, so a
    *  parent's result reuses its children's) per filter change instead of being
-   *  re-derived recursively on every tree render — the recursion ran per row
+   *  re-derived recursively on every tree render   the recursion ran per row
    *  per render and made each directory expansion quadratic. */
   let filterMatchesByDirectory = $derived.by((): Record<string, boolean> => {
     const matches: Record<string, boolean> = {}
@@ -1660,7 +1701,7 @@
           <dd class="capitalize text-foreground">{info.kind}</dd>
           <dt class="text-dimmed">Size</dt>
           <dd class="text-foreground">
-            {info.size === undefined ? '—' : `${info.size.toLocaleString()} bytes`}
+            {info.size === undefined ? ' ' : `${info.size.toLocaleString()} bytes`}
           </dd>
           <dt class="text-dimmed">Modified</dt>
           <dd class="text-foreground">{new Date(info.modifiedAt ?? 0).toLocaleString()}</dd>

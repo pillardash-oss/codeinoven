@@ -119,7 +119,7 @@ export class CoolifyProvider implements DeploymentProvider {
       ? deployments.find((deployment) => deployment.id === deploymentId)
       : deployments[0]
     if (target?.log) return target.log
-    // No deployment log available — fall back to the runtime container output.
+    // No deployment log available   fall back to the runtime container output.
     const response = await this.request(
       `/applications/${encodeURIComponent(containerId)}/logs?lines=${DEFAULT_LOG_LINES}`,
       { method: 'GET' }
@@ -279,7 +279,7 @@ export class CoolifyProvider implements DeploymentProvider {
         })
       )
     } catch {
-      // Project resolution is an enrichment only — never fail the container list.
+      // Project resolution is an enrichment only   never fail the container list.
     }
     return resolver
   }
@@ -338,8 +338,13 @@ export class CoolifyProvider implements DeploymentProvider {
         signal: controller.signal
       })
       if (!response.ok) {
-        const message = await this.readErrorMessage(response)
-        throw new CoolifyProviderError(response.status, message)
+        const detail = await this.readErrorMessage(response)
+        throw new CoolifyProviderError(
+          response.status,
+          // Never propagate an empty message: the renderer surfaces this text
+          // verbatim, so a status-only failure still explains what happened.
+          detail || `Coolify API request failed with HTTP ${response.status}`
+        )
       }
       if (response.status === 204) return {}
       return (await response.json()) as Record<string, unknown> | unknown[]
@@ -360,7 +365,7 @@ export class CoolifyProvider implements DeploymentProvider {
       if (typeof body['message'] === 'string') return body['message'].slice(0, 500)
       if (typeof body['error'] === 'string') return body['error'].slice(0, 500)
     } catch {
-      // Non-JSON error body — fall through to the status-only message.
+      // Non-JSON error body   fall through to the status-only message.
     }
     return ''
   }

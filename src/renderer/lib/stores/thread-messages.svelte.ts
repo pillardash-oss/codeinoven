@@ -7,8 +7,13 @@
  * even when the thread view is not mounted.
  */
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { mergeStreamedPart } from '$lib/agent-part-merge'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageId as createMessageId } from '$shared/id'
+import {
+  classifyProviderIssue,
+  parseUsageResetAt
+} from '$shared/provider-issue'
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type {
   AgentEvent,
@@ -45,7 +50,9 @@ interface ThreadMessagesEntry {
 export const THREAD_MESSAGE_PRELOAD_WINDOW = 12
 
 const EMPTY_MESSAGES: AgentMessage[] = []
-const STREAM_NOTIFICATION_DELAY_MS = 50
+/** Frame-aligned stream notification cadence: deltas paint within one frame
+ *  of arrival so the reveal trail stays fed and the stream never looks stalled. */
+const STREAM_NOTIFICATION_DELAY_MS = 16
 /** How many messages to reveal per frame when a large conversation first loads,
  *  so the heavy markdown render spreads across frames instead of mounting
  *  dozens of blocks in one synchronous flush (which blocks the composer). */
@@ -651,6 +658,36 @@ class ThreadMessagesStore {
   }
 
   /**
+   * Settle a temporary chat turn whose backend invoke rejected (e.g. a
+   * pre-dispatch usage-limit failure). Regular threads recover through
+   * `session.idle`/`session.error` broadcast events, but a rejection that
+   * happens before the harness session streams anything never produces those
+   * events — so the busy flag set optimistically must be cleared here, and the
+   * failure classified into the same provider-issue card pipeline regular
+   * threads use (quota kind, retry countdown from the reset time).
+   */
+  #settleFailedTemporaryTurn(
+    projectId: string,
+    conversationId: string,
+    harnessId: string,
+    error: unknown
+  ): void {
+    const raw = error instanceof Error ? error.message : 'Message failed to send.'
+    const message = raw.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+    const kind = classifyProviderIssue(message)
+    const retryAt = kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
+    this.setRunIssue(projectId, conversationId, {
+      kind,
+      message,
+      rawError: raw,
+      harnessId: harnessId || 'unknown',
+      retryable: true,
+      ...(retryAt === undefined ? {} : { retryAt })
+    })
+    agentRuns.setIdle(projectId, conversationId)
+  }
+
+  /**
    * Send a user message. Inserts an optimistic message immediately, persists it
    * on the server, and reconciles the optimistic ID with the confirmed ID.
    * Returns the message ID so callers can synchronously act on the optimistic
@@ -822,6 +859,7 @@ class ThreadMessagesStore {
       // through the same never-downgrade snapshot path a thread's mirror uses.
       if (response) this.mergePage(projectId, conversationId, [response])
     } catch (error) {
+      this.#settleFailedTemporaryTurn(projectId, conversationId, settings.harnessId, error)
       this.rejectOptimistic(projectId, conversationId, entry, messageId, error)
       throw error
     }
@@ -861,6 +899,7 @@ class ThreadMessagesStore {
         text
       )
     } catch (error) {
+      this.#settleFailedTemporaryTurn(projectId, conversationId, settings.harnessId, error)
       this.rejectOptimistic(projectId, conversationId, entry, messageId, error)
       throw error
     }
@@ -896,7 +935,9 @@ class ThreadMessagesStore {
       if (partIndex === -1) {
         msg.parts = [...msg.parts, part]
       } else {
-        msg.parts[partIndex] = part
+        // A snapshot shorter than what already streamed must never wipe the
+        // streamed text (see mergeStreamedPart).
+        msg.parts[partIndex] = mergeStreamedPart(msg.parts[partIndex], part)
       }
       entry.messages = [...entry.messages]
     }
@@ -1085,7 +1126,13 @@ class ThreadMessagesStore {
   /** Apply Brainstorm lifecycle events by thread identity so navigation never drops them. */
   #applyBrainstormTrace(projectId: string, threadId: string, update: BrainstormTraceUpdate): void {
     if (update.type === 'refresh.started') {
-      agentRuns.setBackgroundBusy(projectId, threadId, 'brainstorm_report', update.startedAt)
+      agentRuns.setBackgroundBusy(
+        projectId,
+        threadId,
+        'brainstorm_report',
+        update.startedAt,
+        update.phase ? { phase: update.phase, version: update.version } : undefined
+      )
       return
     }
     if (update.type === 'refresh.completed') {

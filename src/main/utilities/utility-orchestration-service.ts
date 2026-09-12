@@ -18,6 +18,7 @@ import { SecretVault } from '../storage/secret-vault'
 import {
   APP_BROWSER_UTILITY_ID,
   APP_IMAGE_DESCRIPTOR_UTILITY_ID,
+  APP_RETRIEVE_MCP_HOST_UTILITY_ID,
   UtilityRegistryService
 } from './utility-registry-service'
 import { CuaBridgeService } from './cua-bridge-service'
@@ -54,6 +55,12 @@ import {
 import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../../lib/prompt-budget'
 import { Logger } from '../system/logger'
 import { instanceRegistry } from '../system/instance-registry'
+import {
+  BRAINSTORM_ALIGNMENT_UTILITY_ID,
+  BRAINSTORM_ALIGNMENT_OPERATIONS,
+  BRAINSTORM_ALIGNMENT_NOTE_LIMIT,
+  brainstormAlignmentUtility
+} from '../../lib/brainstorm/brainstorm-alignment'
 
 const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 const RETRIEVE_MCP_HOST_ROUTE = '/retrieve-mcp-host'
@@ -110,6 +117,8 @@ export interface UtilityTurnRequest {
   executingModelVisionCapable?: boolean
   /** Explicit user intent grants the setup-only utility management operation. */
   allowManagement?: boolean
+  /** Present only for an active interview; the callback owns the exact note path/version. */
+  saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -136,7 +145,7 @@ export interface UtilityTurnGateway {
   id: string
   resolvedUtilities: ResolvedUtility[]
   instructions: string
-  /** Shell-callable fallback for harnesses that cannot safely load a per-turn MCP runtime. */
+  /** Tool-only instructions for harnesses with a native gateway bridge. */
   directInstructions: string
   /**
    * Turn-scoped loopback endpoint for direct-gateway harnesses whose persistent
@@ -257,7 +266,6 @@ export class UtilityOrchestrationService {
   private gatewayServer: Server | null = null
   private gatewayBaseUrl: string | null = null
   private gatewayStarting: Promise<string> | null = null
-  private gatewayCloseTimer: ReturnType<typeof setTimeout> | null = null
   private readonly bridgeHandlers: ReadonlyMap<string, GatewayBridgeHandler>
   private cuaActivityListener:
     ((pid: number, threadId: string, sessionId?: string) => void) | null = null
@@ -320,7 +328,7 @@ export class UtilityOrchestrationService {
 
   /**
    * Register a listener invoked whenever a computer-use utility is called with
-   * a target pid — used by the PiP monitor to latch onto the app a thread's
+   * a target pid   used by the PiP monitor to latch onto the app a thread's
    * agent is driving.
    */
   onCuaActivity(listener: (pid: number, threadId: string, sessionId?: string) => void): void {
@@ -336,6 +344,15 @@ export class UtilityOrchestrationService {
       nativeCapabilities: request.nativeCapabilities,
       includeOnDemand: true
     })
+    // Host recovery belongs to the transport, never to model-facing skills.
+    eligible = eligible.filter(({ utility }) => utility.id !== APP_RETRIEVE_MCP_HOST_UTILITY_ID)
+    // This capability is bound to the live interview, never installed globally.
+    eligible = eligible.filter(({ utility }) => utility.id !== BRAINSTORM_ALIGNMENT_UTILITY_ID)
+    if (request.saveBrainstormNotes) {
+      eligible.push(
+        brainstormAlignmentUtility(request.harnessId, request.projectId, request.threadId)
+      )
+    }
     const hasNativeComputerUse = request.nativeCapabilities
       .map(normalizeCapability)
       .includes('computer_use')
@@ -406,22 +423,13 @@ export class UtilityOrchestrationService {
     const token = randomBytes(32).toString('hex')
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
     await this.storage.writeRaw(scriptPath, buildUtilityGatewayScript(gatewayTools))
-    const retrieverPath = await this.ensureMcpHostRetriever()
+    await this.ensureMcpHostRetriever()
     this.turns.set(id, { state, scriptPath, token })
     this.turnIdsByToken.set(token, id)
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
-    // Prose contract for harnesses WITHOUT the app gateway extension (codex,
-    // cline, opencode): the endpoint and bearer token must be spelled out
-    // because the model reaches the gateway through the shell. Pi is the
-    // opposite: its app extension registers cio_util_find/init/use (plus
-    // manage/diagnose on setup turns) as first-class tools that hold the
-    // turn-scoped credentials internally, so the prompt must NOT advertise a
-    // URL or token — a credential printed into a persistent session's system
-    // prompt survives the turn that issued it and poisons every later turn
-    // with a stale token.
-    const piToolInstructions = [
-      `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally — never call the gateway through the shell, and never print or persist tokens.`,
+    const toolInstructions = [
+      `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       ...(hasOnDemand
         ? [
             'A search result reports an explicit `notFound` boolean and may return project-aware candidates (`matchType: "candidates"`) to evaluate semantically. Before concluding that any capability (MCP, skill, tool, utility) is unavailable or does not exist, call ' +
@@ -431,18 +439,16 @@ export class UtilityOrchestrationService {
               ? [
                   'Describe images: search for the image descriptor utility, activate its id, then invoke it with operation "describe" and input {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}.'
                 ]
-              : []),
-            'When a tool reports the gateway is not active for this turn (queued or steer turn after cleanup), continue without app utilities; the next regular user turn re-arms them.'
+              : [])
           ]
         : []),
       ...(request.allowManagement
         ? [
             `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values; the user adds those through Utilities.`,
-            `App diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (read-only: lookup_thread, search_threads, read_messages, read_log).`
+            `App diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (read-only: lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql).`
           ]
         : [])
     ].join('\n')
-    const recoveryInstruction = `The gateway host, port, and bearer token above are scoped to this turn only and rotate on every new turn. Never reuse a host, port, or token you remember from earlier in this conversation or a prior turn — always use the values given for the current turn. The always-active ${RETRIEVE_MCP_HOST_TOOL_NAME} utility is independent of MCP. If the advertised app gateway is unreachable, or you are starting a new turn without a freshly given gateway, run the script at ${shellQuote(retrieverPath)} with args ${shellQuote(request.sessionId)} ${shellQuote(id)} (it is plain Node ESM — use whatever JS runtime is on your PATH). It discovers the CodeInOven instance that owns this exact utility turn and returns the current \`mcpHost\`. Retry the original route against that host with the current turn's authorization header. Never print or persist the bearer token.`
     await this.audit(state, 'turn.started', {
       eligibleUtilityIds: eligible.map(({ utility }) => utility.id),
       alwaysUtilityIds: always.map(({ utility }) => utility.id)
@@ -456,40 +462,14 @@ export class UtilityOrchestrationService {
     return {
       id,
       resolvedUtilities: [...always, gateway],
-      instructions: hasOnDemand
-        ? `A minimal app gateway is available. When you need a skill, MCP, utility, or other capability that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to discover it. Before concluding that any capability (MCP, skill, tool, utility) is unavailable or does not exist, you must first call ${UTILITY_SEARCH_TOOL_NAME}; only conclude unavailability when the search result reports notFound:true. If you already know an eligible utility, activate it directly with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. When you search, the result reports an explicit \`notFound\` boolean: only when it is true may you conclude that the capability does not exist in this session. Activated utilities exist only for this turn. ${recoveryInstruction}`
-        : '',
-      directInstructions:
-        request.harnessId === 'pi'
-          ? piToolInstructions
-          : [
-        'App-managed utilities are available through a turn-scoped loopback gateway. Use the shell to POST JSON with curl, setting Content-Type: application/json and the authorization header below; never print or persist the bearer token.',
-        `Gateway: ${bridgeUrl}`,
-        `Authorization header: Bearer ${token}`,
-        recoveryInstruction,
-        `Search by capability name or task intent: POST /search with {"query":"capability or task","kinds":${JSON.stringify(imageDescriptorEligible ? ['mcp', 'skill', 'computer_use', 'image_descriptor'] : ['mcp', 'skill', 'computer_use'])}}. A \`matchType\` of \`candidates\` means you must inspect the project-aware candidates semantically; \`notFound\` is true only when no eligible utility exists for the requested kinds.`,
-        'Before concluding that any capability (MCP, skill, tool, utility) is unavailable or does not exist, search /search first; only conclude unavailability when the result reports notFound:true. Never treat "the tools are not exposed in this session" as proof of absence.',
-        'Activate: POST /activate with {"utility_id":"id-from-search"}; if you already know an eligible utility id, activate it directly without searching first.',
-        'Invoke: POST /invoke with {"utility_id":"id","operation":"tool-or-operation","input":{}}.',
-        ...(request.allowManagement
-          ? [
-              'Install a validated utility bundle: POST /manage with {"action":"install_bundle","bundle":{"name":"...","utilities":[{"definition":{...}}]}}. Never include credential or secret values; the user adds those through Utilities.'
-            ]
-          : []),
-        ...(imageDescriptorEligible
-          ? [
-              'Describe images: search for the image descriptor utility with {"query":"describe image","kinds":["image_descriptor"]}, activate its id, then POST /invoke with {"utility_id":"id","operation":"describe","input":{"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}}.'
-            ]
-          : []),
-        `Treat these endpoints exactly like ${UTILITY_SEARCH_TOOL_NAME}, ${UTILITY_ACTIVATE_TOOL_NAME}, and ${UTILITY_INVOKE_TOOL_NAME} tool calls.`
-      ].join('\n'),
+      instructions: toolInstructions,
+      directInstructions: toolInstructions,
       directEndpoint: { url: bridgeUrl, token },
       cleanup
     }
   }
 
   async dispose(): Promise<void> {
-    this.cancelGatewayClose()
     await Promise.all([...this.turns.keys()].map((id) => this.cleanupTurn(id)))
     await this.closeGatewayServer()
   }
@@ -568,13 +548,10 @@ export class UtilityOrchestrationService {
   }
 
   /** Read-only app diagnostics, available only on explicit @cio-utility turns. */
-  private async runDiagnostics(
-    state: TurnState,
-    input: Record<string, unknown>
-  ): Promise<unknown> {
+  private async runDiagnostics(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
     if (state.request.allowManagement !== true) {
       throw new Error(
-        'App diagnostics require an explicit @cio-utility turn — tell the user to re-send their request starting with @cio-utility.'
+        'App diagnostics require an explicit @cio-utility turn   tell the user to re-send their request starting with @cio-utility.'
       )
     }
     state.diagnostics ??= new CioDiagnosticsService(requiredDatabase(this.database), () =>
@@ -604,6 +581,15 @@ export class UtilityOrchestrationService {
       const limit = typeof input['limit'] === 'number' ? input['limit'] : 100
       return diagnostics.readLog(file, { level, limit })
     }
+    if (action === 'list_schema') {
+      const table = typeof input['table'] === 'string' ? input['table'] : undefined
+      return diagnostics.listSchema(table)
+    }
+    if (action === 'query_sql') {
+      const sql = requiredString(input['sql'], 'sql', 4_000)
+      const params = Array.isArray(input['params']) ? input['params'] : []
+      return diagnostics.runQuery(sql, params)
+    }
     throw new TypeError('Diagnostics action is invalid')
   }
 
@@ -618,7 +604,6 @@ export class UtilityOrchestrationService {
     await this.audit(turn.state, 'turn.cleaned', {
       activatedUtilityIds: [...turn.state.activated.keys()]
     })
-    this.scheduleGatewayClose()
   }
 
   private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -670,7 +655,6 @@ export class UtilityOrchestrationService {
    * select isolated state; opening another port is never part of starting a turn.
    */
   private async ensureGatewayServer(): Promise<string> {
-    this.cancelGatewayClose()
     if (this.gatewayBaseUrl) return this.gatewayBaseUrl
     if (this.gatewayStarting) return this.gatewayStarting
     const starting = new Promise<string>((resolve, reject) => {
@@ -703,29 +687,9 @@ export class UtilityOrchestrationService {
     }
   }
 
-  private scheduleGatewayClose(): void {
-    if (this.turns.size > 0 || !this.gatewayServer) return
-    this.cancelGatewayClose()
-    this.gatewayCloseTimer = setTimeout(() => {
-      this.gatewayCloseTimer = null
-      void this.closeGatewayServerIfIdle()
-    }, 1_000)
-    this.gatewayCloseTimer.unref?.()
-  }
-
-  private cancelGatewayClose(): void {
-    if (!this.gatewayCloseTimer) return
-    clearTimeout(this.gatewayCloseTimer)
-    this.gatewayCloseTimer = null
-  }
-
-  private async closeGatewayServerIfIdle(): Promise<void> {
-    if (this.turns.size > 0) return
-    await this.closeGatewayServer()
-  }
-
+  // Keep the single listener for the application lifetime. Turn capabilities
+  // still retire independently; idle listener shutdown must not race startup.
   private async closeGatewayServer(): Promise<void> {
-    this.cancelGatewayClose()
     const server = this.gatewayServer
     this.gatewayServer = null
     this.gatewayBaseUrl = null
@@ -817,7 +781,9 @@ export class UtilityOrchestrationService {
     state.activated.set(utilityId, resolved)
 
     let capability: unknown
-    if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
+    if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
+      capability = { tools: BRAINSTORM_ALIGNMENT_OPERATIONS }
+    } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       if (!this.browserExecutor) throw new Error('The in-app browser is unavailable')
       capability = { tools: BROWSER_UTILITY_TOOLS }
     } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
@@ -877,7 +843,17 @@ export class UtilityOrchestrationService {
     if (!resolved) throw new Error('Activate this utility before invoking it')
 
     let result: unknown
-    if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
+    if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
+      if (operation !== 'save_notes' || !state.request.saveBrainstormNotes) {
+        throw new Error('Alignment notes are only available during an active Brainstorm interview')
+      }
+      const markdown = requiredString(
+        operationInput['markdown'],
+        'markdown',
+        BRAINSTORM_ALIGNMENT_NOTE_LIMIT
+      )
+      result = await state.request.saveBrainstormNotes(markdown)
+    } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')
       result = await executor(operation, operationInput, {
@@ -1536,7 +1512,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Build the stdio MCP gateway script. The tool list and the tools/call route
  *  map are generated from `GATEWAY_TOOLS`, so the agent-facing contract always
- *  matches the catalog — no hand-synchronized copy to drift. */
+ *  matches the catalog   no hand-synchronized copy to drift. */
 function buildUtilityGatewayScript(gatewayTools = GATEWAY_TOOLS): string {
   const tools = gatewayTools.map(({ name, description, inputSchema }) => ({
     name,
@@ -1707,10 +1683,6 @@ if (!resolved) {
   process.stdout.write(JSON.stringify({ mcpHost: resolved }) + '\n')
 }
 `
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`
 }
 
 const MAX_CUA_SESSION_TITLE_CHARS = 24

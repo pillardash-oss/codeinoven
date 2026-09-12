@@ -119,9 +119,16 @@ function errorMessage(error: unknown): string {
     .replace(/^Error:\s*/u, '')
 }
 
+/** How long a directory's background refresh may be debounced after an
+ *  expand/collapse, so rapid toggles coalesce into a single re-read. */
+const BACKGROUND_REFRESH_DEBOUNCE_MS = 300
+
 class ProjectFilesWorkspace {
   private projects: Record<string, ProjectFilesState> = $state({})
   private directoryLoads = new Map<string, Promise<void>>()
+  /** Pending debounced silent refreshes, keyed `projectId:directory`. A plain
+   *  Map (not $state) keeps the scheduler allocation-free and off reactivity. */
+  private backgroundRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private focusGenerations = new Map<string, number>()
   /** Fresh project states whose persisted expansion still needs to be populated. */
   private pendingRestores = new Set<string>()
@@ -147,7 +154,12 @@ class ProjectFilesWorkspace {
     return state
   }
 
-  async loadDirectory(projectId: string, directory: string, force = false): Promise<void> {
+  async loadDirectory(
+    projectId: string,
+    directory: string,
+    force = false,
+    options: { silent?: boolean } = {}
+  ): Promise<void> {
     const state = this.ensureState(projectId)
     // A scope switch (thread opened in another bucket, sidebar bucket change)
     // invalidates every cached listing so the tree re-reads the new root.
@@ -167,7 +179,9 @@ class ProjectFilesWorkspace {
     if (!force && state.entriesByDirectory[directory]) return
 
     const load = (async (): Promise<void> => {
-      state.loadingDirectories[directory] = true
+      // Silent refreshes never surface loading spinners in the explorer; the
+      // existing listing stays visible until a successful read replaces it.
+      if (!options.silent) state.loadingDirectories[directory] = true
       delete state.directoryErrors[directory]
       try {
         state.entriesByDirectory[directory] = await invoke(
@@ -186,9 +200,16 @@ class ProjectFilesWorkspace {
           await this.restoreRevealedPath(projectId, state)
         }
       } catch (error) {
-        state.directoryErrors[directory] = errorMessage(error)
+        if (options.silent) {
+          // A failed silent refresh drops the stale cache (the entry may have
+          // been deleted externally) without flashing an error banner; the next
+          // user-driven load retries and surfaces any real error normally.
+          delete state.entriesByDirectory[directory]
+        } else {
+          state.directoryErrors[directory] = errorMessage(error)
+        }
       } finally {
-        delete state.loadingDirectories[directory]
+        if (!options.silent) delete state.loadingDirectories[directory]
       }
     })()
     this.directoryLoads.set(loadKey, load)
@@ -240,11 +261,40 @@ class ProjectFilesWorkspace {
     if (state.expandedDirectories[directory]) {
       delete state.expandedDirectories[directory]
       this.persistExplorer(projectId)
+      // Collapsed folders are not rendered, so refresh silently in the
+      // background: the cache is fresh the next time the user expands. Never
+      // loaded folders have nothing to refresh.
+      if (state.entriesByDirectory[directory]) {
+        this.scheduleBackgroundRefresh(projectId, directory)
+      }
       return
     }
     state.expandedDirectories[directory] = true
     this.persistExplorer(projectId)
+    // A cached listing may be stale (external tooling changed files outside
+    // the tree). Load the cached version immediately for responsiveness, then
+    // refresh silently so no refresh click is ever needed.
+    const wasCached = Boolean(state.entriesByDirectory[directory])
+    if (wasCached) this.scheduleBackgroundRefresh(projectId, directory)
     await this.loadDirectory(projectId, directory)
+  }
+
+  /** Schedule a deduped, debounced background re-read of one directory so its
+   *  cached listing picks up changes made outside the app. All work happens in
+   *  the main process's async fs pipeline (`projectFiles:list`), so neither the
+   *  renderer nor the main thread is ever blocked; only one timer per
+   *  directory is allocated and rapid toggles collapse into a single request. */
+  private scheduleBackgroundRefresh(projectId: string, directory: string): void {
+    const key = `${projectId}:${directory}`
+    const pending = this.backgroundRefreshTimers.get(key)
+    if (pending) clearTimeout(pending)
+    const timer = setTimeout(() => {
+      this.backgroundRefreshTimers.delete(key)
+      // A user-driven load may already be in flight for this key; the shared
+      // directoryLoads dedupe makes this a no-op then.
+      void this.loadDirectory(projectId, directory, true, { silent: true })
+    }, BACKGROUND_REFRESH_DEBOUNCE_MS)
+    this.backgroundRefreshTimers.set(key, timer)
   }
 
   /** Collapse every expanded folder in the tree. */

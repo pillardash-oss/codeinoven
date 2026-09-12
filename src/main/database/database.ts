@@ -45,7 +45,7 @@ import { buildBoundedQuery } from './bounded-query'
 export const MAIN_THREAD_DATABASE_WARNING_MS = 16.7
 
 /**
- * Database — synchronous SQLite wrapper for the Electron main process.
+ * Database   synchronous SQLite wrapper for the Electron main process.
  *
  * - WAL journal mode for concurrent reads
  * - busy_timeout to prevent SQLITE_BUSY
@@ -70,7 +70,7 @@ export class Database {
 
     // On a fresh install the config root does not exist yet and
     // `storage.initialize()` runs concurrently with this call, so create the
-    // parent directory first — otherwise SQLite aborts with
+    // parent directory first   otherwise SQLite aborts with
     // "cannot open database because the directory does not exist".
     mkdirSync(dirname(this.path), { recursive: true })
 
@@ -251,7 +251,7 @@ export class Database {
     return join(dirname(this.path), 'backups')
   }
 
-  /** Passive WAL checkpoint — returns an explicit result. */
+  /** Passive WAL checkpoint   returns an explicit result. */
   async passiveCheckpoint(): Promise<WorkerCheckpointResult> {
     return (
       this.maintenanceWorker?.passiveCheckpoint() ?? { ok: false, error: 'no maintenance worker' }
@@ -308,7 +308,7 @@ export class Database {
    *   never cleared early); the worker's `restore` op closes its own connection
    *   before the atomic swap, so no handle survives onto the pre-restore file.
    * - Typed `shutdown` (when used) is sent and awaited before the handle is
-   *   cleared — see `DatabaseWorker.shutdown`.
+   *   cleared   see `DatabaseWorker.shutdown`.
    * - Failure kinds (`source_invalid` / `verify_failed` / `io`) are preserved
    *   on the returned result.
    */
@@ -337,7 +337,7 @@ export class Database {
     }
     if (result.ok) {
       // Reopen the primary connection on the restored inode. If the reopen
-      // fails, the restore must be reported as failed — a restored database
+      // fails, the restore must be reported as failed   a restored database
       // the app cannot open is not a successful restore.
       try {
         await this.init()
@@ -726,6 +726,10 @@ export class Database {
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
       this.migrateThreadIndependentAuditColumns(connection)
+      this.migrateThreadAccountColumn(connection)
+      this.migrateAgentMessageGenerationColumn(connection)
+      this.migrateAgentMessageAccountColumns(connection)
+      this.migrateAgentMessageContextEstimatedColumn(connection)
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
     })()
   }
@@ -798,15 +802,17 @@ export class Database {
 
   /**
    * Databases created before claim-token tagging carry a `claim_token`-less
-   * snapshot queue. Add the column in place (nullable, no backfill needed —
+   * snapshot queue. Add the column in place (nullable, no backfill needed  
    * unclaimed rows are NULL by definition). Idempotent and safe to re-run.
    */
   migrateModelRankingSnapshotClaimToken(connection?: DatabaseType): void {
     const target = connection ?? this.requireDb()
     const columns = new Set<string>(
-      (target.prepare('PRAGMA table_info(model_ranking_snapshots)').all() as Array<{ name: string }>).map(
-        (column) => column.name
-      )
+      (
+        target.prepare('PRAGMA table_info(model_ranking_snapshots)').all() as Array<{
+          name: string
+        }>
+      ).map((column) => column.name)
     )
     if (columns.size === 0 || columns.has('claim_token')) return
     target.exec('ALTER TABLE model_ranking_snapshots ADD COLUMN claim_token TEXT')
@@ -815,7 +821,7 @@ export class Database {
   /**
    * Rows persisted before the legacy `engineeringMode` settings flag was
    * scrubbed still carry it inside their settings JSON. Rewrite affected rows
-   * without the flag — the Engineering lifecycle selection is the single
+   * without the flag   the Engineering lifecycle selection is the single
    * source of truth now. Idempotent and safe to re-run. Malformed rows are
    * left untouched; the read-path sanitizer in the thread repository still
    * guards them.
@@ -823,7 +829,7 @@ export class Database {
   /**
    * Rebuild missing `main` usage events from the durable agent_messages ledger.
    * `INSERT OR IGNORE` against the `message:<id>` primary key makes this
-   * idempotent — rows already recorded by the live recorder are skipped, so
+   * idempotent   rows already recorded by the live recorder are skipped, so
    * only lost turns (mirrored sessions, recorder outages) are inserted.
    */
   migrateThreadSettingsLegacyEngineeringFlag(connection?: DatabaseType): void {
@@ -875,14 +881,66 @@ export class Database {
       )
     )
     if (!columns.has('independent_audit')) {
-      connection.exec(
-        'ALTER TABLE threads ADD COLUMN independent_audit INTEGER NOT NULL DEFAULT 0'
-      )
+      connection.exec('ALTER TABLE threads ADD COLUMN independent_audit INTEGER NOT NULL DEFAULT 0')
     }
     if (!columns.has('independent_audit_initialized')) {
       connection.exec(
         'ALTER TABLE threads ADD COLUMN independent_audit_initialized INTEGER NOT NULL DEFAULT 0'
       )
+    }
+  }
+
+  /** Existing databases predate account-scoped native session ownership. */
+  private migrateThreadAccountColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('session_account_id')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN session_account_id TEXT')
+    }
+  }
+
+  /** Existing databases predate the per-message generation duration used by
+   *  tokens-per-second rates. Nullable   messages persisted before the column
+   *  have no generation window recorded and fall back to wall-clock rates. */
+  private migrateAgentMessageGenerationColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('generation_ms')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN generation_ms INTEGER')
+    }
+  }
+
+  /** Existing message mirrors predate account-container attribution. */
+  private migrateAgentMessageAccountColumns(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('account_id')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN account_id TEXT')
+    }
+    if (!columns.has('account_label')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN account_label TEXT')
+    }
+  }
+
+  /** Existing message mirrors predate estimated-occupancy provenance; without
+   *  the flag a reloaded estimate masquerades as a provider-reported reading. */
+  private migrateAgentMessageContextEstimatedColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('context_estimated')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN context_estimated INTEGER')
     }
   }
 
@@ -895,6 +953,10 @@ export class Database {
     )
     const addedTokensTotal = !columns.has('tokens_total')
     const addedDuration = !columns.has('duration_ms')
+
+    if (!columns.has('account_id')) {
+      connection.exec('ALTER TABLE usage_events ADD COLUMN account_id TEXT')
+    }
 
     if (addedTokensTotal) {
       connection.exec('ALTER TABLE usage_events ADD COLUMN tokens_total INTEGER')
@@ -984,7 +1046,7 @@ export class Database {
         sql: `INSERT INTO usage_events(
           id, thread_id, parent_turn_id, project_id, project_name,
           feature_call_id, attempt, feature,
-          harness_id, provider_id, model_id, thinking_level, utility_id,
+          harness_id, account_id, provider_id, model_id, thinking_level, utility_id,
           raw_provider_usage_json,
           tokens_uncached_input, tokens_cached_input, tokens_cache_write,
           tokens_output, tokens_reasoning, tokens_total, raw_total, total_semantics,
@@ -994,7 +1056,7 @@ export class Database {
         SELECT
           legacy.id, legacy.thread_id, legacy.parent_turn_id, ${projectId}, ${projectName},
           legacy.feature_call_id, legacy.attempt, legacy.feature,
-          legacy.harness_id, legacy.provider_id, legacy.model_id, legacy.thinking_level,
+          legacy.harness_id, legacy.account_id, legacy.provider_id, legacy.model_id, legacy.thinking_level,
           legacy.utility_id, legacy.raw_provider_usage_json,
           legacy.tokens_uncached_input, legacy.tokens_cached_input, legacy.tokens_cache_write,
           legacy.tokens_output, legacy.tokens_reasoning, legacy.tokens_total,

@@ -69,7 +69,7 @@ const DEFAULT_CONFIG: AppConfig = {
 }
 
 /**
- * StorageEngine — manages all filesystem persistence under ~/.config/pillardash/codeinoven/
+ * StorageEngine   manages all filesystem persistence under ~/.config/pillardash/codeinoven/
  * All writes are atomic (write .tmp then rename).
  */
 const HEARTBEATS_FILE = 'heartbeat/heartbeats.json'
@@ -495,7 +495,7 @@ export class StorageEngine {
 
   /**
    * Resolve the per-project cloud deployment config path, always under the
-   * CodeInOven config directory — never inside the user's repository.
+   * CodeInOven config directory   never inside the user's repository.
    */
   private cloudDeploymentConfigPath(projectId: string): string {
     return join('projects', projectId, 'cloud-deployment.json')
@@ -528,7 +528,7 @@ export class StorageEngine {
 
   /**
    * Resolve the global cloud deployment account registry path, always under the
-   * CodeInOven config directory — never inside the user's repository, and
+   * CodeInOven config directory   never inside the user's repository, and
    * independent of any single project.
    */
   private cloudDeploymentAccountsPath(): string {

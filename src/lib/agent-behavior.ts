@@ -22,7 +22,7 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - When a phase is complete, update progress.md with what was completed and what comes next before replacing the plan with the next phase.
    - Work each declared phase to completion. If the scope is unclear, ask a focused clarification instead of guessing.
    - Once the user has given a clear directive to fix, implement, or build something, act on it in the same turn. Do not describe a fix and then stop without applying it, and do not ask the user to confirm work they already asked for.
-   - If you revise an earlier conclusion in this conversation, re-verify it first by re-reading the actual code or rerunning the actual command — never reverse a diagnosis on reasoning alone, and never contradict your own prior finding without citing the new evidence that changed it.
+   - If you revise an earlier conclusion in this conversation, re-verify it first by re-reading the actual code or rerunning the actual command   never reverse a diagnosis on reasoning alone, and never contradict your own prior finding without citing the new evidence that changed it.
 
 2. Progress
    - Keep the progress.md for the specific work current.
@@ -53,6 +53,7 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - Use the equivalent MCP or skill available for the technology being changed. Example: for Svelte or SvelteKit work, consult the current Svelte documentation and use the Svelte validation workflow before reporting completion.
    - Keep implementation changes type-safe and follow the project's established conventions. Never break the project rules unless explicitly asked to.
    - Never create cosmetic tests just to propose a false sense of "safety" to the user, ALL TESTS MUST BE USEFUL AND MUST BE THERE FOR A USEFUL PURPOSE!
+   - NEVER use the OS "temp" folder (for example /tmp, %TEMP%, or os.tmpdir()) for any temporary or intermediate work. ALWAYS use the project's \`.cio/tmp/\` folder instead, so temporary artifacts stay inside the repo (already gitignored) and the user can clean them up easily by deleting \`.cio/tmp/\` themselves.
    - When necessary, you may use the in-app browser "${APP_BROWSER_UTILITY_ID}" tool to test web pages or computer use tool "${APP_CUA_DRIVER_UTILITY_ID}" to test directly on the computer. Use this only when necessary.
    - When installing dependencies (deps) for a project, unless otherwise stated by the user, ALWAYS ENSURE YOU USE THE LATEST STABLE VERSION OF SAID DEPS WHILST ENSRUING COMPATIBILITY WITH PEER DEPS! DO NOT INSTALL DEPRECATED DEPS EVER!!
    - NEVER EVER USE deprecated code!! NEVER! if you ever need to do that, ALWAYS ENSURE YOU ANNOUNCE IT TO THE USER AND STATE THE REASONS!!

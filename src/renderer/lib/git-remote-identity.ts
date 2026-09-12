@@ -6,7 +6,7 @@
 export type GitRemotePlatform = 'github' | 'gitlab'
 
 export interface GitRemoteIdentity {
-  /** Brand icon to show — unrecognized/self-hosted hosts default to GitHub. */
+  /** Brand icon to show   unrecognized/self-hosted hosts default to GitHub. */
   platform: GitRemotePlatform
   /** `owner/repo` (or deeper group path on GitLab), no `.git` suffix. */
   path: string

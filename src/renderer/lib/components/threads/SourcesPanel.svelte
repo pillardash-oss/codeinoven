@@ -420,8 +420,8 @@
 
   /** Citation text shown in the panel: the project-relative path when the file
    *  lives in the project (the full absolute path stays in the tooltip and on
-   *  the click target). Long paths are middle-ellipsized so the tail — the
-   *  filename — is never cut off by the narrow sidebar. */
+   *  the click target). Long paths are middle-ellipsized so the tail   the
+   *  filename   is never cut off by the narrow sidebar. */
   function citationDisplayText(source: FileCitationAgentSource): string {
     const path = source.displayPath ?? source.path
     if (path.length <= 48) return path

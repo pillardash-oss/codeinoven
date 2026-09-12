@@ -3,11 +3,11 @@
  *
  * Runs inside a dedicated `worker_threads` Worker spawned by `DatabaseWorker`
  * (`database-worker.ts`). It opens a second WAL connection to the same database
- * file and is the single owner of every O(database-size) operation — passive
+ * file and is the single owner of every O(database-size) operation   passive
  * WAL checkpoints, integrity checks, size telemetry, online backup/restore,
  * VACUUM, FTS optimize/integrity/rebuild, bounded retention, corruption/full-
  * disk recovery, and the latency-critical repository CRUD (delta sync,
- * batched transactions) and normal FTS queries — so that no database work ever
+ * batched transactions) and normal FTS queries   so that no database work ever
  * blocks the Electron main process.
  *
  * Every request and the scheduled maintenance loop run through a single-flight
@@ -56,7 +56,7 @@ function executor(): ProviderDeltaSyncExecutor {
 const config = (workerData ?? {}) as DatabaseWorkerConfig
 const port = parentPort
 // When this module is evaluated outside a real Worker (e.g. the test runner
-// imports it through the ?nodeWorker factory) it must load inertly — no parent
+// imports it through the ?nodeWorker factory) it must load inertly   no parent
 // port means nothing can be requested and no maintenance loop may run.
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -476,7 +476,7 @@ function health(): DatabaseWorkerResult {
  * when more rows matched. Caller-owned LIMIT clauses remain inside an outer
  * safety bound. The response is additionally byte-bounded: a single oversized
  * result (huge text/blob columns) must never be structured-cloned across the
- * worker port — ValueSerializer buffer growth on such a payload aborts the
+ * worker port   ValueSerializer buffer growth on such a payload aborts the
  * whole process. Truncation happens at a row boundary and always keeps the
  * first row so cursor-paged callers make forward progress.
  */
@@ -541,7 +541,7 @@ function query(request: Extract<DatabaseWorkerRequest, { kind: 'query' }>): Data
 
 /**
  * Bounded read that decodes straight to `AgentMessage[]` on the worker
- * thread — the multi-megabyte `parts` JSON string (and the bounded-output cap
+ * thread   the multi-megabyte `parts` JSON string (and the bounded-output cap
  * applied to legacy oversized tool outputs) is parsed here and never crosses
  * the worker port as raw text. See `bounded-tool-output.ts` for the cap.
  */

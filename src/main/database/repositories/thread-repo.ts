@@ -31,6 +31,7 @@ interface ThreadRow {
   context_usage: string | null
   session_id: string | null
   session_harness_id: string | null
+  session_account_id: string | null
   dismissed_spec_id: string | null
   dismissed_spec_version: number | null
   audit_state: string | null
@@ -52,7 +53,7 @@ interface ThreadRow {
   working_directory: string
 }
 
-/** Safe JSON read for optional blob columns — a corrupt row must not break a thread list. */
+/** Safe JSON read for optional blob columns   a corrupt row must not break a thread list. */
 function parseStoredJson(raw: string): unknown {
   try {
     return JSON.parse(raw)
@@ -145,6 +146,7 @@ function rowToThread(row: ThreadRow): Thread {
       : undefined,
     sessionId: row.session_id ?? undefined,
     sessionHarnessId: row.session_harness_id ?? undefined,
+    sessionAccountId: row.session_account_id ?? undefined,
     dismissedSpecId: row.dismissed_spec_id ?? undefined,
     dismissedSpecVersion: row.dismissed_spec_version ?? undefined,
     auditState: (row.audit_state as Thread['auditState']) ?? undefined,
@@ -225,7 +227,7 @@ export interface ThreadListOptions {
    * - `default`: pinned (newest pinned first), then manual `sort_order`, then
    *   `last_activity`. Manual reordering can push an active thread beyond a
    *   bounded `limit`, so a "recent" hydration query must use `activity` instead.
-   * - `activity`: pinned (newest pinned first), then `last_activity` descending —
+   * - `activity`: pinned (newest pinned first), then `last_activity` descending  
    *   guarantees the most recently active threads are always loaded regardless
    *   of `sort_order`.
    */
@@ -281,13 +283,13 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   id, project_id, provider_id, title, title_source, status,
   pinned, pinned_at, sort_order, scope_sort_order, archived, read,
   branch, feature_slug, scope_bucket_id, settings, context_usage,
-  session_id, session_harness_id, dismissed_spec_id, dismissed_spec_version,
+  session_id, session_harness_id, session_account_id, dismissed_spec_id, dismissed_spec_version,
   audit_state, loop_iteration, active_audit_id, active_audit_version,
   assignment_id, assignment_role, assignment_task_id,
   coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
   independent_audit, independent_audit_initialized,
   created_at, updated_at, last_activity, working_directory
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -306,6 +308,7 @@ ON CONFLICT(id) DO UPDATE SET
   context_usage=excluded.context_usage,
   session_id=excluded.session_id,
   session_harness_id=excluded.session_harness_id,
+  session_account_id=excluded.session_account_id,
   dismissed_spec_id=excluded.dismissed_spec_id,
   dismissed_spec_version=excluded.dismissed_spec_version,
   audit_state=excluded.audit_state,
@@ -347,6 +350,7 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.contextUsage ? JSON.stringify(thread.contextUsage) : null,
     thread.sessionId ?? null,
     thread.sessionHarnessId ?? null,
+    thread.sessionAccountId ?? null,
     thread.dismissedSpecId ?? null,
     thread.dismissedSpecVersion ?? null,
     thread.auditState ?? null,
@@ -630,6 +634,8 @@ export class ThreadRepo {
     const quotas = await this.projectQuotasViaWorker()
     // Per-project quotas default to the callback value; the inbox project
     // overrides it with its configured thread_limit (the Chats bucket size).
+    // Unread threads bypass the quota entirely: a stale-but-unread row must
+    // never be hidden from the first-paint slice, whatever its age.
     const cases = [...quotas.entries()]
       .filter(([id]) => quotaByProject(id) === Number.MAX_SAFE_INTEGER)
       .map(([id, quota]) => `WHEN project_id = '${id.replace(/'/g, "''")}' THEN ${quota}`)
@@ -649,7 +655,7 @@ export class ThreadRepo {
            AND achievement_role IS NOT 'auditor'
            AND coordinator_thread_id IS NULL
            AND assignment_id IS NULL
-       ) WHERE rn <= ${quotaExpr}
+       ) WHERE rn <= ${quotaExpr} OR read = 0
        ORDER BY pinned DESC, pinned_at DESC, last_activity DESC, id ASC`,
       [],
       0
@@ -661,11 +667,7 @@ export class ThreadRepo {
 
   /** Per-project thread quotas: project rows are few, read them wholesale. */
   private async projectQuotasViaWorker(): Promise<Map<string, number>> {
-    const result = await this.db.queryViaWorker(
-      'SELECT id, thread_limit FROM projects',
-      [],
-      0
-    )
+    const result = await this.db.queryViaWorker('SELECT id, thread_limit FROM projects', [], 0)
     const quotas = new Map<string, number>()
     if (!result.ok) return quotas
     for (const row of result.rows) {
@@ -835,9 +837,11 @@ export class ThreadRepo {
   /**
    * Full-text thread search across titles and conversation content.
    *
-   * Title matches (substring, case-insensitive) rank first, then message
-   * matches ordered by FTS5 relevance (bm25). Message matches surface user
-   * messages and the agent's final output from conversation-scoped records.
+   * Search across titles and conversation content. Results are deduped by
+   * thread and ranked by threaded recency (most recently active thread
+   * first); for title matches the title kind wins the snippet metadata.
+   * Message matches surface user messages and the agent's final output
+   * from conversation-scoped records.
    */
   search(query: string, options: ThreadSearchOptions = {}): ThreadSearchResult[] {
     const raw = query.trim()
@@ -904,39 +908,102 @@ export function buildThreadSearchSql(
   return { title, fts, limit }
 }
 
-/** Merge title + message matches, dedup by thread, and build snippets. */
+/**
+ * Score how strongly a thread title matches the query. All title rows already
+ * contain the full query substring (title LIKE), so this only grades closeness:
+ * exact title > title starting with the query > query appearing mid-title.
+ */
+function titleMatchScore(title: string, raw: string): number {
+  const normalizedTitle = title.toLowerCase()
+  const normalizedQuery = raw.toLowerCase()
+  if (normalizedTitle === normalizedQuery) return 3
+  if (normalizedTitle.startsWith(normalizedQuery)) return 2
+  return 1
+}
+
+/**
+ * Merge title + message matches, dedup by thread, and build snippets.
+ *
+ * Match quality always outranks recency:
+ * 1. Title matches come before message-only matches. Within title matches,
+ *    closer titles (exact > prefix > contains) rank first.
+ * 2. Message matches keep bm25 relevance order (rows arrive pre-sorted, so the
+ *    first row seen per thread is its best-scoring message and supplies the
+ *    snippet).
+ * 3. `last_activity` is only a tiebreaker inside the same quality tier so
+ *    equally relevant threads surface the most recent one first.
+ */
 export function mergeThreadSearchResults(
   titleRows: unknown[],
   messageRows: unknown[],
   raw: string,
   limit: number
 ): ThreadSearchResult[] {
-  const results: ThreadSearchResult[] = []
-  const seen = new Set<string>()
-  for (const row of titleRows) {
-    const threadRow = row as ThreadRow
-    if (seen.has(threadRow.id)) continue
-    seen.add(threadRow.id)
-    results.push({ thread: rowToThread(threadRow), kind: 'title' })
-    if (results.length >= limit) return results
+  interface Entry {
+    result: ThreadSearchResult
+    titleKind: boolean
+    titleScore: number
+    /** Lower bm25 is better; only meaningful for message matches. */
+    bm25: number
+    activity: number
   }
-  for (const row of messageRows) {
+  const byThread = new Map<string, Entry>()
+  const consume = (row: unknown, titleKind: boolean) => {
     const threadRow = row as ThreadRow
-    if (seen.has(threadRow.id)) continue
-    if (results.length >= limit) break
-    seen.add(threadRow.id)
+    if (byThread.has(threadRow.id)) {
+      const entry = byThread.get(threadRow.id)!
+      // An exact title hit beats a message hit for the same thread.
+      if (titleKind && !entry.titleKind) {
+        entry.titleKind = true
+        entry.titleScore = titleMatchScore(threadRow.title, raw)
+        entry.result.kind = 'title'
+        entry.result.role = undefined
+        entry.result.snippet = undefined
+        entry.result.timestamp = undefined
+      }
+      return
+    }
+    const thread = rowToThread(threadRow)
+    if (titleKind) {
+      byThread.set(threadRow.id, {
+        result: { thread, kind: 'title' },
+        titleKind: true,
+        titleScore: titleMatchScore(threadRow.title, raw),
+        bm25: 0,
+        activity: thread.lastActivity
+      })
+      return
+    }
     const meta = row as {
       match_role?: unknown
       snippet_text?: unknown
       snippet_timestamp?: unknown
+      fts_rank?: unknown
     }
-    results.push({
-      thread: rowToThread(threadRow),
-      kind: 'message',
-      role: String(meta.match_role) === 'assistant' ? 'assistant' : 'user',
-      snippet: buildSnippet(String(meta.snippet_text ?? ''), raw),
-      timestamp: Number(meta.snippet_timestamp)
+    byThread.set(threadRow.id, {
+      result: {
+        thread,
+        kind: 'message',
+        role: String(meta.match_role) === 'assistant' ? 'assistant' : 'user',
+        snippet: buildSnippet(String(meta.snippet_text ?? ''), raw),
+        timestamp: Number(meta.snippet_timestamp)
+      },
+      titleKind: false,
+      titleScore: 0,
+      // Rows arrive bm25-ordered, so the first row per thread is its best.
+      bm25: Number(meta.fts_rank ?? 0),
+      activity: thread.lastActivity
     })
   }
-  return results
+  for (const row of messageRows) consume(row, false)
+  for (const row of titleRows) consume(row, true)
+  return [...byThread.values()]
+    .sort((a, b) => {
+      if (a.titleKind !== b.titleKind) return a.titleKind ? -1 : 1
+      if (a.titleKind && a.titleScore !== b.titleScore) return b.titleScore - a.titleScore
+      if (!a.titleKind && a.bm25 !== b.bm25) return a.bm25 - b.bm25
+      return b.activity - a.activity
+    })
+    .slice(0, limit)
+    .map((entry) => entry.result)
 }

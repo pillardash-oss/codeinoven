@@ -13,15 +13,17 @@
     onClose: () => void
     /** Present when creating a worktree for an existing custom scope. */
     existingBucketId?: string | null
+    /** Pre-fills the display name — e.g. from a failed scope search. */
+    initialName?: string
     onCreated?: (bucketId: string) => void
   }
 
-  let { open, projectId, onClose, existingBucketId = null, onCreated }: Props = $props()
+  let { open, projectId, onClose, existingBucketId = null, initialName = '', onCreated }: Props = $props()
 
   const componentId = $props.id()
   const formId = `${componentId}-create-scope-form`
 
-  let name = $state('')
+  let name = $state(initialName)
   let isolated = $state(true)
   let runSetup = $state(true)
   let environmentMode = $state<'copy' | 'symlink'>('copy')
@@ -33,8 +35,6 @@
   /** Local branches whose options carry the [WrkT] worktree marker in the source dropdown. */
   let worktreeSourceCount = $state(0)
   let sourceInfo = $state.raw<ScopeWorktreeSourceInfo | null>(null)
-  let error = $state<string | null>(null)
-  let busy = $state(false)
 
   async function loadLocalBranches(getProjectId: () => string): Promise<void> {
     try {
@@ -96,45 +96,27 @@
     return `cio/${slug || 'feature'}`
   }
 
-  async function create(): Promise<void> {
+  /**
+   * Close immediately and hand the whole creation (bucket, defaults, worktree,
+   * environment + setup commands) to a background job tracked by a docked
+   * toast, so creating a worktree never blocks the UI.
+   */
+  function create(): void {
     const trimmed = name.trim()
-    if (!trimmed || busy || (isolated && (branchesLoading || !baseBranch))) return
-    busy = true
-    error = null
-    try {
-      // For an existing scope we only attach a worktree; otherwise the bucket
-      // is created first. Renaming on the migrate path keeps the stable
-      // branch/directory (main derives those from the feature title).
-      let bucketId = existingBucketId ?? null
-      if (!bucketId) {
-        const bucket = await scopeState.createBucketForProject(projectId, trimmed)
-        bucketId = bucket?.id ?? null
-        if (!bucketId) throw new Error('The scope could not be created')
-      }
-      if (isolated) {
-        // Persist the entered configuration as project defaults BEFORE creating
-        // so the saved defaults can never race ahead of this worktree, then
-        // pass the exact snapshot so these commands run for THIS worktree.
-        await scopeState.setWorktreeDefaults(projectId, {
-          setupCommands,
-          runSetupByDefault: runSetup,
-          environmentMode
-        })
-        await scopeState.createWorktree(projectId, bucketId, {
-          title: trimmed,
-          runSetup,
-          environmentMode,
-          setupCommands: setupCommands.map((command) => ({ ...command })),
-          ...(baseBranch.trim() ? { baseBranch: baseBranch.trim() } : {})
-        })
-      }
-      onCreated?.(bucketId)
-      onClose()
-    } catch (cause) {
-      error = cause instanceof Error ? cause.message : 'The scope could not be created.'
-    } finally {
-      busy = false
-    }
+    if (!trimmed || (isolated && (branchesLoading || !baseBranch))) return
+    onClose()
+    scopeState.beginWorktreeCreation(
+      projectId,
+      {
+        title: trimmed,
+        isolated,
+        runSetup,
+        environmentMode,
+        setupCommands: setupCommands.map((command) => ({ ...command })),
+        ...(isolated && baseBranch.trim() ? { baseBranch: baseBranch.trim() } : {})
+      },
+      { existingBucketId, onCreated }
+    )
   }
 </script>
 
@@ -157,9 +139,6 @@
         placeholder="Feature"
         bind:value={name}
       />
-      {#if error}
-        <p class="mt-1.5 text-xs text-danger">{error}</p>
-      {/if}
     </div>
 
     <div class="rounded-lg border bg-overlay p-3">
@@ -242,7 +221,7 @@
                   {sourceInfo.dirtyFiles.length} uncommitted change{sourceInfo.dirtyFiles.length ===
                   1
                     ? ''
-                    : 's'} in this checkout will not be included — commit them first if they belong in
+                    : 's'} in this checkout will not be included   commit them first if they belong in
                   this feature.
                 </span>
               </div>
@@ -320,9 +299,9 @@
       type="submit"
       form={formId}
       class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-      disabled={!name.trim() || busy || (isolated && (branchesLoading || !baseBranch))}
+      disabled={!name.trim() || (isolated && (branchesLoading || !baseBranch))}
     >
-      {busy ? 'Creating…' : 'Create'}
+      Create
     </button>
   {/snippet}
 </Modal>

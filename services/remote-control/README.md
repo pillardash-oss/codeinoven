@@ -68,11 +68,11 @@ client-secret JWT at runtime, with a 180-day expiry, whenever an Apple authoriza
 
 Required production variables:
 
-- `TRUST_PROXY=1` — enable only when the service is reachable exclusively through the trusted
+- `TRUST_PROXY=1`   enable only when the service is reachable exclusively through the trusted
   reverse proxy shown in `compose.example.yml`.
-- `BETTER_AUTH_SECRET` — generate with `openssl rand -base64 32`.
-- `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` — Google Cloud OAuth web client.
-- `APPLE_OAUTH_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY` — Apple Service
+- `BETTER_AUTH_SECRET`   generate with `openssl rand -base64 32`.
+- `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`   Google Cloud OAuth web client.
+- `APPLE_OAUTH_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY`   Apple Service
   ID and Sign in with Apple key credentials.
 
 The production service has two explicit public origins. `https://mobile.codeinoven.com` serves the

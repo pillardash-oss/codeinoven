@@ -413,7 +413,7 @@ describe('CheckpointManager', () => {
     expect(familyDone.changes.map((change) => change.path)).toEqual(['mine.txt', 'worker.txt'])
 
     // Without family knowledge, the same snapshot hides the worker sub-agent's
-    // work entirely — the regression this test locks in.
+    // work entirely   the regression this test locks in.
     const plain = await setup()
     const plainDone = await plain.manager.completeTurn(
       'project1',

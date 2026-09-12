@@ -43,7 +43,7 @@
     disabled?: boolean
     onValueChange?: (value: string) => void
     /** Fired only by Cmd/Ctrl+Enter (send) or Cmd/Ctrl+Shift+Enter (steer).
-     *  `direct` is true for the steer combo, false/undefined for plain send —
+     *  `direct` is true for the steer combo, false/undefined for plain send  
      *  busy callers queue on send and force-deliver on steer. */
     onSubmit?: (direct?: boolean) => void
     onPaste?: (event: ClipboardEvent) => void
@@ -96,7 +96,7 @@
   let lastHistoryInputType: string | null = null
   let lastHistoryAt = 0
 
-  /** Length a non-editable inline token occupies in serialized markdown — inline
+  /** Length a non-editable inline token occupies in serialized markdown   inline
    *  badges keep their stored value, footnote superscripts their `[^label]`. */
   function inlineTokenLength(node: HTMLElement): number | null {
     if (node.dataset.editorInlineBadge === 'true') return node.dataset.editorValue?.length ?? 0
@@ -210,7 +210,7 @@
     return bookmark
   }
 
-  /** Bookmark of the caret's latest position inside this editor — the live
+  /** Bookmark of the caret's latest position inside this editor   the live
    *  selection when it still points here, otherwise the last tracked position. */
   export function caretBookmark(): SelectionBookmark | null {
     return captureSelection() ?? lastSelectionBookmark
@@ -301,7 +301,7 @@
     }
   }
 
-  /** Visible characters in a text node — zero-width caret anchors are stripped by
+  /** Visible characters in a text node   zero-width caret anchors are stripped by
    *  serialization, so they must never shift a bookmark across a serialize → re-render
    *  round trip (which always drops them from the DOM). */
   function visibleTextLength(text: string | null | undefined): number {
@@ -678,11 +678,11 @@
     }
     if (!(element instanceof HTMLElement) || !editor.contains(element)) return null
     if (!INLINE_BOUNDARY_TAGS.has(element.tagName)) return null
-    // Ignore <code> inside <pre> — code-block content has its own boundary rules.
+    // Ignore <code> inside <pre>   code-block content has its own boundary rules.
     if (element.parentElement?.tagName === 'PRE') return null
     const offset = selection.anchorOffset
     // A boundary is the position where no text remains before (left) or after (right)
-    // the caret inside the element — even if the element ends in a <br> or is empty.
+    // the caret inside the element   even if the element ends in a <br> or is empty.
     const boundary = left
       ? !hasTextBefore(element, anchor, offset)
       : !hasTextAfter(element, anchor, offset)
@@ -748,7 +748,7 @@
 
     // A backtick typed at the end of an inline code span closes it: the caret
     // moves after the span instead of the backtick nesting inside the code.
-    // Only for a collapsed caret sitting at the span's very end — mid-span and
+    // Only for a collapsed caret sitting at the span's very end   mid-span and
     // multi-selection typing stays literal.
     if (event.key === '`') {
       const selection = window.getSelection()
@@ -781,7 +781,7 @@
     // Shift+Arrow never moves the caret by hand: the browser's own extended
     // selection must run untouched. Intercepting here (e.g. exiting an inline
     // token or a leading/trailing code block) would collapse the selection the
-    // user is trying to build — exactly the breakage seen after pasting content
+    // user is trying to build   exactly the breakage seen after pasting content
     // that renders as one of those structures.
     if (!event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
       const left = event.key === 'ArrowLeft'
@@ -799,7 +799,7 @@
         '[data-editor-codeblock]'
       ) as HTMLElement | null
       // A collapsed caret can also sit at the editor level, stranded right after a
-      // trailing code block (or before a leading one) — e.g. after pasting text
+      // trailing code block (or before a leading one)   e.g. after pasting text
       // that ends in a code block, or when autofocus lands on a draft that ends in
       // one. ArrowDown/ArrowUp must still be able to exit the block then.
       const stranded =
@@ -922,7 +922,7 @@
       const blockTag = selectedBlockTag(editor)
 
       // Shift+Enter always inserts a soft line break (never a new list item,
-      // never a submit) — regardless of whether this editor can submit.
+      // never a submit)   regardless of whether this editor can submit.
       if (event.shiftKey) {
         const historyEntry = captureHistoryEntry()
         if (insertMarkdownLineBreak(editor)) {
@@ -1078,7 +1078,7 @@
     const bookmark = captureVisibleSelection()
     replaceEditorContent(markdown)
     // A paste whose tail renders as a fenced code block must never park the caret
-    // inside or against the non-editable wrapper — typing, the slash menu and the
+    // inside or against the non-editable wrapper   typing, the slash menu and the
     // input rules all go dead there. Guarantee a trailing editable paragraph.
     if (editor.lastElementChild?.matches('[data-editor-codeblock]')) {
       const p = document.createElement('p')
@@ -1091,7 +1091,7 @@
     else placeCaretAtEditorEnd()
     // The bookmark is measured on the pre-render DOM, which can be much longer than
     // the re-rendered markdown (fence markers, soft breaks and code headers collapse
-    // away), so it overshoots and strands the caret at the editor level — typically
+    // away), so it overshoots and strands the caret at the editor level   typically
     // right after a trailing code block, where typing is impossible and ArrowDown
     // cannot leave the block. Snap a stranded caret to the end of the last block
     // (inside a trailing code block's <code> element), which is where the caret

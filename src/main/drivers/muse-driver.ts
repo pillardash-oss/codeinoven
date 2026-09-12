@@ -52,7 +52,7 @@ import { Logger } from '../system/logger'
  * Muse Code (Meta) headless integration notes.
  *
  * Muse is a terminal-only coding agent whose programmatic surface is
- * `muse exec --json` — a one-shot, headless run that streams newline-delimited
+ * `muse exec --json`   a one-shot, headless run that streams newline-delimited
  * JSON on stdout and exits when the turn is done. CodeInOven deliberately runs
  * every turn without Muse-native session history, workspace rules, or skills;
  * the app supplies its own bounded history recap, behavior, memory, and utility
@@ -72,7 +72,7 @@ import { Logger } from '../system/logger'
  *   - `*.compaction*` / `runtime.session` `compaction` → harness-native context
  *     compaction checkpoint (auto when soft/hard threshold hit). Mirrored as a
  *     `compaction` part so `formatHistoryRecap` slices from that cut on the
- *     next turn — seamless continuation.
+ *     next turn   seamless continuation.
  *   - `tool.result` → authoritative tool completion (`call_id`, `text`)
  * The provider session UUID is intentionally not reused: every turn runs with
  * a fresh `--session-id`, so Muse-native memory/history stays isolated. The
@@ -141,7 +141,7 @@ async function findMuseSessionLog(museSessionId: string): Promise<string | null>
       const info = await stat(candidate)
       if (info.isFile()) return candidate
     } catch {
-      // Not written yet — keep probing until the finder timeout.
+      // Not written yet   keep probing until the finder timeout.
     }
   }
   return null
@@ -594,7 +594,7 @@ function museCompleteTool(
 }
 
 /**
- * Finalize every in-flight tool card that outlived its run — e.g. the run was
+ * Finalize every in-flight tool card that outlived its run   e.g. the run was
  * stopped for a permission gate or steering while a sibling call was mid-flight,
  * or the turn ended without the call reporting a result. Without this the
  * affected cards spin forever and never show their details.
@@ -607,7 +607,7 @@ function museFinalizeInterruptedTools(
   for (const tool of state.tools.values()) {
     if (tool.status !== 'pending' && tool.status !== 'running') continue
     if (state.gatedTaskIds.has(tool.taskId) || tool.requiresPermission) continue
-    tool.error = 'Interrupted — the Muse run stopped before this call reported a result.'
+    tool.error = 'Interrupted   the Muse run stopped before this call reported a result.'
     const event = museCompleteTool(context, state, tool, undefined, true)
     if (event) events.push(event)
   }
@@ -652,10 +652,10 @@ function museCompactionResult(
 ): CliLineParseResult {
   const fallbackSummary =
     summary ??
-    'Automatic context compaction by Muse — older history summarized per summary-preserved-suffix/v1; next turn continues seamlessly from this checkpoint with preserved suffix.'
+    'Automatic context compaction by Muse   older history summarized per summary-preserved-suffix/v1; next turn continues seamlessly from this checkpoint with preserved suffix.'
   // Muse mirrors the same compaction checkpoint into both the headless stdout
   // and its durable session log with unrelated record ids. One CodeInOven
-  // checkpoint per actual compaction — skip an identical repeat.
+  // checkpoint per actual compaction   skip an identical repeat.
   if (state.lastCompactionSummary === fallbackSummary) {
     return {}
   }
@@ -706,7 +706,7 @@ function museSubagentPart /* worktree_isolation normalized to false */(
   state: MuseTurnState,
   tool: MuseToolState
 ): AgentPart {
-  // Force shared worktree — CodeInOven owns worktree lifecycle, never isolated
+  // Force shared worktree   CodeInOven owns worktree lifecycle, never isolated
   normalizeMuseWorktreeIsolation((tool as unknown as { input?: unknown }).input)
   const input = tool.input ?? {}
   const agent =
@@ -887,7 +887,7 @@ export function mapMuseRecord(
     if (!exportedEvent) return base
     const kind = stringValue(exportedEvent['kind'])
 
-    // Reasoning trace — Muse 1.x does not stream reasoning on the headless
+    // Reasoning trace   Muse 1.x does not stream reasoning on the headless
     // stdout at all; the plaintext reasoning summary (and, for providers that
     // expose it, the raw reasoning delta) is only persisted to the durable
     // session log. The driver tails that log during the turn and replays these
@@ -922,7 +922,7 @@ export function mapMuseRecord(
       }
     }
 
-    // Session-log mirror of `task.lifecycle.output` — same chunk shape, so
+    // Session-log mirror of `task.lifecycle.output`   same chunk shape, so
     // backfill the tool card when the live stream missed the chunk (e.g. the
     // run was stopped for a permission gate right after the call started).
     if (kind === 'output') {
@@ -938,7 +938,7 @@ export function mapMuseRecord(
       return { ...base, events: [museToolEvent(context, state, tool)] }
     }
 
-    // Session-log mirror of `tool.result` batches — authoritative completion
+    // Session-log mirror of `tool.result` batches   authoritative completion
     // backfill for tool cards whose stdout result never arrived.
     if (kind === 'tool_result_batch_committed') {
       const results = Array.isArray(exportedEvent['results']) ? exportedEvent['results'] : []
@@ -985,7 +985,7 @@ export function mapMuseRecord(
             !tool.policyDecision.startsWith('allow') &&
             tool.policyDecision !== 'not_applicable')
         ) {
-          // Surface the card only once — and only after the committed args are
+          // Surface the card only once   and only after the committed args are
           // available so the permission carries the actual command.
           if (!tool.requiresPermission || !state.emittedPermissionTasks.has(tool.taskId)) {
             const permissionEvent = musePermissionEvent(context, state, {
@@ -1067,7 +1067,7 @@ export function mapMuseRecord(
     return base
   }
 
-  // Harness-native context compaction — emitted by Muse when the soft/hard
+  // Harness-native context compaction   emitted by Muse when the soft/hard
   // threshold fires (summary-preserved-suffix/v1). Mirror it as a CodeInOven
   // compaction checkpoint so the next turn's history recap slices from that cut
   // and continues seamlessly instead of replaying the full pre-compaction
@@ -1096,9 +1096,9 @@ export function mapMuseRecord(
     }
   }
 
-  // Tool call proposed — announce a pending tool card in the working trace.
+  // Tool call proposed   announce a pending tool card in the working trace.
   // Muse sub-agents (`subagent_spawn`) are rendered as `type:'subagent'` so CodeInOven shows proper cards.
-  // Normalize worktree_isolation to false (shared) — CodeInOven owns worktree lifecycle.
+  // Normalize worktree_isolation to false (shared)   CodeInOven owns worktree lifecycle.
   // (normalization also done in museSubagentPart)
   // WorkingTrace shows SubagentCard + the header chip/sheet instead of a flat
   // generic tool card.
@@ -1115,7 +1115,7 @@ export function mapMuseRecord(
         start: Date.now()
       }
       state.tools.set(taskId, tool)
-      // CodeInOven owns worktree lifecycle — force shared worktree for any subagent spawn.
+      // CodeInOven owns worktree lifecycle   force shared worktree for any subagent spawn.
       normalizeMuseWorktreeIsolation(tool.input)
       if (isMuseSubagentSpawn(taskKind)) {
         return { ...base, events: [museSubagentEvent(context, state, tool)] }
@@ -1149,7 +1149,7 @@ export function mapMuseRecord(
     return base
   }
 
-  // Tool call accepted for execution — flip to running and record the provider
+  // Tool call accepted for execution   flip to running and record the provider
   // call id (also the key used later by `tool.result`).
   if (payloadType === 'task.lifecycle.side_effect_intent') {
     const tool = taskId ? state.tools.get(taskId) : undefined
@@ -1191,7 +1191,7 @@ export function mapMuseRecord(
     }
   }
 
-  // Tool output chunk — for bash it is a JSON `{command, description, output}`;
+  // Tool output chunk   for bash it is a JSON `{command, description, output}`;
   // for write/read it is the human-readable result. Prefer `tool.result` for the
   // authoritative completion; this fills the input/title early so the card is
   // meaningful while still running.
@@ -1231,7 +1231,7 @@ export function mapMuseRecord(
     }
   }
 
-  // Tool result — authoritative completion; correlate by provider call id.
+  // Tool result   authoritative completion; correlate by provider call id.
   if (payloadType === 'tool.result') {
     const callId = stringValue(payload['call_id'])
     const taskIdFromCall = callId ? state.toolByCall.get(callId) : undefined
@@ -1261,7 +1261,7 @@ export function mapMuseRecord(
     return { ...base, events: [museToolEvent(context, state, tool)] }
   }
 
-  // Tool lifecycle completion — Muse 1.x never re-emits the committed tool
+  // Tool lifecycle completion   Muse 1.x never re-emits the committed tool
   // call and `tool.result` is absent for non-shell tools, so without this
   // handler completed tool cards would stay `running` forever with an empty
   // input. Flip the matching task to `completed` when its lifecycle closes.
@@ -1276,7 +1276,7 @@ export function mapMuseRecord(
     return { ...base, events: [museToolEvent(context, state, tool)] }
   }
 
-  // Tool task closed without executing — Muse policy rejected the call (or the
+  // Tool task closed without executing   Muse policy rejected the call (or the
   // run cancelled/timed it out). Without this the card stays pending forever.
   if (
     payloadType === 'task.lifecycle.rejected' ||
@@ -1320,7 +1320,7 @@ export function mapMuseRecord(
     }
   }
 
-  // Streaming reasoning trace — Muse Spark reasoning effort produces
+  // Streaming reasoning trace   Muse Spark reasoning effort produces
   // provider-side thinking that the CLI surfaces as a separate delta channel.
   // The current CLI (0.2.1) inlines reasoning into `run.output.delta` text for
   // most turns, but any future `*reasoning*` / `*thinking*` payload is captured
@@ -1371,7 +1371,7 @@ export function mapMuseRecord(
     return base
   }
 
-  // Streaming assistant text — `payload.text` is an incremental delta.
+  // Streaming assistant text   `payload.text` is an incremental delta.
   if (payloadType === 'run.output.delta') {
     const delta = stringValue(payload['text'])
     if (delta) {
@@ -1388,7 +1388,7 @@ export function mapMuseRecord(
     return base
   }
 
-  // Generic reasoning payload — captures any envelope that carries reasoning/
+  // Generic reasoning payload   captures any envelope that carries reasoning/
   // thinking content even when payload_type does not contain those words.
   {
     const genericDelta =
@@ -1419,7 +1419,7 @@ export function mapMuseRecord(
     }
   }
 
-  // Turn end — `payload.terminal` is `completed` on success, anything else is an
+  // Turn end   `payload.terminal` is `completed` on success, anything else is an
   // error. `payload.text` is the authoritative final text.
   if (payloadType === 'run.terminal.completed') {
     const terminal = stringValue(payload['terminal'])
@@ -1526,7 +1526,7 @@ export class MuseDriver extends PersistentCliDriver {
   /**
    * Steers received while a tool call is mid-flight (e.g. a running shell
    * command). Muse's `exec` process cannot accept live input, so a steer
-   * always restarts the turn — but restarting immediately would kill the
+   * always restarts the turn   but restarting immediately would kill the
    * tool call itself. Queue it here and deliver once `onJsonRecord` observes
    * the tool call settle (`tool.result`), or the process exits for any other
    * reason. The user's message is already visible in the transcript via
@@ -1697,7 +1697,7 @@ export class MuseDriver extends PersistentCliDriver {
   ): Promise<CliTurnCommand> {
     // A fresh Muse session UUID per turn keeps Muse-native memory and history
     // isolated (CodeInOven supplies its own recap) while still enabling the
-    // durable session log — the only place Muse 1.x persists the reasoning
+    // durable session log   the only place Muse 1.x persists the reasoning
     // summary trace and committed tool-call details for headless runs.
     const museSessionId = randomUUID()
     const args: string[] = [
@@ -1753,7 +1753,7 @@ export class MuseDriver extends PersistentCliDriver {
     )
 
     // Subagents share the CodeInOven-managed worktree/scope. Do not
-    // pass `--subagent-worktree-isolation` — CodeInOven owns the Git
+    // pass `--subagent-worktree-isolation`   CodeInOven owns the Git
     // worktree lifecycle (`ScopeWorktreeService`); harness-owned worktrees
     // are intentionally disabled. `subagent_spawn` without `worktree_isolation:true` stays shared;
     // any affirmative `worktree_isolation:true` is normalized to `false` (shared) before execution.
@@ -1811,7 +1811,7 @@ export class MuseDriver extends PersistentCliDriver {
       attachments: [...options.attachments]
     })
     // Muse 1.x never streams the reasoning summary or committed tool-call
-    // arguments on headless stdout — they are only persisted to the durable
+    // arguments on headless stdout   they are only persisted to the durable
     // session log. Tail that log for the duration of the turn so the working
     // trace shows live thinking and complete tool details.
     this.startSessionLogWatcher(session.id, turnState, session, _projectPath, museSessionId)
@@ -1850,7 +1850,7 @@ export class MuseDriver extends PersistentCliDriver {
           }
         }
 
-        // A tool call just settled (its authoritative completion signal) — if a
+        // A tool call just settled (its authoritative completion signal)   if a
         // steer is queued and no other tool call is still in flight, this is
         // the safe boundary to deliver it at.
         if (payloadType === 'tool.result') {
@@ -1884,7 +1884,7 @@ export class MuseDriver extends PersistentCliDriver {
         // still captured.
         this.scheduleSessionLogWatcherStop(session.id)
         // Fallback for turns that never produced a tool-call boundary (a
-        // plain-text reply, or the process exiting before one settled) — a
+        // plain-text reply, or the process exiting before one settled)   a
         // steer queued against this turn would otherwise never be delivered.
         this.deliverPendingSteers(session.id)
       }
@@ -2003,7 +2003,7 @@ export class MuseDriver extends PersistentCliDriver {
     try {
       // The gated run was stopped (or is paused waiting on an interaction
       // prompt). Await the process settlement so resuming never collides with
-      // the still-active turn ("A turn is already active") — same teardown
+      // the still-active turn ("A turn is already active")   same teardown
       // contract steerPrompt relies on.
       await this.settleActiveProcess(sessionId)
       await this.sendPrompt(projectPath, {

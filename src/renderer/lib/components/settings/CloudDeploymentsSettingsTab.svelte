@@ -1,6 +1,7 @@
 <script lang="ts">
   import { AlertTriangle, Loader2, Pencil, Plus, RefreshCw, Trash2 } from '@lucide/svelte'
   import { cloudAccountsState } from '$lib/stores/cloud-accounts.svelte'
+  import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
   import CloudProviderIcon from '../cloud/icons/CloudProviderIcon.svelte'
   import Modal from '../ui/Modal.svelte'
   import CloudDeploymentAccountEditor from './CloudDeploymentAccountEditor.svelte'
@@ -22,6 +23,14 @@
   let editingAccount = $state<CloudDeploymentProviderAccount | null>(null)
   let deleteTarget = $state<CloudDeploymentProviderAccount | null>(null)
   let deleteError = $state('')
+
+  // Non-sortable listing: the shared table component provides the structure,
+  // borders, and header/accessibility treatment.
+  const accountColumns: DataTableColumn<CloudDeploymentProviderAccount, never>[] = [
+    { key: null, header: 'Account' },
+    { key: null, header: 'Base URL' },
+    { key: null, header: 'Actions', headerClass: 'sr-only' }
+  ]
 
   function openCreate(): void {
     editingAccount = null
@@ -110,11 +119,17 @@
         </button>
       </div>
     {:else}
-      <div class="overflow-hidden rounded-xl border bg-surface">
-        {#each cloudAccountsState.accounts as account (account.id)}
-          <div
-            class="grid grid-cols-[minmax(0,1fr)_minmax(8rem,0.6fr)_auto] items-center gap-3 border-b px-3 py-2.5 last:border-b-0"
-          >
+      <DataTable
+        rows={cloudAccountsState.accounts}
+        columns={accountColumns}
+        getRowId={(account) => account.id}
+        label="Cloud deployment provider accounts"
+      >
+        {#snippet cell(
+          account: CloudDeploymentProviderAccount,
+          column: DataTableColumn<CloudDeploymentProviderAccount, never>
+        )}
+          {#if column.header === 'Account'}
             <div class="min-w-0">
               <div class="flex items-center gap-2">
                 <CloudProviderIcon
@@ -136,9 +151,11 @@
                 {PROVIDER_DISPLAY_NAMES[account.providerKind]}
               </p>
             </div>
+          {:else if column.header === 'Base URL'}
             <p class="truncate font-mono text-[0.625rem] text-dimmed" title={account.baseUrl}>
               {account.baseUrl ?? 'No base URL'}
             </p>
+          {:else}
             <div class="flex items-center gap-1">
               <button
                 class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-overlay hover:text-foreground"
@@ -157,9 +174,9 @@
                 <Trash2 size={13} />
               </button>
             </div>
-          </div>
-        {/each}
-      </div>
+          {/if}
+        {/snippet}
+      </DataTable>
     {/if}
   </div>
 </div>

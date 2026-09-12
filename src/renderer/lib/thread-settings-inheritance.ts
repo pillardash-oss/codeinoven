@@ -74,11 +74,11 @@ export async function inheritEngineeringLifecycle(
       autopilot: source.autopilot
     })
     // The destination view may already be mounted and have hydrated its
-    // lifecycle state before this copy landed — signal it to re-read so the
+    // lifecycle state before this copy landed   signal it to re-read so the
     // inherited switches show as on instead of staying neutral.
     notifyEngineeringLifecycleInherited(destinationThreadId)
   } catch {
-    // Lifecycle inheritance is cosmetic — never block thread creation on it.
+    // Lifecycle inheritance is cosmetic   never block thread creation on it.
   }
 }
 

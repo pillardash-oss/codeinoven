@@ -122,6 +122,7 @@ export function validateEngineeringLifecycleResumeToken(value: unknown): string 
 const THREAD_SETTINGS_FIELDS = new Set([
   'harnessId',
   'providerId',
+  'accountId',
   'modelId',
   'titleMode',
   'thinkingLevel',
@@ -138,6 +139,7 @@ const AGENT_MODEL_SELECTION_FIELDS = new Set([
   'harnessId',
   'providerId',
   'modelId',
+  'accountId',
   'thinkingLevel'
 ])
 const CREATE_PROJECT_FIELDS = new Set([
@@ -1025,7 +1027,7 @@ export function validateChecklistItemStatus(value: unknown): ChecklistItemStatus
 export function validateThreadSettings(value: unknown): ThreadSettings {
   const input = assertRecord(value, 'Thread settings')
   // Settings persisted before the legacy `engineeringMode` flag was scrubbed
-  // still carry it — tolerate and drop it instead of rejecting the payload.
+  // still carry it   tolerate and drop it instead of rejecting the payload.
   const { engineeringMode: _legacyEngineeringMode, ...rest } = input
   rejectUnknownFields(rest, THREAD_SETTINGS_FIELDS, 'thread settings')
 
@@ -1040,6 +1042,9 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
         ? false
         : validateBoolean(input.assignmentMode, 'Assignment'),
     loopMode: input.loopMode === undefined ? false : validateBoolean(input.loopMode, 'Achievement')
+  }
+  if (input.accountId !== undefined) {
+    settings.accountId = validateEntityId(input.accountId, 'Account ID', 256)
   }
   if (input.inferenceMode !== undefined) {
     settings.inferenceMode = assertEnum(input.inferenceMode, INFERENCE_MODES, 'inference mode')
@@ -1062,6 +1067,11 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
         128
       ),
       modelId: validateBoundedString(auditor.modelId, 'Achievement auditor model ID', 1, 256),
+      ...(auditor.accountId === undefined
+        ? {}
+        : {
+            accountId: validateEntityId(auditor.accountId, 'Achievement auditor account ID', 256)
+          }),
       ...(auditor.thinkingLevel === undefined
         ? {}
         : {
@@ -1085,6 +1095,11 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
         128
       ),
       modelId: validateBoundedString(descriptor.modelId, 'Image descriptor model ID', 1, 256),
+      ...(descriptor.accountId === undefined
+        ? {}
+        : {
+            accountId: validateEntityId(descriptor.accountId, 'Image descriptor account ID', 256)
+          }),
       ...(descriptor.thinkingLevel === undefined
         ? {}
         : {
@@ -1113,6 +1128,15 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
         1,
         256
       ),
+      ...(descriptor.accountId === undefined
+        ? {}
+        : {
+            accountId: validateEntityId(
+              descriptor.accountId,
+              'Image descriptor fallback account ID',
+              256
+            )
+          }),
       ...(descriptor.thinkingLevel === undefined
         ? {}
         : {
@@ -1388,12 +1412,21 @@ export function validateScopeBoard(value: unknown): ScopeBoard {
 }
 
 const HOSTNAME_PATTERN =
-  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/iu
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?::\d{1,5})?$/iu
+
+function isValidPortSuffix(value: string): boolean {
+  const portIndex = value.lastIndexOf(':')
+  if (portIndex === -1) return true
+  const port = Number(value.slice(portIndex + 1))
+  return Number.isInteger(port) && port >= 1 && port <= 65_535
+}
 
 /**
  * Validate a list of hostnames used for favicon resolution. Each entry must be
- * a bounded, hostname-shaped string with no scheme, path, port, or control
- * characters. Deduplicates preserving first occurrence.
+ * a bounded, hostname-shaped string with no scheme, path, or control
+ * characters. An optional trailing `:port` (1–65535) is allowed so localhost
+ * development servers resolve against their real port. Deduplicates preserving
+ * first occurrence.
  */
 export function validateFaviconHostnames(value: unknown): string[] {
   if (!Array.isArray(value)) throw new TypeError('Favicon hostnames must be an array')
@@ -1406,11 +1439,12 @@ export function validateFaviconHostnames(value: unknown): string[] {
     if (
       typeof entry !== 'string' ||
       entry.length === 0 ||
-      entry.length > 253 ||
+      entry.length > 253 + 6 ||
       entry.includes('\0') ||
       entry.includes('\n') ||
       entry.includes('\r') ||
-      !HOSTNAME_PATTERN.test(entry)
+      !HOSTNAME_PATTERN.test(entry) ||
+      !isValidPortSuffix(entry)
     ) {
       throw new TypeError(`Favicon hostname at index ${index} is invalid`)
     }
@@ -1458,7 +1492,7 @@ export interface PrivilegedScopeResolvers {
   /** Registered local project root directories, resolved lazily. */
   projectRoots: () => Promise<readonly string[]> | readonly string[]
   /** Concrete app-owned artifact directories (per project) that reveal/preview
-   *  may target — never the whole config root, which holds secrets. */
+   *  may target   never the whole config root, which holds secrets. */
   appArtifactRoots: () => Promise<readonly string[]> | readonly string[]
   /** Exact canonical files previously persisted as user-authored attachments. */
   isApprovedFile?: (canonicalPath: string) => Promise<boolean> | boolean
@@ -1522,8 +1556,9 @@ export class PrivilegedIpcValidator {
   /**
    * Whether the IPC sender frame is the app's own trusted main frame. Only the
    * top-level frame (no parent) may invoke privileged IPC, and its document URL
-   * must exactly match one of the app's own renderer URLs — never a foreign or
-   * arbitrary same-origin document.
+   * must match one of the app's own renderer URLs (query strings ignored, so
+   * first-party documents may carry state such as ?theme=)   never a foreign
+   * or arbitrary same-origin document.
    */
   isTrustedSenderFrame(frame: TrustedFrameCandidate | null | undefined): boolean {
     if (!frame || typeof frame.url !== 'string' || frame.url.length === 0) return false
@@ -1584,7 +1619,13 @@ export class PrivilegedIpcValidator {
 
   #normalizeUrl(url: string): string | null {
     try {
-      return new URL(url).href
+      const parsed = new URL(url)
+      // First-party documents are identified by their path; a query string
+      // (e.g. the permission popup's ?theme= hint) must never make a trusted
+      // sender untrustworthy. Fragments stay significant (hash routing can
+      // change what a document renders).
+      parsed.search = ''
+      return parsed.href
     } catch {
       return null
     }

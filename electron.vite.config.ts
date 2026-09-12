@@ -153,8 +153,7 @@ export default defineConfig(({ mode }) => {
         rollupOptions: {
           external: ['electron'],
           input: {
-            index: resolve(__dirname, 'src/preload/index.ts'),
-            'switcher-preload': resolve(__dirname, 'src/preload/switcher-preload.ts')
+            index: resolve(__dirname, 'src/preload/index.ts')
           },
           // Sandboxed Electron preloads execute in a CommonJS-like isolated
           // context. Emitting ESM here makes production fail before the bridge
@@ -206,10 +205,7 @@ export default defineConfig(({ mode }) => {
             index: resolve(__dirname, 'src/renderer/index.html'),
             // Installable phone client (PWA): served by the LAN gateway in
             // production, or by the Vite dev server in development.
-            remote: resolve(__dirname, 'src/renderer/remote.html'),
-            // Standalone page loaded by the native Ctrl+Tab overlay view (it
-            // must run in its own WebContentsView to stack above the browser).
-            switcher: resolve(__dirname, 'src/renderer/switcher.html')
+            remote: resolve(__dirname, 'src/renderer/remote.html')
           }
         }
       }

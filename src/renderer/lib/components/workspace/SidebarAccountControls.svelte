@@ -148,7 +148,7 @@
     <button
       type="button"
       class="flex h-8 w-8 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      title="Task manager — running processes"
+      title="Task manager   running processes"
       aria-label="Open the task manager"
       onclick={() => (taskManagerOpen = true)}
     >
@@ -191,7 +191,7 @@
       <button
         type="button"
         class="flex h-8 w-8 items-center justify-center rounded-lg text-primary transition-colors hover:bg-elevated"
-        title="Update {updaterState.status.availableVersion} available — download"
+        title="Update {updaterState.status.availableVersion} available   download"
         aria-label="Download update {updaterState.status.availableVersion}"
         onclick={() => void updaterState.downloadUpdate()}
       >
@@ -202,8 +202,8 @@
         type="button"
         class="flex h-8 items-center gap-1 rounded-lg px-1.5 text-[0.6875rem] text-muted"
         disabled
-        title="Downloading update — {updaterState.status.downloadProgress}%"
-        aria-label="Downloading update — {updaterState.status.downloadProgress}%"
+        title="Downloading update   {updaterState.status.downloadProgress}%"
+        aria-label="Downloading update   {updaterState.status.downloadProgress}%"
       >
         <Loader2 size={13} class="animate-spin" />
         <span class="tabular-nums">{updaterState.status.downloadProgress}%</span>
@@ -212,7 +212,7 @@
       <button
         type="button"
         class="flex h-8 w-8 items-center justify-center rounded-lg text-primary transition-colors hover:bg-elevated"
-        title="Update ready — restart and install"
+        title="Update ready   restart and install"
         aria-label="Restart and install update"
         onclick={() => void updaterState.installUpdate()}
       >

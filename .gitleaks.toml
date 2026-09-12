@@ -1,0 +1,16 @@
+# Shared gitleaks configuration: used by the Security workflow (gitleaks-action
+# auto-discovers this file at the repo root) and by the local CI mirror
+# (`bun run ci:local`). Past commits touched fake API-key fixtures in these
+# test files; they are allowlisted so history scans stay green on both CI and
+# locally.
+title = 'CodeInOven gitleaks config'
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = 'Fake credentials in test fixtures'
+paths = [
+  '''^src/main/remote/remote-gateway\.test\.ts$''',
+  '''^tests/main/utilities/cio-diagnostics-service\.test\.ts$'''
+]

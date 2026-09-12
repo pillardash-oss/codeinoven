@@ -207,6 +207,7 @@
         harnessId={visionSelection?.harnessId ?? providers[0]?.harnessId ?? ''}
         providerId={visionSelection?.providerId ?? ''}
         modelId={visionSelection?.modelId ?? ''}
+        accountId={visionSelection?.accountId}
         {favoriteModels}
         {recentModels}
         {onRemoveRecent}
@@ -214,8 +215,8 @@
         side="top"
         variant="field"
         disabled={working}
-        onSelect={(providerId, modelId, harnessId) => {
-          override = { harnessId, providerId, modelId }
+        onSelect={(providerId, modelId, harnessId, accountId) => {
+          override = { harnessId, providerId, modelId, accountId }
         }}
         thinkingLevel={visionSelection?.thinkingLevel}
         onSelectThinking={chooseThinking}

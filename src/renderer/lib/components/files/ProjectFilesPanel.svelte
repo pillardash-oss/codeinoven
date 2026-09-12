@@ -55,7 +55,7 @@
   import ProjectFileViewerMenu from './ProjectFileViewerMenu.svelte'
   import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
   import type { ProjectTextFile } from '$shared/types'
-  import type { ProjectFileInfo } from '$lib/types'
+  import type { ProjectFileInfo } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -161,16 +161,16 @@
   let documentHtml = $state<string | null>(null)
   let documentLoading = $state(false)
   let documentFailed = $state(false)
-  /** Human-readable reason when a preview fails — surfaced in the pane. */
+  /** Human-readable reason when a preview fails   surfaced in the pane. */
   let documentError = $state<string | null>(null)
-  /** Path whose HTML is currently loaded — guards against tab swaps. */
+  /** Path whose HTML is currently loaded   guards against tab swaps. */
   let documentHtmlPath = $state<string | null>(null)
-  /** Path whose HTML is currently being fetched — guards against effect
+  /** Path whose HTML is currently being fetched   guards against effect
    *  re-runs (driven by `activeTab` reference churn) starting duplicate IPC
    *  chains that would otherwise cancel or pile on top of each other.
    *  Deliberately NOT `$state`: the effect both reads and writes it, so a
    *  reactive variable here would re-trigger the effect on its own write
-   *  (effect_update_depth_exceeded) — same reason the previous run token was
+   *  (effect_update_depth_exceeded)   same reason the previous run token was
    *  a plain `let`. Only the async callbacks consult it after each run. */
   let documentInFlightPath: string | null = null
   /** Monotonic ownership token, incremented only when a new chain actually
@@ -181,7 +181,7 @@
    *  touches `workspaceState.selectedThread`, which is reassigned on every
    *  thread update. Reading it inside the effect would re-run (and cancel)
    *  the preview load on each thread churn, leaving `documentLoading` stuck
-   *  true — the infinite spinner. */
+   *  true   the infinite spinner. */
   let documentScopeBucketId = $derived(workspaceState.activeScopeBucketIdFor(projectId))
   $effect(() => {
     if (!activeTab || !documentPreview || activeTab.view !== 'preview') {
@@ -194,10 +194,10 @@
       return
     }
     const path = activeTab.path
-    // Bail if this path is already loaded OR already being fetched — the
+    // Bail if this path is already loaded OR already being fetched   the
     // in-flight chain settles its own state. Without the in-flight guard,
     // every `activeTab` reference change restarts the chain and the previous
-    // one never gets to clear `documentLoading` — the infinite spinner.
+    // one never gets to clear `documentLoading`   the infinite spinner.
     if (documentHtmlPath === path || documentInFlightPath === path) return
     documentInFlightPath = path
     const token = ++documentEffectToken
@@ -506,6 +506,20 @@
   let editorFindValue = $state('')
   let editorFindActive = $state(0)
   let editorFindTotal = $state(0)
+  let editorFindNonce = $state(0)
+  let editorReplaceValue = $state('')
+  let editorReplaceAction = $state<'one' | 'all'>('one')
+  let editorReplaceNonce = $state(0)
+  let editorReplaceRequest = $derived<{ nonce: number; action: 'one' | 'all'; query: string; replacement: string } | null>(
+    editorReplaceNonce === 0
+      ? null
+      : {
+          nonce: editorReplaceNonce,
+          action: editorReplaceAction,
+          query: editorFindValue,
+          replacement: editorReplaceValue
+        }
+  )
 
   function closeEditorFind(): void {
     findNavState.closeEditorFind()
@@ -541,6 +555,26 @@
     const prev = (editorFindActive - 1 + editorFindTotal) % editorFindTotal
     editorFindActive = prev
     findNavState.editorFindActiveIndex = prev
+  }
+
+  function replaceOneInEditor(): void {
+    if (!editorFindValue || editorFindTotal === 0) return
+    editorReplaceAction = 'one'
+    editorReplaceNonce += 1
+  }
+
+  function replaceAllInEditor(): void {
+    if (!editorFindValue || editorFindTotal === 0) return
+    editorReplaceAction = 'all'
+    editorReplaceNonce += 1
+  }
+
+  function handleEditorReplaceDone(replaced: number): void {
+    if (replaced === 0) return
+    editorFindActive = 0
+    findNavState.editorFindActiveIndex = 0
+    // Force the editor to re-scan matches after the document changed.
+    editorFindNonce += 1
   }
 
   function submitGoToLine(line: number): void {
@@ -761,6 +795,11 @@
           floating
           focusTrigger={findNavState.editorFindFocusTrigger}
           onQueryChange={handleEditorFindQuery}
+          enableReplace={!deletedAtCheckpoint}
+          replaceValue={editorReplaceValue}
+          onReplaceChange={(value) => (editorReplaceValue = value)}
+          onReplaceOne={replaceOneInEditor}
+          onReplaceAll={replaceAllInEditor}
           onNext={editorFindNext}
           onPrev={editorFindPrev}
           onClose={closeEditorFind}
@@ -925,9 +964,12 @@
             wrap={wrapLines}
             findQuery={findNavState.editorFindOpen && !fullscreenOpen ? editorFindValue : ''}
             findActiveIndex={editorFindActive}
+            findNonce={editorFindNonce}
+            replaceRequest={editorReplaceRequest}
             focusLine={activeTab.focusLine}
             focusLineRequest={activeTab.focusLineRequest}
             onFindMatches={fullscreenOpen ? undefined : handleEditorFindMatches}
+            onReplaceDone={handleEditorReplaceDone}
             onInput={handleEditorInput}
           />
         {/key}
@@ -1141,6 +1183,11 @@
               floating
               focusTrigger={findNavState.editorFindFocusTrigger}
               onQueryChange={handleEditorFindQuery}
+              enableReplace={!deletedAtCheckpoint}
+              replaceValue={editorReplaceValue}
+              onReplaceChange={(value) => (editorReplaceValue = value)}
+              onReplaceOne={replaceOneInEditor}
+              onReplaceAll={replaceAllInEditor}
               onNext={editorFindNext}
               onPrev={editorFindPrev}
               onClose={closeEditorFind}
@@ -1242,9 +1289,12 @@
                 wrap={wrapLines}
                 findQuery={findNavState.editorFindOpen ? editorFindValue : ''}
                 findActiveIndex={editorFindActive}
+                findNonce={editorFindNonce}
+                replaceRequest={editorReplaceRequest}
                 focusLine={activeTab.focusLine}
                 focusLineRequest={activeTab.focusLineRequest}
                 onFindMatches={handleEditorFindMatches}
+                onReplaceDone={handleEditorReplaceDone}
                 onInput={handleEditorInput}
               />
             {/if}

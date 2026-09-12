@@ -1,7 +1,7 @@
 import type { Attachment } from 'svelte/attachments'
 
 /**
- * Long-press attachment — the touch equivalent of a hover reveal.
+ * Long-press attachment   the touch equivalent of a hover reveal.
  *
  * Rows across the workspace only expose their actions on hover, which a finger
  * cannot produce. Attaching this makes a stationary press of `durationMs` open
@@ -18,7 +18,7 @@ interface LongPressOptions {
   onLongPress: () => void
   /** Hold time before the press counts. Defaults to 500ms. */
   durationMs?: number
-  /** Movement that cancels the press — a scroll, not a press. Defaults to 10px. */
+  /** Movement that cancels the press   a scroll, not a press. Defaults to 10px. */
   moveTolerancePx?: number
   /** Skip wiring entirely (e.g. a picker row with no actions). */
   enabled?: boolean

@@ -167,6 +167,14 @@ jobs:
       - name: Build production bundle
         run: bun run build:production
 
+      - name: Clean stale packaged output
+        shell: bash
+        run: |
+          # Leftover artifacts from earlier builds (stale .bin symlinks, old app
+          # bundles) collide with electron-builder's dependency traversal and
+          # fail packaging with EEXIST. Packaging must start from a clean dist/.
+          rm -rf dist
+
       - name: Package ${{ matrix.name }}
         shell: bash
         env:
@@ -209,10 +217,6 @@ jobs:
             sleep 10
             exit_code=0
           done
-          if [ "$exit_code" -ne 0 ] && [ "${{ matrix.target }}" = "win" ]; then
-            echo "::warning::Windows startup smoke failed with exit $exit_code (known flaky, not blocking nightly)"
-            exit 0
-          fi
           exit "$exit_code"
 
       - name: Upload build artifacts

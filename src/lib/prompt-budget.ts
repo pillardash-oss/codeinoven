@@ -7,6 +7,19 @@
  * the entire window with input.
  */
 
+/**
+ * Maximum share of the aggregate input allowance the history recap may take.
+ *
+ * A rebuilt (fresh-session) turn   a fork, harness switch, or model handoff  
+ * replays prior history as a recap. When that recap is allowed to fill the
+ * whole input allowance, the very first turn lands the native session at ~95%
+ * of the context window, so the harness's own auto-compaction fires on almost
+ * every subsequent turn (each compaction is an expensive summarize request
+ * that drains provider usage). Capping the recap leaves real conversational
+ * headroom before the harness's compaction threshold is reached.
+ */
+export const RECAP_MAX_INPUT_RATIO = 0.6
+
 /** Fallback context window when the selected model reports none. */
 export const DEFAULT_PROMPT_BUDGET = {
   contextWindowTokens: 128_000,
@@ -16,7 +29,7 @@ export const DEFAULT_PROMPT_BUDGET = {
 
 /**
  * A cached `contextWindow` below this is treated as a corrupt/partial catalog
- * record rather than a real limit — honoring it would collapse the input
+ * record rather than a real limit   honoring it would collapse the input
  * budget to ~1 token and deterministically reject every user message.
  */
 const MIN_PLAUSIBLE_CONTEXT_WINDOW = 4_096
@@ -164,7 +177,7 @@ export interface BudgetedTurnLayers {
  * composition (user text + system/behavior/tool + hidden context + history
  * recap), with output/tool headroom reserved once by the caller's
  * `computePromptBudget`. The hidden orchestration context is capped first and
- * the history recap takes only the remaining headroom — no layer gets the full
+ * the history recap takes only the remaining headroom   no layer gets the full
  * allowance.
  */
 export function budgetTurnLayers(
@@ -177,7 +190,11 @@ export function budgetTurnLayers(
   let remaining = Math.max(0, availableInputTokens - fixed)
   const hiddenTokens = Math.min(Math.max(0, layers.hiddenTokens), remaining)
   remaining -= hiddenTokens
-  const recapTokens = Math.min(Math.max(0, layers.recapTokens), remaining)
+  const recapTokens = Math.min(
+    Math.max(0, layers.recapTokens),
+    remaining,
+    Math.floor(availableInputTokens * RECAP_MAX_INPUT_RATIO)
+  )
   return {
     hiddenTokens,
     recapTokens,
@@ -218,7 +235,7 @@ export interface ProductionSendComposition {
  * final system/behavior/tool prompt + hidden orchestration context + history
  * recap (output/tool headroom reserved once by the caller), recomposes the sent
  * driverText from the precise hidden allowance, and DETERMINISTICALLY REJECTS
- * when the fixed user + system layers alone exceed the budget — it never
+ * when the fixed user + system layers alone exceed the budget   it never
  * silently relies on harness truncation.
  */
 export function composeBudgetedSend(

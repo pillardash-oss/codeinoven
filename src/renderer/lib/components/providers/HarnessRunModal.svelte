@@ -30,27 +30,33 @@
   })
 
   function verb(kind: HarnessRunKind): string {
-    return kind === 'uninstall' ? 'uninstall' : 'update'
+    return kind === 'uninstall' ? 'uninstall' : kind === 'install' ? 'install' : 'update'
   }
 
   function activeLabel(kind: HarnessRunKind): string {
-    return kind === 'uninstall' ? 'Uninstalling' : 'Updating'
+    if (kind === 'uninstall') return 'Uninstalling'
+    return kind === 'install' ? 'Installing' : 'Updating'
   }
 
   function finishedLabel(kind: HarnessRunKind): string {
-    return kind === 'uninstall' ? 'Uninstalled' : 'Updated'
+    if (kind === 'uninstall') return 'Uninstalled'
+    return kind === 'install' ? 'Installed' : 'Updated'
   }
 
   function dockTitle(run: HarnessRun): string {
     if (run.exitCode === undefined) {
       return run.kind === 'uninstall'
         ? `${run.harnessName} is uninstalling`
-        : `${run.harnessName} is updating`
+        : run.kind === 'install'
+          ? `${run.harnessName} is installing`
+          : `${run.harnessName} is updating`
     }
     if (run.exitCode === 0) {
       return run.kind === 'uninstall'
         ? `${run.harnessName} uninstalled`
-        : `${run.harnessName} updated`
+        : run.kind === 'install'
+          ? `${run.harnessName} installed`
+          : `${run.harnessName} updated`
     }
     const action = verb(run.kind)
     return `${run.harnessName} ${action} exited with code ${run.exitCode}`
@@ -59,6 +65,7 @@
   function panelTitle(): string {
     const kinds = new Set(store.runs.map((run) => run.kind))
     if (kinds.size === 1 && kinds.has('uninstall')) return 'Uninstall harnesses'
+    if (kinds.size === 1 && kinds.has('install')) return 'Install harnesses'
     if (kinds.size === 1 && kinds.has('update')) return 'Update harnesses'
     return 'Harness tasks'
   }
@@ -77,14 +84,15 @@
   function dockLabel(): string {
     const kinds = new Set(store.runs.map((run) => run.kind))
     if (kinds.size === 1 && kinds.has('uninstall')) return 'Uninstalls'
+    if (kinds.size === 1 && kinds.has('install')) return 'Installs'
     if (kinds.size === 1 && kinds.has('update')) return 'Updates'
     return 'Tasks'
   }
 
   function footerNote(): string {
     return store.finishedCount === store.runs.length
-      ? 'Tasks keep running while you work — click the dock in the bottom-right corner or press Escape to bring them back.'
-      : 'Tasks keep running while you work — click the dock in the bottom-right corner or press Escape to bring them back, and close once all of them finish.'
+      ? 'Tasks keep running while you work   click the dock in the bottom-right corner or press Escape to bring them back.'
+      : 'Tasks keep running while you work   click the dock in the bottom-right corner or press Escape to bring them back, and close once all of them finish.'
   }
 </script>
 
@@ -202,6 +210,7 @@
               terminalId={run.terminalId}
               command={run.handoff.command}
               args={run.handoff.args}
+              idleTimeoutMs={run.kind === 'update' ? 60_000 : undefined}
               onExit={(exitCode) => void store.handleRunExit(run.harnessId, exitCode)}
             />
           </div>

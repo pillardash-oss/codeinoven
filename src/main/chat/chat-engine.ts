@@ -7,6 +7,16 @@ import { fileURLToPath } from 'url'
 import { createHash, randomBytes, randomInt } from 'crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { Logger } from '../system/logger'
+import {
+  BrainstormAlignmentNotes,
+  type BrainstormAlignmentRound
+} from './brainstorm-alignment-notes'
+import {
+  BRAINSTORM_ALIGNMENT_UTILITY_ID,
+  BRAINSTORM_CREATE_DOCUMENT_ANSWER,
+  brainstormDocumentQuestion,
+  isBrainstormDocumentQuestion
+} from '../../lib/brainstorm/brainstorm-alignment'
 import { ThreadCreationCoordinator } from './thread-creation-coordinator'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { RepositoryService } from '../git/repository-service'
@@ -101,6 +111,11 @@ import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { CIO_UTILITY_SETUP_PROMPT, isCioUtilityRequest } from '../utilities/cio-utility-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import { isCodeInOvenCustomProviderId, underlyingProviderId } from '../../lib/custom-provider-id'
+import {
+  HarnessAccountRegistry,
+  legacyHarnessAccountId
+} from '../providers/harness-account-registry'
 import { refreshCustomProviderModels } from '../providers/base-url-model-refresh'
 import { AgentProcessService } from '../agents/agent-process-service'
 import {
@@ -298,7 +313,7 @@ import {
 /**
  * Workflow instruction injected into every prompt when Engineering is
  * enabled. This is how the specification review and implementation behaviour
- * is communicated to the agent — the user never steps through it manually.
+ * is communicated to the agent   the user never steps through it manually.
  */
 const QUESTION_TOOL_INSTRUCTION = [
   'When you need clarification or must present multiple choices to the user, call the `question` tool instead of writing questions as plain text.',
@@ -318,7 +333,7 @@ const MEMORY_RESPONSE_BOUNDARY_INSTRUCTION = [
 ].join(' ')
 
 /** Guidance injected for models that cannot see images (attachment: false). */
-const IMAGE_DESCRIPTOR_SYSTEM_NOTE = `You cannot directly see images. The application describes images attached to the user turn with the configured vision model before dispatch and supplies that evidence in the prompt. For follow-up inspection, the image descriptor is available on demand through the app gateway: search for it with ${UTILITY_SEARCH_TOOL_NAME} using kinds ["image_descriptor"], activate the result with ${UTILITY_ACTIVATE_TOOL_NAME}, then invoke its describe operation with ${UTILITY_INVOKE_TOOL_NAME} passing {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]} (or "type":"binary" with base64 data when the bytes cannot be referenced by path). The operation accepts several images per call, so batch frames at once. If the media is a video file you cannot read directly, check whether ffmpeg is available on the system (e.g., ffmpeg -version or which ffmpeg); if no system ffmpeg is found, this app bundles ffmpeg via ffmpeg-static — resolve its path and use it.`
+const IMAGE_DESCRIPTOR_SYSTEM_NOTE = `You cannot directly see images. The application describes images attached to the user turn with the configured vision model before dispatch and supplies that evidence in the prompt. For follow-up inspection, the image descriptor is available on demand through the app gateway: search for it with ${UTILITY_SEARCH_TOOL_NAME} using kinds ["image_descriptor"], activate the result with ${UTILITY_ACTIVATE_TOOL_NAME}, then invoke its describe operation with ${UTILITY_INVOKE_TOOL_NAME} passing {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]} (or "type":"binary" with base64 data when the bytes cannot be referenced by path). The operation accepts several images per call, so batch frames at once. If the media is a video file you cannot read directly, check whether ffmpeg is available on the system (e.g., ffmpeg -version or which ffmpeg); if no system ffmpeg is found, this app bundles ffmpeg via ffmpeg-static   resolve its path and use it.`
 
 /** Whether two agent model selections identify the same vision model. */
 function isSameImageDescriptorModel(
@@ -329,7 +344,8 @@ function isSameImageDescriptorModel(
     a !== undefined &&
     a.harnessId === b.harnessId &&
     a.providerId === b.providerId &&
-    a.modelId === b.modelId
+    a.modelId === b.modelId &&
+    a.accountId === b.accountId
   )
 }
 
@@ -365,9 +381,14 @@ const TOOL_CATALOG_TTL_MS = 30 * 1000
  * Cooldown used to schedule an automatic retry for a quota/rate-limit wait
  * when the provider's error carries no parseable reset time (or one already
  * in the past). Without this, such a wait would show no timer and never
- * auto-resume — see scheduleAutomaticRetry.
+ * auto-resume   see scheduleAutomaticRetry.
  */
 const USAGE_RESET_FALLBACK_RETRY_MS = 60 * 60 * 1000
+/** Grace added to every provider-reported reset before the auto-resume fires.
+ *  Firing on the exact reset second races the provider's own window rollover:
+ *  the resumed turn re-fails while the limit is still active and the thread
+ *  drops straight back into the wait (observed with Codex on 2026-09-07). */
+const RETRY_FIRE_GRACE_MS = 90 * 1000
 
 interface PersistedProviderCatalog {
   schemaVersion: 3
@@ -382,13 +403,13 @@ const AUDIT_REPORT_JSON_CONTRACT =
 
 /** Every report and answer must carry traceable sources. Files are cited with
  *  their project-rooted relative path (the form the renderer turns into a
- *  clickable citation); external references are cited as Markdown links — never
+ *  clickable citation); external references are cited as Markdown links   never
  *  as bare filenames, plain-text mentions, or full absolute filesystem paths
  *  the user cannot open. Declared before the report-producing prompts so they
  *  can embed it. */
 export const CITATION_SYSTEM_INSTRUCTION = [
   'Cite the source of every factual claim you report.',
-  'Cite local files with their project-rooted relative path, never a bare filename such as `app.html` and never a full absolute filesystem path. State the path plainly — do NOT wrap it in backticks or code formatting, because backticked paths render as read-only code instead of a clickable citation the user can open. Do not construct a link yourself; state the path and, when possible, the line number, and the application handles the rest.',
+  'Cite local files with their project-rooted relative path, never a bare filename such as `app.html` and never a full absolute filesystem path. State the path plainly   do NOT wrap it in backticks or code formatting, because backticked paths render as read-only code instead of a clickable citation the user can open. Do not construct a link yourself; state the path and, when possible, the line number, and the application handles the rest.',
   'Cite external references as Markdown links, e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`, never as bare text such as "pr issue #155".',
   'Never cite a source you did not inspect or retrieve; when a claim cannot be verified, state that limitation instead of padding the report with references.'
 ].join(' ')
@@ -534,6 +555,10 @@ const MUTATING_FILE_PATH_KEYS = new Set([
   'targetfile'
 ])
 
+const SHELL_COMMAND_INPUT_KEYS = ['command', 'cmd', 'script'] as const
+const SHELL_WORKING_DIRECTORY_INPUT_KEYS = ['cwd', 'workdir', 'workingDirectory'] as const
+const STATIC_PATH_EXPRESSION = String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[A-Za-z_$][\w$]*)`
+
 /** How long after a user's last terminal keystroke the user-activity window
  *  stays open, covering commands that finish writing files after Enter. */
 const USER_TERMINAL_SETTLE_MS = 10_000
@@ -545,17 +570,13 @@ function rawErrorMessage(error: unknown): string {
   return fallback
 }
 
-/**
- * Remove quoted spans (straight/curly single & double quotes, backticks) from
- * an instruction so keyword-based intent detection only scans the user's own
- * words. A request like: build a hifi from "the lofi v2" must match on the
- * instruction proper, never on material the user merely quoted or pasted.
- */
-function stripQuotedSpans(source: string): string {
-  return source
-    .replace(/`[^`\n]*`/gu, ' ')
-    .replace(/["\u201c\u201d][^"\u201c\u201d\n]*["\u201c\u201d]/gu, ' ')
-    .replace(/['\u2018\u2019][^'\u2018\u2019\n]*['\u2018\u2019]/gu, ' ')
+/** Full diagnostic error text for the error card's Raw Error view: the stack
+ *  trace when a real Error object reached us, otherwise the message string
+ *  as-is. Deliberately separate from `rawErrorMessage`, which must stay a
+ *  short single-line message for logging and report fields. */
+function rawErrorDetail(error: unknown): string {
+  if (error instanceof Error && error.stack?.trim()) return error.stack.trim()
+  return rawErrorMessage(error)
 }
 
 /** Parse the assistant's text into the batched descriptor object, tolerating a
@@ -597,11 +618,128 @@ function patchPaths(patch: string): string[] {
   )
 }
 
+function staticStringValue(value: string): string | null {
+  const quote = value[0]
+  if ((quote !== '"' && quote !== "'" && quote !== '`') || value.at(-1) !== quote) return null
+  const content = value.slice(1, -1)
+  if (quote === '`' && content.includes('${')) return null
+  return content.replaceAll(/\\([\\'"` ])/gu, '$1')
+}
+
+function shellVariableValues(command: string): Map<string, string> {
+  const values = new Map<string, string>()
+  const assignments = new RegExp(
+    String.raw`(?:^|[;\n"'])\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*=\s*(${STATIC_PATH_EXPRESSION})`,
+    'gmu'
+  )
+  for (const match of command.matchAll(assignments)) {
+    const name = match[1]
+    const literal = match[2]
+    if (!name || !literal) continue
+    const value = staticStringValue(literal)
+    if (value !== null) values.set(name, value)
+  }
+  return values
+}
+
+function shellWorkingDirectory(
+  projectPath: string,
+  input: Record<string, unknown>,
+  command: string
+): string {
+  let workingDirectory = projectPath
+  for (const key of SHELL_WORKING_DIRECTORY_INPUT_KEYS) {
+    const candidate = input[key]
+    if (typeof candidate !== 'string') continue
+    const normalized = projectRelativePath(projectPath, candidate)
+    if (normalized) workingDirectory = resolve(projectPath, normalized)
+    break
+  }
+  const directoryChanges = new RegExp(
+    String.raw`(?:^|&&|;|\n)\s*cd\s+("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;&|]+)(?=\s*(?:&&|;|\n|$))`,
+    'gmu'
+  )
+  for (const match of command.matchAll(directoryChanges)) {
+    const literal = match[1]
+    if (!literal) continue
+    const directory = staticStringValue(literal) ?? literal
+    if (directory === null || directory.includes('$')) continue
+    const absolute = isAbsolute(directory)
+      ? resolve(directory)
+      : resolve(workingDirectory, directory)
+    if (projectRelativePath(projectPath, absolute)) workingDirectory = absolute
+  }
+  return workingDirectory
+}
+
+/** Extract conservatively identifiable write targets from shell source. The
+ * completion snapshot validates every path, so a command that names a file but
+ * leaves its content unchanged cannot create a file-card entry. */
+function shellWritePaths(projectPath: string, input: Record<string, unknown>): string[] {
+  const command = SHELL_COMMAND_INPUT_KEYS.map((key) => input[key]).find(
+    (value): value is string => typeof value === 'string'
+  )
+  if (!command) return []
+  const variables = shellVariableValues(command)
+  const candidates: string[] = []
+  const addExpression = (expression: string | undefined): void => {
+    if (!expression) return
+    const literal = staticStringValue(expression)
+    const candidate =
+      literal ??
+      variables.get(expression) ??
+      (/[/.[\]\\]/u.test(expression) ? expression : undefined)
+    if (candidate) candidates.push(candidate)
+  }
+  const firstArgumentWriters = new RegExp(
+    String.raw`\b(?:Bun\s*\.\s*write|Deno\s*\.\s*(?:writeFile|writeTextFile)|(?:fs\s*\.\s*(?:promises\s*\.\s*)?)?(?:appendFile|appendFileSync|outputFile|outputFileSync|writeFile|writeFileSync))\s*\(\s*(${STATIC_PATH_EXPRESSION})`,
+    'gmu'
+  )
+  const pythonOpenMode = new RegExp(
+    String.raw`\bopen\s*\(\s*(${STATIC_PATH_EXPRESSION})\s*,\s*["'][^"']*[awx+][^"']*["']`,
+    'gmu'
+  )
+  const pythonOpenWrite = new RegExp(
+    String.raw`\bopen\s*\(\s*(${STATIC_PATH_EXPRESSION})\s*\)\s*\.\s*(?:truncate|write|writelines)\s*\(`,
+    'gmu'
+  )
+  const pythonPathWriter = new RegExp(
+    String.raw`\bPath\s*\(\s*(${STATIC_PATH_EXPRESSION})\s*\)\s*\.\s*(?:touch|write_bytes|write_text)\s*\(`,
+    'gmu'
+  )
+  for (const pattern of [firstArgumentWriters, pythonOpenMode, pythonOpenWrite, pythonPathWriter]) {
+    for (const match of command.matchAll(pattern)) addExpression(match[1])
+  }
+  for (const match of command.matchAll(
+    /(?:^|[\s;|&])(?:\d*)>>?\s*(?![&>])("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;|&]+)/gmu
+  )) {
+    addExpression(match[1])
+  }
+  candidates.push(...patchPaths(command))
+  const workingDirectory = shellWorkingDirectory(projectPath, input, command)
+  return [
+    ...new Set(
+      candidates
+        .map((candidate) =>
+          projectRelativePath(
+            projectPath,
+            isAbsolute(candidate) ? candidate : resolve(workingDirectory, candidate)
+          )
+        )
+        .filter((candidate): candidate is string => candidate !== null)
+    )
+  ]
+}
+
 export function changedPathsFromTool(
   projectPath: string,
   part: Extract<AgentPart, { type: 'tool' }>
 ): string[] {
-  if (!MUTATING_FILE_TOOLS.has(normalizedToolName(part.tool))) return []
+  const tool = normalizedToolName(part.tool)
+  if (UNBOUNDED_MUTATING_TOOLS.has(tool)) {
+    return shellWritePaths(projectPath, part.state.input)
+  }
+  if (!MUTATING_FILE_TOOLS.has(tool)) return []
   const candidates: string[] = []
   const input = part.state.input
   for (const [key, value] of Object.entries(input)) {
@@ -647,11 +785,11 @@ function historyMirrorFailureMessage(rawError: string): string {
 }
 
 function historyMirrorIssue(error: unknown, harnessId: string): AgentProviderIssue {
-  const rawError = rawErrorMessage(error)
+  const message = rawErrorMessage(error)
   return {
     kind: 'unknown',
-    message: historyMirrorFailureMessage(rawError),
-    rawError,
+    message: historyMirrorFailureMessage(message),
+    rawError: rawErrorDetail(error),
     harnessId,
     retryable: true
   }
@@ -813,7 +951,7 @@ const TEMPORARY_CHAT_ALLOWED_TOOLS = [
 ]
 
 /**
- * Expected cancellation of an in-flight temporary chat turn — the user closed
+ * Expected cancellation of an in-flight temporary chat turn   the user closed
  * or expired the chat, or pressed stop. Settles the in-flight prompt without
  * surfacing an error to the UI or the IPC layer.
  */
@@ -824,14 +962,14 @@ class TemporaryChatCancelledError extends Error {
   }
 }
 
-/** Chat-only instruction — plain chat threads behave like a browser web chatbot. */
+/** Chat-only instruction   plain chat threads behave like a browser web chatbot. */
 const CHAT_SYSTEM_PROMPT = [
   `You are a general-purpose web chat assistant inside ${APP_NAME}.`,
-  'Files the user attaches to this chat are explicitly shared and may be read and inspected — use them whenever relevant.',
+  'Files the user attaches to this chat are explicitly shared and may be read and inspected   use them whenever relevant.',
   'This chat has no broader file-system access. Do not traverse, read, search, or modify any local file other than the files the user attached. Never enumerate or guess at other file paths.',
   'If something you need was not attached, ask the user to attach it or work only from what was provided; when you do not know an answer directly, search the internet using the web search and web fetch tools instead of inspecting files.',
   'Answer questions directly; use clarifying questions only when the request is genuinely ambiguous.',
-  'When you reference external content, cite it as a Markdown link (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`) — never a bare URL or a plain-text mention.'
+  'When you reference external content, cite it as a Markdown link (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL or a plain-text mention.'
 ].join(' ')
 
 /** Chat-only instruction when the user explicitly enables the File System mode. */
@@ -839,13 +977,13 @@ const FILE_SYSTEM_CHAT_SYSTEM_PROMPT = [
   `You are a general-purpose assistant inside ${APP_NAME} with file-system access enabled.`,
   'The user explicitly granted this chat file operations. You may read and search files with the file tools available in this session.',
   'Files the user attaches are always in scope, wherever they point.',
-  'Do not read or exfiltrate sensitive files — credentials, secrets, tokens, private keys, and protected paths such as `.env`, `.config`, `.ssh`, `.aws`, and the user home configuration — unless the user explicitly approves access to that specific file.',
+  'Do not read or exfiltrate sensitive files   credentials, secrets, tokens, private keys, and protected paths such as `.env`, `.config`, `.ssh`, `.aws`, and the user home configuration   unless the user explicitly approves access to that specific file.',
   'Do not modify files unless the user asks you to.',
   'When you do not know an answer directly, search the internet using the web search and web fetch tools.',
   CITATION_SYSTEM_INSTRUCTION
 ].join(' ')
 
-/** Tools available to a plain (web-only) chat thread — no file-system tools. */
+/** Tools available to a plain (web-only) chat thread   no file-system tools. */
 const CHAT_WEB_ONLY_TOOLS = ['question', 'webfetch', 'websearch', 'gemini_quota']
 
 export const SPEC_IMPLEMENT_SYSTEM_PROMPT = [
@@ -883,7 +1021,7 @@ const ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT = [
  */
 const ENGINEERING_PARKED_LIFECYCLE_INSTRUCTION = [
   'The Engineering lifecycle for this thread is parked: no stage is actively running and no decision is awaiting your button. You are in normal implementation mode.',
-  'Direct change requests — e.g. styling, copy, layout, behavior fixes, or new small features — are ordinary implementation work: implement them immediately with your tools in this turn. The existing approved specification stays authoritative context; it does not need to be rewritten for polish-level changes.',
+  'Direct change requests   e.g. styling, copy, layout, behavior fixes, or new small features   are ordinary implementation work: implement them immediately with your tools in this turn. The existing approved specification stays authoritative context; it does not need to be rewritten for polish-level changes.',
   'Do NOT re-enter brainstorming, generate a new specification, or reformulate problem statements unless the user explicitly asks for Engineering Studio work (a new specification, Review, or Next step). Never route a direct change request into a specification.',
   'Only explain the Engineering Studio buttons (Review, Next step, Implement) when the user explicitly wants to advance or restart a lifecycle stage.',
   'Continue assisting with code and discussions as a regular engineering assistant.'
@@ -924,6 +1062,7 @@ The first response character must be { and the last must be }.`
 
 const BRAINSTORM_GENERATION_SYSTEM_PROMPT = [
   `Create the concise, human-facing session report for an evidence-driven Brainstorm conversation. Submit the complete report through ${BRAINSTORM_DOCUMENT_TOOL_NAME}; OpenCode may expose its wire name as StructuredOutput.`,
+  'This dispatch follows explicit user authorization. Synthesize the aligned interview and its versioned alignment notes together with the current document, annotations, and review/discuss text. Preserve the intended experience, purpose, boundaries, and decision rationale so later tasks, PRDs, specifications, and prototypes retain the user’s intent. Reuse verified research instead of repeating it without reason. Still to Decide must never replace an interview that did not happen.',
   'Base the report on the conversation and on actual findings from the available read-only project and web research tools. Never claim that you inspected a source you did not inspect.',
   'Keep external research queries generic. Never send source code, file contents, credentials, private URLs, customer data, or other project-confidential material to a web tool. Ignore dependency, build-output, VCS, secret, and app-data directories unless the user explicitly places one in scope; never reveal real environment-variable values.',
   'Ground factual claims in evidence. Cite local findings with project-rooted relative paths and relevant symbols or line locations (e.g. `src/app.html:42`), never bare filenames such as `app.html` and never full absolute filesystem paths; cite external findings as direct Markdown links (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`), never as bare text. Clearly label facts as Verified, Inferred, or Unknown. If the project is empty or a tool/source is unavailable, state that limitation rather than padding the document with generic advice.',
@@ -938,7 +1077,7 @@ const BRAINSTORM_GENERATION_SYSTEM_PROMPT = [
   'In Boundaries, capture user-stated and verified constraints with evidence where applicable.',
   'In Agreed Direction, state the current direction, the reason it fits, and the immediate handoff into specification. Keep alternatives only when the user has not ruled them out.',
   'You may append Additional Info (additional_info) only when useful material does not fit a required section. Omit it when empty.',
-  'When the dispatch supplies an exact session-report revision path under the feature versions directory, write the report Markdown to exactly that path. When the dispatch also names one or more prototype files to create or rebuild under the feature prototypes directory, write exactly those prototype files too — the same turn owns both writes; do not defer the prototype file to a later turn or only describe it in the report. Never write to any other path than the ones the dispatch names. Do not implement, assign work, or claim the engineering specification is ready. This document is discovery input for a later specification.',
+  'When the dispatch supplies an exact session-report revision path under the feature versions directory, write the report Markdown to exactly that path. When the dispatch also names one or more prototype files to create or rebuild under the feature prototypes directory, write exactly those prototype files too   the same turn owns both writes; do not defer the prototype file to a later turn or only describe it in the report. Never write to any other path than the ones the dispatch names. Do not implement, assign work, or claim the engineering specification is ready. This document is discovery input for a later specification.',
   'Prefer clarity and accuracy over length. Do not repeat the request in different words or hide uncertainty behind confident prose.',
   MERMAID_OUTPUT_INSTRUCTION
 ].join(' ')
@@ -997,7 +1136,7 @@ export const BRAINSTORM_DOCUMENT_WRITE_TOOLS = [...BRAINSTORM_RESEARCH_ALLOWED_T
  * permission-asked events actually reach the app (`interactivePermissions`)
  * the same PermissionPolicy that governs every other edit already scopes the
  * write: auto-approve unless the path matches a protected pattern (`.git`,
- * lockfiles, etc). Opencode is the one exception — it enforces the boundary
+ * lockfiles, etc). Opencode is the one exception   it enforces the boundary
  * natively through the `cio-brainstorm` agent's path-scoped `edit`
  * permission, so it qualifies even without `interactivePermissions`. A
  * driver with neither channel (no permission stream, no native scoping)
@@ -1031,13 +1170,15 @@ function requireEvidenceDrivenBrainstorm(content: BrainstormContent): Brainstorm
 
 const BRAINSTORM_DISCUSSION_SYSTEM_PROMPT = [
   'You are the Sr. Engineer facilitating an interactive Brainstorm session before specification.',
-  'Start from the existing conversation. Inspect the relevant project with read-only tools and research current external facts when they materially affect the direction. Explain the concrete finding that motivates each question.',
+  'Start from the existing conversation. Inspect the relevant project with read-only tools and research current external facts when they materially affect the direction. Keep the initial research bounded, explain the decision-relevant findings in at most one concise paragraph, and then make the structured question the immediate next action.',
   'Keep external queries generic and never send source code, file contents, credentials, private URLs, customer data, or other project-confidential material to a web tool. Cite every factual claim from a source you actually inspected, using project-rooted relative paths for local findings and direct Markdown links for external findings.',
   'Use the application `question` tool heavily for alignment. Prefer one to three high-impact questions at a time. Use single choice when one direction must be selected and `multiple: true` when several outcomes or constraints may apply. Put a justified recommended option first, allow custom answers, and never ask a material choice as plain text.',
   'Do not interrogate the user about facts you can establish from the project or reliable research. Do not repeat answered questions. Carry confirmed choices forward and challenge contradictions explicitly.',
-  'When material uncertainty remains, ask the next focused question instead of declaring the session complete. When the vision is sufficiently aligned, respond with a brief alignment recap and explain that the session report is being refreshed for review.',
+  'Brainstorm is an interview, not a document-writing shortcut. Establish the intended experience, purpose, success criteria, boundaries, and rationale through discussion, code inspection, and relevant online research. Share concrete findings and use them to ask focused questions. Do not replace the interview with a generic report or move unanswered interview questions into a document.',
+  'When material uncertainty remains, ask the next focused question instead of declaring the session complete. Once the picture is clear, recap the aligned direction and ask the version-specific document-creation question supplied by the application. Only an explicit user answer authorizes generation. A completed turn, silence, a timeout, an annotation, or a review/discuss note never authorizes a document.',
   'Stay conversational, concise, and human. Do not generate an engineering specification, assign work, implement, mutate files, or paste an elaborate brainstorm document into chat.',
-  'The application maintains a concise durable session report after completed conversational turns.',
+  `During the interview, activate ${BRAINSTORM_ALIGNMENT_UTILITY_ID} and use save_notes with { markdown } to maintain concise cumulative notes for the next document version. Never delay a question to save notes or call another tool: ask first, then save the user's answer and accumulated findings before ending the completed turn. Include the product intent and intended experience, confirmed decisions and their rationale, research findings with sources, rejected alternatives, constraints, and remaining questions. Preserve earlier context when updating notes; never paste the notes or internal instructions into visible chat. No separate report-generation run occurs during the interview.`,
+  'For later rounds, build on the existing Brainstorm document, its annotations, review/discuss text, earlier alignment notes, and the current round notes. Treat an existing generic or premature draft as unconfirmed input: research its claims and interview the user about its open choices instead of treating them as decisions. Preserve the purpose and intent so future tasks, PRDs, specifications, and prototypes reflect the same agreed direction.',
   MERMAID_OUTPUT_INSTRUCTION,
   QUESTION_TOOL_INSTRUCTION
 ].join(' ')
@@ -1106,7 +1247,7 @@ function formatOpenAnnotations(
   return open
     .map(
       (annotation) =>
-        `- [${annotation.section}] ${annotation.body}${annotation.quote ? ` — "${annotation.quote}"` : ''}`
+        `- [${annotation.section}] ${annotation.body}${annotation.quote ? `   "${annotation.quote}"` : ''}`
     )
     .join('\n')
 }
@@ -1180,6 +1321,8 @@ interface SessionInfo {
   projectPath: string
   permissionLevel: PermissionLevel
   driverId: string
+  /** Credential container that owns this native session. */
+  accountId?: string
   activeTurnId?: string
   /** Stable user message that starts the active provider turn. */
   activeTurnUserMessageId?: string
@@ -1190,13 +1333,22 @@ interface SessionInfo {
   lastTurnId?: string
   /** Composed request occupancy used only when the harness emits no native context usage. */
   estimatedContextUsed?: number
+  /** True once this session's provider reported a real per-turn token usage
+   *  total. Providers that report usage make the composed-send estimate
+   *  (which measures only the composed text layers, never the harness
+   *  transcript) both unnecessary and wildly wrong as a context signal, so
+   *  the estimate fallback must stay disabled for them. */
+  hasReportedTokenUsage?: boolean
   changedPaths?: Set<string>
   /** Paths claimed by precise file-mutating tools this turn, path → last claimed ms. */
   preciseChangedPaths?: Map<string, number>
   /** Shell-like tool part ids currently in flight for the active turn. */
   openUnboundedTools?: Set<string>
+  /** Whether this turn invoked a shell-like tool. Its before/after project diff
+   *  is the completion fallback if command parsing or a stat window misses a write. */
+  unboundedToolObserved?: boolean
   /** Paths the user saved through the in-app editor while this turn ran.
-   *  These are the user's own edits — never attributed to the thread. */
+   *  These are the user's own edits   never attributed to the thread. */
   userTouchedPaths?: Set<string>
   /** In-flight reopen of a just-settled turn whose edits kept arriving. */
   pendingReopen?: Promise<void>
@@ -1214,6 +1366,7 @@ interface TemporaryChatSession {
   threadId: string
   projectPath: string
   driverId: string
+  accountId?: string
   /** Provider the session's turns run against, for quota reads. */
   providerId?: string
   sessionId: string
@@ -1225,7 +1378,7 @@ interface TemporaryChatSession {
 }
 
 /**
- * Presentation-safe user-message records for temporary chats — the in-memory
+ * Presentation-safe user-message records for temporary chats   the in-memory
  * analog of the thread mirror's `persistOutboundMessage` rows. The harness
  * transcript only ever contains the full transport prompt, so without this
  * overlay the internal instruction leaks into the temporary chat UI (and into
@@ -1247,7 +1400,7 @@ interface HeldSteer {
   kind: 'thread' | 'temporary'
   /** Deliver the steer to the live turn now (tool window closed mid-turn). */
   deliverMidTurn: () => Promise<void>
-  /** The turn ended before a delivery window opened — send as the next turn. */
+  /** The turn ended before a delivery window opened   send as the next turn. */
   deliverAfterTurn: () => Promise<void>
   /** Drop the steer entirely: nothing ever reached the harness. */
   discard: () => Promise<void>
@@ -1258,11 +1411,11 @@ interface TemporaryChatDisplayRecord {
   references: PromptReference[]
 }
 
-/** Every recorded turn, ordered oldest-first — one record per user turn, so
+/** Every recorded turn, ordered oldest-first   one record per user turn, so
  *  later turns never erase the presentation-safe view of earlier ones. */
 interface TemporaryChatDisplayHistory {
   records: TemporaryChatDisplayRecord[]
-  /** Recap of the kept conversation after a history deletion — consumed as
+  /** Recap of the kept conversation after a history deletion   consumed as
    *  the hidden context of the first send into the replacement session. */
   pendingContext?: string
 }
@@ -1348,6 +1501,7 @@ interface ChildSessionInfo {
   threadId: string
   projectPath: string
   driverId: string
+  accountId?: string
   /** Root thread session whose watchdog must include this child's activity. */
   parentSessionId?: string
 }
@@ -1566,7 +1720,7 @@ class AssignmentApiRequestError extends Error {
 }
 
 /**
- * ChatEngine — orchestrates harness drivers and exposes the unified `agent:*`
+ * ChatEngine   orchestrates harness drivers and exposes the unified `agent:*`
  * IPC surface consumed by the renderer.
  *
  * Responsibilities:
@@ -1609,13 +1763,18 @@ export class ChatEngine {
   /** Bound each drain so model ranking never monopolizes the main process. */
   private static readonly RANKING_DRAIN_BATCH_SIZE = 3
 
-  private static readonly STREAM_BROADCAST_INTERVAL_MS = 50
+  /** Frame-aligned (16ms) stream coalescing: token deltas still batch per
+   *  frame to bound IPC traffic, but no longer stack into perceptible ~50ms
+   *  pauses between visible output. */
+  private static readonly STREAM_BROADCAST_INTERVAL_MS = 16
   private static readonly TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
   private static readonly AUDIT_RUN_TIMEOUT_MS = 30 * 60 * 1000
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
   /** Parsed stream-log entries held per thread before the oldest is evicted. */
   private static readonly TURN_STREAM_CACHE_LIMIT = 16
   private drivers = new Map<string, HarnessDriver>()
+  /** Managed-account drivers are lazy and isolated by credential container. */
+  private accountDrivers = new Map<string, HarnessDriver>()
   private readonly openUsage = new OpenUsageClient()
   private readonly customProviderUsage = new CustomProviderUsageClient()
   private sessionRegistry = new Map<string, SessionInfo>()
@@ -1719,6 +1878,7 @@ export class ChatEngine {
     string,
     { brainstormId?: string; version?: number; note: string }
   >()
+  private readonly brainstormAlignmentNotes: BrainstormAlignmentNotes
   /** Sessions currently running an explicit context compaction. */
   private activeCompactions = new Set<string>()
   /**
@@ -1727,7 +1887,7 @@ export class ChatEngine {
    * switch on a reused native session is detectable without a per-turn mirror
    * read; the mirror backfills the first turn after an app restart. The
    * thinking level rides along so turn completion stamps what the turn
-   * actually ran with — never the composer's mid-turn changes.
+   * actually ran with   never the composer's mid-turn changes.
    */
   private readonly sessionModelIds = new Map<
     string,
@@ -1780,7 +1940,7 @@ export class ChatEngine {
   /**
    * Last-seen provider-catalog input fingerprints per driver (drivers that
    * implement `providerCatalogFingerprint`). A drift between the recorded
-   * value and a freshly computed one invalidates the shared catalog cache —
+   * value and a freshly computed one invalidates the shared catalog cache  
    * e.g. the user connecting or logging out of a pi provider while the 1h TTL
    * cache would otherwise keep serving the stale model list.
    */
@@ -1820,8 +1980,17 @@ export class ChatEngine {
    */
   private toolTimes = new Map<string, Map<string, { start: number; end?: number }>>()
 
+  /**
+   * Tracks generation windows per session per assistant message id: `start` is
+   * the timestamp of the first streamed output part (the model's first token),
+   * `end` is stamped when the message completes. Used to persist
+   * `AgentMessage.generationMs` so tokens-per-second rates reflect actual
+   * generation time instead of wall-clock turn time.
+   */
+  private generationWindows = new Map<string, Map<string, { start: number; end?: number }>>()
+
   /** Steered messages held back from the harness while its active turn has a
-   *  tool call in flight — the undo window. Keyed by sessionId. */
+   *  tool call in flight   the undo window. Keyed by sessionId. */
   private heldSteers = new Map<string, HeldSteer>()
 
   /**
@@ -1849,7 +2018,7 @@ export class ChatEngine {
   /**
    * Projects whose harness resources have already been released. They are not
    * released again until the project becomes active (a prompt, an event, or a
-   * session re-registration) — otherwise the reaper would re-release every
+   * session re-registration)   otherwise the reaper would re-release every
    * grace period forever.
    */
   private releasedProjects = new Set<string>()
@@ -1898,6 +2067,7 @@ export class ChatEngine {
   private utilityRegistry: UtilityRegistryService
   private capabilityDiscovery: CapabilityDiscoveryService
   private baseUrlProviders: BaseUrlProviderService
+  private accountRegistry: HarnessAccountRegistry
   private utilityOrchestration: UtilityOrchestrationService
   private usageRepo: HarnessUsageRepo
   private rankingRepo: ModelRankingRepo
@@ -1912,6 +2082,7 @@ export class ChatEngine {
       runtime?: PreparedUtilityRuntime
       gateway: UtilityTurnGateway
       threadId: string
+      cleanupPromise?: Promise<void>
     }
   >()
 
@@ -1964,7 +2135,9 @@ export class ChatEngine {
     this.utilityRegistry = new UtilityRegistryService(storage)
     this.capabilityDiscovery = new CapabilityDiscoveryService()
     this.baseUrlProviders = new BaseUrlProviderService(storage)
+    this.accountRegistry = new HarnessAccountRegistry(storage)
     this.utilityOrchestration = new UtilityOrchestrationService(storage, database)
+    this.brainstormAlignmentNotes = new BrainstormAlignmentNotes(storage)
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
       this.executeImageDescriptor(request)
     )
@@ -1981,8 +2154,8 @@ export class ChatEngine {
     this.engineeringLifecycleEngine = new EngineeringLifecycleEngine(database)
     this.auditEngine = new AuditEngine(storage, database)
     this.assignmentEngine = new AssignmentEngine(storage, database)
-    // Register available harness drivers. Order follows the harness registry —
-    // the single source of truth — so the model list and providers settings
+    // Register available harness drivers. Order follows the harness registry
+    // the single source of truth   so the model list and providers settings
     // page agree. Only harnesses with an integrated driver are instantiated.
     const driverFactories: Record<string, () => HarnessDriver> = {
       opencode: () => new OpenCodeDriver(this.baseUrlProviders, this.secretVault),
@@ -2003,6 +2176,129 @@ export class ChatEngine {
       driver.setProcessObserver?.(this.agentProcesses)
       driver.onEvent((event) => this.handleDriverEvent(driver.id, event))
     }
+  }
+
+  private createAccountDriver(harnessId: string, environment: NodeJS.ProcessEnv): HarnessDriver {
+    switch (harnessId) {
+      case 'opencode':
+        return new OpenCodeDriver(this.baseUrlProviders, this.secretVault, environment)
+      case 'codex':
+        return new CodexDriver(this.storage, this.baseUrlProviders, this.secretVault, environment)
+      case 'claude-code':
+        return new ClaudeCodeDriver(
+          this.storage,
+          this.baseUrlProviders,
+          this.secretVault,
+          environment
+        )
+      case 'pi':
+        return new PiDriver(this.storage, this.baseUrlProviders, this.secretVault, environment)
+      default:
+        throw new Error(`${harnessId} does not support isolated account containers.`)
+    }
+  }
+
+  private async driverForAccount(harnessId: string, accountId?: string): Promise<HarnessDriver> {
+    // Thread-bound ids can outlive their account: the account may be removed
+    // while the thread keeps a persisted session binding (for example across
+    // an app restart, when no live session-registry entry matches). Fall back
+    // to the harness default account instead of failing every read; explicit
+    // user-selection validation calls accountRegistry.resolve directly and
+    // still reports a missing account loudly.
+    const account = await this.accountRegistry
+      .resolve(harnessId, accountId)
+      .catch((error: unknown) =>
+        accountId === undefined ? Promise.reject(error) : this.accountRegistry.resolve(harnessId)
+      )
+    if (account.containerKind === 'legacy-default') {
+      const driver = this.drivers.get(harnessId)
+      if (!driver) throw new Error(`Harness driver "${harnessId}" is not available.`)
+      return driver
+    }
+    const existing = this.accountDrivers.get(account.id)
+    if (existing) return existing
+    const driver = this.createAccountDriver(harnessId, this.accountRegistry.environment(account))
+    driver.setProcessObserver?.(this.agentProcesses)
+    driver.onEvent((event) => this.handleDriverEvent(driver.id, event))
+    this.accountDrivers.set(account.id, driver)
+    return driver
+  }
+
+  private driverForRuntime(harnessId: string, accountId?: string): HarnessDriver | undefined {
+    const resolvedId = accountId || legacyHarnessAccountId(harnessId)
+    return resolvedId.startsWith(legacyHarnessAccountId(harnessId))
+      ? this.drivers.get(harnessId)
+      : this.accountDrivers.get(resolvedId)
+  }
+
+  private allDrivers(): HarnessDriver[] {
+    return [...new Set([...this.drivers.values(), ...this.accountDrivers.values()])]
+  }
+
+  async removeHarnessAccount(accountId: string): Promise<boolean> {
+    const account = (await this.accountRegistry.list()).find(
+      (candidate) => candidate.id === accountId
+    )
+    if (!account) return false
+    const ownedSessions = [...this.sessionRegistry.entries()].filter(
+      ([, info]) => info.accountId === accountId
+    )
+    await Promise.allSettled(
+      ownedSessions.map(async ([sessionId, info]) => {
+        const driver = this.driverForRuntime(info.driverId, accountId)
+        if (driver && this.sessionStatuses.get(sessionId)?.state === 'working') {
+          this.userAbortedSessions.add(sessionId)
+          await driver.abort(info.projectPath, sessionId)
+          this.handleSessionIdleSignal(sessionId)
+          await this.awaitSessionIdleFinalization(sessionId)
+        }
+        await this.cleanupTurnUtilities(sessionId)
+        await this.threadManager.clearSessionId(info.projectId, info.threadId)
+        this.retireSessionState(sessionId)
+      })
+    )
+
+    const clearedThreads = new Set(
+      ownedSessions.map(([, info]) => `${info.projectId}:${info.threadId}`)
+    )
+    const fallbackAccountId =
+      (await this.accountRegistry.list(account.harnessId)).find(
+        (candidate) => candidate.id !== accountId
+      )?.id ?? legacyHarnessAccountId(account.harnessId)
+    const affectedThreads = (await this.threadManager.listAllThreads()).filter(
+      (thread) => thread.settings?.accountId === accountId || thread.sessionAccountId === accountId
+    )
+    for (let offset = 0; offset < affectedThreads.length; offset += 25) {
+      await Promise.all(
+        affectedThreads.slice(offset, offset + 25).map(async (thread) => {
+          const settings = thread.settings
+          const hadSettingsSelection = settings?.accountId === accountId
+          // Threads bound to a session under the removed account with no live
+          // session-registry entry (for example after an app restart) keep a
+          // dead binding. Unbind them so later reads stop chasing the removed
+          // account container.
+          if (
+            thread.sessionAccountId === accountId &&
+            !clearedThreads.has(`${thread.projectId}:${thread.id}`)
+          ) {
+            await this.threadManager.clearSessionId(thread.projectId, thread.id)
+          }
+          if (hadSettingsSelection && settings) {
+            await this.threadManager.updateSettings(thread.projectId, thread.id, {
+              ...settings,
+              accountId: fallbackAccountId
+            })
+          }
+        })
+      )
+    }
+
+    if (account.containerKind === 'managed') {
+      const driver = this.accountDrivers.get(accountId)
+      driver?.dispose()
+      this.accountDrivers.delete(accountId)
+    }
+    return this.accountRegistry.remove(accountId)
   }
 
   setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
@@ -2074,8 +2370,10 @@ export class ChatEngine {
     ipcMain.handle('agent:activateBankedReset', (_, projectId: string, threadId: string) =>
       this.activateBankedReset(projectId, threadId)
     )
-    ipcMain.handle('agent:getHarnessAuthStatus', (_, projectId: string, harnessId: string) =>
-      this.getHarnessAuthStatus(projectId, harnessId)
+    ipcMain.handle(
+      'agent:getHarnessAuthStatus',
+      (_, projectId: string, harnessId: string, accountId?: string) =>
+        this.getHarnessAuthStatus(projectId, harnessId, accountId)
     )
     ipcMain.handle(
       'agent:listTools',
@@ -2624,11 +2922,36 @@ export class ChatEngine {
     requestId = validateEntityId(requestId, 'Question request ID', 256)
     const pending = this.requirePendingQuestion(projectId, threadId, requestId)
     const safeAnswers = this.validateQuestionAnswers(answers, pending.request.questions)
-    const driver = this.drivers.get(pending.driverId)
+    const driver = this.driverForRuntime(
+      pending.driverId,
+      this.sessionRegistry.get(pending.request.sessionId)?.accountId
+    )
     if (!driver) {
       throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
     }
     await this.persistQuestionAnswer(pending, safeAnswers)
+    const approvalIndex = pending.request.questions.findIndex((question) =>
+      isBrainstormDocumentQuestion(question.prompt)
+    )
+    if (approvalIndex >= 0) {
+      const workflow = this.brainstormEngine.getWorkflowState(projectId, threadId)
+      if (workflow?.entryChoice === 'brainstorm' && workflow.stage === 'drafting') {
+        const round = await this.brainstormAlignmentRound(projectId, threadId)
+        const question = pending.request.questions[approvalIndex]
+        const answer = safeAnswers[approvalIndex]?.[0]?.trim()
+        if (
+          pending.request.questions.length === 1 &&
+          question?.prompt === brainstormDocumentQuestion(round.version) &&
+          safeAnswers[approvalIndex]?.length === 1 &&
+          (answer === BRAINSTORM_CREATE_DOCUMENT_ANSWER ||
+            /^(?:yes|create document|yes, create (?:the )?document)[.!]?$/iu.test(answer ?? ''))
+        ) {
+          await this.brainstormAlignmentNotes.approve(round, requestId)
+        } else {
+          await this.brainstormAlignmentNotes.clearApproval(round)
+        }
+      }
+    }
     try {
       await this.resolvePendingQuestion(pending, 'answered', safeAnswers, () =>
         driver.replyToQuestion(
@@ -2728,9 +3051,19 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     requestId = validateEntityId(requestId, 'Question request ID', 256)
     const pending = this.requirePendingQuestion(projectId, threadId, requestId)
-    const driver = this.drivers.get(pending.driverId)
+    const driver = this.driverForRuntime(
+      pending.driverId,
+      this.sessionRegistry.get(pending.request.sessionId)?.accountId
+    )
     if (!driver) {
       throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
+    }
+    if (
+      pending.request.questions.some((question) => isBrainstormDocumentQuestion(question.prompt))
+    ) {
+      await this.brainstormAlignmentNotes.clearApproval(
+        await this.brainstormAlignmentRound(projectId, threadId)
+      )
     }
     try {
       await this.resolvePendingQuestion(pending, 'dismissed', undefined, () =>
@@ -2815,7 +3148,7 @@ export class ChatEngine {
   }
 
   /** Whether the thread's Engineering lifecycle currently has an active stage
-   *  selection or Auto Pilot — the legacy `engineeringMode` settings flag was
+   *  selection or Auto Pilot   the legacy `engineeringMode` settings flag was
    *  scrubbed and the lifecycle is the single source of truth. */
   private engineeringLifecycleActive(projectId: string, threadId: string): boolean {
     const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
@@ -2847,7 +3180,12 @@ export class ChatEngine {
       this.sessionRegistry.get(thread.sessionId)?.driverId ??
       thread.settings?.harnessId ??
       DEFAULT_HARNESS
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    const { driver, projectPath } = await this.resolve(
+      projectId,
+      driverId,
+      threadId,
+      thread.sessionAccountId ?? this.sessionRegistry.get(thread.sessionId)?.accountId
+    )
     const providerRequests = await driver.listPendingQuestions(projectPath)
     const timeoutMs = (await this.storage.getConfig()).questionTimeoutMs
     for (const request of providerRequests) {
@@ -2948,7 +3286,7 @@ export class ChatEngine {
     }
     await Promise.allSettled(
       active.map(async ({ sessionId, info }) => {
-        const driver = this.drivers.get(info.driverId)
+        const driver = this.driverForRuntime(info.driverId, info.accountId)
         if (!driver) return
         try {
           if (driver.terminate) {
@@ -2966,7 +3304,7 @@ export class ChatEngine {
   /**
    * Reap harness processes orphaned by an unclean previous run (crash, force
    * quit, or the shutdown failsafe) before this session spawns any new servers.
-   * Only kills processes the app owns — never a user's external harness.
+   * Only kills processes the app owns   never a user's external harness.
    */
   reapOrphanProcesses(): Promise<import('../agents/agent-process-service').ReapOrphansResult> {
     return this.agentProcesses.reapOrphans()
@@ -3001,9 +3339,10 @@ export class ChatEngine {
     await Promise.allSettled(
       [...this.utilityTurns.keys()].map((sessionId) => this.cleanupTurnUtilities(sessionId))
     )
-    for (const driver of this.drivers.values()) {
+    for (const driver of this.allDrivers()) {
       driver.dispose()
     }
+    this.accountDrivers.clear()
     await this.utilityOrchestration.dispose()
     await this.utilityRuntime.dispose()
     this.retryScheduler?.dispose()
@@ -3074,10 +3413,10 @@ export class ChatEngine {
     budgetContext: UtilityTurnBudgetContext,
     threadTitle: string,
     skipRuntime = false,
-    directGateway = false,
-    allowManagement = false
+    allowManagement = false,
+    brainstormInterview = false
   ): Promise<string> {
-    // A new agent turn begins here — re-enable a user-dismissed PiP so it may
+    // A new agent turn begins here   re-enable a user-dismissed PiP so it may
     // show again if CUA is used, and cancel any auto-dismiss from the last turn.
     this.computerUsePip?.notifyTurnStarted(threadId)
     // A web-only inbox chat masks its tool set to web utilities, so the app
@@ -3096,13 +3435,10 @@ export class ChatEngine {
     // `driver` to `HarnessDriver | OpenCodeDriver` afterwards, and the union
     // hides this optional method.
     const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
-    // Shared or extension-backed harnesses cannot safely receive a fresh
-    // per-turn MCP launch overlay. Keep all app-managed utilities, including
-    // Cua, behind the turn-scoped gateway even when a specialized caller does
-    // not pass the direct-gateway flag explicitly.
-    const gatewayOnlyHarness =
-      driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
-    const useDirectGateway = directGateway || gatewayOnlyHarness
+    // A native bridge owns credentials internally. Other harnesses use their
+    // existing MCP runtime; prompt prose is never a transport fallback.
+    const useDirectGateway = Boolean(publishUtilityEndpoint)
+    await this.cleanupTurnUtilities(sessionId)
     let gateway: UtilityTurnGateway | undefined
     let runtime: PreparedUtilityRuntime | undefined
     try {
@@ -3117,6 +3453,12 @@ export class ChatEngine {
         permissionLevel: settings.permissionLevel,
         executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
         allowManagement,
+        ...(brainstormInterview
+          ? {
+              saveBrainstormNotes: (markdown: string) =>
+                this.saveBrainstormAlignmentNotes(projectId, threadId, sessionId, markdown)
+            }
+          : {}),
         budgetContext,
         attributeReinjectedResult: (attribution) =>
           this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
@@ -3205,39 +3547,31 @@ export class ChatEngine {
     }
   }
 
-  private async cleanupTurnUtilities(sessionId: string): Promise<void> {
+  private async cleanupTurnUtilities(sessionId: string, expectedGatewayId?: string): Promise<void> {
     const turn = this.utilityTurns.get(sessionId)
-    if (!turn) return
-    this.computerUsePip?.notifyTurnEnded(turn.threadId)
-    // Supersession guard: if a newer utility turn re-armed for this session
-    // while this cleanup was in flight (e.g. a held steer was delivered as the
-    // next turn), the shared per-session artifacts now belong to the new turn.
-    // Clearing them here would wipe the new turn's live credentials — only the
-    // replaced turn's own gateway is torn down; the new turn cleans itself up
-    // when it ends.
-    if (this.utilityTurns.get(sessionId) === turn) {
-      this.utilityTurns.delete(sessionId)
+    if (!turn || (expectedGatewayId !== undefined && turn.gateway.id !== expectedGatewayId)) return
+    turn.cleanupPromise ??= (async () => {
+      this.computerUsePip?.notifyTurnEnded(turn.threadId)
       try {
-        if (turn.driver.publishUtilityGatewayEndpoint) {
-          await turn.driver.publishUtilityGatewayEndpoint(turn.projectPath, sessionId, null)
-        }
+        await turn.driver.publishUtilityGatewayEndpoint?.(turn.projectPath, sessionId, null)
         await turn.driver.applyPreparedUtilityRuntime?.(turn.projectPath, null, sessionId)
       } catch (error) {
-        await turn.runtime?.cleanup()
         Logger.error('Harness utility runtime cleanup failed:', error)
+      } finally {
+        await Promise.allSettled([turn.runtime?.cleanup(), turn.gateway.cleanup()])
+        if (this.utilityTurns.get(sessionId) === turn) this.utilityTurns.delete(sessionId)
       }
-    }
-    await turn.gateway.cleanup()
+    })()
+    await turn.cleanupPromise
   }
 
   /**
    * Re-arm the turn-scoped utility gateway for a steered turn. Steers skip
-   * prepareTurnUtilities (no prompt recomposition happens), but pi's gateway
+   * prepareTurnUtilities (no prompt recomposition happens), but native gateway
    * tools are registered at process spawn and work from the handoff file
-   * alone — so a steer that lands after the previous turn's cleanup only
+   * alone   so a steer that lands after the previous turn's cleanup only
    * needs a fresh utility turn + endpoint publish to keep the tools alive.
-   * Shell-gateway harnesses gain nothing here: their credentials live in
-   * per-turn prompt prose a steer never recomposes.
+   * MCP runtime harnesses keep their live overlay until turn completion.
    */
   private async rearmSteerUtilities(
     driver: HarnessDriver,
@@ -3247,7 +3581,8 @@ export class ChatEngine {
     projectPath: string,
     settings: ThreadSettings
   ): Promise<void> {
-    if (driver.id !== 'pi') return
+    const previous = this.utilityTurns.get(sessionId)
+    if (previous?.cleanupPromise) await previous.cleanupPromise
     if (this.utilityTurns.has(sessionId)) return
     const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
     if (!publishUtilityEndpoint) return
@@ -3260,8 +3595,9 @@ export class ChatEngine {
       composedTurnTokens: 0,
       parentTurnId: sessionId
     }
+    let gateway: UtilityTurnGateway | undefined
     try {
-      const gateway = await this.utilityOrchestration.startTurn({
+      gateway = await this.utilityOrchestration.startTurn({
         harnessId: driver.id,
         projectId,
         threadId,
@@ -3272,6 +3608,12 @@ export class ChatEngine {
         permissionLevel: settings.permissionLevel,
         executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
         allowManagement: false,
+        ...(this.pendingBrainstormTurns.has(sessionId)
+          ? {
+              saveBrainstormNotes: (markdown: string) =>
+                this.saveBrainstormAlignmentNotes(projectId, threadId, sessionId, markdown)
+            }
+          : {}),
         budgetContext,
         attributeReinjectedResult: (attribution) =>
           this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
@@ -3281,8 +3623,9 @@ export class ChatEngine {
       }
       this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
     } catch (error) {
-      // Steer delivery must never fail because utilities could not re-arm.
+      await gateway?.cleanup()
       Logger.error('Steer utility re-arm failed:', error)
+      throw error
     }
   }
 
@@ -3333,7 +3676,7 @@ export class ChatEngine {
   /**
    * Compute every implementing driver's provider-catalog input fingerprint and
    * compare it with the last recorded one. Returns (and records) whether any
-   * driver's inputs drifted — e.g. the user connected or disconnected a Pi
+   * driver's inputs drifted   e.g. the user connected or disconnected a Pi
    * provider, so cached catalogs no longer match reality. The first observation
    * only records the baseline.
    */ private async providerCatalogInputsChanged(): Promise<boolean> {
@@ -3362,7 +3705,7 @@ export class ChatEngine {
             ? null
             : ([driver.id, fingerprint] as const)
         } catch {
-          // Cannot determine — treat as unchanged rather than forcing a refresh.
+          // Cannot determine   treat as unchanged rather than forcing a refresh.
           return null
         }
       })
@@ -3405,8 +3748,8 @@ export class ChatEngine {
 
   /**
    * Fetch the current account quota on demand. Account usage is
-   * PROVIDER-level account state — it has nothing to do with any thread or
-   * conversation context — so one channel answers for every surface (project
+   * PROVIDER-level account state   it has nothing to do with any thread or
+   * conversation context   so one channel answers for every surface (project
    * threads, inbox chats, temporary chats, the new-chat composer) and every
    * surface reads the same cache. The caller names the harness/provider the
    * UI is currently showing; the shared telemetry chain does the rest.
@@ -3414,12 +3757,17 @@ export class ChatEngine {
   async refreshAccountUsage(overrides?: AgentAccountUsageOverrides): Promise<AgentAccountUsage[]> {
     const harnessId = overrides?.harnessId
     if (!harnessId) return []
-    const driver = this.drivers.get(harnessId)
+    const providerId = overrides?.providerId ?? harnessId
+    const account = await this.accountRegistry.resolveForProvider(
+      harnessId,
+      providerId,
+      overrides?.accountId
+    )
+    const driver = await this.driverForAccount(harnessId, account.id).catch(() => undefined)
     if (!driver) {
       Logger.dev(`On-demand account usage refresh: unknown harness "${harnessId}"`)
       return []
     }
-    const providerId = overrides?.providerId ?? harnessId
     // Quota reads never depend on where a conversation lives. Read against the
     // shared chats working directory so every surface gets the same answer.
     let projectPath: string
@@ -3429,52 +3777,86 @@ export class ChatEngine {
       await this.storage.ensureDirectory(CHATS_CWD_DIR)
       projectPath = this.storage.resolve(CHATS_CWD_DIR)
     }
-    const entry = await this.readHarnessAccountUsage({ harnessId, providerId, driver, projectPath })
+    const entry = await this.readHarnessAccountUsage({
+      harnessId,
+      providerId,
+      accountId: account.id,
+      accountEnvironment: this.accountRegistry.environment(account),
+      driver,
+      projectPath
+    })
     return entry ? [entry] : []
   }
 
-  /** One harness's on-demand account quota — the single telemetry chain
+  /** One harness's on-demand account quota   the single telemetry chain
    *  (harness-native capture, then OpenUsage, then a custom provider's usage
    *  route) shared by thread, temporary-chat, and threadless reads. */
   private async readHarnessAccountUsage(target: {
     harnessId: string
     providerId: string
+    accountId: string
+    accountEnvironment: NodeJS.ProcessEnv
     driver: HarnessDriver
     projectPath: string
   }): Promise<AgentAccountUsage | null> {
-    const { harnessId, providerId, driver, projectPath } = target
+    const { harnessId, providerId, accountId, accountEnvironment, driver, projectPath } = target
     try {
-      const nativeTelemetry = driver.readAccountUsage
-        ? await driver.readAccountUsage(projectPath, providerId)
-        : null
-      // OpenUsage is keyed by PROVIDER, not harness: resolve the provider
-      // the harness session actually ran against (e.g. a pi thread pointed
-      // at Z.AI queries "z-ai", not "pi").
-      const openUsage = await this.openUsage.readProviderUsage(
-        providerId,
-        harnessId === 'pi' ? ['pi'] : []
+      const isCustomProvider = isCodeInOvenCustomProviderId(providerId)
+      // The driver remains useful for custom providers. Pi's native usage
+      // extension captures response headers from the selected provider, so a
+      // custom provider can report subscription windows even without a custom
+      // usage route. A driver may also return context usage for the live
+      // session, which should remain visible alongside quota data.
+      // OpenUsage is keyed by PROVIDER, not harness. A custom provider ID is a
+      // CodeInOven namespace, so also probe the underlying provider ID. Keep
+      // the Pi fallback for Pi-backed providers when no provider integration
+      // exists in OpenUsage.
+      const openUsageProviderIds = [
+        ...(isCustomProvider ? [underlyingProviderId(providerId)] : []),
+        ...(harnessId === 'pi' ? ['pi'] : [])
+      ].filter((candidate): candidate is string => Boolean(candidate))
+      const [nativeAttempt, openUsageAttempt, customAttempt] = await Promise.allSettled([
+        driver.readAccountUsage
+          ? driver.readAccountUsage(projectPath, providerId)
+          : Promise.resolve(null),
+        this.openUsage.readProviderUsage(
+          providerId,
+          openUsageProviderIds,
+          accountId,
+          accountEnvironment
+        ),
+        this.readCustomProviderUsage(harnessId, providerId)
+      ])
+      const nativeTelemetry = nativeAttempt.status === 'fulfilled' ? nativeAttempt.value : null
+      const openUsage = openUsageAttempt.status === 'fulfilled' ? openUsageAttempt.value : null
+      const customUsage = customAttempt.status === 'fulfilled' ? customAttempt.value : null
+      if (nativeAttempt.status === 'rejected') {
+        Logger.dev('Native account usage read unavailable:', nativeAttempt.reason)
+      }
+      if (openUsageAttempt.status === 'rejected') {
+        Logger.dev('OpenUsage account read unavailable:', openUsageAttempt.reason)
+      }
+      if (customAttempt.status === 'rejected') {
+        Logger.dev('Custom provider usage read unavailable:', customAttempt.reason)
+      }
+      // Custom routes have the highest priority for custom providers. If the
+      // route is missing or returns no usable data, native Pi telemetry and
+      // OpenUsage still get a chance to answer the same request.
+      const orderedTelemetry = isCustomProvider
+        ? [customUsage, nativeTelemetry, openUsage]
+        : [nativeTelemetry, openUsage, customUsage]
+      const rateLimitSource = orderedTelemetry.find(
+        (candidate) => candidate && candidate.rateLimits.length > 0
       )
-      // A custom provider with a user-defined usage route answers the
-      // quota question directly when the harness itself reports nothing.
-      const customUsage =
-        nativeTelemetry?.rateLimits.length || openUsage?.rateLimits.length
-          ? null
-          : await this.readCustomProviderUsage(harnessId, providerId)
+      const creditSource = orderedTelemetry.find((candidate) => candidate?.credits)
       const telemetry =
-        nativeTelemetry || openUsage || customUsage
+        rateLimitSource ||
+        creditSource ||
+        nativeTelemetry?.contextWindow !== undefined ||
+        nativeTelemetry?.contextUsed !== undefined
           ? {
-              rateLimits: nativeTelemetry?.rateLimits.length
-                ? nativeTelemetry.rateLimits
-                : openUsage?.rateLimits.length
-                  ? openUsage.rateLimits
-                  : (customUsage?.rateLimits ?? []),
-              ...(nativeTelemetry?.credits
-                ? { credits: nativeTelemetry.credits }
-                : openUsage?.credits
-                  ? { credits: openUsage.credits }
-                  : customUsage?.credits
-                    ? { credits: customUsage.credits }
-                    : {}),
+              rateLimits: rateLimitSource?.rateLimits ?? [],
+              ...(creditSource?.credits ? { credits: creditSource.credits } : {}),
               ...(nativeTelemetry?.bankedResets
                 ? { bankedResets: nativeTelemetry.bankedResets }
                 : {}),
@@ -3494,7 +3876,7 @@ export class ChatEngine {
       ) {
         return null
       }
-      return { harnessId, providerId, ...telemetry }
+      return { harnessId, providerId, accountId, ...telemetry }
     } catch (error) {
       Logger.dev('On-demand account usage refresh unavailable:', error)
       return null
@@ -3503,7 +3885,7 @@ export class ChatEngine {
 
   /**
    * Redeem one banked rate-limit reset credit for the thread's harness.
-   * Destructive and irreversible — it immediately resets the account's usage
+   * Destructive and irreversible   it immediately resets the account's usage
    * windows and consumes one banked credit. Only Codex currently supports
    * this; other harnesses return null.
    */
@@ -3517,12 +3899,24 @@ export class ChatEngine {
     if (!thread) return null
     const harnessId = thread.settings?.harnessId
     if (!harnessId) return null
-    const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
+    const accountId = (
+      await this.accountRegistry.resolveForProvider(
+        harnessId,
+        thread.settings?.providerId,
+        thread.settings?.accountId
+      )
+    ).id
+    const { driver, projectPath } = await this.resolve(
+      projectIdSafe,
+      harnessId,
+      threadId,
+      accountId
+    )
     if (!driver.activateBankedReset) return null
     const telemetry = await driver.activateBankedReset(projectPath)
     if (!telemetry) return null
     const providerId = thread.settings?.providerId ?? harnessId
-    return { harnessId, providerId, ...telemetry }
+    return { harnessId, providerId, accountId, ...telemetry }
   }
 
   /**
@@ -3540,7 +3934,7 @@ export class ChatEngine {
       if (!provider?.usagePath) return null
       const apiKey = provider.apiKeyRef
         ? await this.secretVault.resolve(provider.apiKeyRef)
-        : undefined
+        : await this.baseUrlProviders.readNativeApiKey(harnessId, providerId)
       return await this.customProviderUsage.read(
         provider.id,
         provider.harnessId,
@@ -3561,10 +3955,14 @@ export class ChatEngine {
    * null when the harness exposes no status probe (the renderer then shows
    * nothing); otherwise true when the stored credential authenticates.
    */
-  async getHarnessAuthStatus(projectId: string, harnessId: string): Promise<boolean | null> {
+  async getHarnessAuthStatus(
+    projectId: string,
+    harnessId: string,
+    accountId?: string
+  ): Promise<boolean | null> {
     projectId = validateEntityId(projectId, 'Project ID')
     harnessId = validateEntityId(harnessId, 'Harness ID', 256)
-    const { driver, projectPath } = await this.resolve(projectId, harnessId)
+    const { driver, projectPath } = await this.resolve(projectId, harnessId, undefined, accountId)
     if (!driver.getAuthStatus) return null
     const status = await driver.getAuthStatus(projectPath)
     return status.state === 'authenticated'
@@ -3574,23 +3972,37 @@ export class ChatEngine {
   private async discoverProviders(projectId: string): Promise<ProviderCatalog[]> {
     const projectPath = await this.resolveProjectPath(projectId)
     const harnessEnv = buildProcessEnvironment()
-    const drivers = [...this.drivers.values()].filter((driver) => {
+    const defaultDrivers = [...this.drivers.values()].filter((driver) => {
       const command = findHarness(driver.id)?.command
       return command !== undefined && resolveExecutablePath(command, harnessEnv) !== undefined
     })
-    const results = await Promise.all(
-      drivers.map(async (driver): Promise<DriverDiscovery> => {
-        try {
-          return await this.discoverDriverProviders(driver, projectPath)
-        } catch (error) {
-          Logger.info('Harness provider discovery skipped', {
-            driverId: driver.id,
-            error: error instanceof Error ? error.message : String(error)
-          })
-          return { catalogs: [], probe: Promise.resolve([]) }
-        }
-      })
+    const managedAccounts = (await this.accountRegistry.list()).filter(
+      (account) =>
+        account.containerKind === 'managed' &&
+        defaultDrivers.some((driver) => driver.id === account.harnessId) &&
+        ['pi', 'opencode', 'codex', 'claude-code'].includes(account.harnessId)
     )
+    const managedDrivers = await Promise.all(
+      managedAccounts.map((account) => this.driverForAccount(account.harnessId, account.id))
+    )
+    const drivers = [...defaultDrivers, ...managedDrivers]
+    const results: DriverDiscovery[] = []
+    for (let offset = 0; offset < drivers.length; offset += 4) {
+      const batch = await Promise.all(
+        drivers.slice(offset, offset + 4).map(async (driver): Promise<DriverDiscovery> => {
+          try {
+            return await this.discoverDriverProviders(driver, projectPath)
+          } catch (error) {
+            Logger.info('Harness provider discovery skipped', {
+              driverId: driver.id,
+              error: error instanceof Error ? error.message : String(error)
+            })
+            return { catalogs: [], probe: Promise.resolve([]) }
+          }
+        })
+      )
+      results.push(...batch)
+    }
     const merged = mergeProviderCatalogs(
       results
         .filter((entry) => entry.catalogs !== undefined)
@@ -3673,8 +4085,8 @@ export class ChatEngine {
   }
 
   /**
-   * Return the last persisted catalog snapshot for a project — or an empty list
-   * when none exists — without contacting any harness or spawning a server.
+   * Return the last persisted catalog snapshot for a project   or an empty list
+   * when none exists   without contacting any harness or spawning a server.
    * Startup warm-up uses this to populate the model picker instantly for every
    * project while provisioning an `opencode serve` process only for the project
    * the user actually had open when the app closed.
@@ -3733,7 +4145,7 @@ export class ChatEngine {
    * The `ensureReady` pre-probe spawns each harness's CLI (or, for OpenCode, a
    * local server) just to answer "is it installed?". Drivers' `listProviders`
    * already fall back to a bundled catalog when the CLI is missing or fails,
-   * so the probe is skipped here — it only adds latency to the picker.
+   * so the probe is skipped here   it only adds latency to the picker.
    *
    * When the budget expires `catalogs` resolves `undefined` but the driver's
    * probe keeps running; `enrichProviders` awaits that same promise so nothing
@@ -4108,10 +4520,16 @@ export class ChatEngine {
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
 
     const driverId = requestedDriverId ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    const account = await this.accountRegistry.resolveForProvider(
+      driverId,
+      thread.settings?.providerId,
+      thread.settings?.accountId
+    )
+    const accountId = account.id
+    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
 
     // A harness switch orphans the old harness's session. The thread's bound
-    // session belongs to the harness that created it — after a mid-run switch
+    // session belongs to the harness that created it   after a mid-run switch
     // `settings.harnessId` already points at the new harness while `sessionId`
     // still lives in the old one, so the switch is detected by comparing the
     // session OWNER (persisted or registered) with the requested driver, never
@@ -4121,11 +4539,19 @@ export class ChatEngine {
     const sessionOwner = thread.sessionId
       ? (thread.sessionHarnessId ?? this.sessionRegistry.get(thread.sessionId)?.driverId)
       : undefined
-    const switchedHarness = Boolean(thread.sessionId && sessionOwner && sessionOwner !== driverId)
-    const previousHarnessId = switchedHarness ? sessionOwner : undefined
-    const previousSessionId = switchedHarness ? thread.sessionId : undefined
+    const sessionOwnerAccount = thread.sessionId
+      ? (thread.sessionAccountId ?? legacyHarnessAccountId(sessionOwner ?? driverId))
+      : undefined
+    const switchedRuntime = Boolean(
+      thread.sessionId &&
+      sessionOwner &&
+      (sessionOwner !== driverId || sessionOwnerAccount !== accountId)
+    )
+    const previousHarnessId = switchedRuntime ? sessionOwner : undefined
+    const previousAccountId = switchedRuntime ? sessionOwnerAccount : undefined
+    const previousSessionId = switchedRuntime ? thread.sessionId : undefined
 
-    let sessionId = switchedHarness ? undefined : thread.sessionId
+    let sessionId = switchedRuntime ? undefined : thread.sessionId
     // Planning-turn suppression is applied per turn in sendPrompt (where the
     // turn's intent is known). Marking the session here unconditionally for a
     // lifecycle-active thread would suppress the final answer of every parked
@@ -4174,7 +4600,8 @@ export class ChatEngine {
         projectId,
         threadId,
         sessionId,
-        driverId
+        driverId,
+        accountId
       )
       // Stamp the thread onto the driver record so the session can be
       // relocated across harness switches (see the switch branch below).
@@ -4187,7 +4614,7 @@ export class ChatEngine {
       // that harness still holds the thread's real native transcript. Restore
       // the binding so the next RPC spawn resumes it instead of cold-starting
       // on the engine's history recap.
-      if (switchedHarness) {
+      if (switchedRuntime) {
         try {
           nativeHistoryBound =
             (await driver.restoreNativeBinding?.(projectPath, sessionId, threadId)) ?? false
@@ -4211,7 +4638,7 @@ export class ChatEngine {
       // of its own. Seed the driver's native transcript from the edited
       // mirror so the next turn resumes the real (edited) conversation
       // natively instead of replaying it as a history recap.
-      if (!nativeHistoryBound && !switchedHarness) {
+      if (!nativeHistoryBound && !switchedRuntime) {
         try {
           const editedMirror = await this.threadManager.loadMessageRecords(projectId, threadId)
           const prefillMirror =
@@ -4238,7 +4665,7 @@ export class ChatEngine {
     // Record whether the harness natively holds the conversation so the recap
     // path can skip a second provider history load. A freshly created session
     // that inherited, restored, or was pre-filled with native history counts
-    // too — the recap must not replay on top of a natively bound transcript.
+    // too   the recap must not replay on top of a natively bound transcript.
     this.sessionNativeHistory.set(
       sessionId,
       (driver.capabilities.nativeResume !== false && storedSessionMessages.length > 0) ||
@@ -4250,7 +4677,7 @@ export class ChatEngine {
     // smaller than the thread's last-known native usage, compact the native
     // session before it resumes so the new model never hits Codex's "ran out of
     // room in the model's context window" boundary.
-    if (!switchedHarness && storedSessionMessages.length > 0 && thread.settings) {
+    if (!switchedRuntime && storedSessionMessages.length > 0 && thread.settings) {
       await this.maybeAutoCompactOnModelSwitch(
         projectId,
         threadId,
@@ -4264,12 +4691,13 @@ export class ChatEngine {
     // The switch succeeded (a replacement session is bound). Best-effort release
     // the old harness's session so its native context, prompt cache, and storage
     // are reclaimed instead of orphaned on disk.
-    if (switchedHarness && previousHarnessId && previousSessionId) {
+    if (switchedRuntime && previousHarnessId && previousAccountId && previousSessionId) {
       await this.releaseOrphanedHarnessSession(
         projectId,
         threadId,
         projectPath,
         previousHarnessId,
+        previousAccountId,
         previousSessionId
       )
     }
@@ -4282,6 +4710,8 @@ export class ChatEngine {
       thread.settings?.permissionLevel ?? 'auto_review',
       driverId
     )
+    const registered = this.sessionRegistry.get(sessionId)
+    if (registered) registered.accountId = accountId
     const recoveredTurnFinished = storedSessionMessages.at(-1)?.role === 'assistant'
     if (recoveredTurnFinished || (thread.status !== 'planning' && thread.status !== 'executing')) {
       const initialSpecKey = this.initialSpecKey(projectId, threadId)
@@ -4340,6 +4770,7 @@ export class ChatEngine {
     updateRetryWakeWindow(sessionId, null)
     this.reasoningTimes.delete(sessionId)
     this.toolTimes.delete(sessionId)
+    this.generationWindows.delete(sessionId)
     this.handledIdleSessions.delete(sessionId)
     this.userAbortedSessions.delete(sessionId)
     this.outboundMessageIdsBySession.delete(sessionId)
@@ -4367,24 +4798,35 @@ export class ChatEngine {
     threadId: string,
     projectPath: string,
     previousHarnessId: string,
+    previousAccountId: string,
     previousSessionId: string
   ): Promise<void> {
     this.retireSessionState(previousSessionId)
-    const previousDriver = this.drivers.get(previousHarnessId)
+    const previousDriver = await this.driverForAccount(previousHarnessId, previousAccountId).catch(
+      () => undefined
+    )
     // The orphaned session's transcript must land in the app mirror before its
     // native session is destroyed, so the user never loses the old harness's
     // final output when they switch harnesses. Best-effort and non-throwing:
     // the idle sync usually already mirrored the completed turn.
     if (previousDriver?.loadMessages) {
       try {
-        const previousMessages = stampHarnessId(
-          await previousDriver.loadMessages(projectPath, previousSessionId),
-          previousHarnessId
+        const previousAccount = await this.accountRegistry.resolve(
+          previousHarnessId,
+          previousAccountId
+        )
+        const previousMessages = stampAccount(
+          stampHarnessId(
+            await previousDriver.loadMessages(projectPath, previousSessionId),
+            previousHarnessId
+          ),
+          previousAccount.id,
+          previousAccount.label
         )
         if (previousMessages.length > 0) {
           const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
-          const merged = restoreMirrorThinkingLevel(
-            mergeAgentMessages(mirror, previousMessages),
+          const merged = restoreMirrorAccount(
+            restoreMirrorThinkingLevel(mergeAgentMessages(mirror, previousMessages), mirror),
             mirror
           )
           await this.threadManager.upsertMessages(projectId, threadId, merged, previousSessionId)
@@ -4464,7 +4906,10 @@ export class ChatEngine {
     const driverId =
       registeredOwner ?? thread.sessionHarnessId ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
     try {
-      const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+      const accountId =
+        this.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
+      const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
+      const account = await this.accountRegistry.resolve(driverId, accountId)
       this.registerSession(
         thread.sessionId,
         projectId,
@@ -4473,12 +4918,16 @@ export class ChatEngine {
         thread.settings?.permissionLevel ?? 'auto_review',
         driverId
       )
-      const messages = stampHarnessId(
-        await driver.loadMessages(projectPath, thread.sessionId),
-        driverId
+      const registered = this.sessionRegistry.get(thread.sessionId)
+      if (registered) registered.accountId = accountId
+      const messages = stampAccount(
+        stampHarnessId(await driver.loadMessages(projectPath, thread.sessionId), driverId),
+        account.id,
+        account.label
       )
       this.applyReasoningStamps(thread.sessionId, messages)
       this.applyToolStamps(thread.sessionId, messages)
+      this.applyGenerationStamps(thread.sessionId, messages)
       const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
       this.outboundMessageIdsBySession.set(
         thread.sessionId,
@@ -4487,14 +4936,18 @@ export class ChatEngine {
       // Preserve thinking and tool timestamps from the mirror for parts the driver lacks.
       this.preserveMirrorReasoningStamps(mirror, messages)
       this.preserveMirrorToolStamps(mirror, messages)
-      let merged = restoreMirrorThinkingLevel(
-        mergeAgentMessages(
-          mirror,
-          classifyProviderMessages(
-            messages,
-            this.planningSessions.has(thread.sessionId) ||
-              isDedicatedAssignmentAuditorThread(thread)
-          )
+      this.preserveMirrorGenerationDurations(mirror, messages)
+      let merged = restoreMirrorAccount(
+        restoreMirrorThinkingLevel(
+          mergeAgentMessages(
+            mirror,
+            classifyProviderMessages(
+              messages,
+              this.planningSessions.has(thread.sessionId) ||
+                isDedicatedAssignmentAuditorThread(thread)
+            )
+          ),
+          mirror
         ),
         mirror
       )
@@ -4815,7 +5268,7 @@ export class ChatEngine {
     return this.generatedArtifactService.artifactsFor(thread, projectPath, messages)
   }
 
-  /** Running processes owned by a thread (and app-scoped pooled harness shares). */
+  /** Running subprocesses owned exclusively by the requested thread. */
   listProcesses(projectId: string, threadId: string): Promise<AgentRunningProcess[]> {
     return this.agentProcesses.list(
       validateEntityId(projectId, 'Project ID'),
@@ -4824,8 +5277,8 @@ export class ChatEngine {
   }
 
   /**
-   * Whether any live agent process is owned by threads in the project —
-   * optionally narrowed to one scope bucket — used by worktree lifecycle
+   * Whether any live agent process is owned by threads in the project  
+   * optionally narrowed to one scope bucket   used by worktree lifecycle
    * preflights so removals never strand running agents.
    */
   async hasActiveProcessesInScope(projectId: string, scopeBucketId?: string): Promise<boolean> {
@@ -4944,6 +5397,9 @@ export class ChatEngine {
    * recognized as user edits and excluded from concurrent agent turns.
    */
   recordUserTerminalInput(projectId: string, projectPath: string): void {
+    // Command-backed terminals (harness logins/updates) carry no project id;
+    // there is no checkpoint to attribute their shell commands to.
+    if (!projectId) return
     const existing = this.userTerminalWindows.get(projectId)
     if (existing) {
       existing.lastInput = Date.now()
@@ -4957,12 +5413,10 @@ export class ChatEngine {
       return
     }
     const window = {
-      fingerprint: this.checkpointManager
-        .fingerprint(projectId, projectPath)
-        .catch((error) => {
-          Logger.error('user-terminal fingerprint failed:', error)
-          return null
-        }),
+      fingerprint: this.checkpointManager.fingerprint(projectId, projectPath).catch((error) => {
+        Logger.error('user-terminal fingerprint failed:', error)
+        return null
+      }),
       lastInput: Date.now(),
       timer: setTimeout(() => undefined, 0)
     }
@@ -5041,12 +5495,16 @@ export class ChatEngine {
       (thread.sessionId ? this.sessionRegistry.get(thread.sessionId)?.driverId : undefined) ??
       thread.settings?.harnessId ??
       DEFAULT_HARNESS
-    const { projectPath } = await this.resolve(projectId, driverId, threadId)
+    const accountId =
+      thread.sessionAccountId ??
+      (thread.sessionId ? this.sessionRegistry.get(thread.sessionId)?.accountId : undefined)
+    const { projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
     const owner: ChildSessionInfo = {
       projectId,
       threadId,
       projectPath,
       driverId,
+      accountId,
       parentSessionId: thread.sessionId
     }
     this.childSessionOwners.set(sessionId, owner)
@@ -5075,7 +5533,7 @@ export class ChatEngine {
     const owner = await this.resolveChildSessionOwner(projectId, threadId, sessionId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.settings) throw new Error('Thread settings are unavailable')
-    const driver = this.drivers.get(owner.driverId)
+    const driver = this.driverForRuntime(owner.driverId, owner.accountId)
     if (!driver) throw new Error(`Harness driver is unavailable: ${owner.driverId}`)
     const messages = await this.threadManager.loadSubagentMessages(projectId, threadId, sessionId)
     const latestModelMessage = [...messages]
@@ -5105,7 +5563,7 @@ export class ChatEngine {
       const issue: AgentProviderIssue = {
         kind: classifyProviderIssue(message),
         message,
-        rawError: message,
+        rawError: rawErrorDetail(error),
         harnessId: owner.driverId,
         retryable: true
       }
@@ -5271,7 +5729,7 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     sessionId = validateEntityId(sessionId, 'Session ID', 512)
     const owner = await this.resolveChildSessionOwner(projectId, threadId, sessionId)
-    const driver = this.drivers.get(owner.driverId)
+    const driver = this.driverForRuntime(owner.driverId, owner.accountId)
     if (!driver) throw new Error(`Harness driver is unavailable: ${owner.driverId}`)
     this.userAbortedSessions.add(sessionId)
     await driver.abort(owner.projectPath, sessionId)
@@ -5289,27 +5747,35 @@ export class ChatEngine {
     if (existing) return existing
 
     const capture = (async (): Promise<AgentMessage[]> => {
-      const driver = resolvedDriver ?? this.drivers.get(owner.driverId)
+      const driver = resolvedDriver ?? this.driverForRuntime(owner.driverId, owner.accountId)
       if (!driver) {
         throw new Error(`Unknown harness: ${owner.driverId}`)
       }
       let timeout: ReturnType<typeof setTimeout> | undefined
       try {
-        const incoming = stampHarnessId(
-          await Promise.race([
-            driver.loadMessages(owner.projectPath, sessionId),
-            new Promise<never>((_, reject) => {
-              timeout = setTimeout(
-                () =>
-                  reject(new Error('The provider took too long to load the sub-agent transcript')),
-                15_000
-              )
-            })
-          ]),
-          owner.driverId
+        const account = await this.accountRegistry.resolve(owner.driverId, owner.accountId)
+        const incoming = stampAccount(
+          stampHarnessId(
+            await Promise.race([
+              driver.loadMessages(owner.projectPath, sessionId),
+              new Promise<never>((_, reject) => {
+                timeout = setTimeout(
+                  () =>
+                    reject(
+                      new Error('The provider took too long to load the sub-agent transcript')
+                    ),
+                  15_000
+                )
+              })
+            ]),
+            owner.driverId
+          ),
+          account.id,
+          account.label
         )
         this.applyReasoningStamps(sessionId, incoming)
         this.applyToolStamps(sessionId, incoming)
+        this.applyGenerationStamps(sessionId, incoming)
         const cached = await this.threadManager.loadSubagentMessages(
           owner.projectId,
           owner.threadId,
@@ -5317,7 +5783,11 @@ export class ChatEngine {
         )
         this.preserveMirrorReasoningStamps(cached, incoming)
         this.preserveMirrorToolStamps(cached, incoming)
-        const merged = restoreMirrorThinkingLevel(mergeAgentMessages(cached, incoming), cached)
+        this.preserveMirrorGenerationDurations(cached, incoming)
+        const merged = restoreMirrorAccount(
+          restoreMirrorThinkingLevel(mergeAgentMessages(cached, incoming), cached),
+          cached
+        )
         await this.threadManager.saveSubagentMessages(
           owner.projectId,
           owner.threadId,
@@ -5535,13 +6005,13 @@ export class ChatEngine {
   }
 
   /**
-   * Count sessions and processes that are actively working or awaiting input —
+   * Count sessions and processes that are actively working or awaiting input  
    * anything that would be interrupted by a forced restart: streaming turns,
    * permission/question decisions, in-flight shell tools, child sessions,
    * pending spec/brainstorm drafts, and in-progress compaction.
    *
    * Kept for power-management and diagnostics. The updater gate intentionally
-   * does NOT use this — see `workingSessionCount()` which mirrors the
+   * does NOT use this   see `workingSessionCount()` which mirrors the
    * AppHeader pulse.
    */
   activeSessionCount(): number {
@@ -5577,7 +6047,7 @@ export class ChatEngine {
   }
 
   /**
-   * Sessions actively producing work — mirrors `AppHeader`'s pulse
+   * Sessions actively producing work   mirrors `AppHeader`'s pulse
    * (`agentRuns.isBusy` / `isThreadWorking`). Only `sessionStatuses === 'working'`
    * counts; `waiting`, pending permissions/questions, compactions, brainstorm,
    * loops, child sessions and idle PTYs do not pulse the header and must not
@@ -5632,7 +6102,7 @@ export class ChatEngine {
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
       // Guard: only block a spurious working signal that arrives before the
       // known reset window. When retryAt is undefined or no scheduler record
-      // exists, treat provider working as authoritative — this covers native
+      // exists, treat provider working as authoritative   this covers native
       // harness auto-retries and >6h/missing-window cases where the thread
       // has legitimately picked itself up but would otherwise stay paused.
       if (thread?.status === 'working-paused') {
@@ -5713,7 +6183,7 @@ export class ChatEngine {
     }
   }
 
-  /** A project is doing live work — reset its idle/released state. */
+  /** A project is doing live work   reset its idle/released state. */
   private markProjectActive(projectId: string): void {
     this.projectIdleSince.delete(projectId)
     this.releasedProjects.delete(projectId)
@@ -5732,7 +6202,7 @@ export class ChatEngine {
    * fully idle (no working turns, no pending input, no in-flight work) for the
    * grace period: pooled servers are stopped, CLI session caches are evicted,
    * and any agent-spawned processes are released. Sessions persist in each
-   * harness's own store, so they rehydrate the next time the project is used —
+   * harness's own store, so they rehydrate the next time the project is used  
    * the same session ids are simply re-served.
    */
   private async reapIdleResources(): Promise<void> {
@@ -5775,7 +6245,7 @@ export class ChatEngine {
         this.releasedProjects.delete(projectId)
         continue
       }
-      // Already released once this active→idle cycle — do not re-release.
+      // Already released once this active→idle cycle   do not re-release.
       if (this.releasedProjects.has(projectId)) continue
       const since = this.projectIdleSince.get(projectId) ?? now
       if (now - since < ChatEngine.IDLE_PROJECT_GRACE_MS) {
@@ -5790,7 +6260,7 @@ export class ChatEngine {
         projectPaths: [...project.projectPaths]
       })
       for (const projectPath of project.projectPaths) {
-        for (const driver of this.drivers.values()) {
+        for (const driver of this.allDrivers()) {
           try {
             await driver.releaseProjectResources?.(projectPath)
           } catch (error) {
@@ -5799,7 +6269,7 @@ export class ChatEngine {
         }
       }
       // Drop the per-session bookkeeping for this project's sessions. The
-      // harness sessions themselves are untouched — they rehydrate from disk.
+      // harness sessions themselves are untouched   they rehydrate from disk.
       for (const [sessionId, info] of this.sessionRegistry) {
         if (info.projectId !== projectId) continue
         this.sessionStatuses.delete(sessionId)
@@ -5812,7 +6282,7 @@ export class ChatEngine {
   }
 
   /**
-   * Drop a message and everything after it from the mirror — editing a
+   * Drop a message and everything after it from the mirror   editing a
    * message replaces that history. The harness session is discarded so the
    * next prompt starts fresh and replays the preserved context via the recap.
    */
@@ -5829,7 +6299,7 @@ export class ChatEngine {
    * `single` removes the message together with its turn (everything up to the
    * next user message) so earlier and later messages splice together; `up`
    * keeps only the messages after the message's turn. All modes discard the
-   * harness session — the next send replays the remaining mirror as a recap.
+   * harness session   the next send replays the remaining mirror as a recap.
    */
   async deleteMessages(
     projectId: string,
@@ -5846,7 +6316,7 @@ export class ChatEngine {
     const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
     const cutoff = mirror.findIndex((m) => m.id === messageId)
     // An id missing from the mirror was never persisted (optimistic local
-    // message) — nothing after it exists, so the mirror is kept whole.
+    // message)   nothing after it exists, so the mirror is kept whole.
     let kept: typeof mirror
     if (cutoff === -1) {
       kept = mirror
@@ -5866,7 +6336,7 @@ export class ChatEngine {
     // Working traces belong to the turn they were produced under. When the
     // anchor message is removed, drop every working_trace row inside the
     // removed span even if a late-arriving trace row sorted after the next
-    // user message — an orphaned trace must never outlive its prompt.
+    // user message   an orphaned trace must never outlive its prompt.
     const removedSpanStart = cutoff !== -1 ? mirror[cutoff].createdAt : Number.POSITIVE_INFINITY
     kept = kept.filter(
       (message) =>
@@ -5886,12 +6356,17 @@ export class ChatEngine {
       this.preparedImplementationSessions.delete(thread.sessionId)
       this.outboundMessageIdsBySession.delete(thread.sessionId)
       await this.threadManager.clearSessionId(projectId, threadId)
-      // Destroy the stale driver record — and with it the native transcript
-      // binding — so the pre-edit conversation can never be restored onto a
+      // Destroy the stale driver record   and with it the native transcript
+      // binding   so the pre-edit conversation can never be restored onto a
       // later session. The next turn seeds a fresh native transcript from the
       // edited mirror (see ensureSession's prefill).
-      const driver = this.drivers.get(
-        thread.settings?.harnessId ?? thread.sessionHarnessId ?? DEFAULT_HARNESS
+      const sessionOwner = this.sessionRegistry.get(thread.sessionId)
+      const driver = this.driverForRuntime(
+        sessionOwner?.driverId ??
+          thread.sessionHarnessId ??
+          thread.settings?.harnessId ??
+          DEFAULT_HARNESS,
+        sessionOwner?.accountId ?? thread.sessionAccountId
       )
       try {
         const projectPath = await this.resolveProjectPath(projectId)
@@ -5907,7 +6382,7 @@ export class ChatEngine {
    * Delete history around a message inside a temporary side chat. The isolated
    * harness session still holds the removed span in its native transcript, so
    * it is destroyed and a replacement session is created lazily by the next
-   * send — which replays the kept conversation as its hidden context. The kept
+   * send   which replays the kept conversation as its hidden context. The kept
    * messages are promoted into the display overlay so a reload can never
    * resurrect the deleted span.
    */
@@ -5928,12 +6403,12 @@ export class ChatEngine {
       throw new Error('Temporary chat does not belong to this thread')
     }
     if (this.completionWaiters.has(temporary.sessionId)) {
-      throw new Error('The agent is still working — wait for the turn to finish before editing.')
+      throw new Error('The agent is still working   wait for the turn to finish before editing.')
     }
     const conversation = await this.loadTemporaryConversation(temporaryChatId)
     const cutoff = conversation.findIndex((m) => m.id === messageId)
     // An id missing from the conversation was never mirrored (optimistic local
-    // message) — nothing after it exists, so the conversation is kept whole.
+    // message)   nothing after it exists, so the conversation is kept whole.
     let kept: AgentMessage[]
     if (cutoff === -1) {
       kept = conversation
@@ -5949,7 +6424,7 @@ export class ChatEngine {
           ? [...conversation.slice(0, cutoff), ...conversation.slice(turnEnd)]
           : conversation.slice(turnEnd)
     }
-    // Working traces belong to the turn they were produced under — drop any
+    // Working traces belong to the turn they were produced under   drop any
     // orphaned trace that would outlive its prompt.
     const removedSpanStart =
       cutoff !== -1 ? conversation[cutoff].createdAt : Number.POSITIVE_INFINITY
@@ -5959,7 +6434,7 @@ export class ChatEngine {
     )
     const pendingContext = kept.length > 0 ? formatHistoryRecap(kept) : ''
     await this.destroyTemporaryChat(temporaryChatId)
-    // destroyTemporaryChat wiped the display history — rebuild it from the
+    // destroyTemporaryChat wiped the display history   rebuild it from the
     // kept conversation so the deleted span can never reappear on reload.
     this.temporaryChatDisplayMessages.set(temporaryChatId, {
       records: kept.map((message) => ({
@@ -5981,7 +6456,7 @@ export class ChatEngine {
       }
     }
     // Sub-agent delegation (OpenCode's "task" tool and similar) runs tool
-    // calls under a child session, not the thread's own session — a steer's
+    // calls under a child session, not the thread's own session   a steer's
     // in-flight check must follow those down or it never sees them as busy.
     for (const [childSessionId, owner] of this.childSessionOwners) {
       if (owner.parentSessionId !== sessionId) continue
@@ -6002,14 +6477,14 @@ export class ChatEngine {
 
   /** Register a held steer and tell renderers the undo window is open. */
   private trackHeldSteer(sessionId: string, steer: HeldSteer): void {
-    // One steer at a time per session — a second steer while one is held
+    // One steer at a time per session   a second steer while one is held
     // replaces the pending delivery, but only the latest is undoable.
     this.heldSteers.set(sessionId, steer)
     this.broadcast({ type: 'steer.held', sessionId, userMessageId: steer.userMessageId })
   }
 
   /** Deliver every held steer for a session whose last in-flight tool just
-   *  ended — the undo window closes the moment the harness can absorb input. */
+   *  ended   the undo window closes the moment the harness can absorb input. */
   private async flushHeldSteers(sessionId: string, mode: 'mid-turn' | 'after-turn'): Promise<void> {
     const steer = this.heldSteers.get(sessionId)
     if (!steer) return
@@ -6019,7 +6494,7 @@ export class ChatEngine {
         await steer.deliverMidTurn()
       } catch (error) {
         Logger.error('Held steer delivery failed:', error)
-        // The harness never absorbed the steer — treat it as discarded so the
+        // The harness never absorbed the steer   treat it as discarded so the
         // undo state cannot get stuck and the transcript stays consistent.
         await steer.discard().catch(() => undefined)
         this.broadcast({ type: 'steer.discarded', sessionId, userMessageId: steer.userMessageId })
@@ -6039,11 +6514,11 @@ export class ChatEngine {
       this.broadcast({ type: 'steer.discarded', sessionId, userMessageId: steer.userMessageId })
       return
     }
-    // The undo window closed — the steer is now an ordinary sent message.
+    // The undo window closed   the steer is now an ordinary sent message.
     this.broadcast({ type: 'steer.delivered', sessionId, userMessageId: steer.userMessageId })
   }
 
-  /** Drop a held steer before delivery — nothing ever reached the harness. */
+  /** Drop a held steer before delivery   nothing ever reached the harness. */
   async discardSteer(projectId: string, threadId: string, userMessageId: string): Promise<void> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
@@ -6064,7 +6539,7 @@ export class ChatEngine {
   }
 
   /** Clear any held steer for a session (driver reset, teardown, abort). The
-   *  steer never reached the harness, so its persisted record is removed too —
+   *  steer never reached the harness, so its persisted record is removed too  
    *  the conversation must look like the steer never happened. */
   private clearHeldSteers(sessionId: string): void {
     const steer = this.heldSteers.get(sessionId)
@@ -6119,11 +6594,53 @@ export class ChatEngine {
     ) {
       throw new Error('This Assignment task is locked. Return to its coordinator to continue.')
     }
-    if (this.sessionStatuses.get(activeSessionId)?.state !== 'working') {
-      throw new Error('The harness turn finished before the steer message could be delivered')
+    // A Codex auto-retry (network blip with `willRetry: true`) parks the
+    // session in `waiting` while the native turn stays live. Rejecting a steer
+    // there claims the turn "finished" when it is merely retrying, so accept
+    // `waiting` too when the driver still reports a registered native turn;
+    // the actual delivery then proves liveness and falls back to nothing.
+    const steerSessionState = this.sessionStatuses.get(activeSessionId)?.state
+    const steerSettings =
+      thread.settings ??
+      ({
+        harnessId: DEFAULT_HARNESS,
+        accountId: legacyHarnessAccountId(DEFAULT_HARNESS),
+        providerId: '',
+        modelId: '',
+        thinkingLevel: 'low',
+        permissionLevel: 'auto_review',
+        assignmentMode: false,
+        loopMode: false
+      } satisfies ThreadSettings)
+    // A steer is a user message first: when the engine's cached status says
+    // the turn is no longer live, the message must still reach the harness
+    //   delivered as a regular send (a fresh turn) instead of being rejected.
+    // Brainstorm-isolated steers keep their guard: their target session is
+    // owned by the brainstorm operation, not the thread's regular session.
+    const deliverAsRegularSend = (): Promise<AgentMessage> =>
+      this.sendPrompt(
+        projectId,
+        threadId,
+        steerSettings,
+        text,
+        attachments,
+        undefined,
+        messageId,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        'user',
+        presentation,
+        taskReferences
+      )
+    if (steerSessionState !== 'working' && steerSessionState !== 'waiting') {
+      if (activeBrainstorm) {
+        throw new Error('The harness turn finished before the steer message could be delivered')
+      }
+      return deliverAsRegularSend()
     }
     // Steering targets the ACTIVE session, which belongs to the harness that
-    // created it — after a mid-run harness switch the active session still
+    // created it   after a mid-run harness switch the active session still
     // lives in the old harness while `settings.harnessId` points at the new
     // one. Resolve the driver by the active session's owner so a steer after a
     // switch reaches the running turn instead of a foreign harness.
@@ -6134,8 +6651,54 @@ export class ChatEngine {
       activeSessionOwner ??
       thread.settings?.harnessId ??
       DEFAULT_HARNESS
-    const resolved = activeBrainstorm ?? (await this.resolve(projectId, driverId, threadId))
+    const activeAccountId =
+      this.sessionRegistry.get(activeSessionId)?.accountId ?? thread.sessionAccountId
+    const selectedDriverId = steerSettings.harnessId || DEFAULT_HARNESS
+    const selectedAccountId = (
+      await this.accountRegistry.resolve(selectedDriverId, steerSettings.accountId)
+    ).id
+    if (
+      driverId !== selectedDriverId ||
+      (activeAccountId ?? legacyHarnessAccountId(driverId)) !== selectedAccountId
+    ) {
+      const activeRuntime = await this.resolve(projectId, driverId, threadId, activeAccountId)
+      this.userAbortedSessions.add(activeSessionId)
+      this.clearHeldSteers(activeSessionId)
+      await activeRuntime.driver.abort(activeRuntime.projectPath, activeSessionId)
+      this.sessionStatuses.set(activeSessionId, { state: 'idle' })
+      this.handleSessionIdleSignal(activeSessionId)
+      await this.awaitSessionIdleFinalization(activeSessionId)
+      return this.sendPrompt(
+        projectId,
+        threadId,
+        steerSettings,
+        text,
+        attachments,
+        undefined,
+        messageId,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        'user',
+        presentation,
+        taskReferences
+      )
+    }
+    const resolved =
+      activeBrainstorm ?? (await this.resolve(projectId, driverId, threadId, activeAccountId))
     const { driver, projectPath } = resolved
+    // `waiting` is only steerable while the native turn is actually live: a
+    // usage-limit reset wait parks the session in `waiting` with the turn
+    // already torn down, and steering that would lose the message.
+    if (
+      steerSessionState === 'waiting' &&
+      driver.hasActiveTurn !== undefined &&
+      !driver.hasActiveTurn(activeSessionId)
+    ) {
+      // The native turn is already torn down   deliver as a regular send
+      // instead of telling the user the turn "finished".
+      return deliverAsRegularSend()
+    }
     if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
       throw new Error(`${driver.name} does not expose native active-turn steering`)
     }
@@ -6176,6 +6739,11 @@ export class ChatEngine {
       validatedPresentation,
       'user'
     )
+    if (this.pendingBrainstormTurns.has(activeSessionId)) {
+      await this.brainstormAlignmentNotes.clearApproval(
+        await this.brainstormAlignmentRound(projectId, threadId)
+      )
+    }
     if (thread.settings && (await this.modelLacksVision(projectId, thread.settings))) {
       const imageDescriptionContext = await this.describePromptAttachments(
         attachments,
@@ -6198,21 +6766,10 @@ export class ChatEngine {
     const outboundIds = this.outboundMessageIdsBySession.get(activeSessionId) ?? new Set<string>()
     outboundIds.add(messageId)
     this.outboundMessageIdsBySession.set(activeSessionId, outboundIds)
-    // Steer does not start a new turn — keep the original turn's checkpoint
+    // Steer does not start a new turn   keep the original turn's checkpoint
     // source and start-message anchor. The scanner's window is the true turn
     // (message after final output → final output), not the steer.
-    const steerSettings =
-      thread.settings ??
-      ({
-        harnessId: driverId,
-        providerId: '',
-        modelId: '',
-        thinkingLevel: 'low',
-        permissionLevel: 'auto_review',
-        assignmentMode: false,
-        loopMode: false
-      } satisfies ThreadSettings)
-    // A steer is the latest user expression in the running turn — keep it (and
+    // A steer is the latest user expression in the running turn   keep it (and
     // its referenced selections) as the memory signal for when the turn ends,
     // replacing the message that originally dispatched the turn.
     this.pendingMemoryDecisions.set(activeSessionId, {
@@ -6257,7 +6814,7 @@ export class ChatEngine {
         kind: 'thread',
         deliverMidTurn: deliverNow,
         deliverAfterTurn: async () => {
-          // The turn ended while the steer was held — it becomes the next
+          // The turn ended while the steer was held   it becomes the next
           // turn's regular send. persistOutboundMessage dedupes by ID, so the
           // already-persisted user message is kept as-is.
           await this.sendPrompt(
@@ -6277,7 +6834,7 @@ export class ChatEngine {
           )
         },
         discard: async () => {
-          // Remove the persisted user message — the harness never saw it, so
+          // Remove the persisted user message   the harness never saw it, so
           // the conversation must look like the steer never happened.
           const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
           const kept = mirror.filter((message) => message.id !== messageId)
@@ -6292,33 +6849,24 @@ export class ChatEngine {
       await deliverNow()
     } catch (error) {
       // The turn can settle inside the race window between the working check
-      // above and this delivery (auto-compaction, silent continue, retry) —
+      // above and this delivery (auto-compaction, silent continue, retry)
       // pi considers compaction part of the working trace but the driver's
       // registered turn is already gone. A settled trace must never reject the
-      // user's message: deliver it as the next regular turn instead.
+      // user's message: deliver it as the next regular turn instead. The
+      // driver's own registered-turn probe is authoritative over the cached
+      // status, which can lag a compaction or process exit by seconds.
       const state = this.sessionStatuses.get(activeSessionId)?.state
-      if (state === 'working' || state === 'waiting') throw error
-      Logger.info('Steer landed on a settled turn — delivering as a regular send:', {
+      const turnStillLive = driver.hasActiveTurn
+        ? driver.hasActiveTurn(activeSessionId)
+        : state === 'working' || state === 'waiting'
+      if (turnStillLive) throw error
+      Logger.info('Steer landed on a settled turn   delivering as a regular send:', {
         projectId,
         threadId,
         sessionId: activeSessionId,
         error: rawErrorMessage(error)
       })
-      await this.sendPrompt(
-        projectId,
-        threadId,
-        steerSettings,
-        text,
-        attachments,
-        undefined,
-        messageId,
-        promptContext,
-        promptReferences,
-        projectReferences,
-        'user',
-        presentation,
-        taskReferences
-      )
+      return deliverAsRegularSend()
     }
     return withoutTransportParts(userMessage)
   }
@@ -6663,7 +7211,7 @@ export class ChatEngine {
     // budget is re-derived later from the actual composed system base. When the
     // fixed user/system layers already exceed the model input budget, the
     // dynamic (hidden + recap) layers are capped to zero and the user text is
-    // sent as-is — the harness enforces its own truncation, and no dynamic
+    // sent as-is   the harness enforces its own truncation, and no dynamic
     // layer is ever allocated past the remaining headroom.
     const inputBudget = this.selectedModelInputBudget(
       settings.providerId,
@@ -6730,8 +7278,8 @@ export class ChatEngine {
       targetThread.titleSource !== 'manual' &&
       mirrorBeforePrompt.messages.length === 0
 
-    // Persist the user message to the mirror immediately — before any slow
-    // session, utility, or history work — so a renderer reload, thread switch,
+    // Persist the user message to the mirror immediately   before any slow
+    // session, utility, or history work   so a renderer reload, thread switch,
     // or crash can never lose the message the user just sent. The renderer
     // only holds an optimistic in-memory copy at this point, so delaying this
     // write until after session setup left a wide window in which a reload
@@ -6761,7 +7309,7 @@ export class ChatEngine {
     ]
       .filter(Boolean)
       .join('\n\n')
-    // First prompt of a fresh thread (forks carry a mirror) — auto-title it
+    // First prompt of a fresh thread (forks carry a mirror)   auto-title it
     // in the background so the sidebar never fills with "New Thread" rows.
     // The fallback is applied immediately. The model-generated title uses a
     // disposable session that starts independently from the main turn.
@@ -6776,7 +7324,18 @@ export class ChatEngine {
     }
 
     const driverId = settings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    const selectedAccount = await this.accountRegistry.resolveForProvider(
+      driverId,
+      settings.providerId,
+      settings.accountId
+    )
+    settings = { ...settings, accountId: selectedAccount.id }
+    const { driver, projectPath } = await this.resolve(
+      projectId,
+      driverId,
+      threadId,
+      selectedAccount.id
+    )
     // Branch metadata must use the same resolved cwd as the harness. Relative
     // thread directories are anchored to the project root by resolveThreadPath.
     if (targetThread?.workingDirectory) {
@@ -6857,6 +7416,23 @@ export class ChatEngine {
         const activeBrainstorm = await this.brainstormEngine.getActive(projectId, threadId)
         if (activeBrainstorm) {
           activeBrainstormTurn = activeBrainstorm
+          const reviewText = presentation?.body?.trim()
+          if (
+            origin === 'user' &&
+            (presentation?.action === 'Review Brainstorm' ||
+              presentation?.action === 'Discuss Brainstorm') &&
+            reviewText &&
+            activeBrainstorm.decisionComments.at(-1)?.body !== reviewText
+          ) {
+            activeBrainstormTurn = await this.brainstormEngine.addDecisionComment(
+              projectId,
+              threadId,
+              activeBrainstorm.id,
+              activeBrainstorm.version,
+              'review',
+              reviewText
+            )
+          }
         }
       }
     }
@@ -6869,7 +7445,7 @@ export class ChatEngine {
       threadId,
       planningSpecTurn ? 'planning' : 'executing'
     )
-    // A fork or recovered thread starts a fresh harness session — replay the
+    // A fork or recovered thread starts a fresh harness session   replay the
     // mirrored transcript through the system prompt so context carries over.
     let sessionId: string
     try {
@@ -6889,10 +7465,9 @@ export class ChatEngine {
       // The planning-session mark drives terminal-answer suppression at turn
       // finalization and on transcript reloads. It must reflect THIS turn's
       // intent, never stale membership from an earlier planning turn: planning
-      // turns suppress their chat prose (the deliverable is the spec/brainstorm
-      // document), while implementation turns and parked-lifecycle chat turns
-      // show their final answer in the conversation.
-      if (planningSpecTurn) {
+      // specification turns suppress their chat prose. Brainstorm interviews
+      // must retain the findings and alignment recap as visible conversation.
+      if (planningSpecTurn && !activeBrainstormSession) {
         this.planningSessions.add(sessionId)
       } else {
         this.planningSessions.delete(sessionId)
@@ -6925,7 +7500,7 @@ export class ChatEngine {
       this.incompleteTurnRecoveryAttempts.delete(sessionId)
       this.searchNudgeAttempts.delete(sessionId)
     }
-    // A new turn resolves any pending auto-resume for this session — the user
+    // A new turn resolves any pending auto-resume for this session   the user
     // (or a previous scheduled retry) is driving it again.
     this.retryScheduler?.clear(sessionId)
     updateRetryWakeWindow(sessionId, null)
@@ -6939,6 +7514,11 @@ export class ChatEngine {
         references: validatedPromptReferences
       })
     }
+    if (activeBrainstormSession && origin === 'user') {
+      await this.brainstormAlignmentNotes.clearApproval(
+        await this.brainstormAlignmentRound(projectId, threadId)
+      )
+    }
     const activeSessionState = this.sessionStatuses.get(sessionId)?.state
     if (
       origin === 'internal' &&
@@ -6951,20 +7531,27 @@ export class ChatEngine {
     // Renderer callers normally use agent:steerPrompt while a turn is active.
     // Keep sendPrompt safe as a second line of defense: an accidental regular
     // USER dispatch must steer the live turn, never reject and poison its task
-    // status. Internal coordinator handoffs are queued above so worker/auditor
+    // status. This also covers a Codex auto-retry: the session parks in
+    // `waiting` while the native turn stays live, and a dispatch there must
+    // reach the retrying turn instead of colliding with it in the driver.
+    // Internal coordinator handoffs are queued above so worker/auditor
     // reports cannot interrupt or confuse the Sr. Engineer's current reasoning.
-    if (activeSessionState === 'working') {
+    const driverReportsLiveTurn =
+      activeSessionState === 'waiting' &&
+      driver.hasActiveTurn !== undefined &&
+      driver.hasActiveTurn(sessionId)
+    if (activeSessionState === 'working' || driverReportsLiveTurn) {
       if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
         throw new Error(`${driver.name} does not expose native active-turn steering`)
       }
       const outboundIds = this.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
       outboundIds.add(messageId)
       this.outboundMessageIdsBySession.set(sessionId, outboundIds)
-      // Steer appends to the live turn — do not rebind the checkpoint source
+      // Steer appends to the live turn   do not rebind the checkpoint source
       // or move the turn-start anchor. Only a message after final output
       // starts a new turn; steers are mid-turn follow-ups.
       // Note: steering appends to the LIVE native turn, which still runs under
-      // the model that started it. Do not record the new settings model here —
+      // the model that started it. Do not record the new settings model here
       // that would mask a pending model switch until the following resume.
       const deliverFallbackSteer = (): Promise<void> => {
         const steer = driver.steerPrompt
@@ -7017,8 +7604,8 @@ export class ChatEngine {
     }
     // Internal continuation prompts (search nudges, mermaid repairs,
     // incomplete-turn retries) start a new turn after the user's turn already
-    // completed. Attribute the new checkpoint to that user message — label and
-    // source id inherited from the thread's latest checkpoint — so the file
+    // completed. Attribute the new checkpoint to that user message   label and
+    // source id inherited from the thread's latest checkpoint   so the file
     // changes card reports the user's prompt, never the hidden internal text.
     const checkpointPromise: Promise<string | undefined> = planningSpecTurn
       ? Promise.resolve(undefined)
@@ -7064,8 +7651,8 @@ export class ChatEngine {
     const utilitySetupRequested = origin === 'user' && isCioUtilityRequest(text)
     // A web-only chat skips the app gateway only when the harness can search
     // the web natively (claude-code, codex, cline, antigravity) or cannot host
-    // the gateway at all. Pi has NO native web tools — the gateway is its only
-    // path to web search/fetch — so it must receive the gateway or a
+    // the gateway at all. Pi has NO native web tools   the gateway is its only
+    // path to web search/fetch   so it must receive the gateway or a
     // File-System-OFF chat can reach neither the internet nor the file system.
     const driverHasNativeWebSearch = (driver.capabilities.nativeUtilities ?? []).includes(
       'web_search'
@@ -7084,11 +7671,8 @@ export class ChatEngine {
         !chatFileSystemEnabled &&
         !utilitySetupRequested &&
         (driverHasNativeWebSearch || !driverCanPublishGateway),
-      // OpenCode sessions use the shared project server. The app gateway is
-      // session-scoped by its capability token, so utilities do not justify a
-      // second `opencode serve` process or listening port for any normal turn.
-      driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id),
-      utilitySetupRequested
+      utilitySetupRequested,
+      activeBrainstormSession
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -7138,7 +7722,14 @@ export class ChatEngine {
       ? await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat')
       : ''
     const brainstormDiscussionPrompt = brainstormingTurn
-      ? await this.cioPrompt('brainstorm-discussion')
+      ? [
+          await this.cioPrompt('brainstorm-discussion'),
+          activeBrainstormSession
+            ? await this.brainstormAlignmentContext(projectId, threadId, true)
+            : ''
+        ]
+          .filter(Boolean)
+          .join('\n\n')
       : ''
     const engineeringSpecPrompt = brainstormingTurn ? await this.cioPrompt('engineering-spec') : ''
     const systemBasePrompt = brainstormingTurn
@@ -7191,7 +7782,7 @@ export class ChatEngine {
     this.sessionStatuses.set(sessionId, { state: 'idle' })
     this.handledIdleSessions.delete(sessionId)
     // A fresh turn on this session is no longer a continuation of a stop the
-    // user requested earlier — clear the marker so a real failure is reported.
+    // user requested earlier   clear the marker so a real failure is reported.
     this.userAbortedSessions.delete(sessionId)
 
     const outboundIds = this.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
@@ -7211,7 +7802,7 @@ export class ChatEngine {
         : null)
     const shouldScheduleInitialSpec = planningSpecTurn && !activeSpec && !activeBrainstormSession
     if (planningSpecTurn) {
-      this.planningSessions.add(sessionId)
+      if (!activeBrainstormSession) this.planningSessions.add(sessionId)
       const requestedSpec = specAction === 'request'
       const revisingSpec = activeSpec !== null
       let promptDispatched = false
@@ -7336,7 +7927,15 @@ export class ChatEngine {
             utilityInstructions,
             historyRecap
           }),
-          allowedTools: SPEC_BRAINSTORM_ALLOWED_TOOLS,
+          allowedTools:
+            activeBrainstormSession && driverId === 'opencode'
+              ? [
+                  ...SPEC_BRAINSTORM_ALLOWED_TOOLS,
+                  `utilities_${UTILITY_SEARCH_TOOL_NAME}`,
+                  `utilities_${UTILITY_ACTIVATE_TOOL_NAME}`,
+                  `utilities_${UTILITY_INVOKE_TOOL_NAME}`
+                ]
+              : SPEC_BRAINSTORM_ALLOWED_TOOLS,
           ...(revisionStructuredOutput === undefined
             ? {}
             : { structuredOutput: revisionStructuredOutput }),
@@ -7365,7 +7964,7 @@ export class ChatEngine {
           projectId,
           threadId,
           sessionId,
-          this.fallbackProviderIssue(driverId, rawErrorMessage(error))
+          this.fallbackProviderIssue(driverId, rawErrorMessage(error), rawErrorDetail(error))
         )
         throw error
       }
@@ -7471,7 +8070,7 @@ export class ChatEngine {
         projectId,
         threadId,
         sessionId,
-        this.fallbackProviderIssue(driverId, failure)
+        this.fallbackProviderIssue(driverId, failure, rawErrorDetail(error))
       )
       throw error
     }
@@ -7530,7 +8129,7 @@ export class ChatEngine {
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread) throw new Error(`Thread not found: ${threadId}`)
       if (!context) {
-        // A history deletion destroyed the previous session — its kept
+        // A history deletion destroyed the previous session   its kept
         // conversation is the context for the replacement session, not the
         // parent thread's mirror. Consumed once, then back to the default.
         const pendingRecap = this.temporaryChatDisplayMessages.get(temporaryChatId)?.pendingContext
@@ -7545,7 +8144,14 @@ export class ChatEngine {
         }
       }
       const driverId = settings.harnessId || DEFAULT_HARNESS
-      const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+      const accountId = (
+        await this.accountRegistry.resolveForProvider(
+          driverId,
+          settings.providerId,
+          settings.accountId
+        )
+      ).id
+      const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
       const isolated =
         driver instanceof OpenCodeDriver
           ? await driver.createIsolatedSession(projectPath, 'Temporary read-only chat')
@@ -7560,6 +8166,7 @@ export class ChatEngine {
         threadId,
         projectPath,
         driverId,
+        accountId,
         providerId: settings.providerId,
         sessionId,
         isolated,
@@ -7582,12 +8189,18 @@ export class ChatEngine {
         undefined,
         true
       )
+      const registered = this.sessionRegistry.get(sessionId)
+      if (registered) registered.accountId = accountId
     }
     if (temporary.projectId !== projectId || temporary.threadId !== threadId) {
       throw new Error('Temporary chat does not belong to this thread')
     }
-    if (temporary.driverId !== settings.harnessId) {
-      throw new Error('The temporary chat harness cannot be changed after its first message')
+    if (
+      temporary.driverId !== settings.harnessId ||
+      temporary.accountId !==
+        (settings.accountId ?? legacyHarnessAccountId(settings.harnessId || DEFAULT_HARNESS))
+    ) {
+      throw new Error('The temporary chat harness or account cannot change after its first message')
     }
     this.refreshTemporaryChatExpiry(temporary)
     this.broadcast({
@@ -7597,7 +8210,7 @@ export class ChatEngine {
       projectId: temporary.projectId
     })
 
-    const driver = this.drivers.get(temporary.driverId)
+    const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
     assertHarnessRequestCapabilities(driver, validatedAttachments, 'auto_review')
     const promptText = selectedTexts.length
@@ -7624,7 +8237,7 @@ export class ChatEngine {
         .filter(Boolean)
         .join('\n\n')
       const userMessageId = outboundUserMessageId
-      // Presentation-safe record BEFORE the prompt leaves the process — the
+      // Presentation-safe record BEFORE the prompt leaves the process   the
       // same ordering guarantee `persistOutboundMessage` gives threads, so the
       // harness echo can never be the display source of truth.
       this.recordTemporaryDisplayMessage(
@@ -7671,7 +8284,7 @@ export class ChatEngine {
         await driver.sendPrompt(temporary.projectPath, request)
       }
       // Snapshot the selection this turn was dispatched with. Temporary
-      // sessions are reused across turns, so this must happen on every send —
+      // sessions are reused across turns, so this must happen on every send
       // completion-time attribution then reads what the turn ran with, never
       // the composer's mid-turn changes.
       this.sessionModelIds.set(temporary.sessionId, {
@@ -7708,7 +8321,7 @@ export class ChatEngine {
     } catch (error) {
       this.clearCompletionWaiter(temporary.sessionId)
       if (error instanceof TemporaryChatCancelledError || !this.temporaryChats.has(temporary.id)) {
-        // Expected teardown while the turn was in flight — settle quietly so
+        // Expected teardown while the turn was in flight   settle quietly so
         // the renderer and the IPC layer never see an exception.
         Logger.dev('Temporary chat turn cancelled before completion:', error)
         return undefined
@@ -7784,7 +8397,6 @@ export class ChatEngine {
             },
             title,
             false,
-            true,
             true
           )
         : ''
@@ -7910,7 +8522,7 @@ export class ChatEngine {
 
   /**
    * Deliver a queued message into the live temporary chat session as an
-   * intervention, without starting a new turn — the counterpart of the main
+   * intervention, without starting a new turn   the counterpart of the main
    * thread's `steerPrompt` for quick chats. The session must still be running
    * (`working`); otherwise the message is rejected so the renderer restores it
    * to its queue. Mirrors `sendTemporaryPrompt` for validation, selection
@@ -7959,15 +8571,19 @@ export class ChatEngine {
     if (temporary.projectId !== projectId || temporary.threadId !== threadId) {
       throw new Error('Temporary chat does not belong to this thread')
     }
-    if (temporary.driverId !== settings.harnessId) {
-      throw new Error('The temporary chat harness cannot be changed after its first message')
+    if (
+      temporary.driverId !== settings.harnessId ||
+      temporary.accountId !==
+        (settings.accountId ?? legacyHarnessAccountId(settings.harnessId || DEFAULT_HARNESS))
+    ) {
+      throw new Error('The temporary chat harness or account cannot change after its first message')
     }
     if (this.sessionStatuses.get(temporary.sessionId)?.state !== 'working') {
       throw new Error('The quick chat turn finished before the steer message could be delivered')
     }
     this.refreshTemporaryChatExpiry(temporary)
 
-    const driver = this.drivers.get(temporary.driverId)
+    const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
     if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
       throw new Error(`${driver.name} does not expose native active-turn steering`)
@@ -8025,7 +8641,7 @@ export class ChatEngine {
         kind: 'temporary',
         deliverMidTurn: deliverTemporarySteer,
         deliverAfterTurn: async () => {
-          // The turn ended while the steer was held — send as the next turn.
+          // The turn ended while the steer was held   send as the next turn.
           await this.sendTemporaryPrompt(
             projectId,
             threadId,
@@ -8040,7 +8656,7 @@ export class ChatEngine {
           )
         },
         discard: async () => {
-          // Drop the display record and outbound registration — the harness
+          // Drop the display record and outbound registration   the harness
           // never received the steer.
           const history = this.temporaryChatDisplayMessages.get(temporaryChatId)
           if (history) {
@@ -8086,7 +8702,7 @@ export class ChatEngine {
         waiter.reject(new TemporaryChatCancelledError('Temporary chat stopped by user'))
       }
     }
-    const driver = this.drivers.get(temporary.driverId)
+    const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (driver) {
       try {
         if (temporary.isolated && driver instanceof OpenCodeDriver) {
@@ -8156,7 +8772,7 @@ export class ChatEngine {
 
     const temporary = this.temporaryChats.get(temporaryChatId)
     if (!temporary) {
-      throw new Error('This side chat has expired — open a new one to continue the conversation')
+      throw new Error('This side chat has expired   open a new one to continue the conversation')
     }
     if (temporary.projectId !== projectId || temporary.threadId !== threadId) {
       throw new Error('This side chat does not belong to the current thread')
@@ -8198,18 +8814,19 @@ export class ChatEngine {
     temporaryChatId = validateEntityId(temporaryChatId, 'Temporary chat ID', 256)
     const temporary = this.temporaryChats.get(temporaryChatId)
     if (!temporary) return []
-    const driver = this.drivers.get(temporary.driverId)
+    const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
     const messages =
       temporary.isolated && driver instanceof OpenCodeDriver
         ? await driver.loadMessages(temporary.projectPath, temporary.sessionId, temporary.isolated)
         : await driver.loadMessages(temporary.projectPath, temporary.sessionId)
     this.applyReasoningStamps(temporary.sessionId, messages)
+    this.applyGenerationStamps(temporary.sessionId, messages)
     return stampHarnessId(messages, temporary.driverId)
   }
 
   /**
-   * Commit the presentation-safe view of a temporary-chat user message — the
+   * Commit the presentation-safe view of a temporary-chat user message   the
    * in-memory analog of the thread mirror's `persistOutboundMessage`. Must run
    * before the prompt leaves the process so the harness echo under the same ID
    * can never become the display source of truth.
@@ -8264,7 +8881,7 @@ export class ChatEngine {
    * Presentation-safe temporary-conversation mirror: the harness transcript
    * overlaid with the display records committed at send/steer time. An echoed
    * harness user message under a recorded ID keeps that ID but demotes its raw
-   * parts to `transportParts` — exactly the display/transport split
+   * parts to `transportParts`   exactly the display/transport split
    * `persistOutboundMessage` gives threads. Records not yet echoed (turn still
    * streaming) appear from the overlay so a mid-turn reload shows them.
    */
@@ -8280,7 +8897,7 @@ export class ChatEngine {
         overlaid.push(message)
         continue
       }
-      // The echo keeps its ID but loses its raw payload — the display record
+      // The echo keeps its ID but loses its raw payload   the display record
       // becomes the visible parts, the raw harness parts demote to transport.
       overlaid.push({
         ...message,
@@ -8357,7 +8974,7 @@ export class ChatEngine {
     this.sessionStatuses.delete(temporary.sessionId)
     this.reasoningTimes.delete(temporary.sessionId)
     this.toolTimes.delete(temporary.sessionId)
-    const driver = this.drivers.get(temporary.driverId)
+    const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) return true
     if (temporary.isolated && driver instanceof OpenCodeDriver) {
       try {
@@ -8382,7 +8999,7 @@ export class ChatEngine {
     return true
   }
 
-  // ─── Image descriptor — vision model for text-only models ──────────────
+  // ─── Image descriptor   vision model for text-only models ──────────────
 
   /**
    * Describe image attachments before a text-only primary model receives the
@@ -8477,7 +9094,7 @@ export class ChatEngine {
   ): Promise<ImageDescriptorResult[]> {
     const thread = await this.threadManager.getThread(request.projectId, request.threadId)
     // A model the user reported as vision-capable must never have a dedicated
-    // vision model describe images for it — the report exists precisely so the
+    // vision model describe images for it   the report exists precisely so the
     // descriptor is skipped, even when the model itself asks for the tool.
     if (thread?.settings && (await this.storage.hasVisionModel(thread.settings.modelId))) {
       Logger.info('Image descriptor skipped: executing model is recorded as vision-capable', {
@@ -8607,7 +9224,17 @@ export class ChatEngine {
     request: ImageDescriptorExecutorRequest,
     selection: AgentModelSelection
   ): Promise<ImageDescriptorBatchCapability> {
-    const { driver } = await this.resolve(request.projectId, selection.harnessId, request.threadId)
+    const account = await this.accountRegistry.resolveForProvider(
+      selection.harnessId,
+      selection.providerId,
+      selection.accountId
+    )
+    const { driver } = await this.resolve(
+      request.projectId,
+      selection.harnessId,
+      request.threadId,
+      account.id
+    )
     if (!driver.capabilities) {
       return { supportsBatch: false, maxImages: IMAGE_DESCRIPTOR_BATCH_MAX_IMAGES }
     }
@@ -8629,9 +9256,20 @@ export class ChatEngine {
     parentTurnId: string | undefined,
     featureCallId: string
   ): Promise<unknown> {
-    const { driver } = await this.resolve(request.projectId, selection.harnessId, request.threadId)
+    const account = await this.accountRegistry.resolveForProvider(
+      selection.harnessId,
+      selection.providerId,
+      selection.accountId
+    )
+    const { driver } = await this.resolve(
+      request.projectId,
+      selection.harnessId,
+      request.threadId,
+      account.id
+    )
     const settings: ThreadSettings = {
       harnessId: selection.harnessId,
+      accountId: account.id,
       providerId: selection.providerId,
       modelId: selection.modelId,
       thinkingLevel: 'low',
@@ -8655,6 +9293,8 @@ export class ChatEngine {
       undefined,
       true
     )
+    const registeredBatchSession = this.sessionRegistry.get(sessionId)
+    if (registeredBatchSession) registeredBatchSession.accountId = settings.accountId
     let response: AgentMessage | undefined
     let failure: string | null = null
     try {
@@ -8764,7 +9404,7 @@ export class ChatEngine {
     let currentImage: ResolvedImageEntry = image
     // One try for the primary, one automatic try for the fallback, and one
     // try for a model (or replacement image) picked from the user decision
-    // card — enough rounds to cover the configured pair without ever hanging
+    // card   enough rounds to cover the configured pair without ever hanging
     // the turn in a loop.
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const active = next
@@ -8982,9 +9622,15 @@ export class ChatEngine {
     attempt: number,
     parentTurnId?: string
   ): Promise<string> {
-    const { driver } = await this.resolve(projectId, selection.harnessId, threadId)
+    const account = await this.accountRegistry.resolveForProvider(
+      selection.harnessId,
+      selection.providerId,
+      selection.accountId
+    )
+    const { driver } = await this.resolve(projectId, selection.harnessId, threadId, account.id)
     const settings: ThreadSettings = {
       harnessId: selection.harnessId,
+      accountId: account.id,
       providerId: selection.providerId,
       modelId: selection.modelId,
       thinkingLevel: 'low',
@@ -9008,12 +9654,14 @@ export class ChatEngine {
       undefined,
       true
     )
+    const registeredImageSession = this.sessionRegistry.get(sessionId)
+    if (registeredImageSession) registeredImageSession.accountId = settings.accountId
     let response: AgentMessage | undefined
     let failure: string | null = null
     try {
       // Pasted/dropped images live in the project's temporary attachment
       // directory, so pass the resolved file path to the vision session and
-      // let the harness read it itself — no base64 inflation in the prompt.
+      // let the harness read it itself   no base64 inflation in the prompt.
       // A missing file throws here and surfaces via the recovery card, where
       // the user can pick a replacement image.
       const attachment = await resolveVisionAttachment(image)
@@ -9314,7 +9962,7 @@ export class ChatEngine {
    * the sidebar updates instantly. This method only replaces the fallback when
    * the model succeeds, and never overwrites a manual title.
    *
-   * The title generation is non-blocking — `generateTitleWithModel` returns a
+   * The title generation is non-blocking   `generateTitleWithModel` returns a
    * Promise that resolves asynchronously via the event loop when the harness
    * session goes idle, so even a slow model cannot stall the main prompt.
    */
@@ -9344,7 +9992,7 @@ export class ChatEngine {
       )
     } catch (error) {
       // The fallback is already applied in sendPrompt(); silently keep it.
-      Logger.dev('Thread auto-title generation failed — keeping fallback', {
+      Logger.dev('Thread auto-title generation failed   keeping fallback', {
         projectId,
         threadId,
         driverId,
@@ -9361,7 +10009,7 @@ export class ChatEngine {
       return
     }
 
-    // The user may have renamed the thread while the model was working —
+    // The user may have renamed the thread while the model was working
     // never overwrite a manual title.
     const latest = await this.threadManager.getThread(projectId, threadId)
     if (!latest || latest.titleSource === 'manual') return
@@ -9383,7 +10031,12 @@ export class ChatEngine {
     parentTurnId: string,
     parentSessionId?: string
   ): Promise<string | null> {
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    const { driver, projectPath } = await this.resolve(
+      projectId,
+      driverId,
+      threadId,
+      settings.accountId
+    )
     let generated: string | null = null
     let failure: string | null = null
     try {
@@ -9518,7 +10171,7 @@ export class ChatEngine {
             if (held.length > 0) return ''
           }
         } catch {
-          // Session unreachable — replay the durable mirror below.
+          // Session unreachable   replay the durable mirror below.
         }
       }
     }
@@ -9545,12 +10198,12 @@ export class ChatEngine {
     // in every branch below. It must never also appear as a "restored from
     // history" entry: on a brand-new or forked thread the mirror holds nothing
     // else, and a recap that announces an earlier conversation but only echoes
-    // the question back reads to the model as a fabricated/injected context —
+    // the question back reads to the model as a fabricated/injected context
     // the exact pattern that makes resuming models refuse to continue.
     // Matched by id, not merely by trailing role: an earlier turn that errored
     // out before an assistant reply was persisted (e.g. a rate limit) also
     // leaves a trailing 'user' record, and it is real prior history, not a
-    // duplicate of the prompt about to be sent — stripping it by role alone
+    // duplicate of the prompt about to be sent   stripping it by role alone
     // silently drops the last thing the user said across a harness switch.
     const last = mirrored.at(-1)
     const mirror =
@@ -9560,7 +10213,7 @@ export class ChatEngine {
     if (mirror.length === 0) return ''
     // `mirror` is non-empty real prior history at this point. If the format
     // step still can't render it into text, that content would otherwise be
-    // silently lost from the conversation — rescue it into a fresh thread
+    // silently lost from the conversation   rescue it into a fresh thread
     // rather than let the turn proceed with no memory of it.
     const emitRecap = (): string => {
       const recap = formatHistoryRecap(mirror, { maxInputTokens: budget })
@@ -9571,7 +10224,7 @@ export class ChatEngine {
     }
     if (thread?.sessionId && sameHarness) {
       // `ensureSession` already confirmed whether the harness natively holds
-      // the conversation — skip the redundant provider history load entirely
+      // the conversation   skip the redundant provider history load entirely
       // (A-13), whether the first load returned messages or zero.
       const nativeHistory = this.sessionNativeHistory.get(thread.sessionId)
       if (nativeHistory === true) return ''
@@ -9639,7 +10292,7 @@ export class ChatEngine {
           .find((model) => model.providerId === providerId && model.id === modelId)
         contextWindow = model?.contextWindow
       } catch {
-        // Catalog unavailable — fall back to the default window.
+        // Catalog unavailable   fall back to the default window.
       }
     }
     return computePromptBudget({ contextWindow }).availableInputTokens
@@ -9748,14 +10401,19 @@ export class ChatEngine {
       thread.sessionHarnessId ??
       thread.settings?.harnessId ??
       DEFAULT_HARNESS
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    const { driver, projectPath } = await this.resolve(
+      projectId,
+      driverId,
+      threadId,
+      this.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
+    )
     await driver.abort(projectPath, thread.sessionId)
     await this.cleanupTurnUtilities(thread.sessionId)
     updateRetryWakeWindow(thread.sessionId, null)
-    // A held steer's turn is dead — undo is no longer meaningful, drop it.
+    // A held steer's turn is dead   undo is no longer meaningful, drop it.
     this.clearHeldSteers(thread.sessionId)
     // A thread waiting on a scheduled usage-reset retry has no live turn to
-    // abort, so a Stop click must cancel the pending resume itself — otherwise
+    // abort, so a Stop click must cancel the pending resume itself   otherwise
     // the scheduler fires later and silently revives the thread the user
     // deliberately stopped.
     this.retryScheduler?.clear(thread.sessionId)
@@ -9775,7 +10433,7 @@ export class ChatEngine {
     this.sessionStatuses.set(thread.sessionId, { state: 'idle' })
     this.clearPendingQuestionsForSession(thread.sessionId)
     this.clearPendingPermissionsForSession(thread.sessionId)
-    // The user stopped this run deliberately — reflect it immediately so the
+    // The user stopped this run deliberately   reflect it immediately so the
     // sidebar indicator never stays stuck on "working". A deliberate stop is
     // "done (read)": it is not an error and not pending the user's attention.
     await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
@@ -9787,7 +10445,7 @@ export class ChatEngine {
    * removed: abort in-flight turns, release utility runtimes, retire session
    * state, and delete the harness sessions (main + child) so any server or
    * port the agent opened in this thread is released. Applies to every harness
-   * — pooled HTTP servers and one-process-per-turn CLIs alike. Best-effort: it
+   *   pooled HTTP servers and one-process-per-turn CLIs alike. Best-effort: it
    * never throws and must not block DB deletion.
    */
   async deleteThreadSession(projectId: string, threadId: string): Promise<void> {
@@ -9797,13 +10455,14 @@ export class ChatEngine {
 
     const tearDownSession = async (
       sessionId: string,
-      info?: { driverId?: string; projectPath?: string }
+      info?: { driverId?: string; projectPath?: string; accountId?: string }
     ): Promise<void> => {
       const registered = this.sessionRegistry.get(sessionId)
       const driverId = info?.driverId ?? registered?.driverId
       const projectPath = info?.projectPath ?? registered?.projectPath
-      const driver = driverId ? this.drivers.get(driverId) : undefined
-      // Abort only a turn we believe is running — aborting an idle session
+      const accountId = info?.accountId ?? registered?.accountId
+      const driver = driverId ? this.driverForRuntime(driverId, accountId) : undefined
+      // Abort only a turn we believe is running   aborting an idle session
       // would otherwise force pooled drivers to spawn their server just to
       // tear this thread down.
       if (driver && projectPath && this.sessionStatuses.get(sessionId)?.state === 'working') {
@@ -9838,13 +10497,17 @@ export class ChatEngine {
 
     // Child (subagent) sessions owned by this thread.
     const sessionIds = new Set<string>()
-    const childSessionInfo = new Map<string, { driverId: string; projectPath: string }>()
+    const childSessionInfo = new Map<
+      string,
+      { driverId: string; projectPath: string; accountId?: string }
+    >()
     for (const [childSessionId, owner] of this.childSessionOwners) {
       if (owner.projectId !== projectId || owner.threadId !== threadId) continue
       sessionIds.add(childSessionId)
       childSessionInfo.set(childSessionId, {
         driverId: owner.driverId,
-        projectPath: owner.projectPath
+        projectPath: owner.projectPath,
+        accountId: owner.accountId
       })
       this.childCaptureTasks.delete(`${owner.projectId}:${owner.threadId}:${childSessionId}`)
       this.childSessionOwners.delete(childSessionId)
@@ -9857,7 +10520,14 @@ export class ChatEngine {
       }
     }
     const thread = await this.threadManager.getThread(projectId, threadId)
-    if (thread?.sessionId) sessionIds.add(thread.sessionId)
+    if (thread?.sessionId) {
+      sessionIds.add(thread.sessionId)
+      childSessionInfo.set(thread.sessionId, {
+        driverId: thread.sessionHarnessId ?? thread.settings?.harnessId ?? DEFAULT_HARNESS,
+        projectPath: await this.resolveThreadPath(projectId, threadId),
+        accountId: thread.sessionAccountId
+      })
+    }
 
     await Promise.allSettled(
       [...sessionIds].map((sessionId) =>
@@ -9897,7 +10567,7 @@ export class ChatEngine {
       throw new Error(`Permission request is no longer pending: ${requestId}`)
     }
 
-    const driver = this.drivers.get(pending.driverId)
+    const driver = this.driverForRuntime(pending.driverId, pending.session.accountId)
     if (!driver) throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
     if (
       pending.policy.approval.expiresAt !== undefined &&
@@ -9921,7 +10591,7 @@ export class ChatEngine {
     // An alternative rejects the blocked action but delivers the user's
     // instruction to the harness as corrective feedback (`message`), so the
     // model continues the SAME turn seeing what to do instead. The harness
-    // fails the blocked tool call with that feedback and keeps streaming — no
+    // fails the blocked tool call with that feedback and keeps streaming   no
     // abort and no re-prompt, both of which used to interrupt the harness's
     // continuation of the current turn.
     const resolvedReply = alternativeInstruction !== undefined ? 'reject' : reply
@@ -10076,7 +10746,12 @@ export class ChatEngine {
           1,
           256
         ),
-        modelId: validateBoundedString(selection.modelId, 'Image descriptor model ID', 1, 256)
+        modelId: validateBoundedString(selection.modelId, 'Image descriptor model ID', 1, 256),
+        ...(selection.accountId === undefined
+          ? {}
+          : {
+              accountId: validateEntityId(selection.accountId, 'Image descriptor account ID', 256)
+            })
       }
     }
     if (
@@ -10355,7 +11030,7 @@ export class ChatEngine {
         this.userAbortedSessions.add(sessionId)
         this.activeCompactions.delete(sessionId)
         this.rejectCompletionWaiter(sessionId, 'Assignment stopped by user')
-        const driver = this.drivers.get(owner.driverId)
+        const driver = this.driverForRuntime(owner.driverId, owner.accountId)
         try {
           if (driver && this.sessionStatuses.get(sessionId)?.state === 'working') {
             await driver.abort(owner.projectPath, sessionId)
@@ -10504,7 +11179,7 @@ export class ChatEngine {
       'The approved Assignment may include user annotations. Treat every open annotation as a signed correction to its anchored section and incorporate it before dispatching affected work.',
       'Do not assign blocked tasks. When a worker reports, audit its checklist and evidence, then call the review endpoint. A passing review unblocks dependent tasks. A rework review automatically returns the same approved task and your complete review findings to its worker; do not create a replacement Assignment or ask the user to sign off again.',
       'Senior-owned tasks are already approved work. Complete them in this coordinator thread without asking the user for routine implementation permission. Submit baseline and check evidence with this coordinator thread ID, report the task, and review it before continuing.',
-      'A task whose worker crashed or whose deliverable was rejected is marked failed — that is not terminal. A stopped worker leaves an attention task without a report. Re-dispatch either state by calling assign-task again: the API retires the stale worker and returns a fresh worker thread. Attention tasks that contain a report must be reviewed instead.',
+      'A task whose worker crashed or whose deliverable was rejected is marked failed   that is not terminal. A stopped worker leaves an attention task without a report. Re-dispatch either state by calling assign-task again: the API retires the stale worker and returns a fresh worker thread. Attention tasks that contain a report must be reviewed instead.',
       'Task rework remains inside the signed Assignment. Let review-task dispatch it directly. Only propose a new Assignment when the user has requested genuinely new product scope that is not a correction of the approved task.',
       this.assignmentApiInstructions(
         this.assignmentApiCapability({
@@ -10705,20 +11380,20 @@ export class ChatEngine {
       'Allowed POST JSON endpoints:'
     ]
     const workerEndpoints = [
-      '- /v1/assignments/submit-test-evidence — { "assignmentId": "...", "taskId": "...", "workerThreadId": "...", "operationId": "unique-id", "kind": "baseline|check", "content": "complete focused test output" }. Worker capabilities submit for their own task; the coordinator submits for a running senior-owned task using the coordinator thread ID.',
-      '- /v1/assignments/report-task — { "assignmentId": "...", "taskId": "...", "workerThreadId": "...", "operationId": "unique-id", "report": { "status": "ready_for_audit|blocked|failed", "summary": "...", "evidence": ["..."], "commitHash": "..." } }'
+      '- /v1/assignments/submit-test-evidence   { "assignmentId": "...", "taskId": "...", "workerThreadId": "...", "operationId": "unique-id", "kind": "baseline|check", "content": "complete focused test output" }. Worker capabilities submit for their own task; the coordinator submits for a running senior-owned task using the coordinator thread ID.',
+      '- /v1/assignments/report-task   { "assignmentId": "...", "taskId": "...", "workerThreadId": "...", "operationId": "unique-id", "report": { "status": "ready_for_audit|blocked|failed", "summary": "...", "evidence": ["..."], "commitHash": "..." } }'
     ]
     const coordinatorEndpoints = [
-      '- /v1/assignments/get — { "assignmentId": "..." }',
-      '- /v1/assignments/assign-task — { "assignmentId": "...", "taskId": "...", "operationId": "unique-id" }. Assigns ready/rework/failed tasks and retries stopped attention tasks that have no report.',
+      '- /v1/assignments/get   { "assignmentId": "..." }',
+      '- /v1/assignments/assign-task   { "assignmentId": "...", "taskId": "...", "operationId": "unique-id" }. Assigns ready/rework/failed tasks and retries stopped attention tasks that have no report.',
       ...workerEndpoints,
-      '- /v1/assignments/review-task — { "assignmentId": "...", "taskId": "...", "coordinatorThreadId": "...", "operationId": "unique-id", "review": { "decision": "pass|rework|fail", "checklistResults": [{ "item": "...", "passed": true, "evidence": "..." }], "notes": "..." } }. A rework decision automatically reassigns the approved task and sends these findings to its worker; do not call assign-task or propose-rework-assignment afterward.',
-      '- /v1/assignments/reopen-task — { "assignmentId": "...", "taskId": "..." }',
-      '- /v1/assignments/add-followup-task — { "assignmentId": "...", "task": { "id": "...", "phaseId": "...", "title": "...", "description": "...", "prompt": "...", "owner": "senior|worker", "dependsOn": [], "expectedFiles": [], "auditChecklist": [] } }',
-      '- /v1/assignments/propose-rework-assignment (coordinator only) — { "assignmentId": "...", "assignment": { "title": "...", "summary": "...", "phases": [], "tasks": [] } }. Reserved for genuinely new product scope outside the signed Assignment; never use it for task corrections, review findings, or audit rework.',
-      '- /v1/assignments/request-reaudit (coordinator only, after direct Sr. Engineer corrections are checked) — { "assignmentId": "..." }',
-      '- /v1/assignments/steer-worker — { "assignmentId": "...", "workerThreadId": "...", "instruction": "1-20000 characters of user instruction" }',
-      '- /v1/assignments/stop-worker — { "assignmentId": "...", "workerThreadId": "..." }. Reassign the resulting attention task with assign-task when a fresh worker should retry it.'
+      '- /v1/assignments/review-task   { "assignmentId": "...", "taskId": "...", "coordinatorThreadId": "...", "operationId": "unique-id", "review": { "decision": "pass|rework|fail", "checklistResults": [{ "item": "...", "passed": true, "evidence": "..." }], "notes": "..." } }. A rework decision automatically reassigns the approved task and sends these findings to its worker; do not call assign-task or propose-rework-assignment afterward.',
+      '- /v1/assignments/reopen-task   { "assignmentId": "...", "taskId": "..." }',
+      '- /v1/assignments/add-followup-task   { "assignmentId": "...", "task": { "id": "...", "phaseId": "...", "title": "...", "description": "...", "prompt": "...", "owner": "senior|worker", "dependsOn": [], "expectedFiles": [], "auditChecklist": [] } }',
+      '- /v1/assignments/propose-rework-assignment (coordinator only)   { "assignmentId": "...", "assignment": { "title": "...", "summary": "...", "phases": [], "tasks": [] } }. Reserved for genuinely new product scope outside the signed Assignment; never use it for task corrections, review findings, or audit rework.',
+      '- /v1/assignments/request-reaudit (coordinator only, after direct Sr. Engineer corrections are checked)   { "assignmentId": "..." }',
+      '- /v1/assignments/steer-worker   { "assignmentId": "...", "workerThreadId": "...", "instruction": "1-20000 characters of user instruction" }',
+      '- /v1/assignments/stop-worker   { "assignmentId": "...", "workerThreadId": "..." }. Reassign the resulting attention task with assign-task when a fresh worker should retry it.'
     ]
     return [
       ...shared,
@@ -11261,7 +11936,7 @@ export class ChatEngine {
       [
         `Worker ${task?.workerName ?? task?.threadId ?? taskId} reported task “${task?.title ?? taskId}”.`,
         'Inspect the worker thread, project changes, audit-checklist.md, baseline.txt, and check.txt. Correctly audit every checklist item.',
-        'Call the review-task API with pass, rework, or fail. If it passes, assign every newly ready task returned by the API. If you mark it fail, re-dispatch it immediately with assign-task so a fresh worker retries it — a failed task is not terminal.',
+        'Call the review-task API with pass, rework, or fail. If it passes, assign every newly ready task returned by the API. If you mark it fail, re-dispatch it immediately with assign-task so a fresh worker retries it   a failed task is not terminal.',
         this.assignmentApiInstructions(
           this.assignmentApiCapability({
             role: 'coordinator',
@@ -11610,6 +12285,9 @@ export class ChatEngine {
         harnessId: this.apiString(value.model.harnessId, 'task.model.harnessId'),
         providerId: this.apiString(value.model.providerId, 'task.model.providerId'),
         modelId: this.apiString(value.model.modelId, 'task.model.modelId'),
+        ...(value.model.accountId === undefined
+          ? {}
+          : { accountId: this.apiString(value.model.accountId, 'task.model.accountId') }),
         thinkingLevel: thinkingLevel as NonNullable<
           AssignmentFollowUpTaskInput['model']
         >['thinkingLevel']
@@ -11695,7 +12373,7 @@ export class ChatEngine {
         projectId,
         threadId,
         thread.settings,
-        'Begin the Brainstorm session now. Research the request and relevant project context first, share the most decision-relevant findings, then use the question tool to ask the first focused alignment questions.',
+        'Begin the Brainstorm session now. Do one bounded read-only research pass, share at most one concise paragraph of decision-relevant findings, then immediately use the question tool for the first focused alignment questions. Do not save alignment notes or call another tool before that first question.',
         [],
         undefined,
         undefined,
@@ -11734,6 +12412,42 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     brainstormId = validateEntityId(brainstormId, 'Brainstorm ID')
     note = validateBoundedString(note, 'Brainstorm review note', 0, 20_000)
+    if (!options.sessionTurn && !options.prototypeRequest) {
+      const current = this.brainstormEngine.getVersion(projectId, threadId, brainstormId, version)
+      if (!current || current.status !== 'draft') throw new Error('Brainstorm draft is unavailable')
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      if (!thread?.settings) throw new Error('Sr. Engineer settings are missing')
+      const reviewed = note.trim()
+        ? await this.brainstormEngine.addDecisionComment(
+            projectId,
+            threadId,
+            brainstormId,
+            version,
+            'review',
+            note
+          )
+        : current
+      await this.sendPrompt(
+        projectId,
+        threadId,
+        thread.settings,
+        [
+          'Continue the Brainstorm interview using the current document, annotations, review text, and alignment notes. Research the points raised, discuss the intended direction, and ask focused questions. Do not generate a new document until alignment and explicit version-specific user approval.',
+          note.trim() ? `User review:\n${note.trim()}` : ''
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+        [],
+        'review',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'user',
+        workflowActionPresentation('Discuss Brainstorm', note)
+      )
+      return reviewed
+    }
     const operationKey = `${projectId}:${threadId}`
     if (this.activeBrainstormOperations.has(operationKey)) {
       throw new Error('The Sr. Engineer is already updating this Brainstorm')
@@ -11747,7 +12461,12 @@ export class ChatEngine {
         sessionId: refreshSessionId,
         projectId,
         threadId,
-        update: { type: 'refresh.started', startedAt: Date.now() }
+        update: {
+          type: 'refresh.started',
+          startedAt: Date.now(),
+          phase: 'refresh',
+          version
+        }
       })
     }
     try {
@@ -11784,9 +12503,11 @@ export class ChatEngine {
         threadId,
         thread.settings,
         [
-          options.sessionTurn
-            ? 'Refresh the concise Brainstorm session report from the latest conversation. Read the current report, incorporate newly aligned decisions and findings, remove resolved items from Still to Decide, and preserve useful unchanged content.'
-            : 'Revise the complete Brainstorm session report from the user review. Read the report at the referenced path and incorporate every open annotation and review note. Preserve useful unchanged content.',
+          options.prototypeRequest
+            ? 'Generate the explicitly requested prototypes using the aligned intent, current Brainstorm document, annotations, review text, and alignment notes. Preserve the existing report text; this action attaches prototypes to the current document, not a new document version.'
+            : options.sessionTurn
+              ? 'Refresh the concise Brainstorm session report from the latest conversation. Read the current report, incorporate newly aligned decisions and findings, remove resolved items from Still to Decide, and preserve useful unchanged content.'
+              : 'Revise the complete Brainstorm session report from the user review. Read the report at the referenced path and incorporate every open annotation and review note. Preserve useful unchanged content.',
           `Brainstorm document: ${brainstormPath}`,
           `Open annotations:\n${formatOpenAnnotations(current.annotations)}`,
           reviewNotes ? `Review notes:\n${reviewNotes}` : ''
@@ -11803,7 +12524,7 @@ export class ChatEngine {
               }
             }
           : {
-              includeConversationContext: false,
+              includeConversationContext: true,
               presentation: workflowActionPresentation('Review Brainstorm', note),
               allowPrototypeSkip: true,
               ...(options.prototypeRequest ? { prototypeOverride: options.prototypeRequest } : {}),
@@ -11823,20 +12544,25 @@ export class ChatEngine {
         existingPrototypes.length > 0 || generatedPrototypes.length > 0
           ? { ...content, prototypes: [...existingPrototypes, ...generatedPrototypes] }
           : content
-      let revised = await this.brainstormEngine.createVersion({
-        projectId,
-        threadId,
-        brainstormId,
-        baseVersion: version,
-        content: mergedContent,
-        provenance: {
-          source: 'agent',
-          actor: 'Sr. Engineer',
-          harnessId: thread.settings.harnessId,
-          providerId: thread.settings.providerId,
-          modelId: thread.settings.modelId
-        }
-      })
+      let revised = options.prototypeRequest
+        ? await this.brainstormEngine.saveDraft(projectId, threadId, brainstormId, version, {
+            ...current.content,
+            prototypes: mergedContent.prototypes
+          })
+        : await this.brainstormEngine.createVersion({
+            projectId,
+            threadId,
+            brainstormId,
+            baseVersion: version,
+            content: mergedContent,
+            provenance: {
+              source: 'agent',
+              actor: 'Sr. Engineer',
+              harnessId: thread.settings.harnessId,
+              providerId: thread.settings.providerId,
+              modelId: thread.settings.modelId
+            }
+          })
       if (note.trim()) {
         revised = await this.brainstormEngine.addDecisionComment(
           projectId,
@@ -11909,33 +12635,70 @@ export class ChatEngine {
     if (existing) return existing
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.settings) throw new Error('Sr. Engineer settings are missing')
-    const content = await this.generateBrainstormContent(
+    // First-document creation must surface the same live indicators as the
+    // revision refresh: without the trace broadcast the renderer never marks
+    // the thread busy, so the open conversation shows nothing and the sidebar
+    // hover shows no working stage until the final `spec` status lands.
+    const createSessionId = `brainstorm-create-${threadId}-${Date.now()}`
+    const createHarnessId = thread.settings.harnessId || DEFAULT_HARNESS
+    this.broadcast({
+      type: 'brainstorm.trace',
+      sessionId: createSessionId,
       projectId,
       threadId,
-      thread.settings,
-      [
-        'Create the first concise Brainstorm session report from the conversation and verified research.',
-        'Preserve unresolved material choices in Still to Decide rather than inventing answers.',
-        note.trim() ? `Latest user input: ${note.trim()}` : ''
-      ]
-        .filter(Boolean)
-        .join('\n\n'),
-      { announceProgress: false }
-    )
-    const created = await this.brainstormEngine.createDraft({
-      projectId,
-      threadId,
-      content,
-      provenance: {
-        source: 'agent',
-        actor: 'Sr. Engineer',
-        harnessId: thread.settings.harnessId,
-        providerId: thread.settings.providerId,
-        modelId: thread.settings.modelId
-      }
+      update: { type: 'refresh.started', startedAt: Date.now(), phase: 'create', version: 1 }
     })
-    await this.publishBrainstormReady(created, thread.sessionId)
-    return created
+    try {
+      await this.threadManager.setStatus(projectId, threadId, 'planning')
+      const content = await this.generateBrainstormContent(
+        projectId,
+        threadId,
+        thread.settings,
+        [
+          'Create the first concise Brainstorm session report from the conversation and verified research.',
+          'Preserve unresolved material choices in Still to Decide rather than inventing answers.',
+          note.trim() ? `Latest user input: ${note.trim()}` : ''
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+        { announceProgress: false }
+      )
+      const created = await this.brainstormEngine.createDraft({
+        projectId,
+        threadId,
+        content,
+        provenance: {
+          source: 'agent',
+          actor: 'Sr. Engineer',
+          harnessId: thread.settings.harnessId,
+          providerId: thread.settings.providerId,
+          modelId: thread.settings.modelId
+        }
+      })
+      await this.publishBrainstormReady(created, thread.sessionId)
+      return created
+    } catch (error) {
+      this.broadcast({
+        type: 'brainstorm.trace',
+        sessionId: createSessionId,
+        projectId,
+        threadId,
+        update: {
+          type: 'refresh.failed',
+          error: rawErrorMessage(error),
+          harnessId: createHarnessId
+        }
+      })
+      throw error
+    } finally {
+      this.broadcast({
+        type: 'brainstorm.trace',
+        sessionId: createSessionId,
+        projectId,
+        threadId,
+        update: { type: 'refresh.completed' }
+      })
+    }
   }
 
   async generatePrd(
@@ -12593,31 +13356,11 @@ export class ChatEngine {
     let revisionPathInstruction = ''
     let featureSlug: string | undefined
     const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
-    // Intent keywords must be detected on the instruction proper — text the
-    // user *quoted* (their own description of a prior stage, a pasted
-    // document, etc.) is not a request for this turn.
-    const instructionSource = stripQuotedSpans(source)
-    const prototypeMentioned = /\b(prototype|wireframe|mockup|lofi|lo-fi|hifi|hi-fi)\b/iu.test(
-      instructionSource
-    )
+    // Historical discussion and annotations are context, not a new prototype
+    // request. Only the explicit prototype action (or opted-in autopilot) owns it.
     const prototypeFidelity: BrainstormPrototypeFidelity | undefined =
-      options.prototypeOverride?.fidelity ??
-      (lifecycle?.autopilot === true
-        ? 'lofi'
-        : /\b(hifi|hi-fi|high[ -]fidelity)\b/iu.test(source)
-          ? 'hifi'
-          : prototypeMentioned
-            ? 'lofi'
-            : undefined)
-    const requestedPrototypeCount =
-      options.prototypeOverride?.count ??
-      (prototypeFidelity
-        ? Number(
-            /\b([1-9]|1[0-9]|20)\s+(?:lofi|lo-fi|hifi|hi-fi|prototype|wireframe|mockup)/iu.exec(
-              source
-            )?.[1]
-          ) || undefined
-        : undefined)
+      options.prototypeOverride?.fidelity ?? (lifecycle?.autopilot === true ? 'lofi' : undefined)
+    const requestedPrototypeCount = options.prototypeOverride?.count
     const prototypeBatches =
       prototypeFidelity && prototypeFidelity !== undefined
         ? planPrototypeGeneration(prototypeFidelity, requestedPrototypeCount)
@@ -12657,8 +13400,8 @@ export class ChatEngine {
         summary: content.summary,
         sections: content.sections
       }
-      // Reconciliation runs on every write-capable brainstorm turn — not just
-      // generation turns — so prototypes the model created ad hoc (or a
+      // Reconciliation runs on every write-capable brainstorm turn   not just
+      // generation turns   so prototypes the model created ad hoc (or a
       // previous turn failed to register) still land in the document.
       if (brainstormWriteRoute && featureSlug !== undefined) {
         const declared = new Map(
@@ -12994,8 +13737,103 @@ export class ChatEngine {
     )
     return [
       instructions,
+      await this.brainstormAlignmentContext(projectId, threadId, false),
       interviewDecisions ? `Authoritative interview decisions:\n${interviewDecisions}` : '',
       transcript ? `Conversation context:\n${transcript}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+  }
+
+  private async saveBrainstormAlignmentNotes(
+    projectId: string,
+    threadId: string,
+    sessionId: string,
+    markdown: string
+  ): Promise<{ path: string; version: number }> {
+    const workflow = this.brainstormEngine.getWorkflowState(projectId, threadId)
+    const turn = this.pendingBrainstormTurns.get(sessionId)
+    if (workflow?.entryChoice !== 'brainstorm' || workflow.stage !== 'drafting' || !turn) {
+      throw new Error('The Brainstorm interview is no longer active')
+    }
+    const round = await this.brainstormAlignmentRound(projectId, threadId)
+    if (round.version !== (turn.version ?? 0) + 1) {
+      throw new Error('The Brainstorm version changed; continue in a new interview turn')
+    }
+    return this.brainstormAlignmentNotes.save(round, markdown)
+  }
+
+  private async brainstormAlignmentRound(
+    projectId: string,
+    threadId: string
+  ): Promise<BrainstormAlignmentRound> {
+    const active = await this.brainstormEngine.getActive(projectId, threadId)
+    return {
+      projectId,
+      threadId,
+      project: {
+        ...requireLocalProject(this.database, projectId),
+        path: await this.resolveThreadPath(projectId, threadId)
+      },
+      featureSlug: await ensureFeatureSlug(this.database, projectId, threadId),
+      version: (active?.version ?? 0) + 1
+    }
+  }
+
+  private async brainstormAlignmentContext(
+    projectId: string,
+    threadId: string,
+    interview: boolean
+  ): Promise<string> {
+    const round = await this.brainstormAlignmentRound(projectId, threadId)
+    const current = await this.brainstormEngine.getActive(projectId, threadId)
+    const notes = await this.brainstormAlignmentNotes.read(round)
+    const previousPath =
+      round.version > 1
+        ? this.brainstormAlignmentNotes.path({ ...round, version: round.version - 1 })
+        : ''
+    return [
+      `Alignment round for Brainstorm v${round.version}. Current notes: ${this.brainstormAlignmentNotes.path(round)}.`,
+      previousPath
+        ? `Previous alignment notes, when present: ${previousPath}. Read them alongside the current document before continuing. Older drafts may predate alignment notes; recover their intent from the original conversation and verify the draft's claims. Earlier round notes remain in the same directory as align-note-[n].md; read relevant earlier rationale when needed.`
+        : '',
+      current
+        ? [
+            `Current Brainstorm v${current.version}: ${await this.artifactRef(projectId, threadId, join('versions', `${current.id}-v${current.version}-brainstorm.md`))}. Read it before discussing or generating the next version.`,
+            `Open annotations:\n${formatOpenAnnotations(current.annotations)}`,
+            `Review/discuss notes:\n${
+              current.decisionComments
+                .filter((comment) => comment.action === 'review')
+                .map((comment) => `- ${comment.body}`)
+                .join('\n') || 'None.'
+            }`
+          ].join('\n\n')
+        : 'No Brainstorm document exists yet. Interview and research first.',
+      notes
+        ? `Current alignment notes:\n${notes}`
+        : 'No notes have been saved for this round yet. Preserve confirmed intent and research in the round notes.',
+      interview
+        ? [
+            `Use ${BRAINSTORM_ALIGNMENT_UTILITY_ID} (activate it, then invoke save_notes with { markdown }) to save concise cumulative notes. The application writes only the designated align-note-${round.version}.md; do not write source files or a report yourself.`,
+            'Research relevant code and external facts, explain findings, and interview the user until the intended experience, boundaries, decisions, and rationale are clear. Existing unanswered choices are interview topics, not permission to generate another draft.',
+            'When aligned, save notes, give a short alignment recap, then ask exactly this single question using the question tool:',
+            JSON.stringify({
+              question: brainstormDocumentQuestion(round.version),
+              header: 'Document',
+              options: [
+                {
+                  label: BRAINSTORM_CREATE_DOCUMENT_ANSWER,
+                  description: `Create Brainstorm v${round.version} from the agreed direction and research.`
+                },
+                {
+                  label: 'Continue discussion',
+                  description: 'Keep interviewing and researching before creating the document.'
+                }
+              ]
+            }),
+            'After approval, finish with a brief acknowledgement; the application generates the document once. Do not rewrite notes after approval unless the direction changes and a new approval is needed. Never claim a document was created before the application confirms it.'
+          ].join('\n')
+        : 'Use the current document, annotations, review/discuss text, and alignment notes as source context. Preserve the agreed intent and rationale, including for prototypes; do not invent decisions.'
     ]
       .filter(Boolean)
       .join('\n\n')
@@ -13063,6 +13901,9 @@ export class ChatEngine {
       const messages = await this.threadManager.loadMessageRecords(projectId, threadId)
       const transcript = formatConversationTranscript(messages, { maxCharacters: 80_000 })
       source = `${instructions}\n\nConversation context:\n${transcript}`
+    }
+    if (await this.brainstormEngine.getActive(projectId, threadId)) {
+      source += `\n\n${await this.brainstormAlignmentContext(projectId, threadId, false)}`
     }
 
     const structuredOutputKey = `${driverId}:${settings.providerId}:${settings.modelId}`
@@ -14966,7 +15807,7 @@ export class ChatEngine {
         const reviewEvidence = task.review?.checklistResults
           .map(
             (result) =>
-              `  - ${result.passed ? 'PASS' : 'FAIL'}: ${result.item}${result.evidence ? ` — ${result.evidence}` : ''}`
+              `  - ${result.passed ? 'PASS' : 'FAIL'}: ${result.item}${result.evidence ? `   ${result.evidence}` : ''}`
           )
           .join('\n')
         return [
@@ -15129,9 +15970,7 @@ export class ChatEngine {
             projectPath,
             auditorSettings,
             auditUtilityBudgetContext,
-            auditorThread.title,
-            false,
-            driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
+            auditorThread.title
           )
           utilityRuntimeAvailable = Boolean(utilityInstructions)
         } catch (error) {
@@ -15835,7 +16674,7 @@ export class ChatEngine {
    * internal "Continue" through the normal sendPrompt pipeline so its persisted
    * harness session picks up where it stopped and the broadcast status flips
    * the sidebar back to "working". Sr. Engineer coordinators and orchestration
-   * children are intentionally skipped — their owner workflows (assignments,
+   * children are intentionally skipped   their owner workflows (assignments,
    * achievement loops) are resumed by `resumePendingWork`. Gated by the
    * "Resume work on restart" setting.
    */
@@ -15868,7 +16707,7 @@ export class ChatEngine {
               continue
             }
           } catch (error) {
-            // Driver unavailable or probe failed — resume anyway (legacy path).
+            // Driver unavailable or probe failed   resume anyway (legacy path).
             Logger.dev('Recovered-thread busy probe skipped:', {
               threadId: thread.id,
               error: rawErrorMessage(error)
@@ -16769,7 +17608,7 @@ export class ChatEngine {
       updatedAt: Date.now()
     }
     await this.writePendingInitialSpec(pending)
-    // The run is terminally done — release the live working trace so the
+    // The run is terminally done   release the live working trace so the
     // dedicated Retry-specification card replaces it instead of a stale trace.
     this.broadcast({
       type: 'spec.trace',
@@ -16887,7 +17726,10 @@ export class ChatEngine {
       )
     }
 
-    const driver = this.drivers.get(pending.harnessId)
+    const driver = this.driverForRuntime(
+      pending.harnessId,
+      this.sessionRegistry.get(sessionId)?.accountId
+    )
     if (!driver) throw new Error(`Unknown harness: ${pending.harnessId}`)
     const projectPath =
       this.sessionRegistry.get(sessionId)?.projectPath ??
@@ -17138,7 +17980,12 @@ export class ChatEngine {
       throw new Error('Select a model before compacting this thread')
     }
     const driverId = thread.settings.harnessId ?? DEFAULT_HARNESS
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    const account = await this.accountRegistry.resolveForProvider(
+      driverId,
+      thread.settings.providerId,
+      thread.sessionAccountId ?? thread.settings.accountId
+    )
+    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, account.id)
     if (!driver.capabilities?.compaction || !driver.compactSession) {
       throw new Error(`${driver.name} does not support manual compaction`)
     }
@@ -17154,7 +18001,7 @@ export class ChatEngine {
    * Compact a reused native session before it resumes under a newly selected
    * model whose context window is much smaller than the thread's last-known
    * native usage. Best-effort maintenance: a failed compaction never blocks the
-   * turn — the harness trims its own history when the window is genuinely over.
+   * turn   the harness trims its own history when the window is genuinely over.
    */
   private async maybeAutoCompactOnModelSwitch(
     projectId: string,
@@ -17235,7 +18082,7 @@ export class ChatEngine {
         }
       }
     } catch {
-      // Mirror unavailable — the model switch is treated as undetectable.
+      // Mirror unavailable   the model switch is treated as undetectable.
     }
     return null
   }
@@ -17270,7 +18117,7 @@ export class ChatEngine {
         }
       }
     } catch {
-      // No usable usage signal — compaction cannot be judged.
+      // No usable usage signal   compaction cannot be judged.
     }
     return undefined
   }
@@ -17294,17 +18141,13 @@ export class ChatEngine {
   private async resolve(
     projectId: string,
     driverId: string,
-    threadId?: string
+    threadId?: string,
+    accountId?: string
   ): Promise<{ driver: HarnessDriver; projectPath: string }> {
     const projectPath = threadId
       ? await this.resolveThreadPath(projectId, threadId)
       : await this.resolveProjectPath(projectId)
-    const driver = this.drivers.get(driverId)
-    if (!driver) {
-      throw new Error(
-        `Harness driver "${driverId}" is not available. Available: ${[...this.drivers.keys()].join(', ')}`
-      )
-    }
+    const driver = await this.driverForAccount(driverId, accountId)
     this.trackProjectResourcePath(projectId, projectPath)
 
     // Installation/version probes belong to the explicit Settings harness check.
@@ -17488,7 +18331,7 @@ export class ChatEngine {
   /**
    * Whether the user has interacted with the app recently enough to be
    * considered "active". When the user is active, pending questions will not
-   * auto-answer — the countdown is paused until they become inactive.
+   * auto-answer   the countdown is paused until they become inactive.
    */
   private isUserActive(): boolean {
     return Date.now() - this.lastUserActivityAt < ChatEngine.USER_ACTIVITY_GRACE_PERIOD_MS
@@ -17496,6 +18339,14 @@ export class ChatEngine {
 
   private schedulePendingQuestion(pending: PendingQuestionInfo): void {
     if (pending.timer) clearTimeout(pending.timer)
+    // Creating a Brainstorm version is a human decision, never a timer default.
+    if (
+      pending.request.questions.some((question) => isBrainstormDocumentQuestion(question.prompt))
+    ) {
+      pending.timer = undefined
+      pending.request.expiresAt = undefined
+      return
+    }
 
     if (this.isUserActive()) {
       pending.request.expiresAt = undefined
@@ -17515,7 +18366,10 @@ export class ChatEngine {
 
     const delay = Math.max(0, expiresAt - Date.now())
     pending.timer = setTimeout(() => {
-      const driver = this.drivers.get(pending.driverId)
+      const driver = this.driverForRuntime(
+        pending.driverId,
+        this.sessionRegistry.get(pending.request.sessionId)?.accountId
+      )
       if (!driver || !this.pendingQuestions.has(pending.request.requestId)) {
         return
       }
@@ -17679,8 +18533,11 @@ export class ChatEngine {
       DEFAULT_QUESTION_TIMEOUT_MS
     )
     const thread = await this.threadManager.getThread(session.projectId, session.threadId)
-    if (await this.achievementOwnsDecisions(thread ?? null)) {
-      const driver = this.drivers.get(driverId)
+    if (
+      !event.questions.some((question) => isBrainstormDocumentQuestion(question.prompt)) &&
+      (await this.achievementOwnsDecisions(thread ?? null))
+    ) {
+      const driver = this.driverForRuntime(driverId, session.accountId)
       if (!driver) return
       const answers = event.questions.map((question) => [this.recommendedQuestionAnswer(question)])
       await this.resolvePendingQuestion(pending, 'answered', answers, () =>
@@ -17710,7 +18567,7 @@ export class ChatEngine {
     }
     // `providerCatalog.updated` is a chat-engine broadcast, never a driver event.
     if (event.type === 'providerCatalog.updated') return
-    // Any live harness activity means the session's project is doing work —
+    // Any live harness activity means the session's project is doing work
     // keep its idle-server clock reset until the stream goes quiet.
     const eventOwner = this.sessionRegistry.get(event.sessionId)
     if (eventOwner) {
@@ -17731,16 +18588,29 @@ export class ChatEngine {
         if (contextWindow !== undefined) event.contextWindow = contextWindow
       }
       if (
+        (event.type === 'message.completed' || event.type === 'usage.updated') &&
+        (event.tokens?.total ?? 0) > 0
+      ) {
+        eventOwner.hasReportedTokenUsage = true
+      }
+      if (
         event.type === 'message.completed' &&
         !event.compaction &&
         event.contextUsed === undefined &&
+        event.error === undefined &&
+        eventOwner.hasReportedTokenUsage !== true &&
         eventOwner.estimatedContextUsed !== undefined
       ) {
         // Some drivers declare `contextUsage: true` yet carry providers that
         // report no token usage at all (e.g. OpenCode gateways like Console
-        // Go). When the event carries no reported occupancy, the composed
-        // request estimate from dispatch is the only signal available —
-        // flagged as estimated so consumers never mistake it for reported.
+        // Go). Only for those sessions is the composed request estimate from
+        // dispatch the only signal available   flagged as estimated so
+        // consumers never mistake it for reported. Sessions whose provider
+        // does report usage (pi mirrors per-turn token totals) never get the
+        // text-layer estimate: it measures the composed send, not the
+        // harness transcript, and would report a fraction of the real
+        // occupancy. Failed turns are skipped too   a rejected request says
+        // nothing about occupancy and must not clobber the last reading.
         event.contextUsed = eventOwner.estimatedContextUsed
         event.contextEstimated = true
       }
@@ -17757,11 +18627,45 @@ export class ChatEngine {
     ) {
       return
     }
+    // Delta events can be the first signal of generated output (some drivers
+    // stream text purely as deltas). Record the generation-window start for
+    // the message they belong to.
+    if (event.type === 'message.part.delta' && streamedMessageId) {
+      let perSession = this.generationWindows.get(event.sessionId)
+      if (!perSession) {
+        perSession = new Map()
+        this.generationWindows.set(event.sessionId, perSession)
+      }
+      if (!perSession.has(streamedMessageId))
+        perSession.set(streamedMessageId, { start: Date.now() })
+    }
+    if (
+      eventOwner &&
+      !eventOwner.ephemeral &&
+      event.type === 'message.part.updated' &&
+      event.part.type === 'compaction' &&
+      event.part.summary?.trim()
+    ) {
+      // Make completed summaries available to database-only forks immediately,
+      // including compactions that finish after the outer turn has settled.
+      void this.threadManager
+        .upsertMessages(eventOwner.projectId, eventOwner.threadId, [
+          {
+            id: event.part.messageID,
+            role: 'assistant',
+            origin: 'compaction',
+            visibility: 'working_trace',
+            createdAt: Date.now(),
+            parts: [event.part]
+          }
+        ])
+        .catch((error) => Logger.error('Compaction summary persistence failed:', error))
+    }
     void this.recordDriverEvent(driverId, event)
     // Durably persist the working-trace part stream to the thread's SSE log so a
     // mid-turn/restart reopen can rehydrate the full trace (tools, reasoning,
     // sub-agents) even if the harness session is no longer reachable. Ephemeral
-    // isolated workers are excluded — they are forwarded as spec/brainstorm
+    // isolated workers are excluded   they are forwarded as spec/brainstorm
     // traces through their own paths.
     if (
       eventOwner &&
@@ -17823,7 +18727,7 @@ export class ChatEngine {
       // will-retry wait, not an error. Some harnesses (pi's `agent_settled`)
       // report the exhausted usage window through `session.status` instead of
       // `session.error`, and that path never reached the provider-failure
-      // pipeline — the card counted down but no scheduler record existed, so
+      // pipeline   the card counted down but no scheduler record existed, so
       // nothing resumed at zero and the thread sat on an error status.
       if (
         event.status.state === 'error' &&
@@ -17855,11 +18759,11 @@ export class ChatEngine {
         // Ethos: usage-limit expiry must surface as Waiting to retry, not Working.
         // Persist working-paused for every retryable waiting signal, even when
         // retryAt is missing or beyond the 6h wake window, or when the harness
-        // owns its own retry — the persisted pause makes the stopped state visible.
+        // owns its own retry   the persisted pause makes the stopped state visible.
         void this.threadManager
           .setStatus(eventOwner.projectId, eventOwner.threadId, 'working-paused', { read: false })
           .catch((error) => Logger.error('Retry-paused status update failed:', error))
-        // Record the wait in the retry scheduler for every harness — including
+        // Record the wait in the retry scheduler for every harness   including
         // harnesses that schedule their own retry (OpenCode). Their native
         // resume emits `working` and clears the record; the recorded wait keeps
         // the thread retryable after an app restart.
@@ -17880,7 +18784,7 @@ export class ChatEngine {
         this.handledIdleSessions.delete(event.sessionId)
         this.startSessionWatchdog(event.sessionId)
       }
-      // A working or idle session resolved its reset — drop any pending
+      // A working or idle session resolved its reset   drop any pending
       // auto-resume record for it (a re-reported error re-tracks it).
       if (event.status.state === 'working' || event.status.state === 'idle') {
         this.retryScheduler?.clear(event.sessionId)
@@ -17900,8 +18804,18 @@ export class ChatEngine {
 
     // Stamp thinking start time on reasoning parts that lack it.
     // Stamp tool start/end times on tool parts as their state transitions.
+    // Stamp the generation window (first output token → turn end) so the
+    // persisted generation duration reflects real generation time.
     if (event.type === 'message.part.updated') {
       const part = event.part
+      if (part.type === 'reasoning' || part.type === 'text') {
+        let perSession = this.generationWindows.get(event.sessionId)
+        if (!perSession) {
+          perSession = new Map()
+          this.generationWindows.set(event.sessionId, perSession)
+        }
+        if (!perSession.has(part.messageID)) perSession.set(part.messageID, { start: Date.now() })
+      }
       if (part.type === 'reasoning' && !part.time?.start) {
         const now = Date.now()
         part.time = { ...part.time, start: now }
@@ -17928,16 +18842,18 @@ export class ChatEngine {
           // A harness can settle a turn while the model is still working (e.g.
           // pi reported a usage-reset settle that proved premature), which
           // finalizes the checkpoint before the last edits landed. A later
-          // file-mutating tool claim then arrives with no active turn —
+          // file-mutating tool claim then arrives with no active turn
           // re-open the just-completed checkpoint so the late work is captured
           // in the same turn's card instead of vanishing.
           const latePaths = changedPathsFromTool(session.projectPath, part)
-          if (latePaths.length > 0 || UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
-            void this.reopenSettledTurnForLateClaim(session, latePaths)
+          const unboundedLate = UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))
+          if (latePaths.length > 0 || unboundedLate) {
+            void this.reopenSettledTurnForLateClaim(session, latePaths, unboundedLate)
           }
         }
         if (session?.activeTurnId) {
           if (UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
+            session.unboundedToolObserved = true
             this.trackUnboundedToolWindow(session, part.id, part.state.status)
           }
           const precisePaths = changedPathsFromTool(session.projectPath, part)
@@ -17947,7 +18863,7 @@ export class ChatEngine {
             const claimedAt = Date.now()
             for (const path of precisePaths) {
               // A path the user saved through the in-app editor during this
-              // turn is the user's edit — the agent must not claim it even
+              // turn is the user's edit   the agent must not claim it even
               // when a tool event names the same file.
               if (session.userTouchedPaths?.has(path)) continue
               session.changedPaths.add(path)
@@ -17986,7 +18902,7 @@ export class ChatEngine {
           // Steer-undo window: the last in-flight tool of the turn just ended,
           // so any held steer can now reach the harness. A tool that just
           // completed may belong to a sub-agent's child session rather than
-          // the thread's own session — resolve to the root before checking.
+          // the thread's own session   resolve to the root before checking.
           const rootSteerSessionId = this.rootSessionIdForSteer(event.sessionId)
           if (
             this.heldSteers.has(rootSteerSessionId) &&
@@ -18016,6 +18932,17 @@ export class ChatEngine {
       if (sessionToolTimes) {
         for (const entry of sessionToolTimes) {
           if (!entry[1].end) entry[1].end = now
+        }
+      }
+      const sessionGeneration = this.generationWindows.get(event.sessionId)
+      if (sessionGeneration) {
+        if (event.type === 'message.completed') {
+          const window = sessionGeneration.get(event.messageId)
+          if (window && !window.end) window.end = now
+        } else {
+          for (const entry of sessionGeneration) {
+            if (!entry[1].end) entry[1].end = now
+          }
         }
       }
     }
@@ -18112,7 +19039,7 @@ export class ChatEngine {
     if (event.type === 'message.completed' && event.error) {
       // Compaction is best-effort maintenance: a failed compaction must never
       // mark the whole session as errored. The conversation is intact, it just
-      // wasn't compacted — leave the session healthy so the user can retry.
+      // wasn't compacted   leave the session healthy so the user can retry.
       if (event.compaction) {
         Logger.dev('compaction message errored (session stays healthy):', event.error)
       } else if (!this.userAbortedSessions.has(event.sessionId)) {
@@ -18172,7 +19099,7 @@ export class ChatEngine {
       return
     }
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
-    const driver = this.drivers.get(driverId)
+    const driver = this.driverForRuntime(driverId, info.accountId)
     if (!thread?.settings || !driver?.steerPrompt) return
 
     this.searchNudgeAttempts.set(sessionId, 1)
@@ -18199,7 +19126,8 @@ export class ChatEngine {
    *  cannot race two reopens of the same row. */
   private reopenSettledTurnForLateClaim(
     session: SessionInfo,
-    claimedPaths: readonly string[]
+    claimedPaths: readonly string[],
+    unboundedClaim = false
   ): Promise<void> {
     const run = async (): Promise<void> => {
       if (session.activeTurnId) return
@@ -18215,9 +19143,35 @@ export class ChatEngine {
       session.changedPaths = new Set(checkpoint.changes.map((change) => change.path))
       session.preciseChangedPaths = new Map()
       session.openUnboundedTools = undefined
+      session.unboundedToolObserved = unboundedClaim
       session.unboundedWindowStart = undefined
       session.pendingWindowScans = undefined
-      for (const path of claimedPaths) session.changedPaths.add(path)
+      const claimedAt = Date.now()
+      for (const path of claimedPaths) {
+        if (session.userTouchedPaths?.has(path)) continue
+        session.changedPaths.add(path)
+        session.preciseChangedPaths.set(path, claimedAt)
+      }
+      if (unboundedClaim) {
+        // A shell-like tool exposes no target paths, so its mutations must be
+        // read off the workspace instead. Diff the current content against the
+        // reopened checkpoint's turn-start snapshot   precisely the files this
+        // turn's late shell commands wrote. Foreign-thread claims are still
+        // excluded later at completion; the user's own edits are excluded here.
+        try {
+          const shellPaths = await this.checkpointManager.changedPathsSince(
+            session.projectId,
+            session.projectPath,
+            checkpoint.before
+          )
+          for (const path of shellPaths) {
+            if (session.userTouchedPaths?.has(path)) continue
+            session.changedPaths.add(path)
+          }
+        } catch (error) {
+          Logger.dev('late-claim shell attribution failed:', error)
+        }
+      }
     }
     const pending = (session.pendingReopen ?? Promise.resolve())
       .then(run)
@@ -18442,6 +19396,31 @@ export class ChatEngine {
     this.broadcast({ type: 'session.status', sessionId: active.threadSessionId, status })
   }
 
+  /** Claim the file paths a sub-agent's worker reported through its activity
+   *  payload onto the owning thread's turn. While the turn is active the paths
+   *  join its live change tracking; after a premature settle they attach to the
+   *  just-completed checkpoint via the late-claim reopen path. */
+  private claimSubagentFiles(session: SessionInfo, files: readonly string[]): void {
+    const claimed: string[] = []
+    for (const file of files) {
+      const path = projectRelativePath(session.projectPath, file)
+      if (!path || session.userTouchedPaths?.has(path)) continue
+      claimed.push(path)
+    }
+    if (claimed.length === 0) return
+    if (session.activeTurnId) {
+      session.changedPaths ??= new Set()
+      session.preciseChangedPaths ??= new Map()
+      const claimedAt = Date.now()
+      for (const path of claimed) {
+        session.changedPaths.add(path)
+        session.preciseChangedPaths.set(path, claimedAt)
+      }
+      return
+    }
+    void this.reopenSettledTurnForLateClaim(session, claimed)
+  }
+
   private observeChildSession(driverId: string, event: SessionAgentEvent): void {
     if (
       event.type === 'message.part.updated' &&
@@ -18459,9 +19438,20 @@ export class ChatEngine {
           threadId: parent.threadId,
           projectPath: parent.projectPath,
           driverId,
+          accountId: parent.accountId,
           parentSessionId: registeredParent ? event.sessionId : inheritedOwner?.parentSessionId
         }
         this.childSessionOwners.set(childSessionId, owner)
+        // The worker's file-tool paths are the only reliable attribution for
+        // sub-agent edits: the child's CLI session can be disposed before any
+        // transcript capture runs, so claim them the moment they are reported.
+        if (event.part.activity.files?.length) {
+          const ownerSession = [...this.sessionRegistry.values()].find(
+            (candidate) =>
+              candidate.projectId === parent.projectId && candidate.threadId === parent.threadId
+          )
+          if (ownerSession) this.claimSubagentFiles(ownerSession, event.part.activity.files)
+        }
         const isTerminal =
           event.part.activity.status === 'completed' || event.part.activity.status === 'error'
         if (isTerminal) {
@@ -18494,7 +19484,7 @@ export class ChatEngine {
     this.handledIdleSessions.add(sessionId)
     // The turn ended while a steer was still held (no tool window opened, or
     // the idle arrived between the tool end and the async flush). Deliver it
-    // as the next turn's regular send — but only AFTER the idle finalization
+    // as the next turn's regular send   but only AFTER the idle finalization
     // completes. The finalization tears down the finished turn's utility
     // gateway (handoff clear + gateway.cleanup); the steer's deliverAfterTurn
     // path runs a full sendPrompt that re-arms a fresh gateway turn, and if
@@ -18555,15 +19545,20 @@ export class ChatEngine {
     }
   }
 
-  private fallbackProviderIssue(harnessId: string, message: string): AgentProviderIssue {
+  private fallbackProviderIssue(
+    harnessId: string,
+    message: string,
+    rawError?: string
+  ): AgentProviderIssue {
     const kind = classifyProviderIssue(message)
+    const raw = rawError?.trim() || message
     return {
       kind,
       message:
         kind === 'authentication'
           ? `${this.drivers.get(harnessId)?.name ?? harnessId} sign-in expired. Sign in again, then retry this message.`
           : message,
-      rawError: message,
+      rawError: raw,
       harnessId,
       retryable: kind !== 'billing'
     }
@@ -18626,7 +19621,7 @@ export class ChatEngine {
     // can ever re-attach.
     const turnId = owner.activeTurnId ?? owner.lastTurnId ?? ''
     // Oversized tool outputs (base64 image payloads, megabyte file dumps) are
-    // capped before they reach the durable stream log — an uncapped line makes
+    // capped before they reach the durable stream log   an uncapped line makes
     // every later log re-parse (reopen, fold, fork) pay for it forever.
     const streamEvent: TurnStreamEvent =
       event.type === 'message.part.updated'
@@ -18695,7 +19690,7 @@ export class ChatEngine {
       return []
     }
     // The log is append-only, so a shrink or a diverging prefix means the file
-    // was rewritten underneath us — drop every cached event and re-parse cold.
+    // was rewritten underneath us   drop every cached event and re-parse cold.
     if (raw.length < entry.consumedRaw.length || !raw.startsWith(entry.consumedRaw)) {
       entry.consumedRaw = ''
       entry.events = []
@@ -18742,7 +19737,7 @@ export class ChatEngine {
     return entry.folded
   }
 
-  /** Timestamp of the newest non-activity user message in the mirror — the
+  /** Timestamp of the newest non-activity user message in the mirror   the
    *  start of the current logical turn. Activity-only user messages (compaction
    *  notices, sub-agent envelopes) ride mid-turn and are skipped, so the
    *  boundary lands on the prompt that opened the turn. Returns undefined when
@@ -18900,19 +19895,17 @@ export class ChatEngine {
 
   /**
    * Send one disposable "ping" completion for a configured Heartbeat, pinned
-   * to its exact harness/provider/model — no visible thread, no cheap-model
+   * to its exact harness/provider/model   no visible thread, no cheap-model
    * substitution. Runs in the same inbox scratch directory as standalone chats.
    */
   private async sendHeartbeatPing(config: HeartbeatConfig): Promise<boolean> {
-    const driver = this.drivers.get(config.harnessId)
-    if (!driver) {
-      throw new Error(`Harness driver "${config.harnessId}" is not available`)
-    }
+    const driver = await this.driverForAccount(config.harnessId, config.accountId)
     const projectPath = await this.resolveProjectPath(INBOX_PROJECT_ID)
     await driver.ensureReady(projectPath)
     return driver.sendHeartbeatPing(projectPath, {
       settings: {
         harnessId: config.harnessId,
+        accountId: config.accountId ?? legacyHarnessAccountId(config.harnessId),
         providerId: config.providerId,
         modelId: config.modelId,
         thinkingLevel: config.thinkingLevel ?? 'minimal',
@@ -18924,7 +19917,7 @@ export class ChatEngine {
   /** Repair stale working rows for scheduler-restored retries so UI shows Waiting to retry immediately on launch. */
   async repairPendingRetryThreadStatuses(): Promise<void> {
     const scheduler = this.retryScheduler
-    // 1) Repair threads that have a persisted scheduler pending (finite retryAt) — original path.
+    // 1) Repair threads that have a persisted scheduler pending (finite retryAt)   original path.
     if (scheduler) {
       try {
         const pending = scheduler as unknown as {
@@ -18969,7 +19962,7 @@ export class ChatEngine {
       )
       if (!activeRows || activeRows.length === 0) return
       for (const row of activeRows) {
-        // Already covered by scheduler pending — skip to avoid duplicate work.
+        // Already covered by scheduler pending   skip to avoid duplicate work.
         if (row.session_id && scheduler?.getPendingRetry(row.session_id)) continue
         try {
           const thread = await this.threadManager.getThread(row.project_id, row.id)
@@ -18987,7 +19980,7 @@ export class ChatEngine {
             )
             if (errorRow?.error) lastError = errorRow.error
           } catch {
-            // Message table may be empty or missing — fall through to next check.
+            // Message table may be empty or missing   fall through to next check.
           }
 
           // Fallback: also check in-memory session status if present (fresh failure before DB flush).
@@ -19007,7 +20000,7 @@ export class ChatEngine {
           const kind = classifyProviderIssue(lastError)
           const retryable = kind !== 'billing'
           // Treat quota/rate_limit/provider_unavailable(retryable) as a retry-paused wait,
-          // even when retryAt was never derived — this covers ba9a2c59... (>6h/missing retryAt).
+          // even when retryAt was never derived   this covers ba9a2c59... (>6h/missing retryAt).
           if (!isUsageResetWaitIssue({ kind, retryable })) continue
 
           const updated = await this.threadManager.setStatus(
@@ -19017,7 +20010,7 @@ export class ChatEngine {
             { read: false }
           )
           broadcastThreadUpdate(updated)
-          // The row previously had no scheduler record at all — give it a real
+          // The row previously had no scheduler record at all   give it a real
           // fallback timer instead of leaving the card "waiting" with nothing
           // to auto-resume it.
           if (scheduler && row.session_id) {
@@ -19047,7 +20040,7 @@ export class ChatEngine {
 
   /**
    * Record a thread whose turn ended in a usage/rate-limit reset so the
-   * scheduler resumes it once the reset time passes. Every harness is tracked —
+   * scheduler resumes it once the reset time passes. Every harness is tracked  
    * including harnesses that schedule their own provider retries (OpenCode): a
    * native resume emits `working` and clears the record, while the persisted
    * record keeps the wait alive (and re-runs the thread) across app restarts.
@@ -19071,16 +20064,17 @@ export class ChatEngine {
     }
     const info = this.sessionRegistry.get(sessionId)
     if (!info || info.ephemeral === true || this.childSessionOwners.has(sessionId)) return false
-    const driver = this.drivers.get(info.driverId)
+    const driver = this.driverForRuntime(info.driverId, info.accountId)
     if (!driver) return false
     let retryAt = issue.retryAt
+    if (retryAt !== undefined) retryAt += RETRY_FIRE_GRACE_MS
     if (retryAt === undefined && driver.readAccountUsage) {
       // Some harnesses surface a usage reset without attaching it to the error
-      // (e.g. Codex reports windows via account/rateLimits/read) — ask the
+      // (e.g. Codex reports windows via account/rateLimits/read)   ask the
       // driver for the reset window as the retry time. A harness can report
       // several concurrent windows (e.g. Codex's 5-hour and weekly limits, one
       // per model), so pick among the windows that actually caused this wait
-      // (fully used) rather than the farthest one overall — otherwise an
+      // (fully used) rather than the farthest one overall   otherwise an
       // unrelated model's fresh weekly/5-hour window can push the retry hours
       // or days past the real reset the message reported.
       try {
@@ -19107,7 +20101,7 @@ export class ChatEngine {
     if (retryAt === undefined && usageResetWait) {
       // A usage-reset wait with no derivable reset time (the provider gave no
       // parseable date, or gave one already in the past) must still get a
-      // concrete timer — otherwise the card is stuck on "waiting" forever with
+      // concrete timer   otherwise the card is stuck on "waiting" forever with
       // no date and no schedule. Retry after a fixed cooldown; if the provider
       // is still limited, the next failure re-tracks with a fresh cooldown.
       retryAt = Date.now() + USAGE_RESET_FALLBACK_RETRY_MS
@@ -19183,7 +20177,7 @@ export class ChatEngine {
   }
 
   /**
-   * True when the session is currently showing a usage/rate-limit reset wait —
+   * True when the session is currently showing a usage/rate-limit reset wait  
    * the unified will-retry state. Any later terminal-looking signal (trailing
    * idle finalization, issue-less teardown failure) must defer to it instead of
    * overwriting the pause with a terminal error.
@@ -19199,7 +20193,7 @@ export class ChatEngine {
    * session error, e.g. "5-hour usage limit reached. Resets in 1hr 53min."
    * That text never reaches classifyProviderIssue through the session.error
    * path, so the turn finishes as a plain idle completion and auto-resume
-   * never schedules — the thread just looks silently stuck. Catch it here by
+   * never schedules   the thread just looks silently stuck. Catch it here by
    * re-classifying the latest assistant message text right after idle.
    *
    * The text must structurally BE the notice (isUsageLimitNoticeText), not
@@ -19214,7 +20208,7 @@ export class ChatEngine {
   ): Promise<void> {
     if (this.isUsageResetWaitActive(sessionId)) return
     if (this.sessionStatuses.get(sessionId)?.state === 'error') return
-    const driver = this.drivers.get(driverId)
+    const driver = this.driverForRuntime(driverId, info.accountId)
     if (!driver) return
     const messages = await driver.loadMessages(info.projectPath, sessionId)
     const latest = messages.at(-1)
@@ -19252,7 +20246,7 @@ export class ChatEngine {
     if (!thread || thread.archived || !thread.sessionId || thread.sessionId !== sessionId) return
     const current = this.sessionStatuses.get(sessionId)
     if (current?.state === 'working') return
-    // A waiting session is the retry-wait we are resuming — clear the waiting
+    // A waiting session is the retry-wait we are resuming   clear the waiting
     // card so the scheduled Continue can transition working-paused → working.
     if (current?.state === 'waiting' || current?.state === 'error') {
       this.sessionStatuses.delete(sessionId)
@@ -19316,7 +20310,7 @@ export class ChatEngine {
    *
    * Chats (inbox threads) get an attachment allowlist: every file the user
    * attached across the conversation is always readable. When File System mode
-   * is off, the chat is also restricted to exactly those attached files — any
+   * is off, the chat is also restricted to exactly those attached files   any
    * other path must surface a permission prompt. File-System-on chats keep the
    * normal project-root + protected-path rules but still auto-allow attached
    * files regardless of where they live. Non-chat threads are untouched.
@@ -19466,7 +20460,7 @@ export class ChatEngine {
     reply: PermissionReply,
     decidedBy: string
   ): Promise<void> {
-    const driver = this.drivers.get(pending.driverId)
+    const driver = this.driverForRuntime(pending.driverId, pending.session.accountId)
     if (!driver) return
     await driver.replyPermission(
       pending.session.projectPath,
@@ -19626,6 +20620,7 @@ export class ChatEngine {
     const info = this.sessionRegistry.get(sessionId)
     if (!info) return
     if (info.ephemeral) return
+    const completedGatewayId = this.utilityTurns.get(sessionId)?.gateway.id
     const pendingMemory = this.pendingMemoryDecisions.get(sessionId)
     this.pendingMemoryDecisions.delete(sessionId)
     let assistantResponse = ''
@@ -19636,18 +20631,23 @@ export class ChatEngine {
       settings: ThreadSettings
     } | null = null
     try {
-      const driver = this.drivers.get(info.driverId)
+      const driver = this.driverForRuntime(info.driverId, info.accountId)
       if (!driver) return
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
-      const loadedMessages = stampHarnessId(
-        info.activeTurnUserMessageId && driver.loadMessagesSince
-          ? await driver.loadMessagesSince(
-              info.projectPath,
-              sessionId,
-              info.activeTurnUserMessageId
-            )
-          : await driver.loadMessages(info.projectPath, sessionId),
-        info.driverId
+      const account = await this.accountRegistry.resolve(info.driverId, info.accountId)
+      const loadedMessages = stampAccount(
+        stampHarnessId(
+          info.activeTurnUserMessageId && driver.loadMessagesSince
+            ? await driver.loadMessagesSince(
+                info.projectPath,
+                sessionId,
+                info.activeTurnUserMessageId
+              )
+            : await driver.loadMessages(info.projectPath, sessionId),
+          info.driverId
+        ),
+        account.id,
+        account.label
       )
       const activeTurnStartIndex = info.activeTurnUserMessageId
         ? loadedMessages.findLastIndex((message) => message.id === info.activeTurnUserMessageId)
@@ -19656,7 +20656,7 @@ export class ChatEngine {
         activeTurnStartIndex > 0 ? loadedMessages.slice(activeTurnStartIndex) : loadedMessages
 
       // Stamp the turn's thinking level from what the turn was dispatched
-      // with — the per-session snapshot, not the thread's current settings.
+      // with   the per-session snapshot, not the thread's current settings.
       // The user may have changed the composer mid-turn while waiting; those
       // changes belong to the next turn and must never re-label this one.
       const latestUserIndex = messages.findLastIndex((message) => message.role === 'user')
@@ -19671,8 +20671,17 @@ export class ChatEngine {
       // Providers that never report token usage leave assistant messages
       // without a contextUsed signal, blinding usage-based compaction and the
       // context indicator. Fall back to the composed-request occupancy captured
-      // at dispatch, clearly flagged as an estimate.
-      if (turnAssistant && turnAssistant.contextUsed === undefined) {
+      // at dispatch, clearly flagged as an estimate   and only for sessions
+      // whose provider reports nothing: where usage IS reported (the mirrored
+      // per-turn totals), the composed text-layer estimate would clobber the
+      // real occupancy with a small fraction of it. Failed turns are skipped
+      // for the same reason: a rejected request proves nothing about size.
+      if (
+        turnAssistant &&
+        turnAssistant.contextUsed === undefined &&
+        turnAssistant.error === undefined &&
+        info.hasReportedTokenUsage !== true
+      ) {
         const composed = info.estimatedContextUsed
         if (composed !== undefined) {
           turnAssistant.contextUsed = composed
@@ -19682,6 +20691,7 @@ export class ChatEngine {
 
       this.applyReasoningStamps(sessionId, messages)
       this.applyToolStamps(sessionId, messages)
+      this.applyGenerationStamps(sessionId, messages)
 
       const mirrorAnchorId = info.activeTurnUserMessageId ?? messages[latestUserIndex]?.id
       const mirror = mirrorAnchorId
@@ -19699,8 +20709,8 @@ export class ChatEngine {
       let classifiedMessages = classifyProviderMessages(messages, suppressTerminalAnswer).filter(
         (message) => !(message.role === 'user' && message.visibility === 'hidden')
       )
-      let merged = restoreMirrorThinkingLevel(
-        mergeAgentMessages(mirror, classifiedMessages),
+      let merged = restoreMirrorAccount(
+        restoreMirrorThinkingLevel(mergeAgentMessages(mirror, classifiedMessages), mirror),
         mirror
       )
       const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -19718,7 +20728,7 @@ export class ChatEngine {
       // A session that already errored during this turn (watchdog abort, session
       // error, failed dispatch) must never be flipped back to `completed` by the
       // idle finalization. The transcript is truncated by the abort, so the last
-      // assistant message usually carries no error — recover the recorded issue
+      // assistant message usually carries no error   recover the recorded issue
       // instead, keeping the thread `failed` and preventing a bogus "done"
       // notification right after the real error notification.
       const erroredSession = this.sessionStatuses.get(sessionId)
@@ -19778,8 +20788,8 @@ export class ChatEngine {
           classifiedMessages = classifiedMessages.map((message) =>
             message.id === rejected.id ? rejected : message
           )
-          merged = restoreMirrorThinkingLevel(
-            mergeAgentMessages(mirror, classifiedMessages),
+          merged = restoreMirrorAccount(
+            restoreMirrorThinkingLevel(mergeAgentMessages(mirror, classifiedMessages), mirror),
             mirror
           )
           if ((this.mermaidRepairAttempts.get(sessionId) ?? 0) >= 1 || !thread?.settings) {
@@ -19831,7 +20841,7 @@ export class ChatEngine {
       // Runs on every turn end (success or failure) and is ledger-guarded, so
       // cost/tokens are added to the thread's existing per-harness totals once.
       await this.threadManager.accumulateHarnessUsage(info.projectId, info.threadId, messages)
-      // The harness demonstrably ran — confirm its behavior manifest in use so
+      // The harness demonstrably ran   confirm its behavior manifest in use so
       // the reliable declared baseline becomes a validated runtime confirmation
       // (unless the user explicitly overrode it). Fire-and-forget: never let
       // manifest bookkeeping block turn finalization.
@@ -19848,7 +20858,7 @@ export class ChatEngine {
           'failed',
           mermaidValidationFailureMessage(mermaidFailures)
         )
-        await this.cleanupTurnUtilities(sessionId)
+        await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
         turnUtilitiesCleaned = true
         if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
         try {
@@ -19867,7 +20877,11 @@ export class ChatEngine {
           )
         } catch (error) {
           this.pendingMemoryDecisions.delete(sessionId)
-          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+          const issue = this.fallbackProviderIssue(
+            info.driverId,
+            rawErrorMessage(error),
+            rawErrorDetail(error)
+          )
           await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
@@ -19877,7 +20891,7 @@ export class ChatEngine {
       // unavailable, yet it never attempted the tool call (so the tool-error
       // nudge path never fired) and never used the app utility-search tool
       // (UTILITY_SEARCH_TOOL_NAME) despite the
-      // gateway exposing it this turn. Nudge it — via the same tight
+      // gateway exposing it this turn. Nudge it   via the same tight
       // detector family that previously proved false-positive-prone, now
       // restricted to high-confidence availability conclusions (session-
       // scoped tool-shaped claims and personal possession denials). One nudge
@@ -19903,7 +20917,7 @@ export class ChatEngine {
         if (searchExposed && !alreadySearched && claimedUnavailable) {
           this.searchNudgeAttempts.set(sessionId, 1)
           await this.finishCheckpoint(sessionId, info, 'completed')
-          await this.cleanupTurnUtilities(sessionId)
+          await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
           turnUtilitiesCleaned = true
           if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
           try {
@@ -19922,7 +20936,11 @@ export class ChatEngine {
             )
           } catch (error) {
             this.pendingMemoryDecisions.delete(sessionId)
-            const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+            const issue = this.fallbackProviderIssue(
+              info.driverId,
+              rawErrorMessage(error),
+              rawErrorDetail(error)
+            )
             await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
             await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
           }
@@ -19939,7 +20957,7 @@ export class ChatEngine {
       if (missingFinalResponse && !failure && !resetWaitActiveForRecovery && thread?.settings) {
         this.incompleteTurnRecoveryAttempts.set(sessionId, 1)
         await this.finishCheckpoint(sessionId, info, 'failed', INCOMPLETE_TURN_MESSAGE)
-        await this.cleanupTurnUtilities(sessionId)
+        await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
         turnUtilitiesCleaned = true
         if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
         try {
@@ -19958,7 +20976,11 @@ export class ChatEngine {
           )
         } catch (error) {
           this.pendingMemoryDecisions.delete(sessionId)
-          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+          const issue = this.fallbackProviderIssue(
+            info.driverId,
+            rawErrorMessage(error),
+            rawErrorDetail(error)
+          )
           await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
@@ -19971,7 +20993,7 @@ export class ChatEngine {
           'interrupted',
           'The approved specification contract is incomplete; continuing implementation.'
         )
-        await this.cleanupTurnUtilities(sessionId)
+        await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
         turnUtilitiesCleaned = true
         if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
         try {
@@ -19990,7 +21012,11 @@ export class ChatEngine {
           )
         } catch (error) {
           this.pendingMemoryDecisions.delete(sessionId)
-          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+          const issue = this.fallbackProviderIssue(
+            info.driverId,
+            rawErrorMessage(error),
+            rawErrorDetail(error)
+          )
           await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
@@ -20004,11 +21030,12 @@ export class ChatEngine {
       // Claim the pending entry up front: a duplicate idle finalization for the
       // same turn (double `session.idle`/`session.status` delivery after a late
       // part event cleared the idle guard) must not call reviewBrainstorm a
-      // second time while the first refresh still holds the brainstorm lock —
+      // second time while the first refresh still holds the brainstorm lock
       // that race surfaced as a misleading "already updating this Brainstorm"
       // toast even though the first refresh completed fine.
       const pendingBrainstormTurn = this.pendingBrainstormTurns.get(sessionId)
-      if (pendingBrainstormTurn) this.pendingBrainstormTurns.delete(sessionId)
+      if (pendingBrainstormTurn && (!awaitingUser || failure))
+        this.pendingBrainstormTurns.delete(sessionId)
       if (failure && hasPendingRevision) {
         this.pendingSpecRevisions.delete(sessionId)
         await this.clearPendingSpecRevision(info.projectId, info.threadId)
@@ -20043,21 +21070,27 @@ export class ChatEngine {
       }
       if (!failure && !awaitingUser && pendingBrainstormTurn) {
         try {
-          revisedBrainstorm =
-            pendingBrainstormTurn.brainstormId && pendingBrainstormTurn.version
-              ? await this.reviewBrainstorm(
-                  info.projectId,
-                  info.threadId,
-                  pendingBrainstormTurn.brainstormId,
-                  pendingBrainstormTurn.version,
-                  pendingBrainstormTurn.note,
-                  { sessionTurn: true }
-                )
-              : await this.createBrainstormSessionReport(
-                  info.projectId,
-                  info.threadId,
-                  pendingBrainstormTurn.note
-                )
+          const round = await this.brainstormAlignmentRound(info.projectId, info.threadId)
+          const expectedVersion = (pendingBrainstormTurn.version ?? 0) + 1
+          const approved =
+            round.version === expectedVersion &&
+            (await this.brainstormAlignmentNotes.consumeApproval(round))
+          if (approved)
+            revisedBrainstorm =
+              pendingBrainstormTurn.brainstormId && pendingBrainstormTurn.version
+                ? await this.reviewBrainstorm(
+                    info.projectId,
+                    info.threadId,
+                    pendingBrainstormTurn.brainstormId,
+                    pendingBrainstormTurn.version,
+                    pendingBrainstormTurn.note,
+                    { sessionTurn: true }
+                  )
+                : await this.createBrainstormSessionReport(
+                    info.projectId,
+                    info.threadId,
+                    pendingBrainstormTurn.note
+                  )
         } catch (error) {
           auxiliaryFailure =
             error instanceof Error ? error.message : 'The Brainstorm revision failed.'
@@ -20085,7 +21118,7 @@ export class ChatEngine {
       // its limit as the waiting card and the engine already persisted
       // `working-paused` with a scheduled resume. The idle finalization's own
       // failure scan (the limit message rides on the last assistant record) is
-      // not a second terminal event — letting it set `failed` would overwrite
+      // not a second terminal event   letting it set `failed` would overwrite
       // the pause, flip the row to an error badge, and fire a misleading
       // "hit an error" notification while the will-retry card is on screen.
       // The checkpoint still finalizes (same as the session-error wait path);
@@ -20189,7 +21222,14 @@ export class ChatEngine {
           contractBlocked ? 'The specification contract requires user intervention.' : failure
         )
       }
-      if (!failure && !awaitingUser && !contractBlocked && !revisedSpec && !revisedBrainstorm) {
+      if (
+        !failure &&
+        !awaitingUser &&
+        !contractBlocked &&
+        !revisedSpec &&
+        !revisedBrainstorm &&
+        !pendingBrainstormTurn
+      ) {
         try {
           await this.runPendingInitialSpec(info.projectId, info.threadId)
         } catch (error) {
@@ -20225,9 +21265,17 @@ export class ChatEngine {
       await this.onSessionError(sessionId, issue.message)
       await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
     } finally {
-      info.activeTurnUserMessageId = undefined
-      info.estimatedContextUsed = undefined
-      if (!turnUtilitiesCleaned) await this.cleanupTurnUtilities(sessionId)
+      const interviewWaiting =
+        this.pendingBrainstormTurns.has(sessionId) &&
+        [...this.pendingQuestions.values()].some(
+          (pending) => pending.request.sessionId === sessionId
+        )
+      if (!interviewWaiting) {
+        info.activeTurnUserMessageId = undefined
+        info.estimatedContextUsed = undefined
+        if (!turnUtilitiesCleaned)
+          await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
+      }
       // The abort marker only needs to survive until the session's idle
       // finalization has run; after that the session is on a fresh turn.
       this.userAbortedSessions.delete(sessionId)
@@ -20301,7 +21349,7 @@ export class ChatEngine {
       })
     }
     if (pendingMemory && assistantResponse && memoryParentTurnId) {
-      const driver = this.drivers.get(info.driverId)
+      const driver = this.driverForRuntime(info.driverId, info.accountId)
       if (driver) {
         void this.proposeMemoryFromCompletedTurn(
           pendingMemory.userMessage,
@@ -20352,6 +21400,7 @@ export class ChatEngine {
       attempt: 1,
       feature,
       harnessId: message.harnessId ?? null,
+      accountId: message.accountId ?? null,
       providerId: message.providerId ?? null,
       modelId: message.modelId ?? null,
       thinkingLevel: message.thinkingLevel ?? thread?.settings?.thinkingLevel ?? null,
@@ -20575,7 +21624,7 @@ export class ChatEngine {
    * first substantive exchange opens a `first_shot` window; every completed
    * later exchange upgrades it to `multi_shot`, appends its prompt as judge
    * context, and slides the inactivity deadline. The window stays open until
-   * the conversation closes — thread deletion or the inactivity deadline —
+   * the conversation closes   thread deletion or the inactivity deadline  
    * and is graded exactly once at that point. Greeting-only first prompts
    * never enter the queue, so they never consume judge tokens.
    * Document-generating workflows (brainstorm, PRD) and audit-report threads
@@ -20621,7 +21670,7 @@ export class ChatEngine {
     if (isGreetingOnly(parentText)) return
     const { costUsd, costStatus } = this.assistantTurnCostAccounting(turnAssistant)
     // Await the durable insert so the drain timer is armed against a settled
-    // queue — otherwise a session ending right after capture could miss the
+    // queue   otherwise a session ending right after capture could miss the
     // inactivity deadline until the next trigger or restart.
     await this.rankingSnapshotRepo.insertViaWorker({
       threadId,
@@ -20674,6 +21723,7 @@ export class ChatEngine {
       attempt: input.attempt,
       feature: input.feature,
       harnessId: input.harnessId,
+      accountId: input.response?.accountId ?? input.settings.accountId ?? null,
       providerId: input.settings.providerId,
       modelId: input.settings.modelId,
       thinkingLevel: input.settings.thinkingLevel ?? null,
@@ -20788,6 +21838,7 @@ export class ChatEngine {
         attempt: 1,
         feature,
         harnessId: message.harnessId ?? null,
+        accountId: message.accountId ?? null,
         providerId: message.providerId ?? null,
         modelId: message.modelId ?? null,
         thinkingLevel: message.thinkingLevel ?? null,
@@ -20833,6 +21884,7 @@ export class ChatEngine {
       attempt: 1,
       feature: 'web',
       harnessId: settings.harnessId,
+      accountId: settings.accountId ?? null,
       providerId: settings.providerId,
       modelId: settings.modelId,
       thinkingLevel: settings.thinkingLevel ?? null,
@@ -20904,6 +21956,23 @@ export class ChatEngine {
   }
 
   /**
+   * Apply in-memory generation windows to loaded assistant messages,
+   * persisting the first-token-to-completion duration as `generationMs`.
+   */
+  private applyGenerationStamps(sessionId: string, messages: AgentMessage[]): void {
+    const sessionGeneration = this.generationWindows.get(sessionId)
+    if (!sessionGeneration) return
+    for (const msg of messages) {
+      if (msg.role !== 'assistant' || msg.generationMs !== undefined) continue
+      const window = sessionGeneration.get(msg.id)
+      if (!window?.start) continue
+      const end = window.end ?? msg.completedAt ?? Date.now()
+      const duration = end - window.start
+      if (duration > 0) msg.generationMs = duration
+    }
+  }
+
+  /**
    * Copy thinking timestamps from the mirror to incoming messages so stamps
    * persisted in a previous session are not lost when the driver returns
    * messages without reasoning timing data.
@@ -20957,6 +22026,25 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * Copy the persisted generation duration from the mirror to incoming
+   * messages so a previously recorded first-token window is not lost when the
+   * driver returns messages without it.
+   */
+  private preserveMirrorGenerationDurations(
+    mirror: AgentMessage[],
+    incoming: AgentMessage[]
+  ): void {
+    if (mirror.length === 0) return
+    for (const incomingMsg of incoming) {
+      if (incomingMsg.generationMs !== undefined) continue
+      const mirrorMsg = mirror.find((m) => m.id === incomingMsg.id)
+      if (mirrorMsg?.generationMs !== undefined) {
+        incomingMsg.generationMs = mirrorMsg.generationMs
+      }
+    }
+  }
+
   private async onSessionError(
     sessionId: string,
     error?: string,
@@ -20965,12 +22053,12 @@ export class ChatEngine {
     const info = this.sessionRegistry.get(sessionId)
     if (!info) return
     if (info.ephemeral) return
-    // A `session.error` event is not proof the underlying turn actually died —
+    // A `session.error` event is not proof the underlying turn actually died
     // e.g. pi's transient extension_error fires while its persistent RPC
     // process keeps running and finishes the turn normally. Probe the live
     // process before tearing anything down so a false alarm doesn't wipe the
     // turn's utility gateway handoff out from under still-running tool calls.
-    const errorDriver = this.drivers.get(info.driverId)
+    const errorDriver = this.driverForRuntime(info.driverId, info.accountId)
     if (errorDriver?.isSessionBusy) {
       const probe = await this.probeSessionLiveness(errorDriver, info, sessionId)
       if (probe === 'busy') return
@@ -21064,8 +22152,8 @@ export class ChatEngine {
 
   /**
    * Shell-like tools can write anywhere, so their edits cannot be read off the
-   * tool input. Instead of giving up on attribution for the whole turn — which
-   * lets a concurrent thread's edits leak into this turn's card — bracket the
+   * tool input. Instead of giving up on attribution for the whole turn   which
+   * lets a concurrent thread's edits leak into this turn's card   bracket the
    * time those tools are in flight with stat-only fingerprints and attribute
    * only the paths that moved inside that window.
    */
@@ -21166,11 +22254,11 @@ export class ChatEngine {
         info.projectPath,
         status,
         failure,
-        // A thread owns only mutations attributed through its tool events or a
-        // bounded shell window. An empty set is intentional: falling back to
-        // the project-wide before/after diff would claim concurrent work from
-        // every other thread sharing this scope.
-        info.changedPaths ?? new Set<string>(),
+        // Shell commands can hide writes inside Python, JavaScript, subprocesses,
+        // or syntax this parser has never seen. Use the full turn snapshot when
+        // one ran. completeTurn still removes user-owned paths and paths claimed
+        // by foreign threads, while precise parsed paths resolve same-file races.
+        info.unboundedToolObserved ? undefined : (info.changedPaths ?? new Set<string>()),
         {
           precisePaths: new Set(info.preciseChangedPaths?.keys() ?? []),
           foreignClaimedPaths: this.liveForeignClaimedPaths(info, ownThreadIds),
@@ -21187,6 +22275,7 @@ export class ChatEngine {
       info.preciseChangedPaths = undefined
       info.userTouchedPaths = undefined
       info.openUnboundedTools = undefined
+      info.unboundedToolObserved = undefined
       info.unboundedWindowStart = undefined
       info.pendingWindowScans = undefined
       const checkpointEvent = {
@@ -21238,7 +22327,7 @@ export class ChatEngine {
     for (const other of this.sessionRegistry.values()) {
       if (other === self || other.projectId !== self.projectId) continue
       if (other.threadId === self.threadId) continue
-      // Worker sub-agents of this thread are part of the same logical turn —
+      // Worker sub-agents of this thread are part of the same logical turn
       // their claimed paths belong to this turn's card.
       if (ownThreadIds?.has(other.threadId)) continue
       if (!other.activeTurnId) continue
@@ -21285,7 +22374,7 @@ export class ChatEngine {
 
     // Scanner: validate that each claimed path actually changed from the turn's
     // opening snapshot (before) to current disk. Steer does not reset the
-    // window — it stays [checkpoint.before.createdAt, now]. Foreign filtering
+    // window   it stays [checkpoint.before.createdAt, now]. Foreign filtering
     // mirrors completeTurn so a fork never claims a file it didn't touch.
     const MAX_LIVE_PATHS = 200
     const changedPaths = session.changedPaths ?? new Set<string>()
@@ -21313,7 +22402,7 @@ export class ChatEngine {
       const results = await Promise.all(
         batch.map(async (path) => {
           // Foreign dedup: another thread demonstrably edited this path during
-          // this turn and this thread didn't precisely claim it — skip. Window
+          // this turn and this thread didn't precisely claim it   skip. Window
           // proof alone does not exempt, so a fork can't steal a file via its
           // shell window.
           const claimedAt = foreign.get(path)
@@ -21350,7 +22439,7 @@ export class ChatEngine {
               afterSize: afterBuf.length
             } satisfies TurnCheckpointChangeSummary
           }
-          // Modified only if hash differs — size alone is not enough.
+          // Modified only if hash differs   size alone is not enough.
           const afterHash = createHash('sha256').update(afterBuf).digest('hex')
           if (afterHash === before.hash) return null
           return {
@@ -21460,29 +22549,32 @@ export class ChatEngine {
       // the registered owner so a settings-derived re-registration (mid-run
       // harness switch) can never clobber which driver owns the session.
       driverId: existing?.driverId ?? driverId,
+      accountId: existing?.accountId,
       activeTurnId: activeTurnId ?? existing?.activeTurnId,
       lastTurnId: activeTurnId ?? existing?.activeTurnId ?? existing?.lastTurnId,
       activeTurnUserMessageId: existing?.activeTurnUserMessageId,
       estimatedContextUsed: activeTurnId ? undefined : existing?.estimatedContextUsed,
+      hasReportedTokenUsage: existing?.hasReportedTokenUsage,
       changedPaths: activeTurnId ? undefined : existing?.changedPaths,
       preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
       userTouchedPaths: activeTurnId ? undefined : existing?.userTouchedPaths,
       openUnboundedTools: activeTurnId ? new Set() : existing?.openUnboundedTools,
+      unboundedToolObserved: activeTurnId ? false : existing?.unboundedToolObserved,
       unboundedWindowStart: activeTurnId ? undefined : existing?.unboundedWindowStart,
       pendingWindowScans: activeTurnId ? new Set() : existing?.pendingWindowScans,
       ephemeral: ephemeral ?? existing?.ephemeral
     })
     this.agentProcesses.claimSession(sessionId, projectId, threadId)
-    // A session re-registering means the project is in use again — make it
+    // A session re-registering means the project is in use again   make it
     // eligible for a future idle release.
     this.releasedProjects.delete(projectId)
   }
 
-  // ─── Session watchdog — catches silent agent failures ───────────────────
+  // ─── Session watchdog   catches silent agent failures ───────────────────
 
   /**
    * Start (or restart) the inactivity watchdog for a session.
-   * The timer is reset on every SSE event — if it fires, no events arrived
+   * The timer is reset on every SSE event   if it fires, no events arrived
    * within the window and provider history is checked for a terminal failure.
    */
   private startSessionWatchdog(
@@ -21517,7 +22609,7 @@ export class ChatEngine {
   }
 
   /**
-   * Called when the watchdog fires — the session has been silent for one check window.
+   * Called when the watchdog fires   the session has been silent for one check window.
    * When the session is demonstrably still working (an in-flight shell tool or
    * a running sub-agent), the silence is legitimate and the window is extended
    * instead of aborting. Otherwise we try to fetch the conversation history
@@ -21534,7 +22626,7 @@ export class ChatEngine {
     // activity window. Extend the window (re-evaluating when it fires again) so
     // live work survives; only silence with no in-flight work is treated as dead.
     if (this.hasInFlightWork(sessionId, info)) {
-      Logger.info('Session silent but demonstrably working — extending watchdog', {
+      Logger.info('Session silent but demonstrably working   extending watchdog', {
         sessionId,
         projectId: info.projectId,
         threadId: info.threadId
@@ -21550,7 +22642,7 @@ export class ChatEngine {
       // another event, while their harness process remains healthy. Keep the
       // canonical working state and re-check later; driver lifecycle events
       // remain authoritative for completion and transport failures.
-      Logger.info('Session remains silent without an explicit provider failure — preserving turn', {
+      Logger.info('Session remains silent without an explicit provider failure   preserving turn', {
         sessionId,
         projectId: info.projectId,
         threadId: info.threadId
@@ -21562,12 +22654,12 @@ export class ChatEngine {
     // A harness can settle a session without the driver noticing: pi's
     // auto-compaction aborts the active run, compacts, and (on overflow)
     // retries, and the driver's turn registration is gone by the time the
-    // final `agent_settled` arrives — so no idle finalization ever fires and
+    // final `agent_settled` arrives   so no idle finalization ever fires and
     // the thread sits on a working card forever. A settled, still-connected
     // session with no registered driver turn is not an error: emit a synthetic
     // idle so the engine's normal finalization runs (its incomplete-turn
     // recovery continues the thread) instead of parking it on an error card.
-    const watchdogDriver = this.drivers.get(info.driverId)
+    const watchdogDriver = this.driverForRuntime(info.driverId, info.accountId)
     if (
       watchdogDriver?.hasActiveTurn &&
       !watchdogDriver.hasActiveTurn(sessionId) &&
@@ -21575,12 +22667,23 @@ export class ChatEngine {
       (await this.probeSessionLiveness(watchdogDriver, info, sessionId)) === 'idle' &&
       !this.hasInFlightWork(sessionId, info)
     ) {
-      Logger.info('Session settled without driver finalization (compaction/retry gap) — reconciling to idle', {
-        sessionId,
-        projectId: info.projectId,
-        threadId: info.threadId
-      })
+      Logger.info(
+        'Session settled without driver finalization (compaction/retry gap)   reconciling to idle',
+        {
+          sessionId,
+          projectId: info.projectId,
+          threadId: info.threadId
+        }
+      )
       this.clearSessionWatchdog(sessionId)
+      // Recover any compaction pi wrote durably during the gap before the
+      // synthetic idle finalizes the turn, so the next history replay starts
+      // at the true post-compaction boundary instead of the full transcript.
+      try {
+        await watchdogDriver.reconcileSession?.(info.projectPath, sessionId)
+      } catch (error) {
+        Logger.dev('Watchdog compaction reconciliation failed:', error)
+      }
       // Route through the driver-event pipeline so every idle consumer
       // (status broadcast, thread finalization, notifications) sees the same
       // synthetic signal it would have seen from a real driver idle event.
@@ -21593,7 +22696,7 @@ export class ChatEngine {
     await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
     await this.onSessionError(sessionId, issue.message)
     try {
-      const driver = this.drivers.get(info.driverId)
+      const driver = this.driverForRuntime(info.driverId, info.accountId)
       if (driver) await driver.abort(info.projectPath, sessionId)
     } catch {
       /* abort is best-effort */
@@ -21622,7 +22725,7 @@ export class ChatEngine {
     info: SessionInfo
   ): Promise<AgentProviderIssue | null> {
     const harnessId = info.driverId
-    const driver = this.drivers.get(harnessId)
+    const driver = this.driverForRuntime(harnessId, info.accountId)
     try {
       if (driver) {
         const messages = await driver.loadMessages(info.projectPath, sessionId)
@@ -21645,7 +22748,7 @@ export class ChatEngine {
     // The persisted transcript only ever carries an error the provider itself
     // reported. A wedged RPC transport (the driver process alive but no
     // longer answering, e.g. pi's known RPC-wedge failure mode) never writes
-    // anything — it just stops emitting events forever, and the check above
+    // anything   it just stops emitting events forever, and the check above
     // can never see it. For drivers that can report live process state,
     // actively probe the connection instead of extending the silence window
     // indefinitely on faith.
@@ -21690,7 +22793,7 @@ export class ChatEngine {
     }
   }
 
-  // ─── Completion waiter — used by ephemeral sessions ─────────────────────
+  // ─── Completion waiter   used by ephemeral sessions ─────────────────────
 
   private waitForSessionCompletion(
     sessionId: string,
@@ -21745,8 +22848,8 @@ export class ChatEngine {
       // them as a terminal `error` status or a `waiting` usage-reset. Ignoring
       // those left auxiliary flows (image descriptor, titles, temporary chats)
       // hanging until the inactivity window expired. Fail them immediately
-      // with the real provider message so recovery — the descriptor's fallback
-      // model chain, or the user card — starts at once.
+      // with the real provider message so recovery   the descriptor's fallback
+      // model chain, or the user card   starts at once.
       const status = event.status
       if (status.state === 'error' || (status.state === 'waiting' && status.issue !== undefined)) {
         this.clearCompletionWaiter(event.sessionId)
@@ -21868,7 +22971,7 @@ export class ChatEngine {
           }
           // The extraction model just answered successfully, so this is the
           // right moment to retry any extractions a previous provider outage
-          // deferred — no memory is lost to a transient failure.
+          // deferred   no memory is lost to a transient failure.
           await this.drainDeferredMemoryExtractions(
             driver,
             projectPath,
@@ -22237,7 +23340,7 @@ interface DriverDiscovery {
 export function mergeProviderCatalogs(catalogs: ProviderCatalog[]): ProviderCatalog[] {
   const merged = new Map<string, ProviderCatalog>()
   for (const catalog of catalogs) {
-    // Key by harnessId:id — each harness exposes its own driver catalog. Two
+    // Key by harnessId:id   each harness exposes its own driver catalog. Two
     // harnesses may report the same provider id (e.g. codex and opencode both
     // expose `openai`); they must stay separate so model selection routes to
     // the harness that actually owns the model.
@@ -22379,13 +23482,24 @@ export function stampHarnessId(messages: AgentMessage[], harnessId: string): Age
   return messages.map((message) => (message.harnessId ? message : { ...message, harnessId }))
 }
 
+/** Record the account container and its label at the time the turn ran. */
+export function stampAccount(
+  messages: AgentMessage[],
+  accountId: string,
+  accountLabel: string
+): AgentMessage[] {
+  return messages.map((message) =>
+    message.accountId ? message : { ...message, accountId, accountLabel }
+  )
+}
+
 /**
  * Keep a message's persisted thinking level when the driver transcript omits it
  * (driver reloads and history loads never know the reasoning effort of past
  * turns). The on-disk mirror is the single source of truth for historical rows:
  * after a restart a driver can re-stamp an entire session with the current
  * turn's provenance, so any message already known to the mirror gets the
- * mirror's level — and a message the mirror never recorded a level for stays
+ * mirror's level   and a message the mirror never recorded a level for stays
  * unknown rather than inheriting the live turn's effort. Brand-new messages
  * (the turn being finalized) are not in the mirror, so their driver-stamped or
  * caller-stamped level is preserved.
@@ -22407,6 +23521,33 @@ export function restoreMirrorThinkingLevel(
       return { ...message, thinkingLevel: undefined }
     }
     return message
+  })
+}
+
+/** Keep historical account attribution immutable when a fresh account session
+ *  was prefilled from the app mirror and reports those older messages again. */
+export function restoreMirrorAccount(
+  merged: AgentMessage[],
+  mirror: AgentMessage[]
+): AgentMessage[] {
+  if (mirror.length === 0) return merged
+  const byId = new Map(mirror.map((message) => [message.id, message]))
+  return merged.map((message) => {
+    const persisted = byId.get(message.id)
+    if (!persisted) return message
+    if (persisted.accountId) {
+      return message.accountId === persisted.accountId &&
+        message.accountLabel === persisted.accountLabel
+        ? message
+        : {
+            ...message,
+            accountId: persisted.accountId,
+            accountLabel: persisted.accountLabel
+          }
+    }
+    return message.accountId
+      ? { ...message, accountId: undefined, accountLabel: undefined }
+      : message
   })
 }
 
@@ -22432,8 +23573,8 @@ export function textForMessage(message: AgentMessage): string {
  * Canonical action categories a tool call is reduced to in a replay recap.
  * Raw tool identifiers diverge per harness (Claude Code's `Bash`/`Read`/`Task`
  * vs. Pi's lowercase `bash`/`read`/spawn-tool names vs. opencode's `webfetch`,
- * etc.), so a recap built from one harness and replayed into another — or
- * into a fresh process of the same harness after a version change — must not
+ * etc.), so a recap built from one harness and replayed into another   or
+ * into a fresh process of the same harness after a version change   must not
  * assert tool names the resuming session may not recognize as its own. These
  * patterns match on intent, not on any one harness's naming, and are checked
  * in order from most to least specific.
@@ -22501,7 +23642,7 @@ function describeToolPart(part: Extract<AgentPart, { type: 'tool' }>): string {
   const subject = summarizeToolInput(part.state.input ?? {})
   const line = subject ? `${action}: ${subject}` : action
   if (part.state.status === 'error' || part.state.error) {
-    const error = part.state.error ? ` — ${truncateToolResult(part.state.error)}` : ''
+    const error = part.state.error ? `   ${truncateToolResult(part.state.error)}` : ''
     return `[Action failed] ${line}${error}`
   }
   const output = part.state.output?.trim()
@@ -22531,7 +23672,7 @@ function formatConversationTranscript(
             return [`[Compacted conversation summary]\n${part.summary}`]
           }
           if (part.type === 'tool') return [describeToolPart(part)]
-          // Presentation-mode user prompts carry no `text` part — the visible
+          // Presentation-mode user prompts carry no `text` part   the visible
           // content lives in the presentation (action + body). Without this
           // branch the recap silently drops every user message written in
           // engineering mode, leaving only assistant output and trace.
@@ -22641,12 +23782,38 @@ export function formatHistoryRecap(
           part.summary.trim().length > 0)
     )
   )
+  const compactionMessage = messages[latestCompactionIndex]
+  const retainedParts =
+    compactionMessage?.parts.filter(
+      (part) => part.type === 'compaction' && part.firstKeptEntryId
+    ) ?? []
+  const unresolvedBoundary = retainedParts.some(
+    (part) => part.type === 'compaction' && part.firstKeptCreatedAt === undefined
+  )
+  const retainedAt = retainedParts.reduce(
+    (earliest, part) =>
+      part.type === 'compaction' && part.firstKeptCreatedAt !== undefined
+        ? Math.min(earliest, part.firstKeptCreatedAt)
+        : earliest,
+    Infinity
+  )
+  const retainedBoundary =
+    messages.findLast((message) => message.createdAt <= retainedAt)?.createdAt ?? retainedAt
   const relevantMessages =
-    latestCompactionIndex === -1 ? messages : messages.slice(latestCompactionIndex)
+    latestCompactionIndex === -1 || unresolvedBoundary
+      ? messages
+      : Number.isFinite(retainedAt)
+        ? [
+            compactionMessage,
+            ...messages.filter(
+              (message) => message !== compactionMessage && message.createdAt >= retainedBoundary
+            )
+          ]
+        : messages.slice(latestCompactionIndex)
   const transcript = formatConversationTranscript(relevantMessages, { includeHidden: true })
   if (!transcript) return ''
   // Character-bound callers (temporary chats) still get a generous token
-  // budget — 50k keeps most of a long coding thread intact instead of the
+  // budget   50k keeps most of a long coding thread intact instead of the
   // tail-only slice that starved temporary chats of anchor context.
   const budgetedTranscript = truncateToTokenBudget(transcript, options.maxInputTokens ?? 50_000)
   return [

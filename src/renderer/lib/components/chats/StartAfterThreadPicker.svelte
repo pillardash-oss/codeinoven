@@ -12,7 +12,7 @@
     open: boolean
     projectId: string | null
     currentThreadId: string
-    /** Threads already selected — hidden/disabled so the user can keep adding. */
+    /** Threads already selected   hidden/disabled so the user can keep adding. */
     selectedIds?: string[]
     onSelect: (thread: Thread) => void
     onClose: () => void

@@ -68,9 +68,9 @@ function setDriver(engine: ChatEngine, id: string, driver: Record<string, unknow
 
 const baseInfo = { driverId: 'pi', projectId: 'p1', threadId: 't1', projectPath: '/project' }
 
-describe('ChatEngine watchdog — silent-session liveness probe', () => {
+describe('ChatEngine watchdog   silent-session liveness probe', () => {
   // A wedged RPC transport (pi's documented failure mode) never writes an
-  // error to the transcript — it just stops emitting events. Without an
+  // error to the transcript   it just stops emitting events. Without an
   // active liveness probe, the watchdog extended the silence window forever
   // and follow-up turns were stuck on a bare "Working..." spinner
   // indefinitely. These lock in the probe's three outcomes.

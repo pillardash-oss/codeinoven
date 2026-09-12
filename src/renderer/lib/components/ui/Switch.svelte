@@ -9,7 +9,7 @@
     label?: string
     /** Custom tooltip text (handled by the global tooltip system). */
     title?: string
-    /** Optional mousedown handler forwarded to the toggle button — lets
+    /** Optional mousedown handler forwarded to the toggle button   lets
      *  call sites (e.g. composer overlays) keep focus on the surrounding UI. */
     onmousedown?: (event: MouseEvent) => void
     role?: string

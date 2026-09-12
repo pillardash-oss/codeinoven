@@ -132,7 +132,7 @@ export function isThreadExecutionActiveStatus(status: ThreadStatus): boolean {
 /**
  * Whether a harness supports manual context compaction, straight from its
  * declared harness manifest (`manualCompaction` behavior in the harness
- * registry) — mirrored onto every `ProviderConnectionInfo` by the main
+ * registry)   mirrored onto every `ProviderConnectionInfo` by the main
  * process. Unknown harnesses (no manifest entry, no connection info) get the
  * behavior-safe default of `false`.
  */

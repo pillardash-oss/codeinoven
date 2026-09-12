@@ -6,6 +6,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { APP_NAME } from '$shared/brand'
   import type { Project } from '$shared/types'
+  import { folderBaseName } from '$lib/project-location'
 
   interface Props {
     open: boolean
@@ -73,7 +74,7 @@
   function handleClose(): void {
     if (busy && !showTerminal) return
     if (showTerminal && exitCode === undefined) {
-      // Let the clone keep running in background minimized — minimize instead of closing
+      // Let the clone keep running in background minimized   minimize instead of closing
       minimized = true
       return
     }
@@ -143,7 +144,7 @@
       try {
         // Verify clone succeeded and create project via regular local flow
         const folder = handoff.destination
-        const name = folder.split('/').filter(Boolean).pop() ?? handoff.repoName ?? folder
+        const name = folderBaseName(folder) || handoff.repoName || folder
         const project = (await invoke('project:create', {
           name,
           path: folder,
@@ -244,10 +245,10 @@
       {/if}
       <p class="text-[0.6875rem] text-dimmed">
         {exitCode === undefined
-          ? 'Clone is running — you can minimize and keep working. Errors appear in the terminal.'
+          ? 'Clone is running   you can minimize and keep working. Errors appear in the terminal.'
           : exitCode === 0
             ? 'Project will be added automatically.'
-            : 'Clone failed — check the terminal output above, then close and retry.'}
+            : 'Clone failed   check the terminal output above, then close and retry.'}
       </p>
     </div>
   </DockableModal>

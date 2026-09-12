@@ -1,18 +1,38 @@
-import { app, session, shell, WebContentsView, type BrowserWindow, type Session } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  MenuItem,
+  dialog,
+  session,
+  shell,
+  webFrameMain,
+  WebContentsView,
+  type Session,
+  type WebFrameMain
+} from 'electron'
 import { join } from 'node:path'
+import type { Database } from '../database/database'
+import { ProjectRepo } from '../database/repositories/project-repo'
+import { ThreadRepo } from '../database/repositories/thread-repo'
+import type { Project, Thread } from '../../lib/types'
 import type {
   BrowserConsoleEntry,
   BrowserConsoleLevel,
+  BrowserDevToolsState,
   BrowserDownload,
   BrowserDownloadState,
   BrowserPageState,
   BrowserPermissionDecision,
   BrowserPermissionRequest,
+  BrowserSiteDataScope,
   BrowserViewBounds
 } from '../../lib/ipc-contract'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
+import { fetchIconAsDataUrl } from '../editor/favicon-service'
+import { PermissionPromptWindow, type PromptRequestContext } from './permission-prompt-window'
 
 const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
 const MAX_BROWSER_URL_LENGTH = 8192
@@ -24,6 +44,9 @@ const PROJECT_ID_PATTERN = /^[a-zA-Z0-9:._-]{1,240}$/u
 const PERMISSION_REQUEST_ID_PATTERN = /^[a-f0-9-]{36}$/u
 const PERMISSION_TIMEOUT_MS = 60_000
 const DOWNLOAD_ID_PATTERN = /^[a-f0-9-]{36}$/u
+/** Character cap for the "<project> - <thread>" context line shown above
+ *  page alert/confirm dialogs, so a long thread title cannot dominate them. */
+const MAX_DIALOG_LABEL_LENGTH = 120
 
 interface BrowserTab {
   view: WebContentsView
@@ -31,6 +54,8 @@ interface BrowserTab {
   threadId: string
   initialNavigationStarted: boolean
   consoleEntries: BrowserConsoleEntry[]
+  /** Favicon data URL from the last `page-favicon-updated`, cleared on navigation. */
+  favicon: string | null
 }
 
 interface PendingBrowserPermission {
@@ -38,6 +63,38 @@ interface PendingBrowserPermission {
   callback: (granted: boolean) => void
   timer: ReturnType<typeof setTimeout>
 }
+
+/** A destructive site-data action offered by the native site-settings menu. */
+interface SiteMenuAction {
+  scope: BrowserSiteDataScope
+  label: string
+  detail: string
+}
+
+const SITE_MENU_ACTIONS: readonly SiteMenuAction[] = [
+  {
+    scope: 'cookies',
+    label: 'Clear cookies',
+    detail: 'Cookies for sites visited in this browser will be deleted. You may be signed out.'
+  },
+  {
+    scope: 'site-data',
+    label: 'Clear site data',
+    detail:
+      'Storage, service workers and sessions for sites visited in this browser will be deleted.'
+  },
+  {
+    scope: 'cache',
+    label: 'Clear cache',
+    detail: 'Cached files for sites visited in this browser will be deleted.'
+  },
+  {
+    scope: 'permissions',
+    label: 'Reset permissions',
+    detail:
+      'Remembered camera, microphone and other permission choices for sites visited in this browser will be forgotten.'
+  }
+]
 
 interface BrowserDownloadRecord {
   item: Electron.DownloadItem
@@ -94,6 +151,59 @@ function validateDownloadId(value: unknown): string {
   return value
 }
 
+const SITE_DATA_SCOPES: readonly BrowserSiteDataScope[] = [
+  'cookies',
+  'site-data',
+  'cache',
+  'permissions'
+]
+
+/** Storage buckets cleared by `session.clearStorageData()` for each scope.
+ *  Cookies get their own scope so "cookies" and "site data" stay separable. */
+const SCOPE_STORAGE_TYPES: Record<
+  'cookies' | 'site-data',
+  Array<
+    | 'cookies'
+    | 'filesystem'
+    | 'indexdb'
+    | 'localstorage'
+    | 'shadercache'
+    | 'serviceworkers'
+    | 'cachestorage'
+  >
+> = {
+  cookies: ['cookies'],
+  'site-data': ['cachestorage', 'filesystem', 'indexdb', 'localstorage', 'serviceworkers']
+}
+
+function validateSiteDataScopes(value: unknown): BrowserSiteDataScope[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > SITE_DATA_SCOPES.length) {
+    throw new TypeError('Browser site data scopes must be a non-empty array')
+  }
+  const unique = new Set(value)
+  for (const scope of unique) {
+    if (!SITE_DATA_SCOPES.includes(scope as BrowserSiteDataScope)) {
+      throw new TypeError(`Browser site data scope is invalid: ${String(scope)}`)
+    }
+  }
+  return [...unique]
+}
+
+function validateSiteMenuPoint(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100_000) {
+    throw new TypeError(`Browser site menu ${label} is invalid`)
+  }
+  return Math.round(value)
+}
+
+/** Validate the display host shown at the top of the site-settings menu. */
+function validateBoundedHost(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 260 || value.includes('\0')) {
+    throw new TypeError('Browser site menu host is invalid')
+  }
+  return value
+}
+
 /** Reduce a server-suggested filename to a safe, absolute-path-free basename. */
 function safeBasename(value: string): string {
   // Substitute every path separator, drive-part, or control character with an
@@ -118,6 +228,30 @@ function safeBasename(value: string): string {
   const normalized = cleaned.replace(/\s+/g, ' ').trim().replace(/^\.+/, '')
   const base = normalized.length > 0 ? normalized.slice(0, 240) : 'download'
   return base
+}
+
+/** Build the injected wrapper that prefixes page alert/confirm messages with
+ *  the owning thread's context line. Escaping goes through `JSON.stringify`,
+ *  so any project or thread name is embedded safely as a JS string literal. */
+function dialogContextScript(label: string): string {
+  return `(() => {
+  const label = ${JSON.stringify(label)};
+  const win = window;
+  if (win.__cioDialogOriginals === undefined) win.__cioDialogOriginals = {};
+  const originals = win.__cioDialogOriginals;
+  for (const [name, kind] of [['alert', 'Alert'], ['confirm', 'Confirm']]) {
+    if (typeof originals[name] !== 'function') {
+      const current = win[name];
+      if (typeof current !== 'function') continue;
+      originals[name] = current.bind(win);
+    }
+    const original = originals[name];
+    win[name] = function (message) {
+      const text = message == null ? '' : String(message);
+      return original(label + ' ' + kind + '\\n\\n' + text);
+    };
+  }
+})()`
 }
 
 function permissionOrigin(value: string): string | null {
@@ -202,12 +336,29 @@ export class BrowserService {
   private readonly permissionGrants = new Map<string, Set<string>>()
   private readonly permissionDenies = new Map<string, Set<string>>()
   private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
-  private readonly permissionSuspendedTabs = new Set<string>()
   private readonly downloads = new Map<string, BrowserDownloadRecord>()
+  private readonly promptWindow: PermissionPromptWindow
+  private readonly projects: ProjectRepo
+  private readonly threads: ThreadRepo
   private activeTabId: string | null = null
+  /** Last known content bounds of the active tab's native view (window-content
+   *  coordinates). The permission popup anchors itself to this area so it
+   *  never collides with toasts at the window edge. */
+  private activeTabBounds: BrowserViewBounds | null = null
+  /** True while a Sonner toast is visible in the renderer. A native
+   *  WebContentsView floats above every DOM surface, so while this is set the
+   *  active browser view stays detached and the DOM toast composites normally. */
+  private toastVisible = false
   private consoleSequence = 0
 
-  constructor(private readonly window: BrowserWindow) {}
+  constructor(
+    private readonly window: BrowserWindow,
+    db: Database
+  ) {
+    this.promptWindow = new PermissionPromptWindow(window)
+    this.projects = new ProjectRepo(db)
+    this.threads = new ThreadRepo(db)
+  }
 
   register(): void {
     ipcMain.handle(
@@ -221,26 +372,15 @@ export class BrowserService {
         const tab = this.ensureTab(tabId, projectId, threadId)
 
         if (this.activeTabId && this.activeTabId !== tabId) this.detachActiveView()
-        if (this.permissionModalPending()) {
-          // A permission modal is open in the renderer. A native WebContentsView
-          // floats above every DOM surface of this window, so attaching it here
-          // would cover the DOM permission dialog and swallow its Allow/Deny
-          // clicks (e.g. the browser is fullscreen and the tab calls a mic). Keep
-          // the native view detached for the whole permission lifetime; the panel
-          // re-shows it through `browser:show` once the modal is gone.
-          this.activeTabId = null
-          tab.view.setBounds(bounds)
-          if (!tab.initialNavigationStarted) {
-            tab.initialNavigationStarted = true
-            this.load(tabId, initialUrl)
-          }
-          return this.stateFor(tabId, tab)
-        }
         if (this.activeTabId !== tabId) {
-          this.window.contentView.addChildView(tab.view)
           this.activeTabId = tabId
+          if (!this.toastVisible) this.window.contentView.addChildView(tab.view)
         }
         tab.view.setBounds(bounds)
+        this.activeTabBounds = bounds
+        // Refresh the alert/confirm context label on every activation so a
+        // renamed project or thread is reflected without waiting for a reload.
+        this.injectDialogContext(tabId)
         if (!tab.initialNavigationStarted) {
           tab.initialNavigationStarted = true
           this.load(tabId, initialUrl)
@@ -252,8 +392,11 @@ export class BrowserService {
     ipcMain.handle('browser:hide', (_event, rawTabId) => {
       const tabId = validateTabId(rawTabId)
       if (this.activeTabId === tabId) this.detachActiveView()
-      // Missing tabs are silently ignored — the renderer may call hide
+      // Missing tabs are silently ignored   the renderer may call hide
       // during teardown after the tab was already destroyed.
+    })
+    ipcMain.handle('browser:setToastVisible', (_event, rawVisible) => {
+      this.setToastVisible(rawVisible === true)
     })
     ipcMain.handle('browser:navigate', (_event, rawTabId, rawUrl) => {
       this.load(validateTabId(rawTabId), validateBrowserUrl(rawUrl))
@@ -276,20 +419,47 @@ export class BrowserService {
     ipcMain.handle('browser:stop', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.stop()
     })
-    ipcMain.handle('browser:getConsole', (_event, rawTabId) => {
-      const tab = this.tabs.get(validateTabId(rawTabId))
-      return tab ? [...tab.consoleEntries] : []
-    })
-    ipcMain.handle('browser:clearConsole', (_event, rawTabId) => {
-      this.requireTab(validateTabId(rawTabId)).consoleEntries = []
+    ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) => {
+      const tab = this.requireTab(validateTabId(rawTabId))
+      const contents = tab.view.webContents
+      if (contents.isDevToolsOpened()) {
+        contents.closeDevTools()
+        return false
+      }
+      // Plain native behavior: default dock inside the window, resizable
+      // there, fully undockable from DevTools' own controls.
+      contents.openDevTools()
+      return true
     })
     ipcMain.handle('browser:clearData', async (_event, rawProjectId) => {
       await this.clearProjectData(validateProjectId(rawProjectId))
+    })
+    ipcMain.handle('browser:clearSiteData', (_event, rawProjectId, rawScopes) => {
+      const projectId = validateProjectId(rawProjectId)
+      const scopes = validateSiteDataScopes(rawScopes)
+      void this.clearSiteData(projectId, scopes).catch((error: unknown) => {
+        Logger.error('Browser site data could not be cleared:', error)
+      })
+    })
+    ipcMain.handle('browser:siteMenu', (_event, rawProjectId, rawHost, rawX, rawY) => {
+      const projectId = validateProjectId(rawProjectId)
+      const host = validateBoundedHost(rawHost)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      // Native popup menus run a nested run loop; detach from the invoke reply
+      // so the renderer's call resolves immediately.
+      setImmediate(() => this.showSiteMenu(projectId, host, x, y))
     })
     ipcMain.handle('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)
       const decision = validatePermissionDecision(rawDecision)
       this.resolvePermission(requestId, permissionResolutions[decision])
+    })
+    ipcMain.handle('browser:popupReady', (_event) => {
+      // The popup document has bound its permission listener; flush whatever
+      // request is currently on display (covers the lost-event race where the
+      // first request arrived before the document finished subscribing).
+      this.promptWindow.flush()
     })
     ipcMain.handle('browser:destroy', (_event, rawTabId) => {
       this.destroy(validateTabId(rawTabId))
@@ -346,8 +516,11 @@ export class BrowserService {
 
   dispose(): void {
     this.detachActiveView()
+    this.toastVisible = false
+    this.activeTabBounds = null
+    this.promptWindow.dispose()
     for (const requestId of [...this.pendingPermissions.keys()]) {
-      this.resolvePermission(requestId, permissionResolutions.dismiss, false)
+      this.resolvePermission(requestId, permissionResolutions.dismiss)
     }
     for (const tab of this.tabs.values()) {
       if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
@@ -492,16 +665,43 @@ export class BrowserService {
       projectId,
       threadId,
       initialNavigationStarted: false,
-      consoleEntries: []
+      consoleEntries: [],
+      favicon: null
     }
     this.tabs.set(tabId, tab)
 
     const publish = (): void => this.publishState(tabId)
+    view.webContents.on('did-finish-load', () => this.injectDialogContext(tabId))
+    view.webContents.on(
+      'did-frame-finish-load',
+      (_event, isMainFrame, frameProcessId, frameRoutingId) => {
+        if (isMainFrame) return
+        const frame = webFrameMain.fromId(frameProcessId, frameRoutingId)
+        if (frame) this.injectDialogContext(tabId, frame)
+      }
+    )
+    view.webContents.on('devtools-opened', publish)
+    view.webContents.on('devtools-closed', publish)
     view.webContents.on('did-start-loading', publish)
     view.webContents.on('did-stop-loading', publish)
-    view.webContents.on('did-navigate', publish)
+    view.webContents.on('did-navigate', () => {
+      // A new document starts without an icon; the old site's favicon must not linger.
+      tab.favicon = null
+      publish()
+    })
     view.webContents.on('did-navigate-in-page', publish)
     view.webContents.on('page-title-updated', publish)
+    view.webContents.on('page-favicon-updated', (_event, favicons) => {
+      const source = favicons.find((candidate) => candidate.length > 0) ?? null
+      if (!source) return
+      // Electron reports icon URLs, but remote images are blocked by the
+      // renderer CSP   convert to a data URL so any consumer can render it.
+      void fetchIconAsDataUrl(source).then((favicon) => {
+        if (!favicon || tab.favicon === favicon) return
+        tab.favicon = favicon
+        publish()
+      })
+    })
     view.webContents.on('console-message', (details) => {
       this.appendConsoleEntry(tabId, {
         level: details.level,
@@ -602,6 +802,7 @@ export class BrowserService {
         return
       }
       const [tabId] = tabEntry
+      const tab = tabEntry[1]
       const id = crypto.randomUUID()
       const rawMediaTypes: unknown = Reflect.get(details, 'mediaTypes')
       const mediaTypes = Array.isArray(rawMediaTypes)
@@ -618,7 +819,9 @@ export class BrowserService {
       // A remembered "Don't allow" for any of these keys: refuse silently so the
       // site is not re-prompted, without suspending the view or showing a modal.
       const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
-      if (permissionGrantKeys(request).some((key) => this.permissionDenies.get(partition)?.has(key))) {
+      if (
+        permissionGrantKeys(request).some((key) => this.permissionDenies.get(partition)?.has(key))
+      ) {
         callback(false)
         return
       }
@@ -627,8 +830,14 @@ export class BrowserService {
         PERMISSION_TIMEOUT_MS
       )
       this.pendingPermissions.set(id, { request, callback, timer })
-      this.suspendActiveViewForPermission()
-      sendToRenderer(this.window.webContents, 'browser:permissionRequested', request)
+      // Native OS popup composites above the WebContentsView: the page stays
+      // live and interactive while the prompt is on screen.
+      const context: PromptRequestContext = {
+        request,
+        queueSize: this.pendingPermissions.size,
+        projectLabel: this.permissionLabel(tab)
+      }
+      this.promptWindow.show(context, this.promptAnchor())
     })
     browserSession.on('will-download', (event, item, contents) => {
       this.handleDownload(projectId, item, contents.id)
@@ -728,9 +937,72 @@ export class BrowserService {
     }
   }
 
+  /** Open the OS-native site-settings context menu. Runs in a nested run loop
+   *  and composites above the WebContentsView, so the page never has to be
+   *  detached for the menu. */
+  private showSiteMenu(projectId: string, host: string, x: number, y: number): void {
+    if (this.window.isDestroyed()) return
+    const menu = new Menu()
+    if (host) menu.append(new MenuItem({ label: host, enabled: false }))
+    menu.append(new MenuItem({ type: 'separator' }))
+    for (const action of SITE_MENU_ACTIONS) {
+      menu.append(
+        new MenuItem({
+          label: `${action.label}…`,
+          click: () => this.confirmAndClearSiteData(projectId, action)
+        })
+      )
+    }
+    menu.popup({
+      window: this.window,
+      x,
+      y,
+      callback: () => {
+        if (!this.window.webContents.isDestroyed()) {
+          sendToRenderer(this.window.webContents, 'browser:siteMenuClosed')
+        }
+      }
+    })
+  }
+
+  /** Confirm the destructive site-data action with a parented native dialog
+   *  before executing it. */
+  private confirmAndClearSiteData(projectId: string, action: SiteMenuAction): void {
+    if (this.window.isDestroyed()) return
+    void dialog
+      .showMessageBox(this.window, {
+        type: 'warning',
+        message: `${action.label}?`,
+        detail: action.detail,
+        buttons: [action.label, 'Cancel'],
+        defaultId: 1,
+        cancelId: 1
+      })
+      .then((result) => {
+        if (result.response !== 0) return
+        return this.clearSiteData(projectId, [action.scope]).catch((error: unknown) => {
+          Logger.error('Browser site data could not be cleared:', error)
+          if (this.window.isDestroyed()) return
+          void dialog.showMessageBox(this.window, {
+            type: 'error',
+            message: 'Site data could not be cleared',
+            detail:
+              error instanceof Error && error.message
+                ? error.message
+                : 'An unexpected error occurred while clearing browser site data.',
+            buttons: ['OK']
+          })
+        })
+      })
+      .catch((error: unknown) => {
+        Logger.error('Browser site data confirmation failed:', error)
+      })
+  }
+
   private async clearProjectData(projectId: string): Promise<void> {
     for (const [requestId, pending] of this.pendingPermissions) {
-      if (pending.request.projectId === projectId) this.resolvePermission(requestId, permissionResolutions.dismiss, false)
+      if (pending.request.projectId === projectId)
+        this.resolvePermission(requestId, permissionResolutions.dismiss)
     }
     for (const record of this.downloads.values()) {
       if (record.download.projectId === projectId && record.download.state === 'progressing') {
@@ -748,11 +1020,38 @@ export class BrowserService {
     }
   }
 
-  private resolvePermission(
-    requestId: string,
-    resolution: PermissionResolution,
-    restoreView = true
-  ): void {
+  /** Clear only the requested scopes for the project's browser session. Tabs of
+   *  the project reload afterwards so cleared state takes effect immediately. */
+  private async clearSiteData(projectId: string, scopes: BrowserSiteDataScope[]): Promise<void> {
+    if (scopes.includes('permissions')) {
+      for (const [requestId, pending] of this.pendingPermissions) {
+        if (pending.request.projectId === projectId) {
+          this.resolvePermission(requestId, permissionResolutions.dismiss)
+        }
+      }
+      const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
+      this.permissionGrants.get(partition)?.clear()
+      this.permissionDenies.get(partition)?.clear()
+    }
+    const browserSession = this.sessionForProject(projectId)
+    const work: Promise<unknown>[] = []
+    for (const scope of scopes) {
+      if (scope === 'cache') {
+        work.push(browserSession.clearCache())
+      } else if (scope === 'cookies' || scope === 'site-data') {
+        work.push(browserSession.clearStorageData({ storages: SCOPE_STORAGE_TYPES[scope] }))
+      }
+    }
+    if (work.length > 0) {
+      await Promise.all(work)
+      await browserSession.closeAllConnections()
+    }
+    for (const tab of this.tabs.values()) {
+      if (tab.projectId === projectId && tab.initialNavigationStarted) tab.view.webContents.reload()
+    }
+  }
+
+  private resolvePermission(requestId: string, resolution: PermissionResolution): void {
     const pending = this.pendingPermissions.get(requestId)
     if (!pending) return
     clearTimeout(pending.timer)
@@ -772,44 +1071,113 @@ export class BrowserService {
       }
     }
     pending.callback(resolution.granted)
-    if (!this.window.webContents.isDestroyed()) {
-      sendToRenderer(this.window.webContents, 'browser:permissionResolved', requestId)
-    }
-    if (restoreView) this.restoreTabAfterPermission(pending.request.tabId)
-  }
-
-  /** Detach whatever native browser view is currently on screen so a DOM
-   *  permission modal is never covered by a native surface. This suspends the
-   *  ACTIVE view even when the permission belongs to a background/popup tab
-   *  (e.g. a fullscreen tab triggers a popup tab's mic request) — the old
-   *  per-tab suspension only detached when the requesting tab was active. */
-  private suspendActiveViewForPermission(): void {
-    if (!this.activeTabId || this.permissionSuspendedTabs.has(this.activeTabId)) return
-    const tab = this.tabs.get(this.activeTabId)
-    if (!tab) return
-    this.window.contentView.removeChildView(tab.view)
-    this.permissionSuspendedTabs.add(this.activeTabId)
-  }
-
-  /** True while a browser permission modal is pending in the renderer. While
-   *  set, no native browser view may be attached — a WebContentsView floats above
-   *  every DOM surface, so restoring one would cover the permission dialog. */
-  private permissionModalPending(): boolean {
-    return this.pendingPermissions.size > 0
-  }
-
-  private restoreTabAfterPermission(tabId: string): void {
-    if (
-      this.activeTabId !== tabId ||
-      !this.permissionSuspendedTabs.has(tabId) ||
-      this.permissionModalPending()
-    ) {
+    // Show the next queued request, or drop the prompt when the queue is empty.
+    const next = this.pendingPermissions.values().next()
+    if (next.done) {
+      this.promptWindow.hide()
       return
     }
+    const nextTab = this.tabs.get(next.value.request.tabId)
+    this.promptWindow.show(
+      {
+        request: next.value.request,
+        queueSize: this.pendingPermissions.size,
+        projectLabel: nextTab ? this.permissionLabel(nextTab) : null
+      },
+      this.promptAnchor()
+    )
+  }
+
+  /** Content-anchored placement data for the permission popup: the active tab's
+   *  last known view bounds, or nothing when no tab is on screen. */
+  private promptAnchor(): { x: number; y: number; width: number } | null {
+    const bounds = this.activeTabBounds
+    return bounds ? { x: bounds.x, y: bounds.y, width: bounds.width } : null
+  }
+
+  /** Resolve the "<project> - <thread>" context line for a tab's dialogs, or
+   *  null when either record is missing (native dialog then stays untouched). */
+  private dialogLabel(tab: BrowserTab): string | null {
+    let project: Project | null
+    let thread: Thread | null
+    try {
+      project = this.projects.get(tab.projectId)
+      thread = this.threads.get(tab.threadId)
+    } catch (error: unknown) {
+      Logger.error('Browser dialog context lookup failed:', error)
+      return null
+    }
+    if (!project || !thread) return null
+    const name = project.name.trim()
+    const title = thread.title.trim()
+    if (!name || !title) return null
+    const label = `${name} - ${title}`
+    return label.length > MAX_DIALOG_LABEL_LENGTH
+      ? `${label.slice(0, MAX_DIALOG_LABEL_LENGTH)}…`
+      : label
+  }
+
+  /** Resolve the requester label for permission prompts: "<project> - <thread>"
+   *  when both records exist, the project name alone when only the project
+   *  does, and null when the request cannot be tied to a project (the popup
+   *  then shows just the requesting website). */
+  private permissionLabel(tab: BrowserTab): string | null {
+    let project: Project | null
+    let thread: Thread | null
+    try {
+      project = this.projects.get(tab.projectId)
+      thread = this.threads.get(tab.threadId)
+    } catch (error: unknown) {
+      Logger.error('Browser permission label lookup failed:', error)
+      return null
+    }
+    if (!project) return null
+    const name = project.name.trim()
+    const title = thread?.title.trim() ?? ''
+    const label = title ? `${name} - ${title}` : name
+    if (!label) return null
+    return label.length > MAX_DIALOG_LABEL_LENGTH
+      ? `${label.slice(0, MAX_DIALOG_LABEL_LENGTH)}…`
+      : label
+  }
+
+  /** Install the labeled alert/confirm shim into a document's JS context.
+   *  Chromium renders page dialogs as native windows parented to the app
+   *  window and carries no context about which CodeInOven thread owns the
+   *  page, so every loaded frame gets a wrapper that prefixes the dialog
+   *  message with "<project> - <thread> <Alert|Confirm>" followed by the
+   *  page's own text. Injection is idempotent per document: re-injection
+   *  (after thread renames or replays) rewraps the same original callables
+   *  instead of stacking prefixes. `prompt()` is left untouched because
+   *  Electron never renders it. */
+  private injectDialogContext(tabId: string, frame?: WebFrameMain): void {
     const tab = this.tabs.get(tabId)
     if (!tab) return
-    this.window.contentView.addChildView(tab.view)
-    this.permissionSuspendedTabs.delete(tabId)
+    const label = this.dialogLabel(tab)
+    if (!label) return
+    const script = dialogContextScript(label)
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) return
+    if (frame) {
+      this.runDialogScript(frame, script)
+      return
+    }
+    let frames: readonly WebFrameMain[]
+    try {
+      frames = contents.mainFrame.framesInSubtree
+    } catch {
+      // Between documents there is no frame tree to inject into.
+      return
+    }
+    for (const candidate of frames) this.runDialogScript(candidate, script)
+  }
+
+  private runDialogScript(frame: WebFrameMain, script: string): void {
+    if (frame.isDestroyed()) return
+    void frame.executeJavaScript(script).catch(() => {
+      // Frames can be replaced mid-navigation; the shim installs on the next
+      // frame load, so a failed injection here is harmless.
+    })
   }
 
   private load(tabId: string, url: string): void {
@@ -826,6 +1194,7 @@ export class BrowserService {
       tabId,
       url: contents.getURL(),
       title: contents.getTitle(),
+      favicon: tab.favicon,
       loading: contents.isLoading(),
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward()
@@ -847,6 +1216,15 @@ export class BrowserService {
     const tab = this.tabs.get(tabId)
     if (!tab || this.window.webContents.isDestroyed()) return
     sendToRenderer(this.window.webContents, 'browser:state', this.stateFor(tabId, tab))
+    sendToRenderer(
+      this.window.webContents,
+      'browser:devToolsChanged',
+      this.devToolsStateFor(tabId, tab)
+    )
+  }
+
+  private devToolsStateFor(tabId: string, tab: BrowserTab): BrowserDevToolsState {
+    return { tabId, open: tab.view.webContents.isDevToolsOpened() }
   }
 
   private appendConsoleEntry(
@@ -870,26 +1248,34 @@ export class BrowserService {
       timestamp: Date.now()
     }
     tab.consoleEntries = [...tab.consoleEntries, entry].slice(-MAX_CONSOLE_ENTRIES)
-    if (!this.window.webContents.isDestroyed()) {
-      sendToRenderer(this.window.webContents, 'browser:console', entry)
-    }
   }
 
   private detachActiveView(): void {
     if (!this.activeTabId) return
     const tab = this.tabs.get(this.activeTabId)
-    if (tab && !this.permissionSuspendedTabs.has(this.activeTabId)) {
-      this.window.contentView.removeChildView(tab.view)
-    }
-    this.permissionSuspendedTabs.delete(this.activeTabId)
+    if (tab) this.window.contentView.removeChildView(tab.view)
     this.activeTabId = null
+  }
+
+  /** Suspend the active native browser view while a toast is on screen. A
+   *  WebContentsView floats above every DOM surface, so toasts would be hidden
+   *  behind it; detaching lets the DOM toast composite normally. When the
+   *  toast clears, the view is re-attached. */
+  private setToastVisible(visible: boolean): void {
+    this.toastVisible = visible
+    if (!this.activeTabId) return
+    const tab = this.tabs.get(this.activeTabId)
+    if (!tab) return
+    if (visible) this.window.contentView.removeChildView(tab.view)
+    else this.window.contentView.addChildView(tab.view)
   }
 
   private destroy(tabId: string): void {
     const tab = this.tabs.get(tabId)
     if (!tab) return
     for (const [requestId, pending] of this.pendingPermissions) {
-      if (pending.request.tabId === tabId) this.resolvePermission(requestId, permissionResolutions.dismiss, false)
+      if (pending.request.tabId === tabId)
+        this.resolvePermission(requestId, permissionResolutions.dismiss)
     }
     if (this.activeTabId === tabId) this.detachActiveView()
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()

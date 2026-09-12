@@ -20,7 +20,7 @@
 
 <!--
   The SVG markup is bundled at build time from vetted package assets
-  (see registry.ts) — never user or network supplied, so {@html} is safe.
+  (see registry.ts)   never user or network supplied, so {@html} is safe.
   Icons size via `1em`, hence font-size drives the box; mono marks use
   currentColor and inherit the surrounding text color.
 -->

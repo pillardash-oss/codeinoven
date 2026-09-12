@@ -89,7 +89,7 @@ export async function revealLocalFile(projectId: string | undefined, url: string
 
 /**
  * Open a file citation in the app's file viewer. Citations are only rendered as
- * links once they are confirmed to exist on disk, so resolution is exact —
+ * links once they are confirmed to exist on disk, so resolution is exact  
  * never a fuzzy name search that could open a different file (e.g. the wrong
  * `app.html` when several share a name). Agents that cite a path must prefix it
  * with the project's CWD so it resolves unambiguously.
@@ -120,7 +120,7 @@ export async function revealCitationFile(
     return
   }
   // Absolute citation outside the project root (e.g. Codex citations to files
-  // the user supplied) — reveal in the OS file manager. `shell:revealExternalPath`
+  // the user supplied)   reveal in the OS file manager. `shell:revealExternalPath`
   // is a reveal-only probe: the path must exist and no content is read, so no
   // scope grant is required.
   if (isAbsoluteCitationPath(targetPath)) {

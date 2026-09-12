@@ -15,7 +15,7 @@ import type {
 } from '../../types'
 
 /**
- * OpenCodeAdapter — PTY-based adapter for the OpenCode CLI.
+ * OpenCodeAdapter   PTY-based adapter for the OpenCode CLI.
  * Spawns opencode in a node-pty process and parses structured output.
  */
 export class OpenCodeAdapter implements ProviderAdapter {

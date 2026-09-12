@@ -34,7 +34,7 @@ interface GradingSpendRow {
  * Permanent "best model" aggregate keyed by harness + provider + model +
  * thinking level + rubric version. Every increment adds raw score, duration,
  * and cost sums in one SQL upsert, so averages are always recomputed as
- * sum ÷ count — never averages of averages. Processed snapshots are
+ * sum ÷ count   never averages of averages. Processed snapshots are
  * hard-deleted by design, making this table the single surviving record.
  */
 export class ModelRankingRepo {
@@ -111,13 +111,12 @@ export class ModelRankingRepo {
     )
   }
 
-  /** Every aggregate row with at least 5 total ranked conversations, strongest one-shot record first. */
+  /** Every aggregate row with at least 5 total ranked conversations, strongest weighted record first. */
   listAll(): ModelRankingRow[] {
     return this.db.all<ModelRankingRow>(
       `SELECT * FROM model_rankings
        WHERE (one_shot_samples + multi_shot_samples) >= ${MIN_RANKING_SAMPLES}
-       ORDER BY (one_shot_score_sum / CASE WHEN one_shot_samples > 0 THEN one_shot_samples ELSE 1 END) DESC,
-                updated_at DESC`
+       ORDER BY ${WEIGHTED_SCORE_SQL} DESC, updated_at DESC`
     )
   }
 
@@ -131,12 +130,17 @@ export class ModelRankingRepo {
 
   /** IPC-shaped view of the aggregates; averages are always sum ÷ count. */
   analytics(): LocalProfileModelRanking[] {
-    // Returns every aggregate row regardless of sample count — the
-    // statistical-significance threshold is a display concern applied by
-    // listAll(), not a data-integrity one. Callers (Profile analytics, IPC)
-    // must see aggregates as soon as the first ranked conversation lands.
+    // Only rows with at least MIN_RANKING_SAMPLES total ranked conversations
+    // are fetched: thinner aggregates are statistically meaningless and must
+    // not surface in Profile analytics or anywhere downstream. Rows are
+    // ranked by sample-weighted combined average score so a single lucky
+    // one-shot sample cannot outrank a consistently strong configuration.
     return this.db
-      .all<ModelRankingRow>('SELECT * FROM model_rankings ORDER BY updated_at DESC')
+      .all<ModelRankingRow>(
+        `SELECT * FROM model_rankings
+         WHERE (one_shot_samples + multi_shot_samples) >= ${MIN_RANKING_SAMPLES}
+         ORDER BY ${WEIGHTED_SCORE_SQL} DESC, updated_at DESC`
+      )
       .map((row) => ({
         harnessId: row.harness_id,
         providerId: row.provider_id,
@@ -167,6 +171,11 @@ function rankingRowId(input: ModelRankingIncrement): string {
 
 /** Minimum total ranked conversations (one-shot + multi-shot) for a ranking row to be reported. */
 const MIN_RANKING_SAMPLES = 5
+
+/** Sample-weighted combined average across both shot categories; null-safe when a category has no samples. */
+const WEIGHTED_SCORE_SQL = `(
+  one_shot_score_sum + multi_shot_score_sum
+) / NULLIF(one_shot_samples + multi_shot_samples, 0)`
 
 /** Sum/count round-trip for one shot category; null averages before any sample. */
 function modeStats(

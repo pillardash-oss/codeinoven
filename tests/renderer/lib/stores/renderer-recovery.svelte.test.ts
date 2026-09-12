@@ -277,7 +277,7 @@ describe('RendererRecoveryStore', () => {
       startAfterThreads: []
     }
 
-    // Two messages queued while the agent is busy — both persist, in order.
+    // Two messages queued while the agent is busy   both persist, in order.
     store.setQueuedMessage('project-1', 'thread-1', first)
     store.setQueuedMessage('project-1', 'thread-1', second)
     store.flushPersist()
@@ -288,7 +288,7 @@ describe('RendererRecoveryStore', () => {
       'Second step'
     ])
 
-    // Delivery dequeues exactly one (the head) — the second stays queued.
+    // Delivery dequeues exactly one (the head)   the second stays queued.
     store.clearQueuedMessage('project-1', 'thread-1')
     expect(store.queuedMessageFor('project-1', 'thread-1')?.text).toBe('Second step')
 

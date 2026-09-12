@@ -13,7 +13,7 @@ import {
  * Base directory of the bundled Pi resource (see `scripts/build-pi-harness.ts`),
  * or `undefined` if it's missing (e.g. a dev checkout that never ran the
  * build script). Used only as a fallback when no `pi` is found on PATH or in
- * WSL — a real install always takes priority.
+ * WSL   a real install always takes priority.
  */
 function bundledPiBase(): string | undefined {
   const base = app.isPackaged
@@ -25,7 +25,7 @@ function bundledPiBase(): string | undefined {
 /**
  * Vendor directory of the bundled Pi runtime (see `scripts/build-pi-harness.ts`),
  * or `undefined` when Pi is not bundled. Lets main-process features reuse the
- * libraries vendored beside the harness — e.g. pi-ai's headless OAuth flows —
+ * libraries vendored beside the harness   e.g. pi-ai's headless OAuth flows  
  * which do not exist in the packaged app's own node_modules.
  */
 export function bundledPiVendorDir(): string | undefined {
@@ -53,7 +53,7 @@ function bundledPiRuntime(command: string): HarnessRuntime | null {
 /**
  * Env overrides for spawning the bundled Pi runtime: `ELECTRON_RUN_AS_NODE`
  * makes Electron's own binary behave as a plain Node runtime, and `NODE_PATH`
- * points at the bundled `vendor/` directory so `require('jiti')` resolves —
+ * points at the bundled `vendor/` directory so `require('jiti')` resolves  
  * electron-builder's extraResources copy drops nested `node_modules`
  * directories, so that dependency ships under a differently named folder and
  * needs NODE_PATH instead of Node's standard `node_modules` upward walk.
@@ -636,10 +636,18 @@ export async function prepareHarnessTerminalHandoff(
   if (!runtime) throw new Error(`${command} was not found on Windows or in any WSL distribution`)
   if (runtime.target.kind === 'bundled') {
     throw new Error(
-      `${command} is bundled with CodeInOven — there is no CLI install to hand off to`
+      `${command} is bundled with CodeInOven   there is no CLI install to hand off to`
     )
   }
   if (runtime.target.kind === 'native') {
+    // node-pty cannot execute a `.cmd`/`.bat` shim directly (ConPTY needs a real
+    // executable image)   spawning one opens a blank terminal that never exits.
+    // Route those through the same PowerShell shim invocation the structured
+    // runner uses, so `pi update` & co. actually start on Windows.
+    if (commandRequiresShell(runtime.executable)) {
+      const shim = prepareNativeInvocation(runtime, args, buildProcessEnvironment())
+      return { command: shim.command, args: shim.args, runtime }
+    }
     return { command: runtime.executable, args, runtime }
   }
   return {
@@ -708,6 +716,22 @@ export async function probeHarnessRuntime(
   }
 }
 
+/** Non-zero exit from a bounded harness command, carrying the captured output. */
+export class HarnessCommandError extends Error {
+  /** undefined when the process could not report an exit code. */
+  readonly exitCode?: number
+  readonly stdout: string
+  readonly stderr: string
+
+  constructor(detail: string, exitCode: number | undefined, stdout: string, stderr: string) {
+    super(detail)
+    this.name = 'HarnessCommandError'
+    this.exitCode = exitCode
+    this.stdout = stdout
+    this.stderr = stderr
+  }
+}
+
 /** Run a finite harness command and collect bounded output. */
 export async function runHarnessCommand(
   command: string,
@@ -733,10 +757,10 @@ export async function runHarnessCommand(
   const stdout = decodeWslOutput(result.stdout)
   const stderr = decodeWslOutput(result.stderr)
   if (result.code !== 0) {
-    throw new Error(
+    const detail =
       (stderr || stdout).split(/\r?\n/u)[0]?.trim() ||
-        `${command} exited with code ${result.code ?? 'unknown'}`
-    )
+      `${command} exited with code ${result.code ?? 'unknown'}`
+    throw new HarnessCommandError(detail, result.code ?? undefined, stdout, stderr)
   }
   return { stdout, stderr }
 }

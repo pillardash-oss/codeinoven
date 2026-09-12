@@ -5,25 +5,25 @@
  *
  * Two listeners:
  *
- * - **HTTPS on 0.0.0.0:`port`** (LAN_PORT) — serves ONLY the installable phone
+ * - **HTTPS on 0.0.0.0:`port`** (LAN_PORT)   serves ONLY the installable phone
  *   PWA assets (allow-listed) over TLS with a self-signed certificate so the
  *   client is a secure context (service worker + install actually work), and
  *   accepts `wss` peer sessions. This is what phones open and connect to.
- * - **HTTP on 127.0.0.1:`localPort`** (LAN_LOCAL_PORT, loopback only) — accepts
+ * - **HTTP on 127.0.0.1:`localPort`** (LAN_LOCAL_PORT, loopback only)   accepts
  *   plain `ws` peer sessions for the Electron renderer's in-app Remote view; it
  *   serves no static files, so nothing is exposed to the LAN.
  *
  * Peer sessions use the same `PEER_SECRET_AUTH` HMAC handshake and AES-GCM
  * payload encryption as the renderer transport. Upgrades require
  * `Sec-WebSocket-Version: 13`, are origin-checked, and unauthenticated peers
- * are evicted after a timeout. Only one phone peer is live at a time — a
+ * are evicted after a timeout. Only one phone peer is live at a time   a
  * second peer is rejected (`session-live`), matching the takeover-rejection
  * semantics required by the spec.
  *
  * Asset serving: the PWA is a Vite code-split bundle, so its shared chunks
  * have hashed, unrelated names. At startup the gateway computes the exact set
  * of `/assets/...` files `remote.html` references (see `pwa-asset-graph.ts`)
- * and serves only that closure — never the desktop app's shell or entry.
+ * and serves only that closure   never the desktop app's shell or entry.
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
@@ -435,7 +435,7 @@ export class RemoteGateway {
    *
    * Every rebuild rewrites `remote.html` with freshly hashed chunk names, so a
    * closure captured at startup would 404 exactly the assets the newly served
-   * HTML asks for — the phone would load a blank page until the app restarted.
+   * HTML asks for   the phone would load a blank page until the app restarted.
    * Fingerprinting `remote.html` keeps the allow-list in step with whatever is
    * actually on disk.
    */
@@ -687,7 +687,7 @@ export class RemoteGateway {
     if (pathOnly === '/cert.pem') return 'no-store'
     if (this.immutableAssets.has(pathOnly)) return 'public, max-age=31536000, immutable'
     // Mutable shell/API endpoints and unhashed public assets (agent icons) are
-    // never cached as immutable — the service worker owns their lifecycle.
+    // never cached as immutable   the service worker owns their lifecycle.
     if (this.mutableAssets.has(pathOnly)) return 'no-store'
     return 'no-store'
   }
@@ -705,7 +705,7 @@ export class RemoteGateway {
     }
   }
 
-  /** Resolve a request path to a PWA asset — allow-list enforced. */
+  /** Resolve a request path to a PWA asset   allow-list enforced. */
   private resolvePwaPath(pathOnly: string): string | null {
     // The self-signed certificate is served so phones (iOS in particular) can
     // download and install it as a trust profile.
@@ -864,7 +864,7 @@ export class RemoteGateway {
    * - `strict` (LAN-exposed HTTPS listener): only same-host origins, plus the
    *   missing/`null` origins produced by non-browser clients.
    * - `local` (loopback-only listener for the desktop's own renderer): also
-   *   accepts same-machine origins — `file://` (production renderer loaded via
+   *   accepts same-machine origins   `file://` (production renderer loaded via
    *   `loadFile`) and `localhost`/`127.0.0.1`/`::1` (the Vite dev server).
    */
   private originAllowed(request: IncomingMessage, originPolicy: 'strict' | 'local'): boolean {

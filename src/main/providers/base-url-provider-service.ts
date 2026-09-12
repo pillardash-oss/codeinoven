@@ -4,6 +4,7 @@ import type {
   BaseUrlProviderModel,
   BaseUrlProviderUpdateRequest
 } from '../../lib/types'
+import { CODEINOVEN_CUSTOM_PROVIDER_PREFIX } from '../../lib/custom-provider-id'
 import {
   hasNativeProviderCatalog,
   NativeProviderConfigService
@@ -74,7 +75,13 @@ export class BaseUrlProviderService {
     return provider ? structuredClone(provider) : null
   }
 
-  /** Ids already used within a harness — native harnesses keep their own
+  /** Resolve a native provider key without returning it through renderer IPC. */
+  async readNativeApiKey(harnessId: string, id: string): Promise<string | undefined> {
+    if (!hasNativeProviderCatalog(harnessId)) return undefined
+    return this.nativeProviders.readApiKey(harnessId, id)
+  }
+
+  /** Ids already used within a harness   native harnesses keep their own
    *  catalog file, so those must be read live rather than from the store. */
   private async existingIdsFor(
     harnessId: string,
@@ -293,7 +300,7 @@ function slugifyProviderName(name: string): string {
 
 /** Appends `-2`, `-3`, … until the slug no longer collides within the harness. */
 function deriveProviderId(name: string, existingIds: ReadonlySet<string>): string {
-  const base = `cio-${slugifyProviderName(name)}`
+  const base = `${CODEINOVEN_CUSTOM_PROVIDER_PREFIX}${slugifyProviderName(name)}`
   if (!existingIds.has(base)) return base
   let suffix = 2
   while (existingIds.has(`${base}-${suffix}`)) suffix++
@@ -644,7 +651,7 @@ function parseDefaultThinkingLevel(value: unknown): BaseUrlProviderModel['defaul
 // ─── Primitives ──────────────────────────────────────────────────────────────
 
 /**
- * Ids are unique per harness, not globally — linking the same provider
+ * Ids are unique per harness, not globally   linking the same provider
  * across harnesses (multi-harness base URL providers) intentionally reuses
  * one id across several `harnessId` records.
  */

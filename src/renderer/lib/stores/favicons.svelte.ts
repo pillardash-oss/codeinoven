@@ -37,12 +37,13 @@ class FaviconState {
     return this.refreshKey
   }
 
-  /** Extract the hostname from a URL, or null when it is not an http(s) URL. */
+  /** Extract the `host:port` from a URL, or null when it is not an http(s) URL.
+   *  The port is kept so localhost dev servers resolve against their real port. */
   hostnameOf(url: string): string | null {
     try {
       const parsed = new URL(url)
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
-      return parsed.hostname.toLowerCase().replace(/\.$/u, '')
+      return parsed.host.toLowerCase().replace(/\.$/u, '')
     } catch {
       return null
     }

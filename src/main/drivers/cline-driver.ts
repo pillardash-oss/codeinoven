@@ -337,7 +337,7 @@ let clineAvailabilityCache: { checkedAt: number; available: boolean } | null = n
 /**
  * Whether the `cline` binary is present on the harness PATH. Fetching the
  * remote model catalog costs a network round-trip for every provider-catalog
- * refresh, so it is pointless when Cline is not installed — gate on the binary
+ * refresh, so it is pointless when Cline is not installed   gate on the binary
  * instead and fall back to the static catalog. The probe result is cached for
  * a short window so rapid refreshes do not repeat filesystem resolution.
  */
@@ -632,7 +632,7 @@ function mapClineContentEvent(
     const events: SessionAgentEvent[] = [
       { type: 'message.part.updated', sessionId: context.sessionId, part }
     ]
-    // Cline's headless `ask_question` executor never blocks on stdin — it
+    // Cline's headless `ask_question` executor never blocks on stdin   it
     // resolves immediately with the first option (`Promise.resolve(F[0])`).
     // Promote the call into the shared interaction stream so the chat engine
     // can pause the turn here and resume it with the user's answers; the
@@ -1022,7 +1022,7 @@ export class ClineDriver extends PersistentCliDriver {
     }
 
     // Do not pay a network round-trip for Cline's remote catalog when the
-    // harness is not installed — return the static fallback instead.
+    // harness is not installed   return the static fallback instead.
     if (!(await isClineAvailable())) {
       return appendCustom(cloneCatalogs(CLINE_FALLBACK_CATALOG))
     }
@@ -1106,18 +1106,10 @@ export class ClineDriver extends PersistentCliDriver {
     }
 
     if (Object.keys(mcpServers).length === 0) return {}
-    const customProvider = await this.resolveCustomProvider(request.providerId)
-    if (!customProvider) {
-      // Cline stores its account access and refresh tokens inside the active
-      // data directory. Pointing an authenticated Cline/ClinePass turn at an
-      // ephemeral utility directory hides those tokens and makes every request
-      // fail as unauthorized. Cline has no per-turn MCP config flag, so keep the
-      // user's real profile authoritative and do not advertise an unreachable
-      // gateway. App-owned custom providers remain isolated below.
-      return { gatewayAvailable: false }
-    }
+    // Override only MCP settings; moving the data directory hides the user's
+    // account access and refresh tokens. Each launch gets its own MCP config.
     return {
-      args: ['--data-dir', '{{runtime-directory}}/config/cline-data'],
+      env: { CLINE_MCP_SETTINGS_PATH: '{{config:cline-mcp}}' },
       configFiles: [
         {
           id: 'cline-mcp',
@@ -1382,7 +1374,7 @@ export class ClineDriver extends PersistentCliDriver {
             handled.add(entry)
           } catch {
             // Cline may still be streaming the request file (or the JSON is
-            // malformed) — leave the request in place so the next sweep can
+            // malformed)   leave the request in place so the next sweep can
             // revisit it instead of silently denying the tool.
             Logger.dev('Cline approval request could not be evaluated yet:', {
               projectPath,
@@ -1516,7 +1508,7 @@ export class ClineDriver extends PersistentCliDriver {
     try {
       // The gated run was stopped at the question boundary. Await the process
       // settlement so resuming never collides with the still-active turn
-      // ("A turn is already active") — same teardown contract steerPrompt
+      // ("A turn is already active")   same teardown contract steerPrompt
       // relies on.
       await this.settleActiveProcess(sessionId)
       // Drop the stopped turn's state only after settlement; `sendPrompt`

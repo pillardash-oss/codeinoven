@@ -6,7 +6,7 @@ import { cp, lstat, readFile, writeFile, mkdir, rename, rm, stat } from 'fs/prom
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../lib/native-skill-paths'
@@ -970,7 +970,7 @@ function requireVersion(value: unknown): number {
 
 function validateAgentModelSelection(value: unknown, label: string): AgentModelSelection {
   if (!isRecord(value)) throw new TypeError(`${label} must be an object`)
-  const fields = new Set(['harnessId', 'providerId', 'modelId', 'thinkingLevel'])
+  const fields = new Set(['harnessId', 'providerId', 'modelId', 'accountId', 'thinkingLevel'])
   for (const field of Object.keys(value)) {
     if (!fields.has(field)) throw new TypeError(`Unsupported ${label} field: ${field}`)
   }
@@ -986,6 +986,9 @@ function validateAgentModelSelection(value: unknown, label: string): AgentModelS
     harnessId: requireString(value.harnessId, `${label} harness ID`),
     providerId: requireString(value.providerId, `${label} provider ID`),
     modelId: requireString(value.modelId, `${label} model ID`),
+    ...(value.accountId === undefined
+      ? {}
+      : { accountId: requireString(value.accountId, `${label} account ID`) }),
     ...(thinkingLevel === undefined
       ? {}
       : { thinkingLevel: thinkingLevel as AgentModelSelection['thinkingLevel'] })
@@ -1053,6 +1056,9 @@ function validateAssignmentModel(
     harnessId: requireString(value.harnessId, `${label} harness ID`),
     providerId: requireString(value.providerId, `${label} provider ID`),
     modelId: requireString(value.modelId, `${label} model ID`),
+    ...(value.accountId === undefined
+      ? {}
+      : { accountId: requireString(value.accountId, `${label} account ID`) }),
     thinkingLevel: thinkingLevel as AssignmentModelSelection['thinkingLevel']
   }
 }
@@ -1954,6 +1960,9 @@ function validateCloudDeploymentContainer(value: unknown, index: number): CloudD
       `Cloud deployment container ${index} provider kind`
     ),
     status: validateCloudDeploymentStatus(value.status, `Cloud deployment container ${index}`),
+    ...(typeof value.accountId === 'string'
+      ? { accountId: requireString(value.accountId, `Cloud deployment container ${index} account ID`, true) }
+      : {}),
     ...(typeof value.url === 'string' ? { url: value.url } : {}),
     ...(value.createdAt === undefined
       ? {}
@@ -2131,6 +2140,10 @@ function mergeCloudDeploymentContainers(
       id: mapping.id,
       label: mapping.label,
       providerKind: kind,
+      // The mapping's account binding is authoritative: a container monitored
+      // through a specific account stays bound to it even when another account
+      // also reports the same container id.
+      ...(mapping.accountId === undefined ? {} : { accountId: mapping.accountId }),
       status: live.status,
       ...(live.url === undefined ? {} : { url: live.url }),
       ...(live.project === undefined ? {} : { project: live.project }),
@@ -2190,7 +2203,7 @@ function validateHeartbeatTimes(value: unknown): string[] {
 }
 
 /**
- * Heartbeat thinking levels are optional — not every model supports thinking.
+ * Heartbeat thinking levels are optional   not every model supports thinking.
  * Absent, null, or unrecognized levels (including driver-specific preset ids
  * outside the standard set) simply omit the level instead of failing the save;
  * the driver then applies its own default for the selected model.
@@ -2211,6 +2224,9 @@ function validateHeartbeatCreateInput(value: unknown): Omit<HeartbeatConfig, 'id
     harnessId: validateBoundedString(input.harnessId, 'Heartbeat harness ID', 1, 100),
     providerId: validateBoundedString(input.providerId, 'Heartbeat provider ID', 1, 100),
     modelId: validateBoundedString(input.modelId, 'Heartbeat model ID', 1, 200),
+    ...(input.accountId === undefined
+      ? {}
+      : { accountId: validateEntityId(input.accountId, 'Heartbeat account ID', 256) }),
     thinkingLevel: validateHeartbeatThinkingLevel(input.thinkingLevel),
     times: validateHeartbeatTimes(input.times),
     enabled: typeof input.enabled === 'boolean' ? input.enabled : true
@@ -2231,6 +2247,9 @@ function validateHeartbeatPatchInput(value: unknown): Partial<Omit<HeartbeatConf
   }
   if (input.modelId !== undefined) {
     patch.modelId = validateBoundedString(input.modelId, 'Heartbeat model ID', 1, 200)
+  }
+  if (input.accountId !== undefined) {
+    patch.accountId = validateEntityId(input.accountId, 'Heartbeat account ID', 256)
   }
   if (input.thinkingLevel !== undefined) {
     patch.thinkingLevel = validateHeartbeatThinkingLevel(input.thinkingLevel)
@@ -2491,7 +2510,7 @@ export function registerIpcHandlers(
           .map((project) => project.path)
           .filter((path): path is string => typeof path === 'string' && path.length > 0)
         // Healthy managed worktrees live beneath the config root and are added
-        // individually — never by approving the whole config directory.
+        // individually   never by approving the whole config directory.
         for (const project of projects) {
           const board = scopeManager.getBoard(project.id)
           for (const bucket of board.buckets) {
@@ -2772,6 +2791,12 @@ export function registerIpcHandlers(
     if (!scheduler) throw new Error('Heartbeat scheduler is not available')
     const safeId = validateBoundedString(id, 'Heartbeat ID', 1, 200)
     return scheduler.update(safeId, validateHeartbeatPatchInput(patch))
+  })
+  ipcMain.handle('heartbeat:trigger', async (_, id: unknown) => {
+    const scheduler = options.heartbeatScheduler
+    if (!scheduler) throw new Error('Heartbeat scheduler is not available')
+    const safeId = validateBoundedString(id, 'Heartbeat ID', 1, 200)
+    await scheduler.trigger(safeId)
   })
   ipcMain.handle('heartbeat:delete', async (_, id: unknown) => {
     const scheduler = options.heartbeatScheduler
@@ -4501,7 +4526,7 @@ export function registerIpcHandlers(
     return false
   })
 
-  // Read a file from disk and return it as a data URL — used for local previews
+  // Read a file from disk and return it as a data URL   used for local previews
   // without persisting anything to project storage. Only scoped paths are read.
   const MIME_MAP: Record<string, string> = {
     '.png': 'image/png',
@@ -4517,6 +4542,109 @@ export function registerIpcHandlers(
   // Read a local file into bytes for renderer-side media previews. The preload
   // no longer reads files directly; it delegates here so the path can be
   // constrained to registered project, config-root, or user-selected scopes.
+  // Read a pasted-file source for the Sound Playground's read-aloud section:
+  // plain text files directly, and rich documents (PDF, Word, PowerPoint, Excel,
+  // OpenDocument, RTF, EPUB) through the `@firecrawl/anydoc` Rust library  
+  // fully local, no network, OCR never invoked. Only scoped paths (e.g. a file
+  // the user just picked from the system dialog) are read.
+  // Text is capped below the prepared-playback text limit.
+  const PLAYGROUND_TEXT_EXTENSIONS = new Set([
+    'txt',
+    'md',
+    'markdown',
+    'log',
+    'json',
+    'jsonc',
+    'csv',
+    'tsv',
+    'yml',
+    'yaml',
+    'toml',
+    'xml',
+    'html',
+    'htm',
+    'css',
+    'js',
+    'jsx',
+    'mjs',
+    'cjs',
+    'ts',
+    'tsx',
+    'py',
+    'sh',
+    'sql',
+    'srt',
+    'vtt'
+  ])
+  const PLAYGROUND_DOCUMENT_EXTENSIONS = new Set([
+    'pdf',
+    'docx',
+    'doc',
+    'odt',
+    'rtf',
+    'epub',
+    'pptx',
+    'xlsx',
+    'xls',
+    'ods'
+  ])
+  const MAX_PLAYGROUND_TEXT_CHARS = 900_000
+  privileged('speech:playgroundReadText', async (_event, rawPath: unknown) => {
+    try {
+      if (typeof rawPath !== 'string' || rawPath.length === 0 || rawPath.length > 4_096) {
+        throw new RangeError('The file path is invalid.')
+      }
+      const safePath = await privilegedIpc.resolveScopedPath(rawPath)
+      const extension = extname(safePath).toLowerCase().replace(/^\./u, '')
+      const fileName = basename(safePath)
+      let text: string
+      if (PLAYGROUND_DOCUMENT_EXTENSIONS.has(extension)) {
+        const bytes = await readFile(safePath)
+        const { toMarkdownBytes, formatFromExtension } = await import('@firecrawl/anydoc')
+        const format = formatFromExtension(extension)
+        try {
+          text = await toMarkdownBytes(bytes, format)
+        } catch (parseError) {
+          if (
+            extension === 'pdf' &&
+            parseError instanceof Error &&
+            parseError.message.includes('NeedsOcr')
+          ) {
+            throw new RangeError(
+              'This PDF appears to be scanned   no local OCR is performed in the playground.',
+              { cause: parseError }
+            )
+          }
+          throw parseError
+        }
+        // Strip Markdown emphasis/heading markup so the TTS voice does not
+        // read out syntax characters from the converted document.
+        text = text
+          .replace(/^#{1,6}\s+/gmu, '')
+          .replace(/[*_~`]+/gu, '')
+          .replace(/\[([^\]]*)\]\([^)]*\)/gu, '$1')
+          .replace(/<[^>]+>/gu, '')
+      } else {
+        if (!PLAYGROUND_TEXT_EXTENSIONS.has(extension)) {
+          throw new RangeError(`Unsupported file type ".${extension}".`)
+        }
+        text = await readFile(safePath, 'utf8')
+      }
+      text = text.replace(/\r\n?/gu, '\n').trimEnd()
+      if (text.trim().length === 0) throw new RangeError('The file contains no readable text.')
+      let truncated = false
+      if (text.length > MAX_PLAYGROUND_TEXT_CHARS) {
+        text = text.slice(0, MAX_PLAYGROUND_TEXT_CHARS)
+        truncated = true
+      }
+      return { text, fileName, truncated }
+    } catch (error) {
+      if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
+      Logger.error('speech:playgroundReadText rejected path:', error)
+      return null
+    }
+  })
+
   privileged('file:read', async (_event, filePath: unknown) => {
     try {
       const safePath = await privilegedIpc.resolveScopedPath(filePath)
@@ -4718,7 +4846,7 @@ export function registerIpcHandlers(
         'code' in error &&
         (error as NodeJS.ErrnoException).code === 'ENOENT'
       ) {
-        // Destination does not exist — git clone will create it
+        // Destination does not exist   git clone will create it
       } else {
         throw error
       }
@@ -4904,44 +5032,83 @@ export function registerIpcHandlers(
       return project
     }
   )
-  ipcMain.handle('project:delete', async (_, projectId: string) => {
-    // Never orphan a registered managed worktree silently: refuse deletion
-    // until every managed association in this project is detached/removed
-    // through the guarded lifecycle (dirty and unpushed work is protected).
-    const board = scopeManager.getBoard(projectId)
-    const managedBuckets = board.buckets.filter((bucket) => bucket.root.kind === 'worktree')
-    if (managedBuckets.length > 0) {
-      throw new Error(
-        `Cannot delete the project while ${managedBuckets.length} managed worktree scope(s) exist; remove them first`
-      )
-    }
-    // Delete every thread through the same path as `thread:delete` (session
-    // teardown, DB row cleanup for FK-less tables, disk artifact removal) so
-    // project deletion can never fall behind that logic or leave orphans.
-    await threadManager.deleteAllThreadsInProject(projectId)
-    await projectManager.deleteProject(projectId)
-    projectFilesService.disposeProject(projectId)
-    // Remove app-owned scratch data keyed by this project id (spec-context
-    // attachments, any leftover per-thread directories) that isn't tied to
-    // an individual thread and so isn't covered by the per-thread cleanup
-    // above. Best-effort: the DB rows are already gone either way.
-    await rm(join(getConfigRoot(), 'projects', projectId), { recursive: true, force: true }).catch(
-      () => {}
-    )
-    // Mass deletion just freed potentially thousands of pages. Reclaim the
-    // file space off-main via the maintenance worker — this also converts
-    // pre-existing databases to `auto_vacuum = INCREMENTAL` so future
-    // incremental vacuums work. Fire-and-forget: the IPC result must not wait
-    // on an O(database-size) operation, and a concurrent WAL transaction may
-    // make VACUUM fail (fine to retry next time).
-    void database.fullVacuum().then((result) => {
-      if (result.ok && (result.freedPages ?? 0) > 0) {
-        Logger.info(`Vacuum after project deletion reclaimed ${result.freedPages} pages`)
-      } else if (!result.ok) {
-        Logger.dev(`Post-deletion vacuum skipped/failed: ${result.error}`)
+  ipcMain.handle(
+    'project:delete',
+    async (_, projectId: string, options?: { deleteFolder?: boolean }) => {
+      // Optional folder erasure runs FIRST and gates the CodeInOven-side
+      // removal: if the filesystem delete fails, nothing below executes and
+      // the project stays fully intact in CodeInOven (the renderer restores
+      // it). Only after the folder is gone does the app data removal begin.
+      if (options?.deleteFolder === true) {
+        const project = await projectManager.getProject(projectId)
+        if (!project?.path || !isAbsolute(project.path)) {
+          throw new Error('This project has no local folder on disk to delete')
+        }
+        const target = resolve(project.path)
+        const homeDir = resolve(app.getPath('home'))
+        const configRoot = resolve(getConfigRoot())
+        const managedClonesRoot = resolve(join(configRoot, 'projects-gh'))
+        const isInside = (child: string, parent: string): boolean => child.startsWith(parent + sep)
+        // Refuse obviously dangerous targets: the filesystem root, the home
+        // directory (or any ancestor of it), and anything inside the app
+        // config root. This makes an accidental catastrophic rm impossible.
+        // The one exception is a project folder strictly inside the managed
+        // `projects-gh/` clones directory: those clones are app-owned project
+        // folders the user registered, so erasing one on removal is legitimate
+        // (the clones root itself stays protected so sibling clones survive).
+        const isManagedClone = isInside(target, managedClonesRoot)
+        if (
+          target === sep ||
+          target === homeDir ||
+          isInside(homeDir, target) ||
+          target === configRoot ||
+          (isInside(target, configRoot) && !isManagedClone)
+        ) {
+          throw new Error('Refusing to delete a protected directory')
+        }
+        // `force` treats an already-missing folder as deleted; real failures
+        // (permissions, path is a file, ...) still throw and abort below.
+        await rm(target, { recursive: true, force: true })
       }
-    })
-  })
+      // Never orphan a registered managed worktree silently: refuse deletion
+      // until every managed association in this project is detached/removed
+      // through the guarded lifecycle (dirty and unpushed work is protected).
+      const board = scopeManager.getBoard(projectId)
+      const managedBuckets = board.buckets.filter((bucket) => bucket.root.kind === 'worktree')
+      if (managedBuckets.length > 0) {
+        throw new Error(
+          `Cannot delete the project while ${managedBuckets.length} managed worktree scope(s) exist; remove them first`
+        )
+      }
+      // Delete every thread through the same path as `thread:delete` (session
+      // teardown, DB row cleanup for FK-less tables, disk artifact removal) so
+      // project deletion can never fall behind that logic or leave orphans.
+      await threadManager.deleteAllThreadsInProject(projectId)
+      await projectManager.deleteProject(projectId)
+      projectFilesService.disposeProject(projectId)
+      // Remove app-owned scratch data keyed by this project id (spec-context
+      // attachments, any leftover per-thread directories) that isn't tied to
+      // an individual thread and so isn't covered by the per-thread cleanup
+      // above. Best-effort: the DB rows are already gone either way.
+      await rm(join(getConfigRoot(), 'projects', projectId), {
+        recursive: true,
+        force: true
+      }).catch(() => {})
+      // Mass deletion just freed potentially thousands of pages. Reclaim the
+      // file space off-main via the maintenance worker   this also converts
+      // pre-existing databases to `auto_vacuum = INCREMENTAL` so future
+      // incremental vacuums work. Fire-and-forget: the IPC result must not wait
+      // on an O(database-size) operation, and a concurrent WAL transaction may
+      // make VACUUM fail (fine to retry next time).
+      void database.fullVacuum().then((result) => {
+        if (result.ok && (result.freedPages ?? 0) > 0) {
+          Logger.info(`Vacuum after project deletion reclaimed ${result.freedPages} pages`)
+        } else if (!result.ok) {
+          Logger.dev(`Post-deletion vacuum skipped/failed: ${result.error}`)
+        }
+      })
+    }
+  )
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:getIcon', (_, projectId: string) =>
       projectManager.getIconDataUrl(projectId)
@@ -5095,7 +5262,9 @@ export function registerIpcHandlers(
         return await projectFilesService.readText(
           validateEntityId(projectId, 'Project ID'),
           requireString(relativePath, 'Project file path'),
-          scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
         )
       } catch {
         return null
@@ -5210,21 +5379,25 @@ export function registerIpcHandlers(
       if (!/^[a-f0-9]{64}$/u.test(revision)) {
         throw new TypeError('Project file revision must be a SHA-256 digest')
       }
-      return projectFilesService.writeText(
-        validateEntityId(projectId, 'Project ID'),
-        requireString(relativePath, 'Project file path'),
-        requireString(content, 'Project file content', true),
-        revision,
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
-      ).then((result) => {
-        // The user saved this file themselves — record it so a concurrent
-        // agent turn's file-changes card never claims their edit.
-        chatEngine?.recordUserFileSave(
+      return projectFilesService
+        .writeText(
           validateEntityId(projectId, 'Project ID'),
-          requireString(relativePath, 'Project file path')
+          requireString(relativePath, 'Project file path'),
+          requireString(content, 'Project file content', true),
+          revision,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
         )
-        return result
-      })
+        .then((result) => {
+          // The user saved this file themselves   record it so a concurrent
+          // agent turn's file-changes card never claims their edit.
+          chatEngine?.recordUserFileSave(
+            validateEntityId(projectId, 'Project ID'),
+            requireString(relativePath, 'Project file path')
+          )
+          return result
+        })
     }
   )
   ipcMain.handle(
@@ -6152,7 +6325,7 @@ export function registerIpcHandlers(
         base: safeBase,
         head: safeHead
       }
-      // Warn when an open PR already exists for this exact head→base pair —
+      // Warn when an open PR already exists for this exact head→base pair  
       // GitHub would reject a duplicate creation with a 422. The lookup is
       // advisory and never allowed to block the compare itself.
       let existing = null
@@ -6273,7 +6446,7 @@ export function registerIpcHandlers(
     async (_, projectId: unknown, owner: unknown, repo: unknown, state: unknown, page: unknown) => {
       const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
       const safePage = validatePrPage(page)
-      // An unauthenticated page is NOT an empty page — the renderer must be
+      // An unauthenticated page is NOT an empty page   the renderer must be
       // able to tell "no open PRs" from "GitHub isn't connected yet", or the
       // header conflict indicator would treat a cold start as zero conflicts.
       if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
@@ -6294,7 +6467,7 @@ export function registerIpcHandlers(
             accessError: GITHUB_REPOSITORY_ACCESS_MESSAGE
           }
         }
-        // An unreachable GitHub is a transient state, not a broken feature —
+        // An unreachable GitHub is a transient state, not a broken feature  
         // degrade to an offline page so the renderer keeps its last known data.
         if (isNetworkError(error)) {
           return { items: [], page: safePage, hasMore: false, accessError: GITHUB_OFFLINE_MESSAGE }
@@ -6328,7 +6501,7 @@ export function registerIpcHandlers(
         }
         throw error
       }
-      // The repo either deploys or it doesn't — persist that fact so the
+      // The repo either deploys or it doesn't   persist that fact so the
       // Deployments tab only ever appears when there is something to show.
       const hasDeployments = overview.deployments.length > 0 || overview.workflowRuns.length > 0
       if (hasDeployments) {
@@ -6695,13 +6868,30 @@ export function registerIpcHandlers(
     }
   )
 
+  /**
+   * Resolve the provider credential context for one project + provider kind.
+   * When `accountId` is given it must be one of the project's attached accounts
+   * for that kind (per-container account binding, so a second account of the
+   * same kind keeps working independently of the active-account switch);
+   * otherwise the project's active account for the kind is used.
+   */
   const resolveDeploymentContext = async (
     projectId: string,
-    kind: CloudDeploymentProviderKind
+    kind: CloudDeploymentProviderKind,
+    accountId?: string
   ): Promise<DeploymentProviderContext> => {
     const config = await storage.getCloudDeploymentConfig(projectId)
     const association = config?.project.providerAccounts?.[kind]
-    const activeAccountId = association?.activeAccountId ?? null
+    const explicitAccountId = accountId ?? null
+    if (
+      explicitAccountId !== null &&
+      !(association?.attachedAccountIds ?? []).includes(explicitAccountId)
+    ) {
+      throw new TypeError(
+        `Cloud deployment account is not attached to this project for ${kind}`
+      )
+    }
+    const activeAccountId = explicitAccountId ?? (association?.activeAccountId ?? null)
     const registry = activeAccountId === null ? null : await storage.getCloudDeploymentAccounts()
     const activeAccount =
       activeAccountId === null
@@ -6724,40 +6914,94 @@ export function registerIpcHandlers(
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const kind = validateCloudDeploymentProviderKind(providerKind)
     const hasDeployments = await storage.hasCloudDeployments(safeProjectId)
-    try {
-      const provider = resolveDeploymentProvider(
-        kind,
-        await resolveDeploymentContext(safeProjectId, kind)
-      )
-      const [liveContainers, config] = await Promise.all([
-        provider.listContainers(),
-        loadOrCreateCloudDeploymentConfig(safeProjectId)
-      ])
-      const containers = mergeCloudDeploymentContainers(
-        liveContainers,
-        config.project.containers,
-        kind
-      )
-      return { containers, fetchedAt: Date.now(), hasDeployments }
-    } catch (error) {
-      return {
-        containers: [],
-        fetchedAt: Date.now(),
-        hasDeployments,
-        accessError: error instanceof Error ? error.message : 'Provider request failed'
+    const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
+    // Every attached account for this kind contributes containers (active
+    // first), so a second account of the same kind is monitored alongside the
+    // first instead of being hidden behind the active-account switch.
+    const association = config.project.providerAccounts?.[kind]
+    const activeAccountId = association?.activeAccountId ?? null
+    const attachedAccountIds = association?.attachedAccountIds ?? []
+    const orderedAccountIds = [
+      ...(activeAccountId !== null ? [activeAccountId] : []),
+      ...attachedAccountIds.filter((accountId) => accountId !== activeAccountId)
+    ]
+    const registry = await storage.getCloudDeploymentAccounts()
+    const accountLabel = (accountId: string): string =>
+      registry.accounts.find((account) => account.id === accountId)?.label ?? accountId
+
+    if (orderedAccountIds.length === 0) {
+      // Legacy shape: the kind is selected but no account association exists;
+      // resolve through the single active-account path (its error surfaces).
+      try {
+        const provider = resolveDeploymentProvider(
+          kind,
+          await resolveDeploymentContext(safeProjectId, kind)
+        )
+        const liveContainers = await provider.listContainers()
+        return {
+          containers: mergeCloudDeploymentContainers(
+            liveContainers,
+            config.project.containers,
+            kind
+          ),
+          fetchedAt: Date.now(),
+          hasDeployments
+        }
+      } catch (error) {
+        return {
+          containers: [],
+          fetchedAt: Date.now(),
+          hasDeployments,
+          accessError: error instanceof Error ? error.message : 'Provider request failed'
+        }
       }
+    }
+
+    const liveContainers: CloudDeploymentContainer[] = []
+    const failures: string[] = []
+    await Promise.all(
+      orderedAccountIds.map(async (accountId) => {
+        try {
+          const provider = resolveDeploymentProvider(
+            kind,
+            await resolveDeploymentContext(safeProjectId, kind, accountId)
+          )
+          const containers = await provider.listContainers()
+          liveContainers.push(
+            ...containers.map((container) => ({ ...container, accountId }))
+          )
+        } catch (error) {
+          const label = accountLabel(accountId)
+          failures.push(
+            `${label}: ${error instanceof Error ? error.message : 'Provider request failed'}`
+          )
+        }
+      })
+    )
+    const containers = mergeCloudDeploymentContainers(
+      liveContainers,
+      config.project.containers,
+      kind
+    )
+    return {
+      containers,
+      fetchedAt: Date.now(),
+      hasDeployments,
+      ...(failures.length > 0 ? { accessError: failures.join(' · ') } : {})
     }
   })
 
   ipcMain.handle(
     'cloudDeploy:availableContainers',
-    async (_, projectId: unknown, providerKind: unknown) => {
+    async (_, projectId: unknown, providerKind: unknown, accountId?: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeAccountId =
+        accountId === undefined ? undefined : requireString(accountId, 'Account ID', true)
       try {
         const provider = resolveDeploymentProvider(
           kind,
-          await resolveDeploymentContext(safeProjectId, kind)
+          await resolveDeploymentContext(safeProjectId, kind, safeAccountId)
         )
         return await provider.listContainers()
       } catch (error) {
@@ -6770,13 +7014,21 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     'cloudDeploy:containerStatus',
-    async (_, projectId: unknown, providerKind: unknown, containerId: unknown) => {
+    async (
+      _,
+      projectId: unknown,
+      providerKind: unknown,
+      containerId: unknown,
+      accountId?: unknown
+    ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
       const safeContainerId = requireString(containerId, 'Container ID')
+      const safeAccountId =
+        accountId === undefined ? undefined : requireString(accountId, 'Account ID', true)
       const provider = resolveDeploymentProvider(
         kind,
-        await resolveDeploymentContext(safeProjectId, kind)
+        await resolveDeploymentContext(safeProjectId, kind, safeAccountId)
       )
       return provider.getStatus(safeContainerId)
     }
@@ -6789,16 +7041,19 @@ export function registerIpcHandlers(
       projectId: unknown,
       providerKind: unknown,
       containerId: unknown,
-      deploymentId?: unknown
+      deploymentId?: unknown,
+      accountId?: unknown
     ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
       const safeContainerId = requireString(containerId, 'Container ID')
       const safeDeploymentId =
         deploymentId === undefined ? undefined : requireString(deploymentId, 'Deployment ID')
+      const safeAccountId =
+        accountId === undefined ? undefined : requireString(accountId, 'Account ID', true)
       const provider = resolveDeploymentProvider(
         kind,
-        await resolveDeploymentContext(safeProjectId, kind)
+        await resolveDeploymentContext(safeProjectId, kind, safeAccountId)
       )
       const log = await provider.getLogs(safeContainerId, safeDeploymentId)
       return { containerId: safeContainerId, deploymentId: safeDeploymentId ?? null, log }
@@ -6807,13 +7062,21 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     'cloudDeploy:deployments',
-    async (_, projectId: unknown, providerKind: unknown, containerId: unknown) => {
+    async (
+      _,
+      projectId: unknown,
+      providerKind: unknown,
+      containerId: unknown,
+      accountId?: unknown
+    ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
       const safeContainerId = requireString(containerId, 'Container ID')
+      const safeAccountId =
+        accountId === undefined ? undefined : requireString(accountId, 'Account ID', true)
       const provider = resolveDeploymentProvider(
         kind,
-        await resolveDeploymentContext(safeProjectId, kind)
+        await resolveDeploymentContext(safeProjectId, kind, safeAccountId)
       )
       return provider.listDeployments(safeContainerId)
     }
@@ -6908,7 +7171,7 @@ export function registerIpcHandlers(
       const [content, stats] = await Promise.all([readFile(reportPath, 'utf-8'), stat(reportPath)])
       return { path: reportPath, content, updatedAt: stats.mtimeMs, threadId }
     } catch {
-      // No report yet — the agent hasn't finished (or hasn't been asked).
+      // No report yet   the agent hasn't finished (or hasn't been asked).
       return { path: reportPath, content: '', updatedAt: null, threadId }
     }
   })
@@ -7314,7 +7577,7 @@ export function registerIpcHandlers(
     // detection finalize in the background. Only the send path awaits
     // `threadCreation.awaitReady`, so a message sent in this window renders
     // instantly and is queued behind the finalization before reaching the
-    // harness — thread creation never waits on the database, and neither does
+    // harness   thread creation never waits on the database, and neither does
     // typing, reading, or switching threads.
     const { thread, finalize } = threadManager.prepareCreateThread(validated, {
       onEvictionError: (error) =>
@@ -7327,7 +7590,7 @@ export function registerIpcHandlers(
       thread.id,
       async () => {
         await finalize()
-        // Broadcast immediately so the new thread opens instantly — the git
+        // Broadcast immediately so the new thread opens instantly   the git
         // branch settles through a detached task below and arrives via a later
         // broadcast, never blocking typing, voice, or "Loading conversation...".
         broadcastThreadUpdate(thread)
@@ -7352,7 +7615,7 @@ export function registerIpcHandlers(
     // on the initial paint path. Wait only when this exact thread is still
     // being finalized so background hydration never races durable ownership.
     // A thread whose creation-time settle never completed (restart or a
-    // transient git failure) heals lazily on its next open — off this read's
+    // transient git failure) heals lazily on its next open   off this read's
     // critical path, deduped while in flight.
     ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
       const ids = await waitForThreadReady(projectId, threadId)
@@ -7423,7 +7686,7 @@ export function registerIpcHandlers(
     return threadManager.searchThreads(safeQuery, safeOptions)
   })
   if (!options.hydrationHandlersRegistered) {
-    // Mirror-only transcript reads — fast disk access, never touches a harness
+    // Mirror-only transcript reads   fast disk access, never touches a harness
     // driver. Hydration registers these before the renderer's first document
     // so a conversation page never waits for optional feature services.
     ipcMain.handle(
@@ -7727,7 +7990,6 @@ export function registerIpcHandlers(
         targetProjectId === undefined
           ? undefined
           : validateEntityId(targetProjectId, 'Target project ID')
-      await chatEngine?.loadMessages(safeProjectId, safeThreadId)
       const forked = await threadManager.forkThread(
         safeProjectId,
         safeThreadId,

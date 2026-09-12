@@ -51,9 +51,14 @@
     return { provider, model }
   })
 
-  function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
+  function chooseModel(
+    providerId: string,
+    modelId: string,
+    nextHarnessId?: string,
+    accountId?: string
+  ): void {
     const harnessId = nextHarnessId ?? settings.harnessId
-    onModelChange({ ...settings, harnessId, providerId, modelId })
+    onModelChange({ ...settings, harnessId, accountId, providerId, modelId })
   }
 
   function chooseThinking(level: ThinkingLevel): void {
@@ -66,7 +71,7 @@
     <div class="rounded-lg bg-primary/10 p-2 text-primary"><ShieldCheck size={18} /></div>
     <div class="min-w-0 flex-1">
       <h3 class="text-sm font-semibold">
-        {reworkCycle ? `Rework ${reworkCycle} complete — audit again` : 'Implementation finished'}
+        {reworkCycle ? `Rework ${reworkCycle} complete   audit again` : 'Implementation finished'}
       </h3>
       <p class="mt-1 text-xs text-muted">
         {reworkCycle ? 'Verify the completed corrections for' : 'Audit'} “{threadTitle}” with
@@ -93,6 +98,7 @@
         harnessId={settings.harnessId}
         providerId={settings.providerId}
         modelId={settings.modelId}
+        accountId={settings.accountId}
         {favoriteModels}
         {recentModels}
         {onRemoveRecent}

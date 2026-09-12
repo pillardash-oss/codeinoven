@@ -412,7 +412,7 @@
         }
       }
       if (deleteBucketTarget.root.kind === 'worktree' && scopeState.activeProjectId) {
-        // Full cleanup for worktree-backed scopes — the worktree and its branch
+        // Full cleanup for worktree-backed scopes   the worktree and its branch
         // are removed through the guarded lifecycle. The token is minted here
         // (fresh) rather than reusing the dialog's display preflight, so it can
         // never be stale by the time the user confirms.

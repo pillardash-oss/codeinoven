@@ -10,6 +10,9 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import type { ScopeProject } from '$lib/stores/scope.svelte'
+  import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 
   interface Props {
     open: boolean
@@ -32,10 +35,15 @@
     /** Render the header icon inside a colored badge to signal a switched mode. */
     headerIconBadge?: boolean
     headerIconBadgeClass?: string
-    /** Results are already filtered/ranked by the server — skip the client re-filter. */
+    /** Results are already filtered/ranked by the server   skip the client re-filter. */
     serverFiltered?: boolean
     /** Render a < Back button in the footer to return to a previous surface. */
     onBack?: () => void
+    /** When provided, the footer shows a project scope picker (empty selection = all projects). */
+    projects?: readonly ScopeProject[]
+    /** Currently scoped project ids; an empty array means all projects. */
+    selectedProjectIds?: readonly string[]
+    onSelectedProjectsChange?: (projectIds: string[]) => void
   }
 
   let {
@@ -57,8 +65,24 @@
     headerIconBadge = false,
     headerIconBadgeClass = '',
     serverFiltered = false,
-    onBack
+    onBack,
+    projects,
+    selectedProjectIds = [],
+    onSelectedProjectsChange
   }: Props = $props()
+
+  // The dialog-mode palette draws a full-window backdrop (fixed inset-0), and
+  // the browser's native view floats above every DOM surface (see
+  // ContextSidebarState.setFullscreenSurfaceActive), so the view must be
+  // suppressed while the palette is open: the same treatment every Modal
+  // gets. Keyed per instance so stacked palettes don't clear each other's
+  // suppression. Inline mode stays inside the composer column and never
+  // overlaps the sidebar, so it does not suppress.
+  const suppressionKey = `command-palette-${Math.random().toString(36).slice(2)}`
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive(suppressionKey, open && mode === 'dialog')
+    return () => contextSidebarState.setFullscreenSurfaceActive(suppressionKey, false)
+  })
 
   let query = $state('')
   let selectedActionId = $state('')
@@ -100,7 +124,7 @@
       onClose()
       return
     }
-    // Alt/Opt+ArrowLeft — go back to the previous surface (e.g. the main Cmd+K).
+    // Alt/Opt+ArrowLeft   go back to the previous surface (e.g. the main Cmd+K).
     // Only the LEFT Alt/Opt key triggers this: right-Option sits next to the arrow
     // keys on many keyboards, and Option+ArrowLeft is word-jump while editing the
     // query, so pressing it must not bounce the user back to the actions list.
@@ -307,7 +331,7 @@
                     class="ml-auto flex shrink-0 items-center gap-1.5"
                     title={meta.working && meta.modelId
                       ? meta.modelId
-                      : meta.providerName ?? undefined}
+                      : (meta.providerName ?? undefined)}
                   >
                     {#if meta.working && meta.modelId}
                       {#if meta.providerName}
@@ -378,7 +402,19 @@
         {/if}
         <span class="tabular-nums">{visibleActions.length} actions</span>
       </span>
-      <span class="shrink-0">↑↓ Navigate · Enter Run</span>
+      {#if projects && onSelectedProjectsChange}
+        <ProjectSwitch
+          multiSelect
+          compact
+          {projects}
+          selectedIds={selectedProjectIds}
+          onSelectionChange={onSelectedProjectsChange}
+          allLabel="All Projects"
+          ariaLabel="Scope search to projects"
+        />
+      {:else}
+        <span class="shrink-0">↑↓ Navigate · Enter Run</span>
+      {/if}
     </footer>
   </Command.Root>
 {/snippet}

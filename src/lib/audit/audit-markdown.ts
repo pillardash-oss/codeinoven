@@ -29,7 +29,7 @@ export function exportAuditReportMarkdown(
       : 'No findings.'
 
   const auditedFiles = report.content.auditedFiles?.length
-    ? report.content.auditedFiles.map((file) => `- \`${file.path}\` — ${file.reason}`).join('\n')
+    ? report.content.auditedFiles.map((file) => `- \`${file.path}\`   ${file.reason}`).join('\n')
     : 'Not recorded.'
   const checks = report.content.verification?.checks.length
     ? report.content.verification.checks
@@ -49,7 +49,7 @@ export function exportAuditReportMarkdown(
     : 'Not recorded.'
   const utilities = report.content.verification?.utilities.length
     ? report.content.verification.utilities
-        .map((utility) => `- **${utility.name} (${utility.status})** — ${utility.evidence}`)
+        .map((utility) => `- **${utility.name} (${utility.status})**   ${utility.evidence}`)
         .join('\n')
     : 'Not recorded.'
   const limitations = report.content.verification?.limitations.length

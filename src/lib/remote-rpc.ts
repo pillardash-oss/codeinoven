@@ -244,7 +244,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'projectFiles:search',
   // Repo metadata (thread hover popover)
   'repository:remoteOrigin',
-  // Git management — the same surface the desktop git sidebar drives. The
+  // Git management   the same surface the desktop git sidebar drives. The
   // phone is a paired, authenticated extension of the user's own desktop and
   // already commands an agent with full repository access, so read/write git
   // is not a widening of trust. GitHub device-flow sign-in and pull-request
@@ -295,7 +295,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'git:abortMerge',
   'git:abortRebase',
   'github:authStatus',
-  // Electron-only helpers — allowed so the shared components never error,
+  // Electron-only helpers   allowed so the shared components never error,
   // but dispatched to no-op handlers on the phone.
   'dialog:pickFile',
   'dialog:pickFiles',
@@ -405,7 +405,7 @@ export interface RemoteRpcStepUpRequired {
  * `assertRemoteChannelRegistry`).
  */
 export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannelAuthorization>> = {
-  // workspace.read — default, no step-up
+  // workspace.read   default, no step-up
   'project:list': { scope: 'workspace.read', stepUp: 'none' },
   'project:get': { scope: 'workspace.read', stepUp: 'none' },
   'project:getIcon': { scope: 'workspace.read', stepUp: 'none' },
@@ -435,7 +435,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'note:list': { scope: 'workspace.read', stepUp: 'none' },
   'attachment:readRemoteChunk': { scope: 'conversation.read', stepUp: 'none' },
 
-  // workspace.write — default-No, no step-up
+  // workspace.write   default-No, no step-up
   'thread:exportTranscript': { scope: 'workspace.write', stepUp: 'none' },
   'thread:create': { scope: 'workspace.write', stepUp: 'none' },
   'attachment:beginRemoteUpload': { scope: 'workspace.write', stepUp: 'none' },
@@ -454,7 +454,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'thread:reorderScope': { scope: 'workspace.write', stepUp: 'none' },
   'note:save': { scope: 'workspace.write', stepUp: 'none' },
 
-  // workspace.delete — explicitly scoped and confirmed in the mobile UI.
+  // workspace.delete   explicitly scoped and confirmed in the mobile UI.
   // Requiring a second desktop-local approval made a remote-only delete
   // impossible: the phone request had already failed before approval and its
   // retry received a different request id. The authenticated device scope plus
@@ -462,14 +462,14 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'thread:delete': { scope: 'workspace.delete', stepUp: 'none' },
   'note:delete': { scope: 'workspace.delete', stepUp: 'none' },
 
-  // config.read — read-only settings exposure, no step-up (the phone's theme
+  // config.read   read-only settings exposure, no step-up (the phone's theme
   // sync and the memory panel's enable-state load depend on it). Mutating
   // workstation config stays behind an always step-up.
   'config:get': { scope: 'config.read', stepUp: 'none' },
   'config:update': { scope: 'config.write', stepUp: 'always' },
   'config:syncAgentRole': { scope: 'config.write', stepUp: 'always' },
 
-  // conversation.read — default, no step-up
+  // conversation.read   default, no step-up
   'agent:loadMessages': { scope: 'conversation.read', stepUp: 'none' },
   'agent:loadSessionMessages': { scope: 'conversation.read', stepUp: 'none' },
   'agent:listProviderSnapshot': { scope: 'conversation.read', stepUp: 'none' },
@@ -488,7 +488,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'agent:loadTemporaryChatMessages': { scope: 'conversation.read', stepUp: 'none' },
   'agent:touchTemporaryChat': { scope: 'conversation.read', stepUp: 'none' },
 
-  // conversation.control — default, no step-up
+  // conversation.control   default, no step-up
   'agent:ensureSession': { scope: 'conversation.control', stepUp: 'none' },
   'agent:sendPrompt': { scope: 'conversation.control', stepUp: 'none' },
   'agent:steerPrompt': { scope: 'conversation.control', stepUp: 'none' },
@@ -501,7 +501,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'agent:dismissQuestion': { scope: 'conversation.control', stepUp: 'none' },
   'agent:updateQuestion': { scope: 'conversation.control', stepUp: 'none' },
   'agent:compact': { scope: 'conversation.control', stepUp: 'none' },
-  // Destructive process control — the panels confirm before invoking, and a
+  // Destructive process control   the panels confirm before invoking, and a
   // desktop-local step-up can never complete for a remote request.
   'agent:killProcess': { scope: 'conversation.control', stepUp: 'none' },
   'agent:killThreadProcesses': { scope: 'conversation.control', stepUp: 'none' },
@@ -510,15 +510,15 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'agent:dismissSessionError': { scope: 'conversation.control', stepUp: 'none' },
   'agent:abortChildSession': { scope: 'conversation.control', stepUp: 'none' },
 
-  // permission.reply — default-No, always step-up
+  // permission.reply   default-No, always step-up
   'agent:replyPermission': { scope: 'permission.reply', stepUp: 'always' },
 
-  // command.run — default-No, always step-up
+  // command.run   default-No, always step-up
   'agent:runCommand': { scope: 'command.run', stepUp: 'always' },
   'agent:truncateMessages': { scope: 'command.run', stepUp: 'always' },
   'agent:deleteMessages': { scope: 'command.run', stepUp: 'always' },
 
-  // workflow.read — default, no step-up
+  // workflow.read   default, no step-up
   'engineeringLifecycle:get': { scope: 'workflow.read', stepUp: 'none' },
   'prd:getWorkflow': { scope: 'workflow.read', stepUp: 'none' },
   'prd:getActive': { scope: 'workflow.read', stepUp: 'none' },
@@ -541,7 +541,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'checkpoint:diff': { scope: 'workflow.read', stepUp: 'none' },
   'checkpoint:liveDiff': { scope: 'workflow.read', stepUp: 'none' },
 
-  // workflow.write — default-No, conditional step-up
+  // workflow.write   default-No, conditional step-up
   'engineeringLifecycle:select': { scope: 'workflow.write', stepUp: 'conditional' },
   'engineeringLifecycle:start': { scope: 'workflow.write', stepUp: 'conditional' },
   'engineeringLifecycle:complete': { scope: 'workflow.write', stepUp: 'conditional' },
@@ -648,26 +648,26 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'brainstorm:updateAnnotation': { scope: 'workflow.write', stepUp: 'conditional' },
   'brainstorm:resolveAnnotation': { scope: 'workflow.write', stepUp: 'conditional' },
 
-  // workflow.approve — default-No, always step-up
+  // workflow.approve   default-No, always step-up
   'spec:approve': { scope: 'workflow.approve', stepUp: 'always' },
   'audit:complete': { scope: 'workflow.approve', stepUp: 'always' },
   'audit:dismiss': { scope: 'workflow.write', stepUp: 'conditional' },
 
-  // rollback — default-No, always step-up
+  // rollback   default-No, always step-up
   'checkpoint:rollbackPaths': { scope: 'rollback', stepUp: 'always' },
 
-  // memory.read — default, no step-up
+  // memory.read   default, no step-up
   'memory:getPendingProposals': { scope: 'memory.read', stepUp: 'none' },
   'memory:getEntries': { scope: 'memory.read', stepUp: 'none' },
 
-  // memory.write — default-No, no step-up. Approve/reject/save are explicit,
+  // memory.write   default-No, no step-up. Approve/reject/save are explicit,
   // confirmed user actions in the memory panel; a desktop-local step-up can
   // never complete for a remote request.
   'memory:approveProposal': { scope: 'memory.write', stepUp: 'none' },
   'memory:rejectProposal': { scope: 'memory.write', stepUp: 'none' },
   'memory:saveEntries': { scope: 'memory.write', stepUp: 'none' },
 
-  // filesystem.read — read-only path/origin lookups, no step-up. The phone's
+  // filesystem.read   read-only path/origin lookups, no step-up. The phone's
   // git panel preflight and the composer's @-file mentions depend on these.
   'projectFiles:resolveCitationPaths': { scope: 'filesystem.read', stepUp: 'none' },
   'projectFiles:resolveExternalCitationPaths': { scope: 'filesystem.read', stepUp: 'none' },
@@ -675,7 +675,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'repository:remoteOrigin': { scope: 'filesystem.read', stepUp: 'none' },
   'repository:preflight': { scope: 'filesystem.read', stepUp: 'none' },
 
-  // git.read — default, no step-up
+  // git.read   default, no step-up
   'git:status': { scope: 'git.read', stepUp: 'none' },
   'git:diff': { scope: 'git.read', stepUp: 'none' },
   'git:analyzeConflict': { scope: 'git.read', stepUp: 'none' },
@@ -693,7 +693,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'git:stashFileDiff': { scope: 'git.read', stepUp: 'none' },
   'github:authStatus': { scope: 'git.read', stepUp: 'none' },
 
-  // git.write — default-No, no step-up. The phone drives the same read/write
+  // git.write   default-No, no step-up. The phone drives the same read/write
   // git surface as the desktop sidebar and already commands an agent with full
   // repository access over this bridge, so git mutations do not widen trust.
   // Step-up cannot gate these: the remote request fails before a desktop-local
@@ -729,7 +729,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'git:abortMerge': { scope: 'git.write', stepUp: 'none' },
   'git:abortRebase': { scope: 'git.write', stepUp: 'none' },
 
-  // local.system — default-No, always step-up
+  // local.system   default-No, always step-up
   'dialog:pickFile': { scope: 'local.system', stepUp: 'always' },
   'dialog:pickFiles': { scope: 'local.system', stepUp: 'always' },
   'clipboard:saveImage': { scope: 'local.system', stepUp: 'always' },

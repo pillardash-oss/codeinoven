@@ -68,7 +68,7 @@ export function normalizeVendorName(value: string): string {
 }
 
 /**
- * Canonical vendor slug for a vendor name — same normalization and aliases
+ * Canonical vendor slug for a vendor name   same normalization and aliases
  * used when resolving bundled icon SVGs. Lets callers compare two vendor
  * names (e.g. a harness vendor vs. a provider name) for identity.
  */

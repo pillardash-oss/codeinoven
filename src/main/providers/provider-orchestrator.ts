@@ -3,7 +3,7 @@ import { MockOpenCodeAdapter } from '../../lib/adapters/opencode/mock'
 import type { ProviderAdapter } from '../../lib/adapters/adapter.interface'
 
 /**
- * ProviderOrchestrator — runs provider adapters in the main process and exposes
+ * ProviderOrchestrator   runs provider adapters in the main process and exposes
  * them over IPC. Adapters depend on Node APIs (crypto, pty), so they must live
  * here rather than in the renderer.
  *

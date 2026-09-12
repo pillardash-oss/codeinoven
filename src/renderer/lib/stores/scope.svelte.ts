@@ -1,4 +1,5 @@
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import { APP_SLUG } from '$shared/brand'
@@ -244,6 +245,55 @@ class ScopeState {
   worktreeProgress = $state<ScopeWorktreeProgress>({ stage: 'none' })
   private loadSequence = 0
   private saveSequence = 0
+  /** Projects whose full non-archived thread list has been merged into memory. */
+  private fullyHydratedProjects: SvelteSet<string> = $state(new SvelteSet())
+  private hydratingProjects = new Set<string>()
+  /** Threads holding unsent composer content. Draft state lives in renderer
+   *  storage only, so it is applied here as an in-memory stage: drafted
+   *  threads slice into 'todo' and return to their DB-derived slice (done)
+   *  the moment the draft is cleared. */
+  draftStageThreadIds: SvelteSet<string> = $state(new SvelteSet())
+
+  setDraftStageThreadIds(ids: readonly string[]): void {
+    const next = new SvelteSet<string>(ids)
+    const current = this.draftStageThreadIds
+    if (next.size === current.size && [...next].every((id) => current.has(id))) return
+    this.draftStageThreadIds = next
+  }
+
+  /** Whether a project's full thread list has been merged into `allScopeThreads`. */
+  isProjectFullyHydrated(projectId: string): boolean {
+    return this.fullyHydratedProjects.has(projectId)
+  }
+
+  /**
+   * Merge a project's complete non-archived thread list into memory. The
+   * first-paint hydration is a bounded per-project recent slice, so a read
+   * thread older than that slice would never appear in scoped board views
+   * (a scope shows exactly the threads of its bucket). Runs once per project;
+   * on failure nothing is marked hydrated and the next open retries.
+   */
+  async ensureProjectThreadsLoaded(projectId: string): Promise<void> {
+    if (projectId === '' || this.fullyHydratedProjects.has(projectId)) return
+    if (this.hydratingProjects.has(projectId)) return
+    this.hydratingProjects.add(projectId)
+    try {
+      const threads = await invoke('thread:list', projectId)
+      for (const thread of threads) {
+        if (thread.archived || isOrchestrationChildThread(thread)) continue
+        if (this.allScopeThreads.some((existing) => existing.id === thread.id)) {
+          this.updateThread(thread)
+        } else {
+          this.allScopeThreads = [...this.allScopeThreads, thread]
+        }
+      }
+      this.fullyHydratedProjects.add(projectId)
+    } catch {
+      // Keep the bounded slice; the next open of this scope retries.
+    } finally {
+      this.hydratingProjects.delete(projectId)
+    }
+  }
 
   get projectBadges(): SvelteMap<string, ProjectBadge> {
     const badges = new SvelteMap<string, ProjectBadge>()
@@ -575,6 +625,7 @@ class ScopeState {
   }
 
   stageForThread(thread: Thread): ThreadStage {
+    if (this.draftStageThreadIds.has(thread.id)) return 'todo'
     return threadStage(thread, this.draftThreadId)
   }
 
@@ -586,6 +637,7 @@ class ScopeState {
     if (thread.projectId !== this.activeProjectId) {
       void this.activateProject(thread.projectId)
     }
+    void this.ensureProjectThreadsLoaded(thread.projectId)
     this.sidebarContext = {
       projectId: thread.projectId,
       bucketId: bucketId ?? thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID,
@@ -602,6 +654,7 @@ class ScopeState {
     if (projectId !== this.activeProjectId) {
       void this.activateProject(projectId)
     }
+    void this.ensureProjectThreadsLoaded(projectId)
     this.sidebarContext = {
       projectId,
       bucketId: this.lastBucketForProject(projectId),
@@ -742,6 +795,57 @@ class ScopeState {
       this.error = error instanceof Error ? error.message : 'The worktree could not be created.'
       throw error
     }
+  }
+
+  /**
+   * Kick the full new-scope creation off in the background so the app stays
+   * usable while git + setup commands run. Progress is shown as a persistent
+   * docked toast; it flips to a success check on completion (auto-dismisses)
+   * or an error toast that stays until dismissed.
+   */
+  beginWorktreeCreation(
+    projectId: string,
+    input: {
+      title: string
+      /** Whether an isolated worktree is requested; shared-directory scopes skip setup entirely. */
+      isolated: boolean
+      runSetup: boolean
+      environmentMode: ScopeEnvironmentMode
+      baseBranch?: string
+      setupCommands?: ScopeSetupCommandSpec[]
+    },
+    options: { existingBucketId?: string | null; onCreated?: (bucketId: string) => void } = {}
+  ): void {
+    const creation = (async (): Promise<string> => {
+      let bucketId = options.existingBucketId ?? null
+      if (!bucketId) {
+        const bucket = await this.createBucketForProject(projectId, input.title)
+        bucketId = bucket?.id ?? null
+        if (!bucketId) throw new Error('The scope could not be created')
+      }
+      if (input.isolated) {
+        // Persist the entered configuration as project defaults BEFORE creating
+        // so the saved defaults can never race ahead of this worktree.
+        await this.setWorktreeDefaults(projectId, {
+          setupCommands: input.setupCommands ?? [],
+          runSetupByDefault: input.runSetup,
+          environmentMode: input.environmentMode
+        })
+        await this.createWorktree(projectId, bucketId, input)
+      }
+      options.onCreated?.(bucketId)
+      return input.title
+    })().catch((cause: unknown) => {
+      const message = cause instanceof Error ? cause.message : 'The scope could not be created.'
+      // Never let an unhandled rejection surface: the toast already reports it.
+      return Promise.reject(new Error(message))
+    })
+    void toast.promise(creation, {
+      loading: `Creating “${input.title}”…`,
+      success: `“${input.title}” is ready`,
+      error: (cause: unknown) =>
+        cause instanceof Error ? cause.message : 'The scope could not be created.'
+    })
   }
 
   /** Inspect the source checkout before creating a worktree. */

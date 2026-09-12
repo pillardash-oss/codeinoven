@@ -44,7 +44,7 @@ export function buildUpgradeResponse(clientKey: string): string {
   ].join('\r\n')
 }
 
-/** Encode a text frame (opcode 0x1) — server to client, unmasked. */
+/** Encode a text frame (opcode 0x1)   server to client, unmasked. */
 export function encodeTextFrame(payload: string): Buffer {
   const data = Buffer.from(payload, 'utf8')
   const header: number[] = [0x81]

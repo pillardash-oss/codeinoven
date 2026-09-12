@@ -29,7 +29,7 @@ const TOKEN_REFRESH_LEEWAY_MS = 5 * 60 * 1000
  * How long a fetched GitHub profile (with its inlined avatar) is served from
  * memory before it is re-fetched. The Git panel remounts on every tab switch
  * and would otherwise re-hit `api.github.com/user` and re-download the avatar
- * image each time — the avatar is inlined as a `data:` URL, so the browser's
+ * image each time   the avatar is inlined as a `data:` URL, so the browser's
  * HTTP cache never applies to it.
  */
 const GITHUB_USER_CACHE_TTL_MS = 5 * 60 * 1000
@@ -70,12 +70,12 @@ export class GitHubAuthService {
   constructor(private readonly vault: SecretVault) {}
 
   /**
-   * GitHub App public client ID — never a secret, safe to embed or configure via env.
+   * GitHub App public client ID   never a secret, safe to embed or configure via env.
    *
    * Resolution order:
-   * 1. `__CODEINOVEN_GITHUB_CLIENT_ID__` — replaced at build time by Vite's
+   * 1. `__CODEINOVEN_GITHUB_CLIENT_ID__`   replaced at build time by Vite's
    *    `define` from `.env` (`CODEINOVEN_GITHUB_CLIENT_ID`). The compile-time constant.
-   * 2. `CODEINOVEN_GITHUB_CLIENT_ID` — runtime override (CI shells, tests).
+   * 2. `CODEINOVEN_GITHUB_CLIENT_ID`   runtime override (CI shells, tests).
    */
   private get clientId(): string {
     const baked =
@@ -260,7 +260,7 @@ export class GitHubAuthService {
   ): Promise<void> {
     const accessToken = this.readString(record, 'access_token')
     if (!accessToken) throw new Error('GitHub token response did not include an access token')
-    // Credentials changed — the cached profile may belong to the previous user.
+    // Credentials changed   the cached profile may belong to the previous user.
     this.cachedUser = null
     const now = Date.now()
     const expiresIn = this.readNumber(record, 'expires_in')
@@ -331,7 +331,7 @@ export class GitHubAuthService {
   /**
    * Download the avatar here and hand the renderer a `data:` URL.
    *
-   * The renderer's CSP is `img-src 'self' data: blob: file: appfile:` — remote
+   * The renderer's CSP is `img-src 'self' data: blob: file: appfile:`   remote
    * hosts are deliberately not allowed, so a raw githubusercontent URL renders
    * as a broken image. Inlining keeps the CSP tight and the avatar visible.
    * Returns null on any failure so the caller can fall back to the remote URL.

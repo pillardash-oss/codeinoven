@@ -17,6 +17,7 @@ export interface PrComposeAgentSelection {
   harnessId: string
   providerId: string
   modelId: string
+  accountId?: string
   thinkingLevel: ThinkingLevel
 }
 
@@ -45,6 +46,7 @@ function loadSelection(): PrComposeAgentSelection | null {
       harnessId: selection['harnessId'],
       providerId: selection['providerId'],
       modelId: selection['modelId'],
+      ...(typeof selection['accountId'] === 'string' ? { accountId: selection['accountId'] } : {}),
       thinkingLevel: thinkingLevel as ThinkingLevel
     }
   } catch {

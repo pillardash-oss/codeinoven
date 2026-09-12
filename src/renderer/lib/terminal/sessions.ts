@@ -27,6 +27,9 @@ export interface TerminalSession {
 }
 
 const MAX_RESPAWNS = 5
+/** Fixed grid width for action terminals: wider than the visible pane so long
+ *  output lines don't wrap mid-run and users can scroll horizontally. */
+const ACTION_COLS = 240
 const RESPAWN_BACKOFF_RESET_MS = 2000
 const RESIZE_SETTLE_MS = 100
 
@@ -36,11 +39,25 @@ const RESIZE_SETTLE_MS = 100
  * previous fit is still settling, which can leave the canvas at an older width
  * when the last notification arrives inside that window.
  */
-function observeTerminalResize(host: HTMLDivElement, fitAddon: FitAddon): () => void {
+/**
+ * Fit a session's grid to its host. Action terminals keep a fixed wide column
+ * count (the host only controls the row count) so their pane can scroll
+ * horizontally instead of clipping long lines.
+ */
+function fitSession(session: TerminalSession): void {
+  if (session.kind !== 'action') {
+    session.fitAddon.fit()
+    return
+  }
+  const proposal = session.fitAddon.proposeDimensions()
+  session.term.resize(ACTION_COLS, Math.max(1, proposal ? proposal.rows : session.term.rows))
+}
+
+function observeTerminalResize(host: HTMLDivElement, session: TerminalSession): () => void {
   let settleTimer: ReturnType<typeof setTimeout> | undefined
   const observer = new ResizeObserver(() => {
     if (settleTimer) clearTimeout(settleTimer)
-    settleTimer = setTimeout(() => fitAddon.fit(), RESIZE_SETTLE_MS)
+    settleTimer = setTimeout(() => fitSession(session), RESIZE_SETTLE_MS)
   })
   observer.observe(host)
 
@@ -136,7 +153,7 @@ class TerminalSessionManager {
     if (session.host.parentElement !== container) {
       container.replaceChildren(session.host)
     }
-    session.fitAddon.fit()
+    fitSession(session)
     session.threadId = threadId
     session.scopeBucketId = scopeBucketId ?? null
     await this.ensurePty(session, projectId, threadId, scopeBucketId)
@@ -153,7 +170,7 @@ class TerminalSessionManager {
     scopeBucketId?: string
   ): Promise<void> {
     if (session.host.parentElement !== container) container.replaceChildren(session.host)
-    session.fitAddon.fit()
+    fitSession(session)
     if (!session.ptySpawned) {
       session.projectId = projectId
       session.ptySpawned = true
@@ -284,7 +301,7 @@ class TerminalSessionManager {
 
     const subs: Array<() => void> = []
     const cursorShape = new CursorShapeDecoder()
-    subs.push(cleanupFocus, observeTerminalResize(host, fitAddon))
+    subs.push(cleanupFocus, observeTerminalResize(host, session))
 
     // PTY output → terminal buffer. Always active so the buffer stays current
     // even while the panel is hidden or the component is unmounted. DECSCUSR

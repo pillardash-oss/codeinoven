@@ -148,7 +148,7 @@
             {#if !isFolded}
               {#if limitExceeded}
                 <div class="px-3 py-3 text-center font-sans text-[0.6875rem] text-muted" role="note">
-                  Maximum diff exceeded — this hunk changes {hunkChanged} lines (limit {maxDiffLines}).
+                  Maximum diff exceeded   this hunk changes {hunkChanged} lines (limit {maxDiffLines}).
                   The lines are hidden to keep the diff responsive.
                 </div>
               {:else}

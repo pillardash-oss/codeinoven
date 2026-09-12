@@ -59,7 +59,7 @@ export async function writeMemorySyncState(
   }
 }
 
-/** Ids that were synced before but are gone locally now — treat them as deleted. */
+/** Ids that were synced before but are gone locally now   treat them as deleted. */
 export function tombstonesForDeletions(
   snapshotIds: string[],
   currentIds: string[],

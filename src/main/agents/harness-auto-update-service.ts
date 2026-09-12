@@ -7,7 +7,7 @@ const AUTO_UPDATE_STORE_PATH = 'harness-auto-update.json'
 /**
  * Per-harness "update automatically on launch" preference. Only the set of
  * harnesses the user opted into auto-updating is persisted (an absent id means
- * off). Main never runs an update on its own — the renderer reads these
+ * off). Main never runs an update on its own   the renderer reads these
  * preferences at startup, checks for available updates, and launches the
  * harness's own self-update command in an embedded terminal.
  */

@@ -29,10 +29,12 @@
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import Toaster from '$lib/components/ui/Toaster.svelte'
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
+  import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
   import { toast } from 'svelte-sonner'
   import { SvelteMap } from 'svelte/reactivity'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
+  import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import {
     rendererRecovery,
     isSettingsSection,
@@ -148,11 +150,17 @@
   let fileSearchLoading = $state(false)
   let fileSearchTimer: number | null = null
   let fileSearchRequest = 0
+  /** Scoped project ids for the footer picker; empty = all projects. */
+  let fileSearchProjectIds = $state<string[]>([])
+  let lastFileSearchQuery = ''
   let threadSearchPaletteOpen = $state(false)
   let threadSearchActions = $state<ActionDefinition[]>([])
   let threadSearchLoading = $state(false)
   let threadSearchTimer: number | null = null
   let threadSearchRequest = 0
+  /** Scoped project ids for the footer picker; empty = all projects. */
+  let threadSearchProjectIds = $state<string[]>([])
+  let lastThreadSearchQuery = ''
   let newProjectSpotlightOpen = $state(false)
   let onboardingOpen = $state(false)
   let onboardingStep = $state(0)
@@ -300,7 +308,7 @@
       {
         id: 'app:new-project',
         title: 'Create new project',
-        description: 'Choose how to add a project — local folder or SSH',
+        description: 'Choose how to add a project   local folder or SSH',
         category: 'command',
         source: applicationSource,
         icon: FolderPlus,
@@ -450,16 +458,16 @@
     ...navigationActions,
     ...settingsActions,
     // Harness-bound actions (model pickers, slash commands) belong to the inline
-    // menus — the global Cmd+K surface keeps app-level and cross-harness actions.
+    // menus   the global Cmd+K surface keeps app-level and cross-harness actions.
     ...actionContext.actions.filter((action) => action.source.kind !== 'harness')
   ])
 
-  /** Content view to return to when leaving Settings or Scope — persisted in the
+  /** Content view to return to when leaving Settings or Scope   persisted in the
    *  recovery snapshot so a restart made while on a Settings page or the Scope
    *  view still returns to the previous content view instead of resetting to Projects. */
   let lastContentView = $derived(rendererRecovery.lastContentView)
 
-  /** The view the user was on before opening Settings — the Settings back button returns here. */
+  /** The view the user was on before opening Settings   the Settings back button returns here. */
   let lastViewBeforeSettings = $derived(rendererRecovery.lastViewBeforeSettings)
 
   let effectiveTheme = $derived(
@@ -537,7 +545,7 @@
   }
 
   function navigate(view: View): void {
-    // Warm the lazy page chunks so the view swap resolves instantly — the
+    // Warm the lazy page chunks so the view swap resolves instantly   the
     // sidebar/header hover preloads cover the mouse path; this covers every
     // other entry point (shortcuts, palette, programmatic navigation). The
     // imports are memoized, so repeated calls are no-ops.
@@ -553,6 +561,11 @@
     } else if (view === 'chats') {
       scopeState.stashSidebarContext()
     } else if (view === 'threads') {
+      scopeState.clearSidebarContext()
+    } else if (view === 'projects') {
+      // Leaving the registered scoped view (or any scoped state) for the plain
+      // projects view: the sidebar is what defines the scoped state, so close
+      // it   the sidebar context itself is stashed for later restore.
       scopeState.clearSidebarContext()
     }
     const previousContentView = rendererRecovery.lastContentView
@@ -837,6 +850,8 @@
     fileSearchLoading = false
     fileSearchActions = []
     fileSearchTargets.clear()
+    fileSearchProjectIds = []
+    lastFileSearchQuery = ''
   }
 
   function openFileSearchPalette(): void {
@@ -845,8 +860,13 @@
   }
 
   async function searchFilesAcrossProjects(query: string, request: number): Promise<void> {
+    const selectedIds = new Set(fileSearchProjectIds)
     const projects = scopeState.projectRecords.filter(
-      (project) => !project.hidden && project.source === 'local' && project.path
+      (project) =>
+        !project.hidden &&
+        project.source === 'local' &&
+        project.path &&
+        (selectedIds.size === 0 || selectedIds.has(project.id))
     )
     const projectResults = await Promise.all(
       projects.map(async (project) => {
@@ -906,7 +926,21 @@
     fileSearchLoading = false
   }
 
+  /** Re-run the in-flight file search immediately when the project scope changes. */
+  function setFileSearchScope(projectIds: string[]): void {
+    fileSearchProjectIds = projectIds
+    if (!fileSearchPaletteOpen || lastFileSearchQuery.trim().length < 2) return
+    if (fileSearchTimer !== null) {
+      window.clearTimeout(fileSearchTimer)
+      fileSearchTimer = null
+    }
+    const request = ++fileSearchRequest
+    fileSearchLoading = true
+    void searchFilesAcrossProjects(lastFileSearchQuery.trim(), request)
+  }
+
   function handleFileSearchQuery(query: string): void {
+    lastFileSearchQuery = query
     if (fileSearchTimer !== null) window.clearTimeout(fileSearchTimer)
     const request = ++fileSearchRequest
     const normalized = query.trim()
@@ -947,6 +981,8 @@
     threadSearchLoading = false
     threadSearchActions = []
     threadSearchTargets.clear()
+    threadSearchProjectIds = []
+    lastThreadSearchQuery = ''
   }
 
   function openThreadSearchPalette(): void {
@@ -972,7 +1008,20 @@
   async function searchThreadsAcrossProjects(query: string, request: number): Promise<void> {
     let results: ThreadSearchResult[]
     try {
-      results = await invoke('threads:search', query, { limit: 50 })
+      // Scoped search: fan out per selected project so the manager can use its
+      // per-project index; empty selection searches all projects in one call.
+      results =
+        threadSearchProjectIds.length > 0
+          ? (
+              await Promise.all(
+                threadSearchProjectIds.map((projectId) =>
+                  invoke('threads:search', query, { projectId, limit: 50 }).catch(
+                    (): ThreadSearchResult[] => []
+                  )
+                )
+              )
+            ).flat()
+          : await invoke('threads:search', query, { limit: 50 })
     } catch {
       results = []
     }
@@ -1003,7 +1052,7 @@
       const status = statusBadgeForThread(thread, isLiveWorking)
       // Model/harness metadata for the result row: while the thread is working
       // the current provider + model is shown, otherwise the thread's harnesses
-      // and provider appear as icons — mirroring the sidebar thread row.
+      // and provider appear as icons   mirroring the sidebar thread row.
       const harnessIds = Array.from(
         new Set([
           ...(thread.usedHarnessIds ?? []),
@@ -1016,13 +1065,15 @@
         ? (providers.find((provider) => provider.id === providerId)?.name ?? null)
         : null
       const projectLabel = project?.name ?? thread.projectId
-      const createdLabel = relativeThreadTime(thread.createdAt)
+      // Thread rows always surface the thread's last-activity time, never its
+      // creation time, so freshly worked-on threads read as "1h" etc.
+      const activityLabel = relativeThreadTime(thread.lastActivity)
       actions.push({
         id,
         title: thread.title,
         description: snippet
-          ? `${projectLabel} · ${createdLabel} · ${snippet}`
-          : `${projectLabel} · ${createdLabel}`,
+          ? `${projectLabel} · ${activityLabel} · ${snippet}`
+          : `${projectLabel} · ${activityLabel}`,
         category: 'thread',
         source: {
           id: `project:${thread.projectId}`,
@@ -1049,7 +1100,21 @@
     threadSearchLoading = false
   }
 
+  /** Re-run the in-flight thread search immediately when the project scope changes. */
+  function setThreadSearchScope(projectIds: string[]): void {
+    threadSearchProjectIds = projectIds
+    if (!threadSearchPaletteOpen || lastThreadSearchQuery.trim().length < 2) return
+    if (threadSearchTimer !== null) {
+      window.clearTimeout(threadSearchTimer)
+      threadSearchTimer = null
+    }
+    const request = ++threadSearchRequest
+    threadSearchLoading = true
+    void searchThreadsAcrossProjects(lastThreadSearchQuery.trim(), request)
+  }
+
   function handleThreadSearchQuery(query: string): void {
+    lastThreadSearchQuery = query
     if (threadSearchTimer !== null) window.clearTimeout(threadSearchTimer)
     const request = ++threadSearchRequest
     const normalized = query.trim()
@@ -1068,7 +1133,7 @@
   }
 
   /** Preserve the current content view / project sidebar state when opening a
-   *  searched thread — never force the Projects view. Reuses the notification
+   *  searched thread   never force the Projects view. Reuses the notification
    *  open logic, which handles scope state, the threads view and chats. */
   async function openThreadFromSearch(thread: Thread): Promise<void> {
     const project =
@@ -1092,13 +1157,13 @@
 
   async function loadScopeData(preferredProjectId?: string): Promise<void> {
     try {
-      // 1. Projects first — the header and project list render immediately
+      // 1. Projects first   the header and project list render immediately
       //    without waiting for the (larger) thread payload.
       const projectList = await invoke('project:list')
       const icons = await loadProjectIcons(projectList)
       scopeState.setScopesFromProjects(projectList, icons, preferredProjectId)
 
-      // 2. Tasks — recent rows only, via the bounded per-project hydration
+      // 2. Tasks   recent rows only, via the bounded per-project hydration
       //    query. Each project contributes its own recent slice (inbox gets its
       //    configured bucket size), so one busy project can never evict other
       //    projects' threads from the initial paint. Older rows page in on
@@ -1108,7 +1173,7 @@
       scopeState.setThreads(visibleThreads)
       notificationPanelState.hydrateFromThreads(visibleThreads, projectList)
 
-      // 3. The selected project's scope board is the visible surface — load it
+      // 3. The selected project's scope board is the visible surface   load it
       //    before warming any provider data.
       if (scopeState.activeProjectId) {
         scopeState.ensureBoardLoaded(scopeState.activeProjectId)
@@ -1127,7 +1192,7 @@
           // harness probe automatically (after first paint) so the picker always
           // has live data ready instead of fetching lazily on open.
           void providerCatalog.init(targets, { refresh: true })
-          // Canonical-ordered harness list (registry order) — the model picker's
+          // Canonical-ordered harness list (registry order)   the model picker's
           // harness filter sorts against this so its chip order never depends on
           // catalog insertion order.
           void providerStore.init()
@@ -1165,7 +1230,7 @@
     }
   }
 
-  /** Spotlight flow: a picked folder already exists as a project — focus it. */
+  /** Spotlight flow: a picked folder already exists as a project   focus it. */
   function handleSpotlightExistingProject(project: Project): void {
     newProjectSpotlightOpen = false
     navigate('projects')
@@ -1215,17 +1280,6 @@
     navigate('settings-harnesses')
   }
 
-  async function openScopeThread(thread: Thread): Promise<void> {
-    navigate('projects')
-    const project =
-      scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
-    workspaceState.openThread(thread, project)
-    void scopeState.ensureBoardLoaded(thread.projectId)
-    const updated = await invoke('thread:markRead', thread.projectId, thread.id)
-    scopeState.updateThread(updated)
-    workspaceState.updateThread(updated)
-  }
-
   /**
    * Open a thread from a notification while preserving the current view:
    * - Regular project view → stay there (no scope sidebar).
@@ -1240,7 +1294,9 @@
   ): Promise<void> {
     const isChat = thread.projectId === INBOX_PROJECT_ID
     const inScopeState =
-      activeView === 'scope' || (activeView === 'projects' && Boolean(scopeState.sidebarContext))
+      activeView === 'scope'
+      || activeView === 'projects-scope'
+      || (activeView === 'projects' && Boolean(scopeState.sidebarContext))
 
     if (isChat) {
       // Chat notifications always land in the chats view.
@@ -1269,7 +1325,7 @@
 
     if (temporaryChatId) {
       // A temporary (side) chat notification: opening the parent thread alone
-      // is not enough — reveal the sidebar and focus the side chat that has
+      // is not enough   reveal the sidebar and focus the side chat that has
       // the unread response. When its tab no longer exists the badge would
       // never clear, so drop it here instead.
       if (!contextSidebarState.focusTemporaryChat(thread.projectId, thread.id, temporaryChatId)) {
@@ -1344,7 +1400,7 @@
     }
   }
 
-  /** The user approved the force close — tell main to proceed with quitting. */
+  /** The user approved the force close   tell main to proceed with quitting. */
   async function confirmForceClose(): Promise<void> {
     await invoke('app:confirmClose')
   }
@@ -1353,7 +1409,7 @@
    * While the close-confirmation modal is open, watch the threads it listed as
    * still working. As each one leaves that state (completed, failed, or
    * otherwise no longer executing/planning) it drops off the list. Once none
-   * remain — and no unsaved files are pending — the close the user already
+   * remain   and no unsaved files are pending   the close the user already
    * asked for proceeds automatically instead of waiting on a second click.
    */
   function settleCloseConfirmationThread(thread: Thread): void {
@@ -1461,7 +1517,7 @@
   /** Clean up renderer resources when the main process signals shutdown. */
   function installShutdownSubscription(): () => void {
     return subscribe('window:beforeQuit', () => {
-      // Renderer should release event subscriptions — the main process
+      // Renderer should release event subscriptions   the main process
       // will dispose services and flush logs 500ms after this signal.
       // The component tree unmounts naturally as the window closes.
     })
@@ -1474,7 +1530,7 @@
    * actions and the native window close control.
    */
   function handleCloseShortcut(): void {
-    // App-managed palettes first — they float above every view.
+    // App-managed palettes first   they float above every view.
     if (fileSearchPaletteOpen) {
       fileSearchPaletteOpen = false
       resetFileSearch()
@@ -1513,14 +1569,14 @@
       workspaceState.clearThread()
       return
     }
-    // Nothing active — keep the application open.
+    // Nothing active   keep the application open.
   }
 
   /**
    * Cmd/Ctrl+T while a terminal is focused opens a new terminal tab in the
    * terminal panel (right sidebar or bottom dock). The main process only emits
    * this event when it intercepted the key with a terminal focused, but the
-   * renderer's own focus flag is the source of truth — re-check it defensively.
+   * renderer's own focus flag is the source of truth   re-check it defensively.
    */
   function handleNewTerminalShortcut(): void {
     if (!isTerminalFocused()) return
@@ -1582,6 +1638,21 @@
   /** Global application shortcuts. */
   function onKeydown(e: KeyboardEvent): void {
     const isMac = window.api?.windowInfo?.platform === 'darwin'
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      // ⌘/Ctrl+Enter runs the topmost open modal's primary action. The shared
+      // LIFO registry (modal-primary-action.svelte.ts) resolves which modal is
+      // in focus; when no modal claims the chord, composers (chat send, git
+      // commit, PR sheet) keep their existing focused-element behavior.
+      //
+      // Held chords fire auto-repeat keydowns; without this guard a repeat
+      // that lands after a PR sheet's success screen rendered would re-claim
+      // the chord and click "View PR", closing the modal the user just got.
+      if (e.repeat) return
+      if (activateTopModalPrimaryAction()) {
+        e.preventDefault()
+        return
+      }
+    }
     if (e.key.toLowerCase() === 'w' && (isMac ? e.metaKey : e.ctrlKey)) {
       // Primary path is the main process `before-input-event` → the
       // `window:closeShortcut` event. This is a fallback for platforms where
@@ -1589,7 +1660,7 @@
       // the page keydown, so this normally never fires twice).
       //
       // On non-mac platforms Ctrl+W is the shell's delete-word binding while a
-      // terminal is focused — leave it alone so it reaches the shell.
+      // terminal is focused   leave it alone so it reaches the shell.
       if (!isMac && isTerminalFocused()) return
       e.preventDefault()
       if (e.repeat) return
@@ -1632,8 +1703,10 @@
     // remap side buttons to on macOS, since there's no native OS-level
     // back/forward gesture API for non-Apple mice. Alt+Left/Alt+Right mirrors
     // the same convention on Windows/Linux.
-    if ((isMac && e.metaKey && (e.key === '[' || e.key === ']')) ||
-      (!isMac && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))) {
+    if (
+      (isMac && e.metaKey && (e.key === '[' || e.key === ']')) ||
+      (!isMac && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))
+    ) {
       e.preventDefault()
       if (e.repeat) return
       if (e.key === '[' || e.key === 'ArrowLeft') void goBack()
@@ -1687,13 +1760,13 @@
 
   /**
    * Timestamp of the last mouse side-button navigation. Windows/Linux deliver
-   * a side press both as an app command (forwarded over IPC) and — through
-   * Chromium — as a renderer mouse event; macOS only delivers the raw event.
+   * a side press both as an app command (forwarded over IPC) and   through
+   * Chromium   as a renderer mouse event; macOS only delivers the raw event.
    * A short dedupe window keeps one physical press from navigating twice.
    */
   let lastMouseHistoryNavAt = 0
 
-  /** Mouse back/forward buttons (button 3 = back, 4 = forward) — macOS path. */
+  /** Mouse back/forward buttons (button 3 = back, 4 = forward)   macOS path. */
   function onMouseHistoryButton(e: MouseEvent): void {
     if (e.button !== 3 && e.button !== 4) return
     const now = Date.now()
@@ -1757,27 +1830,30 @@
 </script>
 
 <div class="flex h-screen flex-col bg-app">
-  <AppHeader
-    {activeView}
-    {navigate}
-    {goBack}
-    {goForward}
-    onProjectCreated={handleProjectCreated}
-    onScopeThreadOpen={openScopeThread}
-  />
+  <AppHeader {activeView} {navigate} {goBack} {goForward} />
 
   <main class="flex-1 overflow-hidden">
-    <!-- One shell for all views — the workspace (and the open thread) stays
+    <!-- One shell for all views   the workspace (and the open thread) stays
          mounted across Settings/Scope so returning never reloads the thread
          list or reconnects the harness; it's simply hidden while away. -->
     <div
-      class={activeView === 'projects' || activeView === 'chats' || activeView === 'threads'
-        ? 'h-full'
-        : 'hidden'}
+      class={
+        activeView === 'projects'
+        || activeView === 'projects-scope'
+        || activeView === 'chats'
+        || activeView === 'threads'
+          ? 'h-full'
+          : 'hidden'
+      }
     >
       <Workspace
         mode={lastContentView}
-        active={activeView === 'projects' || activeView === 'chats' || activeView === 'threads'}
+        active={
+          activeView === 'projects'
+          || activeView === 'projects-scope'
+          || activeView === 'chats'
+          || activeView === 'threads'
+        }
         scopeViewActive={activeView === 'scope'}
         {navigate}
         {config}
@@ -1791,7 +1867,7 @@
     {:else if isSettingsView(activeView)}
       <!-- Each settings section is its own dedicated page in the navigation model.
            The view stays mounted and SettingsView swaps its content on the section
-           prop — a keyed remount here would flash the screen on every tab switch. -->
+           prop   a keyed remount here would flash the screen on every tab switch. -->
       {#await import('$lib/components/settings/SettingsView.svelte') then { default: SettingsView }}
         <SettingsView
           {config}
@@ -1837,6 +1913,9 @@
         headerIconBadge
         headerIconBadgeClass="border-warning/25 bg-warning/10 text-warning"
         serverFiltered
+        projects={scopeState.projects}
+        selectedProjectIds={fileSearchProjectIds}
+        onSelectedProjectsChange={setFileSearchScope}
         onBack={backToCommandPaletteFromFileSearch}
         onQueryChange={handleFileSearchQuery}
         onSelect={handleFileSearchSelection}
@@ -1862,6 +1941,9 @@
         headerIconBadge
         headerIconBadgeClass="border-info/25 bg-info/10 text-info"
         serverFiltered
+        projects={scopeState.projects}
+        selectedProjectIds={threadSearchProjectIds}
+        onSelectedProjectsChange={setThreadSearchScope}
         onBack={backToCommandPaletteFromThreadSearch}
         onQueryChange={handleThreadSearchQuery}
         onSelect={handleThreadSearchSelection}
@@ -1899,6 +1981,7 @@
     {/key}
   {/if}
   <Toaster />
+  <TextSelectionContextMenu />
   <TooltipHost />
   {#if pipState.active && pipState.frameDataUrl !== null}
     {#await import('$lib/components/pip/PipOverlay.svelte') then { default: PipOverlay }}
@@ -1919,14 +2002,14 @@
   {/if}
 
   {#if harnessLifecycleStore.runs.length}
-    <!-- Floats above every view — survives navigation while tasks keep running. -->
+    <!-- Floats above every view   survives navigation while tasks keep running. -->
     {#await import('$lib/components/providers/HarnessRunModal.svelte') then { default: HarnessRunModal }}
       <HarnessRunModal />
     {/await}
   {/if}
 
   {#if prLifecycleStore.drafts.length}
-    <!-- Floats above every view — survives thread/project/view and sidebar visibility. -->
+    <!-- Floats above every view   survives thread/project/view and sidebar visibility. -->
     {#await import('$lib/components/git/PrDockHost.svelte') then { default: PrDockHost }}
       <PrDockHost />
     {/await}

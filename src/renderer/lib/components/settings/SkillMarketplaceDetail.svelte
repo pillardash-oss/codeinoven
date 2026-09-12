@@ -27,8 +27,8 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
-  import ProjectMultiSelect from '../shared/ProjectMultiSelect.svelte'
-  import type { ProjectMultiSelectOption } from '../shared/ProjectMultiSelect.svelte'
+  import ProjectSwitch from '../shared/ProjectSwitch.svelte'
+  import type { ScopeProject } from '$lib/stores/scope.svelte'
   import type {
     Project,
     SkillMarketDetail,
@@ -67,7 +67,7 @@
   let activation = $state<UtilityActivation>('on_demand')
   let selectedProjectIds = $state<string[]>([])
   let selectedHarnessIds = $state<string[]>([])
-  let projects = $state<ProjectMultiSelectOption[]>([])
+  let projects = $state<ScopeProject[]>([])
   let cachedProviders = $derived(providerCatalog.allCached())
   let availableHarnesses = $derived.by((): HarnessOption[] => {
     const harnessNames: Record<string, string> = {}
@@ -399,10 +399,13 @@
             {/if}
           </div>
           {#if scope === 'projects'}
-            <ProjectMultiSelect
+            <ProjectSwitch
+              multiSelect
               {projects}
-              values={selectedProjectIds}
-              onValuesChange={(projectIds) => (selectedProjectIds = projectIds)}
+              selectedIds={selectedProjectIds}
+              onSelectionChange={(projectIds) => (selectedProjectIds = projectIds)}
+              allLabel="Select projects"
+              ariaLabel="Select projects"
               disabled={installing}
             />
           {/if}
@@ -503,7 +506,7 @@
             </p>
             <p class="mt-1 font-mono text-sm tabular-nums">
               {detail?.githubStars === null || detail?.githubStars === undefined
-                ? '—'
+                ? ' '
                 : detail.githubStars.toLocaleString()}
             </p>
           </div>
@@ -513,7 +516,7 @@
             >
               <CalendarDays size={11} /> First seen
             </p>
-            <p class="mt-1 font-mono text-xs">{detail?.firstSeen ?? '—'}</p>
+            <p class="mt-1 font-mono text-xs">{detail?.firstSeen ?? ' '}</p>
           </div>
           <div>
             <p

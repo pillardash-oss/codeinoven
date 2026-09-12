@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { PreparedHarnessInvocation } from './harness-runtime'
+import { PI_COMPACTION_EXTENSION_KEY } from './pi-compaction-extension'
 
 /**
  * A single Pi image content block, sent with a prompt or steer message.
@@ -11,6 +12,7 @@ export interface PiRpcImage {
 }
 
 interface PendingRequest {
+  compacting: boolean
   resolve(value: unknown): void
   reject(error: Error): void
   timer: ReturnType<typeof setTimeout>
@@ -33,6 +35,8 @@ interface PiRpcOptions {
 }
 
 const REQUEST_TIMEOUT_MS = 120_000
+/** A page checkpoint can take several requests; bound idle time between batches. */
+const COMPACTION_IDLE_TIMEOUT_MS = 300_000
 
 /**
  * Minimal JSONL RPC client for `pi --mode rpc` (installed on the user's PATH).
@@ -109,11 +113,14 @@ export class PiRpcClient {
     const id = String(this.nextId++)
     const payload = JSON.stringify({ ...command, id })
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        reject(new Error(`Pi command ${String(command['type'])} timed out`))
-      }, REQUEST_TIMEOUT_MS)
-      this.pending.set(id, { resolve, reject, timer })
+      const timer = setTimeout(
+        () => {
+          this.pending.delete(id)
+          reject(new Error(`Pi command ${String(command['type'])} timed out`))
+        },
+        command['type'] === 'compact' ? COMPACTION_IDLE_TIMEOUT_MS : REQUEST_TIMEOUT_MS
+      )
+      this.pending.set(id, { resolve, reject, timer, compacting: command['type'] === 'compact' })
       this.child.stdin?.write(`${payload}\n`)
     })
   }
@@ -153,7 +160,7 @@ export class PiRpcClient {
   }
 
   /** Queue a follow-up message processed after the agent finishes. Unlike
-   *  `steer`, this is accepted while no turn is streaming — pi runs it as the
+   *  `steer`, this is accepted while no turn is streaming   pi runs it as the
    *  continuation of the session (after compaction/retry windows settle). */
   async followUp(message: string, images?: PiRpcImage[]): Promise<void> {
     await this.send(
@@ -244,6 +251,15 @@ export class PiRpcClient {
       return
     }
     if (type === 'extension_ui_request') {
+      if (
+        record['method'] === 'setStatus' &&
+        record['statusKey'] === PI_COMPACTION_EXTENSION_KEY &&
+        record['statusText'] === 'progress'
+      ) {
+        for (const pending of this.pending.values()) {
+          if (pending.compacting) pending.timer.refresh()
+        }
+      }
       // Only dialog methods block on a client response. Fire-and-forget methods
       // (notify, setStatus, setWidget, setTitle, set_editor_text) never expect a
       // reply, so answering them would be noise.

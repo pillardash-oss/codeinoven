@@ -2,7 +2,7 @@
  * Network-level failure detection for IPC handlers.
  *
  * Handlers that reach out to remote providers (GitHub, npm, …) must never let
- * a raw `fetch failed` TypeError cross the IPC boundary — the renderer treats
+ * a raw `fetch failed` TypeError cross the IPC boundary   the renderer treats
  * a rejected handler as a broken feature instead of a transient offline
  * state. Use {@link isNetworkError} to recognize connect/DNS timeouts and
  * degrade gracefully (cached data + an actionable offline message) instead.
@@ -27,7 +27,7 @@ const NETWORK_MESSAGE_PATTERN = /fetch failed|network error|socket (?:hang ?up|c
 
 /**
  * Whether an error (or anything in its `cause` chain) is a network-level
- * failure — offline, DNS, connect timeout, or a dropped socket — as opposed
+ * failure   offline, DNS, connect timeout, or a dropped socket   as opposed
  * to an application-level failure that should still be surfaced as-is.
  */
 export function isNetworkError(error: unknown, depth = 0): boolean {

@@ -5,12 +5,12 @@
  * This extension closes that gap with three custom tools plus a tool-call
  * permission gate:
  *
- *  - `cio_ask_user`      — structured multi-question ask rendered by the app's
+ *  - `cio_ask_user`        structured multi-question ask rendered by the app's
  *                          question cards through the extension-UI protocol.
- *  - `cio_todo_write`    — todo tracking; the name and `{ todos: [...] }`
+ *  - `cio_todo_write`      todo tracking; the name and `{ todos: [...] }`
  *                          input shape match the renderer's todo-tool
  *                          detection, so AgentTodoCard works unchanged.
- *  - `cio_request_files` — asks the user for file paths, validates them, and
+ *  - `cio_request_files`   asks the user for file paths, validates them, and
  *                          returns a structured file list for the agent.
  *
  * The permission gate intercepts every built-in tool call via
@@ -32,15 +32,15 @@
  *
  * Sub-agents: `cio_spawn_agent` opens a nested in-process pi session (a
  * persistent worker "thread" controlled by the primary agent). Sub-agents
- * get gated wrappers around the built-in tools — never the spawn tool, so
- * they cannot recurse — inherit the primary's model/thinking level unless
+ * get gated wrappers around the built-in tools   never the spawn tool, so
+ * they cannot recurse   inherit the primary's model/thinking level unless
  * overridden per spawn, and bubble every permission request up to the
  * primary thread through the parent extension-UI context. Permission cards
  * are pure UI on the primary thread: the primary agent's context only ever
  * receives the sub-agent's final message, never its transcript.
  *
  * Background sub-agents announce completion to the primary agent through a
- * display:false custom message delivered with pi.sendMessage — steer while
+ * display:false custom message delivered with pi.sendMessage   steer while
  * the primary is streaming, a fresh turn when it is idle. The model sees
  * the notification and final output as a user-role context message, but it
  * never renders in the transcript: the driver ignores custom-role messages.
@@ -107,23 +107,23 @@ const CIO_PI_BUILTIN_TOOLS = new Set([
 // disclaiming, "I should be cautious") instead of acting as an autonomous
 // engineering agent. This only gets swapped for genuine project-thread work
 // (Engineering and regular project chats with full workspace scope), never
-// for plain/temporary chat or file-system-enabled chat threads — those are
+// for plain/temporary chat or file-system-enabled chat threads   those are
 // still meant to read as a chat assistant, not an autonomous engineering
 // agent. The full workspace-scope block (buildWorkspaceContext in
 // prompt-assembler.ts) is the only prompt layer that ever contains this
 // marker line, so its presence is the reliable "this is project mode, not
 // chat mode" signal.
-const CIO_PROJECT_MODE_MARKER = 'WORKING SCOPE — this overrides ambiguous instructions:'
+const CIO_PROJECT_MODE_MARKER = 'WORKING SCOPE   this overrides ambiguous instructions:'
 const PI_ASSISTANT_IDENTITY_LINE =
   'You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.'
 const CIO_AGENT_IDENTITY_LINE =
-  'You are the agentic engine driving CodeInOven, an Agentic Development Environment (ADE) for autonomous software engineering — not a chat assistant. You act directly: read files, execute commands, edit code, and write new files to complete real engineering work end to end on the open project, without waiting for permission to do what you were already asked to do.'
+  'You are the agentic engine driving CodeInOven, an Agentic Development Environment (ADE) for autonomous software engineering   not a chat assistant. You act directly: read files, execute commands, edit code, and write new files to complete real engineering work end to end on the open project, without waiting for permission to do what you were already asked to do.'
 
 // The driver rewrites this file per turn with the CodeInOven-composed
 // instructions (work ethic, persistent preferences, working scope, skills).
 // Reading it here and returning it from before_agent_start delivers it as a
 // real system-role field on every request, instead of the driver
-// concatenating it into the user turn's text — which replayed the same
+// concatenating it into the user turn's text   which replayed the same
 // multi-kilobyte block inside every "user" message and made models mistake
 // the repeated block for injected/duplicated content.
 function loadCioSystemPrompt() {
@@ -163,7 +163,7 @@ interface DenyRule {
   label: string
 }
 
-// Recursive or bulk deletes — flat out denied without explicit approval.
+// Recursive or bulk deletes   flat out denied without explicit approval.
 const RECURSIVE_DELETE_RULES: DenyRule[] = [
   { pattern: /(?:^|[;&|]\\s*)rm\\s+(?=[^\\n]*(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\\s|$))/u, label: 'a recursive delete (rm -r)' },
   { pattern: /(?:^|[;&|]\\s*)find\\s+[^\\n]+\\s-delete(?:\\s|$)/u, label: 'find -delete' },
@@ -259,9 +259,9 @@ function gateHit(permission, reason, patterns, command) {
  */
 // Some provider/model pairs (observed on zai/glm-5.3-flash via the Vercel AI
 // Gateway) occasionally fail to terminate a tool call's JSON arguments
-// mid-stream: the model keeps emitting raw text — its own reasoning, a
+// mid-stream: the model keeps emitting raw text   its own reasoning, a
 // second tool-call attempt in the model's native pseudo-XML tool syntax
-// (<tool_call>...<arg_key>...</arg_key><arg_value>...) — and it all lands
+// (<tool_call>...<arg_key>...</arg_key><arg_value>...)   and it all lands
 // inside the first call's string argument (e.g. bash's "command"). Running
 // that string produces garbage shell output that looks exactly like a
 // fabricated/injected transcript, which is what makes the model itself
@@ -591,7 +591,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
 
   /**
    * What the primary agent receives: metadata plus ONLY the sub-agent's
-   * final message — never the running transcript. The full transcript stays
+   * final message   never the running transcript. The full transcript stays
    * in the sub-agent's own session, viewable in the UI.
    */
   function subAgentResult(record) {
@@ -614,7 +614,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
    * Steer the primary agent when a background sub-agent finishes. Uses a
    * display:false custom message: it reaches the model as a user-role
    * context message (with the final output) but never shows in the
-   * transcript — the driver ignores custom-role messages. While the primary
+   * transcript   the driver ignores custom-role messages. While the primary
    * is streaming this steers the current run; when idle it triggers a turn.
    */
   function notifySubAgentDone(record) {
@@ -624,7 +624,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
       'Sub-agent done for task ' + record.purpose + ' (' + record.agentId + ', status: ' + record.status + ').' +
       (record.error ? ' Error: ' + record.error : '') +
       (files.length > 0 ? '\\n\\nFiles it worked on (you are responsible for committing approved work): ' + files.join(', ') : '') +
-      '\\n\\nThis is the final output of the sub-agent — use it as you continue your work:\\n\\n' +
+      '\\n\\nThis is the final output of the sub-agent   use it as you continue your work:\\n\\n' +
       (record.finalOutput || record.output || '(the sub-agent produced no text output)')
     try {
       void pi.sendMessage(
@@ -835,7 +835,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
       'Purpose: ' + spec.purpose + '.',
       'The user does not chat with you directly: your final message is returned to the primary agent, which reports to the user.',
       'Work autonomously and do not ask the user questions. Permission requests for destructive actions are surfaced to the user on the primary thread.',
-      'Your final message MUST list every file you created or modified (relative to the project root), including files changed through shell commands — the primary agent is responsible for committing the work and needs this list.',
+      'Your final message MUST list every file you created or modified (relative to the project root), including files changed through shell commands   the primary agent is responsible for committing the work and needs this list.',
       '',
       'Instructions from the primary agent:',
       '',
@@ -847,11 +847,11 @@ export default function codeInOvenCoreToolsExtension(pi) {
     name: '${CIO_SPAWN_AGENT_TOOL_NAME}',
     label: 'Spawn a sub-agent',
     description:
-      'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default — unless the user explicitly asks you to use sub-agents differently — delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Run several sub-agents concurrently with background:true — each one automatically steers you a notification with its final output the moment it finishes, so you can keep working and act on results as they land. Omit background to block until the sub-agent finishes and returns its result directly — use that whenever you need the output before proceeding. You must never end your turn while any sub-agent is still running, regardless of outcome; workers report every file they touched because you are responsible for committing approved work. Sub-agents cannot spawn further sub-agents, and they inherit your model and thinking level unless you pass model/thinking_level overrides.',
+      'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default, unless the user explicitly asks you to use sub-agents differently, delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Run several sub-agents concurrently with background:true; each one automatically steers you a notification with its final output the moment it finishes, so you can keep working and act on results as they land. Omit background to block until the sub-agent finishes and returns its result directly; use that whenever you need the output before proceeding. You must never end your turn while any sub-agent is still running, regardless of outcome; workers report every file they touched because you are responsible for committing approved work. Sub-agents cannot spawn further sub-agents, and they inherit your model and thinking level unless you pass model/thinking_level overrides.',
     promptSnippet: 'Spawn sub-agent worker threads for focused or parallelizable tasks (explore, implement, tests, cleanup, docs)',
     promptGuidelines: [
       'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
-      'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work and collect results with ${CIO_AGENT_STATUS_TOOL_NAME}. Never end your turn while sub-agents are still running — wait for every result (successful or failed) with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true) first, because the primary agent owns committing the files the workers changed.'
+      'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work and collect results with ${CIO_AGENT_STATUS_TOOL_NAME}. Never end your turn while sub-agents are still running   wait for every result (successful or failed) with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true) first, because the primary agent owns committing the files the workers changed.'
     ],
     parameters: Type.Object({
       purpose: Type.String({
@@ -897,7 +897,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
           agentId: result.record.agentId,
           childSessionId: result.record.childSessionId,
           status: result.record.status,
-          note: 'Sub-agent is running in the background. When it finishes you will receive a steer message (sub-agent done for task …) carrying its final output — keep working until then; ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true) is available for explicit polling.'
+          note: 'Sub-agent is running in the background. When it finishes you will receive a steer message (sub-agent done for task …) carrying its final output   keep working until then; ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true) is available for explicit polling.'
         })
       }
       await result.record.promise
@@ -909,7 +909,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
     name: '${CIO_AGENT_STATUS_TOOL_NAME}',
     label: 'Check sub-agent status',
     description:
-      'Check the status and output of spawned sub-agent threads. Background sub-agents steer you a completion notification with their final output automatically; use this tool to poll explicitly, or wait:true to block until every running sub-agent finishes (with or without a specific agent_id) — always do this before ending your turn so no result is lost.',
+      'Check the status and output of spawned sub-agent threads. Background sub-agents steer you a completion notification with their final output automatically; use this tool to poll explicitly, or wait:true to block until every running sub-agent finishes (with or without a specific agent_id)   always do this before ending your turn so no result is lost.',
     promptSnippet: 'Check or wait for spawned sub-agent threads and collect their results',
     promptGuidelines: [
       'Background sub-agents announce completion themselves with a steer message containing their final output; use ${CIO_AGENT_STATUS_TOOL_NAME} to poll explicitly, with wait:true before finishing the turn so no result is lost.'
@@ -982,7 +982,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
           content:
             'Your turn ended while sub-agents are still running: ' +
             running.join(', ') +
-            '. Do not finish your work yet. Call ${CIO_AGENT_STATUS_TOOL_NAME} with agent_id set to each running id (or omit agent_id) and wait:true to block until they finish, then incorporate every result — successful or failed — before ending your turn. Sub-agents report the files they changed; you are responsible for committing approved work.',
+            '. Do not finish your work yet. Call ${CIO_AGENT_STATUS_TOOL_NAME} with agent_id set to each running id (or omit agent_id) and wait:true to block until they finish, then incorporate every result   successful or failed   before ending your turn. Sub-agents report the files they changed; you are responsible for committing approved work.',
           display: false
         },
         { triggerTurn: true }
@@ -1045,7 +1045,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
         ...(command === undefined ? {} : { command })
       }
       const approved = await ctx.ui.confirm(
-        'Permission needed: this chat has no file-system access — using ' + event.toolName + ' requires your approval',
+        'Permission needed: this chat has no file-system access   using ' + event.toolName + ' requires your approval',
         CIO_PERMISSION_MARKER + JSON.stringify(payload)
       )
       if (approved) return undefined

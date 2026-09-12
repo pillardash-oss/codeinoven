@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Toaster as Sonner, toast } from 'svelte-sonner'
-  import { subscribe } from '$lib/ipc.svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { onMount } from 'svelte'
   import { CheckCircle2, AlertTriangle, XCircle, Info } from '@lucide/svelte'
   import MemoryToastComponent from './MemoryToast.svelte'
@@ -16,6 +16,25 @@
   let theme = $state<'light' | 'dark'>(
     document.documentElement.classList.contains('dark') ? 'dark' : 'light'
   )
+
+  // The in-app browser is a native WebContentsView that composites above every
+  // DOM surface of the window, so it must be detached while a toast is on
+  // screen or it would cover the toast (see `browser:setToastVisible` in
+  // browser-service.ts). svelte-sonner starts dismissing by flagging the toast
+  // while its ~200ms exit animation still plays, so the restore is delayed to
+  // wait the animation out instead of clipping a fading toast.
+  let toastActive = $derived(toast.getActiveToasts().length > 0)
+
+  $effect(() => {
+    if (toastActive) {
+      void invoke('browser:setToastVisible', true).catch(() => {})
+      return
+    }
+    const restoreTimer = setTimeout(() => {
+      void invoke('browser:setToastVisible', false).catch(() => {})
+    }, 300)
+    return () => clearTimeout(restoreTimer)
+  })
 
   $effect(() => {
     const observer = new MutationObserver(() => {
@@ -139,8 +158,13 @@
   }
 
   :global([data-sonner-toast][data-styled='true'] [data-button]) {
-    flex: 1 1 0 !important;
-    min-width: 0 !important;
+    /* 100% basis (not 0) so the button ALWAYS wraps to its own bottom row,
+       even when the toast has no description. With basis 0 an action button
+       and a title fit side by side on one row, which is exactly the bug that
+       hit error toasts (title + Copy, no description) while thread toasts
+       (title + description + action) wrapped correctly. One rule, one
+       behaviour, every status. */
+    flex: 1 1 100% !important;
     margin-top: 4px !important;
     justify-content: center !important;
   }
@@ -166,7 +190,6 @@
   :global([data-sonner-toast][data-type='error']),
   :global([data-sonner-toast][data-type='warning']),
   :global([data-sonner-toast][data-type='info']) {
-    --status: transparent;
     position: relative;
   }
 
@@ -201,7 +224,7 @@
       ),
       var(--color-surface) !important;
     border: 1px solid color-mix(in srgb, var(--status) 55%, var(--color-border)) !important;
-    /* Real border instead of a ::before bar — it can never detach or escape
+    /* Real border instead of a ::before bar   it can never detach or escape
        the toast during drag, dismissal or scale transitions. */
     border-left: 3px solid var(--status) !important;
     box-shadow:
@@ -210,7 +233,7 @@
     color: var(--color-foreground) !important;
   }
 
-  /* Status-colored title — the colour reads before the words do */
+  /* Status-colored title   the colour reads before the words do */
   :global(
     [data-sonner-toast][data-type='success'] [data-title],
     [data-sonner-toast][data-type='error'] [data-title],

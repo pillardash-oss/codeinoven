@@ -54,7 +54,7 @@ async function waitForFeatureHandlers(channel: InvokeChannel): Promise<void> {
  * Typed IPC invoke helper. Channel determines both its argument tuple and result.
  *
  * Electron's contextBridge cannot structured-clone Proxy objects, and Svelte 5
- * `$state` values are deep proxies — passing one straight to the bridge throws
+ * `$state` values are deep proxies   passing one straight to the bridge throws
  * "An object could not be cloned". `$state.snapshot` unwraps each argument into
  * a plain static copy in a single pass (no string intermediate), so callers can
  * hand reactive state to `invoke` directly. Primitives pass through untouched.

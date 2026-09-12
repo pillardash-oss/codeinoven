@@ -11,7 +11,7 @@
  * at startup by parsing `remote.html` for its script/modulepreload/stylesheet
  * references and then walking the dependency arrays Vite embeds inside every JS
  * chunk (static `from` imports, dynamic `import()`, and preload dep lists).
- * Only files in that closure are ever served — the desktop app's own entry
+ * Only files in that closure are ever served   the desktop app's own entry
  * (`index.html`, `index-*.js`, unrelated chunks) is never exposed.
  *
  * The same graph also classifies the closure for HTTP caching:
@@ -20,7 +20,7 @@
  *   chunks) have content-derived names, so they are safe to serve with
  *   `Cache-Control: public, max-age=31536000, immutable`.
  * - **Public runtime assets** (agent icon SVGs loaded through
- *   `publicAssetUrl`) keep stable, unhashed names and are therefore mutable —
+ *   `publicAssetUrl`) keep stable, unhashed names and are therefore mutable  
  *   they must never be cached as immutable.
  *
  * It additionally exposes the **disconnected-shell precache manifest** (the
@@ -43,7 +43,7 @@ import { gzipSync } from 'node:zlib'
 const ASSET_REFERENCE = /\.\/([A-Za-z0-9._-]+\.(?:js|mjs|css))/g
 
 /**
- * Match only **static** import references inside a chunk — `from "./x.js"` and
+ * Match only **static** import references inside a chunk   `from "./x.js"` and
  * bare side-effect `import "./x.js"`. Dynamic `import("./x.js")` and the
  * modulepreload dependency arrays Vite emits for lazy chunks (`["./x.js"]`) are
  * deliberately excluded because they load on interaction, not on first paint.
@@ -57,7 +57,7 @@ const STATIC_IMPORT_REFERENCE = /(?:from|import)\s*["']\.\/([A-Za-z0-9._-]+\.(?:
  * (never via a static import), so they are invisible to the chunk-walk above.
  * The agent icon SVGs are loaded by `AgentIcon` from `publicAssetUrl`; the
  * phone reuses those components (ThreadView, ThreadRow), so the gateway must
- * serve them too. The set is a fixed public directory — no desktop assets leak.
+ * serve them too. The set is a fixed public directory   no desktop assets leak.
  */
 async function collectPublicAssetDir(staticRoot: string, relativeDir: string): Promise<string[]> {
   const dir = join(staticRoot, relativeDir)
@@ -65,7 +65,7 @@ async function collectPublicAssetDir(staticRoot: string, relativeDir: string): P
   const entries = await readdir(dir, { withFileTypes: true })
   const paths: string[] = []
   for (const entry of entries) {
-    // Skip macOS/editor metadata (`.DS_Store`, hidden files) — never served.
+    // Skip macOS/editor metadata (`.DS_Store`, hidden files)   never served.
     if (entry.name.startsWith('.')) continue
     const relative = `${relativeDir}/${entry.name}`
     if (entry.isDirectory()) {
@@ -117,11 +117,11 @@ export interface PwaBundleBudget {
 
 /** The full cache-classified view of the PWA asset graph. */
 export interface PwaAssetGraph {
-  /** Full transitive closure — the serving allow-list. */
+  /** Full transitive closure   the serving allow-list. */
   closure: ReadonlySet<string>
-  /** Hashed build outputs — safe to cache immutable. */
+  /** Hashed build outputs   safe to cache immutable. */
   immutable: ReadonlySet<string>
-  /** Public, unhashed runtime assets — never cached as immutable. */
+  /** Public, unhashed runtime assets   never cached as immutable. */
   mutable: ReadonlySet<string>
   /** Disconnected-shell precache manifest (absolute paths). */
   precache: string[]
@@ -134,7 +134,7 @@ export interface PwaAssetGraph {
  *
  * Starts from every asset mentioned in `remote.html`, then follows the
  * dependency references inside each JS chunk until the closure is stable.
- * Only files that actually exist under `assets/` are kept — a root-level file
+ * Only files that actually exist under `assets/` are kept   a root-level file
  * such as `service-worker.js` referenced by the PWA entry is served via the
  * static allow-list, never the asset closure.
  * Returns asset paths only (never the HTML shell).
@@ -210,8 +210,8 @@ export const MAX_CHUNK_GZIP_BUDGET_BYTES = 350 * 1024
  * Compute the eagerly-loaded initial JavaScript closure: the entry and
  * modulepreload chunks referenced directly by `remote.html` plus every chunk
  * they import **statically** (`from "./x.js"`). Lazy dynamic imports and their
- * modulepreload dep arrays are excluded — they load on interaction, not first
- * paint — so the closure is exactly what a phone parses to show the first
+ * modulepreload dep arrays are excluded   they load on interaction, not first
+ * paint   so the closure is exactly what a phone parses to show the first
  * screen. Returns a sorted, deduplicated list of `/assets/...` JS paths.
  */
 async function collectEagerJsClosure(staticRoot: string, initialRefs: string[]): Promise<string[]> {
@@ -247,8 +247,8 @@ async function collectEagerJsClosure(staticRoot: string, initialRefs: string[]):
 
 /**
  * Compute the full cache-classified asset graph, precache manifest, and bundle
- * budget. `precache` covers the disconnected shell — root files plus every
- * eagerly-loaded JS/CSS the initial paint needs — while lazy feature chunks
+ * budget. `precache` covers the disconnected shell   root files plus every
+ * eagerly-loaded JS/CSS the initial paint needs   while lazy feature chunks
  * (the connected client) are excluded so a rebuild never pins stale hashes.
  * The bundle budget is measured over the same eager closure.
  */

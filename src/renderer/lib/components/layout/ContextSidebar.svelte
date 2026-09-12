@@ -25,6 +25,7 @@
     X
   } from '@lucide/svelte'
   import type { ContextSidebarTab, TerminalPlacement } from '$lib/stores/context-sidebar.svelte'
+  import { faviconState } from '$lib/stores/favicons.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -76,8 +77,15 @@
   let resizing = $state(false)
   let activeTab = $derived(tabs.find((tab) => tab.id === activeTabId) ?? null)
 
+  // Resolve favicons for browser tab URLs so the strip can show the site's icon
+  // once available. Resolution is deduped per hostname inside the store.
+  let browserTabUrls = $derived(
+    tabs.flatMap((tab) => (tab.kind === 'browser' ? [tab.url] : []))
+  )
+  $effect(() => faviconState.ensureResolved(browserTabUrls))
+
   // Every other tool opens from the context dock rail and owns the whole panel,
-  // so only these kinds get a tab strip — the rest get a plain titled header.
+  // so only these kinds get a tab strip   the rest get a plain titled header.
   // Sub-agents share one panel toggle, so their tabs stay together here rather
   // than competing with the other context tools.
   const TABBED_KINDS = new Set<ContextSidebarTab['kind']>([
@@ -88,7 +96,7 @@
   ])
 
   // These tools are opened and closed from their own rail icon, and each one
-  // already owns its full-height content — the generic title-and-close header
+  // already owns its full-height content   the generic title-and-close header
   // was a redundant layer stacked on top of a panel that either has its own
   // internal toolbar (files, diff, debugger) or needs no title at all (sources,
   // memory, cloud deployment). Terminal keeps its header because it needs tabs.
@@ -107,7 +115,7 @@
   ])
 
   /** Files are headerless like the other single-panel tools right up until a
-   *  second file is open — then a real tab strip is the only way back to the
+   *  second file is open   then a real tab strip is the only way back to the
    *  first one, so it earns the same tabbed treatment as terminals. */
   let openFilesCount = $derived(tabs.filter((tab) => tab.kind === 'files').length)
   let tabbedMode = $derived(
@@ -128,7 +136,7 @@
   let siblingTabs = $derived(
     activeTab && !tabbedMode ? tabs.filter((tab) => tab.kind === activeTab.kind) : []
   )
-  /** Temporary chats close from their own tab, so they need no header cluster —
+  /** Temporary chats close from their own tab, so they need no header cluster  
    *  rendering it anyway would leave a stray divider on the right edge. */
   let showHeaderControls = $derived(
     terminalMode || browserMode || (activeTab !== null && !tabbedMode)
@@ -253,7 +261,16 @@
     {:else if tab.kind === 'actions'}
       <MonitorCog size={12} class="shrink-0" />
     {:else if tab.kind === 'browser'}
-      <Globe2 size={12} class="shrink-0" />
+      {#if tab.favicon ?? faviconState.faviconFor(tab.url)}
+        <img
+          src={(tab.favicon ?? faviconState.faviconFor(tab.url)) ?? ''}
+          alt=""
+          class="h-3 w-3 shrink-0"
+          aria-hidden="true"
+        />
+      {:else}
+        <Globe2 size={12} class="shrink-0" />
+      {/if}
     {:else if tab.kind === 'debugger'}
       <Bug size={12} class="shrink-0 text-accent" />
     {:else if tab.kind === 'sources'}

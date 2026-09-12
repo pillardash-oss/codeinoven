@@ -60,8 +60,8 @@ export function broadcastThreadUpdate(thread: Thread): void {
  * land at any time after a thread is opened (creation-time detection, or a
  * lazy heal on read), including while the user is actively typing. Routing it
  * through the full thread broadcast would force every `thread:updated`
- * subscriber — including ThreadView's message reconcile, which reloads and
- * re-merges the whole transcript — to run at that moment, freezing input on
+ * subscriber   including ThreadView's message reconcile, which reloads and
+ * re-merges the whole transcript   to run at that moment, freezing input on
  * large conversations for a purely cosmetic field.
  */
 export function broadcastThreadBranchUpdated(thread: Thread): void {

@@ -65,6 +65,23 @@ if [[ "$DRY_RUN" -eq 0 && -z "$(command -v gh)" ]]; then
   die "The 'gh' CLI is required to open the nightly-promotion pull request (run: brew install gh / gh auth login)."
 fi
 
+# --- 0b. local CI gate -------------------------------------------------------
+# Run the full host-OS mirror of the GitHub Actions quality/security/nightly
+# checks BEFORE anything is pushed or promoted. Individual failing stages are
+# NOT fatal mid-run — every stage runs, then failures are reported as one
+# markdown file per failed stage under .cio/git/ci/<unix-ts>/ with the path
+# splashed at the end. Deployment never proceeds until the whole gate passes.
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  say "${C_BOLD}Local CI gate: running the host-OS mirror of the CI checks...${C_RESET}"
+  if ! bun scripts/ci-local.ts --gate; then
+    CI_REPORT_DIR="${CI_REPORT_DIR:-$(ls -d .cio/git/ci/* 2>/dev/null | sort | tail -1)}"
+    die "Local CI gate failed. Per-failure reports: ${CI_REPORT_DIR:-.cio/git/ci}"
+  fi
+  ok "Local CI gate passed — proceeding with promotion."
+else
+  say "(dry-run) bun scripts/ci-local.ts --gate"
+fi
+
 say "${C_BOLD}Resolving latest remote state...${C_RESET}"
 git fetch origin
 
@@ -147,7 +164,8 @@ DEV_VERSION="$(pkg_version dev)"
 # Semver-correct: stable 0.5.51 -> nightly 0.5.52-nightly-1 must be > stable.
 # dev must be one patch ahead of nightly (first nightly after stable),
 # or equal for subsequent nightlies on same base.
-# Only auto-bump when dev==nightly AND nightly equals stable (main) — i.e. first nightly after a stable.
+# Only auto-bump when dev==nightly AND nightly equals stable (main) — i.e. the
+# first nightly after a stable release (stable 0.5.52 -> dev/nightly 0.5.53).
 if ! BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$NIGHTLY_VERSION" \
     CURRENT_VERSION="$DEV_VERSION" bun scripts/validate-release-promotion.ts >/dev/null 2>&1; then
   if [ "$DEV_VERSION" = "$NIGHTLY_VERSION" ]; then

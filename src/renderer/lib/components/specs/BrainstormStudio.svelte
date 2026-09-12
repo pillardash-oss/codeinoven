@@ -558,7 +558,7 @@
     submittingAction = true
     try {
       // Only clear the panel and the user's typed notes once the send has
-      // actually gone through — a painstakingly-typed draft must survive a
+      // actually gone through   a painstakingly-typed draft must survive a
       // failed or merely-deferred submit so the user never has to retype it.
       await onSubmit(action, submitted, notes, {
         baselineAvailable: brainstorm.generatedContent !== undefined,

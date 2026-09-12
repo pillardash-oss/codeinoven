@@ -61,7 +61,7 @@
 
   // Mic is hidden only when we know the state and neither a local ASR nor the
   // opt-in audio-to-LLM fallback is available. Store-derived ASR makes this
-  // reactive across the app without a restart — import/activate in Sound
+  // reactive across the app without a restart   import/activate in Sound
   // immediately flows to every mounted composer, edit and comment editor.
   let hidden = $derived(visibilityKnown && !hasInstalledAsr && !voiceRecordingEnabled)
 
@@ -166,7 +166,7 @@
           : 'Transcribing voice recording'
     }
     if (transcribingHere)
-      return 'Transcribing your last recording — click to start a new one'
+      return 'Transcribing your last recording   click to start a new one'
     return 'Start voice recording'
   })
 
@@ -290,7 +290,7 @@
     {:else if action === 'wait'}
       <WaveBars decorative label="Transcribing voice recording" />
     {:else if transcribingHere}
-      <WaveBars decorative label="Transcribing your last recording — click to start a new one" />
+      <WaveBars decorative label="Transcribing your last recording   click to start a new one" />
     {:else}
       <Mic size={14} aria-hidden="true" />
     {/if}

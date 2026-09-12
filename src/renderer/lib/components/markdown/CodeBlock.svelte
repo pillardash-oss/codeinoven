@@ -6,7 +6,7 @@
 
   interface Props {
     code: string
-    /** Fence language tag, e.g. `ts` — plain text when omitted or unknown. */
+    /** Fence language tag, e.g. `ts`   plain text when omitted or unknown. */
     lang?: string
   }
 
@@ -28,7 +28,7 @@
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copied = false), 1500)
     } catch {
-      // Clipboard unavailable — the button simply stays idle.
+      // Clipboard unavailable   the button simply stays idle.
     }
   }
 </script>

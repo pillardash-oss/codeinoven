@@ -9,6 +9,7 @@
     AccountUsageBreakdown,
     LocalProfileAnalytics,
     LocalProfileAnalyticsRange,
+    LocalProfileModelRanking,
     LocalProfileProjectBreakdown,
     LocalProfileRankingModeStats,
     LocalProfileUsageBreakdown,
@@ -17,12 +18,14 @@
   } from '$shared/types'
   import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
 
   type ThinkingFilter = 'all' | ThinkingLevel
   type ShotFilter = 'all' | 'one_shot' | 'multi_shot'
+  type RankingSortKey = 'aggregate' | 'one_shot' | 'multi_shot'
   type RangePreset = 'today' | 'yesterday' | '7d' | '30d' | 'year' | 'custom'
   type ModelRankMetric = 'cost' | 'tokens' | 'runtime'
 
@@ -107,7 +110,7 @@
     generatedAt: 0
   }
 
-  let usage = $state<LocalProfileAnalytics>(EMPTY_USAGE)  // responseDurationMs added below
+  let usage = $state<LocalProfileAnalytics>(EMPTY_USAGE) // responseDurationMs added below
   let accountState = $state<AccountProfileState>({ status: 'signed-out', profile: null })
   let loading = $state(true)
   let errorMessage = $state('')
@@ -266,12 +269,86 @@
   let thinkingFilter = $state<ThinkingFilter>('all')
   let shotFilter = $state<ShotFilter>('all')
 
+  /** Sample-weighted average across both shot categories; null when nothing is ranked yet. */
+  function rankingAggregate(entry: LocalProfileModelRanking): number | null {
+    const oneShotScore = entry.oneShot.averageScore
+    const multiShotScore = entry.multiShot.averageScore
+    const samples = entry.oneShot.samples + entry.multiShot.samples
+    if (samples === 0) return null
+    const weighted =
+      (oneShotScore === null ? 0 : oneShotScore * entry.oneShot.samples) +
+      (multiShotScore === null ? 0 : multiShotScore * entry.multiShot.samples)
+    const scoredSamples =
+      (oneShotScore === null ? 0 : entry.oneShot.samples) +
+      (multiShotScore === null ? 0 : entry.multiShot.samples)
+    return scoredSamples === 0 ? null : weighted / scoredSamples
+  }
+
+  function rankingSortValue(entry: LocalProfileModelRanking, key: RankingSortKey): number | null {
+    if (key === 'aggregate') return rankingAggregate(entry)
+    const stats = key === 'one_shot' ? entry.oneShot : entry.multiShot
+    return stats.samples === 0 ? null : stats.averageScore
+  }
+
+  function compareRankings(
+    left: LocalProfileModelRanking,
+    right: LocalProfileModelRanking,
+    key: RankingSortKey,
+    direction: 1 | -1
+  ): number {
+    const leftValue = rankingSortValue(left, key)
+    const rightValue = rankingSortValue(right, key)
+    // Unranked configurations (null) always sink below scored ones.
+    if (leftValue === null || rightValue === null) {
+      if (leftValue === rightValue) return right.updatedAt - left.updatedAt
+      return leftValue === null ? 1 : -1
+    }
+    const difference = (leftValue - rightValue) * direction
+    if (difference !== 0) return difference
+    const sampleDifference =
+      left.oneShot.samples +
+      left.multiShot.samples -
+      (right.oneShot.samples + right.multiShot.samples)
+    if (sampleDifference !== 0) return sampleDifference * -1
+    return right.updatedAt - left.updatedAt
+  }
+
   const filteredRankings = $derived(
     shotFilter === 'all'
       ? usage.modelRankings
       : usage.modelRankings.filter((entry) =>
           shotFilter === 'one_shot' ? entry.oneShot.samples > 0 : entry.multiShot.samples > 0
         )
+  )
+  const rankingColumns: DataTableColumn<LocalProfileModelRanking, RankingSortKey>[] = $derived.by(
+    () => {
+      const columns: DataTableColumn<LocalProfileModelRanking, RankingSortKey>[] = [
+        { key: null, header: 'Configuration' }
+      ]
+      if (shotFilter !== 'multi_shot') {
+        columns.push({
+          key: 'one_shot',
+          header: 'One-shot',
+          cellClass: 'tabular-nums',
+          compare: (left, right, direction) => compareRankings(left, right, 'one_shot', direction)
+        })
+      }
+      if (shotFilter !== 'one_shot') {
+        columns.push({
+          key: 'multi_shot',
+          header: 'Multi-shot',
+          cellClass: 'tabular-nums',
+          compare: (left, right, direction) => compareRankings(left, right, 'multi_shot', direction)
+        })
+      }
+      columns.push({
+        key: 'aggregate',
+        header: 'Total',
+        cellClass: 'tabular-nums',
+        compare: (left, right, direction) => compareRankings(left, right, 'aggregate', direction)
+      })
+      return columns
+    }
   )
   const shotFilterOptions: { value: ShotFilter; label: string }[] = [
     { value: 'all', label: 'All' },
@@ -326,7 +403,7 @@
     usage.models.filter((model) =>
       thinkingFilter === 'all' ? true : model.thinkingLevel === thinkingFilter
     )
- )
+  )
 
   function thinkingLevelLabel(level: ThinkingLevel): string {
     return (
@@ -336,7 +413,7 @@
   }
 
   function rankingScoreLabel(stats: LocalProfileRankingModeStats): string {
-    if (stats.samples === 0 || stats.averageScore === null) return '—'
+    if (stats.samples === 0 || stats.averageScore === null) return ' '
     return `${stats.averageScore.toFixed(1)}/10`
   }
 
@@ -345,8 +422,18 @@
   }
 
   function rankingDurationLabel(stats: LocalProfileRankingModeStats): string {
-    if (stats.samples === 0 || stats.averageDurationMs === null) return '—'
+    if (stats.samples === 0 || stats.averageDurationMs === null) return ' '
     return formatDuration(stats.averageDurationMs)
+  }
+
+  function rankingAggregateLabel(entry: LocalProfileModelRanking): string {
+    const aggregate = rankingAggregate(entry)
+    return aggregate === null ? ' ' : `${aggregate.toFixed(1)}/10`
+  }
+
+  function rankingTotalSamplesLabel(entry: LocalProfileModelRanking): string {
+    const total = entry.oneShot.samples + entry.multiShot.samples
+    return total === 1 ? '1 conversation' : `${total} conversations`
   }
 
   function localDateKey(date: Date): string {
@@ -1135,7 +1222,9 @@
         </div>
         {#if peakDay}
           <div class="text-right">
-            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Peak day</p>
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+              Peak day
+            </p>
             <p class="mt-0.5 text-xs font-semibold tabular-nums">
               {formatUsageDate(peakDay.date)} · {formatNumber(peakDay.tokens)}
             </p>
@@ -1195,7 +1284,10 @@
           </div>
         {/each}
       </div>
-      <div class="mt-2 grid grid-cols-4 text-[0.625rem] tabular-nums text-dimmed" aria-hidden="true">
+      <div
+        class="mt-2 grid grid-cols-4 text-[0.625rem] tabular-nums text-dimmed"
+        aria-hidden="true"
+      >
         <span>12 AM</span><span class="text-center">6 AM</span><span class="text-center">12 PM</span
         ><span class="text-right">6 PM</span>
       </div>
@@ -1492,11 +1584,7 @@
         </p>
       {/if}
     </div>
-    <div
-      class="border-b px-4 py-2"
-      role="group"
-      aria-label="Filter rankings by shot category"
-    >
+    <div class="border-b px-4 py-2" role="group" aria-label="Filter rankings by shot category">
       <div class="flex flex-wrap items-center gap-1">
         {#each shotFilterOptions as option (option.value)}
           <button
@@ -1514,80 +1602,67 @@
       </div>
     </div>
     {#if filteredRankings.length > 0}
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-xs">
-          <thead>
-            <tr class="border-b text-[0.6875rem] uppercase tracking-wide text-muted">
-              <th scope="col" class="px-4 py-2 font-medium">Configuration</th>
-              {#if shotFilter !== 'multi_shot'}
-                <th scope="col" class="px-4 py-2 font-medium">One-shot</th>
+      <DataTable
+        rows={filteredRankings.slice(0, 10)}
+        columns={rankingColumns}
+        getRowId={(entry) =>
+          `${entry.harnessId}:${entry.providerId}:${entry.modelId}:${entry.thinkingLevel}:${entry.rubricVersion}`}
+        label="Model rankings"
+        initialSortKey="aggregate"
+      >
+        {#snippet cell(
+          entry: LocalProfileModelRanking,
+          column: DataTableColumn<LocalProfileModelRanking, RankingSortKey>
+        )}
+          {#if column.key === null}
+            <span class="flex min-w-0 items-center gap-1.5 font-semibold">
+              {#if getAgentIcon(entry.harnessId)}
+                <img
+                  class="h-4 w-4 shrink-0 object-contain"
+                  src={getAgentIcon(entry.harnessId)?.iconUrl}
+                  alt=""
+                />
               {/if}
-              {#if shotFilter !== 'one_shot'}
-                <th scope="col" class="px-4 py-2 font-medium">Multi-shot</th>
+              <VendorIcon
+                name={entry.providerId || entry.modelId}
+                id={entry.providerId}
+                size={15}
+              />
+              <span class="truncate">{entry.modelId}</span>
+            </span>
+            <span class="mt-1 flex flex-wrap items-center gap-1 text-[0.625rem] text-muted">
+              {#if entry.thinkingLevel}
+                <span
+                  class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 capitalize"
+                >
+                  <Brain size={9} />
+                  {entry.thinkingLevel}
+                </span>
               {/if}
-            </tr>
-          </thead>
-          <tbody class="divide-y">
-            {#each filteredRankings.slice(0, 10) as entry (`${entry.harnessId}:${entry.providerId}:${entry.modelId}:${entry.thinkingLevel}:${entry.rubricVersion}`)}
-              <tr>
-                <td class="max-w-56 px-4 py-3">
-                  <span class="flex min-w-0 items-center gap-1.5 font-semibold">
-                    {#if getAgentIcon(entry.harnessId)}
-                      <img
-                        class="h-4 w-4 shrink-0 object-contain"
-                        src={getAgentIcon(entry.harnessId)?.iconUrl}
-                        alt=""
-                      />
-                    {/if}
-                    <VendorIcon
-                      name={entry.providerId || entry.modelId}
-                      id={entry.providerId}
-                      size={15}
-                    />
-                    <span class="truncate">{entry.modelId}</span>
-                  </span>
-                  <span class="mt-1 flex flex-wrap items-center gap-1 text-[0.625rem] text-muted">
-                    {#if entry.thinkingLevel}
-                      <span class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 capitalize">
-                        <Brain size={9} />
-                        {entry.thinkingLevel}
-                      </span>
-                    {/if}
-                    <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5">
-                      {entry.harnessId}
-                    </span>
-                    <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5">
-                      rubric {entry.rubricVersion}
-                    </span>
-                  </span>
-                </td>
-                {#if shotFilter !== 'multi_shot'}
-                  <td class="px-4 py-3 tabular-nums">
-                    <div class="font-semibold text-foreground">{rankingScoreLabel(entry.oneShot)}</div>
-                    <div class="mt-0.5 text-[0.6875rem] text-dimmed">
-                      {rankingSamplesLabel(entry.oneShot)}
-                      {#if entry.oneShot.samples > 0}
-                        · {rankingDurationLabel(entry.oneShot)} avg
-                      {/if}
-                    </div>
-                  </td>
-                {/if}
-                {#if shotFilter !== 'one_shot'}
-                  <td class="px-4 py-3 tabular-nums">
-                    <div class="font-semibold text-foreground">{rankingScoreLabel(entry.multiShot)}</div>
-                    <div class="mt-0.5 text-[0.6875rem] text-dimmed">
-                      {rankingSamplesLabel(entry.multiShot)}
-                      {#if entry.multiShot.samples > 0}
-                        · {rankingDurationLabel(entry.multiShot)} avg
-                      {/if}
-                    </div>
-                  </td>
-                {/if}
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+              <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5">
+                {entry.harnessId}
+              </span>
+              <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5">
+                rubric {entry.rubricVersion}
+              </span>
+            </span>
+          {:else if column.key === 'aggregate'}
+            <div class="font-semibold text-foreground">{rankingAggregateLabel(entry)}</div>
+            <div class="mt-0.5 text-[0.6875rem] text-dimmed">
+              {rankingTotalSamplesLabel(entry)}
+            </div>
+          {:else}
+            {@const stats = column.key === 'one_shot' ? entry.oneShot : entry.multiShot}
+            <div class="font-semibold text-foreground">{rankingScoreLabel(stats)}</div>
+            <div class="mt-0.5 text-[0.6875rem] text-dimmed">
+              {rankingSamplesLabel(stats)}
+              {#if stats.samples > 0}
+                · {rankingDurationLabel(stats)} avg
+              {/if}
+            </div>
+          {/if}
+        {/snippet}
+      </DataTable>
     {:else}
       <p class="px-4 py-8 text-center text-xs text-muted">
         The more you use CodeInOven, the more models that do a good job will appear here.

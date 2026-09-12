@@ -133,7 +133,7 @@
     scopeState.board.buckets.find((bucket) => bucket.id === sourceBucketId) ?? null
   )
 
-  /** Scopes the source branch may be merged into — every scope but the source. */
+  /** Scopes the source branch may be merged into   every scope but the source. */
   const targetOptions = $derived(
     scopeState.board.buckets.filter((bucket) => bucket.id !== sourceBucketId)
   )
@@ -176,7 +176,7 @@
     return bucket.root.kind === 'worktree' ? `${bucket.name} (worktree)` : bucket.name
   }
 
-  /** Fixed summary rows — the row always exists; only its label text changes. */
+  /** Fixed summary rows   the row always exists; only its label text changes. */
   const threadRowLabel = $derived(
     mode === 'merge-delete'
       ? 'Threads to delete'
@@ -188,7 +188,7 @@
   /** Always-rendered bottom note; text adapts to the selected mode. */
   const modeNote = $derived(
     mode === 'merge-keep'
-      ? 'The worktree, this scope and its threads are kept — nothing is removed.'
+      ? 'The worktree, this scope and its threads are kept   nothing is removed.'
       : mode === 'merge-move-to-default'
         ? 'The worktree is removed, this scope is deleted, and its threads move to Default (evicting the oldest Default threads to respect the thread limit).'
         : 'The worktree and the branch are removed, and this scope is deleted, after the merge completes.'

@@ -8,7 +8,7 @@ import type { SimpleGit } from 'simple-git'
 /**
  * Phase 0 spike: prove `simple-git` (thin wrapper over the system git binary)
  * covers every operation the four phases need before the architecture commits
- * to it — init, status, stage/commit, push to a bare local remote, rebase with
+ * to it   init, status, stage/commit, push to a bare local remote, rebase with
  * a constructed conflict, and merge `MergeSummary` conflict detection.
  */
 

@@ -48,7 +48,7 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
     const thread = await threadManager.getThreadViaWorker(projectId, threadId)
     // A thread whose creation-time branch settle never completed (restart or a
-    // transient git failure) heals lazily on its next open — off this read's
+    // transient git failure) heals lazily on its next open   off this read's
     // critical path, deduped while in flight.
     if (thread) settleThreadBranch(branchDeps, thread)
     return thread

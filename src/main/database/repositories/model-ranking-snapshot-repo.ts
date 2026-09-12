@@ -31,7 +31,7 @@ export interface OpenRankingSnapshotInput {
  * Transient grading queue for model-ranking conversations. Snapshots are
  * captured while a conversation window is open, closed for grading by thread
  * deletion or the inactivity deadline, claimed in bounded batches by the
- * drain, and hard-deleted the moment their score lands in the aggregate —
+ * drain, and hard-deleted the moment their score lands in the aggregate  
  * never deleted unscored. Judge failures retry with bounded backoff up to the
  * documented attempt cap and remain `status='failed'` for recovery.
  */
@@ -124,7 +124,7 @@ export class ModelRankingSnapshotRepo {
   /**
    * A completed later exchange on the still-open conversation window: upgrade
    * the classification to multi_shot, append the follow-up prompt as judge
-   * context, and slide the inactivity deadline. The window stays open — a
+   * context, and slide the inactivity deadline. The window stays open   a
    * conversation is graded exactly once, at close. A plain update, never a
    * failure marker.
    *
@@ -223,7 +223,7 @@ export class ModelRankingSnapshotRepo {
   /**
    * Judge failure bookkeeping. Under the attempt cap the row returns to
    * 'pending' with bounded exponential backoff; at the cap it parks as
-   * 'failed' with its attempt count preserved for recovery — never deleted
+   * 'failed' with its attempt count preserved for recovery   never deleted
    * unscored, never counted in the aggregate. Token-guarded: only the current
    * claim generation can defer or park the row.
    */

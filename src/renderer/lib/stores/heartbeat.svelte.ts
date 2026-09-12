@@ -51,6 +51,11 @@ class HeartbeatStore {
     }
   }
 
+  async trigger(id: string): Promise<void> {
+    await invoke('heartbeat:trigger', id)
+    this.heartbeats = await invoke('heartbeat:list')
+  }
+
   async setEnabled(id: string, enabled: boolean): Promise<void> {
     const updated = await invoke('heartbeat:toggle', id, enabled)
     this.heartbeats = this.heartbeats.map((entry) => (entry.id === id ? updated : entry))

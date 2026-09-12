@@ -166,8 +166,10 @@ export class RendererRecoveryStore {
     this.activeView = view
     // Track the last content view so returning from Settings/Scope — even
     // across a restart made on a Settings page — lands back on the same view.
-    if (view === 'projects' || view === 'chats' || view === 'threads') {
-      this.lastContentView = view
+    // 'projects-scope' renders the same workspace page as 'projects' (just
+    // with the scope sidebar focused), so it records as the projects view.
+    if (view === 'projects' || view === 'projects-scope' || view === 'chats' || view === 'threads') {
+      this.lastContentView = view === 'projects-scope' ? 'projects' : view
     }
     // Remember the last non-settings view for the Settings back button.
     if (!isSettingsView(view)) {
@@ -197,6 +199,32 @@ export class RendererRecoveryStore {
 
   draftFor(projectId: string, threadId: string): string {
     return this.entryFor(projectId, threadId).text
+  }
+
+  /** Every thread whose composer holds unsent content, as (projectId, threadId)
+   *  refs. Drafts persist only in renderer storage, never the DB, so main's
+   *  SQL hydration cannot include them — the workspace uses this list to fetch
+   *  draft threads that fall outside the bounded first-paint slice. */
+  listDraftThreadRefs(): Array<{ projectId: string; threadId: string }> {
+    const refs: Array<{ projectId: string; threadId: string }> = []
+    for (const key of Object.keys(this.composerDrafts)) {
+      try {
+        const parsed: unknown = JSON.parse(key)
+        if (!Array.isArray(parsed) || parsed.length !== 2) continue
+        const [projectId, threadId] = parsed
+        if (
+          typeof projectId === 'string' &&
+          typeof threadId === 'string' &&
+          isRecoveryIdentifier(projectId) &&
+          isRecoveryIdentifier(threadId)
+        ) {
+          refs.push({ projectId, threadId })
+        }
+      } catch {
+        // Corrupt key — skip it, the draft is unusable anyway.
+      }
+    }
+    return refs
   }
 
   /** Whether the thread has any unsent composer content (text, attachments, or references). */

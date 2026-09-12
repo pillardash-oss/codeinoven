@@ -1,8 +1,10 @@
 <script lang="ts">
   import {
     AlertTriangle,
+    Check,
     Clock3,
     Code2,
+    Copy,
     Loader2,
     LogIn,
     RotateCcw,
@@ -20,6 +22,7 @@
     ThreadSettings
   } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
+  import { copyText } from '$lib/copy-text'
   import { normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
   import Modal from '../ui/Modal.svelte'
   import ProviderLoginTerminal from '../providers/ProviderLoginTerminal.svelte'
@@ -78,6 +81,7 @@
     autoRetryEnabled = true
   }: Props = $props()
   let showRawError = $state(false)
+  let copiedRawError = $state(false)
   let loginOpen = $state(false)
   let loginHandoff = $state<ProviderAccountLoginHandoff | null>(null)
   let loginError = $state('')
@@ -94,7 +98,7 @@
   /**
    * A reset far in the future (e.g. a multi-day weekly usage cap) is not
    * something the app should present as an imminent, live-ticking
-   * auto-resume — that reads as broken when the countdown says "in 6 days".
+   * auto-resume   that reads as broken when the countdown says "in 6 days".
    * It also isn't something the harness's own short-interval retry hint
    * (meant for transient errors) should drive. Once the reset falls inside
    * this window, switch to the live auto-resume countdown.
@@ -104,6 +108,16 @@
     issue.retryAt !== undefined && issue.retryAt - now <= AUTO_SCHEDULE_WINDOW_MS
   )
   const rawError = $derived(issue.rawError?.trim() || issue.message.trim())
+
+  async function copyRawError(): Promise<void> {
+    try {
+      await copyText(rawError)
+      copiedRawError = true
+      setTimeout(() => (copiedRawError = false), 1500)
+    } catch {
+      // clipboard not available
+    }
+  }
   const waiting = $derived(status.state === 'waiting')
   /**
    * A usage/rate-limit reset that the app will (or can) auto-resume: a terminal
@@ -202,7 +216,12 @@
   /** Commit a new thread model from the shared picker, mirroring the pattern used
    *  by the Audit/Spec/Assignment cards. Fast inference only survives the switch
    *  when the newly selected model actually exposes a fast tier. */
-  function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
+  function chooseModel(
+    providerId: string,
+    modelId: string,
+    nextHarnessId?: string,
+    accountId?: string
+  ): void {
     if (!settings || !onModelChange) return
     const harnessId = nextHarnessId ?? settings.harnessId
     const provider = providers.find(
@@ -210,7 +229,7 @@
     )
     const model = provider?.models.find((candidate) => candidate.id === modelId)
     const updated = normalizeFastInference(
-      { ...settings, harnessId, providerId, modelId },
+      { ...settings, harnessId, accountId, providerId, modelId },
       harnessId,
       providerId,
       modelId,
@@ -258,7 +277,9 @@
           {providerName}
         </span>
         {#if sourceLabel}
-          <span class="rounded-full bg-danger/10 px-2 py-0.5 text-[0.625rem] font-semibold text-danger">
+          <span
+            class="rounded-full bg-danger/10 px-2 py-0.5 text-[0.625rem] font-semibold text-danger"
+          >
             Worker · {sourceLabel}
           </span>
         {/if}
@@ -372,6 +393,7 @@
             harnessId={settings.harnessId}
             providerId={settings.providerId}
             modelId={settings.modelId}
+            accountId={settings.accountId}
             {favoriteModels}
             {recentModels}
             {onRemoveRecent}
@@ -416,6 +438,20 @@
     title={`${providerName} Raw Error`}
     onClose={() => (showRawError = false)}
   >
+    <button
+      class="mb-2 inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+      aria-label={copiedRawError ? 'Raw error copied' : 'Copy raw error to clipboard'}
+      title={copiedRawError ? 'Copied' : 'Copy raw error'}
+      onclick={() => void copyRawError()}
+    >
+      {#if copiedRawError}
+        <Check size={13} class="text-success" />
+        Copied
+      {:else}
+        <Copy size={13} />
+        Copy
+      {/if}
+    </button>
     <pre
       class="max-h-96 overflow-auto rounded-lg border border-border bg-raised p-3 text-xs leading-relaxed text-foreground"><code
         >{rawError}</code

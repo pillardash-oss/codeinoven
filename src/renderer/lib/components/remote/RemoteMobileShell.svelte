@@ -55,7 +55,7 @@
 
   interface Props {
     onDisconnect?: () => void
-    /** Called once the shell is connected and mounted — the app root uses it
+    /** Called once the shell is connected and mounted   the app root uses it
      *  to sync the desktop theme through the bridge. */
     onConnected?: () => void
   }
@@ -107,7 +107,7 @@
   let deleteTarget = $state<Thread | null>(null)
   let deleteBusy = $state(false)
   let deleteError = $state('')
-  // Which thread's action menu is open — drives the shared bottom-sheet action menu.
+  // Which thread's action menu is open   drives the shared bottom-sheet action menu.
   let actionMenuThread = $state<Thread | null>(null)
   // Sidebar Projects/Threads/Chats mode picker.
   let modeMenuOpen = $state(false)
@@ -387,7 +387,7 @@
   let selectedThreadWorking = $derived(
     mobileState.selectedThread ? mobileState.isWorking(mobileState.selectedThread) : false
   )
-  /** The real project whose thread is currently open — used to scope a new thread. */
+  /** The real project whose thread is currently open   used to scope a new thread. */
   let activeThreadProject = $derived(
     mobileState.selectedProject && mobileState.selectedProject.id !== INBOX_PROJECT_ID
       ? mobileState.selectedProject
@@ -532,7 +532,7 @@
             class="flex h-11 w-9 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
             aria-label={usagePercent === undefined
               ? 'Context usage unavailable'
-              : `Context usage — ${Math.round(usagePercent)}% used`}
+              : `Context usage   ${Math.round(usagePercent)}% used`}
             title="Context usage"
             onclick={() => (mobileState.usageOpen = true)}
           >
@@ -573,7 +573,7 @@
     </header>
   </div>
 
-  <!-- Conversation — the mobile transcript, lazy-loaded. -->
+  <!-- Conversation   the mobile transcript, lazy-loaded. -->
   <main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     {#if mobileState.selectedThread}
       {#key mobileState.selectedThread.id}
@@ -617,7 +617,7 @@
     <MessageHistoryPanel messages={mobileState.userMessages} onSelect={historyJump} />
   </BottomSheet>
 
-  <!-- Notifications sheet — the panel lazy-loads at open time. -->
+  <!-- Notifications sheet   the panel lazy-loads at open time. -->
   <BottomSheet
     open={mobileState.notificationsOpen}
     title="Notifications"
@@ -667,7 +667,7 @@
     {/await}
   </BottomSheet>
 
-  <!-- Memory sheet — the desktop panel lazy-loads at open time. -->
+  <!-- Memory sheet   the desktop panel lazy-loads at open time. -->
   <BottomSheet
     open={mobileState.memoryOpen}
     title="Memory"
@@ -695,7 +695,7 @@
     </div>
   </BottomSheet>
 
-  <!-- Temporary (explain / quick) chat sheet — opened from the conversation's
+  <!-- Temporary (explain / quick) chat sheet   opened from the conversation's
        selection popover or the header overflow menu. -->
   {#if mobileState.temporaryChatTabId && contextSidebarState.temporaryChatTab(mobileState.temporaryChatTabId)}
     <BottomSheet
@@ -720,7 +720,7 @@
     </BottomSheet>
   {/if}
 
-  <!-- Git sheet — the desktop panel lazy-loads at open time. -->
+  <!-- Git sheet   the desktop panel lazy-loads at open time. -->
   {#if mobileState.selectedThread && !mobileState.chatMode}
     <BottomSheet
       open={mobileState.gitOpen}
@@ -737,18 +737,27 @@
           Loading Git…
         </div>
       {:then { default: GitStatusPanel }}
-        <GitStatusPanel
-          projectId={mobileState.selectedThread?.projectId ?? ''}
-          threadId={mobileState.selectedThread?.id ?? ''}
-          scopeBucketId={mobileState.selectedThread?.scopeBucketId}
-        />
+        {#if mobileState.selectedThread}
+          <GitStatusPanel
+            projectId={mobileState.selectedThread.projectId}
+            threadId={mobileState.selectedThread.id}
+            scopeBucketId={mobileState.selectedThread.scopeBucketId}
+          />
+        {:else}
+          <div
+            class="flex h-full items-center justify-center px-6 text-center text-sm text-dimmed"
+            role="status"
+          >
+            Open a thread to view its Git panel.
+          </div>
+        {/if}
       {:catch}
         {@render chunkFailure()}
       {/await}
     </BottomSheet>
   {/if}
 
-  <!-- Sources sheet — files, processes, artifacts, and context this thread has touched. -->
+  <!-- Sources sheet   files, processes, artifacts, and context this thread has touched. -->
   {#if mobileState.selectedThread}
     <BottomSheet
       open={mobileState.sourcesOpen}
@@ -793,7 +802,7 @@
     </BottomSheet>
   {/if}
 
-  <!-- Notes drawer — shares the same editor panel as the desktop sidebar. -->
+  <!-- Notes drawer   shares the same editor panel as the desktop sidebar. -->
   {#if mobileState.selectedThread}
     <BottomSheet
       open={mobileState.notesOpen}
@@ -821,7 +830,7 @@
     </BottomSheet>
   {/if}
 
-  <!-- Context usage sheet — same detail the desktop composer's battery icon shows. -->
+  <!-- Context usage sheet   same detail the desktop composer's battery icon shows. -->
   {#if mobileState.selectedThread}
     <BottomSheet
       open={mobileState.usageOpen}
@@ -1176,7 +1185,7 @@
             {/each}
           </div>
         {:else}
-          <!-- Chats — the standalone inbox conversations. -->
+          <!-- Chats   the standalone inbox conversations. -->
           <div class="space-y-px">
             {#each mobileState.chatThreads as thread (thread.id)}
               <div class="flex items-center gap-0.5">
@@ -1226,7 +1235,7 @@
         {/if}
       </div>
 
-      <!-- Sidebar footer: view switcher + new thread/chat — share the same row. -->
+      <!-- Sidebar footer: view switcher + new thread/chat   share the same row. -->
       <div class="shrink-0 border-t border-border p-2 flex items-center gap-2">
         <button
           type="button"
@@ -1344,7 +1353,7 @@
                 >1</span
               >
               <span class="min-w-0 flex-1 text-[0.8125rem] leading-relaxed text-muted">
-                Open the browser menu — the <span class="text-foreground">⋮</span> (or ⋯) button.
+                Open the browser menu   the <span class="text-foreground">⋮</span> (or ⋯) button.
               </span>
             </li>
             <li class="flex items-start gap-3">
@@ -1404,7 +1413,7 @@
         <div class="mt-5 flex items-start gap-2.5 rounded-xl bg-elevated px-3.5 py-3">
           <Share size={14} class="mt-0.5 shrink-0 text-primary" />
           <p class="text-[0.75rem] leading-relaxed text-muted">
-            Open the installed icon going forward — the install button here disappears once it's
+            Open the installed icon going forward   the install button here disappears once it's
             added.
           </p>
         </div>
@@ -1412,7 +1421,7 @@
     </aside>
   {/if}
 
-  <!-- Rename thread dialog (bits-ui Dialog — no desktop modal graph). -->
+  <!-- Rename thread dialog (bits-ui Dialog   no desktop modal graph). -->
   <Dialog.Root
     open={renameTarget !== null}
     onOpenChange={(open) => {
@@ -1506,7 +1515,7 @@
     </AlertDialog.Portal>
   </AlertDialog.Root>
 
-  <!-- Touch-friendly thread actions — bottom-sheet menu backed by the same
+  <!-- Touch-friendly thread actions   bottom-sheet menu backed by the same
        MenuItem shape the rest of the app uses. -->
   <ActionSheet
     open={actionMenuThread !== null}
@@ -1515,7 +1524,7 @@
     onClose={() => (actionMenuThread = null)}
   />
 
-  <!-- Sidebar view switcher — Projects / Threads / Chats. -->
+  <!-- Sidebar view switcher   Projects / Threads / Chats. -->
   <ActionSheet
     open={modeMenuOpen}
     title="View"
@@ -1523,7 +1532,7 @@
     onClose={() => (modeMenuOpen = false)}
   />
 
-  <!-- App header overflow menu — history/memory/git/sources/notes/notifications. -->
+  <!-- App header overflow menu   history/memory/git/sources/notes/notifications. -->
   <ActionSheet
     open={headerMenuOpen}
     title="Options"

@@ -30,7 +30,7 @@ export interface GatewayAdapterDefinition {
   description: string
   /** Exact npm package that is installed into the app-owned directory. */
   npmPackage: string
-  /** Pinned version — never a range, so installs are reproducible. */
+  /** Pinned version   never a range, so installs are reproducible. */
   version: string
   /** Package-relative path of the server entrypoint. */
   binPath: string

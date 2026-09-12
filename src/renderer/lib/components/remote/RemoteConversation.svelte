@@ -33,8 +33,8 @@
   import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { copyText } from '$lib/copy-text'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
+  import ReadAlongOverlay from '../speech/ReadAlongOverlay.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
-  import { spokenWordOffset } from '../../speech/read-along'
   import { attachmentPreviewKind, fileUrlToPath } from '$lib/mime'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { fastVariantForModelId } from '$shared/fast-inference'
@@ -141,7 +141,7 @@
     }
   }
 
-  /** Message roots keyed by id — lets history jumps scroll without a DOM query. */
+  /** Message roots keyed by id   lets history jumps scroll without a DOM query. */
   const messageElements = new SvelteMap<string, HTMLDivElement>()
   const registerMessageElement: Attachment<HTMLDivElement> = (element) => {
     const id = element.dataset.messageId
@@ -151,11 +151,11 @@
     }
   }
 
-  /** Effective agent settings for this thread — chats keep their own model.
+  /** Effective agent settings for this thread   chats keep their own model.
    *  Held as local state (not a pure derive) so the composer's toolbar edits
    *  (model/permission/thinking) are reflected immediately without a round
    *  trip, matching desktop's ThreadView. */
-  // Intentional initial-value capture — this component is keyed per thread.
+  // Intentional initial-value capture   this component is keyed per thread.
   // svelte-ignore state_referenced_locally
   let settings = $state<ThreadSettings>(
     chatMode ? chatEffectiveSettings() : threadSettings.initialFor(thread)
@@ -188,7 +188,7 @@
     }
   }
 
-  // Provider/model catalog — hydrate this project's catalog if it hasn't
+  // Provider/model catalog   hydrate this project's catalog if it hasn't
   // been fetched yet (desktop's App.svelte seeds every project at startup;
   // mobile only ever opens one project's threads at a time).
   let providers = $derived(providerCatalog.cached(thread.projectId) ?? [])
@@ -212,7 +212,7 @@
     const hydrate = async (): Promise<void> => {
       await threadMessages.load(projectId, id, 40)
       // A thread opened while its turn is still running has its accumulated
-      // working trace only in the live harness session — the mirror persists
+      // working trace only in the live harness session   the mirror persists
       // assistant parts only when the turn idles/completes. Pull the live
       // transcript so the in-progress work renders immediately instead of a
       // bare user message that only fills in after the turn ends.
@@ -285,7 +285,7 @@
   function selectEngineeringLifecycle(input: EngineeringLifecycleSelectionInput): void {
     pendingLifecycleSelection = input
     // Persist the staged intent so the switches stay exactly where the user
-    // left them across thread switches and app restarts — a send must never
+    // left them across thread switches and app restarts   a send must never
     // steer a different prompt than the one the switches currently show.
     saveLifecycleIntent(thread.projectId, thread.id, input)
   }
@@ -300,7 +300,7 @@
     )
     pendingLifecycleSelection = null
     lifecycleGuardOpen = false
-    // The staged intent was either applied or discarded by this confirmation —
+    // The staged intent was either applied or discarded by this confirmation  
     // it must not resurface on the next mount.
     clearLifecycleIntent(thread.projectId, thread.id)
     if (replacement.stages.length > 0 || replacement.autopilot) {
@@ -586,7 +586,7 @@
           (!message.providerId || model.providerId === message.providerId)
       ) ?? allModels.find((model) => model.id === message.modelId)
     if (model) return model.name
-    // Fast variants may be absent from harness catalogs — fall back to a derived label.
+    // Fast variants may be absent from harness catalogs   fall back to a derived label.
     return fastVariantForModelId(message.modelId)?.label ?? message.modelId
   }
 
@@ -906,7 +906,7 @@
     if (!pending) return base
     const autopilot = pending.autopilot === true
     const selectedStages = autopilot ? [] : normalizeLifecycleStages(pending.stages)
-    // A staged "everything off" must read as off — never carry a stale
+    // A staged "everything off" must read as off   never carry a stale
     // `startedAt` marker that would keep the toolbox icon lit.
     const cleared = !autopilot && selectedStages.length === 0
     return {
@@ -926,7 +926,7 @@
 
   /** Toolbox icon activity mirrors the staged selection, not the persisted
    *  settings: toggles are intent-only until send, so the icon must dim or
-   *  light the moment a switch flips — not after the next message. */
+   *  light the moment a switch flips   not after the next message. */
   const toolboxActive = $derived.by(() => {
     const pending = pendingLifecycleSelection
     if (pending) {
@@ -956,7 +956,7 @@
     const dependencies = (startAfterThreads ?? []).filter((dep) => dep.id !== thread.id)
     // Commit any staged Toolbox choice before routing the send: the user is
     // actually sending now, so the choice applies (or asks for confirmation)
-    // because it will steer this message — never at toggle time.
+    // because it will steer this message   never at toggle time.
     void (async () => {
       const staged = pendingLifecycleSelection
       if (staged) {
@@ -965,7 +965,7 @@
           (engineeringLifecycle.activeStage !== undefined ||
             engineeringLifecycle.humanGate !== undefined)
         ) {
-          // Keep the staged choice — confirmLifecycleReplacement reads it.
+          // Keep the staged choice   confirmLifecycleReplacement reads it.
           guardedSend = {
             text: msg,
             attachments,
@@ -1250,31 +1250,12 @@
                       speechController.playback.state === 'playing' ||
                       speechController.playback.state === 'paused')}
                   {#if isReadingRemote && speechController.activeSegments && speechController.activeSegments.length > 0 && speechController.readingOverlayActive}
-                    {@const segs = speechController.activeSegments}
-                    {@const activeIdx = speechController.visibleSegmentIndex}
-                    {@const spokenProgress = speechController.activeSegmentProgress}
-                    <div class="flex flex-col gap-1.5 text-sm text-foreground">
-                      {#each segs as seg, i (seg.id)}
-                        {@const spokenOffset =
-                          i === activeIdx ? spokenWordOffset(seg.text, spokenProgress) : -1}
-                        <div
-                          class={i === activeIdx
-                            ? 'rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors'
-                            : 'px-2.5 py-1 opacity-80'}
-                          data-speech-line={i === activeIdx ? 'active' : undefined}
-                        >
-                          <span class="leading-relaxed">
-                            {#if spokenOffset > 0}
-                              <span class="rounded-sm bg-info/20 px-0.5 box-decoration-clone"
-                                >{seg.text.slice(0, spokenOffset)}</span
-                              >{seg.text.slice(spokenOffset)}
-                            {:else}
-                              {seg.text}
-                            {/if}
-                          </span>
-                        </div>
-                      {/each}
-                    </div>
+                    <ReadAlongOverlay
+                      segments={speechController.activeSegments}
+                      activeIndex={speechController.visibleSegmentIndex}
+                      spokenProgress={speechController.activeSegmentProgress}
+                      textClass="text-sm"
+                    />
                   {:else}
                     <div
                       class={isReadingRemote && speechController.playback.state === 'preparing'
@@ -1387,7 +1368,7 @@
 
       {#if queuedMessage}
         <p class="rounded-xl border border-border bg-elevated px-3 py-2 text-[0.75rem] text-dimmed">
-          Queued — will send once {queuedMessage.startAfterThreads.length === 1
+          Queued   will send once {queuedMessage.startAfterThreads.length === 1
             ? 'the selected thread finishes'
             : 'the selected threads finish'}.
         </p>
@@ -1525,7 +1506,7 @@
         working={busy}
         onStop={abortRun}
         placeholder={busy
-          ? `${chatMode ? 'Chat' : 'Agent'} is working — type to queue`
+          ? `${chatMode ? 'Chat' : 'Agent'} is working   type to queue`
           : 'Message…'}
         {settings}
         onSettingsChange={updateSettings}
@@ -1561,7 +1542,7 @@
   oncancel={() => {
     lifecycleGuardOpen = false
     // The staged Toolbox choice stays staged (deliberate toggle); only the
-    // parked send is discarded — its draft was restored into the composer.
+    // parked send is discarded   its draft was restored into the composer.
     guardedSend = null
   }}
   onconfirm={confirmLifecycleReplacement}

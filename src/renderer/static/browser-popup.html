@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <title>Browser permission</title>
+  <style>
+    /* Palette mirrors the app tokens (src/renderer/app.css) for both themes;
+       the host page passes ?theme= so the OS-independent app theme wins. */
+    :root {
+      --app: #f7f6f2;
+      --surface: #ffffff;
+      --foreground: #081825;
+      --muted: #4a5568;
+      --dimmed: #8b95a5;
+      --border: #e2e1dc;
+      --border-strong: #c8c7c2;
+      --primary: #081825;
+      --primary-hover: #0d2438;
+      --on-primary: #f7f6f2;
+      --danger: #dc2626;
+      font-size: 16px;
+    }
+
+    :root.dark {
+      --app: #0b0b0d;
+      --surface: #141417;
+      --foreground: #f5f4f0;
+      --muted: #9d9da6;
+      --dimmed: #5f5f68;
+      --border: #27272c;
+      --border-strong: #3b3b42;
+      --primary: #f5f4f0;
+      --primary-hover: #e5e4df;
+      --on-primary: #0b0b0d;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+      overflow: hidden;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 0.75rem;
+      padding: 0.875rem;
+      background: var(--app);
+      color: var(--foreground);
+      font-family: 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular', Menlo, Monaco,
+        'Cascadia Code', monospace;
+      font-weight: 300;
+      -webkit-font-smoothing: antialiased;
+      user-select: none;
+      cursor: default;
+    }
+
+    .queue-note {
+      font-size: 0.6875rem;
+      color: var(--dimmed);
+      letter-spacing: 0.04em;
+    }
+
+    .summary {
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      color: var(--muted);
+    }
+
+    .origin {
+      display: block;
+      word-break: break-all;
+      font-size: 0.75rem;
+      color: var(--foreground);
+    }
+
+    .requesting {
+      font-weight: 500;
+      color: var(--foreground);
+    }
+
+    .requester-label {
+      font-size: 0.6875rem;
+      letter-spacing: 0.02em;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .actions {
+      display: flex;
+      gap: 0.375rem;
+    }
+
+    button {
+      flex: 1;
+      padding: 0.4375rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+    }
+
+    button:hover {
+      background: var(--surface);
+      color: var(--foreground);
+      border-color: var(--border-strong);
+    }
+
+    button.primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: var(--on-primary);
+      font-weight: 500;
+    }
+
+    button.primary:hover {
+      background: var(--primary-hover);
+      border-color: var(--primary-hover);
+      color: var(--on-primary);
+    }
+
+    button:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 1px;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <p class="queue-note hidden" id="queue-note"></p>
+  <p class="requester-label hidden" id="requester"></p>
+  <p class="summary" role="document">
+    <span class="origin" id="origin"></span>
+    wants to use <span class="requesting" id="permission"></span>.
+  </p>
+  <div class="actions" role="group" aria-label="Permission decision">
+    <button type="button" id="deny" title="Refuse and stop asking for this permission on this site">Don't allow</button>
+    <button type="button" id="allow-once" title="Allow only this one request; ask again next time">Allow once</button>
+    <button type="button" id="allow" class="primary" title="Allow this permission for the site for this app session">Allow</button>
+  </div>
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search)
+      var root = document.documentElement
+      function applyTheme(resolved) {
+        root.classList.toggle('dark', resolved === 'dark')
+      }
+      if (params.get('theme') === 'dark') root.classList.add('dark')
+      var api = window.api
+      if (!api) return
+
+      // The app theme is user-configurable independent of the OS; the URL
+      // parameter above is only the first-paint hint from the OS scheme.
+      var systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      api.config
+        .get()
+        .then(function (config) {
+          var preference = config && config.theme ? config.theme : 'system'
+          applyTheme(preference === 'system' ? (systemDark ? 'dark' : 'light') : preference)
+        })
+        .catch(function () { })
+
+      var current = null
+      var queueNote = document.getElementById('queue-note')
+      var originEl = document.getElementById('origin')
+      var requesterEl = document.getElementById('requester')
+      var permissionEl = document.getElementById('permission')
+
+      function describe(permission, mediaTypes) {
+        if (permission === 'media' && Array.isArray(mediaTypes) && mediaTypes.length > 0) {
+          return mediaTypes
+            .map(function (mediaType) {
+              if (mediaType === 'video') return 'the camera'
+              if (mediaType === 'audio') return 'the microphone'
+              return mediaType
+            })
+            .join(' and ')
+        }
+        return permission.replace(/-/g, ' ')
+      }
+
+      function decide(decision) {
+        if (!current) return
+        var requestId = current.id
+        current = null
+        api.invoke('browser:resolvePermission', requestId, decision).catch(function () { })
+      }
+
+      function bind(id, decision) {
+        document.getElementById(id).addEventListener('click', function () {
+          decide(decision)
+        })
+      }
+      bind('allow', 'allow')
+      bind('allow-once', 'allow-once')
+      bind('deny', 'deny')
+
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') decide('dismiss')
+      })
+
+      api.on('browser:popup:permission', function (request, context) {
+        current = request
+        originEl.textContent = request.origin
+        permissionEl.textContent = describe(request.permission, request.mediaTypes)
+        var projectLabel = context && typeof context.projectLabel === 'string' ? context.projectLabel : ''
+        if (projectLabel !== '') {
+          requesterEl.textContent = projectLabel
+          requesterEl.classList.remove('hidden')
+        } else {
+          requesterEl.textContent = ''
+          requesterEl.classList.add('hidden')
+        }
+        var queueSize = context && typeof context.queueSize === 'number' ? context.queueSize : 1
+        if (queueSize > 1) {
+          queueNote.textContent = queueSize + ' permission requests pending'
+          queueNote.classList.remove('hidden')
+        } else {
+          queueNote.classList.add('hidden')
+        }
+        var primary = document.getElementById('allow')
+        if (primary instanceof HTMLElement) primary.focus()
+      })
+
+      // Announce readiness so main flushes a request that arrived while this
+      // document was still subscribing (the lost-first-event race).
+      api.invoke('browser:popupReady').catch(function () { })
+    })()
+  </script>
+</body>
+
+</html>

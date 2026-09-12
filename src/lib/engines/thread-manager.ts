@@ -152,7 +152,7 @@ function buildThreadDeletionStatements(
 
   // Pending turn-feedback rows are NOT resolved here: they keep their captured
   // grading payload (their thread reference is SET NULL) and are judged by the
-  // LLM grader immediately after deletion — a lost-cause thread never scores
+  // LLM grader immediately after deletion   a lost-cause thread never scores
   // as a pass just because it was deleted.
 
   if (assignmentValues.length > 0) {
@@ -230,24 +230,6 @@ export function remapCopiedMessages(messages: AgentMessage[]): AgentMessage[] {
 }
 
 /**
- * Keep the latest completed compaction and everything after it. A compaction
- * replaces the harness context that preceded it, so older mirrored messages
- * are unnecessary when creating a new branch from this history.
- */
-function historyFromLatestCompaction(messages: AgentMessage[]): AgentMessage[] {
-  const latestCompactionIndex = messages.findLastIndex((message) =>
-    message.parts.some(
-      (part) =>
-        part.type === 'compaction-summary' ||
-        (part.type === 'compaction' &&
-          typeof part.summary === 'string' &&
-          part.summary.trim().length > 0)
-    )
-  )
-  return latestCompactionIndex === -1 ? messages : messages.slice(latestCompactionIndex)
-}
-
-/**
  * Main-process injection point that resolves a scope target into its
  * authoritative filesystem root. The persisted `Thread.workingDirectory` is
  * compatibility data; this provider is the authority at creation time.
@@ -272,7 +254,7 @@ export class ThreadManager {
    * Per-thread cache of the full user-message jump list (keyed by
    * `${projectId}:${threadId}`), populated on first async worker-backed load
    * and busted only when a new user message is applied to that thread or the
-   * thread is deleted — repeated menu-opens never re-scan the database.
+   * thread is deleted   repeated menu-opens never re-scan the database.
    */
   private readonly userMessageHistoryCache = new Map<string, UserMessageSummary[]>()
 
@@ -303,7 +285,7 @@ export class ThreadManager {
   /**
    * Set by the ChatEngine so deleting a thread closes its open ranking
    * snapshot conversation for immediate grading before the thread foreign
-   * key is detached — deletion is the conversation close signal.
+   * key is detached   deletion is the conversation close signal.
    */
   onThreadsDeletedForRanking?: (projectId: string, threadIds: string[]) => void
 
@@ -515,7 +497,7 @@ export class ThreadManager {
    * `sortOrder ?? lastActivity` descending, so a dragged thread holds its
    * position, while any thread that receives genuinely newer activity (a
    * larger `lastActivity`, since epoch time only grows) naturally sorts above
-   * it — and can be dragged back above again. Unlike the batch reorder, this
+   * it   and can be dragged back above again. Unlike the batch reorder, this
    * touches only the dragged thread and never wipes other threads' anchors.
    */
   async setSortOrder(projectId: string, threadId: string, sortOrder: number): Promise<Thread> {
@@ -529,7 +511,7 @@ export class ThreadManager {
   /**
    * Manual reorder of the pinned threads for a project. This is the single way
    * pin order changes: the first id becomes most-recently pinned (top). Only
-   * pinned_at is rewritten — nothing else, so it stays consistent across every
+   * pinned_at is rewritten   nothing else, so it stays consistent across every
    * surface and a newly pinned thread always lands on top.
    */
   async reorderPinnedThreads(projectId: string, orderedPinnedIds: string[]): Promise<Thread[]> {
@@ -556,8 +538,8 @@ export class ThreadManager {
 
   /**
    * Manual reorder of pinned threads across every project (Threads view). The
-   * first id becomes most-recently pinned (top). Only pinned_at is rewritten —
-   * nothing else — so pin order stays consistent across every surface and a
+   * first id becomes most-recently pinned (top). Only pinned_at is rewritten  
+   * nothing else   so pin order stays consistent across every surface and a
    * newly pinned thread always lands on top.
    */
   async reorderPinnedThreadsGlobal(orderedPinnedIds: string[]): Promise<Thread[]> {
@@ -800,7 +782,7 @@ export class ThreadManager {
    * Delete every thread in a project through the same path as
    * `deleteThread` (session teardown, DB row cleanup, disk artifacts), so
    * project deletion never has to duplicate or fall behind that logic.
-   * Only walks coordinator/standalone threads — orchestration children are
+   * Only walks coordinator/standalone threads   orchestration children are
    * swept as part of their coordinator's deletion.
    */
   async deleteAllThreadsInProject(projectId: string): Promise<void> {
@@ -953,7 +935,7 @@ export class ThreadManager {
   }
 
   /**
-   * Ids of every orchestration descendant of `threadId` — worker sub-agent
+   * Ids of every orchestration descendant of `threadId`   worker sub-agent
    * threads dispatched by this coordinator, transitively. Used to attribute
    * sub-agent checkpoint work to the parent thread's turn.
    */
@@ -1167,7 +1149,7 @@ export class ThreadManager {
    *
    * Enabling requires prior work (a bound session or mirrored conversation),
    * excludes orchestration threads, and is rejected while an Engineering
-   * lifecycle selection is active — the two workflows are mutually exclusive.
+   * lifecycle selection is active   the two workflows are mutually exclusive.
    * Once the first audit run has started (`independentAuditInitialized`), the
    * audit stays enabled for the thread's lifetime. The flag is deliberately a
    * `Thread` field, not a `ThreadSettings` entry, so forks and new threads
@@ -1187,12 +1169,9 @@ export class ThreadManager {
     }
     if (enabled && existing.independentAudit !== true) {
       const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
-      if (
-        (lifecycle && lifecycle.selection !== 'none') ||
-        lifecycle?.startedAt !== undefined
-      ) {
+      if ((lifecycle && lifecycle.selection !== 'none') || lifecycle?.startedAt !== undefined) {
         throw new Error(
-          'Independent audit excludes Engineering modes — turn them off first or fork the thread.'
+          'Independent audit excludes Engineering modes   turn them off first or fork the thread.'
         )
       }
       const hasWork =
@@ -1217,7 +1196,8 @@ export class ThreadManager {
     projectId: string,
     threadId: string,
     sessionId: string,
-    harnessId?: string
+    harnessId?: string,
+    accountId?: string
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
@@ -1225,6 +1205,7 @@ export class ThreadManager {
       ...existing,
       sessionId,
       ...(harnessId ? { sessionHarnessId: harnessId } : {}),
+      ...(accountId ? { sessionAccountId: accountId } : {}),
       updatedAt: Date.now()
     }
 
@@ -1232,13 +1213,14 @@ export class ThreadManager {
     return updated
   }
 
-  /** Unbind the harness session — the next prompt starts a fresh one. */
+  /** Unbind the harness session   the next prompt starts a fresh one. */
   async clearSessionId(projectId: string, threadId: string): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
     const updated: Thread = { ...existing, updatedAt: Date.now() }
     delete updated.sessionId
     delete updated.sessionHarnessId
+    delete updated.sessionAccountId
 
     await this.threadRepo.upsertViaWorker(updated)
     return updated
@@ -1255,10 +1237,14 @@ export class ThreadManager {
     // multi-megabyte transaction payload in memory. Every batch is its own
     // transaction; the delete+upsert sequence below preserves the same
     // end state because the delete always precedes the first upsert batch.
-    const statements = buildSaveMessagesStatements(threadId, messages)
-    const BATCH = 64
-    for (let offset = 0; offset < statements.length; offset += BATCH) {
-      const batch = statements.slice(offset, offset + BATCH)
+    const BATCH = 16
+    for (let offset = 0; offset < Math.max(1, messages.length); offset += BATCH) {
+      const statements = buildSaveMessagesStatements(
+        threadId,
+        messages.slice(offset, offset + BATCH)
+      )
+      const batch = offset === 0 ? statements : statements.slice(2)
+      if (offset > 0) await new Promise<void>((resolve) => setImmediate(resolve))
       const outcome = await this.db.transactionViaWorker(batch)
       if (!outcome.ok) {
         // Fallback: identical batching semantics on the primary connection.
@@ -1437,22 +1423,18 @@ export class ThreadManager {
    * Bounded per-project recent-thread list for sidebar hydration. The inbox
    * (Chats) project gets its configured `thread_limit` quota; every other
    * project gets `RECENT_THREADS_PER_PROJECT`. Older rows stay reachable via
-   * `listProjectThreads` paging.
+   * `listProjectThreads` paging. Unread threads bypass every quota so they
+   * always surface in the first-paint slice regardless of age.
    */
   async listRecentPerProject(): Promise<Thread[]> {
     return this.threadRepo.listRecentPerProjectViaWorker((projectId) =>
-      projectId === INBOX_PROJECT_ID
-        ? Number.MAX_SAFE_INTEGER
-        : RECENT_THREADS_PER_PROJECT
+      projectId === INBOX_PROJECT_ID ? Number.MAX_SAFE_INTEGER : RECENT_THREADS_PER_PROJECT
     )
   }
 
   /** Paged threads for one project: the project filter is applied in SQL
    *  before the limit, so "load more" always reaches the project's older rows. */
-  async listProjectThreads(
-    projectId: string,
-    options?: ThreadListOptions
-  ): Promise<Thread[]> {
+  async listProjectThreads(projectId: string, options?: ThreadListOptions): Promise<Thread[]> {
     return this.threadRepo.listByProjectViaWorker(projectId, {
       includeArchived: false,
       order: 'activity',
@@ -1463,7 +1445,7 @@ export class ThreadManager {
   /**
    * Deterministic thread-capacity view for the current project. Exposes the
    * limit, active/protected counts, and how many threads could be deleted to
-   * make room — so the UI can explain a protected-capacity refusal.
+   * make room   so the UI can explain a protected-capacity refusal.
    */
   async getThreadCapacity(projectId: string): Promise<ThreadCapacity> {
     const project = this.projectRepo.get(projectId)
@@ -1517,7 +1499,7 @@ export class ThreadManager {
 
   /**
    * Fork a thread into a new conversation. When `targetProjectId` is provided
-   * the fork is created in that project instead of the source project — used to
+   * the fork is created in that project instead of the source project   used to
    * continue a standalone chat inside a real project.
    */
   async forkThread(
@@ -1534,19 +1516,45 @@ export class ThreadManager {
       const destination = this.projectRepo.get(destinationProjectId)
       if (!destination) throw new Error(`Project not found: ${destinationProjectId}`)
     }
-    // Forking can copy a large transcript. Use the worker-backed paged reader
-    // instead of running the unbounded repository query on Electron's main
-    // connection while active agent streams remain responsive.
-    const parentMessages = await this.loadMessageRecords(projectId, threadId)
-    let copied = parentMessages
-    if (messageId) {
-      const cutoff = parentMessages.findIndex((message) => message.id === messageId)
-      if (cutoff === -1) {
-        throw new Error(`Cannot fork from message ${messageId}: message not found in thread`)
-      }
-      copied = parentMessages.slice(0, cutoff + 1)
+    // Resolve the upper bound before creating a destination. Only metadata crosses
+    // the worker boundary; transcript JSON stays in SQLite throughout the copy.
+    const upper = await this.db.queryViaWorker(
+      `SELECT id, created_at FROM agent_messages WHERE thread_id = ?
+       AND session_id IS NULL ${messageId ? 'AND id = ?' : ''}
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+      messageId ? [threadId, messageId] : [threadId],
+      1
+    )
+    if (!upper.ok) throw new Error(upper.error ?? 'Cannot read fork boundary')
+    if (messageId && upper.rows.length === 0) {
+      throw new Error(`Cannot fork from message ${messageId}: message not found in thread`)
     }
-    copied = historyFromLatestCompaction(copied)
+    const cutoff = upper.rows[0]
+    const boundary = cutoff
+      ? await this.db.queryViaWorker(
+          `SELECT CASE WHEN json_extract(p.value, '$.firstKeptCreatedAt') IS NOT NULL THEN '' ELSE m.id END AS id,
+         min(m.created_at, coalesce((SELECT max(k.created_at) FROM agent_messages k
+           WHERE k.thread_id = m.thread_id AND k.session_id IS NULL
+             AND k.created_at <= json_extract(p.value, '$.firstKeptCreatedAt')),
+           json_extract(p.value, '$.firstKeptCreatedAt'), m.created_at)) AS created_at
+       FROM agent_messages m, json_each(m.parts) p
+       WHERE m.thread_id = ? AND m.session_id IS NULL
+       AND (m.created_at, m.id) <= (?, ?)
+       AND (
+         (json_extract(p.value, '$.type') = 'compaction-summary'
+           AND length(trim(json_extract(p.value, '$.text'))) > 0)
+         OR (json_extract(p.value, '$.type') = 'compaction'
+           AND length(trim(json_extract(p.value, '$.summary'))) > 0
+           AND (json_extract(p.value, '$.firstKeptEntryId') IS NULL
+             OR json_extract(p.value, '$.firstKeptCreatedAt') IS NOT NULL)))
+       ORDER BY m.created_at DESC, m.id DESC LIMIT 1`,
+          [threadId, cutoff.created_at, cutoff.id],
+          1
+        )
+      : undefined
+    if (boundary && !boundary.ok)
+      throw new Error(boundary.error ?? 'Cannot read compaction boundary')
+    const lower = boundary?.rows[0]
 
     const destinationPath = this.projectRepo.get(destinationProjectId)?.path ?? ''
     const forkScopeBucketId = destinationProjectId === projectId ? parent.scopeBucketId : undefined
@@ -1581,17 +1589,55 @@ export class ThreadManager {
             autopilot: sourceLifecycle.autopilot === true
           })
         } catch {
-          // Lifecycle inheritance is cosmetic — never fail the fork on it.
+          // Lifecycle inheritance is cosmetic   never fail the fork on it.
         }
       }
     }
-    if (copied.length > 0) {
-      // Yield the main-process event loop before the copy so an active agent
-      // stream (or the renderer) is never starved by the fork's serialization
-      // work, even for a large legacy transcript.
-      await new Promise<void>((resolve) => setImmediate(resolve))
-      const withNewIds = remapCopiedMessages(copied)
-      await this.saveMessages(destinationProjectId, forked.id, withNewIds)
+    if (cutoff) {
+      let after: Record<string, unknown> | undefined
+      for (;;) {
+        const page = await this.db.queryViaWorker(
+          `SELECT id, created_at FROM agent_messages WHERE thread_id = ?
+           AND session_id IS NULL AND visibility IN ('conversation', 'working_trace')
+           AND (created_at, id) <= (?, ?)
+           ${lower ? 'AND (created_at, id) >= (?, ?)' : ''}
+           ${after ? 'AND (created_at, id) > (?, ?)' : ''}
+           ORDER BY created_at, id LIMIT 16`,
+          [
+            threadId,
+            cutoff.created_at,
+            cutoff.id,
+            ...(lower ? [lower.created_at, lower.id] : []),
+            ...(after ? [after.created_at, after.id] : [])
+          ],
+          16
+        )
+        if (!page.ok) throw new Error(page.error ?? 'Cannot read fork page')
+        if (page.rows.length === 0) break
+        const statements = page.rows.map((row) => {
+          const id = createMessageId()
+          return {
+            sql: `INSERT INTO agent_messages (
+              id, thread_id, role, origin, visibility, parts, search_text,
+              model_id, provider_id, harness_id, thinking_level,
+              references_json, project_references_json, created_at, completed_at,
+              generation_ms
+            ) SELECT ?, ?, role, origin, visibility,
+              (SELECT json_group_array(json(CASE WHEN json_type(value, '$.messageID') IS NULL
+                THEN value ELSE json_set(value, '$.messageID', ?, '$.id', ? || ':' || json_extract(value, '$.id')) END))
+                FROM json_each(parts)), search_text,
+              model_id, provider_id, harness_id, thinking_level,
+              references_json, project_references_json, created_at, completed_at,
+              generation_ms
+              FROM agent_messages WHERE thread_id = ? AND id = ?`,
+            params: [id, forked.id, id, id, threadId, row.id]
+          }
+        })
+        const outcome = await this.db.transactionViaWorker(statements)
+        if (!outcome.ok) throw new Error(outcome.error ?? 'Cannot copy fork page')
+        after = page.rows[page.rows.length - 1]
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
     }
 
     // A fork carries the parent's history, so it is a completed thread, not an

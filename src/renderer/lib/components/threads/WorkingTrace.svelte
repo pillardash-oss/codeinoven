@@ -19,6 +19,7 @@
   import SubagentCard from './SubagentCard.svelte'
   import ThinkingBlock from './ThinkingBlock.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
+  import SmoothMarkdown from '../markdown/SmoothMarkdown.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import ActionSheet from '../ui/ActionSheet.svelte'
@@ -33,7 +34,7 @@
     open?: boolean
     busy?: boolean
     latest?: boolean
-    /** True once this trace's turn produced a completed assistant message — the
+    /** True once this trace's turn produced a completed assistant message   the
      *  only condition under which the trace may fold itself. */
     done?: boolean
     /** True when this trace was rehydrated from persisted state because no live
@@ -52,6 +53,7 @@
     providerId?: string | null
     harnessId?: string | null
     harnessName?: string | null
+    accountLabel?: string | null
     isFast?: boolean
     projectId?: string
     threadId?: string
@@ -78,6 +80,7 @@
     providerId,
     harnessId,
     harnessName,
+    accountLabel,
     isFast = false,
     projectId,
     threadId,
@@ -88,7 +91,7 @@
     onCiteFile
   }: Props = $props()
 
-  // Intentional initial-value capture — props are only used to seed local state.
+  // Intentional initial-value capture   props are only used to seed local state.
   // svelte-ignore state_referenced_locally
   let isOpen = $state(open || initialOpen)
   // svelte-ignore state_referenced_locally
@@ -105,7 +108,7 @@
   /** The trace renders its own pagination: the newest 15 entries first, and
    *  one older page (15 more) whenever the reader scrolls the trace's inner
    *  scroller until the ante-penultimate rendered item is in view. The header
-   *  count always reflects the FULL entry count — the window limits what
+   *  count always reflects the FULL entry count   the window limits what
    *  mounts, never what is reported. Entries come from the already-loaded
    *  message cache, so paging here costs no IPC. */
   const TRACE_PAGE_SIZE = 15
@@ -231,7 +234,7 @@
         notify()
       }
     } else if (done && !busy && wasLatest && !latest && isOpen && !userOpened) {
-      // Turn finished and a newer turn superseded it — fold immediately.
+      // Turn finished and a newer turn superseded it   fold immediately.
       if (closeTimer) {
         clearTimeout(closeTimer)
         closeTimer = null
@@ -316,7 +319,7 @@
     visibleParts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
   )
 
-  // Live clock for the sub-agent dropdown list — ticks only while any sub-agent is running.
+  // Live clock for the sub-agent dropdown list   ticks only while any sub-agent is running.
   let listNow = $state(0)
   $effect(() => {
     if (subagentParts.every((part) => part.activity.status !== 'running')) {
@@ -353,7 +356,7 @@
 
   function subagentSheetItems(): MenuItem[] {
     return subagentParts.map((part) => ({
-      label: `${part.activity.agent || 'Sub-agent'} — ${
+      label: `${part.activity.agent || 'Sub-agent'}   ${
         part.activity.description || subagentStatusLabel(part.activity.status)
       }`,
       icon: Bot,
@@ -391,8 +394,8 @@
             <button
               type="button"
               class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-1 text-[0.5625rem] text-info transition-colors active:bg-info/20"
-              aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
-              title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
+              aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned   open list`}
+              title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned   open list`}
               onclick={(e: MouseEvent) => {
                 e.preventDefault()
                 e.stopPropagation()
@@ -410,8 +413,8 @@
             <DropdownMenu.Root>
               <DropdownMenu.Trigger
                 class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info transition-colors hover:bg-info/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-info/40"
-                aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
-                title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
+                aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned   open list`}
+                title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned   open list`}
                 onclick={(e: MouseEvent) => {
                   e.preventDefault()
                   e.stopPropagation()
@@ -527,7 +530,7 @@
           <SubagentCard {part} live={liveActivity} onOpen={onOpenSubagent} />
         {:else if part.type === 'text'}
           <div class="text-sm text-foreground">
-            <MarkdownView text={part.text} {onCiteFile} />
+            <SmoothMarkdown text={part.text} streaming={busy} {onCiteFile} />
           </div>
         {:else if part.type === 'compaction-summary'}
           <div class="rounded-lg border border-border bg-elevated px-3 py-2">
@@ -661,6 +664,15 @@
                 >
                   <Brain size={9} />
                   {thinkingLevel}
+                </span>
+              {/if}
+              {#if accountLabel && accountLabel !== 'Default'}
+                <span
+                  class="flex shrink-0 items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
+                  title={`Account: ${accountLabel}`}
+                  aria-label={`Account: ${accountLabel}`}
+                >
+                  {accountLabel}
                 </span>
               {/if}
             </span>

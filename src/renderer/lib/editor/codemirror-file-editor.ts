@@ -26,8 +26,8 @@ export interface FileEditorRangeViewportRect {
 /**
  * The file editor is backed by CodeMirror 6 so selection, scrolling (including
  * native drag-autoscroll) and editing behave exactly like a plain text editor.
- * The previous approach — a transparent `<textarea>` over a scroll-synced
- * highlighted `<pre>` — could not keep the two layers aligned while the user
+ * The previous approach   a transparent `<textarea>` over a scroll-synced
+ * highlighted `<pre>`   could not keep the two layers aligned while the user
  * dragged a selection past the visible page, which made selection appear to
  * break. CodeMirror renders the highlighted tokens, caret and selection in one
  * content layer, so there is nothing to desync.
@@ -45,6 +45,8 @@ export interface FileEditorController {
   setShowLineNumbers(show: boolean): void
   setSpellcheck(enabled: boolean): void
   setFind(query: string, activeIndex: number): void
+  replaceOne(query: string, replacement: string, activeIndex: number): boolean
+  replaceAll(query: string, replacement: string): number
   getValue(): string
   replaceRange(from: number, to: number, text: string, userEvent?: string): void
   resolveConflictRange(
@@ -360,6 +362,28 @@ export async function createFileEditor(
       })
     },
     setFind,
+    replaceOne(query: string, replacement: string, activeIndex: number): boolean {
+      const text = view.state.doc.toString()
+      const matches = findMatches(text, query)
+      if (matches.length === 0) return false
+      const [from, to] = matches[Math.max(0, Math.min(activeIndex, matches.length - 1))]
+      view.dispatch({
+        changes: { from, to, insert: replacement },
+        scrollIntoView: true,
+        userEvent: 'input.replace'
+      })
+      return true
+    },
+    replaceAll(query: string, replacement: string): number {
+      const text = view.state.doc.toString()
+      const matches = findMatches(text, query)
+      if (matches.length === 0) return 0
+      view.dispatch({
+        changes: matches.map(([from, to]) => ({ from, to, insert: replacement })),
+        userEvent: 'input.replace'
+      })
+      return matches.length
+    },
     getValue(): string {
       return view.state.doc.toString()
     },
@@ -579,8 +603,8 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
       '.cm-lineNumbers .cm-gutterElement': {
         // CodeMirror assigns each gutter element the measured height of its
         // code line inline. Flex-centering the number inside that row makes
-        // the alignment structural — independent of line-height ratios, font
-        // metrics and fractional zoom rounding — so digits track their code
+        // the alignment structural   independent of line-height ratios, font
+        // metrics and fractional zoom rounding   so digits track their code
         // line exactly at any user font size or zoom.
         display: 'flex',
         alignItems: 'center',

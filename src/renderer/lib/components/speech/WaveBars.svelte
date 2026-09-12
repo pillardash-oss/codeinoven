@@ -7,7 +7,7 @@
   let { label = 'Transcribing', decorative = false }: Props = $props()
 </script>
 
-<!-- Three animated amber bars — the same voice-activity waveform the composer
+<!-- Three animated amber bars   the same voice-activity waveform the composer
      mic shows, reused wherever a live transcription needs representing. -->
 <span
   class="wave-wrap"

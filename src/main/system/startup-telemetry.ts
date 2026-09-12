@@ -11,8 +11,8 @@ import { Logger } from './logger'
  * ready, splash, storage/database ready, window creation, renderer document
  * load, visual readiness, hydration, workspace readiness, provider warmup) and samples the Electron main
  * event-loop delay during the boot window. Only phase names and millisecond
- * durations are ever emitted — never paths, project names, usernames, or
- * message content — so the data is safe to keep in durable logs and
+ * durations are ever emitted   never paths, project names, usernames, or
+ * message content   so the data is safe to keep in durable logs and
  * diagnostics.
  */
 export type StartupPhase =

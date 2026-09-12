@@ -270,7 +270,7 @@ export class CloudRelayClient {
       // Per the WHATWG WebSocket spec an `error` always fires before `close`,
       // and the close handler carries the code/reason and drives the bounded
       // self-reconnect. This is therefore a diagnostic breadcrumb, not a fault
-      // to surface at error level — logging every transient drop as an error
+      // to surface at error level   logging every transient drop as an error
       // only floods the error log with noise the recovery path already handles.
       const detail =
         event && typeof event === 'object' && 'message' in event
@@ -525,7 +525,7 @@ export class CloudRelayClient {
         }
         if (this.inboundProcessing.has(wireId)) {
           // A concurrent duplicate of a frame being decrypted/dispatched is
-          // coalesced/ignored — the single in-flight decrypt will emit exactly
+          // coalesced/ignored   the single in-flight decrypt will emit exactly
           // one ACK on success and none on failure so replay stays possible.
           return
         }
@@ -734,7 +734,7 @@ export class CloudRelayClient {
 
   /**
    * Authenticate (or enroll) the phone device for this relay session using a
-   * desktop-issued single-use challenge and proof-of-possession — the same
+   * desktop-issued single-use challenge and proof-of-possession   the same
    * contract as the LAN handshake. The bound device context is then attached
    * to every RPC invoke on this session. Caller-supplied device ids in invoke
    * frames are never trusted; the context always comes from this verified

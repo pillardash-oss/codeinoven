@@ -29,6 +29,7 @@ export type SettingsSection =
 
 export type MainView =
   | 'projects'
+  | 'projects-scope'
   | 'chats'
   | 'scope'
   | 'threads'
@@ -133,6 +134,7 @@ export interface RecoveryStorage {
 
 const MAIN_VIEWS: readonly MainView[] = [
   'projects',
+  'projects-scope',
   'chats',
   'scope',
   'threads',
@@ -306,7 +308,7 @@ function parseContentView(value: unknown): 'projects' | 'chats' | 'threads' {
 }
 
 function parseNonSettingsView(value: unknown, fallback: MainView): MainView {
-  if (value === 'projects' || value === 'chats' || value === 'scope' || value === 'threads') {
+  if (value === 'projects' || value === 'projects-scope' || value === 'chats' || value === 'scope' || value === 'threads') {
     return value
   }
   return fallback

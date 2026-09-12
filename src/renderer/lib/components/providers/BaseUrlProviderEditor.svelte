@@ -35,7 +35,7 @@
     onClose: () => void
     /** Invoked with the persisted provider after a successful save. */
     onSaved: (provider: BaseUrlProvider) => void
-    /** Shown as a footer "Back" button when set — lets a caller that opened
+    /** Shown as a footer "Back" button when set   lets a caller that opened
      *  this editor from its own modal (e.g. Add provider) return there
      *  instead of closing everything. */
     onBack?: () => void
@@ -91,7 +91,7 @@
   const MAX_DISCOVERED_MODELS_TO_SAVE = 128
 
   /** Mirror of the service's SAFE_MODEL_ID: ids routinely include slashes/at-signs
-   *  (LM Studio `org/model`, HF `org/model@precision`) — anything else would
+   *  (LM Studio `org/model`, HF `org/model@precision`)   anything else would
    *  make the whole save fail main-process validation, so it is skipped here. */
   const SAFE_DISCOVERED_MODEL_ID = /^[a-zA-Z0-9@][a-zA-Z0-9._:/@+-]*$/u
 
@@ -145,7 +145,7 @@
     )
   })
 
-  /** Every persisted record sharing this provider's id — one per linked
+  /** Every persisted record sharing this provider's id   one per linked
    *  harness. Empty in create mode. Fields are kept in sync across the group,
    *  so any member's values are representative of the whole group. */
   let linkedProviders = $derived(
@@ -156,7 +156,7 @@
   let apiKeyConfigured = $derived(
     linkedProviders.some((p) => p.apiKeyConfigured === true || p.apiKeyRef !== undefined)
   )
-  /** Newly-checked harnesses can't inherit a key they never had — the vault
+  /** Newly-checked harnesses can't inherit a key they never had   the vault
    *  only exposes ciphertext, so main can't silently copy it across. */
   let addingHarnessWithoutKey = $derived(
     apiKeyConfigured &&
@@ -194,7 +194,7 @@
   /** Persisted model rows for the provider, ready to hand to the save flow.
    *  When the user defined no models of their own, every model discovered from
    *  `${baseURL}/models` becomes a provider model so the provider is usable the
-   *  moment it is saved — the picker cache already overlays saved providers. */
+   *  moment it is saved   the picker cache already overlays saved providers. */
   async function resolveModelsToSave(
     headers: Record<string, string> | undefined
   ): Promise<Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>> {
@@ -216,7 +216,7 @@
         })
         discoveredModels = models
       } catch {
-        // Unreachable endpoint — save proceeds with no models; the picker
+        // Unreachable endpoint   save proceeds with no models; the picker
         // still shows the provider and the editor keeps its error surfaced.
         return []
       }
@@ -250,7 +250,7 @@
   }
 
   /** Auto-search once a base URL is typed and the draft has no models of its
-   *  own yet — debounced so it doesn't refire on every keystroke. */
+   *  own yet   debounced so it doesn't refire on every keystroke. */
   $effect(() => {
     const baseURL = draft.baseURL.trim()
     if (draft.models.length > 0 || !baseURL || discoveredModels.length > 0) return
@@ -370,10 +370,10 @@
       const line = rawLine.trim()
       if (!line) continue
       const separator = line.indexOf(':')
-      if (separator < 1) throw new Error(`Header must use Name: Value — ${line}`)
+      if (separator < 1) throw new Error(`Header must use Name: Value   ${line}`)
       const name = line.slice(0, separator).trim()
       const headerValue = line.slice(separator + 1).trim()
-      if (!name || !headerValue) throw new Error(`Header must include a name and value — ${line}`)
+      if (!name || !headerValue) throw new Error(`Header must include a name and value   ${line}`)
       headers[name] = headerValue
     }
     return Object.keys(headers).length > 0 ? headers : undefined
@@ -404,7 +404,7 @@
   /**
    * Applies the draft to every selected harness: updates records already
    * linked, deletes ones the user unchecked, and creates new ones for
-   * newly-checked harnesses — all sharing the same provider id so they stay
+   * newly-checked harnesses   all sharing the same provider id so they stay
    * linked. A brand-new provider seeds the id from its first created record.
    */
   async function save(event: SubmitEvent): Promise<void> {
@@ -621,7 +621,7 @@
       />
       {#if addingHarnessWithoutKey}
         <p class="text-[0.6875rem] text-warning">
-          Newly-added harnesses won't get the stored API key — re-enter it below to apply it there
+          Newly-added harnesses won't get the stored API key   re-enter it below to apply it there
           too.
         </p>
       {/if}
@@ -700,7 +700,7 @@
       <input
         id="base-url-provider-api-key"
         class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
-        placeholder={apiKeyConfigured ? 'Stored securely — enter a new key to replace' : 'sk-...'}
+        placeholder={apiKeyConfigured ? 'Stored securely   enter a new key to replace' : 'sk-...'}
         autocomplete="off"
         spellcheck="false"
         disabled={draft.removeApiKey}
@@ -821,7 +821,7 @@
         {:else if discoveredModels.length > 0}
           <div class="space-y-1">
             <p class="text-[0.6875rem] font-medium text-dimmed">
-              Found {discoveredModels.length} model{discoveredModels.length === 1 ? '' : 's'} — click
+              Found {discoveredModels.length} model{discoveredModels.length === 1 ? '' : 's'}   click
               to add
             </p>
             <div class="flex flex-wrap gap-1.5">

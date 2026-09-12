@@ -6,7 +6,7 @@
  * where `type` is `stdout` or `stderr`. We render each entry as a timestamp
  * line followed by its output line(s), and mark only lines from `stderr`
  * entries as errors so the UI can tint them destructively. Nothing is inferred
- * from the text itself — a successful build can print words like "error" or
+ * from the text itself   a successful build can print words like "error" or
  * "failed" on stdout (e.g. a commit message), so the stream type is the single
  * source of truth. Anything that is not that JSON-array shape is treated as
  * plain text and split on newlines.

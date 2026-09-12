@@ -17,7 +17,7 @@ afterEach(async () => {
   vi.restoreAllMocks()
 })
 
-describe('lifecycle guard — re-entry prevention', () => {
+describe('lifecycle guard   re-entry prevention', () => {
   it('prevents the cleanup pipeline from running more than once', () => {
     let invocations = 0
     const guard = { active: false }
@@ -50,14 +50,14 @@ describe('lifecycle guard — re-entry prevention', () => {
     beforeQuitHandler({ preventDefault: () => undefined })
     expect(preventDefaultCalled).toBe(true)
 
-    // Second call — guard is active, handler returns without preventDefault
+    // Second call   guard is active, handler returns without preventDefault
     preventDefaultCalled = false
     beforeQuitHandler({ preventDefault: () => undefined })
     expect(preventDefaultCalled).toBe(false)
   })
 })
 
-describe('lifecycle — disposal ordering', () => {
+describe('lifecycle   disposal ordering', () => {
   it('runs every step even when an earlier step throws', async () => {
     const steps: string[] = []
 
@@ -134,14 +134,14 @@ describe('lifecycle — disposal ordering', () => {
   })
 })
 
-describe('lifecycle — Logger flush on shutdown', () => {
+describe('lifecycle   Logger flush on shutdown', () => {
   it('flushes pending writes before the shutdown pipeline resolves', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'lifecycle-logger-'))
     temporaryPaths.push(directory)
     const logPath = join(directory, 'shutdown.jsonl')
     Logger.initialize(logPath)
 
-    Logger.info('shutdown test — before flush')
+    Logger.info('shutdown test   before flush')
     await Logger.flush()
 
     const content = await import('fs/promises').then((m) =>
@@ -154,7 +154,7 @@ describe('lifecycle — Logger flush on shutdown', () => {
   })
 })
 
-describe('lifecycle — PtyService destroyAll', () => {
+describe('lifecycle   PtyService destroyAll', () => {
   it('kills all active PTY sessions and clears sender', async () => {
     const { PtyService } = await import('../../src/main/system/pty-service')
     const { StorageEngine } = await import('../../src/main/storage/storage-engine')

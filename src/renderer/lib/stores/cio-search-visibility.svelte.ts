@@ -52,8 +52,11 @@ export function isCioScratchPath(path: string): boolean {
 }
 
 /** Whether a search-result entry must be hidden for the current visibility
- *  preferences (scratch paths and/or git-ignored entries). */
+ *  preferences (scratch paths and/or git-ignored entries). Scratch visibility
+ *  is governed exclusively by the `.cio` switch: the directory is always
+ *  git-ignored, so letting the ignored switch also gate it would make the
+ *  dedicated `.cio` switch impossible to satisfy. */
 export function isEntryHiddenByVisibility(path: string, ignored?: boolean): boolean {
-  if (!cioSearchVisibility.includeCio && isCioScratchPath(path)) return true
+  if (isCioScratchPath(path)) return !cioSearchVisibility.includeCio
   return !cioSearchVisibility.includeIgnored && ignored === true
 }

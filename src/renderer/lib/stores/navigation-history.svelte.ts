@@ -29,6 +29,8 @@ export interface NavigationLocation {
 }
 
 function isProjectView(view: MainView): view is ProjectViewMode {
+  // 'projects-scope' is the scoped projects state — same page, sidebar focus.
+  if (view === 'projects-scope') return true
   return view === 'projects' || view === 'scope' || view === 'threads'
 }
 

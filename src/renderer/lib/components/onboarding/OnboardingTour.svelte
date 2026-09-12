@@ -44,14 +44,16 @@
 
   let { step, onStepChange, onChooseProject, onBrowseHarnesses, onFinish }: Props = $props()
 
+  const isMac = navigator.platform.toUpperCase().includes('MAC')
+  const viewKey = (key: string): string => (isMac ? `⌘${key}` : `Ctrl+${key}`)
+
   const spotlightSteps: SpotlightStep[] = [
     {
       step: 1,
       selector: '[data-onboarding="view-switcher"]',
-      eyebrow: 'Conversation View type',
-      title: 'Projects|Threads|Scope|Chats',
-      description:
-        "Projects groups by folder. Threads shows every project conversation. Scope is for board view and worktrees. Chat is for tasks that don't need a projects for a start."
+      eyebrow: 'View switcher',
+      title: 'One dropdown, every view',
+      description: `This dropdown switches how the workspace is organized. Projects groups conversations by folder (${viewKey('1')}). Threads lists every project conversation (${viewKey('2')}). Scoped threads opens the scope sidebar over Projects (${viewKey('3')}), Scope Board opens the full-page board (${viewKey('4')}), and Chats is for work that does not need a project (${viewKey('0')}).`
     },
     {
       step: 2,
@@ -88,7 +90,6 @@
   ]
 
   const activeSpotlight = $derived(spotlightSteps.find((item) => item.step === step))
-  const isMac = navigator.platform.toUpperCase().includes('MAC')
   const sendShortcut = isMac ? '⌘ Enter' : 'Ctrl + Enter'
   const steerShortcut = isMac ? '⌘ ⇧ Enter' : 'Ctrl + Shift + Enter'
   const spotlightCount = spotlightSteps.length
@@ -97,6 +98,7 @@
   let calloutTop = $state(0)
   let calloutLeft = $state(0)
   let nextButton = $state<HTMLButtonElement | undefined>(undefined)
+  let calloutEl = $state<HTMLDivElement | undefined>(undefined)
   let installOpened = $state(false)
   let installBusy = $state(false)
   let installError = $state('')
@@ -128,7 +130,7 @@
     }
 
     const cardWidth = 340
-    const cardHeight = step === 4 ? 270 : 220
+    const cardHeight = calloutEl?.offsetHeight ?? (step === 4 ? 270 : 220)
     const gap = 16
     const below = targetRect.top + targetRect.height + gap
     const above = targetRect.top - cardHeight - gap
@@ -143,6 +145,17 @@
       Math.max(16, window.innerWidth - cardWidth - 16)
     )
   }
+
+  /** Re-position once the callout has rendered   the initial placement uses a
+   *  height estimate, the real card can be taller and must not overflow. */
+  $effect(() => {
+    if (!activeSpotlight) return
+    void tick().then(() => {
+      if (calloutEl && Math.abs(calloutEl.offsetHeight - (step === 4 ? 270 : 220)) > 1) {
+        measureTarget()
+      }
+    })
+  })
 
   function nextStep(): void {
     onStepChange(step < 5 ? step + 1 : 6)
@@ -281,7 +294,8 @@
       {/if}
 
       <div
-        class="fixed w-[340px] rounded-2xl border bg-surface p-5 shadow-xl"
+        bind:this={calloutEl}
+        class="fixed max-h-[calc(100vh-2rem)] w-[340px] overflow-y-auto rounded-2xl border bg-surface p-5 shadow-xl"
         style:top={`${calloutTop}px`}
         style:left={`${calloutLeft}px`}
         role="dialog"

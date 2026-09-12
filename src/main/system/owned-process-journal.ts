@@ -68,7 +68,7 @@ export class OwnedProcessJournal {
       const parsed = parseStore(raw)
       for (const root of parsed) this.roots.set(root.pid, root)
     } catch {
-      // Missing or malformed journal is not an error — there is simply nothing to reap.
+      // Missing or malformed journal is not an error   there is simply nothing to reap.
     }
     return this.list()
   }

@@ -133,7 +133,7 @@
     <button
       type="button"
       class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
-      title="Done — attach this comment to the selection"
+      title="Done   attach this comment to the selection"
       onclick={submit}
     >
       <Check size={12} />

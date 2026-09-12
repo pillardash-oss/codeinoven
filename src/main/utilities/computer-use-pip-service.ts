@@ -77,7 +77,7 @@ export class ComputerUsePipService {
   async track(pid: number, threadId: string, sessionId?: string): Promise<void> {
     if (!Number.isInteger(pid) || pid <= 0) return
     this.clearAutoDismiss()
-    // The user closed the overlay this turn — keep it hidden for the rest of
+    // The user closed the overlay this turn   keep it hidden for the rest of
     // the turn; only the next agent turn (after a new user message) re-enables it.
     if (this.dismissedThreadId === threadId) return
     const targetChanged =
@@ -100,7 +100,7 @@ export class ComputerUsePipService {
     if (pid === null || !this.active) return
     const client = await this.ensureClient()
     // The driver refuses pid-only activation when the app owns multiple
-    // windows (ambiguous_window_target) — always front the exact tracked
+    // windows (ambiguous_window_target)   always front the exact tracked
     // window, falling back to the latest frontmost one.
     const windowId = this.windowId
     try {
@@ -109,7 +109,7 @@ export class ComputerUsePipService {
         ...(windowId !== null ? { window_id: windowId } : {})
       })
     } catch {
-      // windowId can be stale (window closed) — retry with pid-only app-level
+      // windowId can be stale (window closed)   retry with pid-only app-level
       // activation so the click still pulls the app forward.
       await client.callTool('bring_to_front', { pid })
     }
@@ -260,7 +260,7 @@ export class ComputerUsePipService {
         }
       }
       // The overlay may have been dismissed (or re-targeted) while we awaited
-      // the driver — never resurrect it with a stale frame.
+      // the driver   never resurrect it with a stale frame.
       if (!this.active || this.targetPid !== pid || this.targetSessionId !== sessionId) return
       const frame: ComputerUsePipFrame = {
         pid,

@@ -184,8 +184,9 @@ export class PermissionPolicy {
   evaluate(request: PermissionRequest): PermissionDecisionResult {
     const permission = normalizePermissionName(request.permission)
     const risk = classifyPermissionRisk(permission)
-    const paths =
+    const rawPaths =
       request.path === undefined ? (request.paths ?? []) : [request.path, ...(request.paths ?? [])]
+    const paths = rawPaths.map(normalizeNativePath)
     const scope = this.createScope(paths)
 
     if (!permission) {
@@ -225,7 +226,7 @@ export class PermissionPolicy {
     }
 
     // File-System-OFF chats only auto-approve reads confined to the attached
-    // files. Shell commands, writes, and reads elsewhere must ask — the agent
+    // files. Shell commands, writes, and reads elsewhere must ask   the agent
     // must not reach the broader file system (or the shell) unprompted.
     if (this.restrictToAllowed) {
       const confinedRead =
@@ -263,7 +264,7 @@ export class PermissionPolicy {
     return this.createDecision(
       'auto_review',
       true,
-      'Auto Review — every permission that is not explicitly denied is auto-approved.',
+      'Auto Review   every permission that is not explicitly denied is auto-approved.',
       risk,
       scope
     )
@@ -285,7 +286,7 @@ export class PermissionPolicy {
     return this.createDecision(
       'full_access',
       true,
-      'Full Access — yolo mode, every operation is auto-approved.',
+      'Full Access   yolo mode, every operation is auto-approved.',
       risk,
       scope
     )
@@ -326,8 +327,8 @@ export class PermissionPolicy {
   }
 
   /** Whether a resolved path is inside the attachment allowlist (or the allowlist
-   *  requirement does not apply). A matching path — or any path below a directory
-   *  that was attached — is always permitted. */
+   *  requirement does not apply). A matching path   or any path below a directory
+   *  that was attached   is always permitted. */
   private isAllowedPath(path: string): boolean {
     return this.allowedPaths.some((allowed) => {
       return allowed === path || isWithinDirectory(allowed, path)
@@ -376,6 +377,18 @@ export class PermissionPolicy {
 
     return { decision, approved, reason, risk, scope, approval, ledger }
   }
+}
+
+/** Rewrite POSIX/MSYS-style Windows drive paths ("/C/Users/...") into native
+ *  Windows form ("C:\\Users\\..."). Tools running under the agent harness on
+ *  Windows report such paths; resolving them verbatim anchors them to the
+ *  current drive's root ("C:\\C\\Users\\..."), which makes in-project files
+ *  look like external paths and triggers spurious permission prompts. */
+export function normalizeNativePath(path: string): string {
+  if (process.platform !== 'win32') return path
+  const match = /^\/([A-Za-z])(?=\/|$)/u.exec(path)
+  if (match === null) return path
+  return `${match[1]!.toUpperCase()}:\\${path.slice(match[0].length).replaceAll('/', '\\')}`
 }
 
 function containsTerm(terms: readonly string[], candidates: readonly string[]): boolean {

@@ -49,7 +49,7 @@ function makeStorage(initial: Record<string, string> = {}): Map<string, string> 
 
 /**
  * Import a fresh store singleton with `window.localStorage` pre-seeded so the
- * constructor's loadMirror() picks it up — the same path a real renderer takes
+ * constructor's loadMirror() picks it up   the same path a real renderer takes
  * at startup. Returns the store plus the agent:event handler captured from the
  * mocked subscribe so tests can fire main-process broadcasts.
  */
@@ -91,7 +91,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('provider catalog store — stale mirror isolation', () => {
+describe('provider catalog store   stale mirror isolation', () => {
   it('never serves mirror-seeded entries for unvalidated projects through allCached', async () => {
     const { providerCatalog } = await loadStore({ [ZOMBIE_PROJECT]: zombieCatalogs })
     // Before any init the store knows no validated project, so the cross-project

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { DropdownMenu, Popover } from 'bits-ui'
   import {
@@ -14,6 +14,7 @@
     Search,
     Star,
     SquareTerminal,
+    UserRound,
     Zap,
     X
   } from '@lucide/svelte'
@@ -27,20 +28,36 @@
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { getVendorSlug } from '$lib/vendor-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import type { ProviderCatalog, ProviderModel, ThinkingLevel, ThinkingPreset } from '$shared/types'
+  import { harnessAccountCache } from '$lib/stores/harness-accounts'
+  import type {
+    HarnessAccount,
+    ProviderCatalog,
+    ProviderModel,
+    ThinkingLevel,
+    ThinkingPreset
+  } from '$shared/types'
 
   interface Props {
     providers: ProviderCatalog[]
     harnessId: string
     providerId: string
     modelId: string
+    /** Credential container used by the selected provider. Missing means its default. */
+    accountId?: string
     favoriteModels?: string[]
     recentModels?: string[]
-    /** True while the picker is open — opening it refreshes the catalog. */
+    /** True while the picker is open   opening it refreshes the catalog. */
     open?: boolean
     /** True while the thinking-level dropdown is open. Lets a parent open the
      *  thinking selector directly (e.g. from the `/thinking` slash action). */
     thinkingMenuOpen?: boolean
+    /** True while the account dropdown is open. Lets a parent open the account
+     *  selector directly (e.g. from the `/account` slash action). */
+    accountMenuOpen?: boolean
+    /** Reports whether the account picker is rendered (more than one account
+     *  for the current provider). Lets a parent conditionally surface actions
+     *  such as the `/account` slash command. */
+    onAccountPickerVisibleChange?: (visible: boolean) => void
     /** Project whose harness catalog this picker displays. When provided, opening
      *  the picker lazily fetches that project's catalog (network only when stale). */
     projectId?: string | null
@@ -58,20 +75,22 @@
     visionOnly?: boolean
     /** Current thinking level. Whenever the selected model declares thinking
      *  presets, the trigger shows the level badge and the popover exposes the
-     *  presets — no opt-in beyond passing the current value is needed. */
+     *  presets   no opt-in beyond passing the current value is needed. */
     thinkingLevel?: ThinkingLevel | null
     /** Thinking presets to display. Defaults to the selected model's declared
-     *  presets — when the model declares none, thinking controls stay hidden. */
+     *  presets   when the model declares none, thinking controls stay hidden. */
     thinkingPresets?: ThinkingPreset[]
-    onSelect: (providerId: string, modelId: string, harnessId: string) => void
+    onSelect: (providerId: string, modelId: string, harnessId: string, accountId?: string) => void
+    /** Reports the full account record when the account segment changes. */
+    onSelectAccount?: (account: HarnessAccount) => void
     onSelectMultiple?: (modelKeys: string[]) => void
-    /** Fired when the thinking level changes — either from an explicit preset
+    /** Fired when the thinking level changes   either from an explicit preset
      *  click, or automatically when a newly selected model no longer supports
      *  the previous level. */
     onSelectThinking?: (level: ThinkingLevel) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Removes a model from the caller's recently-used history; when provided,
-     *  recent rows show a small "x" next to the favorite star. No confirmation —
+     *  recent rows show a small "x" next to the favorite star. No confirmation  
      *  removing from history is trivially re-triggered by using the model. */
     onRemoveRecent?: (modelKey: string) => void
     /** Reorders a favorite relative to another favorite; position in display order. */
@@ -87,10 +106,12 @@
     harnessId,
     providerId,
     modelId,
+    accountId,
     favoriteModels = [],
     recentModels = [],
     open = $bindable(false),
     thinkingMenuOpen = $bindable(false),
+    accountMenuOpen = $bindable(false),
     projectId = null,
     side = 'top',
     disabled = false,
@@ -103,6 +124,8 @@
     thinkingLevel = null,
     thinkingPresets,
     onSelect,
+    onSelectAccount,
+    onAccountPickerVisibleChange,
     onSelectMultiple,
     onSelectThinking,
     onToggleFavorite,
@@ -116,6 +139,9 @@
   let search = $state('')
   let searchInput: HTMLInputElement | undefined
   let modelList: HTMLDivElement | undefined
+  let accounts = $state.raw<HarnessAccount[]>([])
+  let accountLoading = $state(false)
+  let accountLoadGeneration = 0
   const collapsedGroups = new SvelteSet<string>()
   let favoriteModelsSet = $derived(new Set(favoriteModels))
   let selectedModelKeysSet = $derived(new Set(selectedModelKeys))
@@ -151,11 +177,11 @@
   /**
    * Thinking presets offered by the selected model. Callers may override them
    * (e.g. the composer falls back to the standard presets while the catalog is
-   * still cold); otherwise the model's declared presets decide — none declared
+   * still cold); otherwise the model's declared presets decide   none declared
    * means the model does not reason and the thinking controls stay hidden.
    */
   let effectiveThinkingPresets = $derived(thinkingPresets ?? selectedModel?.thinkingPresets ?? [])
-  /** Thinking controls appear whenever the selected model declares presets —
+  /** Thinking controls appear whenever the selected model declares presets  
    *  the thinking level depends on the model, not on the caller's opt-in. */
   let supportsThinking = $derived(effectiveThinkingPresets.length > 0)
   /**
@@ -177,6 +203,24 @@
       effectiveThinkingPresets[0]?.label ??
       ''
   )
+  let providerAccounts = $derived(
+    accounts.filter(
+      (account) => account.harnessId === harnessId && account.providerId === providerId
+    )
+  )
+  let effectiveAccountId = $derived(
+    accountId && providerAccounts.some((account) => account.id === accountId)
+      ? accountId
+      : (providerAccounts[0]?.id ?? `${harnessId}.default`)
+  )
+  let selectedAccount = $derived(
+    providerAccounts.find((account) => account.id === effectiveAccountId)
+  )
+  let showAccountPicker = $derived(!multiSelect && providerAccounts.length > 1)
+
+  $effect(() => {
+    onAccountPickerVisibleChange?.(showAccountPicker)
+  })
   /**
    * Snapshot fallback so the trigger renders instantly, before any harness
    * catalog resolves: the thread's stored harness icon is always available, and
@@ -192,7 +236,7 @@
             : `${selectedModelKeys.length} model${selectedModelKeys.length === 1 ? '' : 's'} selected`))
       : (label ?? selectedModel?.name ?? (modelId || 'Model'))
   )
-  /** Keep the trigger readable — long names (e.g. Claude Code's default-model
+  /** Keep the trigger readable   long names (e.g. Claude Code's default-model
    *  description) would otherwise swallow the composer's bottom bar. */
   let selectedLabelDisplay = $derived(truncateLabel(selectedLabel))
   /** Peak/off-peak state of the currently selected model, for the trigger badge. */
@@ -206,8 +250,8 @@
   )
   /**
    * Harnesses present in the current catalog, ordered by the canonical harness
-   * registry (via `providerStore.providers`) so omitting a harness — or a custom
-   * provider being appended to the catalog tail — never reshuffles the chips.
+   * registry (via `providerStore.providers`) so omitting a harness   or a custom
+   * provider being appended to the catalog tail   never reshuffles the chips.
    */
   let harnessOptions = $derived(
     Array.from(
@@ -295,7 +339,7 @@
           (words.length === 0 && provider.catalogStatus === 'unavailable')
       )
   })
-  /** Visual shell of the trigger — it hosts the model button and, when the
+  /** Visual shell of the trigger   it hosts the model button and, when the
    *  selected model reasons, the thinking-level badge as a split control. */
   let triggerClasses = $derived(
     variant === 'field'
@@ -324,7 +368,7 @@
 
   /**
    * Whether a row is the currently selected model. The selected model is fully
-   * identified by the (harnessId, providerId, modelId) triple — never by modelId
+   * identified by the (harnessId, providerId, modelId) triple   never by modelId
    * alone, since different providers (e.g. DeepSeek vs OpenCode Go) can expose
    * models sharing the same id.
    */
@@ -491,6 +535,20 @@
     // prevents catalog updates from snapping the user's scroll position back
     // to the selected model.
     if (projectId) void providerCatalog.refresh(projectId)
+    void loadAccounts(harnessId, true)
+  }
+
+  async function loadAccounts(targetHarnessId: string, force = false): Promise<void> {
+    const generation = ++accountLoadGeneration
+    accountLoading = true
+    try {
+      const loaded = await harnessAccountCache.list(targetHarnessId, force)
+      if (generation === accountLoadGeneration) accounts = loaded
+    } catch {
+      if (generation === accountLoadGeneration) accounts = []
+    } finally {
+      if (generation === accountLoadGeneration) accountLoading = false
+    }
   }
 
   // ---- Virtualized model list ----------------------------------------------
@@ -532,7 +590,7 @@
         entry: ModelEntry
         favoriteKey?: string
         /** Stored recently-used key of the row, when the row comes from the
-         *  "Recently used" section — enables the remove-from-history "x". */
+         *  "Recently used" section   enables the remove-from-history "x". */
         recentKey?: string
         draggable: boolean
       }
@@ -540,7 +598,7 @@
   let pickerListScrollTop = $state(0)
   let pickerViewport = $state(240)
   /** True right after an arrow-key press, until the mouse physically moves.
-   *  CSS `:hover` is geometric — it re-fires on whatever row ends up under a
+   *  CSS `:hover` is geometric   it re-fires on whatever row ends up under a
    *  stationary cursor once the virtual list auto-scrolls for keyboard nav.
    *  While this is true, rows go pointer-events: none so a parked mouse can't
    *  paint a stale `:hover`; a real `mousemove` clears it and hands control
@@ -763,7 +821,11 @@
     void providerCatalog.refresh(projectId, true)
   }
 
-  function choose(nextProviderId: string, nextModelId: string, nextHarnessId: string): void {
+  async function choose(
+    nextProviderId: string,
+    nextModelId: string,
+    nextHarnessId: string
+  ): Promise<void> {
     if (multiSelect) {
       const nextKey = modelKey(nextHarnessId, nextProviderId, nextModelId)
       const nextKeys = selectedModelKeysSet.has(nextKey)
@@ -776,7 +838,33 @@
       findModelEntry(displayProviders, nextProviderId, nextModelId, nextHarnessId) ??
       findModelEntry(cachedProviders, nextProviderId, nextModelId, nextHarnessId)
     close()
-    onSelect(nextProviderId, nextModelId, nextHarnessId)
+    let availableAccounts = nextHarnessId === harnessId ? accounts : []
+    if (nextHarnessId !== harnessId) {
+      try {
+        availableAccounts = await harnessAccountCache.list(nextHarnessId)
+      } catch {
+        availableAccounts = []
+      }
+    }
+    const matchingAccounts = availableAccounts.filter(
+      (account) => account.harnessId === nextHarnessId && account.providerId === nextProviderId
+    )
+    const nextAccountId =
+      matchingAccounts.find((account) => account.id === accountId)?.id ??
+      matchingAccounts[0]?.id ??
+      `${nextHarnessId}.default`
+    onSelect(nextProviderId, nextModelId, nextHarnessId, nextAccountId)
+    if (nextHarnessId !== harnessId) {
+      // Invalidate any in-flight loadAccounts for the previous harness before
+      // assigning the cross-harness list. A popover-open reload (forced, and
+      // potentially slow because it re-syncs harness auth) that resolves after
+      // this point would otherwise overwrite `accounts` with the previous
+      // harness's list, emptying `providerAccounts` and hiding the account
+      // segment for a provider that does have accounts.
+      accountLoadGeneration++
+      accounts = availableAccounts
+      accountLoading = false
+    }
     // Thinking level depends on the model: resolve a level the new model
     // actually offers and surface it right after the model change, so parents
     // never keep a stale level the model no longer supports.
@@ -793,6 +881,11 @@
       )
       if (resolved && resolved !== thinkingLevel) onSelectThinking?.(resolved)
     }
+  }
+
+  function chooseAccount(account: HarnessAccount): void {
+    onSelect(providerId, modelId, harnessId, account.id)
+    onSelectAccount?.(account)
   }
 
   function toggleGroup(id: string): void {
@@ -846,6 +939,10 @@
     favoriteDropTarget = null
     draggingFavoriteKey = null
   }
+
+  onMount(() => {
+    void loadAccounts(harnessId)
+  })
 </script>
 
 <div class="min-w-0">
@@ -858,7 +955,7 @@
       <Popover.Trigger
         class={modelButtonClasses}
         aria-label={`${multiSelect ? 'Select models' : 'Select model'}, currently ${selectedLabel}`}
-        title={`${multiSelect ? 'Select models' : 'Select model'} — ${selectedLabel}`}
+        title={`${multiSelect ? 'Select models' : 'Select model'}   ${selectedLabel}`}
         {disabled}
       >
         {#if selectedProvider}
@@ -936,11 +1033,60 @@
                   <span class="flex flex-col">
                     <span class="capitalize">{preset.label}</span>
                     {#if preset.description}
-                      <span class="text-[0.625rem] font-normal text-muted">{preset.description}</span>
+                      <span class="text-[0.625rem] font-normal text-muted"
+                        >{preset.description}</span
+                      >
                     {/if}
                   </span>
                 </DropdownMenu.Item>
               {/each}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      {/if}
+      {#if showAccountPicker}
+        <DropdownMenu.Root bind:open={accountMenuOpen}>
+          <DropdownMenu.Trigger
+            class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            aria-label={`Account: ${selectedAccount?.label ?? 'Default'}`}
+            title="Account"
+            {disabled}
+          >
+            <UserRound size={10} class="shrink-0" />
+            <span class="max-w-24 truncate">{selectedAccount?.label ?? 'Default'}</span>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="start"
+              sideOffset={4}
+              collisionPadding={12}
+              onCloseAutoFocus={(event) => event.preventDefault()}
+              class="z-70 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
+            >
+              {#if accountLoading}
+                <div class="px-2 py-2 text-xs text-muted">Loading accounts…</div>
+              {:else}
+                {#each providerAccounts as account (account.id)}
+                  {@const active = account.id === effectiveAccountId}
+                  <DropdownMenu.Item
+                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
+                      ? 'text-primary'
+                      : ''}"
+                    title={`Use ${account.label}`}
+                    onSelect={() => {
+                      if (!active) chooseAccount(account)
+                    }}
+                  >
+                    {#if active}
+                      <Check size={11} class="shrink-0 text-primary" />
+                    {:else}
+                      <span class="w-[11px] shrink-0" aria-hidden="true"></span>
+                    {/if}
+                    <span class="min-w-0 flex-1 truncate">{account.label}</span>
+                  </DropdownMenu.Item>
+                {/each}
+              {/if}
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
@@ -978,7 +1124,7 @@
                 event.preventDefault()
                 keyboardNavActive = true
                 // Anchor the first arrow-key press on the active model so nav
-                // starts from what's selected, not the top of the list — but
+                // starts from what's selected, not the top of the list   but
                 // once the user has typed a search, "top of the results" is
                 // the more useful anchor.
                 const targetKey = search ? undefined : pickerKeyForSelectedModel()
@@ -1312,7 +1458,7 @@
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
-    onclick={() => choose(entry.provider.id, entry.model.id, entry.provider.harnessId)}
+    onclick={() => void choose(entry.provider.id, entry.model.id, entry.provider.harnessId)}
     onkeydown={(event: KeyboardEvent) => {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
@@ -1343,7 +1489,7 @@
       }
       if (event.key === 'Enter') {
         event.preventDefault()
-        choose(entry.provider.id, entry.model.id, entry.provider.harnessId)
+        void choose(entry.provider.id, entry.model.id, entry.provider.harnessId)
         return
       }
       // Editing intent: left/right moves the caret and characters/backspace edit

@@ -63,8 +63,13 @@
 
   const logKey = $derived(
     selectedDeploymentId
-      ? `${CloudDeployState.containerKey(projectId, container.providerKind, container.id)}/${selectedDeploymentId}`
-      : CloudDeployState.containerKey(projectId, container.providerKind, container.id)
+      ? `${CloudDeployState.containerKey(
+          projectId,
+          container.providerKind,
+          container.id,
+          container.accountId
+        )}/${selectedDeploymentId}`
+      : CloudDeployState.containerKey(projectId, container.providerKind, container.id, container.accountId)
   )
   const log = $derived(cloudDeployState.containerLogs[logKey]?.value.log ?? '')
 
@@ -135,7 +140,12 @@
 
   const cachedStatus = $derived(
     cloudDeployState.containerStatuses[
-      CloudDeployState.containerKey(projectId, container.providerKind, container.id)
+      CloudDeployState.containerKey(
+        projectId,
+        container.providerKind,
+        container.id,
+        container.accountId
+      )
     ]
   )
   const status = $derived(cachedStatus?.value ?? container)
@@ -155,7 +165,8 @@
         projectId,
         container.providerKind,
         container.id,
-        force
+        force,
+        container.accountId
       )
       deployments = list ?? []
       if (deployments.length === 0) {
@@ -166,7 +177,8 @@
         projectId,
         container.providerKind,
         container.id,
-        force
+        force,
+        container.accountId
       )
       if (fresh) onUpdated(fresh)
     } catch (reason) {
@@ -178,8 +190,8 @@
 
   /**
    * Force a full refresh of everything shown on the current screen:
-   * the deployment list, the container status, and — when a single deployment
-   * is open — that deployment's log. The refresh button spins while this runs.
+   * the deployment list, the container status, and   when a single deployment
+   * is open   that deployment's log. The refresh button spins while this runs.
    */
   async function refresh(): Promise<void> {
     if (refreshing) return
@@ -191,14 +203,16 @@
         projectId,
         container.providerKind,
         container.id,
-        true
+        true,
+        container.accountId
       )
       if (list) deployments = list
       const fresh = await cloudDeployState.ensureContainerStatus(
         projectId,
         container.providerKind,
         container.id,
-        true
+        true,
+        container.accountId
       )
       if (fresh) onUpdated(fresh)
       if (selectedDeploymentId) {
@@ -207,7 +221,8 @@
           container.providerKind,
           container.id,
           selectedDeploymentId,
-          true
+          true,
+          container.accountId
         )
       }
     } catch (reason) {
@@ -228,7 +243,9 @@
         projectId,
         container.providerKind,
         container.id,
-        deployment.id
+        deployment.id,
+        false,
+        container.accountId
       )
     } catch (reason) {
       logError = message(reason)
@@ -621,7 +638,7 @@
                     <span class="font-mono">{deployment.commit.slice(0, 7)}</span>
                     <span> · </span>
                   {/if}
-                  {deployment.updatedAt ? relativeTime(deployment.updatedAt) : '—'}
+                  {deployment.updatedAt ? relativeTime(deployment.updatedAt) : ' '}
                 </span>
               </span>
               {#if deployment.status !== 'unknown'}

@@ -20,6 +20,63 @@ interface PtySession {
   shell: string
   createdAt: number
   process: pty.IPty
+  /** When set, the session is killed after this long with zero output or input. */
+  idleTimeoutMs?: number
+  lastActivityAt: number
+}
+
+/** How often the watchdog sweeps for idle sessions. */
+const IDLE_WATCHDOG_INTERVAL_MS = 5_000
+
+const ALLOWED_COMMANDS = new Set([
+  'opencode',
+  'claude',
+  'codex',
+  'cline',
+  'pi',
+  'agy',
+  'muse',
+  'npm',
+  'bun',
+  'brew',
+  'winget',
+  'rm',
+  'git',
+  'wsl',
+  'sh',
+  'cmd',
+  'powershell'
+])
+
+const ACCOUNT_ENVIRONMENT_KEYS = new Set([
+  'PI_CODING_AGENT_DIR',
+  'OPENCODE_CONFIG_DIR',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_STATE_HOME',
+  'XDG_CACHE_HOME',
+  'CODEX_HOME',
+  'CLAUDE_CONFIG_DIR'
+])
+
+function normalizedCommandName(command: string): string {
+  return basename(command)
+    .replace(/\.(?:exe|cmd|bat|ps1)$/iu, '')
+    .toLowerCase()
+}
+
+function safeCommandEnvironment(environment?: Record<string, string>): Record<string, string> {
+  if (!environment) return {}
+  return Object.fromEntries(
+    Object.entries(environment).filter(
+      ([key, value]) =>
+        ACCOUNT_ENVIRONMENT_KEYS.has(key) &&
+        typeof value === 'string' &&
+        value.length > 0 &&
+        value.length <= 4_096 &&
+        !value.includes('\0')
+    )
+  )
 }
 
 /** Called when the user types into a project terminal, so concurrent agent
@@ -83,6 +140,7 @@ function resolveShellArgs(shell: string): string[] {
  */
 export class PtyService {
   private sessions = new Map<string, PtySession>()
+  private idleWatchdog: ReturnType<typeof setInterval> | null = null
   private sender: WebContents | null = null
   private projectManager: ProjectManager
   private scopeRoots
@@ -107,6 +165,7 @@ export class PtyService {
   }
 
   register(): void {
+    this.ensureIdleWatchdog()
     ipcMain.handle(
       'pty:create',
       (
@@ -121,8 +180,16 @@ export class PtyService {
     )
     ipcMain.handle(
       'pty:createCommand',
-      (_, id: string, command: string, args: string[], cols: number, rows: number) =>
-        this.createCommand(id, command, args, cols, rows)
+      (
+        _,
+        id: string,
+        command: string,
+        args: string[],
+        cols: number,
+        rows: number,
+        idleTimeoutMs?: number,
+        environment?: Record<string, string>
+      ) => this.createCommand(id, command, args, cols, rows, idleTimeoutMs, environment)
     )
     ipcMain.handle(
       'pty:createAction',
@@ -216,7 +283,8 @@ export class PtyService {
       projectId,
       cwd,
       shell,
-      createdAt
+      createdAt,
+      lastActivityAt: createdAt
     })
     await this.recordEvent({
       type: 'create',
@@ -251,24 +319,11 @@ export class PtyService {
     command: string,
     args: string[],
     cols: number,
-    rows: number
+    rows: number,
+    idleTimeoutMs?: number,
+    environment?: Record<string, string>
   ): Promise<{ id: string; pid: number }> {
-    const allowed = new Set([
-      'opencode',
-      'claude',
-      'codex',
-      'cline',
-      'pi',
-      'agy',
-      'muse',
-      'npm',
-      'bun',
-      'brew',
-      'winget',
-      'rm',
-      'git'
-    ])
-    if (!allowed.has(basename(command))) {
+    if (!ALLOWED_COMMANDS.has(normalizedCommandName(command))) {
       throw new Error(`Refusing to start unknown harness command: ${command}`)
     }
 
@@ -281,7 +336,7 @@ export class PtyService {
       cols,
       rows,
       cwd,
-      env: buildShellEnv()
+      env: { ...buildShellEnv(), ...safeCommandEnvironment(environment) }
     })
     this.trackProcess?.({
       pid: proc.pid,
@@ -290,6 +345,8 @@ export class PtyService {
     })
 
     proc.onData((data) => {
+      const session = this.sessions.get(id)
+      if (session) session.lastActivityAt = Date.now()
       sendToRenderer(this.sender, `pty:data:${id}`, data)
     })
 
@@ -313,7 +370,9 @@ export class PtyService {
       projectId: '',
       cwd,
       shell: command,
-      createdAt
+      createdAt,
+      idleTimeoutMs: idleTimeoutMs && idleTimeoutMs > 0 ? idleTimeoutMs : undefined,
+      lastActivityAt: createdAt
     })
     await this.recordEvent({
       type: 'create',
@@ -325,6 +384,36 @@ export class PtyService {
       timestamp: createdAt
     })
     return { id, pid: proc.pid }
+  }
+
+  /**
+   * Kill single-command sessions (harness self-updates, logins) that have been
+   * completely silent   no output and no input   past their idle timeout, so a
+   * hung update never pins the terminal until the app is restarted.
+   */
+  private ensureIdleWatchdog(): void {
+    if (this.idleWatchdog) return
+    this.idleWatchdog = setInterval(() => {
+      const now = Date.now()
+      for (const session of this.sessions.values()) {
+        if (!session.idleTimeoutMs) continue
+        if (now - session.lastActivityAt < session.idleTimeoutMs) continue
+        Logger.info(
+          `[pty] Session ${session.id} (${session.shell}) idle for ${Math.round(
+            (now - session.lastActivityAt) / 1000
+          )}s   killing hung process`
+        )
+        session.process.write(
+          `\r\n\x1b[33m[${APP_NAME}] No activity for ${Math.round(
+            session.idleTimeoutMs / 1000
+          )}s   the process appears hung and was stopped automatically.\x1b[0m\r\n`
+        )
+        // Give the notice a moment to flush before the PTY goes away.
+        setTimeout(() => this.destroy(session.id), 300)
+      }
+    }, IDLE_WATCHDOG_INTERVAL_MS)
+    // Never keep the Electron main process alive just for the watchdog.
+    this.idleWatchdog.unref()
   }
 
   private async createAction(
@@ -350,7 +439,7 @@ export class PtyService {
 
     // Resolve the action root through the active thread's scope when one is
     // supplied, so scripts run inside the checked-out worktree instead of the
-    // main project directory — matching interactive terminal behavior.
+    // main project directory   matching interactive terminal behavior.
     const cwd =
       scopeBucketId && this.scopeRoots
         ? await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
@@ -392,7 +481,15 @@ export class PtyService {
         timestamp: Date.now()
       })
     })
-    this.sessions.set(id, { id, process: proc, projectId, cwd, shell, createdAt })
+    this.sessions.set(id, {
+      id,
+      process: proc,
+      projectId,
+      cwd,
+      shell,
+      createdAt,
+      lastActivityAt: createdAt
+    })
     await this.recordEvent({
       type: 'create',
       terminalId: id,
@@ -409,12 +506,21 @@ export class PtyService {
   private write(id: string, data: string): void {
     const session = this.sessions.get(id)
     if (!session) return
+    if (session.idleTimeoutMs) session.lastActivityAt = Date.now()
+    // The keystroke reaches the PTY first, always: the user-activity hook below
+    // is best-effort and must never be able to swallow terminal input.
+    session.process.write(data)
     // Any user keystroke (including pastes) keeps the user-activity window
     // open so their commands' file writes are never claimed by an agent turn.
-    if (data.length > 0 && this.onUserInput) {
-      this.onUserInput(session.projectId, session.cwd)
+    // Command sessions (harness logins/updates) carry no project, so there is
+    // nothing to attribute and the hook is skipped entirely.
+    if (data.length > 0 && this.onUserInput && session.projectId) {
+      try {
+        this.onUserInput(session.projectId, session.cwd)
+      } catch (error) {
+        Logger.error('user-input activity hook failed:', error)
+      }
     }
-    session.process.write(data)
   }
 
   private resize(id: string, cols: number, rows: number): void {
@@ -439,12 +545,16 @@ export class PtyService {
 
   destroyAll(): void {
     this.sender = null
+    if (this.idleWatchdog) {
+      clearInterval(this.idleWatchdog)
+      this.idleWatchdog = null
+    }
     for (const id of this.sessions.keys()) {
       this.destroy(id)
     }
   }
 
-  /** Number of live terminal sessions — any of which a forced restart would kill. */
+  /** Number of live terminal sessions   any of which a forced restart would kill. */
   activeSessionCount(): number {
     return this.sessions.size
   }

@@ -66,7 +66,7 @@
     )
   }
 
-  /** Cached logs for the jobs currently expanded — non-null for markup safety. */
+  /** Cached logs for the jobs currently expanded   non-null for markup safety. */
   const logs = $derived.by(() => {
     const result: Record<number, GitHubDeploymentJobLog> = {}
     for (const key of Object.keys(expandedLog)) {
@@ -420,7 +420,7 @@
                           ].log}</pre>
                         {#if logs[job.id].truncated}
                           <p class="mt-1 text-[0.5625rem] text-dimmed">
-                            Log truncated — {job.name} may exceed the in-app limit.
+                            Log truncated   {job.name} may exceed the in-app limit.
                           </p>
                         {/if}
                       </div>

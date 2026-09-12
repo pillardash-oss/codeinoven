@@ -21,7 +21,7 @@ function loadMermaid(): Promise<(typeof import('mermaid'))['default']> {
     .catch((error) => {
       // A single transient dynamic-import failure (cold-start chunk fetch, race
       // under memory pressure) must not poison every later diagram in the
-      // session — clear the cached promise so the next render retries the import.
+      // session   clear the cached promise so the next render retries the import.
       mermaidPromise = undefined
       throw error
     })

@@ -136,7 +136,7 @@ describe('splitTtsText', () => {
     const longWord = '🙂'.repeat(300)
     const pieces = splitTtsText(longWord)
     for (const piece of pieces) {
-      // Every code point survives intact — no lone surrogates.
+      // Every code point survives intact   no lone surrogates.
       expect(Array.from(piece).every((char) => char === '🙂')).toBe(true)
     }
   })

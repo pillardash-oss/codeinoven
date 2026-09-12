@@ -76,10 +76,16 @@
     return `${seconds}s`
   }
 
-  function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
+  function chooseModel(
+    providerId: string,
+    modelId: string,
+    nextHarnessId?: string,
+    accountId?: string
+  ): void {
     onModelChange({
       ...settings,
       harnessId: nextHarnessId ?? settings.harnessId,
+      accountId,
       providerId,
       modelId
     })
@@ -118,9 +124,9 @@
               ? 'Review sent to Sr. Engineer'
               : version === undefined
                 ? reworkCycle
-                  ? `Rework ${reworkCycle} complete — audit running again`
+                  ? `Rework ${reworkCycle} complete   audit running again`
                   : 'Audit in progress'
-                : `Report generated — Version ${version}`}
+                : `Report generated   Version ${version}`}
       </h3>
       <p
         class="mt-1 text-xs leading-relaxed {failed ? 'text-danger' : 'text-muted'}"
@@ -159,6 +165,7 @@
         harnessId={settings.harnessId}
         providerId={settings.providerId}
         modelId={settings.modelId}
+        accountId={settings.accountId}
         {favoriteModels}
         {recentModels}
         {onRemoveRecent}

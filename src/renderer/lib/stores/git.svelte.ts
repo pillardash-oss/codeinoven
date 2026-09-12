@@ -1591,6 +1591,7 @@ export class GitState {
     pullNumber: number,
     force = false
   ): Promise<void> {
+    if (!projectId) return
     const key = GitState.bundleKey(owner, repo, pullNumber)
     const cached = this.prBundles[key]
     if (!force && cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) return
@@ -1776,6 +1777,7 @@ export class GitState {
 
   /** Read the agent's review report for a PR, if it has written one. */
   async loadAgentReport(projectId: string, pullNumber: number): Promise<PrAgentReport | null> {
+    if (!projectId) return null
     try {
       const report = await invoke('pr:agentReport', projectId, pullNumber)
       this.prAgentReports = { ...this.prAgentReports, [String(pullNumber)]: report }

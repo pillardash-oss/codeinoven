@@ -7,7 +7,7 @@ Website: [codeinoven.com](https://codeinoven.com) · [Support](SECURITY.md) · [
 [![CI](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml)
 [![Security](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-orange.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fpillardash-oss%2Fcodeinoven%2Fmain%2Fpackage.json&query=version&label=version)](package.json)
+[![Version](https://img.shields.io/github/v/release/pillardash-oss/codeinoven?label=version)](https://github.com/pillardash-oss/codeinoven/releases/latest)
 
 ---
 
@@ -18,8 +18,8 @@ Website: [codeinoven.com](https://codeinoven.com) · [Support](SECURITY.md) · [
 <table>
   <tr>
     <td width="50%"><img src="docs/media/start-screen.png" alt="Start Screen"></td>
-    <td width="50%"><img src="docs/media/engineering-toolbox.png" alt="Engineering Toolbox — pick the stages to run: Brainstorm, PRD, Spec, Assignment, Achievement, Auto Pilot"></td>
-    <td width="50%"><img src="docs/media/scopes-board.png" alt="Scopes board — organize threads into Pinned, Todo, Spec, and Done columns across project scopes"></td>
+    <td width="50%"><img src="docs/media/engineering-toolbox.png" alt="Engineering Toolbox   pick the stages to run: Brainstorm, PRD, Spec, Assignment, Achievement, Auto Pilot"></td>
+    <td width="50%"><img src="docs/media/scopes-board.png" alt="Scopes board   organize threads into Pinned, Todo, Spec, and Done columns across project scopes"></td>
   </tr>
 </table>
 <table>
@@ -108,6 +108,25 @@ bun install
 bun run dev
 ```
 
+#### Windows on ARM: ffmpeg install note
+
+`bun install` fails on Windows on ARM with `ffmpeg-static install failed: No binary found for architecture`, because `ffmpeg-static` publishes no win32-arm64 binary. Fix by pointing the app at an ffmpeg you install yourself:
+
+1. Download an x64 Windows ffmpeg build (runs on ARM Windows via emulation), e.g. from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or [BtbN builds](https://github.com/BtbN/FFmpeg-Builds/releases).
+2. Point `FFMPEG_BIN` at the executable:
+
+   ```powershell
+   setx FFMPEG_BIN "C:\ffmpeg\bin\ffmpeg.exe"
+   ```
+
+3. Install with scripts skipped, since the bundled binary is not needed when `FFMPEG_BIN` is set:
+
+   ```powershell
+   bun install --ignore-scripts
+   ```
+
+`FFMPEG_BIN` overrides the bundled binary entirely, so the app works normally once it is set.
+
 Release builds are available for:
 
 - macOS (`.dmg` / `.zip`)
@@ -153,6 +172,14 @@ Release builds are available for:
 
 ### Troubleshooting
 
+- **Windows on ARM:** if `bun install` fails with `ffmpeg-static install failed: No binary found for architecture`, see [Windows on ARM: ffmpeg install note](#windows-on-arm-ffmpeg-install-note)   set `FFMPEG_BIN` to an x64 ffmpeg and run `bun install --ignore-scripts`.
+- **Windows on ARM (native build):** `better-sqlite3` has no prebuilt win32-arm64 binary, so `bun install` rebuilds it from source and requires the Visual Studio C++ toolset. If you get `error MSB8020: The build tools for v145 cannot be found`, install the C++ BuildTools workload:
+
+  ```powershell
+  winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+  ```
+
+  Make sure **MSVC build tools** and a **Windows SDK** are selected in the installer, then re-run `bun install`.
 - If a harness is not detected, verify the CLI is on `PATH` and authenticated.
 - Use exported diagnostics when reporting issues.
 - Thread recovery handles interrupted work on restart.
@@ -169,4 +196,4 @@ Release builds are available for:
 
 CodeInOven is licensed under the [PolyForm Noncommercial 1.0.0](LICENSE) license.
 
-You are free to use, modify, and redistribute CodeInOven for **personal, educational, and non-commercial** purposes. Commercial use — including use by companies or organizations in the course of business — requires a separate commercial license from [Pillardash Solutions Limited](mailto:sales@pillardash.com).
+You are free to use, modify, and redistribute CodeInOven for **personal, educational, and non-commercial** purposes. Commercial use   including use by companies or organizations in the course of business   requires a separate commercial license from [Pillardash Solutions Limited](mailto:sales@pillardash.com).

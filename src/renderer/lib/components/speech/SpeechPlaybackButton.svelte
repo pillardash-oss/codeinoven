@@ -20,7 +20,7 @@
     'messageId' in playbackState && playbackState.messageId === messageId
   )
   // The compact seek slider lives in this same row and only appears while the
-  // read-along overlay is active — the shared pause-linger timer hides both.
+  // read-along overlay is active   the shared pause-linger timer hides both.
   const seekExpanded = $derived(
     ownsSession &&
       (playbackState.state === 'playing' ||
@@ -72,7 +72,7 @@
     // Commit the value captured while scrubbing, not `input.value`: the
     // pointerup handler clears `scrubbing` before `change` dispatches, which
     // makes the reactive binding overwrite the input with the current playhead
-    // — reading it here would seek right back to where playback already is.
+    //   reading it here would seek right back to where playback already is.
     scrubbing = false
     void speechController.seekPlayback(scrubValue)
   }

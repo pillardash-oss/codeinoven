@@ -62,7 +62,7 @@ function installedVersionNames(root: string, platform: NodeJS.Platform): string[
   }
 }
 
-/** Bin dir for a versioned dir — nvm-windows keeps node.exe in the version dir itself. */
+/** Bin dir for a versioned dir   nvm-windows keeps node.exe in the version dir itself. */
 function versionBinDir(root: string, version: string, platform: NodeJS.Platform): string {
   return platform === 'win32' ? join(root, version) : join(root, 'versions', 'node', version, 'bin')
 }
@@ -143,6 +143,13 @@ function preferredNodeBin(base: NodeJS.ProcessEnv, platform: NodeJS.Platform): s
  * reaper can identify app-owned processes without touching a user's own
  * external claude-code/opencode sessions. Inherited by agent-spawned children. */
 export const OWNED_PROCESS_MARKER = 'CODEINOVEN_OWNED'
+
+/** Companion marker stamped with the CodeInOven session id that spawned the
+ * harness. Inherited by agent-spawned children   including daemons that
+ * re-parent to launchd/init (e.g. the adb server)   so the agent process
+ * service can attribute an orphaned daemon back to its owning thread even
+ * after the parent harness process is gone. */
+export const OWNED_SESSION_MARKER = 'CODEINOVEN_SESSION'
 
 /**
  * Desktop apps do not inherit a login shell PATH. Keep the augmented external
@@ -228,6 +235,16 @@ export function buildProcessEnvironment(
   const environment: NodeJS.ProcessEnv = {
     ...base,
     PATH: pathEntries.join(sep)
+  }
+  // Git read commands (status, diff) opportunistically refresh the index and
+  // grab `.git/index.lock` to do it. Multiple app-owned processes share one
+  // repository (git service polling, agents committing), so those refreshes
+  // race real writes and surface as transient "index.lock: File exists"
+  // failures. Disabling the opportunistic refresh keeps reads lock-free;
+  // real index writes (add, commit) still take the lock when they must. An
+  // explicit value in the base environment wins.
+  if (base['GIT_OPTIONAL_LOCKS'] === undefined) {
+    environment['GIT_OPTIONAL_LOCKS'] = '0'
   }
   if (markOwned) environment[OWNED_PROCESS_MARKER] = '1'
   else delete environment[OWNED_PROCESS_MARKER]

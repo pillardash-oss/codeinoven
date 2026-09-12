@@ -10,7 +10,7 @@ import {
  * Resolve where the window controls live for the current OS.
  *
  * macOS: traffic lights always sit inset on the left.
- * Windows/Linux: the native frame owns its own controls — nothing to reserve.
+ * Windows/Linux: the native frame owns its own controls   nothing to reserve.
  * GTK's decoration layout describes controls in that native frame, not controls
  * drawn over the renderer, so it must never become renderer padding.
  */

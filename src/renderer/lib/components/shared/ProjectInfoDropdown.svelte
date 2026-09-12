@@ -60,8 +60,8 @@
 <DropdownMenu.Root {onOpenChange}>
   <DropdownMenu.Trigger
     class={`flex items-center justify-center rounded transition-colors hover:bg-elevated focus:outline-none ${className}`}
-    aria-label="{project.name} — project details"
-    title="{project.name} — project details"
+    aria-label="{project.name}   project details"
+    title="{project.name}   project details"
   >
     {@render children?.()}
   </DropdownMenu.Trigger>

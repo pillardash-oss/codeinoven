@@ -224,7 +224,7 @@ export class HarnessUsageRepo {
         `INSERT OR IGNORE INTO usage_events(
           id, thread_id, parent_turn_id, project_id, project_name,
           feature_call_id, attempt, feature,
-          harness_id, provider_id, model_id, thinking_level, utility_id, raw_provider_usage_json,
+          harness_id, account_id, provider_id, model_id, thinking_level, utility_id, raw_provider_usage_json,
           tokens_uncached_input, tokens_cached_input, tokens_cache_write,
           tokens_output, tokens_reasoning, tokens_total, raw_total, total_semantics,
           cost_usd, cost_status, pricing_provenance_json, tool_fee_usd,
@@ -234,7 +234,7 @@ export class HarnessUsageRepo {
           (SELECT project_id FROM threads WHERE id = ?),
           (SELECT projects.name FROM threads JOIN projects ON projects.id = threads.project_id WHERE threads.id = ?),
           ?,?,?,
-          ?,?,?,?,?,
+          ?,?,?,?,?,?,
           ?,
           ?,?,?,?,?,?,?,?,
           ?,?,?,?,
@@ -249,6 +249,7 @@ export class HarnessUsageRepo {
         event.attempt,
         event.feature,
         event.harnessId,
+        event.accountId ?? null,
         event.providerId,
         event.modelId,
         event.thinkingLevel,
@@ -403,7 +404,8 @@ export class HarnessUsageRepo {
         range?.endAt ?? null,
         threadId ?? null,
         threadId ?? null
-      ])
+      ]
+    )
     const successfulTurns = row?.successful_turns ?? 0
     const uncachedInputTokens = row?.uncached_input ?? 0
     const cachedInputTokens = row?.cached_input ?? 0
@@ -464,7 +466,8 @@ export class HarnessUsageRepo {
         range?.endAt ?? null,
         threadId ?? null,
         threadId ?? null
-      ])
+      ]
+    )
     const cacheBreakdown: UsageCacheHitBreakdown[] = cacheBreakdownRows.map((entry) => ({
       harnessId: entry.harness_id,
       providerId: entry.provider_id,
@@ -942,7 +945,7 @@ export class HarnessUsageRepo {
    * Accumulate one completed turn into the snapshot table. Called at the end of
    * each agent turn (success or failure). Each assistant message is counted once
    * (guarded by the harness_usage_messages ledger), so cost/tokens/duration are
-   * added to whatever the thread's harness row already holds — never double
+   * added to whatever the thread's harness row already holds   never double
    * counted across retries, compaction, or restart.
    *
    * Only candidate ids from this turn are checked against the ledger, on the

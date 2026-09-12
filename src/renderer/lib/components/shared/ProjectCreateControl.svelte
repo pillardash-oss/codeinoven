@@ -3,10 +3,10 @@
     AlertTriangle,
     Files,
     FolderInput,
+    FolderKanban,
     GitBranch,
     Globe,
-    Loader2,
-    Plus
+    Loader2
   } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import Modal from '../ui/Modal.svelte'
@@ -14,6 +14,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { APP_NAME } from '$shared/brand'
   import type { ChangeTrackingMode, Project, RepositoryPreflightResult } from '$shared/types'
+  import { folderBaseName } from '$lib/project-location'
 
   interface Props {
     projects: Project[]
@@ -48,7 +49,7 @@
   /** Highest trigger value already handled. The control unmounts in other modes
    *  (e.g. Chats) and remounts later; re-initialising from the live value keeps
    *  a stale trigger from re-opening the add-project flow on remount. */
-  // Intentional initial-value capture — this is the baseline that later triggers
+  // Intentional initial-value capture   this is the baseline that later triggers
   // are compared against.
   // svelte-ignore state_referenced_locally
   let handledTrigger = triggerAddProject
@@ -97,7 +98,7 @@
     folder: string,
     changeTrackingMode: ChangeTrackingMode
   ): Promise<void> {
-    const name = folder.split('/').filter(Boolean).pop() ?? folder
+    const name = folderBaseName(folder)
     const project = await invoke('project:create', {
       name,
       path: folder,
@@ -183,7 +184,7 @@
       aria-label={title}
       {title}
     >
-      <Plus size={15} strokeWidth={1.8} />
+      <FolderKanban size={15} strokeWidth={1.8} />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content

@@ -3,7 +3,7 @@
  *
  * After a phone enrolls over the relay, RemoteModeController rotates the
  * persisted peer secret, the gateway secret, the visible pairing URL, and the
- * registered five-minute bootstrap immediately — exactly like the LAN path.
+ * registered five-minute bootstrap immediately   exactly like the LAN path.
  */
 
 import { describe, expect, it, vi, beforeAll } from 'vitest'
@@ -56,7 +56,7 @@ function makeRawDatabase(): Database {
   } as unknown as Database
 }
 
-describe('RemoteModeController — cloud enrollment rotates the pairing bootstrap', () => {
+describe('RemoteModeController   cloud enrollment rotates the pairing bootstrap', () => {
   beforeAll(() => {
     // No network/port reuse: the controller binds ephemeral ports via the gateway.
   })

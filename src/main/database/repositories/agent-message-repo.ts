@@ -67,6 +67,8 @@ export interface PersistedMessageRow {
   model_id: string | null
   provider_id: string | null
   harness_id: string | null
+  account_id: string | null
+  account_label: string | null
   thinking_level: string | null
   references_json: string | null
   project_references_json: string | null
@@ -78,14 +80,16 @@ export interface PersistedMessageRow {
   usage_credits_json: string | null
   context_window: number | null
   context_used: number | null
+  context_estimated: number | null
+  generation_ms: number | null
   error: string | null
   structured_output: string | null
 }
 
 /**
  * Stable content fingerprint of a persisted agent message row. The delta sync
- * compares this hash against the stored `content_hash` so unchanged messages —
- * identical JSON, search text, and metadata — are never re-stringified or
+ * compares this hash against the stored `content_hash` so unchanged messages  
+ * identical JSON, search text, and metadata   are never re-stringified or
  * rewritten on a transcript sync.
  */
 export function hashPersistedRow(row: PersistedMessageRow): string {
@@ -100,6 +104,8 @@ export function hashPersistedRow(row: PersistedMessageRow): string {
     row.model_id ?? '',
     row.provider_id ?? '',
     row.harness_id ?? '',
+    row.account_id ?? '',
+    row.account_label ?? '',
     row.thinking_level ?? '',
     row.references_json ?? '',
     row.project_references_json ?? '',
@@ -111,6 +117,7 @@ export function hashPersistedRow(row: PersistedMessageRow): string {
     row.usage_credits_json ?? '',
     String(row.context_window ?? ''),
     String(row.context_used ?? ''),
+    String(row.generation_ms ?? ''),
     row.error ?? '',
     row.structured_output ?? ''
   ]
@@ -133,6 +140,8 @@ export interface AgentMessageRow {
   model_id: string | null
   provider_id: string | null
   harness_id: string | null
+  account_id: string | null
+  account_label: string | null
   thinking_level: string | null
   references_json: string | null
   project_references_json: string | null
@@ -144,6 +153,8 @@ export interface AgentMessageRow {
   usage_credits_json: string | null
   context_window: number | null
   context_used: number | null
+  context_estimated: number | null
+  generation_ms: number | null
   error: string | null
   structured_output: string | null
 }
@@ -195,6 +206,8 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
     modelId: row.model_id ?? undefined,
     providerId: row.provider_id ?? undefined,
     harnessId: row.harness_id ?? undefined,
+    accountId: row.account_id ?? undefined,
+    accountLabel: row.account_label ?? undefined,
     thinkingLevel: row.thinking_level ? (row.thinking_level as ThinkingLevel) : undefined,
     references: row.references_json ? JSON.parse(row.references_json) : undefined,
     projectReferences: row.project_references_json
@@ -208,6 +221,8 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
     credits: row.usage_credits_json ? JSON.parse(row.usage_credits_json) : undefined,
     contextWindow: row.context_window ?? undefined,
     contextUsed: row.context_used ?? undefined,
+    ...(row.context_estimated === 1 ? { contextEstimated: true } : {}),
+    generationMs: row.generation_ms ?? undefined,
     error: row.error ?? undefined,
     structuredOutput: row.structured_output ? JSON.parse(row.structured_output) : undefined
   }
@@ -240,6 +255,8 @@ export interface EncodedAgentMessage {
   modelId: string | null
   providerId: string | null
   harnessId: string | null
+  accountId: string | null
+  accountLabel: string | null
   thinkingLevel: string | null
   referencesJson: string | null
   projectReferencesJson: string | null
@@ -252,6 +269,8 @@ export interface EncodedAgentMessage {
   creditsJson: string | null
   contextWindow: number | null
   contextUsed: number | null
+  contextEstimated: number | null
+  generationMs: number | null
   error: string | null
   structuredOutputJson: string | null
 }
@@ -276,6 +295,8 @@ export function encodeAgentMessage(
   const modelId = message.modelId ?? null
   const providerId = message.providerId ?? null
   const harnessId = message.harnessId ?? null
+  const accountId = message.accountId ?? null
+  const accountLabel = message.accountLabel ?? null
   const thinkingLevel = message.thinkingLevel ?? null
   const referencesJson = message.references ? JSON.stringify(message.references) : null
   const projectReferencesJson = message.projectReferences
@@ -290,6 +311,8 @@ export function encodeAgentMessage(
   const creditsJson = message.credits ? JSON.stringify(message.credits) : null
   const contextWindow = message.contextWindow ?? null
   const contextUsed = message.contextUsed ?? null
+  const contextEstimated = message.contextEstimated === true ? 1 : 0
+  const generationMs = message.generationMs ?? null
   const error = message.error ?? null
   const structuredOutputJson =
     message.structuredOutput !== undefined ? JSON.stringify(message.structuredOutput) : null
@@ -304,6 +327,8 @@ export function encodeAgentMessage(
     model_id: modelId,
     provider_id: providerId,
     harness_id: harnessId,
+    account_id: accountId,
+    account_label: accountLabel,
     thinking_level: thinkingLevel,
     references_json: referencesJson,
     project_references_json: projectReferencesJson,
@@ -315,6 +340,8 @@ export function encodeAgentMessage(
     usage_credits_json: creditsJson,
     context_window: contextWindow,
     context_used: contextUsed,
+    context_estimated: contextEstimated,
+    generation_ms: generationMs,
     error,
     structured_output: structuredOutputJson
   })
@@ -333,6 +360,8 @@ export function encodeAgentMessage(
     modelId,
     providerId,
     harnessId,
+    accountId,
+    accountLabel,
     thinkingLevel,
     referencesJson,
     projectReferencesJson,
@@ -345,6 +374,8 @@ export function encodeAgentMessage(
     creditsJson,
     contextWindow,
     contextUsed,
+    contextEstimated,
+    generationMs,
     error,
     structuredOutputJson
   }
@@ -359,12 +390,12 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
     sql: `INSERT INTO agent_messages(
       id, thread_id, session_id, role, origin, visibility, parts, search_text, content_hash,
       transport_parts, transport_origin,
-      model_id, provider_id, harness_id, thinking_level,
+      model_id, provider_id, harness_id, account_id, account_label, thinking_level,
       references_json, project_references_json,
       created_at, completed_at, cost,
       tokens_json, tokens_total, rate_limits_json, usage_credits_json,
-      context_window, context_used, error, structured_output
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      context_window, context_used, context_estimated, generation_ms, error, structured_output
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET
       role = excluded.role,
       origin = excluded.origin,
@@ -377,6 +408,8 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       model_id = excluded.model_id,
       provider_id = excluded.provider_id,
       harness_id = excluded.harness_id,
+      account_id = excluded.account_id,
+      account_label = excluded.account_label,
       thinking_level = excluded.thinking_level,
       references_json = excluded.references_json,
       project_references_json = excluded.project_references_json,
@@ -389,6 +422,8 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       usage_credits_json = excluded.usage_credits_json,
       context_window = excluded.context_window,
       context_used = excluded.context_used,
+      context_estimated = excluded.context_estimated,
+      generation_ms = excluded.generation_ms,
       error = excluded.error,
       structured_output = excluded.structured_output`,
     params: [
@@ -406,6 +441,8 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       encoded.modelId,
       encoded.providerId,
       encoded.harnessId,
+      encoded.accountId,
+      encoded.accountLabel,
       encoded.thinkingLevel,
       encoded.referencesJson,
       encoded.projectReferencesJson,
@@ -418,6 +455,8 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       encoded.creditsJson,
       encoded.contextWindow,
       encoded.contextUsed,
+      encoded.contextEstimated,
+      encoded.generationMs,
       encoded.error,
       encoded.structuredOutputJson
     ]
@@ -436,7 +475,7 @@ export function writeEncodedMessage(
 
 /**
  * Atomic replace of a thread's conversation mirror: delete conversation rows
- * and any provider cursors, then upsert every message — as a statement batch
+ * and any provider cursors, then upsert every message   as a statement batch
  * runnable on the worker's `transaction` command or on the primary connection.
  */
 export function buildSaveMessagesStatements(
@@ -464,7 +503,7 @@ export function buildSaveMessagesStatements(
  * message against the persisted `content_hash`, so in-place edits to any
  * message are detected and persisted. Only new or changed messages are written,
  * and every write is batched inside a single transaction. When nothing changed
- * (a true noop) the database is not written to at all — not even the cursor row.
+ * (a true noop) the database is not written to at all   not even the cursor row.
  *
  * `sessionId` is the thread's current harness session and keys the cursor.
  */
@@ -522,7 +561,7 @@ export function runProviderDeltaSync(
     writes.push(encoded)
   }
 
-  // True noop: nothing changed, so write nothing — not even the cursor row.
+  // True noop: nothing changed, so write nothing   not even the cursor row.
   if (writes.length === 0 && collisions === 0) {
     return {
       applied: 0,
@@ -576,7 +615,7 @@ export class AgentMessageRepo {
         references_json, project_references_json,
         created_at, completed_at, cost,
         tokens_json, rate_limits_json, usage_credits_json,
-        context_window, context_used, error, structured_output
+        context_window, context_used, context_estimated, error, structured_output
        FROM agent_messages WHERE id = ?`,
       message.id
     )
@@ -737,14 +776,17 @@ export class AgentMessageRepo {
     }
     const hasOlder = end < rows.length - 1 || rows.length >= scanCap
     return {
-      messages: rows.slice(0, end + 1).reverse().map((row) => rowToMessage(row)),
+      messages: rows
+        .slice(0, end + 1)
+        .reverse()
+        .map((row) => rowToMessage(row)),
       hasOlder
     }
   }
 
   /**
    * Load a contiguous window of conversation history centered on an arbitrary
-   * message id — half older and half newer around the anchor. Used to jump to a
+   * message id   half older and half newer around the anchor. Used to jump to a
    * message far outside the currently loaded window.
    */
   loadPageAroundByThread(threadId: string, anchorId: string, limit: number): ThreadMessagePage {
@@ -876,7 +918,7 @@ export function mapUserMessageRows(rows: unknown[]): UserMessageSummary[] {
   })
 }
 
-/** ASC cursor condition: strictly after (created_at, id) — for paged loops. */
+/** ASC cursor condition: strictly after (created_at, id)   for paged loops. */
 function afterCursor(after: ThreadMessageCursor | undefined): string {
   return after ? ` AND (created_at > ? OR (created_at = ? AND id > ?))` : ''
 }
@@ -889,9 +931,10 @@ function afterCursor(after: ThreadMessageCursor | undefined): string {
  */
 const MESSAGE_READ_COLUMNS = `id, thread_id, session_id, role, origin, visibility, parts,
   content_hash, transport_parts, transport_origin, model_id, provider_id, harness_id,
+  account_id, account_label,
   thinking_level, references_json, project_references_json, created_at, completed_at, cost,
-  tokens_json, rate_limits_json, usage_credits_json, context_window, context_used, error,
-  structured_output`
+  tokens_json, rate_limits_json, usage_credits_json, context_window, context_used,
+  context_estimated, generation_ms, error, structured_output`
 
 /**
  * SQL for one bounded page of the mirrored conversation (parent-session rows),

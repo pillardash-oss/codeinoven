@@ -4,6 +4,11 @@
   import { APP_SLUG } from '$shared/brand'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
+  import {
+    registerModalPrimaryAction,
+    findPanelPrimaryAction,
+    focusOwnsEnter
+  } from '$lib/modal-primary-action.svelte'
 
   interface Props {
     open: boolean
@@ -13,7 +18,7 @@
     /**
      * Whether the close (X) affordance is available. When false the header shows
      * only the minimize button, Escape minimizes, and there is no backdrop to
-     * dismiss — the panel floats and the app stays usable behind it.
+     * dismiss   the panel floats and the app stays usable behind it.
      */
     closable: boolean
     onMinimize: () => void
@@ -58,7 +63,7 @@
   const MIN_PANEL_WIDTH = 360
   const MAX_PANEL_WIDTH = 640
   const MIN_PANEL_HEIGHT = 240
-  /** The chat composer's `max-w-2xl` — the panel must never cover it by default. */
+  /** The chat composer's `max-w-2xl`   the panel must never cover it by default. */
   const CHAT_MAX_WIDTH = 672
 
   interface PanelSnapshot {
@@ -83,7 +88,7 @@
 
   /**
    * The gap between the right edge of the chat composer and the right edge of
-   * the window (with the left sidebar docked) — the panel's default max width so
+   * the window (with the left sidebar docked)   the panel's default max width so
    * it never covers the chat by default.
    */
   function preferredWidth(): number {
@@ -172,7 +177,7 @@
 
   function onHeaderPointerDown(event: PointerEvent): void {
     if (minimized || event.button !== 0) return
-    // Let the header's own buttons keep their click behavior — never start a drag.
+    // Let the header's own buttons keep their click behavior   never start a drag.
     if (event.target instanceof Element && event.target.closest('button')) return
     dragging = true
     dragStart = { x: event.clientX, y: event.clientY }
@@ -214,6 +219,22 @@
       }
     })
   })
+
+  let panelEl = $state<HTMLElement | null>(null)
+
+  // ⌘/Ctrl+Enter runs this panel's primary action through the shared LIFO
+  // pipeline while the panel is open and expanded (a minimized panel is not in
+  // focus, so its resolver yields).
+  $effect(() => {
+    if (!open || minimized) return
+    return registerModalPrimaryAction(() => {
+      if (!panelEl || focusOwnsEnter(panelEl)) return false
+      const action = findPanelPrimaryAction(panelEl)
+      if (!action) return false
+      action.click()
+      return true
+    })
+  })
 </script>
 
 <svelte:window
@@ -232,7 +253,7 @@
 {#if open}
   <!--
     The panel stays mounted in the SAME tree position whether minimized or not so
-    its embedded terminal PTYs are never torn down — minimize only hides it while
+    its embedded terminal PTYs are never torn down   minimize only hides it while
     the bottom-right dock keeps the run badges live. The dock renders as a sibling.
   -->
   <div
@@ -240,6 +261,7 @@
       ? 'invisible pointer-events-none'
       : ''}"
     style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;"
+    bind:this={panelEl}
     role="dialog"
     aria-label={title}
   >
@@ -286,7 +308,10 @@
     <div class="min-h-0 flex-1 overflow-y-auto p-4">{@render children()}</div>
 
     {#if footer}
-      <div class="flex shrink-0 items-center justify-end gap-2 border-t bg-surface px-4 py-3">
+      <div
+        class="flex shrink-0 items-center justify-end gap-2 border-t bg-surface px-4 py-3"
+        data-modal-footer
+      >
         {@render footer()}
       </div>
     {/if}

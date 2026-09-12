@@ -48,7 +48,7 @@
   let prState = $state<PrState>('open')
   let page = $state(1)
 
-  /** Cached page for the current filter — renders instantly on tab re-entry. */
+  /** Cached page for the current filter   renders instantly on tab re-entry. */
   const cached = $derived(
     identity
       ? gitState.prPages[GitState.pageKey(identity.owner, identity.repo, prState, page)]
@@ -102,7 +102,7 @@
     }
   })
 
-  // After a new PR is created the cached "open" page may not include it yet —
+  // After a new PR is created the cached "open" page may not include it yet  
   // force a refetch so it appears right away.
   $effect(() => {
     if (refreshSignal > 0 && identity && githubConnected) void load(true)

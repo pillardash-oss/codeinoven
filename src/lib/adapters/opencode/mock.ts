@@ -15,7 +15,7 @@ import type {
 } from '../../types'
 
 /**
- * MockOpenCodeAdapter — Testing adapter that simulates OpenCode responses.
+ * MockOpenCodeAdapter   Testing adapter that simulates OpenCode responses.
  * Use for development and E2E testing without a real CLI binary.
  */
 export class MockOpenCodeAdapter implements ProviderAdapter {

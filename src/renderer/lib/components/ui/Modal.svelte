@@ -4,6 +4,19 @@
   import type { Snippet } from 'svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import {
+    registerModalPrimaryAction,
+    findPanelPrimaryAction,
+    focusOwnsEnter,
+    isFocusableTarget
+  } from '$lib/modal-primary-action.svelte'
+
+  const INPUT_FIELD_SELECTOR = [
+    'input:not([type="hidden"]):not([disabled]):not([readonly])',
+    'textarea:not([disabled]):not([readonly])',
+    'select:not([disabled])',
+    '[contenteditable="true"]:not([aria-disabled="true"])'
+  ].join(',')
 
   interface Props {
     open: boolean
@@ -36,45 +49,10 @@
     xl: 'max-w-5xl'
   } as const
 
-  const INPUT_FIELD_SELECTOR = [
-    'input:not([type="hidden"]):not([disabled]):not([readonly])',
-    'textarea:not([disabled]):not([readonly])',
-    'select:not([disabled])',
-    '[contenteditable="true"]:not([aria-disabled="true"])'
-  ].join(',')
-
-  const PRIMARY_ACTION_SELECTOR =
-    'button.bg-primary:not([disabled]), button.bg-danger:not([disabled])'
-
-  function isFocusableTarget(element: HTMLElement): boolean {
-    return (
-      element.getAttribute('aria-disabled') !== 'true' &&
-      !element.closest('[hidden], [inert], [aria-hidden="true"]') &&
-      element.checkVisibility()
-    )
-  }
-
-  function firstFocusable(panel: HTMLElement, selector: string): HTMLElement | undefined {
-    return Array.from(panel.querySelectorAll<HTMLElement>(selector)).find(isFocusableTarget)
-  }
-
-  function primaryAction(panel: HTMLElement): HTMLElement | undefined {
-    const footerActions = Array.from(
-      panel.querySelectorAll<HTMLElement>('[data-modal-footer] button:not([disabled])')
-    ).filter(isFocusableTarget)
-
-    return (
-      firstFocusable(panel, '[data-modal-primary]:not([disabled])') ??
-      firstFocusable(panel, '[data-modal-footer] button[type="submit"]:not([disabled])') ??
-      firstFocusable(panel, `[data-modal-footer] :is(${PRIMARY_ACTION_SELECTOR})`) ??
-      footerActions.at(-1) ??
-      firstFocusable(panel, PRIMARY_ACTION_SELECTOR)
-    )
-  }
 
   // The browser's native view floats above every DOM surface (see
   // ContextSidebarState.setFullscreenSurfaceActive), so this shared modal must
-  // suppress it while open — otherwise a still-visible browser tab covers the
+  // suppress it while open   otherwise a still-visible browser tab covers the
   // dialog's content and footer buttons, making them unclickable. Keyed per
   // instance so stacked modals don't clear each other's suppression.
   const suppressionKey = `modal-${Math.random().toString(36).slice(2)}`
@@ -90,14 +68,34 @@
     return registerOverlayClose(() => onClose())
   })
 
+  // ⌘/Ctrl+Enter runs this modal's primary action. This instance registers a
+  // resolver on the shared LIFO stack while open, so the shortcut always
+  // activates the topmost (focused) modal's action.
+  $effect(() => {
+    if (!open) return
+    return registerModalPrimaryAction(() => {
+      if (!panelEl || focusOwnsEnter(panelEl)) return false
+      const action = findPanelPrimaryAction(panelEl)
+      if (!action) return false
+      action.click()
+      return true
+    })
+  })
+
   function focusInitialElement(event: Event) {
     // Own the initial focus (input field, else the primary action) instead
     // of bits-ui's default of focusing the panel itself.
     event.preventDefault()
     if (!panelEl) return
-    const inputField = firstFocusable(panelEl, INPUT_FIELD_SELECTOR)
-    const defaultAction = primaryAction(panelEl)
+    const inputField = firstTextField(panelEl)
+    const defaultAction = findPanelPrimaryAction(panelEl)
     ;(inputField ?? defaultAction)?.focus({ preventScroll: true })
+  }
+
+  function firstTextField(panel: HTMLElement): HTMLElement | undefined {
+    return Array.from(panel.querySelectorAll<HTMLElement>(INPUT_FIELD_SELECTOR)).find(
+      isFocusableTarget
+    )
   }
 </script>
 

@@ -2,8 +2,8 @@
  * Generated TypeScript source for the app-owned Pi usage extension.
  *
  * The PiDriver launches `pi --mode rpc --extension <this file>` for every
- * session. The extension subscribes to `after_provider_response` — fired with
- * the raw HTTP response headers of every provider call — extracts the known
+ * session. The extension subscribes to `after_provider_response`   fired with
+ * the raw HTTP response headers of every provider call   extracts the known
  * rate-limit/quota header families, and forwards them to the driver through
  * `ctx.ui.setStatus(key, JSON)`, the same fire-and-forget
  * `extension_ui_request` channel the status extension uses. `PiRpcClient`
