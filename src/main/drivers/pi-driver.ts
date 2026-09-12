@@ -3063,10 +3063,62 @@ export class PiDriver extends PersistentCliDriver {
       void this.compactAndContinue(session, client, state)
       return true
     }
-    void client.prompt('Continue.').catch((error: unknown) => {
-      this.failSilentContinue(session, error instanceof Error ? error.message : state.lastError)
-    })
+    void this.promptContinuation(
+      session,
+      this.sessionProjects.get(session.id),
+      'Continue.',
+      state.lastError
+    )
     return true
+  }
+
+  /** Re-prompt a settled turn on the continuation channel. A rejection here is
+   *  a transport/state failure (pi rejects `prompt` only at transport level;
+   *  provider errors stream as events afterwards), so recover instead of
+   *  killing the turn: retry the live client once after a short settle, then
+   *  boot a fresh RPC process (which resumes the persisted native transcript)
+   *  and try again. Only a double failure finalizes the turn with the error. */
+  private async promptContinuation(
+    session: PersistentCliSession,
+    projectPath: string | undefined,
+    text: string,
+    fallbackError: string
+  ): Promise<void> {
+    const live = this.rpcClients.get(session.id)
+    if (live) {
+      try {
+        await live.prompt(text)
+        return
+      } catch (error) {
+        Logger.error('Pi continuation prompt rejected by the live client', {
+          sessionId: session.id,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      }
+      // The compaction lane can still be settling when the continuation is
+      // issued; a short delay clears the transient busy state.
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      try {
+        await live.prompt(text)
+        return
+      } catch {
+        // Fall through to the fresh-process recovery.
+      }
+    }
+    if (projectPath) {
+      try {
+        this.disposeRpcClient(session.id)
+        const fresh = await this.ensureRpcClient(projectPath, session.id)
+        await fresh.prompt(text)
+        return
+      } catch (error) {
+        Logger.error('Pi continuation retry on a fresh RPC process failed', {
+          sessionId: session.id,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
+    this.failSilentContinue(session, fallbackError)
   }
 
   /**
@@ -3128,8 +3180,14 @@ export class PiDriver extends PersistentCliDriver {
     try {
       await client.prompt('Continue.')
     } catch (error) {
-      await this.publishOversizedRecovery(session.id, false)
-      this.failSilentContinue(session, error instanceof Error ? error.message : state.lastError)
+      // Keep the recovery armed: the fresh-process retry below still needs the
+      // extension to strip image parts and oversized text from the request.
+      await this.promptContinuation(
+        session,
+        projectPath,
+        'Continue.',
+        error instanceof Error ? error.message : state.lastError
+      )
     }
   }
 
@@ -3164,6 +3222,13 @@ export class PiDriver extends PersistentCliDriver {
 
   /** Surface a silent continue that could not be started as a real error. */
   private failSilentContinue(session: PersistentCliSession, error: string): void {
+    // Logged at error level: a silent-continue failure kills a real turn, and
+    // the raw reason (pi process death, transport rejection) was previously
+    // invisible everywhere but the user-facing card, making diagnosis impossible.
+    Logger.error('Pi silent continue failed; finalizing the turn', {
+      sessionId: session.id,
+      error
+    })
     this.silentContinues.delete(session.id)
     this.activeTurns.delete(session.id)
     this.emit({
@@ -3244,7 +3309,17 @@ export class PiDriver extends PersistentCliDriver {
       if (!current()) return
       const session = await this.requireSession(projectPath, sessionId)
       if (!current()) return
-      this.failSilentContinue(session, error instanceof Error ? error.message : String(error))
+      // The compaction succeeded; only the resume failed. Recover through the
+      // resilient continuation instead of discarding a healthy checkpointed
+      // turn   a fresh RPC process resumes the persisted native transcript.
+      const latest = this.turnStates.get(sessionId)
+      if (latest) this.turnStates.set(sessionId, { ...latest, compacting: false })
+      await this.promptContinuation(
+        session,
+        projectPath,
+        'Continue from the Last working trace in the checkpoint. Complete the current step, then the next unfinished step.',
+        error instanceof Error ? error.message : String(error)
+      )
     } finally {
       if (current()) {
         this.pageCompactions.delete(sessionId)

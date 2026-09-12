@@ -17,6 +17,14 @@ const KEY = '${PI_COMPACTION_EXTENSION_KEY}'
 const yieldBatch = () => new Promise<void>((resolve) => setImmediate(resolve))
 const FLAG_PATH = '__CIO_OVERSIZED_FLAG_PATH__'
 const MAX_TEXT_BYTES = 384_000
+// Providers cap the number of images per request (Console Go rejects at 30).
+// The transcript accumulates images across every turn (each image file the
+// read tool opens adds one), so an unconditional budget on the REQUEST copy is
+// required: waiting for a failure to arm the stripping loses the turn to a retry loop
+// that re-sends the same oversized request. Keep a small headroom below the
+// tightest known cap so steering between images cannot push a request over.
+const MAX_REQUEST_IMAGES = 24
+const IMAGE_BUDGET_MARKER = '[image removed from the provider request: the request image budget was exceeded; the original image is preserved in the session transcript]'
 let cachedArmed = false
 let cachedMtimeMs = -1
 
@@ -42,6 +50,45 @@ function recoverPart<T extends { type: string; text?: string }>(part: T): T | Te
     return { type: 'text', text: prefix + '\n[truncated from the provider request to fit its size limit; the full output is preserved in the session transcript]' }
   }
   return part
+}
+
+type ContextContent = string | Array<{ type: string; text?: string }>
+interface ContextMessage {
+  role: string
+  content: ContextContent
+}
+
+/** Enforce the request image budget on a copy of the messages: when the
+ *  request carries more images than a provider accepts, replace the OLDEST
+ *  image parts with a text marker (newest are kept, so the model still sees
+ *  the media it is actively working with). Returns the input reference when
+ *  nothing had to be stripped. The session transcript is never modified. */
+function applyImageBudget<T extends ContextMessage>(messages: T[]): T[] {
+  let total = 0
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue
+    for (const part of message.content) if (part.type === 'image') total++
+  }
+  let toRemove = total - MAX_REQUEST_IMAGES
+  if (toRemove <= 0) return messages
+  const stripped: T[] = []
+  for (const message of messages) {
+    if (!Array.isArray(message.content) || toRemove <= 0) {
+      stripped.push(message)
+      continue
+    }
+    let removed = false
+    const content = message.content.map((part) => {
+      if (part.type === 'image' && toRemove > 0) {
+        toRemove--
+        removed = true
+        return { type: 'text', text: IMAGE_BUDGET_MARKER }
+      }
+      return part
+    })
+    stripped.push(removed ? { ...message, content } : message)
+  }
+  return stripped
 }
 
 function artifactReferences(value: unknown): string {
@@ -142,6 +189,10 @@ export default function (pi: ExtensionAPI): void {
   })
   pi.on('context', async (event, ctx) => {
     if (!await readArmed()) {
+      // The image budget applies on every request, armed or not: it prevents
+      // the provider's image-count rejection from ever killing the turn.
+      const budgeted = applyImageBudget(event.messages as ContextMessage[])
+      if (budgeted !== (event.messages as unknown)) return { messages: budgeted as typeof event.messages }
       await reportThreshold(ctx, true)
       return
     }
@@ -158,7 +209,8 @@ export default function (pi: ExtensionAPI): void {
         else messages.push({ ...message, content })
       } else messages.push(message)
     }
-    return { messages }
+    const budgeted = applyImageBudget(messages as unknown as ContextMessage[])
+    return { messages: budgeted as typeof event.messages }
   })
   pi.on('session_compact', () => { compacting = false; requestedAt = null })
   pi.on('session_compact_failed', () => { compacting = false })
