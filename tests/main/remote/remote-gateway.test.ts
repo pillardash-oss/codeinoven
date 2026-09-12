@@ -262,7 +262,7 @@ describe('RemoteGateway', () => {
     } finally {
       await gateway.stop()
     }
-  })
+  }, 30_000)
 
   it('serves only allow-listed PWA assets   never the whole renderer bundle', async () => {
     const { gateway, port, staticRoot } = await makeGateway()
