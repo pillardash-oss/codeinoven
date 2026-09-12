@@ -1817,7 +1817,13 @@ export const IPC_INVOKE_CONTRACT = {
    * Provider/credential failures are returned as `{ accessError }`.
    */
   'cloudDeploy:availableContainers': {} as Contract<
-    [projectId: string, providerKind: import('./types').CloudDeploymentProviderKind],
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      /** Browse a specific attached account's containers instead of the
+       *  project's active one (multi-account same-kind support). */
+      accountId?: string
+    ],
     import('./types').CloudDeploymentContainer[] | { accessError: string }
   >,
   /**
@@ -1828,7 +1834,9 @@ export const IPC_INVOKE_CONTRACT = {
     [
       projectId: string,
       providerKind: import('./types').CloudDeploymentProviderKind,
-      containerId: string
+      containerId: string,
+      /** Resolve through the container's bound account when present. */
+      accountId?: string
     ],
     import('./types').CloudDeploymentContainer | null
   >,
@@ -1840,7 +1848,9 @@ export const IPC_INVOKE_CONTRACT = {
     [
       projectId: string,
       providerKind: import('./types').CloudDeploymentProviderKind,
-      containerId: string
+      containerId: string,
+      /** Resolve through the container's bound account when present. */
+      accountId?: string
     ],
     import('./types').CloudDeploymentDeployment[]
   >,
@@ -1850,7 +1860,9 @@ export const IPC_INVOKE_CONTRACT = {
       projectId: string,
       providerKind: import('./types').CloudDeploymentProviderKind,
       containerId: string,
-      deploymentId?: string
+      deploymentId?: string,
+      /** Resolve through the container's bound account when present. */
+      accountId?: string
     ],
     { containerId: string; deploymentId: string | null; log: string }
   >,
@@ -2370,14 +2382,14 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   /** Open the native site-settings context menu anchored at the given point
    *  (window-content coordinates in density-independent pixels). */
-  'browser:siteMenu': {} as Contract<
-    [projectId: string, host: string, x: number, y: number],
-    void
-  >,
+  'browser:siteMenu': {} as Contract<[projectId: string, host: string, x: number, y: number], void>,
   'browser:resolvePermission': {} as Contract<
     [requestId: string, decision: BrowserPermissionDecision],
     void
   >,
+  /** Invoked by the native permission popup document once its permission
+   *  listener is bound; main flushes the request on display in response. */
+  'browser:popupReady': {} as Contract<[], void>,
   'browser:destroy': {} as Contract<[tabId: string], void>,
   'browser:destroyThread': {} as Contract<[projectId: string, threadId: string], void>,
   'browser:destroyProject': {} as Contract<[projectId: string], void>,
@@ -2989,7 +3001,7 @@ export const IPC_EVENT_CONTRACT = {
    */
   'browser:popup:permission': [] as unknown as [
     request: BrowserPermissionRequest,
-    context: { queueSize: number }
+    context: { queueSize: number; projectLabel: string | null }
   ],
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],

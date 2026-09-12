@@ -1556,8 +1556,9 @@ export class PrivilegedIpcValidator {
   /**
    * Whether the IPC sender frame is the app's own trusted main frame. Only the
    * top-level frame (no parent) may invoke privileged IPC, and its document URL
-   * must exactly match one of the app's own renderer URLs   never a foreign or
-   * arbitrary same-origin document.
+   * must match one of the app's own renderer URLs (query strings ignored, so
+   * first-party documents may carry state such as ?theme=)   never a foreign
+   * or arbitrary same-origin document.
    */
   isTrustedSenderFrame(frame: TrustedFrameCandidate | null | undefined): boolean {
     if (!frame || typeof frame.url !== 'string' || frame.url.length === 0) return false
@@ -1618,7 +1619,13 @@ export class PrivilegedIpcValidator {
 
   #normalizeUrl(url: string): string | null {
     try {
-      return new URL(url).href
+      const parsed = new URL(url)
+      // First-party documents are identified by their path; a query string
+      // (e.g. the permission popup's ?theme= hint) must never make a trusted
+      // sender untrustworthy. Fragments stay significant (hash routing can
+      // change what a document renders).
+      parsed.search = ''
+      return parsed.href
     } catch {
       return null
     }

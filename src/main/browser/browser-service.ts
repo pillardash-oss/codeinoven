@@ -32,7 +32,7 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
-import { PermissionPromptWindow } from './permission-prompt-window'
+import { PermissionPromptWindow, type PromptRequestContext } from './permission-prompt-window'
 
 const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
 const MAX_BROWSER_URL_LENGTH = 8192
@@ -455,6 +455,12 @@ export class BrowserService {
       const decision = validatePermissionDecision(rawDecision)
       this.resolvePermission(requestId, permissionResolutions[decision])
     })
+    ipcMain.handle('browser:popupReady', (_event) => {
+      // The popup document has bound its permission listener; flush whatever
+      // request is currently on display (covers the lost-event race where the
+      // first request arrived before the document finished subscribing).
+      this.promptWindow.flush()
+    })
     ipcMain.handle('browser:destroy', (_event, rawTabId) => {
       this.destroy(validateTabId(rawTabId))
     })
@@ -796,6 +802,7 @@ export class BrowserService {
         return
       }
       const [tabId] = tabEntry
+      const tab = tabEntry[1]
       const id = crypto.randomUUID()
       const rawMediaTypes: unknown = Reflect.get(details, 'mediaTypes')
       const mediaTypes = Array.isArray(rawMediaTypes)
@@ -825,7 +832,12 @@ export class BrowserService {
       this.pendingPermissions.set(id, { request, callback, timer })
       // Native OS popup composites above the WebContentsView: the page stays
       // live and interactive while the prompt is on screen.
-      this.promptWindow.show(request, this.pendingPermissions.size, this.promptAnchor())
+      const context: PromptRequestContext = {
+        request,
+        queueSize: this.pendingPermissions.size,
+        projectLabel: this.permissionLabel(tab)
+      }
+      this.promptWindow.show(context, this.promptAnchor())
     })
     browserSession.on('will-download', (event, item, contents) => {
       this.handleDownload(projectId, item, contents.id)
@@ -1065,7 +1077,15 @@ export class BrowserService {
       this.promptWindow.hide()
       return
     }
-    this.promptWindow.show(next.value.request, this.pendingPermissions.size, this.promptAnchor())
+    const nextTab = this.tabs.get(next.value.request.tabId)
+    this.promptWindow.show(
+      {
+        request: next.value.request,
+        queueSize: this.pendingPermissions.size,
+        projectLabel: nextTab ? this.permissionLabel(nextTab) : null
+      },
+      this.promptAnchor()
+    )
   }
 
   /** Content-anchored placement data for the permission popup: the active tab's
@@ -1092,6 +1112,30 @@ export class BrowserService {
     const title = thread.title.trim()
     if (!name || !title) return null
     const label = `${name} - ${title}`
+    return label.length > MAX_DIALOG_LABEL_LENGTH
+      ? `${label.slice(0, MAX_DIALOG_LABEL_LENGTH)}…`
+      : label
+  }
+
+  /** Resolve the requester label for permission prompts: "<project> - <thread>"
+   *  when both records exist, the project name alone when only the project
+   *  does, and null when the request cannot be tied to a project (the popup
+   *  then shows just the requesting website). */
+  private permissionLabel(tab: BrowserTab): string | null {
+    let project: Project | null
+    let thread: Thread | null
+    try {
+      project = this.projects.get(tab.projectId)
+      thread = this.threads.get(tab.threadId)
+    } catch (error: unknown) {
+      Logger.error('Browser permission label lookup failed:', error)
+      return null
+    }
+    if (!project) return null
+    const name = project.name.trim()
+    const title = thread?.title.trim() ?? ''
+    const label = title ? `${name} - ${title}` : name
+    if (!label) return null
     return label.length > MAX_DIALOG_LABEL_LENGTH
       ? `${label.slice(0, MAX_DIALOG_LABEL_LENGTH)}…`
       : label

@@ -89,6 +89,15 @@
       color: var(--foreground);
     }
 
+    .requester-label {
+      font-size: 0.6875rem;
+      letter-spacing: 0.02em;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .actions {
       display: flex;
       gap: 0.375rem;
@@ -139,6 +148,7 @@
 
 <body>
   <p class="queue-note hidden" id="queue-note"></p>
+  <p class="requester-label hidden" id="requester"></p>
   <p class="summary" role="document">
     <span class="origin" id="origin"></span>
     wants to use <span class="requesting" id="permission"></span>.
@@ -173,6 +183,7 @@
       var current = null
       var queueNote = document.getElementById('queue-note')
       var originEl = document.getElementById('origin')
+      var requesterEl = document.getElementById('requester')
       var permissionEl = document.getElementById('permission')
 
       function describe(permission, mediaTypes) {
@@ -212,6 +223,14 @@
         current = request
         originEl.textContent = request.origin
         permissionEl.textContent = describe(request.permission, request.mediaTypes)
+        var projectLabel = context && typeof context.projectLabel === 'string' ? context.projectLabel : ''
+        if (projectLabel !== '') {
+          requesterEl.textContent = projectLabel
+          requesterEl.classList.remove('hidden')
+        } else {
+          requesterEl.textContent = ''
+          requesterEl.classList.add('hidden')
+        }
         var queueSize = context && typeof context.queueSize === 'number' ? context.queueSize : 1
         if (queueSize > 1) {
           queueNote.textContent = queueSize + ' permission requests pending'
@@ -222,6 +241,10 @@
         var primary = document.getElementById('allow')
         if (primary instanceof HTMLElement) primary.focus()
       })
+
+      // Announce readiness so main flushes a request that arrived while this
+      // document was still subscribing (the lost-first-event race).
+      api.invoke('browser:popupReady').catch(function () { })
     })()
   </script>
 </body>

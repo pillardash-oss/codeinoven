@@ -1960,6 +1960,9 @@ function validateCloudDeploymentContainer(value: unknown, index: number): CloudD
       `Cloud deployment container ${index} provider kind`
     ),
     status: validateCloudDeploymentStatus(value.status, `Cloud deployment container ${index}`),
+    ...(typeof value.accountId === 'string'
+      ? { accountId: requireString(value.accountId, `Cloud deployment container ${index} account ID`, true) }
+      : {}),
     ...(typeof value.url === 'string' ? { url: value.url } : {}),
     ...(value.createdAt === undefined
       ? {}
@@ -2137,6 +2140,10 @@ function mergeCloudDeploymentContainers(
       id: mapping.id,
       label: mapping.label,
       providerKind: kind,
+      // The mapping's account binding is authoritative: a container monitored
+      // through a specific account stays bound to it even when another account
+      // also reports the same container id.
+      ...(mapping.accountId === undefined ? {} : { accountId: mapping.accountId }),
       status: live.status,
       ...(live.url === undefined ? {} : { url: live.url }),
       ...(live.project === undefined ? {} : { project: live.project }),
@@ -6861,13 +6868,30 @@ export function registerIpcHandlers(
     }
   )
 
+  /**
+   * Resolve the provider credential context for one project + provider kind.
+   * When `accountId` is given it must be one of the project's attached accounts
+   * for that kind (per-container account binding, so a second account of the
+   * same kind keeps working independently of the active-account switch);
+   * otherwise the project's active account for the kind is used.
+   */
   const resolveDeploymentContext = async (
     projectId: string,
-    kind: CloudDeploymentProviderKind
+    kind: CloudDeploymentProviderKind,
+    accountId?: string
   ): Promise<DeploymentProviderContext> => {
     const config = await storage.getCloudDeploymentConfig(projectId)
     const association = config?.project.providerAccounts?.[kind]
-    const activeAccountId = association?.activeAccountId ?? null
+    const explicitAccountId = accountId ?? null
+    if (
+      explicitAccountId !== null &&
+      !(association?.attachedAccountIds ?? []).includes(explicitAccountId)
+    ) {
+      throw new TypeError(
+        `Cloud deployment account is not attached to this project for ${kind}`
+      )
+    }
+    const activeAccountId = explicitAccountId ?? (association?.activeAccountId ?? null)
     const registry = activeAccountId === null ? null : await storage.getCloudDeploymentAccounts()
     const activeAccount =
       activeAccountId === null
@@ -6890,40 +6914,94 @@ export function registerIpcHandlers(
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const kind = validateCloudDeploymentProviderKind(providerKind)
     const hasDeployments = await storage.hasCloudDeployments(safeProjectId)
-    try {
-      const provider = resolveDeploymentProvider(
-        kind,
-        await resolveDeploymentContext(safeProjectId, kind)
-      )
-      const [liveContainers, config] = await Promise.all([
-        provider.listContainers(),
-        loadOrCreateCloudDeploymentConfig(safeProjectId)
-      ])
-      const containers = mergeCloudDeploymentContainers(
-        liveContainers,
-        config.project.containers,
-        kind
-      )
-      return { containers, fetchedAt: Date.now(), hasDeployments }
-    } catch (error) {
-      return {
-        containers: [],
-        fetchedAt: Date.now(),
-        hasDeployments,
-        accessError: error instanceof Error ? error.message : 'Provider request failed'
+    const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
+    // Every attached account for this kind contributes containers (active
+    // first), so a second account of the same kind is monitored alongside the
+    // first instead of being hidden behind the active-account switch.
+    const association = config.project.providerAccounts?.[kind]
+    const activeAccountId = association?.activeAccountId ?? null
+    const attachedAccountIds = association?.attachedAccountIds ?? []
+    const orderedAccountIds = [
+      ...(activeAccountId !== null ? [activeAccountId] : []),
+      ...attachedAccountIds.filter((accountId) => accountId !== activeAccountId)
+    ]
+    const registry = await storage.getCloudDeploymentAccounts()
+    const accountLabel = (accountId: string): string =>
+      registry.accounts.find((account) => account.id === accountId)?.label ?? accountId
+
+    if (orderedAccountIds.length === 0) {
+      // Legacy shape: the kind is selected but no account association exists;
+      // resolve through the single active-account path (its error surfaces).
+      try {
+        const provider = resolveDeploymentProvider(
+          kind,
+          await resolveDeploymentContext(safeProjectId, kind)
+        )
+        const liveContainers = await provider.listContainers()
+        return {
+          containers: mergeCloudDeploymentContainers(
+            liveContainers,
+            config.project.containers,
+            kind
+          ),
+          fetchedAt: Date.now(),
+          hasDeployments
+        }
+      } catch (error) {
+        return {
+          containers: [],
+          fetchedAt: Date.now(),
+          hasDeployments,
+          accessError: error instanceof Error ? error.message : 'Provider request failed'
+        }
       }
+    }
+
+    const liveContainers: CloudDeploymentContainer[] = []
+    const failures: string[] = []
+    await Promise.all(
+      orderedAccountIds.map(async (accountId) => {
+        try {
+          const provider = resolveDeploymentProvider(
+            kind,
+            await resolveDeploymentContext(safeProjectId, kind, accountId)
+          )
+          const containers = await provider.listContainers()
+          liveContainers.push(
+            ...containers.map((container) => ({ ...container, accountId }))
+          )
+        } catch (error) {
+          const label = accountLabel(accountId)
+          failures.push(
+            `${label}: ${error instanceof Error ? error.message : 'Provider request failed'}`
+          )
+        }
+      })
+    )
+    const containers = mergeCloudDeploymentContainers(
+      liveContainers,
+      config.project.containers,
+      kind
+    )
+    return {
+      containers,
+      fetchedAt: Date.now(),
+      hasDeployments,
+      ...(failures.length > 0 ? { accessError: failures.join(' · ') } : {})
     }
   })
 
   ipcMain.handle(
     'cloudDeploy:availableContainers',
-    async (_, projectId: unknown, providerKind: unknown) => {
+    async (_, projectId: unknown, providerKind: unknown, accountId?: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeAccountId =
+        accountId === undefined ? undefined : requireString(accountId, 'Account ID', true)
       try {
         const provider = resolveDeploymentProvider(
           kind,
-          await resolveDeploymentContext(safeProjectId, kind)
+          await resolveDeploymentContext(safeProjectId, kind, safeAccountId)
         )
         return await provider.listContainers()
       } catch (error) {
@@ -6936,13 +7014,21 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     'cloudDeploy:containerStatus',
-    async (_, projectId: unknown, providerKind: unknown, containerId: unknown) => {
+    async (
+      _,
+      projectId: unknown,
+      providerKind: unknown,
+      containerId: unknown,
+      accountId?: unknown
+    ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
       const safeContainerId = requireString(containerId, 'Container ID')
+      const safeAccountId =
+        accountId === undefined ? undefined : requireString(accountId, 'Account ID', true)
       const provider = resolveDeploymentProvider(
         kind,
-        await resolveDeploymentContext(safeProjectId, kind)
+        await resolveDeploymentContext(safeProjectId, kind, safeAccountId)
       )
       return provider.getStatus(safeContainerId)
     }
@@ -6955,16 +7041,19 @@ export function registerIpcHandlers(
       projectId: unknown,
       providerKind: unknown,
       containerId: unknown,
-      deploymentId?: unknown
+      deploymentId?: unknown,
+      accountId?: unknown
     ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
       const safeContainerId = requireString(containerId, 'Container ID')
       const safeDeploymentId =
         deploymentId === undefined ? undefined : requireString(deploymentId, 'Deployment ID')
+      const safeAccountId =
+        accountId === undefined ? undefined : requireString(accountId, 'Account ID', true)
       const provider = resolveDeploymentProvider(
         kind,
-        await resolveDeploymentContext(safeProjectId, kind)
+        await resolveDeploymentContext(safeProjectId, kind, safeAccountId)
       )
       const log = await provider.getLogs(safeContainerId, safeDeploymentId)
       return { containerId: safeContainerId, deploymentId: safeDeploymentId ?? null, log }
@@ -6973,13 +7062,21 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     'cloudDeploy:deployments',
-    async (_, projectId: unknown, providerKind: unknown, containerId: unknown) => {
+    async (
+      _,
+      projectId: unknown,
+      providerKind: unknown,
+      containerId: unknown,
+      accountId?: unknown
+    ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
       const safeContainerId = requireString(containerId, 'Container ID')
+      const safeAccountId =
+        accountId === undefined ? undefined : requireString(accountId, 'Account ID', true)
       const provider = resolveDeploymentProvider(
         kind,
-        await resolveDeploymentContext(safeProjectId, kind)
+        await resolveDeploymentContext(safeProjectId, kind, safeAccountId)
       )
       return provider.listDeployments(safeContainerId)
     }

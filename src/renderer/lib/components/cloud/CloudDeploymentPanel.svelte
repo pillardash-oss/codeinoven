@@ -11,7 +11,8 @@
     Rocket,
     Search,
     Server,
-    Trash2
+    Trash2,
+    TriangleAlert
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { relativeTime } from '$lib/format/relative-time'
@@ -122,22 +123,33 @@
     for (const kind of providers) {
       const cached = cloudDeployState.overviews[CloudDeployState.overviewKey(projectId, kind)]
       for (const container of cached?.value.containers ?? []) {
-        byKey[`${container.providerKind}/${container.id}`] = container
-      }
-    }
-    for (const [key, entry] of Object.entries(cloudDeployState.containerStatuses)) {
-      if (!key.startsWith(`${projectId}/`)) continue
-      const container = entry.value
-      const existing = byKey[`${container.providerKind}/${container.id}`]
-      if (!existing) continue
-      byKey[`${container.providerKind}/${container.id}`] = {
-        ...existing,
-        status: container.status,
-        updatedAt: container.updatedAt,
-        createdAt: container.createdAt,
-        log: container.log,
-        url: container.url,
-        urls: container.urls
+        // Account-aware key: the same container id can exist under two accounts
+        // of the same provider kind without colliding.
+        const key = `${container.providerKind}/${container.accountId ?? ''}/${container.id}`
+        byKey[key] = container
+        // The authoritative per-container status is overlaid on top so build
+        // status changes show up without a manual reload. Only the
+        // status-bearing fields are overlaid so the project's label/id are
+        // never replaced by the provider's.
+        const statusEntry = cloudDeployState.containerStatuses[
+          CloudDeployState.containerKey(
+            projectId,
+            container.providerKind,
+            container.id,
+            container.accountId
+          )
+        ]
+        if (statusEntry) {
+          byKey[key] = {
+            ...container,
+            status: statusEntry.value.status,
+            updatedAt: statusEntry.value.updatedAt,
+            createdAt: statusEntry.value.createdAt,
+            log: statusEntry.value.log,
+            url: statusEntry.value.url,
+            urls: statusEntry.value.urls
+          }
+        }
       }
     }
     return Object.values(byKey)
@@ -317,6 +329,16 @@
     if (status === 'failed') return 'Failed'
     if (status === 'building') return 'Building'
     return 'Unknown'
+  }
+
+  /** Why the latest status poll for this container failed, if it did. */
+  function containerError(container: CloudDeploymentContainer): string | undefined {
+    return cloudDeployState.containerError(
+      projectId,
+      container.providerKind,
+      container.id,
+      container.accountId
+    )
   }
 
   /** Deduped, non-empty URLs for a container, preferring the provider's list. */
@@ -645,6 +667,15 @@ ${fence}`
                             >
                               {statusLabel(container.status)}
                             </StatusPill>
+                            {#if containerError(container)}
+                              {@const pollError = containerError(container)}
+                              <TriangleAlert
+                                size={12}
+                                class="shrink-0 text-warning"
+                                title="Status check failed: {pollError}"
+                                aria-label="Status check failed: {pollError}"
+                              />
+                            {/if}
                           </div>
                           <div class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
                             <span class="truncate font-mono">{container.id}</span>

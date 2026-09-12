@@ -4785,6 +4785,12 @@ export interface CloudDeploymentContainer {
   label: string
   /** Provider that owns this container. */
   providerKind: CloudDeploymentProviderKind
+  /** Global provider account this container is monitored through. When unset,
+   *  the project's active account for the provider kind is used (legacy single
+   *  active account model). Set when a container is added while browsing a
+   *  specific account so a second account of the same kind keeps working
+   *  independently of the active-account switch. */
+  accountId?: string
   /** Latest known deployment/build status. */
   status: CloudDeploymentStatus
   /** Live URL of the deployed application, when known. */
