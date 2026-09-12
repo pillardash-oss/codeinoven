@@ -87,6 +87,9 @@
     "word-extractor": "^1.0.4",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
+  "optionalDependencies": {
+    "@firecrawl/anydoc-win32-x64-msvc": "0.2.4"
+  },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.259",
     "@baybreezy/file-extension-icon": "^0.0.5",
