@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import { CheckCircle2, Cloud, Loader2, Search } from '@lucide/svelte'
+  import { CheckCircle2, Cloud, Loader2, Plus, Search } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { cloudAccountsState } from '$lib/stores/cloud-accounts.svelte'
@@ -72,6 +72,12 @@
   // "reuse" path: pick an existing global account to attach.
   let selectedExistingAccountId = $state('')
   let containerProviderKind = $state<CloudDeploymentProviderKind | ''>('')
+  /** The attached account the container flow browses (multi-account same kind). */
+  let containerAccountId = $state('')
+  /** True when the provider flow was entered from the container flow to add an
+   *  account; after saving, the sheet returns to the container flow with the
+   *  new account selected instead of closing. */
+  let returnToContainer = $state(false)
   let containerId = $state('')
   let containerLabel = $state('')
   let containerSearch = $state('')
@@ -104,6 +110,32 @@
   let containerProviders = $derived(
     PROVIDER_KINDS.filter((kind) => attachedProviderKinds.includes(kind))
   )
+
+  /** Accounts attached to this project for the container flow's provider. */
+  const containerAccounts = $derived(
+    containerProviderKind === ''
+      ? []
+      : (config?.project.providerAccounts?.[containerProviderKind]?.attachedAccountIds ?? [])
+          .map((accountId) => cloudAccountsState.accountById(accountId))
+          .filter((account) => account !== undefined)
+  )
+
+  /** The project's active account for the container flow's provider. */
+  const containerActiveAccountId = $derived(
+    containerProviderKind === ''
+      ? null
+      : (config?.project.providerAccounts?.[containerProviderKind]?.activeAccountId ?? null)
+  )
+
+  /** Default the account picker to the active account, falling back to the
+   *  first attached one. */
+  function pickDefaultContainerAccount(kind: CloudDeploymentProviderKind | ''): string {
+    if (kind === '') return ''
+    const active = config?.project.providerAccounts?.[kind]?.activeAccountId ?? null
+    const attached = config?.project.providerAccounts?.[kind]?.attachedAccountIds ?? []
+    if (active !== null) return active
+    return attached[0] ?? ''
+  }
 
   let filteredAvailable = $derived(
     availableContainers.filter((container) => {
@@ -165,11 +197,14 @@
       containerProviderKind = editingContainer.providerKind
       containerId = editingContainer.id
       containerLabel = editingContainer.label
+      containerAccountId = editingContainer.accountId ?? ''
     } else {
       containerProviderKind = ''
       containerId = ''
       containerLabel = ''
+      containerAccountId = ''
     }
+    returnToContainer = false
     containerSearch = ''
     availableContainers = []
     availableLoading = false
@@ -227,6 +262,8 @@
     token = ''
     selectedExistingAccountId = ''
     containerProviderKind = ''
+    containerAccountId = ''
+    returnToContainer = false
     containerId = ''
     containerLabel = ''
     containerSearch = ''
@@ -256,6 +293,7 @@
     saving = true
     error = ''
     try {
+      let savedAccountId = ''
       if (createMode === 'create') {
         const validation = validateBaseUrl(baseUrl)
         if (!validation.ok) {
@@ -281,6 +319,7 @@
         if (projectId) {
           config = await cloudAccountsState.attachAccount(projectId, selectedKind, account.id)
         }
+        savedAccountId = account.id
         toast.success(`Created “${account.label}”.`)
       } else {
         if (!projectId) {
@@ -296,8 +335,27 @@
           selectedKind,
           selectedExistingAccountId
         )
+        savedAccountId = selectedExistingAccountId
         const account = cloudAccountsState.accountById(selectedExistingAccountId)
         toast.success(`Attached “${account?.label ?? 'provider account'}”.`)
+      }
+      // Entered from the container flow to add an account: go straight back to
+      // it with the new account selected and its containers loading.
+      if (returnToContainer && projectId && selectedKind !== null) {
+        const kind = selectedKind
+        returnToContainer = false
+        mode = 'container'
+        containerProviderKind = kind
+        containerAccountId = savedAccountId
+        selectedKind = null
+        createMode = 'create'
+        accountLabel = ''
+        baseUrl = ''
+        token = ''
+        selectedExistingAccountId = ''
+        error = ''
+        await loadAvailableContainers()
+        return
       }
       resetForm()
       onClose()
@@ -308,6 +366,15 @@
     } finally {
       saving = false
     }
+  }
+
+  /** Jump to the provider flow to create/attach another account for the kind
+   *  currently selected in the container flow, then come back to it. */
+  function addAccountForContainerProvider(): void {
+    if (containerProviderKind === '') return
+    returnToContainer = true
+    mode = 'provider'
+    selectProvider(containerProviderKind)
   }
 
   async function loadAvailableContainers(): Promise<void> {
@@ -322,7 +389,8 @@
       const result = await invoke(
         'cloudDeploy:availableContainers',
         projectId,
-        containerProviderKind
+        containerProviderKind,
+        containerAccountId === '' ? undefined : containerAccountId
       )
       if (Array.isArray(result)) {
         availableContainers = result
@@ -410,6 +478,10 @@
         }
       }
       const now = Date.now()
+      /** The account the flow browsed; every added mapping is bound to it so a
+       *  second account of the same kind keeps working independently of the
+       *  project's active-account switch. */
+      const boundAccountId = containerAccountId === '' ? undefined : containerAccountId
       const existingIds = new Set(
         current.project.containers
           .filter((mapping) => mapping.providerKind === containerProviderKind)
@@ -424,6 +496,7 @@
           providerKind: containerProviderKind,
           status: 'unknown',
           ...(container.project ? { project: container.project } : {}),
+          ...(boundAccountId === undefined ? {} : { accountId: boundAccountId }),
           createdAt: now,
           updatedAt: now
         })
@@ -434,6 +507,7 @@
           label: manualLabel,
           providerKind: containerProviderKind,
           status: 'unknown',
+          ...(boundAccountId === undefined ? {} : { accountId: boundAccountId }),
           createdAt: now,
           updatedAt: now
         })
@@ -616,6 +690,7 @@
         checked={mode === 'container'}
         onchange={(v) => {
           mode = v ? 'container' : 'provider'
+          returnToContainer = false
           error = ''
         }}
         aria-label="Toggle between adding a provider and adding a container"
@@ -802,7 +877,10 @@
           <select
             class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
             bind:value={containerProviderKind}
-            onchange={() => void loadAvailableContainers()}
+            onchange={() => {
+              containerAccountId = pickDefaultContainerAccount(containerProviderKind)
+              void loadAvailableContainers()
+            }}
           >
             <option value="">Select a provider</option>
             {#each containerProviders as kind (kind)}
@@ -810,6 +888,45 @@
             {/each}
           </select>
         </label>
+
+        {#if containerProviderKind !== ''}
+          <div class="flex items-end gap-2">
+            <label class="block min-w-0 flex-1 space-y-1 text-xs font-medium">
+              <span>{PROVIDER_DISPLAY_NAMES[containerProviderKind]} account</span>
+              <select
+                class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+                bind:value={containerAccountId}
+                onchange={() => void loadAvailableContainers()}
+              >
+                {#if containerAccounts.length === 0}
+                  <option value="">No account attached</option>
+                {/if}
+                {#each containerAccounts as account (account.id)}
+                  <option value={account.id}>
+                    {account.label}{account.id === containerActiveAccountId ? ' (active)' : ''}
+                  </option>
+                {/each}
+              </select>
+            </label>
+            {#if containerProviderKind === WORKING_KIND}
+              <button
+                type="button"
+                class="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-muted hover:bg-overlay hover:text-foreground"
+                title="Create or attach another {PROVIDER_DISPLAY_NAMES[containerProviderKind]} account, then continue adding containers"
+                onclick={() => addAccountForContainerProvider()}
+              >
+                <Plus size={13} />
+                New account
+              </button>
+            {/if}
+          </div>
+          {#if containerAccounts.length === 0}
+            <p class="rounded-lg border bg-elevated px-3 py-2 text-[0.6875rem] text-muted">
+              No {PROVIDER_DISPLAY_NAMES[containerProviderKind]} account is attached to this
+              project. Add one to browse its containers.
+            </p>
+          {/if}
+        {/if}
 
         {#if containerProviderKind !== ''}
           {#if availableLoading}

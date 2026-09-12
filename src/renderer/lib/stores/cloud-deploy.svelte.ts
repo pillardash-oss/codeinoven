@@ -62,16 +62,16 @@ export class CloudDeployState {
   /** Cached provider overviews, keyed by `${projectId}/${providerKind}`. */
   overviews: Record<string, CacheEntry<CloudDeploymentResult>> = $state({})
 
-  /** Cached per-container statuses, keyed by `${projectId}/${providerKind}/${containerId}`. */
+  /** Cached per-container statuses, keyed by `${projectId}/${providerKind}[/accountId]/${containerId}`. */
   containerStatuses: Record<string, CacheEntry<CloudDeploymentContainer>> = $state({})
 
-  /** Cached per-container logs, keyed by `${projectId}/${providerKind}/${containerId}[/deploymentId]`. */
+  /** Cached per-container logs, keyed by `${projectId}/${providerKind}[/accountId]/${containerId}[/deploymentId]`. */
   containerLogs: Record<
     string,
     CacheEntry<{ containerId: string; deploymentId: string | null; log: string }>
   > = $state({})
 
-  /** Cached per-container deployment lists, keyed by `${projectId}/${providerKind}/${containerId}`. */
+  /** Cached per-container deployment lists, keyed by `${projectId}/${providerKind}[/accountId]/${containerId}`. */
   containerDeployments: Record<string, CacheEntry<CloudDeploymentDeployment[]>> = $state({})
 
   /** Epoch ms of the last failure per key. Deliberately plain (not `$state`) —
@@ -98,9 +98,16 @@ export class CloudDeployState {
   static containerKey(
     projectId: string,
     providerKind: CloudDeploymentProviderKind,
-    containerId: string
+    containerId: string,
+    /** The account the container is monitored through; included in the key so
+     *  the same container id under two accounts of the same provider never
+     *  collides in cache, cooldown, or in-flight state. */
+    accountId?: string
   ): string {
-    return `${projectId}/${providerKind}/${containerId}`
+    const base = `${projectId}/${providerKind}`
+    return accountId === undefined || accountId === ''
+      ? `${base}/${containerId}`
+      : `${base}/${accountId}/${containerId}`
   }
 
   /** Drop the entries whose key starts with the given project prefix. */
@@ -225,23 +232,24 @@ export class CloudDeployState {
     projectId: string,
     providerKind: CloudDeploymentProviderKind,
     containerId: string,
-    force = false
+    force = false,
+    accountId?: string
   ): Promise<CloudDeploymentContainer | null> {
     if (this.handleNotImplemented(providerKind)) return null
-    const key = CloudDeployState.containerKey(projectId, providerKind, containerId)
+    const key = CloudDeployState.containerKey(projectId, providerKind, containerId, accountId)
     const cached = this.containerStatuses[key]
     if (cached && !force) {
       if (Date.now() - cached.fetchedAt < STATUS_CACHE_TTL_MS) return cached.value
       if (!this.coolingDown(key)) {
         void this.dedupe(key, () =>
-          this.loadContainerStatus(projectId, providerKind, containerId, key)
+          this.loadContainerStatus(projectId, providerKind, containerId, key, accountId)
         )
       }
       return cached.value
     }
     if (!force && this.coolingDown(key)) return cached?.value ?? null
     return this.dedupe(key, () =>
-      this.loadContainerStatus(projectId, providerKind, containerId, key)
+      this.loadContainerStatus(projectId, providerKind, containerId, key, accountId)
     )
   }
 
@@ -249,14 +257,16 @@ export class CloudDeployState {
     projectId: string,
     providerKind: CloudDeploymentProviderKind,
     containerId: string,
-    key: string
+    key: string,
+    accountId?: string
   ): Promise<CloudDeploymentContainer | null> {
     try {
       const container = await invoke(
         'cloudDeploy:containerStatus',
         projectId,
         providerKind,
-        containerId
+        containerId,
+        accountId
       )
       if (container) {
         this.containerStatuses = {
@@ -283,24 +293,32 @@ export class CloudDeployState {
     providerKind: CloudDeploymentProviderKind,
     containerId: string,
     deploymentId?: string,
-    force = false
+    force = false,
+    accountId?: string
   ): Promise<{ containerId: string; deploymentId: string | null; log: string } | null> {
     if (this.handleNotImplemented(providerKind)) return null
-    const key = CloudDeployState.containerKey(projectId, providerKind, containerId)
+    const key = CloudDeployState.containerKey(projectId, providerKind, containerId, accountId)
     const logKey = deploymentId ? `${key}/${deploymentId}` : key
     const cached = this.containerLogs[logKey]
     if (cached && !force) {
       if (Date.now() - cached.fetchedAt < LOG_CACHE_TTL_MS) return cached.value
       if (!this.coolingDown(logKey)) {
         void this.dedupe(logKey, () =>
-          this.loadContainerLog(projectId, providerKind, containerId, logKey, deploymentId)
+          this.loadContainerLog(
+            projectId,
+            providerKind,
+            containerId,
+            logKey,
+            deploymentId,
+            accountId
+          )
         )
       }
       return cached.value
     }
     if (!force && this.coolingDown(logKey)) return cached?.value ?? null
     return this.dedupe(logKey, () =>
-      this.loadContainerLog(projectId, providerKind, containerId, logKey, deploymentId)
+      this.loadContainerLog(projectId, providerKind, containerId, logKey, deploymentId, accountId)
     )
   }
 
@@ -312,20 +330,25 @@ export class CloudDeployState {
     projectId: string,
     providerKind: CloudDeploymentProviderKind,
     containerId: string,
-    force = false
+    force = false,
+    accountId?: string
   ): Promise<CloudDeploymentDeployment[] | null> {
     if (this.handleNotImplemented(providerKind)) return null
-    const key = CloudDeployState.containerKey(projectId, providerKind, containerId)
+    const key = CloudDeployState.containerKey(projectId, providerKind, containerId, accountId)
     const cached = this.containerDeployments[key]
     if (cached && !force) {
       if (Date.now() - cached.fetchedAt < STATUS_CACHE_TTL_MS) return cached.value
       if (!this.coolingDown(key)) {
-        void this.dedupe(key, () => this.loadDeployments(projectId, providerKind, containerId, key))
+        void this.dedupe(key, () =>
+          this.loadDeployments(projectId, providerKind, containerId, key, accountId)
+        )
       }
       return cached.value
     }
     if (!force && this.coolingDown(key)) return cached?.value ?? null
-    return this.dedupe(key, () => this.loadDeployments(projectId, providerKind, containerId, key))
+    return this.dedupe(key, () =>
+      this.loadDeployments(projectId, providerKind, containerId, key, accountId)
+    )
   }
 
   private async loadContainerLog(
@@ -333,7 +356,8 @@ export class CloudDeployState {
     providerKind: CloudDeploymentProviderKind,
     containerId: string,
     key: string,
-    deploymentId?: string
+    deploymentId?: string,
+    accountId?: string
   ): Promise<{ containerId: string; deploymentId: string | null; log: string } | null> {
     try {
       const result = await invoke(
@@ -341,7 +365,8 @@ export class CloudDeployState {
         projectId,
         providerKind,
         containerId,
-        deploymentId
+        deploymentId,
+        accountId
       )
       this.containerLogs = {
         ...this.containerLogs,
@@ -361,10 +386,17 @@ export class CloudDeployState {
     projectId: string,
     providerKind: CloudDeploymentProviderKind,
     containerId: string,
-    key: string
+    key: string,
+    accountId?: string
   ): Promise<CloudDeploymentDeployment[] | null> {
     try {
-      const result = await invoke('cloudDeploy:deployments', projectId, providerKind, containerId)
+      const result = await invoke(
+        'cloudDeploy:deployments',
+        projectId,
+        providerKind,
+        containerId,
+        accountId
+      )
       this.containerDeployments = {
         ...this.containerDeployments,
         [key]: { value: result, fetchedAt: Date.now() }
@@ -389,11 +421,21 @@ export class CloudDeployState {
    */
   async monitorContainers(
     projectId: string,
-    containers: ReadonlyArray<{ providerKind: CloudDeploymentProviderKind; id: string }>
+    containers: ReadonlyArray<{
+      providerKind: CloudDeploymentProviderKind
+      id: string
+      accountId?: string
+    }>
   ): Promise<void> {
     for (const container of containers) {
       try {
-        await this.ensureContainerStatus(projectId, container.providerKind, container.id)
+        await this.ensureContainerStatus(
+          projectId,
+          container.providerKind,
+          container.id,
+          false,
+          container.accountId
+        )
       } catch {
         // The store surfaces a tailored message via its error channel; the
         // panel keeps each container's last known status on screen.
@@ -407,7 +449,12 @@ export class CloudDeployState {
    * failure cooldown for the key.
    */
   setContainerStatus(projectId: string, container: CloudDeploymentContainer): void {
-    const key = CloudDeployState.containerKey(projectId, container.providerKind, container.id)
+    const key = CloudDeployState.containerKey(
+      projectId,
+      container.providerKind,
+      container.id,
+      container.accountId
+    )
     this.containerStatuses = {
       ...this.containerStatuses,
       [key]: { value: container, fetchedAt: Date.now() }

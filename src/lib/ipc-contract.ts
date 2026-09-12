@@ -1817,7 +1817,13 @@ export const IPC_INVOKE_CONTRACT = {
    * Provider/credential failures are returned as `{ accessError }`.
    */
   'cloudDeploy:availableContainers': {} as Contract<
-    [projectId: string, providerKind: import('./types').CloudDeploymentProviderKind],
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      /** Browse a specific attached account's containers instead of the
+       *  project's active one (multi-account same-kind support). */
+      accountId?: string
+    ],
     import('./types').CloudDeploymentContainer[] | { accessError: string }
   >,
   /**
@@ -1828,7 +1834,9 @@ export const IPC_INVOKE_CONTRACT = {
     [
       projectId: string,
       providerKind: import('./types').CloudDeploymentProviderKind,
-      containerId: string
+      containerId: string,
+      /** Resolve through the container's bound account when present. */
+      accountId?: string
     ],
     import('./types').CloudDeploymentContainer | null
   >,
@@ -1840,7 +1848,9 @@ export const IPC_INVOKE_CONTRACT = {
     [
       projectId: string,
       providerKind: import('./types').CloudDeploymentProviderKind,
-      containerId: string
+      containerId: string,
+      /** Resolve through the container's bound account when present. */
+      accountId?: string
     ],
     import('./types').CloudDeploymentDeployment[]
   >,
@@ -1850,7 +1860,9 @@ export const IPC_INVOKE_CONTRACT = {
       projectId: string,
       providerKind: import('./types').CloudDeploymentProviderKind,
       containerId: string,
-      deploymentId?: string
+      deploymentId?: string,
+      /** Resolve through the container's bound account when present. */
+      accountId?: string
     ],
     { containerId: string; deploymentId: string | null; log: string }
   >,

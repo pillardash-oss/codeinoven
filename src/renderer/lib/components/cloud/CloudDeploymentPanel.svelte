@@ -122,22 +122,33 @@
     for (const kind of providers) {
       const cached = cloudDeployState.overviews[CloudDeployState.overviewKey(projectId, kind)]
       for (const container of cached?.value.containers ?? []) {
-        byKey[`${container.providerKind}/${container.id}`] = container
-      }
-    }
-    for (const [key, entry] of Object.entries(cloudDeployState.containerStatuses)) {
-      if (!key.startsWith(`${projectId}/`)) continue
-      const container = entry.value
-      const existing = byKey[`${container.providerKind}/${container.id}`]
-      if (!existing) continue
-      byKey[`${container.providerKind}/${container.id}`] = {
-        ...existing,
-        status: container.status,
-        updatedAt: container.updatedAt,
-        createdAt: container.createdAt,
-        log: container.log,
-        url: container.url,
-        urls: container.urls
+        // Account-aware key: the same container id can exist under two accounts
+        // of the same provider kind without colliding.
+        const key = `${container.providerKind}/${container.accountId ?? ''}/${container.id}`
+        byKey[key] = container
+        // The authoritative per-container status is overlaid on top so build
+        // status changes show up without a manual reload. Only the
+        // status-bearing fields are overlaid so the project's label/id are
+        // never replaced by the provider's.
+        const statusEntry = cloudDeployState.containerStatuses[
+          CloudDeployState.containerKey(
+            projectId,
+            container.providerKind,
+            container.id,
+            container.accountId
+          )
+        ]
+        if (statusEntry) {
+          byKey[key] = {
+            ...container,
+            status: statusEntry.value.status,
+            updatedAt: statusEntry.value.updatedAt,
+            createdAt: statusEntry.value.createdAt,
+            log: statusEntry.value.log,
+            url: statusEntry.value.url,
+            urls: statusEntry.value.urls
+          }
+        }
       }
     }
     return Object.values(byKey)
