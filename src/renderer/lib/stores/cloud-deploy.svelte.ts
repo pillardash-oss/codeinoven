@@ -65,6 +65,10 @@ export class CloudDeployState {
   /** Cached per-container statuses, keyed by `${projectId}/${providerKind}[/accountId]/${containerId}`. */
   containerStatuses: Record<string, CacheEntry<CloudDeploymentContainer>> = $state({})
 
+  /** Last status-fetch failure per container (same keys as `containerStatuses`),
+   *  so the panel can surface WHY a status is stale instead of only the console. */
+  containerErrors: Record<string, string> = $state({})
+
   /** Cached per-container logs, keyed by `${projectId}/${providerKind}[/accountId]/${containerId}[/deploymentId]`. */
   containerLogs: Record<
     string,
@@ -275,13 +279,28 @@ export class CloudDeployState {
         }
         delete this.failures[key]
       }
+      delete this.containerErrors[key]
       this.error = null
       return container
     } catch (reason) {
       this.markFailure(key)
-      this.error = errorMessage(reason, 'Container status could not be loaded')
+      const message = errorMessage(reason, 'Container status could not be loaded')
+      this.containerErrors[key] = message
+      this.error = message
       throw reason
     }
+  }
+
+  /** Last status-fetch failure for one container, or undefined when healthy. */
+  containerError(
+    projectId: string,
+    providerKind: CloudDeploymentProviderKind,
+    containerId: string,
+    accountId?: string
+  ): string | undefined {
+    return this.containerErrors[
+      CloudDeployState.containerKey(projectId, providerKind, containerId, accountId)
+    ]
   }
 
   /**
@@ -473,6 +492,7 @@ export class CloudDeployState {
     if (projectId === undefined) {
       this.overviews = {}
       this.containerStatuses = {}
+      this.containerErrors = {}
       this.containerLogs = {}
       this.containerDeployments = {}
       this.failures = {}
@@ -484,6 +504,7 @@ export class CloudDeployState {
     }
     this.overviews = CloudDeployState.dropByProjectPrefix(this.overviews, projectId)
     this.containerStatuses = CloudDeployState.dropByProjectPrefix(this.containerStatuses, projectId)
+    this.containerErrors = CloudDeployState.dropByProjectPrefix(this.containerErrors, projectId)
     this.containerLogs = CloudDeployState.dropByProjectPrefix(this.containerLogs, projectId)
     this.containerDeployments = CloudDeployState.dropByProjectPrefix(
       this.containerDeployments,

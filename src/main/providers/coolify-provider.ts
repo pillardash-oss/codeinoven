@@ -338,8 +338,13 @@ export class CoolifyProvider implements DeploymentProvider {
         signal: controller.signal
       })
       if (!response.ok) {
-        const message = await this.readErrorMessage(response)
-        throw new CoolifyProviderError(response.status, message)
+        const detail = await this.readErrorMessage(response)
+        throw new CoolifyProviderError(
+          response.status,
+          // Never propagate an empty message: the renderer surfaces this text
+          // verbatim, so a status-only failure still explains what happened.
+          detail || `Coolify API request failed with HTTP ${response.status}`
+        )
       }
       if (response.status === 204) return {}
       return (await response.json()) as Record<string, unknown> | unknown[]

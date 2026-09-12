@@ -11,7 +11,8 @@
     Rocket,
     Search,
     Server,
-    Trash2
+    Trash2,
+    TriangleAlert
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { relativeTime } from '$lib/format/relative-time'
@@ -328,6 +329,16 @@
     if (status === 'failed') return 'Failed'
     if (status === 'building') return 'Building'
     return 'Unknown'
+  }
+
+  /** Why the latest status poll for this container failed, if it did. */
+  function containerError(container: CloudDeploymentContainer): string | undefined {
+    return cloudDeployState.containerError(
+      projectId,
+      container.providerKind,
+      container.id,
+      container.accountId
+    )
   }
 
   /** Deduped, non-empty URLs for a container, preferring the provider's list. */
@@ -656,6 +667,15 @@ ${fence}`
                             >
                               {statusLabel(container.status)}
                             </StatusPill>
+                            {#if containerError(container)}
+                              {@const pollError = containerError(container)}
+                              <TriangleAlert
+                                size={12}
+                                class="shrink-0 text-warning"
+                                title="Status check failed: {pollError}"
+                                aria-label="Status check failed: {pollError}"
+                              />
+                            {/if}
                           </div>
                           <div class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
                             <span class="truncate font-mono">{container.id}</span>
