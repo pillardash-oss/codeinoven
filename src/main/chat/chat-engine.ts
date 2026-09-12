@@ -1333,6 +1333,12 @@ interface SessionInfo {
   lastTurnId?: string
   /** Composed request occupancy used only when the harness emits no native context usage. */
   estimatedContextUsed?: number
+  /** True once this session's provider reported a real per-turn token usage
+   *  total. Providers that report usage make the composed-send estimate
+   *  (which measures only the composed text layers, never the harness
+   *  transcript) both unnecessary and wildly wrong as a context signal, so
+   *  the estimate fallback must stay disabled for them. */
+  hasReportedTokenUsage?: boolean
   changedPaths?: Set<string>
   /** Paths claimed by precise file-mutating tools this turn, path → last claimed ms. */
   preciseChangedPaths?: Map<string, number>
@@ -18582,16 +18588,29 @@ export class ChatEngine {
         if (contextWindow !== undefined) event.contextWindow = contextWindow
       }
       if (
+        (event.type === 'message.completed' || event.type === 'usage.updated') &&
+        (event.tokens?.total ?? 0) > 0
+      ) {
+        eventOwner.hasReportedTokenUsage = true
+      }
+      if (
         event.type === 'message.completed' &&
         !event.compaction &&
         event.contextUsed === undefined &&
+        event.error === undefined &&
+        eventOwner.hasReportedTokenUsage !== true &&
         eventOwner.estimatedContextUsed !== undefined
       ) {
         // Some drivers declare `contextUsage: true` yet carry providers that
         // report no token usage at all (e.g. OpenCode gateways like Console
-        // Go). When the event carries no reported occupancy, the composed
-        // request estimate from dispatch is the only signal available
-        // flagged as estimated so consumers never mistake it for reported.
+        // Go). Only for those sessions is the composed request estimate from
+        // dispatch the only signal available   flagged as estimated so
+        // consumers never mistake it for reported. Sessions whose provider
+        // does report usage (pi mirrors per-turn token totals) never get the
+        // text-layer estimate: it measures the composed send, not the
+        // harness transcript, and would report a fraction of the real
+        // occupancy. Failed turns are skipped too   a rejected request says
+        // nothing about occupancy and must not clobber the last reading.
         event.contextUsed = eventOwner.estimatedContextUsed
         event.contextEstimated = true
       }
@@ -20652,8 +20671,17 @@ export class ChatEngine {
       // Providers that never report token usage leave assistant messages
       // without a contextUsed signal, blinding usage-based compaction and the
       // context indicator. Fall back to the composed-request occupancy captured
-      // at dispatch, clearly flagged as an estimate.
-      if (turnAssistant && turnAssistant.contextUsed === undefined) {
+      // at dispatch, clearly flagged as an estimate   and only for sessions
+      // whose provider reports nothing: where usage IS reported (the mirrored
+      // per-turn totals), the composed text-layer estimate would clobber the
+      // real occupancy with a small fraction of it. Failed turns are skipped
+      // for the same reason: a rejected request proves nothing about size.
+      if (
+        turnAssistant &&
+        turnAssistant.contextUsed === undefined &&
+        turnAssistant.error === undefined &&
+        info.hasReportedTokenUsage !== true
+      ) {
         const composed = info.estimatedContextUsed
         if (composed !== undefined) {
           turnAssistant.contextUsed = composed
@@ -22526,6 +22554,7 @@ export class ChatEngine {
       lastTurnId: activeTurnId ?? existing?.activeTurnId ?? existing?.lastTurnId,
       activeTurnUserMessageId: existing?.activeTurnUserMessageId,
       estimatedContextUsed: activeTurnId ? undefined : existing?.estimatedContextUsed,
+      hasReportedTokenUsage: existing?.hasReportedTokenUsage,
       changedPaths: activeTurnId ? undefined : existing?.changedPaths,
       preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
       userTouchedPaths: activeTurnId ? undefined : existing?.userTouchedPaths,

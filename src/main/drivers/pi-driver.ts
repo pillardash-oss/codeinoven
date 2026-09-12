@@ -215,6 +215,23 @@ function mirroredSessionCost(session: PersistentCliSession): number | undefined 
   return total
 }
 
+/** Last provider-reported context occupancy from the session's mirrored
+ *  assistant messages: the final turn's usage total (input + cache + output)
+ *  is the prompt size the provider actually processed, so it is the honest
+ *  occupancy signal when pi's own contextUsage stats cannot answer (gateway
+ *  models pi has no contextWindow for, broken stats RPC, post-compaction
+ *  silence). Errored/aborted turns report zero usage and are skipped. */
+function mirroredContextUsed(messages: readonly AgentMessage[]): number | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.role !== 'assistant') continue
+    if (message.error !== undefined) continue
+    const total = message.tokens?.total
+    if (typeof total === 'number' && Number.isFinite(total) && total > 0) return total
+  }
+  return undefined
+}
+
 function errorText(value: Record<string, unknown>): string {
   return (
     stringValue(value['errorMessage']) ??
@@ -3579,7 +3596,15 @@ export class PiDriver extends PersistentCliDriver {
       const cost =
         typeof stats?.['cost'] === 'number' ? (stats['cost'] as number) : mapPiCost(stats)
       const contextWindow = numberValue(contextUsage?.['contextWindow'])
-      const contextUsed = numberValue(contextUsage?.['tokens'])
+      // pi's getContextUsage() returns undefined when its session model carries
+      // no contextWindow (gateway models missing from pi's registry), and
+      // `{ tokens: null }` after a compaction with no post-compaction usage.
+      // The provider's own per-turn accounting is still mirrored on the
+      // session's assistant messages, and its last total IS the context
+      // occupancy (prompt + completion of the last request), so use it rather
+      // than reporting nothing and letting a text-only estimate fill the gap.
+      const contextUsed =
+        numberValue(contextUsage?.['tokens']) ?? mirroredContextUsed(session.messages)
       const rateLimits = this.latestRateLimits.get(session.id)?.windows ?? []
       if (
         cost === undefined &&
@@ -3611,23 +3636,24 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
-  /** Emit cumulative cost and rate-limit windows for a session whose native
-   *  stats RPC is broken, using the per-message accounting the turn events
-   *  already mirrored into `session.messages`. Context occupancy cannot be
-   *  mirrored this way, so it is simply absent for these sessions. */
+  /** Emit cumulative cost, context occupancy, and rate-limit windows for a
+   *  session whose native stats RPC is broken, using the per-message accounting
+   *  the turn events already mirrored into `session.messages`. */
   private applyMirroredUsage(
     session: PersistentCliSession,
     lastAssistant: AgentMessage | undefined
   ): void {
     if (!lastAssistant) return
     const cost = mirroredSessionCost(session)
+    const contextUsed = mirroredContextUsed(session.messages)
     const rateLimits = this.latestRateLimits.get(session.id)?.windows ?? []
-    if (cost === undefined && rateLimits.length === 0) return
+    if (cost === undefined && contextUsed === undefined && rateLimits.length === 0) return
     const event: SessionAgentEvent = {
       type: 'usage.updated',
       sessionId: session.id,
       messageId: lastAssistant.id,
       ...(cost !== undefined ? { cost } : {}),
+      ...(contextUsed !== undefined ? { contextUsed } : {}),
       ...(rateLimits.length > 0 ? { rateLimits } : {})
     }
     this.applyEventToSession(session, event)

@@ -1370,8 +1370,8 @@
   const contextUsage = $derived.by((): AgentContextUsage | undefined => {
     let latestMessage: AgentMessage | undefined
     let latestTokens: NonNullable<AgentContextUsage['tokens']> | undefined
-    let latestContextUsed: number | undefined
-    let latestContextEstimated = false
+    let latestReportedContextUsed: number | undefined
+    let latestEstimatedContextUsed: number | undefined
     let latestRateLimits: AgentContextUsage['rateLimits'] | undefined
     let latestCredits: AgentContextUsage['credits'] | undefined
     let costUsd = 0
@@ -1401,8 +1401,8 @@
         message.origin === 'compaction' ||
         message.parts.some((part) => part.type === 'compaction-summary')
       ) {
-        latestContextUsed = undefined
-        latestContextEstimated = false
+        latestReportedContextUsed = undefined
+        latestEstimatedContextUsed = undefined
         latestTokens = undefined
       }
       latestMessage = message
@@ -1444,10 +1444,20 @@
         // Token, context, and account quota telemetry arrive independently.
         // Preserve each latest snapshot so a token-only update cannot erase a
         // previously reported quota status when the user reveals live usage.
+        // Context occupancy is kept in two tracks: a provider-reported reading
+        // always wins over an estimated one, so a late estimate (or an older
+        // transcript where the estimate flag was lost) can never drag the
+        // meter down from the real occupancy the provider reported.
         if (tokens) latestTokens = tokens
         if (message.contextUsed !== undefined) {
-          latestContextUsed = message.contextUsed
-          latestContextEstimated = message.contextEstimated === true
+          if (message.contextEstimated === true) {
+            if (latestReportedContextUsed === undefined) {
+              latestEstimatedContextUsed = message.contextUsed
+            }
+          } else {
+            latestReportedContextUsed = message.contextUsed
+            latestEstimatedContextUsed = undefined
+          }
         }
         if (message.rateLimits?.length) latestRateLimits = message.rateLimits
         if (message.credits) latestCredits = message.credits
@@ -1464,7 +1474,8 @@
       ) ?? providers.find((provider) => provider.id === providerId)
     )?.models.find((candidate) => candidate.id === modelId)
     const contextWindow = latestMessage?.contextWindow ?? model?.contextWindow
-    const contextUsed = latestContextUsed ?? latestTokens?.total
+    const contextEstimated = latestReportedContextUsed === undefined
+    const contextUsed = latestReportedContextUsed ?? latestEstimatedContextUsed ?? latestTokens?.total
     if (
       contextWindow === undefined &&
       contextUsed === undefined &&
@@ -1479,7 +1490,7 @@
     return {
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(contextUsed === undefined ? {} : { contextUsed }),
-      ...(contextUsed !== undefined && latestContextEstimated ? { contextEstimated: true } : {}),
+      ...(contextUsed !== undefined && contextEstimated ? { contextEstimated: true } : {}),
       ...(contextWindow !== undefined && contextUsed !== undefined
         ? { contextPercent: Math.min(100, (contextUsed / contextWindow) * 100) }
         : {}),
