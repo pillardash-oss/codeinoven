@@ -821,11 +821,29 @@ describe('cloudDeploy IPC', () => {
       }
       expect(result).toMatchObject({ hasDeployments: true })
       expect(result.containers[0]).toMatchObject({ id: 'app-1' })
-      const [url, init] = fetchMock.mock.calls[0]
-      expect(String(url)).toContain('http://localhost:8080')
-      expect((init as RequestInit).headers).toMatchObject({
-        Authorization: 'Bearer company-token'
-      })
+      // The overview fetches every attached account of the kind concurrently,
+      // so the arrival order of the two account requests is nondeterministic
+      // (a CI failure pinned to calls[0] proved this). Each account request
+      // makes two mocked calls: `GET /applications` plus `GET /projects` for
+      // the container project-name resolver. Assert that the active account's
+      // calls carry its token and that every call targets the account's base
+      // URL, independent of call order.
+      expect(fetchMock.mock.calls.length).toBe(4)
+      const activeCalls = fetchMock.mock.calls.filter(
+        ([, callInit]) =>
+          ((callInit as RequestInit | undefined)?.headers as Record<string, string> | undefined)
+            ?.Authorization === 'Bearer company-token'
+      )
+      expect(activeCalls.length).toBe(2)
+      for (const [callUrl, callInit] of activeCalls) {
+        expect(String(callUrl)).toContain('http://localhost:8080')
+        expect((callInit as RequestInit).headers).toMatchObject({
+          Authorization: 'Bearer company-token'
+        })
+      }
+      for (const [callUrl] of fetchMock.mock.calls) {
+        expect(String(callUrl)).toContain('http://localhost:8080')
+      }
     } finally {
       vi.unstubAllGlobals()
     }
