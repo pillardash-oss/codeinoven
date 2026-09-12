@@ -99,7 +99,7 @@
     "@electron/osx-sign": "2.7.0",
     "@eslint/js": "^10.0.1",
     "@lobehub/icons-static-svg": "^1.94.0",
-    "@lucide/svelte": "^1.39.0",
+    "@lucide/svelte": "^1.43.0",
     "@resvg/resvg-js": "^2.6.2",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@tailwindcss/vite": "^4.3.3",
