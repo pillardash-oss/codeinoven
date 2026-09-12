@@ -542,7 +542,11 @@ export class NotificationService {
       .catch((error) => Logger.dev('Remote Web Push notification failed:', error))
 
     if (this.appFocused()) return
-    this.dispatchNotificationSound(payload.kind === 'attention' ? 'attention' : 'default', windows)
+    // Errors use the same attention alert: both mean the user must act.
+    this.dispatchNotificationSound(
+      payload.kind === 'attention' || payload.kind === 'error' ? 'attention' : 'default',
+      windows
+    )
     const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
       if (!this.unsupportedLogged) {
@@ -638,7 +642,11 @@ export class NotificationService {
       .catch((error) => Logger.dev('Remote Web Push notification failed:', error))
 
     if (this.appFocused()) return
-    this.dispatchNotificationSound(payload.kind === 'attention' ? 'attention' : 'default', windows)
+    // Errors use the same attention alert: both mean the user must act.
+    this.dispatchNotificationSound(
+      payload.kind === 'attention' || payload.kind === 'error' ? 'attention' : 'default',
+      windows
+    )
     const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
       if (!this.unsupportedLogged) {

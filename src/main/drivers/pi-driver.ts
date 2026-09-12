@@ -409,13 +409,17 @@ export function isContinuableFinishReasonError(error: string): boolean {
 /**
  * True when a provider rejected the request because the serialized body exceeds
  * a hard byte limit (e.g. "Upstream request failed: [invalid_request_error]
- * Request body exceeds the 4.5 MiB limit."). Token-based auto-compaction never
- * sees this coming   images and large tool results blow the byte budget long
- * before the token window fills   so the driver recovers by compacting the
- * transcript (which replaces bulky history with a summary) and re-prompting.
+ * Request body exceeds the 4.5 MiB limit."), or because it carries more media
+ * parts than the provider accepts per request (e.g. "Too many images in
+ * request: 31 > 30"). Token-based auto-compaction never sees either coming
+ *   images and large tool results blow the byte budget or the media-part cap
+ * long before the token window fills   so the driver recovers by compacting
+ * the transcript (which replaces bulky history with a summary) and re-prompting
+ * with the oversized-recovery armed, which strips image parts and oversized
+ * text from the request copy only.
  */
 export function isOversizedRequestError(error: string): boolean {
-  return /request body exceeds[\w\s.]*limit/iu.test(error)
+  return /request body exceeds[\w\s.]*limit|too many images in request/iu.test(error)
 }
 
 /** The extension tool whose calls render as sub-agent activity cards. */
@@ -2001,13 +2005,49 @@ export class PiDriver extends PersistentCliDriver {
       compacting: true
     })
     this.activeTurns.add(sessionId)
+    // pi's `compact` RPC aborts any active run before compacting. When a turn
+    // was live (or a steer/follow-up was queued into the compaction window),
+    // the work must resume after the checkpoint instead of silently dying:
+    // pi drains queued steer/follow-up messages only inside an agent run, and
+    // compaction leaves the session idle, so without a continuation the
+    // queued messages strand forever and the user's steered input is lost.
+    let before: Record<string, unknown> | null
+    try {
+      before = record(await client.getState())
+    } catch {
+      before = null
+    }
+    let continuationStarted = false
     try {
       const result = await client.compact()
       await this.handleRpcEvent({ type: 'compaction_end', result }, sessionId, projectPath)
+      const after = record(await client.getState())
+      // pi resumed the aborted run itself (overflow recovery)   let its own
+      // `agent_settled` finalize the turn; do not compete with it.
+      if (after?.['isStreaming'] === true) return
+      const pending = numberValue(after?.['pendingMessageCount']) ?? 0
+      const interrupted = before?.['isStreaming'] === true
+      if (pending > 0 || interrupted) {
+        // Clear the compacting flag before the continuation so the
+        // continuation run's `agent_settled` finalizes the turn normally.
+        const settled = this.turnStates.get(sessionId)
+        if (settled) this.turnStates.set(sessionId, { ...settled, compacting: false })
+        continuationStarted = true
+        await client.prompt(
+          'Continue from the Last working trace in the checkpoint. Complete the current step, then the next unfinished step.'
+        )
+        return
+      }
     } finally {
-      this.activeTurns.delete(sessionId)
+      // A started continuation keeps the turn registered (its own settled
+      // finalizes it); every other path finalizes right here so the thread
+      // never lingers "working" until the watchdog reconciles.
       const state = this.turnStates.get(sessionId)
       if (state) this.turnStates.set(sessionId, { ...state, compacting: false })
+      if (!continuationStarted && this.activeTurns.has(sessionId)) {
+        this.activeTurns.delete(sessionId)
+        await this.refreshSessionUsage(session).finally(() => void this.finishTurn(session))
+      }
     }
   }
 
@@ -2142,30 +2182,49 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
-    await this.requireSession(projectPath, options.sessionId)
+    const session = await this.requireSession(projectPath, options.sessionId)
     const client = this.rpcClients.get(options.sessionId)
-    if (!client) {
-      throw new Error(`No active Pi turn is available to steer for session ${options.sessionId}`)
+    // A registered live turn takes the steer channel. When it is not
+    // registered, the session may still be busy inside pi's own lifecycle
+    // (auto-compaction, retry windows) that CodeInOven reports as "working"
+    //   pi's docs treat compaction/retry as part of the running trace, so
+    // never reject user input there. `follow_up` is accepted in exactly those
+    // states: pi queues it and runs it as the continuation of the same
+    // session, whether the trace is compacting, retrying, or momentarily
+    // between agent runs. Manual compaction drains the queue afterwards
+    // (see `compactSession`).
+    if (client && this.activeTurns.has(options.sessionId)) {
+      await this.steerIntoActiveTurn(options.sessionId, options.text, options.attachments)
+      return
     }
-    // A live turn must be registered before steering. When it is not, the
-    // session may still be busy inside pi's own lifecycle (auto-compaction,
-    // retry windows) that CodeInOven reports as "working"   pi's docs treat
-    // compaction/retry as part of the running trace, so never reject user
-    // input there. `follow_up` is accepted in exactly those states: pi queues
-    // it and runs it as the continuation of the same session, whether the
-    // trace is compacting, retrying, or momentarily between agent runs.
-    if (!this.activeTurns.has(options.sessionId)) {
-      const busy = await this.isSessionBusy(projectPath, options.sessionId)
-      if (!busy) {
-        throw new Error(`No active Pi turn is available to steer for session ${options.sessionId}`)
-      }
+    if (client && (await this.isSessionBusy(projectPath, options.sessionId))) {
       const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
       const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
-      this.appendUserMessage(await this.requireSession(projectPath, options.sessionId), options)
+      this.appendUserMessage(session, options)
+      this.silentContinues.delete(options.sessionId)
       await client.followUp(message, images)
       return
     }
-    await this.steerIntoActiveTurn(options.sessionId, options.text, options.attachments)
+    // Neither a registered turn nor a busy pi lifecycle: the harness is idle
+    // or its process was evicted mid-turn. A steered message must never be
+    // rejected   resume the work by starting a fresh run with it. pi keeps
+    // the session's model in its durable state, so no settings round-trip is
+    // needed; the run's own `agent_settled` finalizes the turn normally.
+    const activeClient = client ?? (await this.ensureRpcClient(projectPath, options.sessionId))
+    this.appendUserMessage(session, options)
+    this.silentContinues.delete(options.sessionId)
+    this.activeTurns.add(options.sessionId)
+    const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
+    const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
+    try {
+      await activeClient.prompt(message, images)
+    } catch (error) {
+      this.activeTurns.delete(options.sessionId)
+      const failure = error instanceof Error ? error.message : 'Pi turn failed to start'
+      this.emit({ type: 'session.error', sessionId: options.sessionId, error: failure })
+      await this.finishTurn(session)
+      throw error
+    }
   }
 
   /** Compose attachments + text and deliver them into the session's live turn

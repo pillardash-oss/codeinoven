@@ -6594,9 +6594,6 @@ export class ChatEngine {
     // `waiting` too when the driver still reports a registered native turn;
     // the actual delivery then proves liveness and falls back to nothing.
     const steerSessionState = this.sessionStatuses.get(activeSessionId)?.state
-    if (steerSessionState !== 'working' && steerSessionState !== 'waiting') {
-      throw new Error('The harness turn finished before the steer message could be delivered')
-    }
     const steerSettings =
       thread.settings ??
       ({
@@ -6609,6 +6606,33 @@ export class ChatEngine {
         assignmentMode: false,
         loopMode: false
       } satisfies ThreadSettings)
+    // A steer is a user message first: when the engine's cached status says
+    // the turn is no longer live, the message must still reach the harness
+    //   delivered as a regular send (a fresh turn) instead of being rejected.
+    // Brainstorm-isolated steers keep their guard: their target session is
+    // owned by the brainstorm operation, not the thread's regular session.
+    const deliverAsRegularSend = (): Promise<AgentMessage> =>
+      this.sendPrompt(
+        projectId,
+        threadId,
+        steerSettings,
+        text,
+        attachments,
+        undefined,
+        messageId,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        'user',
+        presentation,
+        taskReferences
+      )
+    if (steerSessionState !== 'working' && steerSessionState !== 'waiting') {
+      if (activeBrainstorm) {
+        throw new Error('The harness turn finished before the steer message could be delivered')
+      }
+      return deliverAsRegularSend()
+    }
     // Steering targets the ACTIVE session, which belongs to the harness that
     // created it   after a mid-run harness switch the active session still
     // lives in the old harness while `settings.harnessId` points at the new
@@ -6665,7 +6689,9 @@ export class ChatEngine {
       driver.hasActiveTurn !== undefined &&
       !driver.hasActiveTurn(activeSessionId)
     ) {
-      throw new Error('The harness turn finished before the steer message could be delivered')
+      // The native turn is already torn down   deliver as a regular send
+      // instead of telling the user the turn "finished".
+      return deliverAsRegularSend()
     }
     if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
       throw new Error(`${driver.name} does not expose native active-turn steering`)
@@ -6820,30 +6846,21 @@ export class ChatEngine {
       // above and this delivery (auto-compaction, silent continue, retry)
       // pi considers compaction part of the working trace but the driver's
       // registered turn is already gone. A settled trace must never reject the
-      // user's message: deliver it as the next regular turn instead.
+      // user's message: deliver it as the next regular turn instead. The
+      // driver's own registered-turn probe is authoritative over the cached
+      // status, which can lag a compaction or process exit by seconds.
       const state = this.sessionStatuses.get(activeSessionId)?.state
-      if (state === 'working' || state === 'waiting') throw error
+      const turnStillLive = driver.hasActiveTurn
+        ? driver.hasActiveTurn(activeSessionId)
+        : state === 'working' || state === 'waiting'
+      if (turnStillLive) throw error
       Logger.info('Steer landed on a settled turn   delivering as a regular send:', {
         projectId,
         threadId,
         sessionId: activeSessionId,
         error: rawErrorMessage(error)
       })
-      await this.sendPrompt(
-        projectId,
-        threadId,
-        steerSettings,
-        text,
-        attachments,
-        undefined,
-        messageId,
-        promptContext,
-        promptReferences,
-        projectReferences,
-        'user',
-        presentation,
-        taskReferences
-      )
+      return deliverAsRegularSend()
     }
     return withoutTransportParts(userMessage)
   }
