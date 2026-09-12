@@ -6,7 +6,14 @@ export default defineConfig({
   plugins: [svelte()],
   test: {
     environment: 'node',
-    include: ['tests/**/*.test.ts']
+    include: ['tests/**/*.test.ts'],
+    // Slow CI runners (Windows in particular: git process spawns under Defender
+    // scanning, cold JIT, pure-JS RSA key generation) can legitimately exceed
+    // the 5s defaults, which timed out two tests in Quality #643. A generous
+    // global headroom keeps CI green; genuinely hung tests still fail, just
+    // more slowly.
+    testTimeout: 30_000,
+    hookTimeout: 30_000
   },
   resolve: {
     conditions: ['browser'],

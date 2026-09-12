@@ -619,7 +619,7 @@ describe('git IPC', () => {
     expect(thread?.branch).toBe('feature/git')
 
     await rm(gitDir, { recursive: true, force: true })
-  }, 30_000)
+  })
 
   it('exposes git mutation channels incl. amend and reset', async () => {
     const storage = new StorageEngine()

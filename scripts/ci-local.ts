@@ -237,10 +237,13 @@ async function buildStagePlan(options: StageOptions, target: SmokeTarget): Promi
   }
 
   // Mirrors quality.yml jobs: check, lint, test, audit, build (shared runtime).
+  // The test stage pins CI=true because GitHub Actions always sets it — running
+  // vitest with the exact CI environment keeps the local mirror faithful, so a
+  // green local test stage means the CI Tests job sees the same behavior.
   stages.push(
     await stage('check', 'Type check', ['bun', 'run', 'check']),
     await stage('lint', 'Lint', ['bun', 'run', 'lint', '.']),
-    await stage('test', 'Tests', ['bun', 'run', 'test']),
+    await stage('test', 'Tests', ['bun', 'run', 'test'], undefined, { CI: 'true' }),
     await stage('audit', 'Dependency audit', ['bun', 'audit'])
   )
 
