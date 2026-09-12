@@ -248,6 +248,16 @@ export interface BrowserOpenRequestContext {
   reveal: boolean
 }
 
+/** What the permission popup displays for one pending request. Main resolves
+ *  `browser:popupCurrent` with this; the document pulls it on load so the
+ *  first prompt can never be lost to push-delivery load-state races. */
+export interface BrowserPermissionPromptContext {
+  request: BrowserPermissionRequest
+  queueSize: number
+  /** Owning project (and thread) label; null shows only the website. */
+  projectLabel: string | null
+}
+
 /** A permission requested by a page inside the project-scoped browser session. */
 export interface BrowserPermissionRequest {
   id: string
@@ -2387,9 +2397,11 @@ export const IPC_INVOKE_CONTRACT = {
     [requestId: string, decision: BrowserPermissionDecision],
     void
   >,
-  /** Invoked by the native permission popup document once its permission
-   *  listener is bound; main flushes the request on display in response. */
-  'browser:popupReady': {} as Contract<[], void>,
+  /** Invoked by the native permission popup document when it is ready to
+   *  display a request; main resolves with the request on display, or null.
+   *  This pull model cannot race document load state, which the previous
+   *  push-based first-delivery repeatedly did (blank first prompt). */
+  'browser:popupReady': {} as Contract<[], BrowserPermissionPromptContext | null>,
   'browser:destroy': {} as Contract<[tabId: string], void>,
   'browser:destroyThread': {} as Contract<[projectId: string, threadId: string], void>,
   'browser:destroyProject': {} as Contract<[projectId: string], void>,
