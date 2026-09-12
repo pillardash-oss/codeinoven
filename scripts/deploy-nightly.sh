@@ -21,8 +21,10 @@
 #     the promotion is REFUSED — reconcile manually first. If `nightly`
 #     already contains `dev`'s content (e.g. a promotion already merged),
 #     it's treated as nothing-to-promote.
-#   - Auto-bumps the `dev` version (patch +1) when it is not already higher
-#     than the current `nightly` version, mirroring `promotion-version.yml`.
+#   - Auto-bumps the `dev` version (patch +1) when dev equals nightly AND
+#     nightly's base equals the last published stable release, i.e. the first
+#     nightly of a new stable cycle (stable 0.5.52 -> dev/nightly 0.5.53),
+#     mirroring `promotion-version.yml`.
 #   - Runs non-interactively once the version gate passes: opens (or reuses)
 #     the promotion PR and enables auto-merge without prompting, since running
 #     the script at all is the confirmation.
@@ -160,30 +162,38 @@ fi
 # --- 3. version gate: dev must be next patch after stable (semver-correct nightly) -----
 NIGHTLY_VERSION="$(pkg_version origin/nightly)"
 DEV_VERSION="$(pkg_version dev)"
+LAST_STABLE="$(gh release list --limit 1000 --json tagName,isPrerelease --jq '[.[] | select(.isPrerelease | not) | .tagName] | max_by(ltrimstr("v"))' 2>/dev/null | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true)"
 
 # Semver-correct: stable 0.5.51 -> nightly 0.5.52-nightly-1 must be > stable.
 # dev must be one patch ahead of nightly (first nightly after stable),
 # or equal for subsequent nightlies on same base.
-# Only auto-bump when dev==nightly AND nightly equals stable (main) — i.e. the
-# first nightly after a stable release (stable 0.5.52 -> dev/nightly 0.5.53).
+# Auto-bump BEFORE the gate when dev==nightly AND nightly's base equals the
+# LAST PUBLISHED stable release — i.e. the stable cycle just completed
+# (stable 0.5.53 published -> dev/nightly still 0.5.53 -> new cycle needs
+# 0.5.54-nightly.1). The gate alone cannot trigger this: it passes on
+# dev==nightly equality, which previously left the bump unreachable so
+# deploy:main later rejected 0.5.53 == last stable 0.5.53.
+if [[ "$DEV_VERSION" == "$NIGHTLY_VERSION" && -n "$LAST_STABLE" && "$NIGHTLY_VERSION" == "$LAST_STABLE" ]]; then
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    warn "dev ($DEV_VERSION) equals nightly ($NIGHTLY_VERSION) which equals last published stable v$LAST_STABLE — bumping dev to the next patch for the new stable cycle (stable $LAST_STABLE -> nightly $LAST_STABLE+1)..."
+    bun scripts/bump-version.ts
+    DEV_VERSION="$(pkg_version dev)"
+    git add package.json src/renderer/static/manifest.webmanifest services/remote-control/package.json
+    git commit -m "chore: bump version for next stable cycle"
+    git push origin dev
+    ok "Bumped dev to $DEV_VERSION and pushed."
+  else
+    say "(dry-run) bun scripts/bump-version.ts (dev $DEV_VERSION -> next patch; last stable v$LAST_STABLE)"
+    DEV_VERSION="$(node -p "(() => { const v='"$DEV_VERSION"'.split('.').map(Number); let [M,m,p]=v; p+=1; if(p===100){p=0;m+=1} if(m===100){m=0;M+=1} return M+'.'+m+'.'+p })()")"
+  fi
+fi
+
 if ! BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$NIGHTLY_VERSION" \
     CURRENT_VERSION="$DEV_VERSION" bun scripts/validate-release-promotion.ts >/dev/null 2>&1; then
   if [ "$DEV_VERSION" = "$NIGHTLY_VERSION" ]; then
     MAIN_VERSION="$(pkg_version origin/main 2>/dev/null || echo "$NIGHTLY_VERSION")"
     if [ "$NIGHTLY_VERSION" = "$MAIN_VERSION" ]; then
-      warn "dev ($DEV_VERSION) equals nightly ($NIGHTLY_VERSION) which equals stable ($MAIN_VERSION) — bumping dev to next patch for semver-correct nightly (stable $MAIN_VERSION -> nightly $MAIN_VERSION+1)..."
-      if [[ "$DRY_RUN" -eq 0 ]]; then
-        git checkout dev
-        bun scripts/bump-version.ts
-        DEV_VERSION="$(pkg_version dev)"
-        git add package.json src/renderer/static/manifest.webmanifest services/remote-control/package.json
-        git commit -m "chore: bump version for nightly promotion"
-        git push origin dev
-        ok "Bumped dev to $DEV_VERSION and pushed."
-      else
-        say "(dry-run) bun scripts/bump-version.ts && git push origin dev"
-        DEV_VERSION="$(node -p "(() => { const v='"$DEV_VERSION"'.split('.').map(Number); let [M,m,p]=v; p+=1; if(p===100){p=0;m+=1} if(m===100){m=0;M+=1} return M+'.'+m+'.'+p })()")"
-      fi
+      die "dev ($DEV_VERSION) equals nightly ($NIGHTLY_VERSION) which equals main ($MAIN_VERSION), but the version gate failed and no auto-bump applied (no published stable release could be resolved). Bump dev manually before promoting."
     else
       die "dev ($DEV_VERSION) must be one patch ahead of nightly ($NIGHTLY_VERSION) for semver-correct nightly (nightly $NIGHTLY_VERSION is already ahead of stable $MAIN_VERSION)."
     fi
