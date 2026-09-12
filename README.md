@@ -7,7 +7,7 @@ Website: [codeinoven.com](https://codeinoven.com) · [Support](SECURITY.md) · [
 [![CI](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml)
 [![Security](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-orange.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fpillardash-oss%2Fcodeinoven%2Fmain%2Fpackage.json&query=version&label=version)](package.json)
+[![Version](https://img.shields.io/github/v/release/pillardash-oss/codeinoven?label=version)](https://github.com/pillardash-oss/codeinoven/releases/latest)
 
 ---
 
