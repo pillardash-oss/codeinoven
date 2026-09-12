@@ -9,7 +9,11 @@
  *
  * This script exits instantly when the binary is present, and otherwise runs
  * the package's own `install.js` so the exact pinned Electron version is
- * fetched. Runs via the `predev` hook so every dev start is self-healing.
+ * fetched. The download goes through `@electron/get` over the network, which
+ * occasionally dies mid-connection on CI runners (e.g. "The socket connection
+ * was closed unexpectedly" on Windows runners), so the download is retried a
+ * few times with a short backoff before giving up. Runs via the `predev` hook
+ * so every dev start is self-healing.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
@@ -32,8 +36,24 @@ function isBinaryPresent(): boolean {
   }
 }
 
+const DOWNLOAD_ATTEMPTS = 4
+const RETRY_DELAY_MS = 5000
+
 if (!isBinaryPresent()) {
   Logger.dev('[ensure-electron-binary] Electron binary missing — downloading pinned version…')
-  execFileSync(process.execPath, [join(electronDir, 'install.js')], { stdio: 'inherit' })
+  const installJs = join(electronDir, 'install.js')
+  for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
+    try {
+      execFileSync(process.execPath, [installJs], { stdio: 'inherit' })
+      break
+    } catch (error) {
+      if (attempt === DOWNLOAD_ATTEMPTS) throw error
+      Logger.dev(
+        `[ensure-electron-binary] Electron download attempt ${attempt}/${DOWNLOAD_ATTEMPTS} failed; retrying in ${RETRY_DELAY_MS}ms…`,
+        error,
+      )
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS))
+    }
+  }
   Logger.dev('[ensure-electron-binary] Electron binary restored.')
 }
