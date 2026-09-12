@@ -1,10 +1,18 @@
 name: Quality
 
+# The full suite runs once per change, on the nightly side:
+#   - on every pull_request (feature PRs, dev -> nightly promotion PRs)
+#   - on push to nightly (the promotion merge itself)
+# A nightly -> main promotion PR re-delivers the exact content that just
+# passed the full suite on nightly, so only the cheap "Release promotion
+# policy" job runs there; the heavy jobs report "Skipped" (treated as
+# passing by required-check policies). Pushes to main are excluded entirely:
+# main only ever receives nightly promotion merges, which were just checked
+# on the nightly push.
 on:
   pull_request:
   push:
     branches:
-      - main
       - nightly
   workflow_dispatch:
 
@@ -46,8 +54,11 @@ jobs:
           HEAD_BRANCH: ${{ github.head_ref }}
         run: bun scripts/validate-release-promotion.ts
 
+  # Nightly -> main promotion PRs skip the heavy jobs below: the identical
+  # content was fully checked (and built) by the nightly workflow moments ago.
   install:
     name: Frozen install
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
     runs-on: macos-latest
     timeout-minutes: 15
 
@@ -65,6 +76,7 @@ jobs:
 
   check:
     name: Type check
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
     runs-on: macos-latest
     timeout-minutes: 15
     needs: install
@@ -86,6 +98,7 @@ jobs:
 
   lint:
     name: Lint
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
     runs-on: macos-latest
     timeout-minutes: 15
     needs: install
@@ -107,6 +120,7 @@ jobs:
 
   test:
     name: Tests
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
     runs-on: macos-latest
     timeout-minutes: 15
     needs: install
@@ -128,6 +142,7 @@ jobs:
 
   audit:
     name: Dependency audit
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
     runs-on: macos-latest
     timeout-minutes: 15
     needs: install
@@ -149,6 +164,7 @@ jobs:
 
   build:
     name: Production build
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
     runs-on: macos-latest
     timeout-minutes: 20
     needs: install
@@ -176,6 +192,7 @@ jobs:
 
   windows-runtime:
     name: Windows quality and packaged startup
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
     runs-on: windows-latest
     timeout-minutes: 40
     env:
@@ -249,6 +266,7 @@ jobs:
 
   linux-runtime:
     name: Linux quality and packaged startup
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -296,6 +314,7 @@ jobs:
 
   verify-release:
     name: Release verification
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
     runs-on: macos-latest
     timeout-minutes: 30
     needs: [check, lint, test, audit, build, windows-runtime, linux-runtime]
