@@ -92,6 +92,10 @@ say "  last stable  -> ${C_GREEN}v$LAST_STABLE${C_RESET}  (published release)"
 say "  this stable  -> ${C_GREEN}v$NIGHTLY_VERSION${C_RESET}  (nightly base)"
 say ""
 
+if [[ "$NIGHTLY_VERSION" == "$LAST_STABLE" ]]; then
+  die "nightly ($NIGHTLY_VERSION) equals the last published stable release (v$LAST_STABLE) — there is no new stable version to publish. The stable cycle already completed; run 'bun run deploy:nightly' to bump dev and start the next cycle (dev/nightly -> $NIGHTLY_VERSION+1-nightly.N), then promote that nightly here."
+fi
+
 # --- 1. verify a published nightly prerelease exists -------------------------
 if [[ "$DRY_RUN" -eq 0 ]]; then
   if ! gh release list --limit 1000 --json tagName,isPrerelease | \
