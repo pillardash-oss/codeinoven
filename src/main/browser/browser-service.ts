@@ -455,11 +455,11 @@ export class BrowserService {
       const decision = validatePermissionDecision(rawDecision)
       this.resolvePermission(requestId, permissionResolutions[decision])
     })
-    ipcMain.handle('browser:popupReady', (_event) => {
-      // The popup document has bound its permission listener; flush whatever
-      // request is currently on display (covers the lost-event race where the
-      // first request arrived before the document finished subscribing).
-      this.promptWindow.flush()
+    ipcMain.handle('browser:popupReady', () => {
+      // Pull model: the popup document requests the prompt on display once its
+      // listener is bound. Invoke replies bypass the push-side load-state
+      // guards that repeatedly dropped the first prompt (blank first popup).
+      return this.promptWindow.currentContext()
     })
     ipcMain.handle('browser:destroy', (_event, rawTabId) => {
       this.destroy(validateTabId(rawTabId))

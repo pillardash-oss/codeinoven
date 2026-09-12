@@ -53,16 +53,19 @@ function defaultResolveTheme(): 'light' | 'dark' {
  * asked for the camera or microphone. A real OS popup composites above the
  * view, so the page stays live and interactive while the prompt is open.
  *
- * Delivery is ready-gated: the document invokes `browser:popupReady` once its
- * permission listener is bound, and only then is the pending request sent.
- * Delivering straight after `loadURL` raced document subscription and could
- * drop the first request, leaving an empty "wants to use ." shell.
+ * Delivery is pull-based: the document invokes `browser:popupReady` once its
+ * permission listener is bound, and main resolves the invoke with the request
+ * on display. Pushing the first request after `loadURL` raced document
+ * subscription AND the renderer-delivery load-state guards (which see
+ * `isLoadingMainFrame()` still true after load settles), repeatedly dropping
+ * the first prompt and leaving an empty "wants to use ." shell. An invoke
+ * reply cannot hit that race, so the document always pulls its payload.
  */
 export class PermissionPromptWindow {
   private popup: BrowserWindow | null = null
   private anchor: PromptAnchor | null = null
-  /** Request currently on display; redelivered when the document re-announces
-   *  readiness (first load) and cleared when the prompt hides. */
+  /** Request currently on display; resolved to the document when it pulls via
+   *  `browser:popupReady`, and cleared when the prompt hides. */
   private current: PromptRequestContext | null = null
   /** True while a request is on display; the reposition tracker only re-shows
    *  the popup when this is set so a resolved (hidden) prompt never returns. */
@@ -83,6 +86,8 @@ export class PermissionPromptWindow {
       const existing = this.popup
       this.position(existing)
       if (!existing.isVisible()) existing.show()
+      // The document is already listening; push the update immediately. The
+      // pull path only covers first-load delivery, where push races.
       this.deliver()
       return
     }
@@ -123,18 +128,17 @@ export class PermissionPromptWindow {
       if (popup.isDestroyed()) return
       this.position(popup)
       popup.show()
-      // The document may not have subscribed yet; `flush()` is triggered by
-      // `browser:popupReady` and covers that case. This delivery handles the
-      // re-show path where the document is already listening.
-      this.deliver()
+      // First-load delivery is pull-based: the document invokes
+      // `browser:popupReady` and main resolves with `current`. A push here
+      // races the document subscription and the load-state guards.
     })
   }
 
-  /** Redeliver the current request to a document that just (re)announced
-   *  readiness. No-op when nothing is on display. */
-  flush(): void {
-    if (!this.current || !this.active) return
-    this.deliver()
+  /** The request on display, resolved to the document's `browser:popupReady`
+   *  invoke. No-op returns null when nothing is on display. */
+  currentContext(): PromptRequestContext | null {
+    if (!this.current || !this.active) return null
+    return this.current
   }
 
   /** Hide the popup (e.g. last request resolved); the window stays reusable. */
