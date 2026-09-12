@@ -2370,14 +2370,14 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   /** Open the native site-settings context menu anchored at the given point
    *  (window-content coordinates in density-independent pixels). */
-  'browser:siteMenu': {} as Contract<
-    [projectId: string, host: string, x: number, y: number],
-    void
-  >,
+  'browser:siteMenu': {} as Contract<[projectId: string, host: string, x: number, y: number], void>,
   'browser:resolvePermission': {} as Contract<
     [requestId: string, decision: BrowserPermissionDecision],
     void
   >,
+  /** Invoked by the native permission popup document once its permission
+   *  listener is bound; main flushes the request on display in response. */
+  'browser:popupReady': {} as Contract<[], void>,
   'browser:destroy': {} as Contract<[tabId: string], void>,
   'browser:destroyThread': {} as Contract<[projectId: string, threadId: string], void>,
   'browser:destroyProject': {} as Contract<[projectId: string], void>,
@@ -2989,7 +2989,7 @@ export const IPC_EVENT_CONTRACT = {
    */
   'browser:popup:permission': [] as unknown as [
     request: BrowserPermissionRequest,
-    context: { queueSize: number }
+    context: { queueSize: number; projectLabel: string | null }
   ],
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],

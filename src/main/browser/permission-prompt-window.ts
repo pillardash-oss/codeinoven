@@ -12,8 +12,17 @@ interface PromptAnchor {
   width: number
 }
 
-const POPUP_WIDTH = 360
-const POPUP_HEIGHT = 208
+/** One permission request on display in the popup, with everything the
+ *  document needs: the request itself, the queue depth, and the owning
+ *  project/thread label (null when the records are unavailable). */
+export interface PromptRequestContext {
+  request: BrowserPermissionRequest
+  queueSize: number
+  projectLabel: string | null
+}
+
+const POPUP_WIDTH = 380
+const POPUP_HEIGHT = 240
 const POPUP_MARGIN = 8
 
 /** Resolve the app preload bundle (same lookup as the main window).
@@ -43,10 +52,18 @@ function defaultResolveTheme(): 'light' | 'dark' {
  * main process to detach the whole view (blanking the page) whenever a site
  * asked for the camera or microphone. A real OS popup composites above the
  * view, so the page stays live and interactive while the prompt is open.
+ *
+ * Delivery is ready-gated: the document invokes `browser:popupReady` once its
+ * permission listener is bound, and only then is the pending request sent.
+ * Delivering straight after `loadURL` raced document subscription and could
+ * drop the first request, leaving an empty "wants to use ." shell.
  */
 export class PermissionPromptWindow {
   private popup: BrowserWindow | null = null
   private anchor: PromptAnchor | null = null
+  /** Request currently on display; redelivered when the document re-announces
+   *  readiness (first load) and cleared when the prompt hides. */
+  private current: PromptRequestContext | null = null
   /** True while a request is on display; the reposition tracker only re-shows
    *  the popup when this is set so a resolved (hidden) prompt never returns. */
   private active = false
@@ -57,19 +74,16 @@ export class PermissionPromptWindow {
     private readonly resolveTheme: () => 'light' | 'dark' = defaultResolveTheme
   ) {}
 
-  /** Show (or update) the prompt for `request`; `queueSize` covers queued siblings. */
-  show(
-    request: BrowserPermissionRequest,
-    queueSize: number,
-    contentAnchor: PromptAnchor | null
-  ): void {
+  /** Show (or update) the prompt for `context`; kept until the prompt hides. */
+  show(context: PromptRequestContext, contentAnchor: PromptAnchor | null): void {
+    this.current = context
     this.anchor = contentAnchor
     this.active = true
     if (this.popup && !this.popup.isDestroyed()) {
       const existing = this.popup
       this.position(existing)
       if (!existing.isVisible()) existing.show()
-      this.deliver(request, queueSize)
+      this.deliver()
       return
     }
     if (!this.parent || this.parent.isDestroyed()) return
@@ -109,13 +123,24 @@ export class PermissionPromptWindow {
       if (popup.isDestroyed()) return
       this.position(popup)
       popup.show()
-      this.deliver(request, queueSize)
+      // The document may not have subscribed yet; `flush()` is triggered by
+      // `browser:popupReady` and covers that case. This delivery handles the
+      // re-show path where the document is already listening.
+      this.deliver()
     })
+  }
+
+  /** Redeliver the current request to a document that just (re)announced
+   *  readiness. No-op when nothing is on display. */
+  flush(): void {
+    if (!this.current || !this.active) return
+    this.deliver()
   }
 
   /** Hide the popup (e.g. last request resolved); the window stays reusable. */
   hide(): void {
     this.active = false
+    this.current = null
     const popup = this.popup
     if (!popup || popup.isDestroyed()) return
     if (popup.isVisible()) popup.hide()
@@ -125,13 +150,20 @@ export class PermissionPromptWindow {
     const popup = this.popup
     this.popup = null
     this.anchor = null
+    this.current = null
+    this.active = false
     if (popup && !popup.isDestroyed()) popup.destroy()
   }
 
-  private deliver(request: BrowserPermissionRequest, queueSize: number): void {
+  private deliver(): void {
     const popup = this.popup
+    const context = this.current
     if (!popup || popup.isDestroyed() || this.parent.isDestroyed()) return
-    sendToRenderer(popup.webContents, 'browser:popup:permission', request, { queueSize })
+    if (!context) return
+    sendToRenderer(popup.webContents, 'browser:popup:permission', context.request, {
+      queueSize: context.queueSize,
+      projectLabel: context.projectLabel
+    })
   }
 
   private load(popup: BrowserWindow): Promise<void> {
