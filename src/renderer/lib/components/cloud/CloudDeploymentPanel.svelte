@@ -12,8 +12,10 @@
     Search,
     Server,
     Trash2,
-    TriangleAlert
+    TriangleAlert,
+    X
   } from '@lucide/svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import { invoke } from '$lib/ipc.svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import { pathToFileUrl } from '$lib/mime'
@@ -246,6 +248,17 @@
   })
 
   const anyAccessError = $derived(Object.keys(accessErrors).length > 0)
+
+  /** Access-error banners the user dismissed, keyed by provider + message so a new failure reappears. */
+  const dismissedAccessErrors = new SvelteSet<string>()
+
+  function dismissAccessError(kind: string): void {
+    dismissedAccessErrors.add(accessErrorKey(kind))
+  }
+
+  function accessErrorKey(kind: string): string {
+    return `${kind}:${accessErrors[kind] ?? ''}`
+  }
 
   function message(reason: unknown): string {
     if (!(reason instanceof Error)) return 'Cloud deployments could not be loaded.'
@@ -616,12 +629,21 @@ ${fence}`
                 >{projectGroups.reduce((n, g) => n + g.containers.length, 0)}</span
               >
             </div>
-            {#if accessErrors[kind]}
-              <p
-                class="border-t border-border bg-danger/10 px-3 py-1.5 text-[0.5625rem] leading-relaxed text-danger"
+            {#if accessErrors[kind] && !dismissedAccessErrors.has(accessErrorKey(kind))}
+              <div
+                class="flex items-start gap-1.5 border-t border-border bg-danger/10 px-3 py-1.5 text-[0.5625rem] leading-relaxed text-danger"
               >
-                {accessErrors[kind]}
-              </p>
+                <p class="min-w-0 flex-1">{accessErrors[kind]}</p>
+                <button
+                  type="button"
+                  class="-m-0.5 shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-danger/10"
+                  title="Dismiss {PROVIDER_LABELS[kind as CloudDeploymentProviderKind]} access error"
+                  aria-label="Dismiss {PROVIDER_LABELS[kind as CloudDeploymentProviderKind]} access error"
+                  onclick={() => dismissAccessError(kind)}
+                >
+                  <X size={11} />
+                </button>
+              </div>
             {/if}
             {#each projectGroups as projectGroup (projectGroup.project)}
               <div class="border-t border-border">
