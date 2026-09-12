@@ -80,6 +80,7 @@ export interface PersistedMessageRow {
   usage_credits_json: string | null
   context_window: number | null
   context_used: number | null
+  context_estimated: number | null
   generation_ms: number | null
   error: string | null
   structured_output: string | null
@@ -152,6 +153,7 @@ export interface AgentMessageRow {
   usage_credits_json: string | null
   context_window: number | null
   context_used: number | null
+  context_estimated: number | null
   generation_ms: number | null
   error: string | null
   structured_output: string | null
@@ -219,6 +221,7 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
     credits: row.usage_credits_json ? JSON.parse(row.usage_credits_json) : undefined,
     contextWindow: row.context_window ?? undefined,
     contextUsed: row.context_used ?? undefined,
+    ...(row.context_estimated === 1 ? { contextEstimated: true } : {}),
     generationMs: row.generation_ms ?? undefined,
     error: row.error ?? undefined,
     structuredOutput: row.structured_output ? JSON.parse(row.structured_output) : undefined
@@ -266,6 +269,7 @@ export interface EncodedAgentMessage {
   creditsJson: string | null
   contextWindow: number | null
   contextUsed: number | null
+  contextEstimated: number | null
   generationMs: number | null
   error: string | null
   structuredOutputJson: string | null
@@ -307,6 +311,7 @@ export function encodeAgentMessage(
   const creditsJson = message.credits ? JSON.stringify(message.credits) : null
   const contextWindow = message.contextWindow ?? null
   const contextUsed = message.contextUsed ?? null
+  const contextEstimated = message.contextEstimated === true ? 1 : 0
   const generationMs = message.generationMs ?? null
   const error = message.error ?? null
   const structuredOutputJson =
@@ -335,6 +340,7 @@ export function encodeAgentMessage(
     usage_credits_json: creditsJson,
     context_window: contextWindow,
     context_used: contextUsed,
+    context_estimated: contextEstimated,
     generation_ms: generationMs,
     error,
     structured_output: structuredOutputJson
@@ -368,6 +374,7 @@ export function encodeAgentMessage(
     creditsJson,
     contextWindow,
     contextUsed,
+    contextEstimated,
     generationMs,
     error,
     structuredOutputJson
@@ -387,8 +394,8 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       references_json, project_references_json,
       created_at, completed_at, cost,
       tokens_json, tokens_total, rate_limits_json, usage_credits_json,
-      context_window, context_used, generation_ms, error, structured_output
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      context_window, context_used, context_estimated, generation_ms, error, structured_output
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET
       role = excluded.role,
       origin = excluded.origin,
@@ -415,6 +422,7 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       usage_credits_json = excluded.usage_credits_json,
       context_window = excluded.context_window,
       context_used = excluded.context_used,
+      context_estimated = excluded.context_estimated,
       generation_ms = excluded.generation_ms,
       error = excluded.error,
       structured_output = excluded.structured_output`,
@@ -447,6 +455,7 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       encoded.creditsJson,
       encoded.contextWindow,
       encoded.contextUsed,
+      encoded.contextEstimated,
       encoded.generationMs,
       encoded.error,
       encoded.structuredOutputJson
@@ -606,7 +615,7 @@ export class AgentMessageRepo {
         references_json, project_references_json,
         created_at, completed_at, cost,
         tokens_json, rate_limits_json, usage_credits_json,
-        context_window, context_used, error, structured_output
+        context_window, context_used, context_estimated, error, structured_output
        FROM agent_messages WHERE id = ?`,
       message.id
     )
@@ -925,7 +934,7 @@ const MESSAGE_READ_COLUMNS = `id, thread_id, session_id, role, origin, visibilit
   account_id, account_label,
   thinking_level, references_json, project_references_json, created_at, completed_at, cost,
   tokens_json, rate_limits_json, usage_credits_json, context_window, context_used,
-  generation_ms, error, structured_output`
+  context_estimated, generation_ms, error, structured_output`
 
 /**
  * SQL for one bounded page of the mirrored conversation (parent-session rows),

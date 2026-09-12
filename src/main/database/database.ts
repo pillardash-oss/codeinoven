@@ -729,6 +729,7 @@ export class Database {
       this.migrateThreadAccountColumn(connection)
       this.migrateAgentMessageGenerationColumn(connection)
       this.migrateAgentMessageAccountColumns(connection)
+      this.migrateAgentMessageContextEstimatedColumn(connection)
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
     })()
   }
@@ -927,6 +928,19 @@ export class Database {
     }
     if (!columns.has('account_label')) {
       connection.exec('ALTER TABLE agent_messages ADD COLUMN account_label TEXT')
+    }
+  }
+
+  /** Existing message mirrors predate estimated-occupancy provenance; without
+   *  the flag a reloaded estimate masquerades as a provider-reported reading. */
+  private migrateAgentMessageContextEstimatedColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('context_estimated')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN context_estimated INTEGER')
     }
   }
 
