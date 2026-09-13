@@ -82,3 +82,15 @@ export function keyTokenLabel(key: string, isMac: boolean): string {
 export function formatKeyCombo(keys: readonly string[], isMac = isMacPlatform()): string {
   return keys.map((key) => keyTokenLabel(key, isMac)).join(isMac ? '' : '+')
 }
+
+const KEYMAP_BY_ID: Map<string, readonly string[]> = new Map(
+  KEYMAP.categories.flatMap((category) =>
+    category.shortcuts.map((shortcut) => [shortcut.id, shortcut.keys] as const)
+  )
+)
+
+/** Key tokens for a keymap entry id, e.g. 'nav-new-thread' → ['mod', 'n'].
+ *  Returns an empty array for unknown ids so call sites can render nothing. */
+export function keymapKeys(id: string): readonly string[] {
+  return KEYMAP_BY_ID.get(id) ?? []
+}

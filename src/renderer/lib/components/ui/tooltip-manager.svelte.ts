@@ -6,6 +6,8 @@ export const TOOLTIP_ID = 'codeinoven-tooltip'
 
 interface TooltipRequest {
   content: string
+  /** Symbolic key tokens for an optional shortcut chip, e.g. ['mod', 'n']. */
+  keys: readonly string[]
   anchorX: number
   anchorY: number
   side: TooltipSide
@@ -23,14 +25,15 @@ class TooltipState {
     anchorX: number,
     anchorY: number,
     side: TooltipSide = 'top',
-    sideOffset = TOOLTIP_GAP_PX
+    sideOffset = TOOLTIP_GAP_PX,
+    keys: readonly string[] = []
   ): void {
     if (content.trim() === '') {
       this.end()
       return
     }
     this.clearShowTimer()
-    this.request = { content, anchorX, anchorY, side, sideOffset }
+    this.request = { content, keys, anchorX, anchorY, side, sideOffset }
     this.visible = false
     this.showTimer = setTimeout(() => {
       this.visible = true
@@ -69,6 +72,20 @@ interface SuppressedTitle {
 const SUPPRESSED_TITLES = new WeakMap<Element, SuppressedTitle>()
 
 let activeTitleElement: HTMLElement | null = null
+
+/**
+ * Reads an element's optional shortcut declaration for the tooltip chip. The
+ * `data-shortcut` attribute holds comma-separated symbolic key tokens from the
+ * keymap registry, e.g. `data-shortcut="mod,shift,n"`.
+ */
+function shortcutKeysFor(el: HTMLElement): readonly string[] {
+  const raw = el.getAttribute('data-shortcut')
+  if (!raw) return []
+  return raw
+    .split(',')
+    .map((token) => token.trim())
+    .filter(Boolean)
+}
 
 function resolveTitleElement(target: EventTarget | null): HTMLElement | null {
   if (!(target instanceof Element)) return null
@@ -130,7 +147,14 @@ export function attachTitleTooltipDelegation(): () => void {
     }
     suppressNativeTitle(el)
     activeTitleElement = el
-    tooltipState.begin(title, event.clientX, event.clientY)
+    tooltipState.begin(
+      title,
+      event.clientX,
+      event.clientY,
+      'top',
+      TOOLTIP_GAP_PX,
+      shortcutKeysFor(el)
+    )
   }
 
   function onPointerMove(event: PointerEvent): void {

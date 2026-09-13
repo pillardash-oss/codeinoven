@@ -10,6 +10,8 @@
   interface Props {
     /** Text rendered by the custom tooltip on hover (or focus). */
     title: string
+    /** Optional symbolic key tokens; renders a shortcut chip inside the tooltip. */
+    keys?: readonly string[]
     side?: TooltipSide
     sideOffset?: number
     disabled?: boolean
@@ -19,6 +21,7 @@
 
   let {
     title,
+    keys = [],
     side = 'top',
     sideOffset = TOOLTIP_GAP_PX,
     disabled = false,
@@ -30,7 +33,7 @@
 
   function showAt(event: PointerEvent): void {
     if (disabled || title.trim() === '') return
-    tooltipState.begin(title, event.clientX, event.clientY, side, sideOffset)
+    tooltipState.begin(title, event.clientX, event.clientY, side, sideOffset, keys)
     if (wrapper) wrapper.setAttribute('aria-describedby', TOOLTIP_ID)
   }
 
@@ -43,7 +46,8 @@
       rect.left + rect.width / 2,
       rect.top + rect.height / 2,
       side,
-      sideOffset
+      sideOffset,
+      keys
     )
     wrapper.setAttribute('aria-describedby', TOOLTIP_ID)
   }

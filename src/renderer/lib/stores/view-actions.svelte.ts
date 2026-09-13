@@ -14,6 +14,8 @@ export interface ViewActionItem {
   icon?: Component
   title?: string
   ariaLabel?: string
+  /** Symbolic key tokens for the action's shortcut; shown inside its tooltip. */
+  shortcut?: readonly string[]
   run?: () => void
   component?: Component<Record<string, unknown>>
   props?: Record<string, unknown>

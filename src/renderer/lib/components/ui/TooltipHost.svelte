@@ -7,6 +7,7 @@
     TOOLTIP_ID,
     type TooltipSide
   } from './tooltip-manager.svelte'
+  import ShortcutHint from './ShortcutHint.svelte'
 
   let side = $state<TooltipSide>('top')
 
@@ -110,6 +111,11 @@
       class:opacity-0={!tooltipState.visible}
     >
       {tooltipState.request.content}
+      {#if tooltipState.request.keys.length > 0}
+        <span class="ml-1.5 inline-flex translate-y-px align-middle">
+          <ShortcutHint keys={tooltipState.request.keys} />
+        </span>
+      {/if}
       <span
         class="tooltip-arrow"
         class:tooltip-arrow-top={side === 'top'}

@@ -12,6 +12,7 @@
   import Modal from '../ui/Modal.svelte'
   import GitCloneModal from './GitCloneModal.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { keymapKeys } from '$lib/keymap/keymap'
   import { APP_NAME } from '$shared/brand'
   import type { ChangeTrackingMode, Project, RepositoryPreflightResult } from '$shared/types'
   import { folderBaseName } from '$lib/project-location'
@@ -183,6 +184,7 @@
       class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={title}
       {title}
+      data-shortcut={keymapKeys('nav-new-project').join(',')}
     >
       <FolderKanban size={15} strokeWidth={1.8} />
     </DropdownMenu.Trigger>
