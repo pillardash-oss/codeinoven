@@ -1,5 +1,5 @@
 import { BrowserWindow, powerMonitor } from 'electron'
-import { readdir, readFile } from 'fs/promises'
+import { readdir, readFile, rm } from 'fs/promises'
 import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, relative, resolve } from 'path'
@@ -292,6 +292,8 @@ import {
 } from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
 import {
+  LEGACY_CHAT_ARTIFACTS_DIRECTORY,
+  chatThreadArtifactDirectory,
   ensureFeatureSlug,
   featureArtifactDirectory,
   requireLocalProject
@@ -993,14 +995,27 @@ const CHAT_SYSTEM_PROMPT = [
 ].join(' ')
 
 /** Non-editable safety boundary appended even when the user customized Chat prompts. */
-const CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION = [
+const CHAT_FILESYSTEM_BOUNDARY_LINES = [
   'FILESYSTEM-OFF CHAT BOUNDARY:',
   'The harness starts in a neutral chat-cwd only because its process requires a working directory. That directory is not part of the conversation, not project context, and never a source to inspect.',
   'Do not proactively call read, list, glob, grep, find, bash, powershell, or another local tool to discover context. Do not inspect chat-cwd, the open project, the repository, the home directory, or application storage.',
   'Use the conversation and your own knowledge first. Use web search, web fetch, and other internet tools when current or external information is needed.',
   'You may read only files the user attached and harness-owned skill instructions needed for the request. Their availability is not permission to explore neighboring files.',
   'Only File System mode changes this boundary.'
-].join(' ')
+]
+
+const CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION = CHAT_FILESYSTEM_BOUNDARY_LINES.join(' ')
+
+/** File-System-off chats own one carve-out: their artifact directory is part
+ *  of the conversation. Reads and writes inside it are pre-authorized and are
+ *  where chat outputs belong; it never opens the broader file system. */
+function chatFilesystemBoundaryInstruction(chatArtifactRoot?: string): string {
+  if (!chatArtifactRoot) return CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION
+  return [
+    CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION,
+    `One exception: the artifact directory of this chat (${chatArtifactRoot}) is part of this conversation. You may create and read files inside it freely, and outputs you create for the user belong there. This carve-out does not extend to anything outside that directory.`
+  ].join(' ')
+}
 
 /** Chat-only instruction when the user explicitly enables the File System mode. */
 const FILE_SYSTEM_CHAT_SYSTEM_PROMPT = [
@@ -7754,12 +7769,17 @@ export class ChatEngine {
       transportPromise
     ])
     const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
+    const chatArtifactRoot = this.storage.resolve(chatThreadArtifactDirectory(threadId))
     const generatedArtifactPrompt = artifactInstruction(
       targetThread ?? {
         projectId,
         id: threadId,
         title: 'current-work',
         featureSlug: undefined
+      },
+      {
+        chatArtifactRoot,
+        chatFileSystemMode: isChatThread && chatFileSystemEnabled
       }
     )
     const parkedLifecycleInstruction = lifecycleParked
@@ -7777,7 +7797,11 @@ export class ChatEngine {
     const chatSystemPrompt = isChatThread
       ? [
           await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat'),
-          chatFileSystemEnabled ? '' : CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION
+          chatFileSystemEnabled
+            ? ''
+            : chatFilesystemBoundaryInstruction(
+                this.storage.resolve(chatThreadArtifactDirectory(threadId))
+              )
         ]
           .filter(Boolean)
           .join('\n\n')
@@ -10602,6 +10626,17 @@ export class ChatEngine {
     this.activeLoopRuns.delete(`${projectId}:${threadId}`)
     this.activeAchievementAuditorEnsures.delete(`${projectId}:${threadId}`)
     this.activeAchievementAuditRuns.delete(`${projectId}:${threadId}`)
+
+    // The thread's own artifact scratch directory (and its legacy inbox-image
+    // root) is per-thread app data; it goes away with the thread.
+    for (const directory of [
+      chatThreadArtifactDirectory(threadId),
+      join(LEGACY_CHAT_ARTIFACTS_DIRECTORY, threadId)
+    ]) {
+      void rm(this.storage.resolve(directory), { recursive: true, force: true }).catch((error) =>
+        Logger.dev('Thread artifact directory cleanup was incomplete:', error)
+      )
+    }
   }
 
   /** Reply to a pending permission request (from the UI permission card). */
@@ -20402,19 +20437,26 @@ export class ChatEngine {
   /**
    * The file-access scope for a permission request in a chat session.
    *
-   * Chats (inbox threads) get a read allowlist containing every user attachment
-   * plus the shared and active-harness skill roots. When File System mode is
-   * off, safe read/list/search operations are restricted to those paths. Skill
-   * access never grants writes or shell commands. File-System-on chats keep the
-   * normal project-root + protected-path rules while retaining these read-only
-   * exceptions. Non-chat threads are untouched.
+   * Every session gets the thread's own `chats-artifacts/<threadId>` artifact
+   * directory as a pre-authorized scratch path: non-destructive, path-scoped
+   * file operations inside it never prompt, regardless of permission level or
+   * File System mode.
+   *
+   * Chats (inbox threads) additionally get a read allowlist containing every
+   * user attachment plus the shared and active-harness skill roots. When File
+   * System mode is off, safe read/list/search operations are restricted to
+   * those paths. Skill access never grants writes or shell commands.
+   * File-System-on chats keep the normal project-root + protected-path rules
+   * while retaining these read-only exceptions.
    */
   private async chatPermissionScope(info: SessionInfo): Promise<{
     allowedPaths: string[]
+    scratchPaths: string[]
     restrictToAllowed: boolean
   }> {
     const isChat = info.projectId === INBOX_PROJECT_ID
-    if (!isChat) return { allowedPaths: [], restrictToAllowed: false }
+    const scratchPaths = [this.storage.resolve(chatThreadArtifactDirectory(info.threadId))]
+    if (!isChat) return { allowedPaths: [], scratchPaths, restrictToAllowed: false }
 
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
     const fileSystemMode = thread?.settings?.fileSystemMode === true
@@ -20427,11 +20469,13 @@ export class ChatEngine {
       this.chatAttachmentAllowlists.set(info.threadId, attachmentPaths)
       return {
         allowedPaths: [...attachmentPaths, ...this.chatSkillPaths(info.driverId)],
+        scratchPaths,
         restrictToAllowed: !fileSystemMode
       }
     }
     return {
       allowedPaths: [...cached, ...this.chatSkillPaths(info.driverId)],
+      scratchPaths,
       restrictToAllowed: !fileSystemMode
     }
   }
@@ -20475,11 +20519,12 @@ export class ChatEngine {
     }
 
     const commands = permissionCommands(request.metadata)
-    const { allowedPaths, restrictToAllowed } = await this.chatPermissionScope(info)
+    const { allowedPaths, scratchPaths, restrictToAllowed } = await this.chatPermissionScope(info)
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
       mode: level,
       ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
+      ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
       ...(restrictToAllowed ? { restrictToAllowed } : {})
     }).evaluate({
       permission: request.permission,

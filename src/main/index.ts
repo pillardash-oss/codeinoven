@@ -62,7 +62,8 @@ import { sendToRenderer } from './ipc/renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
 import { BrowserService } from './browser/browser-service'
-import { getConfigRoot } from '../lib/utils'
+import { ensureDir, getConfigRoot } from '../lib/utils'
+import { chatThreadArtifactDirectory } from '../lib/project-artifacts'
 import type { SpeechService } from './speech/speech-service'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
@@ -583,10 +584,16 @@ async function bootPostPaintServices(): Promise<void> {
     scopeManager,
     scopeWorktreeService
   )
-  const projectFilesService = new ProjectFilesService(
-    projectManager,
-    scopeRootProvider(scopeRootResolver)
-  )
+  const projectFilesService = new ProjectFilesService(projectManager, scopeRootProvider(scopeRootResolver), {
+    // Chat file trees mount on the thread's own `chats-artifacts/<threadId>`
+    // directory; resolution creates it on demand so an empty thread still has
+    // a browsable root.
+    resolve: async (threadId: string) => {
+      const root = storage.resolve(chatThreadArtifactDirectory(threadId))
+      await ensureDir(root)
+      return root
+    }
+  })
   appfileProjectFiles = projectFilesService
   computerUsePipService = new ComputerUsePipService(storage)
   harnessManifestService = new HarnessManifestService(storage)

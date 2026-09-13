@@ -745,7 +745,17 @@
   let deleteThreads = $state(false)
 
   async function openFiles(): Promise<void> {
-    if (!selectedThread || activeProject?.source !== 'local' || !activeProject.path) return
+    if (!selectedThread) return
+    // Inbox chats browse the thread's own artifact directory instead of a
+    // project root; the mount must be registered before the root listing.
+    if (selectedThread.projectId === INBOX_PROJECT_ID) {
+      projectFilesWorkspace.ensureState(selectedThread.projectId)
+      projectFilesWorkspace.setChatThread(selectedThread.projectId, selectedThread.id)
+      await projectFilesWorkspace.loadDirectory(selectedThread.projectId, '')
+      contextSidebarState.openFiles(selectedThread.projectId, selectedThread.id)
+      return
+    }
+    if (activeProject?.source !== 'local' || !activeProject.path) return
     await projectFilesWorkspace.loadDirectory(selectedThread.projectId, '')
     contextSidebarState.openFiles(selectedThread.projectId, selectedThread.id)
   }
@@ -1070,6 +1080,16 @@
     ]
 
     const workspaceTools: ContextDockItem[] = []
+    // Chats surface their own per-thread artifact directory as the file tree.
+    if (isChatThread) {
+      workspaceTools.push({
+        id: 'files',
+        label: 'Artifacts',
+        icon: FolderTree,
+        active: dockKindActive('files'),
+        onSelect: () => toggleDockPanel('files', () => void openFiles())
+      })
+    }
     if (!isChatThread && projectToolsAvailable) {
       workspaceTools.push(
         {
@@ -4437,7 +4457,11 @@
               {#if activeContextTab.kind === 'files'}
                 <ProjectFilesPanel
                   projectId={activeContextTab.projectId}
-                  projectName={activeProject?.name ?? 'Project files'}
+                  projectName={
+                    activeContextTab.projectId === INBOX_PROJECT_ID
+                      ? 'Chat artifacts'
+                      : (activeProject?.name ?? 'Project files')
+                  }
                   projectIconUrl={activeProject
                     ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
                     : null}

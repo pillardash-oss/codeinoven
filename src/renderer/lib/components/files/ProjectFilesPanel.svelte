@@ -56,6 +56,7 @@
   import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
   import type { ProjectTextFile } from '$shared/types'
   import type { ProjectFileInfo } from '$shared/types'
+  import { INBOX_PROJECT_ID } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -71,6 +72,12 @@
       : null
   )
   let activeThreadId = $derived(contextTab?.threadId ?? null)
+  /** Inbox chats mount the file tree on the thread's own artifact directory;
+   *  real projects always use the project root regardless of the open thread. */
+  let chatThreadId = $derived(projectId === INBOX_PROJECT_ID ? activeThreadId : null)
+  $effect(() => {
+    projectFilesWorkspace.setChatThread(projectId, chatThreadId)
+  })
   // This panel can be restored directly from persisted sidebar state before a
   // file action has had a chance to prepare the workspace store.
   function prepareProjectFilesState(): void {
@@ -111,7 +118,7 @@
   let audio = $derived(activeTab ? isAudioMime(mimeFromPath(activeTab.path)) : false)
   let previewUrl = $derived(
     activeTab && (pdf || image || video || audio) && !svg
-      ? projectFilePreviewUrl(projectId, activeTab.path)
+      ? projectFilePreviewUrl(projectId, activeTab.path, chatThreadId ?? undefined)
       : null
   )
   // SVG is rendered natively in the renderer via a blob URL (animated SVGs
@@ -134,7 +141,8 @@
       'projectFiles:read',
       projectId,
       activeTab.path,
-      workspaceState.activeScopeBucketIdFor(projectId)
+      workspaceState.activeScopeBucketIdFor(projectId),
+      chatThreadId ?? undefined
     )
       .then((source: ProjectTextFile | null) => {
         if (cancelled || !source) return
@@ -448,7 +456,8 @@
       'projectFiles:openInEditor',
       projectId,
       activeTab.path,
-      workspaceState.activeScopeBucketIdFor(projectId)
+      workspaceState.activeScopeBucketIdFor(projectId),
+      chatThreadId ?? undefined
     )
   }
 

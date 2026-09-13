@@ -54,6 +54,12 @@ export interface PermissionPolicyOptions {
    *  inside the project root) requires explicit approval. Used by File-System-
    *  OFF chats so the agent can only touch files the user attached. */
   restrictToAllowed?: boolean
+  /** Absolute directories pre-authorized for this session (e.g. the chat's own
+   *  `chats-artifacts/<threadId>` artifact directory). Any non-destructive,
+   *  path-scoped permission inside one of them is auto-approved in every mode,
+   *  File-System-OFF chats included. Shell commands and destructive actions
+   *  are never auto-approved through this carve-out. */
+  scratchPaths?: readonly string[]
   now?: () => number
 }
 
@@ -167,6 +173,7 @@ export class PermissionPolicy {
   private readonly approvalTtlMs: number
   private readonly protectedPathPatterns: readonly string[]
   private readonly allowedPaths: readonly string[]
+  private readonly scratchPaths: readonly string[]
   private readonly restrictToAllowed: boolean
   private readonly now: () => number
 
@@ -178,6 +185,7 @@ export class PermissionPolicy {
       ...(options.protectedPathPatterns ?? [])
     ]
     this.allowedPaths = (options.allowedPaths ?? []).map((path) => resolve(path))
+    this.scratchPaths = (options.scratchPaths ?? []).map((path) => resolve(path))
     this.restrictToAllowed = options.restrictToAllowed === true
     this.now = options.now ?? Date.now
   }
@@ -226,6 +234,20 @@ export class PermissionPolicy {
       )
     }
 
+    // The chat's own artifact directory is pre-authorized: non-destructive,
+    // path-scoped operations inside it never prompt, File-System-OFF chats
+    // included. Shell commands stay gated because a command cannot be scoped
+    // to a path by this policy.
+    if (this.isScratchScope(permission, paths, commands)) {
+      return this.createDecision(
+        'auto_review',
+        true,
+        'Auto-approved: the chat owns this artifact directory and file operations there never prompt.',
+        risk,
+        scope
+      )
+    }
+
     // File-System-OFF chats only auto-approve reads confined to the attached
     // files. Shell commands, writes, and reads elsewhere must ask   the agent
     // must not reach the broader file system (or the shell) unprompted.
@@ -269,6 +291,26 @@ export class PermissionPolicy {
       risk,
       scope
     )
+  }
+
+  /** Whether every requested path sits inside one pre-authorized scratch
+   *  directory and nothing else in the request widens the grant (no shell
+   *  commands, nothing destructive). */
+  private isScratchScope(
+    permission: string,
+    paths: readonly string[],
+    commands: readonly string[]
+  ): boolean {
+    if (this.scratchPaths.length === 0) return false
+    if (commands.length > 0) return false
+    if (paths.length === 0) return false
+    const terms = normalizePermissionName(permission).split('-').filter(Boolean)
+    if (terms.some((term) => DESTRUCTIVE_TERMS.includes(term))) return false
+    return paths.every((path) => {
+      if (hasTraversal(path)) return false
+      const resolvedPath = isAbsolute(path) ? resolve(path) : resolve(this.projectRoot, path)
+      return this.scratchPaths.some((scratch) => isWithinDirectory(scratch, resolvedPath))
+    })
   }
 
   private getDestructiveReason(permission: string): string | undefined {
