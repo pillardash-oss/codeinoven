@@ -69,7 +69,8 @@ export const CIO_QUESTION_MARKER = 'cio-question:'
 
 export function piCoreToolsExtension(): string {
   return `import { existsSync, readFileSync } from 'node:fs'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { homedir } from 'node:os'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
   createAgentSession,
@@ -221,6 +222,41 @@ function isOutsideCwd(candidatePath, cwd) {
   const abs = isAbsolute(candidatePath) ? resolve(candidatePath) : resolve(cwd, candidatePath)
   const rel = relative(cwd, abs)
   return rel.startsWith('..') || isAbsolute(rel)
+}
+
+const CIO_INTRINSIC_SKILL_ROOTS = [
+  join(homedir(), '.agents', 'skills'),
+  join(homedir(), '.pi', 'agent', 'skills')
+]
+
+function isWithinPath(candidatePath, root) {
+  const rel = relative(root, resolve(candidatePath))
+  return rel === '' || (!rel.startsWith('..' + sep) && rel !== '..' && !isAbsolute(rel))
+}
+
+// Shared and Pi-native skills are part of the harness runtime, not user file
+// access. Resolve these reads before opening a permission dialog so chat mode
+// never flashes a card or races an asynchronous auto-approval.
+function isIntrinsicSkillRead(toolName, input, cwd) {
+  if (!['read', 'grep', 'find', 'ls'].includes(toolName)) return false
+  const rawPath = firstString(input['path'], input['file_path'], input['filePath'], input['filename'])
+  if (!rawPath) return false
+  const candidate = isAbsolute(rawPath) ? resolve(rawPath) : resolve(cwd, rawPath)
+  return CIO_INTRINSIC_SKILL_ROOTS.some(function (root) {
+    return isWithinPath(candidate, root)
+  })
+}
+
+// Filesystem-off chat still has ordinary internet access. Permit a single
+// network curl invocation only when it has no shell composition, interpolation,
+// local-file input, upload, or output flags. Broader shell use remains gated.
+function isSafeNetworkCurl(toolName, input) {
+  if (toolName !== 'bash' || typeof input['command'] !== 'string') return false
+  const command = input['command'].trim()
+  if (!/^curl(?:\\s|$)/u.test(command)) return false
+  if (/[\\n\\r;&|\`<>@]/u.test(command) || /\\$(?:\\(|\\{|[A-Za-z_])/u.test(command)) return false
+  if (!/(?:^|\\s)https?:\\/\\/[^\\s"']+/iu.test(command)) return false
+  return !/(?:^|\\s)(?:-o|--output|-T|--upload-file|-K|--config|--unix-socket|--netrc-file|--cookie|--cookie-jar|--cert|--key)(?:\\s|=|$)/u.test(command)
 }
 
 function isProtectedPath(candidatePath) {
@@ -1036,6 +1072,8 @@ export default function codeInOvenCoreToolsExtension(pi) {
       CIO_PI_BUILTIN_TOOLS.has(event.toolName) &&
       !allowedTools.includes(event.toolName)
     ) {
+      if (isIntrinsicSkillRead(event.toolName, input, ctx.cwd)) return undefined
+      if (isSafeNetworkCurl(event.toolName, input)) return undefined
       const command = typeof input['command'] === 'string' ? input['command'] : undefined
       const path = firstString(input['path'], input['file_path'], input['filePath'], input['filename'])
       const payload = {
