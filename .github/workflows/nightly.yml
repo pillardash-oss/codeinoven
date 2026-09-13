@@ -248,6 +248,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
       - name: Download build artifacts
         uses: actions/download-artifact@v7
         with:
@@ -263,6 +268,20 @@ jobs:
           find . -type f | sort
           echo "SHA256SUMS.txt:"
           cat SHA256SUMS.txt
+
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Notes cover every commit since the newest published nightly tag of
+          # this base version (else the last stable release). The file feeds
+          # the GitHub release body below, which the in-app updater also
+          # surfaces via electron-updater's releaseNotes.
+          if ! bun scripts/generate-release-notes.ts --channel nightly --to "$GITHUB_SHA" --out release-notes.md; then
+            echo "::error::Failed to generate release notes"
+            exit 1
+          fi
+          cat release-notes.md
 
       - name: Create or update nightly release
         env:
@@ -286,12 +305,12 @@ jobs:
             publish_attempt=$((publish_attempt + 1))
             if gh release view "$tag" >/dev/null 2>&1; then
               gh release upload "$tag" "${files[@]}" --clobber
-              gh release edit "$tag" --title "CodeInOven $version nightly" --prerelease
+              gh release edit "$tag" --title "CodeInOven $version nightly" --notes-file release-notes.md --prerelease
             else
               gh release create "$tag" "${files[@]}" \
                 --target "$GITHUB_SHA" \
                 --title "CodeInOven $version nightly" \
-                --notes "Prerelease build of version $version from the \`nightly\` branch. Use for testing; not intended for production." \
+                --notes-file release-notes.md \
                 --prerelease \
                 --latest=false
             fi
