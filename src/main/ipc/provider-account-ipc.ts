@@ -106,6 +106,10 @@ export function registerProviderAccountIpc(
       text(rawLabel, 'Account label', 80)
     )
   )
+  ipcMain.handle('providerAccounts:setDefault', async (_, rawAccountId: unknown) => {
+    const account = await accounts.setDefault(validateEntityId(rawAccountId, 'Account ID', 256))
+    return accounts.list(account.harnessId)
+  })
   ipcMain.handle('providerAccounts:remove', (_, rawAccountId: unknown) =>
     (removeAccount ?? ((accountId: string) => accounts.remove(accountId)))(
       validateEntityId(rawAccountId, 'Account ID', 256)

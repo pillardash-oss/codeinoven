@@ -791,6 +791,9 @@ export interface HarnessAccount {
   providerName: string
   label: string
   containerKind: 'legacy-default' | 'managed'
+  /** Marks the user's preferred account for this harness+provider. When unset,
+   *  the earliest created account acts as the default. */
+  isDefault?: boolean
   createdAt: number
   updatedAt: number
 }

@@ -7,9 +7,11 @@ import { dirname, join } from 'node:path'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { BaseUrlProvider, BaseUrlProviderModel, ThinkingLevel } from '../../lib/types'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
+import { Logger } from '../system/logger'
 
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
-const PI_MODELS_PATH = join(homedir(), '.pi', 'agent', 'models.json')
+const PI_AGENT_DIR = join(homedir(), '.pi', 'agent')
+const PI_MODELS_PATH = join(PI_AGENT_DIR, 'models.json')
 const NATIVE_HARNESSES = new Set(['opencode', 'pi'])
 const FORMAT_OPTIONS = { tabSize: 2, insertSpaces: true, eol: '\n' }
 const THINKING_LEVELS = new Set<ThinkingLevel>([
@@ -45,8 +47,9 @@ export function hasNativeProviderCatalog(harnessId: string): boolean {
  * explicit connect targets regardless of whether their entry carries an API
  * key (keyless local servers are legitimate).
  */
-export async function piNativeProviderIds(): Promise<Set<string>> {
-  const config = await readJsoncObject(PI_MODELS_PATH)
+export async function piNativeProviderIds(): Promise<Set<string> | null> {
+  const config = await tryReadJsoncObject(PI_MODELS_PATH)
+  if (!config) return null
   const providers = record(config['providers']) ?? {}
   return new Set(Object.keys(providers))
 }
@@ -60,14 +63,11 @@ export async function piNativeProviderIds(): Promise<Set<string>> {
  * than wrongly hiding every provider behind a read failure.
  */
 export async function opencodeNativeProviderIds(): Promise<Set<string> | null> {
-  try {
-    const config = await readJsoncObject(OPENCODE_CONFIG_PATH)
-    const providers = record(config['provider']) ?? {}
-    const disabled = new Set(stringArray(config['disabled_providers']))
-    return new Set(Object.keys(providers).filter((id) => !disabled.has(id)))
-  } catch {
-    return null
-  }
+  const config = await tryReadJsoncObject(OPENCODE_CONFIG_PATH)
+  if (!config) return null
+  const providers = record(config['provider']) ?? {}
+  const disabled = new Set(stringArray(config['disabled_providers']))
+  return new Set(Object.keys(providers).filter((id) => !disabled.has(id)))
 }
 
 /** Reads and surgically edits harness-owned custom provider catalogs. */
@@ -75,7 +75,8 @@ export class NativeProviderConfigService {
   /** Read a native Pi provider key for main-process usage probes only. */
   async readApiKey(harnessId: string, providerId: string): Promise<string | undefined> {
     if (harnessId !== 'pi') return undefined
-    const config = await readJsoncObject(PI_MODELS_PATH)
+    const config = await tryReadJsoncObject(PI_MODELS_PATH)
+    if (!config) return undefined
     const provider = record(record(config['providers'])?.[providerId])
     const apiKey = stringValue(provider?.['apiKey'])
     return apiKey && apiKey !== 'none' ? apiKey : undefined
@@ -84,6 +85,17 @@ export class NativeProviderConfigService {
   async listProviders(): Promise<BaseUrlProvider[]> {
     const [openCode, pi] = await Promise.all([this.listOpenCodeProviders(), this.listPiProviders()])
     return [...openCode, ...pi]
+  }
+
+  /**
+   * Harness-global native Pi providers from `~/.pi/agent/models.json`.
+   * Managed account containers get their own agent dir with no models.json, so
+   * custom providers (keyless local servers like llama.cpp) must be re-read
+   * from the global file and mirrored into the container via the driver's
+   * overlay extension.
+   */
+  async listGlobalPiProviders(): Promise<BaseUrlProvider[]> {
+    return this.listPiProviders()
   }
 
   async upsertProvider(
@@ -115,7 +127,8 @@ export class NativeProviderConfigService {
   }
 
   private async listOpenCodeProviders(): Promise<BaseUrlProvider[]> {
-    const config = await readJsoncObject(OPENCODE_CONFIG_PATH)
+    const config = await tryReadJsoncObject(OPENCODE_CONFIG_PATH)
+    if (!config) return []
     const providers = record(config['provider']) ?? {}
     const disabled = new Set(stringArray(config['disabled_providers']))
     return Object.entries(providers).flatMap(([id, value]) => {
@@ -178,8 +191,9 @@ export class NativeProviderConfigService {
     await writeJsonc(OPENCODE_CONFIG_PATH, raw)
   }
 
-  private async listPiProviders(): Promise<BaseUrlProvider[]> {
-    const config = await readJsoncObject(PI_MODELS_PATH)
+  private async listPiProviders(modelsPath: string = PI_MODELS_PATH): Promise<BaseUrlProvider[]> {
+    const config = await tryReadJsoncObject(modelsPath)
+    if (!config) return []
     const providers = record(config['providers']) ?? {}
     return Object.entries(providers).flatMap(([id, value]) => {
       const provider = record(value)
@@ -403,6 +417,89 @@ async function readJsoncObject(filePath: string): Promise<Record<string, unknown
   return record(parsed) ?? {}
 }
 
+/**
+ * Read-only callers (provider listings, usage probes) must not fail wholesale
+ * when a user hand-edited a native config into invalid JSONC   they degrade to
+ * "no native providers" instead, with auto-repair attempted first (see
+ * `repairJsoncFile`). Write paths use the throwing `readJsoncObject` so a
+ * broken file is never silently overwritten.
+ */
+async function tryReadJsoncObject(filePath: string): Promise<Record<string, unknown> | null> {
+  try {
+    return await readJsoncObject(filePath)
+  } catch (error) {
+    return repairJsoncFile(filePath, error)
+  }
+}
+
+/**
+ * Auto-repair for a corrupt native config: back up the original, sanitize the
+ * structural comma corruption jsonc editing can leave behind, and only rewrite
+ * the file atomically once the repaired text verifiably parses. When repair is
+ * impossible the original is left untouched and callers degrade as before.
+ */
+async function repairJsoncFile(
+  filePath: string,
+  cause: unknown
+): Promise<Record<string, unknown> | null> {
+  const raw = await readJsoncText(filePath)
+  const repaired = sanitizeJsoncCommas(raw)
+  const errors: ParseError[] = []
+  const parsed = parse(repaired, errors, { allowTrailingComma: true }) as unknown
+  if (repaired === raw || errors.length > 0) {
+    Logger.error('Native provider config could not be auto-repaired; leaving it untouched', {
+      filePath,
+      cause: cause instanceof Error ? cause.message : String(cause)
+    })
+    return null
+  }
+  const backupPath = `${filePath}.broken-${new Date().toISOString().replace(/[:.]/g, '-')}`
+  await writeFile(backupPath, raw, { encoding: 'utf8', mode: 0o600 })
+  await writeJsonc(filePath, repaired)
+  Logger.info('Native provider config was corrupt and has been auto-repaired', {
+    filePath,
+    backupPath
+  })
+  return record(parsed) ?? {}
+}
+
+/**
+ * Repair stray comma corruption while leaving every other byte in place:
+ * string literals are copied verbatim (their contents are data, not structure),
+ * and only commas outside strings are normalized. Repairs doubled commas,
+ * leading commas after `{`/`[`, and trailing commas before `}`/`]`.
+ */
+function sanitizeJsoncCommas(raw: string): string {
+  let result = ''
+  let code = ''
+  let i = 0
+  while (i < raw.length) {
+    if (raw[i] === '"') {
+      let end = i + 1
+      while (end < raw.length && raw[end] !== '"') {
+        if (raw[end] === '\\') end++
+        end++
+      }
+      end = Math.min(end + 1, raw.length)
+      result += fixCommaRuns(code) + raw.slice(i, end)
+      code = ''
+      i = end
+    } else {
+      code += raw[i]
+      i++
+    }
+  }
+  return result + fixCommaRuns(code)
+}
+
+function fixCommaRuns(code: string): string {
+  return code
+    .replace(/,\s*,+/g, ',')
+    .replace(/:(\s*),/g, ':$1null,')
+    .replace(/([{[])\s*,+/g, '$1')
+    .replace(/,\s*([}\]])/g, '$1')
+}
+
 async function readJsoncText(filePath: string): Promise<string> {
   try {
     return await readFile(filePath, 'utf8')
@@ -413,10 +510,14 @@ async function readJsoncText(filePath: string): Promise<string> {
 }
 
 async function writeJsonc(filePath: string, raw: string): Promise<void> {
+  // Our own jsonc edits can occasionally leave stray commas behind   never
+  // persist output that does not parse: sanitize it, refuse otherwise.
+  const validated = validatedJsoncText(raw)
+  if (validated === null) throw new Error(`Refusing to write invalid JSONC to: ${filePath}`)
   await mkdir(dirname(filePath), { recursive: true })
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
   try {
-    await writeFile(temporaryPath, raw.endsWith('\n') ? raw : `${raw}\n`, {
+    await writeFile(temporaryPath, validated.endsWith('\n') ? validated : `${validated}\n`, {
       encoding: 'utf8',
       flag: 'wx',
       mode: 0o600
@@ -426,6 +527,17 @@ async function writeJsonc(filePath: string, raw: string): Promise<void> {
     await rm(temporaryPath, { force: true }).catch(() => undefined)
     throw error
   }
+}
+
+/** Returns the text as-is when it parses; sanitized when repair fixes it; null otherwise. */
+function validatedJsoncText(raw: string): string | null {
+  const errors: ParseError[] = []
+  parse(raw, errors, { allowTrailingComma: true })
+  if (errors.length === 0) return raw
+  const sanitized = sanitizeJsoncCommas(raw)
+  const sanitizedErrors: ParseError[] = []
+  parse(sanitized, sanitizedErrors, { allowTrailingComma: true })
+  return sanitizedErrors.length === 0 ? sanitized : null
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

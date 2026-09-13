@@ -52,6 +52,23 @@ export class QuestionRequestGoneError extends Error {
   }
 }
 
+/**
+ * The chat engine still tracks a permission as pending after the driver's
+ * underlying request has already been resolved or discarded. Permission-card
+ * replies are idempotent at this boundary so a late renderer response can
+ * reconcile the engine state instead of surfacing a permanent IPC error.
+ */
+export class PermissionRequestGoneError extends Error {
+  constructor(
+    readonly sessionId: string | undefined,
+    readonly requestId: string,
+    harnessName: string
+  ) {
+    super(`The ${harnessName} permission ${requestId} is no longer pending on the driver`)
+    this.name = 'PermissionRequestGoneError'
+  }
+}
+
 /** Features a harness can reliably provide to CodeInOven. */
 export interface HarnessCapabilities {
   /** Truthful process topology used for app-wide host and RAM policy. */

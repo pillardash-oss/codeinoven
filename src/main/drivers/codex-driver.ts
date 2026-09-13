@@ -621,9 +621,9 @@ export class CodexDriver extends PersistentCliDriver {
         model: options.settings.modelId,
         ...(fastInference ? { serviceTier: 'fast' } : {}),
         effort: codexEffort(options.settings.thinkingLevel),
-        ...(this.modelsWithoutReasoningSummaries.has(options.settings.modelId)
-          ? { summary: 'none' }
-          : {}),
+        summary: this.modelsWithoutReasoningSummaries.has(options.settings.modelId)
+          ? 'none'
+          : 'auto',
         ...(options.structuredOutput ? { outputSchema: options.structuredOutput.schema } : {})
       }
       active.startParams = turnParams
@@ -2784,8 +2784,17 @@ function parseReasoning(
   completed: boolean,
   sessionId: string
 ): CliLineParseResult {
-  const text = stringValue(item['text']) ?? ''
+  const text = arrayText(item['content']) || stringValue(item['text']) || ''
   const summary = arrayText(item['summary'])
+  if (completed && !text && !summary) {
+    // Completion snapshots may omit the content already delivered through
+    // reasoning deltas. Do not replace the accumulated session message with an
+    // empty item; only mark that streamed message complete.
+    return {
+      events: [{ type: 'message.completed', sessionId, messageId: itemId }],
+      messages: []
+    }
+  }
   const part = {
     type: 'reasoning' as const,
     id: `${itemId}:reasoning`,

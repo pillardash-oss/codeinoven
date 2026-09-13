@@ -19,11 +19,17 @@ export function mergeStreamedPart(existing: AgentPart, incoming: AgentPart): Age
   if (incoming.id !== existing.id) return incoming
   if (incoming.type !== existing.type) return incoming
   if (incoming.type !== 'text' && incoming.type !== 'reasoning') return incoming
-  const streamedText: string = existing.type === 'text' || existing.type === 'reasoning' ? existing.text : ''
-  const arrivingText: string = incoming.type === 'text' || incoming.type === 'reasoning' ? incoming.text : ''
-  if (arrivingText.length < streamedText.length && streamedText.startsWith(arrivingText)) {
-    // Stale or shortened echo of already-streamed text: keep the accumulated
-    // text, take the snapshot's newer metadata (phase, summary, time, ...).
+  const streamedText: string =
+    existing.type === 'text' || existing.type === 'reasoning' ? existing.text : ''
+  const arrivingText: string =
+    incoming.type === 'text' || incoming.type === 'reasoning' ? incoming.text : ''
+  if (
+    (arrivingText.length < streamedText.length && streamedText.startsWith(arrivingText)) ||
+    (incoming.type === 'reasoning' && !arrivingText.startsWith(streamedText))
+  ) {
+    // Stale, shortened, or summary-only reasoning snapshot: keep the
+    // accumulated text and take the snapshot's newer metadata. Reasoning is an
+    // append-only stream; a divergent snapshot is never allowed to erase it.
     return { ...incoming, text: streamedText }
   }
   return incoming

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
   import { shouldMountWorkingTrace } from '$lib/working-trace-parts'
+  import { mergeStreamedPart } from '$lib/agent-part-merge'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
@@ -4127,7 +4128,7 @@
       void invoke('thread:loadStreamParts', projectId, id)
         .then((parts) => {
           if (!alive || generation !== streamPartsLoadGeneration) return
-          streamParts = parts
+          streamParts = mergeWorkingParts(streamParts, parts)
           if (
             providerStatus === null &&
             thread.status !== 'working-paused' &&
@@ -4452,7 +4453,9 @@
         streamParts =
           streamPartIndex === -1
             ? [...streamParts, event.part]
-            : streamParts.map((part, index) => (index === streamPartIndex ? event.part : part))
+            : streamParts.map((part, index) =>
+                index === streamPartIndex ? mergeStreamedPart(part, event.part) : part
+              )
         if (event.part.type === 'subagent') syncOpenSubagentTabs()
         break
       }
@@ -10013,7 +10016,7 @@
       void invoke('thread:loadStreamParts', thread.projectId, thread.id)
         .then((parts) => {
           if (!alive || generation !== streamPartsLoadGeneration) return
-          streamParts = parts
+          streamParts = mergeWorkingParts(streamParts, parts)
         })
         .catch(() => {})
     }, 1000)
@@ -10833,7 +10836,7 @@
                         </div>
                       {/if}
 
-                      {#if turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(absIndex, turnCheckpoint)}
+                      {#if !chatMode && turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(absIndex, turnCheckpoint)}
                         <div class="mt-3">
                           <RunChangesCard
                             checkpoint={turnCheckpoint}

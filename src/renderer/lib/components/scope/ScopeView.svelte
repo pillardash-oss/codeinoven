@@ -27,10 +27,10 @@
   import type { ScopeLifecycleAction, ScopeLifecyclePreflight } from '$shared/types'
 
   interface Props {
-    navigateToProjects?: () => void
+    navigateToScopedThreads?: () => void
   }
 
-  let { navigateToProjects }: Props = $props()
+  let { navigateToScopedThreads }: Props = $props()
 
   let editBucketTarget = $state<ScopeBucket | null>(null)
   let editBucketName = $state('')
@@ -121,7 +121,7 @@
     const project =
       scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
     scopeState.showSidebarForThread(thread)
-    navigateToProjects?.()
+    navigateToScopedThreads?.()
     workspaceState.openThread(thread, project)
     try {
       const updated = await invoke('thread:markRead', thread.projectId, thread.id)
@@ -163,7 +163,7 @@
       const project =
         scopeState.projectRecords.find((candidate) => candidate.id === forked.projectId) ?? null
       scopeState.showSidebarForThread(forked)
-      navigateToProjects?.()
+      navigateToScopedThreads?.()
       workspaceState.openThread(forked, project)
     } catch (error) {
       actionError = errorMessage(error, 'The thread could not be forked.')
@@ -235,7 +235,7 @@
             : existing
           scopeState.updateThread(thread)
           scopeState.showSidebarForThread(thread, bucketId)
-          navigateToProjects?.()
+          navigateToScopedThreads?.()
           if (activeThread) {
             await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)
           }
@@ -260,7 +260,7 @@
         : created
       scopeState.updateThread(thread)
       scopeState.showSidebarForThread(thread, bucketId)
-      navigateToProjects?.()
+      navigateToScopedThreads?.()
       if (activeThread) {
         await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)
       }
@@ -335,7 +335,7 @@
       return
     }
     scopeState.showSidebarForThread(anchor)
-    navigateToProjects?.()
+    navigateToScopedThreads?.()
     workspaceState.openThread(anchor, project)
     contextSidebarState.openGit(projectId, anchor.id)
   }

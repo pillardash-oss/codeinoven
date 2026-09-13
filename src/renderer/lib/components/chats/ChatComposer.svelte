@@ -30,6 +30,7 @@
     supportsFastInference
   } from '$shared/fast-inference'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
+  import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { STANDARD_THINKING_PRESETS, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { posixBasename } from '$shared/paths'
   import { invoke } from '$lib/ipc.svelte'
@@ -1320,11 +1321,16 @@
       harnessId: nextHarnessId ?? resolved.harnessId,
       providerId,
       modelId,
+      // Custom base URL providers run without an account: fall back to the
+      // harness default only for real providers so a turn never gets a random
+      // harness account stamped onto its attribution.
       accountId:
-        accountId ??
-        (nextHarness !== resolved.harnessId
-          ? `${nextHarness}.default`
-          : (resolved.accountId ?? `${nextHarness}.default`)),
+        isCodeInOvenCustomProviderId(providerId)
+          ? undefined
+          : (accountId ??
+            (nextHarness !== resolved.harnessId
+              ? `${nextHarness}.default`
+              : (resolved.accountId ?? `${nextHarness}.default`))),
       ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(fastSupported ? {} : { inferenceMode: 'normal' })
     }

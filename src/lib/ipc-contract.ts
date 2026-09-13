@@ -2074,11 +2074,17 @@ export const IPC_INVOKE_CONTRACT = {
     Project
   >,
   'projectFiles:list': {} as Contract<
-    [projectId: string, relativeDirectory: string, scopeBucketId?: string],
+    [projectId: string, relativeDirectory: string, scopeBucketId?: string, threadId?: string],
     ProjectFileEntry[]
   >,
   'projectFiles:search': {} as Contract<
-    [projectId: string, query: string, category: 'all' | 'rules', scopeBucketId?: string],
+    [
+      projectId: string,
+      query: string,
+      category: 'all' | 'rules',
+      scopeBucketId?: string,
+      threadId?: string
+    ],
     ProjectFileEntry[]
   >,
   'projectFiles:resolveCitationPaths': {} as Contract<
@@ -2090,31 +2096,49 @@ export const IPC_INVOKE_CONTRACT = {
     Record<string, boolean>
   >,
   'projectFiles:create': {} as Contract<
-    [projectId: string, relativeDirectory: string, name: string, scopeBucketId?: string],
+    [
+      projectId: string,
+      relativeDirectory: string,
+      name: string,
+      scopeBucketId?: string,
+      threadId?: string
+    ],
     ProjectFileEntry
   >,
   'projectFiles:createDirectory': {} as Contract<
-    [projectId: string, relativeDirectory: string, name: string, scopeBucketId?: string],
+    [
+      projectId: string,
+      relativeDirectory: string,
+      name: string,
+      scopeBucketId?: string,
+      threadId?: string
+    ],
     ProjectFileEntry
   >,
   'projectFiles:delete': {} as Contract<
-    [projectId: string, relativePath: string, scopeBucketId?: string],
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     void
   >,
   'projectFiles:info': {} as Contract<
-    [projectId: string, relativePath: string, scopeBucketId?: string],
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     ProjectFileInfo
   >,
   'projectFiles:openInEditor': {} as Contract<
-    [projectId: string, relativePath: string, scopeBucketId?: string],
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     void
   >,
   'projectFiles:openInEditorWith': {} as Contract<
-    [projectId: string, relativePath: string, editorId: EditorId, scopeBucketId?: string],
+    [
+      projectId: string,
+      relativePath: string,
+      editorId: EditorId,
+      scopeBucketId?: string,
+      threadId?: string
+    ],
     void
   >,
   'projectFiles:saveAs': {} as Contract<
-    [projectId: string, relativePath: string, scopeBucketId?: string],
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     string | null
   >,
   'projectFiles:paste': {} as Contract<
@@ -2125,7 +2149,9 @@ export const IPC_INVOKE_CONTRACT = {
       destinationDirectory: string,
       mode: ProjectFileTransferMode,
       sourceScopeBucketId?: string,
-      destinationScopeBucketId?: string
+      destinationScopeBucketId?: string,
+      sourceThreadId?: string,
+      destinationThreadId?: string
     ],
     ProjectFileEntry
   >,
@@ -2134,7 +2160,8 @@ export const IPC_INVOKE_CONTRACT = {
       projectId: string,
       sourcePaths: string[],
       destinationDirectory: string,
-      scopeBucketId?: string
+      scopeBucketId?: string,
+      threadId?: string
     ],
     ProjectFileEntry[]
   >,
@@ -2143,17 +2170,18 @@ export const IPC_INVOKE_CONTRACT = {
       projectId: string,
       sourcePaths: string[],
       destinationDirectory: string,
-      scopeBucketId?: string
+      scopeBucketId?: string,
+      threadId?: string
     ],
     ProjectFileDropResult[]
   >,
   'projectFiles:read': {} as Contract<
-    [projectId: string, relativePath: string, scopeBucketId?: string],
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     /** null when the file cannot be read as text (binary, too large, missing). */
     ProjectTextFile | null
   >,
   'projectFiles:rename': {} as Contract<
-    [projectId: string, relativePath: string, name: string, scopeBucketId?: string],
+    [projectId: string, relativePath: string, name: string, scopeBucketId?: string, threadId?: string],
     ProjectFileEntry
   >,
   'projectFiles:save': {} as Contract<
@@ -2162,7 +2190,8 @@ export const IPC_INVOKE_CONTRACT = {
       relativePath: string,
       content: string,
       expectedRevision: string,
-      scopeBucketId?: string
+      scopeBucketId?: string,
+      threadId?: string
     ],
     ProjectTextFile
   >,
@@ -2205,6 +2234,9 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'providerAccounts:cancelPending': {} as Contract<[pendingAccountId: string], void>,
   'providerAccounts:rename': {} as Contract<[accountId: string, label: string], HarnessAccount>,
+  /** Mark an account as its harness's default for the account's provider.
+   *  Returns the harness's full account list so callers can refresh caches. */
+  'providerAccounts:setDefault': {} as Contract<[accountId: string], HarnessAccount[]>,
   'providerAccounts:remove': {} as Contract<[accountId: string], boolean>,
   'providerAccounts:beginLogin': {} as Contract<
     [harnessId: string, options?: ProviderAccountLoginOptions],

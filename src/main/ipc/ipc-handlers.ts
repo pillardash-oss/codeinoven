@@ -2535,6 +2535,7 @@ export function registerIpcHandlers(
         return [
           join(getConfigRoot(), 'chats'),
           join(getConfigRoot(), 'chat-artifacts'),
+          join(getConfigRoot(), 'chats-artifacts'),
           ...projects.flatMap((project) => [
             join(getConfigRoot(), 'projects', project.id, 'spec-context', 'attachments'),
             join(getConfigRoot(), 'projects', project.id, 'threads')
@@ -2559,6 +2560,13 @@ export function registerIpcHandlers(
   async function attachmentStorageDirectory(scope: AttachmentStorageScope): Promise<string> {
     const project = await projectManager.getProject(scope.projectId)
     return threadAttachmentDirectory(project ?? null, scope)
+  }
+
+  /** Optional trailing thread mount on `projectFiles:*` channels: when the
+   *  caller browses a chat's own artifact directory it names the thread so the
+   *  service resolves `chats-artifacts/<threadId>` as the root. */
+  function threadIdArg(threadId: unknown): string | undefined {
+    return threadId === undefined ? undefined : validateEntityId(threadId, 'Thread ID')
   }
 
   // A File supplied through the preload represents an explicit user drop/paste
@@ -5135,22 +5143,36 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'projectFiles:list',
-    (_, projectId: unknown, relativeDirectory: unknown, scopeBucketId?: unknown) => {
+    (
+      _,
+      projectId: unknown,
+      relativeDirectory: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) => {
       const validatedProjectId = validateEntityId(projectId, 'Project ID')
       const directory = requireString(relativeDirectory, 'Project directory', true)
       if (directory === '') {
-        void projectFilesService.prewarmProject(validatedProjectId)
+        void projectFilesService.prewarmProject(validatedProjectId, threadIdArg(threadId))
       }
       return projectFilesService.listDirectory(
         validatedProjectId,
         directory,
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        threadIdArg(threadId)
       )
     }
   )
   ipcMain.handle(
     'projectFiles:search',
-    (_, projectId: unknown, query: unknown, category: unknown, scopeBucketId?: unknown) => {
+    (
+      _,
+      projectId: unknown,
+      query: unknown,
+      category: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) => {
       if (category !== 'all' && category !== 'rules') {
         throw new TypeError('Project file search category must be all or rules')
       }
@@ -5158,7 +5180,8 @@ export function registerIpcHandlers(
         validateEntityId(projectId, 'Project ID'),
         requireString(query, 'Project file search query', true),
         category,
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        threadIdArg(threadId)
       )
     }
   )
@@ -5178,34 +5201,57 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'projectFiles:create',
-    (_, projectId: unknown, relativeDirectory: unknown, name: unknown, scopeBucketId?: unknown) =>
+    (
+      _,
+      projectId: unknown,
+      relativeDirectory: unknown,
+      name: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) =>
       projectFilesService.createFile(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativeDirectory, 'Project directory', true),
         requireString(name, 'File name'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        threadIdArg(threadId)
       )
   )
   ipcMain.handle(
     'projectFiles:createDirectory',
-    (_, projectId: unknown, relativeDirectory: unknown, name: unknown, scopeBucketId?: unknown) =>
+    (
+      _,
+      projectId: unknown,
+      relativeDirectory: unknown,
+      name: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) =>
       projectFilesService.createDirectory(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativeDirectory, 'Project directory', true),
         requireString(name, 'Folder name'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        threadIdArg(threadId)
       )
   )
   ipcMain.handle(
     'projectFiles:delete',
-    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) => {
+    async (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) => {
       const validatedProjectId = validateEntityId(projectId, 'Project ID')
       const validatedScopeBucketId =
         scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       const target = await projectFilesService.resolveForTrash(
         validatedProjectId,
         requireString(relativePath, 'Project file path'),
-        validatedScopeBucketId
+        validatedScopeBucketId,
+        threadIdArg(threadId)
       )
       await shell.trashItem(target)
       projectFilesService.invalidateProject(validatedProjectId, validatedScopeBucketId)
@@ -5213,21 +5259,35 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'projectFiles:info',
-    (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
+    (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) =>
       projectFilesService.getInfo(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativePath, 'Project file path'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        threadIdArg(threadId)
       )
   )
   privileged(
     'projectFiles:openInEditor',
-    async (_event, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) => {
+    async (
+      _event,
+      projectId: unknown,
+      relativePath: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) => {
       const config = await storage.getConfig()
       const target = await projectFilesService.resolveForExternalEditor(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativePath, 'Project file path'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        threadIdArg(threadId)
       )
       await editorService.openInEditor(config.preferredEditor, target, 'file')
     }
@@ -5254,7 +5314,13 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'projectFiles:read',
-    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) => {
+    async (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) => {
       // Read failures (binary files, size limits, missing paths) are surfaced
       // gracefully by renderer call sites; returning null avoids a noisy
       // main-process "Error occurred in handler" log for every expected case.
@@ -5264,7 +5330,8 @@ export function registerIpcHandlers(
           requireString(relativePath, 'Project file path'),
           scopeBucketId === undefined
             ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+            : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+          threadIdArg(threadId)
         )
       } catch {
         return null
@@ -5273,12 +5340,20 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'projectFiles:rename',
-    (_, projectId: unknown, relativePath: unknown, name: unknown, scopeBucketId?: unknown) =>
+    (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      name: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) =>
       projectFilesService.renameEntry(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativePath, 'Project file path'),
         requireString(name, 'File name'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        threadIdArg(threadId)
       )
   )
   ipcMain.handle(
@@ -5291,7 +5366,9 @@ export function registerIpcHandlers(
       destinationDirectory: unknown,
       mode: unknown,
       sourceScopeBucketId?: unknown,
-      destinationScopeBucketId?: unknown
+      destinationScopeBucketId?: unknown,
+      sourceThreadId?: unknown,
+      destinationThreadId?: unknown
     ) => {
       if (mode !== 'copy' && mode !== 'move') {
         throw new TypeError('Project file transfer mode must be copy or move')
@@ -5307,7 +5384,9 @@ export function registerIpcHandlers(
           : validateEntityId(sourceScopeBucketId, 'Scope bucket ID'),
         destinationScopeBucketId === undefined
           ? undefined
-          : validateEntityId(destinationScopeBucketId, 'Scope bucket ID')
+          : validateEntityId(destinationScopeBucketId, 'Scope bucket ID'),
+        threadIdArg(sourceThreadId),
+        threadIdArg(destinationThreadId)
       )
     }
   )
@@ -5318,13 +5397,15 @@ export function registerIpcHandlers(
       projectId: unknown,
       sourcePaths: unknown,
       destinationDirectory: unknown,
-      scopeBucketId?: unknown
+      scopeBucketId?: unknown,
+      threadId?: unknown
     ) =>
       projectFilesService.importPaths(
         validateEntityId(projectId, 'Project ID'),
         validateStringArray(sourcePaths, 'Import source paths'),
         requireString(destinationDirectory, 'Destination directory', true),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        threadIdArg(threadId)
       )
   )
   ipcMain.handle(
@@ -5334,13 +5415,15 @@ export function registerIpcHandlers(
       projectId: unknown,
       sourcePaths: unknown,
       destinationDirectory: unknown,
-      scopeBucketId?: unknown
+      scopeBucketId?: unknown,
+      threadId?: unknown
     ) =>
       projectFilesService.dropPaths(
         validateEntityId(projectId, 'Project ID'),
         validateStringArray(sourcePaths, 'Dropped paths'),
         requireString(destinationDirectory, 'Destination directory', true),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        threadIdArg(threadId)
       )
   )
   ipcMain.on(
@@ -5373,7 +5456,8 @@ export function registerIpcHandlers(
       relativePath: unknown,
       content: unknown,
       expectedRevision: unknown,
-      scopeBucketId?: unknown
+      scopeBucketId?: unknown,
+      threadId?: unknown
     ) => {
       const revision = requireString(expectedRevision, 'Project file revision')
       if (!/^[a-f0-9]{64}$/u.test(revision)) {
@@ -5387,7 +5471,8 @@ export function registerIpcHandlers(
           revision,
           scopeBucketId === undefined
             ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+            : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+          threadIdArg(threadId)
         )
         .then((result) => {
           // The user saved this file themselves   record it so a concurrent
@@ -5402,12 +5487,19 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'projectFiles:saveAs',
-    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) => {
+    async (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) => {
       const safeRelativePath = requireString(relativePath, 'Project file path')
       const textFile = await projectFilesService.readText(
         validateEntityId(projectId, 'Project ID'),
         safeRelativePath,
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        threadIdArg(threadId)
       )
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
       const options: Electron.SaveDialogOptions = {
@@ -6762,6 +6854,54 @@ export function registerIpcHandlers(
     }
   )
 
+  /**
+   * Remove every trace of a provider account from one project's cloud
+   * deployment config: its attachment, its active-account role, and every
+   * container mapping monitored through it (explicitly bound mappings, plus
+   * legacy unbound mappings for kinds where it was the active account).
+   * Mirrors `cloudDeploy:detachAccount` cleanup so deleting an account
+   * globally leaves no orphaned containers behind.
+   */
+  const pruneAccountFromCloudDeploymentConfig = async (accountId: string): Promise<void> => {
+    for (const projectId of await storage.listDirectories('projects')) {
+      const config = await storage.getCloudDeploymentConfig(projectId)
+      const providerAccounts = config?.project.providerAccounts
+      if (!config || !providerAccounts) continue
+      let changed = false
+      for (const key of Object.keys(providerAccounts) as CloudDeploymentProviderKind[]) {
+        const association = providerAccounts[key]
+        if (!association || !association.attachedAccountIds.includes(accountId)) continue
+        const wasActive = association.activeAccountId === accountId
+        const remaining = association.attachedAccountIds.filter((id) => id !== accountId)
+        const containers = config.project.containers.filter((mapping) =>
+          mapping.accountId !== undefined
+            ? mapping.accountId !== accountId
+            : // Legacy unbound mappings were monitored through the kind's
+              // active account; they belong to the removed account when it was
+              // active and must not silently reattach to another account.
+              !(wasActive && mapping.providerKind === key)
+        )
+        if (containers.length !== config.project.containers.length) {
+          config.project.containers = containers
+        }
+        if (remaining.length === 0) {
+          delete providerAccounts[key]
+          config.project.providers = config.project.providers.filter((provider) => provider !== key)
+        } else {
+          providerAccounts[key] = {
+            attachedAccountIds: remaining,
+            activeAccountId: wasActive ? (remaining[0] ?? null) : association.activeAccountId
+          }
+        }
+        changed = true
+      }
+      if (!changed) continue
+      config.updatedAt = Date.now()
+      await storage.saveCloudDeploymentConfig(projectId, config)
+      await syncCloudDeploymentsFlag(projectId)
+    }
+  }
+
   ipcMain.handle('cloudDeploy:removeAccount', async (_, accountId: unknown) => {
     const safeAccountId = requireString(accountId, 'Account ID', true)
     const registry = await storage.getCloudDeploymentAccounts()
@@ -6771,6 +6911,10 @@ export function registerIpcHandlers(
     registry.accounts = registry.accounts.filter((entry) => entry.id !== safeAccountId)
     await storage.saveCloudDeploymentAccounts(registry)
     await vault.removeProviderToken(safeAccountId)
+    // Detach the account from every project and drop the container mappings
+    // monitored through it, so no project keeps polling (or erroring on) an
+    // account that no longer exists.
+    await pruneAccountFromCloudDeploymentConfig(safeAccountId)
   })
 
   ipcMain.handle(
@@ -6825,6 +6969,16 @@ export function registerIpcHandlers(
         throw new TypeError(`Account is not attached for ${kind}`)
       }
       const remaining = association.attachedAccountIds.filter((id) => id !== safeAccountId)
+      const wasActive = association.activeAccountId === safeAccountId
+      // Container mappings monitored through the detached account stop here:
+      // explicitly bound mappings go with the account, and legacy unbound
+      // mappings for this kind were monitored through it while it was active
+      // and must not silently reattach to another account.
+      config.project.containers = config.project.containers.filter((mapping) =>
+        mapping.accountId !== undefined
+          ? mapping.accountId !== safeAccountId
+          : !(wasActive && mapping.providerKind === kind)
+      )
       if (remaining.length === 0) {
         delete providerAccounts[kind]
         config.project.providerAccounts = providerAccounts
@@ -6833,9 +6987,7 @@ export function registerIpcHandlers(
         providerAccounts[kind] = {
           attachedAccountIds: remaining,
           activeAccountId:
-            association.activeAccountId === safeAccountId
-              ? (remaining[0] ?? null)
-              : association.activeAccountId
+            wasActive ? (remaining[0] ?? null) : association.activeAccountId
         }
         config.project.providerAccounts = providerAccounts
       }
@@ -6926,6 +7078,14 @@ export function registerIpcHandlers(
       ...attachedAccountIds.filter((accountId) => accountId !== activeAccountId)
     ]
     const registry = await storage.getCloudDeploymentAccounts()
+    // Read-time guard for configs that still reference accounts deleted from
+    // the global registry (e.g. removed before pruning existed): skip them and
+    // the container mappings bound to them so dead accounts stop surfacing
+    // errors or ghost containers.
+    const knownAccountIds = new Set(registry.accounts.map((account) => account.id))
+    const liveMappings = config.project.containers.filter(
+      (mapping) => mapping.accountId === undefined || knownAccountIds.has(mapping.accountId)
+    )
     const accountLabel = (accountId: string): string =>
       registry.accounts.find((account) => account.id === accountId)?.label ?? accountId
 
@@ -6941,7 +7101,7 @@ export function registerIpcHandlers(
         return {
           containers: mergeCloudDeploymentContainers(
             liveContainers,
-            config.project.containers,
+            liveMappings,
             kind
           ),
           fetchedAt: Date.now(),
@@ -6957,10 +7117,19 @@ export function registerIpcHandlers(
       }
     }
 
+    const fetchableAccountIds = orderedAccountIds.filter((accountId) =>
+      knownAccountIds.has(accountId)
+    )
+    if (fetchableAccountIds.length === 0) {
+      // Every attached account was deleted from the registry; report an empty
+      // overview instead of erroring on accounts the user already removed.
+      return { containers: [], fetchedAt: Date.now(), hasDeployments }
+    }
+
     const liveContainers: CloudDeploymentContainer[] = []
     const failures: string[] = []
     await Promise.all(
-      orderedAccountIds.map(async (accountId) => {
+      fetchableAccountIds.map(async (accountId) => {
         try {
           const provider = resolveDeploymentProvider(
             kind,
@@ -6980,7 +7149,7 @@ export function registerIpcHandlers(
     )
     const containers = mergeCloudDeploymentContainers(
       liveContainers,
-      config.project.containers,
+      liveMappings,
       kind
     )
     return {

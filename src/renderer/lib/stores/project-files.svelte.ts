@@ -6,7 +6,7 @@ import type {
   ProjectTextFile,
   TurnCheckpointFileDiff
 } from '$shared/types'
-import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
+import { DEFAULT_SCOPE_BUCKET_ID, INBOX_PROJECT_ID } from '$shared/types'
 import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState, type FilesContextTab } from '$lib/stores/context-sidebar.svelte'
@@ -70,6 +70,9 @@ export interface ProjectFilesState {
   sessions: Record<string, ProjectFileSession>
   /** Scope bucket the cached listings were read from. */
   activeScope: string
+  /** Inbox thread whose `chats-artifacts/<threadId>` directory this project's
+   *  file tree is mounted on; `null` for real projects and threadless views. */
+  chatThreadId: string | null
   /** Whether the "Last turn" filter is active in the file tree. Lives here
    *  (per project) instead of local component state so panel remounts from
    *  sidebar tab changes (e.g. previewing a file) do not reset it. */
@@ -108,6 +111,7 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     loadingPaths: {},
     sessions: {},
     activeScope: DEFAULT_SCOPE_BUCKET_ID,
+    chatThreadId: null,
     lastTurnOnly: false
   }
 }
@@ -134,9 +138,33 @@ class ProjectFilesWorkspace {
   private pendingRestores = new Set<string>()
   clipboard: ProjectFileClipboard | null = $state(null)
 
-  /** The scope bucket the project's file operations must target right now. */
+  /** The scope bucket the project's file operations must target right now.
+   *  This value is sent to the main process, so it must stay a real scope
+   *  bucket id. A mounted chat artifact directory is threaded separately via
+   *  `threadArg`; only cache keys below use the mount-aware key. */
   private scopeFor(projectId: string): string {
     return workspaceState.activeScopeBucketIdFor(projectId)
+  }
+
+  /** Internal cache/invalidation key that also distinguishes which chat
+   *  artifact mount (if any) the cached listings belong to. Never sent over
+   *  IPC, so the `thread:` prefix is safe here. */
+  private mountKeyFor(projectId: string): string {
+    const threadId = this.projects[projectId]?.chatThreadId ?? null
+    if (threadId && projectId === INBOX_PROJECT_ID) return `thread:${threadId}`
+    return this.scopeFor(projectId)
+  }
+
+  /** Register the inbox thread whose artifact directory the file tree is
+   *  mounted on. Switching threads (or unmounting) changes the effective
+   *  scope, so every cached listing is dropped and re-read. */
+  setChatThread(projectId: string, threadId: string | null): void {
+    this.ensureState(projectId).chatThreadId = threadId
+  }
+
+  /** Optional trailing thread-mount argument for `projectFiles:*` invokes. */
+  private threadArg(projectId: string): string | undefined {
+    return this.projects[projectId]?.chatThreadId ?? undefined
   }
 
   ensureState(projectId: string): ProjectFilesState {
@@ -161,11 +189,12 @@ class ProjectFilesWorkspace {
     options: { silent?: boolean } = {}
   ): Promise<void> {
     const state = this.ensureState(projectId)
-    // A scope switch (thread opened in another bucket, sidebar bucket change)
-    // invalidates every cached listing so the tree re-reads the new root.
-    const scope = this.scopeFor(projectId)
-    if (state.activeScope !== scope) {
-      state.activeScope = scope
+    // A scope or chat-mount switch (thread opened in another bucket, sidebar
+    // bucket change, thread change) invalidates every cached listing so the
+    // tree re-reads the new root.
+    const mountKey = this.mountKeyFor(projectId)
+    if (state.activeScope !== mountKey) {
+      state.activeScope = mountKey
       state.entriesByDirectory = {}
       state.loadingDirectories = {}
       state.directoryErrors = {}
@@ -173,7 +202,7 @@ class ProjectFilesWorkspace {
         if (key.startsWith(`${projectId}:`)) this.directoryLoads.delete(key)
       }
     }
-    const loadKey = `${projectId}:${directory}`
+    const loadKey = `${projectId}:${mountKey}:${directory}`
     const pending = this.directoryLoads.get(loadKey)
     if (pending) return pending
     if (!force && state.entriesByDirectory[directory]) return
@@ -188,7 +217,8 @@ class ProjectFilesWorkspace {
           'projectFiles:list',
           projectId,
           directory,
-          scope
+          this.scopeFor(projectId),
+          this.threadArg(projectId)
         )
         // The first time the root is listed for a freshly hydrated project,
         // cheaply restore the last-viewed position: only the ancestor chain of
@@ -395,7 +425,14 @@ class ProjectFilesWorkspace {
 
   async createFile(projectId: string, directory: string, name: string): Promise<void> {
     const entry = await this.runFileOperation(() =>
-      invoke('projectFiles:create', projectId, directory, name, this.scopeFor(projectId))
+      invoke(
+        'projectFiles:create',
+        projectId,
+        directory,
+        name,
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
+      )
     )
     await this.loadDirectory(projectId, directory, true)
     await this.openFile(projectId, entry.path)
@@ -403,7 +440,14 @@ class ProjectFilesWorkspace {
 
   async createDirectory(projectId: string, directory: string, name: string): Promise<void> {
     await this.runFileOperation(() =>
-      invoke('projectFiles:createDirectory', projectId, directory, name, this.scopeFor(projectId))
+      invoke(
+        'projectFiles:createDirectory',
+        projectId,
+        directory,
+        name,
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
+      )
     )
     await this.loadDirectory(projectId, directory, true)
   }
@@ -411,7 +455,14 @@ class ProjectFilesWorkspace {
   async renameFile(projectId: string, path: string, name: string): Promise<void> {
     const state = this.ensureState(projectId)
     const next = await this.runFileOperation(() =>
-      invoke('projectFiles:rename', projectId, path, name, this.scopeFor(projectId))
+      invoke(
+        'projectFiles:rename',
+        projectId,
+        path,
+        name,
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
+      )
     )
     this.remapPath(state, projectId, path, next.path)
     await this.loadDirectory(projectId, this.parentDirectory(path), true)
@@ -419,7 +470,9 @@ class ProjectFilesWorkspace {
 
   async deleteFile(projectId: string, path: string): Promise<void> {
     const state = this.ensureState(projectId)
-    await this.runFileOperation(() => invoke('projectFiles:delete', projectId, path))
+    await this.runFileOperation(() =>
+      invoke('projectFiles:delete', projectId, path, this.scopeFor(projectId), this.threadArg(projectId))
+    )
     this.removePathsFromState(state, projectId, [path])
     await this.loadDirectory(projectId, this.parentDirectory(path), true)
   }
@@ -431,7 +484,9 @@ class ProjectFilesWorkspace {
       .filter((path) => !unique.some((other) => other !== path && path.startsWith(`${other}/`)))
       .sort((a, b) => b.split('/').length - a.split('/').length)
     for (const path of ordered) {
-      await this.runFileOperation(() => invoke('projectFiles:delete', projectId, path))
+      await this.runFileOperation(() =>
+        invoke('projectFiles:delete', projectId, path, this.scopeFor(projectId), this.threadArg(projectId))
+      )
     }
     this.removePathsFromState(state, projectId, ordered)
     const parents = new Set(ordered.map((path) => this.parentDirectory(path)))
@@ -461,7 +516,9 @@ class ProjectFilesWorkspace {
               destinationDirectory,
               clipboard.mode,
               clipboard.scopeBucketId,
-              this.scopeFor(projectId)
+              this.scopeFor(projectId),
+              this.threadArg(clipboard.projectId),
+              this.threadArg(projectId)
             )
           )
         )
@@ -501,7 +558,8 @@ class ProjectFilesWorkspace {
         projectId,
         sourcePaths,
         destinationDirectory,
-        this.scopeFor(projectId)
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
       )
     )
     await this.loadDirectory(projectId, destinationDirectory, true)
@@ -520,7 +578,8 @@ class ProjectFilesWorkspace {
         projectId,
         sourcePaths,
         destinationDirectory,
-        this.scopeFor(projectId)
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
       )
     )
     for (const result of results) {
@@ -532,7 +591,13 @@ class ProjectFilesWorkspace {
 
   async fileInfo(projectId: string, path: string): Promise<ProjectFileInfo> {
     return this.runFileOperation(() =>
-      invoke('projectFiles:info', projectId, path, this.scopeFor(projectId))
+      invoke(
+        'projectFiles:info',
+        projectId,
+        path,
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
+      )
     )
   }
 
@@ -888,7 +953,9 @@ class ProjectFilesWorkspace {
         projectId,
         path,
         submittedDraft,
-        session.source.revision
+        session.source.revision,
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
       )
       session.source = source
       if (session.draft === submittedDraft) session.draft = source.content
@@ -918,7 +985,13 @@ class ProjectFilesWorkspace {
     if (session) session.error = null
     state.loadingPaths[path] = true
     try {
-      const source = await invoke('projectFiles:read', projectId, path, this.scopeFor(projectId))
+      const source = await invoke(
+        'projectFiles:read',
+        projectId,
+        path,
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
+      )
       if (!source) throw new Error('This file cannot be opened in the sidebar')
       state.sessions[path] = {
         source,
@@ -1060,7 +1133,13 @@ class ProjectFilesWorkspace {
     if (state.loadingPaths[path]) return
     state.loadingPaths[path] = true
     try {
-      const source = await invoke('projectFiles:read', projectId, path, this.scopeFor(projectId))
+      const source = await invoke(
+        'projectFiles:read',
+        projectId,
+        path,
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
+      )
       if (!source) throw new Error('This file cannot be opened in the sidebar')
       state.sessions[path] = {
         source,
@@ -1137,7 +1216,9 @@ class ProjectFilesWorkspace {
             projectId,
             path,
             submittedDraft,
-            session.source.revision
+            session.source.revision,
+            this.scopeFor(projectId),
+            this.threadArg(projectId)
           )
           session.source = source
           if (session.draft === submittedDraft) session.draft = source.content

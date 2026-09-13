@@ -121,6 +121,7 @@
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { modelKey } from '$lib/model-keys'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { logRendererError } from '$lib/system/renderer-logger'
   import {
     threadSort,
     pinnedThreadSort,
@@ -744,7 +745,17 @@
   let deleteThreads = $state(false)
 
   async function openFiles(): Promise<void> {
-    if (!selectedThread || activeProject?.source !== 'local' || !activeProject.path) return
+    if (!selectedThread) return
+    // Inbox chats browse the thread's own artifact directory instead of a
+    // project root; the mount must be registered before the root listing.
+    if (selectedThread.projectId === INBOX_PROJECT_ID) {
+      projectFilesWorkspace.ensureState(selectedThread.projectId)
+      projectFilesWorkspace.setChatThread(selectedThread.projectId, selectedThread.id)
+      await projectFilesWorkspace.loadDirectory(selectedThread.projectId, '')
+      contextSidebarState.openFiles(selectedThread.projectId, selectedThread.id)
+      return
+    }
+    if (activeProject?.source !== 'local' || !activeProject.path) return
     await projectFilesWorkspace.loadDirectory(selectedThread.projectId, '')
     contextSidebarState.openFiles(selectedThread.projectId, selectedThread.id)
   }
@@ -1069,6 +1080,16 @@
     ]
 
     const workspaceTools: ContextDockItem[] = []
+    // Chats surface their own per-thread artifact directory as the file tree.
+    if (isChatThread) {
+      workspaceTools.push({
+        id: 'files',
+        label: 'Artifacts',
+        icon: FolderTree,
+        active: dockKindActive('files'),
+        onSelect: () => toggleDockPanel('files', () => void openFiles())
+      })
+    }
     if (!isChatThread && projectToolsAvailable) {
       workspaceTools.push(
         {
@@ -1685,10 +1706,27 @@
         // never linger on a stale unread state when the backend's own
         // broadcast is missed.
         if (!updated.read && document.hasFocus()) {
-          void markThreadReadAndApply(updated.projectId, updated.id).catch(() => undefined)
+          requestThreadRead(updated.projectId, updated.id)
         }
       }
     })
+  })
+
+  // Selecting a thread through any path must settle its unread badge. Sidebar
+  // clicks route through openThread, but every programmatic selection calls
+  // workspaceState.openThread directly and bypasses it: the view-switch
+  // reconcile in App.svelte (entering Chats restores the last chat), history
+  // restore, and the startup restore below. Without this net the thread the
+  // user is looking at would stay unread until they click a different row.
+  // Keyed on the thread id so re-renders of the same selection are no-ops,
+  // while switching away and back re-marks (marking read is idempotent).
+  let readSettledThreadId: string | null = null
+  $effect(() => {
+    const thread = selectedThread
+    if (!thread || thread.id === readSettledThreadId) return
+    readSettledThreadId = thread.id
+    if (thread.read || isOrchestrationChildThread(thread) || !document.hasFocus()) return
+    markThreadReadAfterPaint(thread)
   })
 
   // Returning to the window with a thread already open must settle its unread
@@ -1701,7 +1739,7 @@
     const onWindowFocus = (): void => {
       const selected = workspaceState.selectedThread
       if (!selected || selected.read || isOrchestrationChildThread(selected)) return
-      void markThreadReadAndApply(selected.projectId, selected.id).catch(() => undefined)
+      requestThreadRead(selected.projectId, selected.id)
     }
     window.addEventListener('focus', onWindowFocus)
     return () => window.removeEventListener('focus', onWindowFocus)
@@ -2204,6 +2242,8 @@
           restoredThread,
           projectList.find((candidate) => candidate.id === restoredThread.projectId) ?? null
         )
+        // Read-settling for programmatic selections is centralized in the
+        // selected-thread effect above; startup restore needs no extra call.
         void scopeState.ensureBoardLoaded(restoredThread.projectId)
       } else if (saved) {
         // The saved thread may sit beyond the bounded recent hydration list
@@ -3103,30 +3143,81 @@
     }
   }
 
+  /** In-flight mark-read requests keyed by `projectId:threadId`. A thread that
+   *  is already being marked read is never re-requested, but a failure clears
+   *  its key so a later interaction can retry. */
   const pendingReadThreads = new SvelteSet<string>()
+  /** One delayed retry per failed mark-read, keyed the same way. */
+  const readRetryTimers = new SvelteMap<string, ReturnType<typeof setTimeout>>()
 
-  /** Mark a thread read and push the confirmed snapshot into every sidebar
-   *  store (regular list, scope board, selected thread) so the row badge
-   *  settles in the same tick instead of waiting on the backend's own
-   *  broadcast round-trip. */
-  async function markThreadReadAndApply(projectId: string, threadId: string): Promise<void> {
-    const updated = await invoke('thread:markRead', projectId, threadId)
-    upsertThreadInList(updated)
-    scopeState.updateThread(updated)
-    if (workspaceState.selectedThread?.id === updated.id) {
-      workspaceState.updateThread(updated)
+  /** Push a read snapshot into every sidebar store (regular list, scope board,
+   *  selected thread) so the row badge settles in the same tick instead of
+   *  waiting on the backend's own broadcast round-trip. */
+  function applyThreadRead(thread: Thread): void {
+    upsertThreadInList(thread)
+    scopeState.updateThread(thread)
+    if (workspaceState.selectedThread?.id === thread.id) {
+      workspaceState.updateThread(thread)
     }
+  }
+
+  /** Mark a thread read through the backend and apply the confirmed snapshot.
+   *  A failed or lost request must never leave a thread the user has already
+   *  interacted with stuck on unread, so an unconfirmed read still applies
+   *  locally (the next `thread:updated` broadcast reconciles any drift), and
+   *  the request retries once after a short delay before the failure is
+   *  surfaced to the durable log. */
+  async function markThreadReadAndApply(projectId: string, threadId: string): Promise<void> {
+    const key = `${projectId}:${threadId}`
+    try {
+      const updated = await invoke('thread:markRead', projectId, threadId)
+      if (updated.read) {
+        applyThreadRead(updated)
+        return
+      }
+      // The backend answered but did not flip the flag (e.g. the thread row was
+      // momentarily invisible through the worker read). Retry once.
+      const retried = await invoke('thread:markRead', projectId, threadId)
+      applyThreadRead(retried.read ? retried : { ...retried, read: true })
+      if (!retried.read) {
+        logRendererError(
+          `Thread mark-read did not settle on the backend: thread ${threadId} in project ${projectId} stayed unread after retry`
+        )
+      }
+    } catch (error) {
+      // The backend never confirmed. Schedule one delayed retry so a transient
+      // IPC or worker failure cannot leave the badge stuck on unread; clear the
+      // pending key first so the retry is not gated as a duplicate.
+      pendingReadThreads.delete(key)
+      if (readRetryTimers.has(key)) return
+      readRetryTimers.set(
+        key,
+        setTimeout(() => {
+          readRetryTimers.delete(key)
+          void markThreadReadAndApply(projectId, threadId).catch((retryError) => {
+            logRendererError('Thread mark-read retry failed', retryError)
+          })
+        }, 2000)
+      )
+      logRendererError('Thread mark-read request failed; scheduled a retry', error)
+    }
+  }
+
+  /** Entry point that gates duplicate in-flight requests per thread. */
+  function requestThreadRead(projectId: string, threadId: string): void {
+    const key = `${projectId}:${threadId}`
+    if (pendingReadThreads.has(key)) return
+    pendingReadThreads.add(key)
+    void markThreadReadAndApply(projectId, threadId)
+      .catch(() => undefined)
+      .finally(() => pendingReadThreads.delete(key))
   }
 
   function markThreadReadAfterPaint(thread: Thread): void {
     if (thread.read) return
-    const key = `${thread.projectId}:${thread.id}`
-    if (pendingReadThreads.has(key)) return
-    pendingReadThreads.add(key)
     window.requestAnimationFrame(() => {
       window.setTimeout(() => {
-        pendingReadThreads.delete(key)
-        void markThreadReadAndApply(thread.projectId, thread.id).catch(() => undefined)
+        requestThreadRead(thread.projectId, thread.id)
       }, 0)
     })
   }
@@ -4366,7 +4457,11 @@
               {#if activeContextTab.kind === 'files'}
                 <ProjectFilesPanel
                   projectId={activeContextTab.projectId}
-                  projectName={activeProject?.name ?? 'Project files'}
+                  projectName={
+                    activeContextTab.projectId === INBOX_PROJECT_ID
+                      ? 'Chat artifacts'
+                      : (activeProject?.name ?? 'Project files')
+                  }
                   projectIconUrl={activeProject
                     ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
                     : null}

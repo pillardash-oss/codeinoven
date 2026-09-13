@@ -7,12 +7,15 @@ import { Readable } from 'node:stream'
 import { extname, join, sep } from 'path'
 import { realpath } from 'fs/promises'
 import { getConfigRoot } from '../../lib/utils'
+import { INBOX_PROJECT_ID } from '../../lib/types'
 import { Logger } from '../system/logger'
 import type { ProjectFilesService } from './project-files-service'
 
 const SCHEME = 'appfile'
 const PROJECT_ID_PATTERN = /^[a-zA-Z0-9_-]+$/u
 const ATTACHMENT_ID_PATTERN = /^[a-f0-9]{24}$/u
+/** Thread IDs follow the same safe-entity charset as project IDs. */
+const THREAD_ID_PATTERN = /^[a-zA-Z0-9._-]+$/u
 
 interface PreviewType {
   extension: string
@@ -194,6 +197,8 @@ function decodeSegments(pathname: string): string[] {
  *
  * - `appfile://project/<projectId>/<relativePath>`   resolved against the
  *   project root through {@link ProjectFilesService#resolveForExternalEditor}
+ * - `appfile://chat/<threadId>/<relativePath>`   resolved against the chat
+ *   thread's own `chats-artifacts/<threadId>` artifact directory
  * - `appfile://attachment/<projectId>/<attachmentId>?name=<label>`   an
  *   out-of-project attachment copied into CodeInOven storage
  *
@@ -222,6 +227,25 @@ export function installFilePreviewProtocol(
         const absolutePath = await projectFiles.resolveForExternalEditor(
           projectId,
           relativePath
+        )
+        return serveFile(absolutePath, type, request)
+      }
+
+      if (url.host === 'chat') {
+        const segments = decodeSegments(url.pathname)
+        const threadId = segments[0] ?? ''
+        if (!THREAD_ID_PATTERN.test(threadId)) return notFound()
+        const relativePath = segments.slice(1).join('/')
+        if (!relativePath) return notFound()
+        const type = typeFromPath(relativePath)
+        if (!type) return notFound()
+        const projectFiles = getProjectFiles()
+        if (!projectFiles) return notFound()
+        const absolutePath = await projectFiles.resolveForExternalEditor(
+          INBOX_PROJECT_ID,
+          relativePath,
+          undefined,
+          threadId
         )
         return serveFile(absolutePath, type, request)
       }

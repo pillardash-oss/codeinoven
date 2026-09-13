@@ -28,6 +28,7 @@ import { buildProcessEnvironment } from './cli-environment'
 import { piNativeProviderIds } from '../agents/native-provider-config-service'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import type { BaseUrlProvider } from '../../lib/types'
 import type { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
@@ -39,7 +40,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
-import { QuestionRequestGoneError } from './driver.interface'
+import { PermissionRequestGoneError, QuestionRequestGoneError } from './driver.interface'
 import type { HarnessCommand, PermissionReply, ThreadSettings } from '../../lib/types'
 import {
   classifyProviderIssue,
@@ -57,6 +58,7 @@ import {
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { piMcpExtension } from './pi-mcp-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
+import { apiKeyEnvVarFor } from '../providers/base-url-provider-service'
 import {
   CIO_PERMISSION_MARKER,
   CIO_QUESTION_MARKER,
@@ -1318,6 +1320,12 @@ function piAgentDir(): string {
   return join(homedir(), '.pi', 'agent')
 }
 
+/** pi rejects `set_model` for models outside its availability snapshot; the
+ *  only recovery is a fresh process with a regenerated providers extension. */
+function isPiModelNotFoundError(error: unknown): boolean {
+  return error instanceof Error && /^Model not found: /u.test(error.message)
+}
+
 /** Mirror pi's own session-dir encoding (`--<cwd>--` under the agent dir). */
 function nativePiSessionDir(projectPath: string): string {
   const safePath = `--${projectPath.replace(/^[/\\]/u, '').replace(/[/\\:]/gu, '-')}--`
@@ -1727,6 +1735,9 @@ export class PiDriver extends PersistentCliDriver {
    *  extension module (status + usage + gateway + core tools composed), passed
    *  to `--extension`. */
   private cioCoreToolsExtensionPaths = new Map<string, string>()
+  /** Resolved key env for the session's custom-providers extension, merged
+   *  into the RPC process environment on every (re)boot. */
+  private cioProvidersExtensionEnvs = new Map<string, Record<string, string>>()
   /** WSL-aware read view of Pi's own credential store (`~/.pi/agent/auth.json`). */
   private readonly authConfig = new PiAuthConfigService(undefined, piAuthFileIo)
 
@@ -2110,7 +2121,28 @@ export class PiDriver extends PersistentCliDriver {
         `Pi model is unavailable: ${options.settings.providerId}/${options.settings.modelId}`
       )
     }
-    await this.applyPiSettingsIfChanged(session.id, client, model, options.settings.thinkingLevel)
+    let turnClient = client
+    try {
+      await this.applyPiSettingsIfChanged(
+        session.id,
+        turnClient,
+        model,
+        options.settings.thinkingLevel
+      )
+    } catch (error) {
+      if (!isPiModelNotFoundError(error)) throw error
+      // The running process predates a provider/model edit: regenerate the
+      // custom-providers extension and retry once on a fresh process (which
+      // reloads extensions at boot). Any second failure surfaces unchanged.
+      this.disposeRpcClient(session.id)
+      turnClient = await this.ensureRpcClient(projectPath, session.id)
+      await this.applyPiSettingsIfChanged(
+        session.id,
+        turnClient,
+        model,
+        options.settings.thinkingLevel
+      )
+    }
 
     this.setTurnProvenance(
       session.id,
@@ -2132,7 +2164,7 @@ export class PiDriver extends PersistentCliDriver {
     const prompt = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
 
     try {
-      await client.prompt(prompt, images)
+      await turnClient.prompt(prompt, images)
     } catch (error) {
       this.activeTurns.delete(session.id)
       const message = error instanceof Error ? error.message : 'Pi turn failed to start'
@@ -2577,6 +2609,13 @@ export class PiDriver extends PersistentCliDriver {
       )
     }
     const extensionArgs = ['--extension', cioCoreToolsExtensionPath]
+    // Custom providers (app-store entries plus, inside managed containers, the
+    // harness-global models.json providers) must be registered in THIS process
+    // too, or `set_model` rejects models the model picker offered.
+    const providersExtensionPath = await this.materializeCioProvidersExtension(sessionId)
+    if (providersExtensionPath) {
+      extensionArgs.push('--extension', providersExtensionPath)
+    }
     const invocation = await prepareHarnessInvocation(
       'pi',
       ['--mode', 'rpc', ...extensionArgs, ...args],
@@ -2584,6 +2623,7 @@ export class PiDriver extends PersistentCliDriver {
         cwd: projectPath,
         env: {
           ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+          ...(this.cioProvidersExtensionEnvs.get(sessionId) ?? {}),
           ...runtimeEnv
         }
       }
@@ -2630,6 +2670,7 @@ export class PiDriver extends PersistentCliDriver {
       client.dispose()
       this.rpcClients.delete(sessionId)
       this.sessionProjects.delete(sessionId)
+      this.cioProvidersExtensionEnvs.delete(sessionId)
       throw new Error(
         `Failed to start a Pi session: ${error instanceof Error ? error.message : String(error)}`,
         { cause: error }
@@ -3456,6 +3497,10 @@ export class PiDriver extends PersistentCliDriver {
     const client = this.rpcClients.get(sessionId)
     if ((typeof rawId !== 'string' && typeof rawId !== 'number') || !method || !client) return
     const requestId = `pi-ui-${sessionId}-${String(rawId)}`.replace(/[^a-zA-Z0-9._-]/gu, '-')
+    // Keep one authoritative pending entry for a raw Pi dialog until the user
+    // or policy resolves it. Repeated transport records must not create two UI
+    // decisions for one blocked tool call.
+    if (this.pendingUiRequests.has(requestId)) return
     // The core-tools extension's permission gate marks its confirm dialogs
     // with a structured payload so they surface as real permission cards
     // (policy enrichment, allow/reject) instead of plain question cards.
@@ -3570,14 +3615,13 @@ export class PiDriver extends PersistentCliDriver {
     requestId: string,
     reply: PermissionReply,
     _message?: string,
-    _sessionId?: string
+    sessionId?: string
   ): Promise<void> {
     void _projectPath
     void _message
-    void _sessionId
     const request = this.pendingUiRequests.get(requestId)
     if (!request || request.method !== 'cio-permission') {
-      throw new Error(`Pi permission request is no longer pending: ${requestId}`)
+      throw new PermissionRequestGoneError(sessionId, requestId, this.name)
     }
     const rawId = request.request['id']
     if (typeof rawId !== 'string' && typeof rawId !== 'number') {
@@ -4004,24 +4048,20 @@ export class PiDriver extends PersistentCliDriver {
     this.resumedNativeSessions.delete(sessionId)
     this.appliedPiSettings.delete(sessionId)
     this.latestRateLimits.delete(sessionId)
+    this.cioProvidersExtensionEnvs.delete(sessionId)
   }
 
   private async buildProviderOverlay(projectPath: string): Promise<ProviderOverlay> {
     const args: string[] = []
     const env: Record<string, string> = {}
     let directory: string | null = null
-    const providers = this.baseUrlProviders
-      ? await this.baseUrlProviders.listEnabled(this.id).catch(() => [])
-      : []
-    if (providers.length > 0 && this.secretVault) {
-      for (const provider of providers) {
-        if (!provider.apiKeyRef || !provider.apiKeyEnvVar) continue
-        env[provider.apiKeyEnvVar] = await this.secretVault.resolve(provider.apiKeyRef)
-      }
+    const resolved = await this.resolveOverlayProviders()
+    if (resolved) {
       directory = await mkdtemp(join(tmpdir(), 'codeinoven-pi-providers-'))
       const extensionPath = join(directory, 'codeinoven-providers.ts')
-      await writeFile(extensionPath, piCustomProvidersExtension(providers), 'utf8')
+      await writeFile(extensionPath, piCustomProvidersExtension(resolved.providers), 'utf8')
       args.push('--extension', extensionPath)
+      Object.assign(env, resolved.env)
     }
     void projectPath
     return {
@@ -4030,6 +4070,64 @@ export class PiDriver extends PersistentCliDriver {
       cleanup: async () => {
         if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined)
       }
+    }
+  }
+
+  /**
+   * Enabled custom providers for this driver plus the env carrying their keys.
+   * Managed account containers run pi against their own agent dir, which has
+   * no models.json; harness-global custom providers (keyless local servers
+   * like llama.cpp) are mirrored in so their models stay selectable.
+   */
+  private async resolveOverlayProviders(): Promise<{
+    providers: BaseUrlProvider[]
+    env: Record<string, string>
+  } | null> {
+    const containerAgentDir = this.accountEnvironment['PI_CODING_AGENT_DIR']?.trim() || undefined
+    const providers = this.baseUrlProviders
+      ? await this.baseUrlProviders.listEnabled(this.id, containerAgentDir).catch(() => [])
+      : []
+    if (providers.length === 0 || !this.secretVault) return null
+    const env: Record<string, string> = {}
+    for (const provider of providers) {
+      if (provider.apiKeyRef && provider.apiKeyEnvVar) {
+        env[provider.apiKeyEnvVar] = await this.secretVault.resolve(provider.apiKeyRef)
+        continue
+      }
+      // Native providers mirrored from the global models.json have no vault
+      // reference; their key (when configured) rides the env var instead.
+      if (!provider.apiKeyEnvVar && provider.harnessId === this.id && this.baseUrlProviders) {
+        const nativeKey = await this.baseUrlProviders
+          .readNativeApiKey(this.id, provider.id)
+          .catch(() => undefined)
+        if (nativeKey) {
+          const envVar = apiKeyEnvVarFor(provider.id)
+          env[envVar] = nativeKey
+          provider.apiKeyEnvVar = envVar
+        }
+      }
+    }
+    return { providers, env }
+  }
+
+  /**
+   * Materialize the per-session custom-providers extension next to the
+   * cio-core-tools module so the long-lived RPC process registers the same
+   * custom providers discovery showed (managed containers cannot see the
+   * harness-global models.json on their own). Rewritten on every process boot,
+   * so provider edits reach the next fresh session.
+   */
+  private async materializeCioProvidersExtension(sessionId: string): Promise<string | null> {
+    try {
+      const resolved = await this.resolveOverlayProviders()
+      if (!resolved) return null
+      const extensionRelative = join('runtime', 'cio-providers', sessionId, 'providers.ts')
+      await this.storage.writeRaw(extensionRelative, piCustomProvidersExtension(resolved.providers))
+      this.cioProvidersExtensionEnvs.set(sessionId, resolved.env)
+      return this.storage.resolve(extensionRelative)
+    } catch (error) {
+      Logger.dev('Pi providers extension materialization failed:', error)
+      return null
     }
   }
 }

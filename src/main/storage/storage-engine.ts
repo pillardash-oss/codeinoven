@@ -26,7 +26,11 @@ import {
 } from '../../lib/cio-prompts'
 import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../../lib/types'
 import type { Project } from '../../lib/types'
-import { featureArtifactDirectory, featureSlugFromTitle } from '../../lib/project-artifacts'
+import {
+  CHATS_ARTIFACTS_DIRECTORY,
+  featureArtifactDirectory,
+  featureSlugFromTitle
+} from '../../lib/project-artifacts'
 import {
   CUSTOM_WORKER_NAMES_FILE,
   DEFAULT_WORKER_NAMES,
@@ -94,6 +98,7 @@ export class StorageEngine {
     await ensureDir(this.resolve('remote'))
     await ensureDir(this.resolve('logs'))
     await ensureDir(this.resolve('chats-cwd'))
+    await ensureDir(this.resolve(CHATS_ARTIFACTS_DIRECTORY))
     await ensureDir(this.resolve('window-state'))
     await ensureDir(this.resolve('scheduler'))
     await ensureDir(this.resolve('memory'))
