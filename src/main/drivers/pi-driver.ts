@@ -3497,6 +3497,10 @@ export class PiDriver extends PersistentCliDriver {
     const client = this.rpcClients.get(sessionId)
     if ((typeof rawId !== 'string' && typeof rawId !== 'number') || !method || !client) return
     const requestId = `pi-ui-${sessionId}-${String(rawId)}`.replace(/[^a-zA-Z0-9._-]/gu, '-')
+    // Keep one authoritative pending entry for a raw Pi dialog until the user
+    // or policy resolves it. Repeated transport records must not create two UI
+    // decisions for one blocked tool call.
+    if (this.pendingUiRequests.has(requestId)) return
     // The core-tools extension's permission gate marks its confirm dialogs
     // with a structured payload so they surface as real permission cards
     // (policy enrichment, allow/reject) instead of plain question cards.

@@ -1529,6 +1529,8 @@ interface ChildSessionInfo {
 
 interface PendingPermissionInfo {
   driverId: string
+  /** Exact runtime instance that emitted the blocking request. */
+  driver?: HarnessDriver
   session: SessionInfo
   request: PermissionRequest
   policy: PermissionDecisionResult
@@ -2195,7 +2197,7 @@ export class ChatEngine {
     // Wire each driver's event output to the broadcast + permission policy.
     for (const driver of this.drivers.values()) {
       driver.setProcessObserver?.(this.agentProcesses)
-      driver.onEvent((event) => this.handleDriverEvent(driver.id, event))
+      driver.onEvent((event) => this.handleDriverEvent(driver.id, event, driver))
     }
   }
 
@@ -2240,7 +2242,7 @@ export class ChatEngine {
     if (existing) return existing
     const driver = this.createAccountDriver(harnessId, this.accountRegistry.environment(account))
     driver.setProcessObserver?.(this.agentProcesses)
-    driver.onEvent((event) => this.handleDriverEvent(driver.id, event))
+    driver.onEvent((event) => this.handleDriverEvent(driver.id, event, driver))
     this.accountDrivers.set(account.id, driver)
     return driver
   }
@@ -10613,7 +10615,8 @@ export class ChatEngine {
       return
     }
 
-    const driver = this.driverForRuntime(pending.driverId, pending.session.accountId)
+    const driver =
+      pending.driver ?? this.driverForRuntime(pending.driverId, pending.session.accountId)
     if (!driver) throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
     if (
       pending.policy.approval.expiresAt !== undefined &&
@@ -10653,15 +10656,10 @@ export class ChatEngine {
       if (!(error instanceof PermissionRequestGoneError)) throw error
       this.pendingPermissions.delete(requestId)
       await this.recordPermissionDecision(pending, resolvedReply, 'user:stale-request')
-      if (reply === 'reject' && alternativeInstruction === undefined) {
-        await this.interruptRejectedPermission(pending, driver)
-        return
-      }
-      await this.threadManager.setStatus(
-        pending.session.projectId,
-        pending.session.threadId,
-        pending.resumeStatus
-      )
+      // The decision cannot be delivered after the driver's blocking request
+      // disappears. Never pretend the turn resumed: terminate it cleanly so a
+      // stale approval or rejection cannot leave a tool call spinning forever.
+      await this.interruptRejectedPermission(pending, driver)
       Logger.dev(`Reconciled resolved permission request: ${requestId}`)
       return
     }
@@ -18626,7 +18624,11 @@ export class ChatEngine {
   }
 
   /** Process an event from a driver: apply permission policy, then broadcast. */
-  private handleDriverEvent(driverId: string, event: AgentEvent): void {
+  private handleDriverEvent(
+    driverId: string,
+    event: AgentEvent,
+    sourceDriver?: HarnessDriver
+  ): void {
     // A driver finished enriching its catalog in the background (e.g. Cline's
     // remote list). Re-merge every project we already exposed a catalog for and
     // push the fresher result so open pickers update without re-opening.
@@ -19018,7 +19020,7 @@ export class ChatEngine {
 
     // Permission events go through the policy filter before reaching the UI.
     if (event.type === 'permission.asked') {
-      void this.handlePermissionAsked(driverId, event).catch((error) =>
+      void this.handlePermissionAsked(driverId, event, sourceDriver).catch((error) =>
         Logger.error('Permission request registration failed:', error)
       )
       return
@@ -20443,7 +20445,8 @@ export class ChatEngine {
   /** Resolve a permission request per the thread's permission level. */
   private async handlePermissionAsked(
     driverId: string,
-    event: Extract<AgentEvent, { type: 'permission.asked' }>
+    event: Extract<AgentEvent, { type: 'permission.asked' }>,
+    sourceDriver?: HarnessDriver
   ): Promise<void> {
     const { sessionId, permission: request } = event
     const info = this.sessionRegistry.get(sessionId)
@@ -20492,6 +20495,7 @@ export class ChatEngine {
       : 'planning'
     const pending: PendingPermissionInfo = {
       driverId,
+      driver: sourceDriver,
       session: info,
       request: enrichedRequest,
       policy,
@@ -20550,7 +20554,8 @@ export class ChatEngine {
     reply: PermissionReply,
     decidedBy: string
   ): Promise<void> {
-    const driver = this.driverForRuntime(pending.driverId, pending.session.accountId)
+    const driver =
+      pending.driver ?? this.driverForRuntime(pending.driverId, pending.session.accountId)
     if (!driver) return
     await driver.replyPermission(
       pending.session.projectPath,
