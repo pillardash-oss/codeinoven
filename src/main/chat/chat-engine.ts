@@ -1316,6 +1316,7 @@ export function composeBrainstormSystemPrompt(input: {
 }
 
 interface SessionInfo {
+  sessionId: string
   projectId: string
   threadId: string
   projectPath: string
@@ -22520,9 +22521,10 @@ export class ChatEngine {
     // Notify renderers that the live file list changed
     this.broadcast({
       type: 'checkpoint.liveUpdated',
+      sessionId: session.sessionId,
       projectId: session.projectId,
       threadId: session.threadId
-    } as unknown as AgentEvent)
+    })
   }
 
   // ─── Session registry ─────────────────────────────────────────────────────
@@ -22539,6 +22541,7 @@ export class ChatEngine {
   ): void {
     const existing = this.sessionRegistry.get(sessionId)
     this.sessionRegistry.set(sessionId, {
+      sessionId,
       projectId,
       threadId,
       projectPath,

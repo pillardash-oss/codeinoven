@@ -2808,6 +2808,12 @@ export type AgentEvent =
       checkpointId: string
     }
   | {
+      type: 'checkpoint.liveUpdated'
+      sessionId: string
+      projectId: string
+      threadId: string
+    }
+  | {
       type: 'thread.error'
       sessionId: string
       projectId: string
