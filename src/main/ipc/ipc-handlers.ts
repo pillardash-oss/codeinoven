@@ -6854,6 +6854,54 @@ export function registerIpcHandlers(
     }
   )
 
+  /**
+   * Remove every trace of a provider account from one project's cloud
+   * deployment config: its attachment, its active-account role, and every
+   * container mapping monitored through it (explicitly bound mappings, plus
+   * legacy unbound mappings for kinds where it was the active account).
+   * Mirrors `cloudDeploy:detachAccount` cleanup so deleting an account
+   * globally leaves no orphaned containers behind.
+   */
+  const pruneAccountFromCloudDeploymentConfig = async (accountId: string): Promise<void> => {
+    for (const projectId of await storage.listDirectories('projects')) {
+      const config = await storage.getCloudDeploymentConfig(projectId)
+      const providerAccounts = config?.project.providerAccounts
+      if (!config || !providerAccounts) continue
+      let changed = false
+      for (const key of Object.keys(providerAccounts) as CloudDeploymentProviderKind[]) {
+        const association = providerAccounts[key]
+        if (!association || !association.attachedAccountIds.includes(accountId)) continue
+        const wasActive = association.activeAccountId === accountId
+        const remaining = association.attachedAccountIds.filter((id) => id !== accountId)
+        const containers = config.project.containers.filter((mapping) =>
+          mapping.accountId !== undefined
+            ? mapping.accountId !== accountId
+            : // Legacy unbound mappings were monitored through the kind's
+              // active account; they belong to the removed account when it was
+              // active and must not silently reattach to another account.
+              !(wasActive && mapping.providerKind === key)
+        )
+        if (containers.length !== config.project.containers.length) {
+          config.project.containers = containers
+        }
+        if (remaining.length === 0) {
+          delete providerAccounts[key]
+          config.project.providers = config.project.providers.filter((provider) => provider !== key)
+        } else {
+          providerAccounts[key] = {
+            attachedAccountIds: remaining,
+            activeAccountId: wasActive ? (remaining[0] ?? null) : association.activeAccountId
+          }
+        }
+        changed = true
+      }
+      if (!changed) continue
+      config.updatedAt = Date.now()
+      await storage.saveCloudDeploymentConfig(projectId, config)
+      await syncCloudDeploymentsFlag(projectId)
+    }
+  }
+
   ipcMain.handle('cloudDeploy:removeAccount', async (_, accountId: unknown) => {
     const safeAccountId = requireString(accountId, 'Account ID', true)
     const registry = await storage.getCloudDeploymentAccounts()
@@ -6863,6 +6911,10 @@ export function registerIpcHandlers(
     registry.accounts = registry.accounts.filter((entry) => entry.id !== safeAccountId)
     await storage.saveCloudDeploymentAccounts(registry)
     await vault.removeProviderToken(safeAccountId)
+    // Detach the account from every project and drop the container mappings
+    // monitored through it, so no project keeps polling (or erroring on) an
+    // account that no longer exists.
+    await pruneAccountFromCloudDeploymentConfig(safeAccountId)
   })
 
   ipcMain.handle(
@@ -6917,6 +6969,16 @@ export function registerIpcHandlers(
         throw new TypeError(`Account is not attached for ${kind}`)
       }
       const remaining = association.attachedAccountIds.filter((id) => id !== safeAccountId)
+      const wasActive = association.activeAccountId === safeAccountId
+      // Container mappings monitored through the detached account stop here:
+      // explicitly bound mappings go with the account, and legacy unbound
+      // mappings for this kind were monitored through it while it was active
+      // and must not silently reattach to another account.
+      config.project.containers = config.project.containers.filter((mapping) =>
+        mapping.accountId !== undefined
+          ? mapping.accountId !== safeAccountId
+          : !(wasActive && mapping.providerKind === kind)
+      )
       if (remaining.length === 0) {
         delete providerAccounts[kind]
         config.project.providerAccounts = providerAccounts
@@ -6925,9 +6987,7 @@ export function registerIpcHandlers(
         providerAccounts[kind] = {
           attachedAccountIds: remaining,
           activeAccountId:
-            association.activeAccountId === safeAccountId
-              ? (remaining[0] ?? null)
-              : association.activeAccountId
+            wasActive ? (remaining[0] ?? null) : association.activeAccountId
         }
         config.project.providerAccounts = providerAccounts
       }
@@ -7018,6 +7078,14 @@ export function registerIpcHandlers(
       ...attachedAccountIds.filter((accountId) => accountId !== activeAccountId)
     ]
     const registry = await storage.getCloudDeploymentAccounts()
+    // Read-time guard for configs that still reference accounts deleted from
+    // the global registry (e.g. removed before pruning existed): skip them and
+    // the container mappings bound to them so dead accounts stop surfacing
+    // errors or ghost containers.
+    const knownAccountIds = new Set(registry.accounts.map((account) => account.id))
+    const liveMappings = config.project.containers.filter(
+      (mapping) => mapping.accountId === undefined || knownAccountIds.has(mapping.accountId)
+    )
     const accountLabel = (accountId: string): string =>
       registry.accounts.find((account) => account.id === accountId)?.label ?? accountId
 
@@ -7033,7 +7101,7 @@ export function registerIpcHandlers(
         return {
           containers: mergeCloudDeploymentContainers(
             liveContainers,
-            config.project.containers,
+            liveMappings,
             kind
           ),
           fetchedAt: Date.now(),
@@ -7049,10 +7117,19 @@ export function registerIpcHandlers(
       }
     }
 
+    const fetchableAccountIds = orderedAccountIds.filter((accountId) =>
+      knownAccountIds.has(accountId)
+    )
+    if (fetchableAccountIds.length === 0) {
+      // Every attached account was deleted from the registry; report an empty
+      // overview instead of erroring on accounts the user already removed.
+      return { containers: [], fetchedAt: Date.now(), hasDeployments }
+    }
+
     const liveContainers: CloudDeploymentContainer[] = []
     const failures: string[] = []
     await Promise.all(
-      orderedAccountIds.map(async (accountId) => {
+      fetchableAccountIds.map(async (accountId) => {
         try {
           const provider = resolveDeploymentProvider(
             kind,
@@ -7072,7 +7149,7 @@ export function registerIpcHandlers(
     )
     const containers = mergeCloudDeploymentContainers(
       liveContainers,
-      config.project.containers,
+      liveMappings,
       kind
     )
     return {
