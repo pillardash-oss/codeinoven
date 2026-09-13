@@ -6803,6 +6803,7 @@ export class ChatEngine {
     // A steer is the latest user expression in the running turn   keep it (and
     // its referenced selections) as the memory signal for when the turn ends,
     // replacing the message that originally dispatched the turn.
+    const previousPendingMemoryDecision = this.pendingMemoryDecisions.get(activeSessionId)
     this.pendingMemoryDecisions.set(activeSessionId, {
       userMessage: text,
       settings: steerSettings,
@@ -6897,6 +6898,14 @@ export class ChatEngine {
         sessionId: activeSessionId,
         error: rawErrorMessage(error)
       })
+      if (previousPendingMemoryDecision) {
+        this.pendingMemoryDecisions.set(activeSessionId, previousPendingMemoryDecision)
+      } else {
+        this.pendingMemoryDecisions.delete(activeSessionId)
+      }
+      this.sessionStatuses.set(activeSessionId, { state: 'idle' })
+      this.handleSessionIdleSignal(activeSessionId)
+      await this.awaitSessionIdleFinalization(activeSessionId)
       return deliverAsRegularSend()
     }
     return withoutTransportParts(userMessage)
