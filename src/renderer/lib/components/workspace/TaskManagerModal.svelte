@@ -1,10 +1,12 @@
 <script lang="ts">
   import {
+    ArrowDownUp,
     BatteryCharging,
     BatteryMedium,
     Cpu,
     ExternalLink,
     MemoryStick,
+    MessagesSquare,
     Plug,
     RefreshCw,
     SquareTerminal,
@@ -15,10 +17,12 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import type { Project, TaskManagerProcess, TaskManagerSnapshot } from '$shared/types'
@@ -26,6 +30,14 @@
   interface Props {
     open: boolean
     onClose: () => void
+  }
+
+  type TaskSortMode = 'memory' | 'cpu' | 'name'
+
+  const SORT_MODE_LABELS: Record<TaskSortMode, string> = {
+    memory: 'Sort by RAM usage',
+    cpu: 'Sort by CPU usage',
+    name: 'Sort by name'
   }
 
   let { open, onClose }: Props = $props()
@@ -38,6 +50,10 @@
   /** True only while a background 5s poll is in flight. */
   let polling = $state(false)
   let error = $state('')
+  /** Sort mode for the list; memory (highest first) is the default. */
+  let sortMode = $state<TaskSortMode>('memory')
+  /** Project filter for project-owned processes; null shows everything. */
+  let filterProjectId = $state<string | null>(null)
   let selected = new SvelteSet<number>()
   let ending = $state(false)
   let forceEndTargets = $state<readonly TaskManagerProcess[]>([])
@@ -47,6 +63,37 @@
   const projectIconUrls = new SvelteMap<string, string>()
 
   const selectedProcesses = $derived(processes.filter((process) => selected.has(process.pid)))
+
+  /**
+   * App-scoped processes (ASR, LAMA server, …) have no owning project, so a
+   * project filter can never exclude them; they always stay visible.
+   */
+  const visibleProcesses = $derived.by(() => {
+    const filtered = filterProjectId
+      ? processes.filter(
+          (process) => !process.projectId || process.projectId === filterProjectId
+        )
+      : processes
+    return filtered.toSorted(compareFor(sortMode))
+  })
+
+  function compareFor(mode: TaskSortMode): (a: TaskManagerProcess, b: TaskManagerProcess) => number {
+    if (mode === 'cpu') {
+      return (a, b) => (b.cpuPercent ?? 0) - (a.cpuPercent ?? 0)
+    }
+    if (mode === 'name') {
+      return (a, b) =>
+        processName(a.command).localeCompare(processName(b.command), undefined, {
+          sensitivity: 'base'
+        })
+    }
+    return (a, b) => (b.memoryBytes ?? 0) - (a.memoryBytes ?? 0)
+  }
+
+  function toggleSelected(process: TaskManagerProcess): void {
+    if (selected.has(process.pid)) selected.delete(process.pid)
+    else selected.add(process.pid)
+  }
 
   const totalRamBytes = $derived(
     processes.reduce((sum, process) => sum + (process.memoryBytes ?? 0), 0)
@@ -197,6 +244,18 @@
   function formatCpu(percent: number | null): string {
     if (percent === null) return 'Unavailable'
     return `${percent.toFixed(percent < 10 ? 1 : 0)}%`
+  }
+
+  /** Cycle RAM → CPU → name; each mode puts the highest/most relevant first. */
+  function setNextSortMode(): void {
+    const order: TaskSortMode[] = ['memory', 'cpu', 'name']
+    const next = order[(order.indexOf(sortMode) + 1) % order.length]
+    if (next) sortMode = next
+  }
+
+  function setFilterProject(projectId: string | null): void {
+    filterProjectId = projectId
+    if (projectId) void ensureProjectIcons(processes)
   }
 
   function thermalLabel(): string {
@@ -364,6 +423,46 @@
 
 <Modal {open} title="Task Manager" {onClose} size="xl" fill contentClass="p-0">
   <div class="flex h-full flex-col overflow-hidden">
+    <div
+      class="flex shrink-0 items-center justify-between gap-3 border-b border-border px-5 py-2"
+    >
+      <p class="text-xs font-medium text-muted">Filter & sort</p>
+      <div class="flex items-center gap-1.5">
+        <ProjectSwitch
+          projects={scopeState.projects}
+          activeProjectId={filterProjectId}
+          onSwitch={(projectId) => setFilterProject(projectId)}
+          ariaLabel="Filter processes by project"
+          placeholder="All projects"
+          searchPlaceholder="Search projects…"
+          emptyMessage="No matching projects"
+          class="h-7"
+          compact
+          align="end"
+        />
+        {#if filterProjectId}
+          <button
+            type="button"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-elevated text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+            title="Clear the project filter"
+            aria-label="Clear the project filter"
+            onclick={() => setFilterProject(null)}
+          >
+            <X size={12} />
+          </button>
+        {/if}
+        <button
+          type="button"
+          class="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          title={SORT_MODE_LABELS[sortMode]}
+          aria-label={SORT_MODE_LABELS[sortMode]}
+          onclick={() => setNextSortMode()}
+        >
+          <ArrowDownUp size={12} />
+          {SORT_MODE_LABELS[sortMode]}
+        </button>
+      </div>
+    </div>
     {#if error}
       <div class="shrink-0 border-b border-border px-5 py-2" role="alert">
         <p class="truncate text-xs text-danger">{error}</p>
@@ -381,6 +480,16 @@
           ></span>
           <p class="text-xs text-dimmed">Checking running processes…</p>
         </div>
+      {:else if visibleProcesses.length === 0}
+        <div class="flex h-full items-center justify-center px-8 text-center">
+          <div class="max-w-64">
+            <Plug size={20} class="mx-auto text-muted" />
+            <p class="mt-3 text-sm font-semibold text-foreground">No matching processes</p>
+            <p class="mt-1 text-xs leading-relaxed text-dimmed">
+              No project processes match the current filter. Shared servers always stay visible.
+            </p>
+          </div>
+        </div>
       {:else if processes.length === 0}
         <div class="flex h-full items-center justify-center px-8 text-center">
           <div class="max-w-64">
@@ -393,41 +502,11 @@
         </div>
       {:else}
         <ul class="divide-y divide-border">
-          {#each processes as process (process.pid)}
+          {#each visibleProcesses as process (process.pid)}
             {@const harnessId = harnessIdFor(process.command)}
             {@const projectIcon = projectIconFor(process)}
-            <li
-              class="flex items-start gap-3 px-5 py-3 transition-colors {selected.has(process.pid)
-                ? 'bg-elevated'
-                : 'hover:bg-elevated'}"
-            >
-              <Switch
-                checked={selected.has(process.pid)}
-                onchange={(value) => {
-                  if (value) selected.add(process.pid)
-                  else selected.delete(process.pid)
-                }}
-                aria-label={`Select ${processName(process.command)} (PID ${process.pid})`}
-                title={`Select ${processName(process.command)}`}
-                class="mt-1 shrink-0"
-              />
-              <span
-                class="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
-              >
-                {#if harnessId}
-                  <AgentIcon agentId={harnessId} size={16} />
-                {:else if projectIcon}
-                  <img
-                    src={projectIcon}
-                    alt=""
-                    class="h-4 w-4 rounded-sm object-contain grayscale"
-                    onerror={(event) => handleProjectIconError(event, process.projectId)}
-                  />
-                {:else}
-                  <SquareTerminal size={15} />
-                {/if}
-              </span>
-              {#snippet processContent()}
+            {#snippet processContent()}
+              <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
                   <p class="truncate text-sm font-semibold text-foreground">
                     {processName(process.command)}
@@ -482,25 +561,54 @@
                   </span>
                   <span class="shrink-0">{locationLabel(process)}</span>
                 </div>
-              {/snippet}
-              {#if process.projectId}
-                <button
-                  type="button"
-                  class="min-w-0 flex-1 cursor-pointer text-left"
-                  title={`Open ${processName(process.command)} in ${locationLabel(process)}`}
-                  onclick={() => void navigateToProcess(process)}
+              </div>
+            {/snippet}
+            <li
+              class="flex items-start gap-3 px-5 py-3 transition-colors {selected.has(process.pid)
+                ? 'bg-elevated'
+                : 'hover:bg-elevated'}"
+            >
+              <Switch
+                checked={selected.has(process.pid)}
+                onchange={(value) => {
+                  if (value) selected.add(process.pid)
+                  else selected.delete(process.pid)
+                }}
+                aria-label={`Select ${processName(process.command)} (PID ${process.pid})`}
+                title={`Select ${processName(process.command)}`}
+                class="mt-1 shrink-0"
+              />
+              <button
+                type="button"
+                class="flex min-w-0 flex-1 cursor-pointer items-start gap-3 text-left"
+                title={`Select ${processName(process.command)} (PID ${process.pid})`}
+                aria-pressed={selected.has(process.pid)}
+                onclick={() => toggleSelected(process)}
+              >
+                <span
+                  class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
                 >
+                  {#if harnessId}
+                    <AgentIcon agentId={harnessId} size={16} />
+                  {:else if projectIcon}
+                    <img
+                      src={projectIcon}
+                      alt=""
+                      class="h-4 w-4 rounded-sm object-contain grayscale"
+                      onerror={(event) => handleProjectIconError(event, process.projectId)}
+                    />
+                  {:else}
+                    <SquareTerminal size={15} />
+                  {/if}
+                </span>
+                <span class="min-w-0 flex-1">
                   {@render processContent()}
-                </button>
-              {:else}
-                <div class="min-w-0 flex-1">
-                  {@render processContent()}
-                </div>
-              {/if}
-              <div class="flex shrink-0 items-center gap-1">
+                </span>
+              </button>
+              <div class="mt-0.5 flex shrink-0 items-center gap-1">
                 <button
                   type="button"
-                  class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                  class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                   disabled={process.ports.length === 0 || !process.projectId}
                   title={
                     process.ports.length === 0
@@ -512,11 +620,11 @@
                   aria-label={`Open ${processName(process.command)} in the in-app browser`}
                   onclick={() => void openInBrowser(process)}
                 >
-                  <ExternalLink size={13} />
+                  <ExternalLink size={15} />
                 </button>
                 <button
                   type="button"
-                  class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                  class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                   disabled={!process.projectId}
                   title={process.projectId
                     ? 'Open path in in-app terminal'
@@ -524,7 +632,19 @@
                   aria-label={`Open ${processName(process.command)} path in the in-app terminal`}
                   onclick={() => void openInTerminal(process)}
                 >
-                  <SquareTerminal size={13} />
+                  <SquareTerminal size={15} />
+                </button>
+                <button
+                  type="button"
+                  class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={!process.threadId}
+                  title={process.threadId
+                    ? `Open the thread responsible for ${processName(process.command)}`
+                    : 'No thread associated with this process'}
+                  aria-label={`Open the thread responsible for ${processName(process.command)}`}
+                  onclick={() => void navigateToProcess(process)}
+                >
+                  <MessagesSquare size={15} />
                 </button>
               </div>
             </li>
