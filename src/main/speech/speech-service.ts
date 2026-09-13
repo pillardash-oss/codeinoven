@@ -239,6 +239,11 @@ export class SpeechService {
       JSON.parse(await readFile(this.paths.catalogPath, 'utf8'))
     )
     await this.loadInstalledIndex()
+    // Warm the native capture worker in the background so the first voice
+    // recording starts instantly instead of paying process + audio-unit init.
+    void this.nativeCapture.warm().catch((error) => {
+      Logger.dev('Native speech capture warmup failed (non-fatal):', error)
+    })
   }
 
   /** Resolve the discover-or-download llama.cpp runtime for cleanup inference. */

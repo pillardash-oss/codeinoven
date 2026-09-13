@@ -27,7 +27,10 @@ import type {
 
 export type RendererSpeechState =
   | { state: 'idle' }
-  | { state: 'requesting-permission'; targetId: string }
+  /** Optimistic phase between the user's trigger and the capture pipeline
+   *  answering. Rendered exactly like an active recording so the mic button
+   *  flips instantly; every begin failure settles into `failed`. */
+  | { state: 'starting'; targetId: string }
   | {
       state: 'recording'
       targetId: string
@@ -255,6 +258,10 @@ class SpeechController {
   private currentSegments = $state<SpeechSegment[] | null>(null)
   private stopPromise: Promise<void> | null = null
   private sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
+  /** Whether `sound` has been loaded from config at least once. Until then a
+   *  `start()` still pays one `config:get`; afterwards the mirror below keeps
+   *  it fresh without any disk round trip on the recording hot path. */
+  private soundReady = false
   private playbackStallWatchdog: ReturnType<typeof setTimeout> | null = null
   private playbackStallMessageId: string | null = null
   private pausedLingerTimer: ReturnType<typeof setTimeout> | null = null
@@ -270,7 +277,16 @@ class SpeechController {
   constructor() {
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', this.handleGlobalKeydown, true)
+      window.addEventListener('cio:soundChanged', this.handleSoundChanged)
+      void this.loadSettings()
     }
+  }
+
+  private readonly handleSoundChanged = (event: Event): void => {
+    const detail = (event as CustomEvent<unknown>).detail
+    if (!detail || typeof detail !== 'object') return
+    this.sound = structuredClone(detail as typeof this.sound)
+    this.soundReady = true
   }
 
   private readonly handleGlobalKeydown = (event: KeyboardEvent): void => {
@@ -342,11 +358,13 @@ class SpeechController {
   }
 
   get recordingScope(): SpeechScope | null {
-    return this.state.state === 'recording' ? (this.active?.scope ?? null) : null
+    if (this.state.state === 'recording' || this.state.state === 'starting')
+      return this.active?.scope ?? this.captureScope
+    return null
   }
 
   /** The scope of whichever editor is dictating across every live phase —
-   *  requesting-permission → recording → stopping. Unlike `recordingScope`
+   *  starting → recording → stopping. Unlike `recordingScope`
    *  this stays non-null after the mic closes until the transcript lands or
    *  the capture fails, so consumers that represent in-progress drafting
    *  (thread rows) never flash back mid-pipeline. */
@@ -418,13 +436,16 @@ class SpeechController {
       await this.cancelPlayback()
     }
     this.captureScope = scope
-    await this.loadSettings()
+    if (!this.soundReady) await this.loadSettings()
     const snapshot = preparedSnapshot ?? target.capture()
     if (!snapshot) {
       this.surfaceFailure(target.id, 'prepare', new Error('Focus the editor before recording.'))
       return
     }
-    this.state = { state: 'requesting-permission', targetId: target.id }
+    // Flip the surface to recording immediately: the double-press shortcut and
+    // the mic button must respond in the same frame they are pressed. Every
+    // async pipeline step below has a failure path that settles into `failed`.
+    this.state = { state: 'starting', targetId: target.id }
 
     const nativeStarted = isRemotePwaRuntime()
       ? null
@@ -1492,6 +1513,8 @@ class SpeechController {
       this.sound = structuredClone(config.sound)
     } catch {
       this.sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
+    } finally {
+      this.soundReady = true
     }
   }
 }

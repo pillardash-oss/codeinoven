@@ -140,9 +140,18 @@
         activeRecordingScope.threadId !== scope.threadId)
   )
   const action = $derived.by(() => {
-    if (recordingHere || (belongsHere && speechController.state.state === 'recording'))
+    // `starting` is rendered exactly like an active recording: the trigger
+    // (click or double-press) must flip the button in the same frame.
+    if (
+      recordingHere ||
+      (belongsHere &&
+        (speechController.state.state === 'recording' || speechController.state.state === 'starting'))
+    )
       return 'stop' as const
-    if (recordingElsewhere && speechController.state.state === 'recording')
+    if (
+      recordingElsewhere &&
+      (speechController.state.state === 'recording' || speechController.state.state === 'starting')
+    )
       return 'blocked' as const
     if (belongsHere && speechController.state.state === 'failed') return 'retry' as const
     if (speechController.state.state !== 'idle' && speechController.state.state !== 'failed')
@@ -159,8 +168,8 @@
         : 'Retry voice recording'
     }
     if (action === 'wait') {
-      return speechController.state.state === 'requesting-permission'
-        ? 'Requesting microphone permission'
+      return speechController.state.state === 'starting'
+        ? 'Starting voice recording'
         : speechController.state.state === 'stopping'
           ? 'Stopping voice recording'
           : 'Transcribing voice recording'
@@ -247,10 +256,11 @@
 
   // Expose this mic input to the global voice shortcut so double-press Left Alt
   // (or the user's remapped binding) drives whichever recorder is on view.
-  // The effect re-registers as visibility/disability changes; a hidden button
-  // unregisters itself and can never claim the shortcut.
+  // Hidden buttons (no installed ASR model and voice recording not enabled)
+  // stay registered but ineligible: the shortcut can then tell the user why
+  // recording did not start instead of claiming there is no input on screen.
   $effect(() => {
-    if (hidden || disabled || !buttonEl) return
+    if (disabled || !buttonEl) return
     return registerVoiceTriggerHost({
       targetId,
       priority: triggerPriority,

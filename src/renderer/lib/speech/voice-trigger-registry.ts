@@ -131,6 +131,18 @@ export function triggerPreferredVoiceHost(): void {
     best.activate()
     return
   }
+  // A registered-but-ineligible host means a mic input exists on screen but
+  // recording is gated off (no installed ASR model and voice recording not
+  // enabled) — say that instead of the generic no-input message.
+  if (hosts.size > 0) {
+    toast.info('Voice recording is turned off', {
+      id: 'voice-shortcut-no-host',
+      description:
+        'Install a speech-to-text model or enable voice recording in Sound settings to use the shortcut.',
+      duration: 4000
+    })
+    return
+  }
   toast.info('No microphone input on screen', {
     id: 'voice-shortcut-no-host',
     description: 'Open a chat, comment box, or editor with a mic button to start dictation.',
