@@ -37,6 +37,7 @@
     UtilityActivation
   } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
+  import { toPosixPath } from '$shared/paths'
 
   interface Props {
     entry: SkillMarketEntry
@@ -114,7 +115,7 @@
           {
             id: project.id,
             label: project.name,
-            path: `${project.path.replace(/\/+$/u, '')}/${SHARED_PROJECT_SKILL_PATH}`
+            path: `${toPosixPath(project.path).replace(/\/+$/u, '')}/${SHARED_PROJECT_SKILL_PATH}`
           }
         ]
       })

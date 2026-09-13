@@ -37,6 +37,7 @@ import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
 import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
+import { toPosixPath } from '../../lib/paths'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
 import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 import { CheckpointLimitError, type ProjectFingerprint } from '../git/change-tracking-service'
@@ -231,7 +232,10 @@ import { foldTurnStreamEvents, type TurnStreamEvent } from './turn-stream'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
 import { workflowActionPresentation } from '../../lib/workflow-action-presentation'
-import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
+import {
+  DEFAULT_AGENT_BEHAVIOR_PROMPT,
+  gateCuaDriverBehaviorPrompt
+} from '../../lib/agent-behavior'
 import { registerCioPromptDefault, type CioPromptId } from '../../lib/cio-prompts'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -572,10 +576,23 @@ function rawErrorMessage(error: unknown): string {
 
 /** Full diagnostic error text for the error card's Raw Error view: the stack
  *  trace when a real Error object reached us, otherwise the message string
- *  as-is. Deliberately separate from `rawErrorMessage`, which must stay a
- *  short single-line message for logging and report fields. */
+ *  as-is. Drivers may attach the raw process output (stderr tail, crash trace)
+ *  to an Error's `cause` while keeping `message` short and user-facing, so the
+ *  cause chain is walked and appended here. Deliberately separate from
+ *  `rawErrorMessage`, which must stay a short single-line message for logging
+ *  and report fields. */
 function rawErrorDetail(error: unknown): string {
-  if (error instanceof Error && error.stack?.trim()) return error.stack.trim()
+  if (error instanceof Error) {
+    const parts = [error.stack?.trim() || error.message.trim()]
+    const cause = error.cause
+    if (typeof cause === 'string' && cause.trim()) {
+      parts.push(cause.trim())
+    } else if (cause instanceof Error) {
+      const nested = rawErrorDetail(cause)
+      if (nested) parts.push(nested)
+    }
+    return parts.filter((part) => part.length > 0).join('\n\nCaused by: ')
+  }
   return rawErrorMessage(error)
 }
 
@@ -607,7 +624,7 @@ function projectRelativePath(projectPath: string, candidate: string): string | n
   const trimmed = candidate.trim()
   if (!trimmed || trimmed.includes('\0')) return null
   const absolutePath = isAbsolute(trimmed) ? resolve(trimmed) : resolve(projectPath, trimmed)
-  const relativePath = relative(resolve(projectPath), absolutePath).replaceAll('\\', '/')
+  const relativePath = toPosixPath(relative(resolve(projectPath), absolutePath))
   if (!relativePath || relativePath === '..' || relativePath.startsWith('../')) return null
   return relativePath
 }
@@ -920,7 +937,7 @@ function attributionModeFor(
 }
 
 function engineeringArtifactBoundaryInstruction(artifactDirectory: string): string {
-  const normalizedDirectory = artifactDirectory.replace(/\\/gu, '/')
+  const normalizedDirectory = toPosixPath(artifactDirectory)
   return [
     `CodeInOven is the sole owner of Engineering lifecycle artifacts in ${normalizedDirectory}/, including spec.md, plan.md, progress.md, assignment.md, audit documents, and task evidence.`,
     'The application Agent behavior layer may inform how implementation work is performed, but it is non-authoritative for Engineering lifecycle storage and reporting.',
@@ -1316,6 +1333,7 @@ export function composeBrainstormSystemPrompt(input: {
 }
 
 interface SessionInfo {
+  sessionId: string
   projectId: string
   threadId: string
   projectPath: string
@@ -5382,7 +5400,7 @@ export class ChatEngine {
    * attributed to a running agent thread's file-changes card.
    */
   recordUserFileSave(projectId: string, relativePath: string): void {
-    const normalized = relativePath.trim().replaceAll('\\', '/')
+    const normalized = toPosixPath(relativePath.trim())
     if (!normalized || normalized.startsWith('../') || normalized === '..') return
     for (const session of this.sessionRegistry.values()) {
       if (session.projectId !== projectId || !session.activeTurnId) continue
@@ -5819,11 +5837,13 @@ export class ChatEngine {
     executionScope: BehaviorExecutionScope = 'project-thread',
     attributionKey?: string
   ): Promise<string> {
+    let behaviorDriver: HarnessDriver | undefined
     try {
       const threadSettings =
         settings ?? (await this.threadManager.getThread(projectId, threadId))?.settings
       const harnessId = threadSettings?.harnessId ?? DEFAULT_HARNESS
       const driver = this.drivers.get(harnessId)
+      behaviorDriver = driver
       const config = await this.storage.getConfig()
       // Trimmed modes get a compact scope guard instead of the full workspace
       // block; pure inbox chat and image description (no project scope) omit it.
@@ -5837,7 +5857,13 @@ export class ChatEngine {
         projectId,
         threadId,
         projectPath,
-        driver ? { id: driver.id, name: driver.name } : null,
+        driver
+          ? {
+              id: driver.id,
+              name: driver.name,
+              nativeComputerUse: driver.capabilities.nativeUtilities?.includes('computer_use')
+            }
+          : null,
         '',
         {
           SPEC_BRAINSTORM_SYSTEM_PROMPT: await this.cioPrompt('engineering-spec'),
@@ -5873,7 +5899,12 @@ export class ChatEngine {
         executionScope,
         error: rawErrorMessage(error)
       })
-      return executionScope === 'project-thread' ? DEFAULT_AGENT_BEHAVIOR_PROMPT : ''
+      return executionScope === 'project-thread'
+        ? gateCuaDriverBehaviorPrompt(
+            DEFAULT_AGENT_BEHAVIOR_PROMPT,
+            behaviorDriver?.capabilities.nativeUtilities?.includes('computer_use') === true
+          )
+        : ''
     }
   }
 
@@ -13367,11 +13398,9 @@ export class ChatEngine {
         : []
     if (brainstormWriteRoute) {
       featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
-      const revisionRelativePath = join(
-        featureArtifactDirectory(featureSlug),
-        'versions',
-        `session-${Date.now()}-brainstorm.md`
-      ).replace(/\\/gu, '/')
+      const revisionRelativePath = toPosixPath(
+        join(featureArtifactDirectory(featureSlug), 'versions', `session-${Date.now()}-brainstorm.md`)
+      )
       revisionPathInstruction = [
         '',
         'Session-report revision path (write the report Markdown to EXACTLY this project-relative path, creating parent directories as needed):',
@@ -19007,7 +19036,12 @@ export class ChatEngine {
       // A deliberate user stop must never surface as a session error.
       if (!this.userAbortedSessions.has(event.sessionId)) {
         const issue: AgentProviderIssue =
-          event.issue ?? this.fallbackProviderIssue(driverId, event.error ?? 'Agent session failed')
+          event.issue ??
+          this.fallbackProviderIssue(
+            driverId,
+            event.error ?? 'Agent session failed',
+            event.rawError
+          )
         if (isUsageResetWaitIssue(issue)) {
           // Unified contract: a usage/rate-limit reset is a scheduled wait, not
           // a failure. Re-surface the reset-wait as a `waiting` card and let
@@ -19044,7 +19078,7 @@ export class ChatEngine {
         Logger.dev('compaction message errored (session stays healthy):', event.error)
       } else if (!this.userAbortedSessions.has(event.sessionId)) {
         const issue: AgentProviderIssue =
-          event.issue ?? this.fallbackProviderIssue(driverId, event.error)
+          event.issue ?? this.fallbackProviderIssue(driverId, event.error, event.rawError)
         if (isUsageResetWaitIssue(issue)) {
           // The failed message still broadcasts below; the provider card is
           // replaced by the unified waiting state instead of an error.
@@ -22520,9 +22554,10 @@ export class ChatEngine {
     // Notify renderers that the live file list changed
     this.broadcast({
       type: 'checkpoint.liveUpdated',
+      sessionId: session.sessionId,
       projectId: session.projectId,
       threadId: session.threadId
-    } as unknown as AgentEvent)
+    })
   }
 
   // ─── Session registry ─────────────────────────────────────────────────────
@@ -22539,6 +22574,7 @@ export class ChatEngine {
   ): void {
     const existing = this.sessionRegistry.get(sessionId)
     this.sessionRegistry.set(sessionId, {
+      sessionId,
       projectId,
       threadId,
       projectPath,

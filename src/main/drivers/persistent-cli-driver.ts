@@ -593,7 +593,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     let stdoutBuffer = ''
     let stderrBuffer = ''
     let completed = false
-    const finish = async (error?: string): Promise<void> => {
+    const finish = async (error?: string, detail?: string): Promise<void> => {
       if (completed) return
       completed = true
       try {
@@ -618,11 +618,18 @@ export abstract class PersistentCliDriver implements HarnessDriver {
           }
         }
         if (error && !this.structuredProcessIssues.has(session.id)) {
-          const kind = classifyProviderIssue(error)
+          // The stderr tail (typically the harness's stack trace) must never
+          // appear in the beautified card body. Classify on the combined text
+          // so embedded signals (auth, quota, billing) still match, but keep
+          // `message` short and carry the trace only in `rawError`.
+          const classificationSource = detail ? `${error}: ${detail}` : error
+          const kind = classifyProviderIssue(classificationSource)
+          const rawError = detail ? `${error}\n\n${detail}` : error
           this.emit({
             type: 'session.error',
             sessionId: session.id,
             error,
+            rawError,
             ...(kind === 'unknown'
               ? {}
               : {
@@ -632,7 +639,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
                       kind === 'authentication'
                         ? `${this.name} sign-in expired. Sign in again, then retry this message.`
                         : error,
-                    rawError: error,
+                    rawError,
                     harnessId: this.id,
                     retryable: kind !== 'billing'
                   }
@@ -666,13 +673,13 @@ export abstract class PersistentCliDriver implements HarnessDriver {
           this.consumeJsonLineIfPresent(line, session, projectPath, invocation)
         }
       }
-      const failure =
+      const exitedCleanly =
         code === 0 || signal === 'SIGTERM' || invocation.isExpectedExit?.(code, signal)
-          ? undefined
-          : `Harness process exited with code ${code ?? 'unknown'}${
-              stderrBuffer.trim() ? `: ${stderrBuffer.trim()}` : ''
-            }`
-      void finish(failure)
+      const failure = exitedCleanly
+        ? undefined
+        : `Harness process exited with code ${code ?? 'unknown'}`
+      const failureDetail = exitedCleanly || !stderrBuffer.trim() ? undefined : stderrBuffer.trim()
+      void finish(failure, failureDetail)
     })
 
     if (invocation.input) child.stdin?.write(invocation.input)

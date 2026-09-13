@@ -214,6 +214,16 @@ export interface UpdaterStatus {
   errorMessage?: string
 }
 
+/** Release notes of the newest published release for the configured channel. */
+export interface UpdaterChangelog {
+  /** Release tag, e.g. `v0.5.54-nightly.2` or `v0.5.53`. */
+  tag: string
+  /** ISO publish date of the release, empty when unknown. */
+  publishedAt: string
+  /** Markdown release body, sanitized by the renderer before display. */
+  notes: string
+}
+
 /** Native browser content rectangle in BrowserWindow density-independent pixels. */
 export interface BrowserViewBounds {
   x: number
@@ -2739,6 +2749,8 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'updater:check': {} as Contract<[explicit?: boolean], UpdaterStatus>,
   'updater:getStatus': {} as Contract<[], UpdaterStatus>,
+  /** Release notes of the newest published release for the configured channel. */
+  'updater:getChangelog': {} as Contract<[], UpdaterChangelog | null>,
   'updater:download': {} as Contract<[], void>,
   'updater:install': {} as Contract<[], void>,
   'remote:getStatus': {} as Contract<[], RemoteModeStatus>,

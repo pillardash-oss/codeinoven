@@ -4,8 +4,8 @@ import type {
   SpecValidationIssue,
   SpecValidationResult
 } from '../types'
+import { isAbsoluteishPath, toPosixPath } from '../paths'
 
-const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:[\\/]/
 const UNC_PATH = /^(?:\\\\|\/\/)/
 
 function isBlank(value: string): boolean {
@@ -54,15 +54,13 @@ export function isSafeProjectRelativePath(path: string): boolean {
   if (
     path.length === 0 ||
     path.includes('\0') ||
-    path.startsWith('/') ||
-    path.startsWith('\\') ||
-    WINDOWS_ABSOLUTE_PATH.test(path) ||
+    isAbsoluteishPath(path) ||
     UNC_PATH.test(path)
   ) {
     return false
   }
 
-  const segments = path.replaceAll('\\', '/').split('/')
+  const segments = toPosixPath(path).split('/')
   return segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
 }
 

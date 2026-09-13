@@ -104,6 +104,19 @@ private final class CaptureSession {
         }
     }
 
+    /// One-shot CoreAudio/HAL warmup. Builds and prepares a throwaway engine so
+    /// the first real start does not pay audio-unit initialization latency.
+    /// The engine is intentionally discarded afterwards: every real start
+    /// creates a fresh engine bound to the current default input device, so a
+    /// warmup can never pin a stale microphone.
+    func warm() {
+        let engine = AVAudioEngine()
+        let inputFormat = engine.inputNode.inputFormat(forBus: 0)
+        guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else { return }
+        _ = AVAudioConverter(from: inputFormat, to: targetFormat)
+        engine.prepare()
+    }
+
     private func write(_ input: AVAudioPCMBuffer, generation: Int) {
         guard generation == self.generation, let converter, let file else { return }
         let ratio = targetFormat.sampleRate / input.format.sampleRate
@@ -163,6 +176,8 @@ private func handle(_ request: Request) -> Response {
                 throw NSError(domain: "SpeechCaptureWorker", code: 3, userInfo: [NSLocalizedDescriptionKey: "Missing recording output path."])
             }
             try capture.start(outputPath: outputPath)
+        case "prepare":
+            capture.warm()
         case "stop":
             capture.stop()
         default:

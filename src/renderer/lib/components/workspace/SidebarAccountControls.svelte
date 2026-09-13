@@ -12,6 +12,7 @@
     Smartphone
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { keymapKeys } from '$lib/keymap/keymap'
   import { preloadSettingsChunk } from '$lib/page-preload'
   import { updaterState } from '$lib/stores/updater.svelte'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
@@ -135,7 +136,8 @@
     <button
       type="button"
       class="flex h-8 flex-1 items-center gap-2 rounded-lg px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Open settings (⌘,)"
+      title="Open settings"
+      data-shortcut={keymapKeys('nav-settings').join(',')}
       onmouseenter={preloadSettingsChunk}
       onclick={() => navigate('settings')}
     >
@@ -158,7 +160,8 @@
       <button
         type="button"
         class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Open settings (⌘,)"
+        title="Open settings"
+        data-shortcut={keymapKeys('nav-settings').join(',')}
         aria-label="Open settings"
         onmouseenter={preloadSettingsChunk}
         onclick={() => navigate('settings')}

@@ -160,6 +160,7 @@
   import { isTodoToolPart, latestAgentTodo } from '$lib/agent-todos'
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
   import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
+  import { toPosixPath } from '$shared/paths'
   import { revealCitationFile, revealFileInAppTree, revealLocalFile } from '$lib/reveal-file'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
@@ -2927,7 +2928,7 @@
       })
       .map((source) => {
         if (source.kind !== 'file-citation' || !source.path || !projectPath) return source
-        const root = projectPath.replace(/[\\/]+$/u, '')
+        const root = toPosixPath(projectPath).replace(/\/+$/u, '')
         if (isAbsoluteCitationPath(source.path)) {
           const target = normalizeCitationPath(source.path)
           const rootKey = normalizeCitationPath(root)

@@ -2808,6 +2808,12 @@ export type AgentEvent =
       checkpointId: string
     }
   | {
+      type: 'checkpoint.liveUpdated'
+      sessionId: string
+      projectId: string
+      threadId: string
+    }
+  | {
       type: 'thread.error'
       sessionId: string
       projectId: string
@@ -2827,6 +2833,9 @@ export type AgentEvent =
       sessionId: string
       messageId: string
       error?: string
+      /** Full diagnostic detail (stderr tail, stack trace) kept out of the
+       *  beautified `error` message; shown only in the Raw Error view. */
+      rawError?: string
       issue?: AgentProviderIssue
       /** Structured result captured before a provider history read is required. */
       structuredOutput?: unknown
@@ -2871,6 +2880,9 @@ export type AgentEvent =
       type: 'session.error'
       sessionId: string
       error?: string
+      /** Full diagnostic detail (stderr tail, stack trace) kept out of the
+       *  beautified `error` message; shown only in the Raw Error view. */
+      rawError?: string
       issue?: AgentProviderIssue
     }
   | {

@@ -181,6 +181,7 @@ export class UtilityRegistryService {
         harnessBindings: harnesses.map((harness) => ({
           harnessId: harness.id,
           strategy: 'mcp' as const,
+          nativeCapability: 'computer_use',
           transportName: 'cua-driver'
         })),
         appOwned: true,

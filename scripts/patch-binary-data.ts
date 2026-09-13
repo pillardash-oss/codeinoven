@@ -10,7 +10,8 @@
  * Electron asar archive.
  */
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
+import { toPosixPath } from '../src/lib/paths'
 
 const packageRoot = resolve(import.meta.dirname ?? '.', '../node_modules/@shinyoshiaki/binary-data')
 const srcNodeModules = join(packageRoot, 'src/node_modules')
@@ -41,12 +42,15 @@ function collectJsFiles(root: string, out: string[] = []): string[] {
 function patchFile(file: string): boolean {
   const original = readFileSync(file, 'utf8')
   let patched = original
-  const dir = file.slice(0, file.lastIndexOf('/')) || '.'
+  const dir = dirname(file)
 
   // Replace require('lib/...') / require("lib/...") etc
   for (const [prefix, targetDir] of Object.entries(targets)) {
-    // relative from this file's dir to the target dir
-    let rel = relative(dir, targetDir)
+    // relative from this file's dir to the target dir. POSIX separators are
+    // required: the specifier is embedded into a JS string literal, and
+    // Windows backslashes would collapse through legacy escapes
+    // (ERR_INVALID_MODULE_SPECIFIER / broken require paths).
+    let rel = toPosixPath(relative(dir, targetDir))
     if (!rel) rel = '.'
     // Ensure relative require prefix uses ./ or ../
     if (!rel.startsWith('.')) rel = `./${rel}`

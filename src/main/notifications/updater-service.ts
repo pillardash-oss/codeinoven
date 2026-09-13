@@ -1,13 +1,19 @@
 import electronUpdater from 'electron-updater'
 import { BrowserWindow, app } from 'electron'
 import { Logger } from '../system/logger'
-import type { UpdaterStatus } from '../../lib/ipc-contract'
+import type { UpdaterStatus, UpdaterChangelog } from '../../lib/ipc-contract'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const DEFERRED_POLL_MS = 5_000
 const PENDING_INSTALL_FILE = 'updater/install-pending.json'
+/** GitHub releases API for the published feed (public repo, no auth needed). */
+const GITHUB_RELEASES_URL = 'https://api.github.com/repos/pillardash-oss/codeinoven/releases?per_page=40'
+/** Refetch window for the cached changelog; avoids hammering the API per visit. */
+const CHANGELOG_CACHE_MS = 15 * 60 * 1000
+/** Hard cap on the notes body sent over IPC and rendered. */
+const CHANGELOG_MAX_NOTES_CHARS = 40_000
 const { autoUpdater } = electronUpdater
 
 /** Anything that can report how much interactive work would be interrupted by a restart. */
@@ -34,6 +40,7 @@ export class UpdaterService {
   private explicitCheckInFlight = false
   /** True while a check initiated by this service is still resolving. */
   private checkInFlight = false
+  private changelogCache: { changelog: UpdaterChangelog | null; fetchedAt: number } | null = null
 
   constructor(storage: StorageEngine) {
     this.storage = storage
@@ -231,6 +238,60 @@ export class UpdaterService {
       autoUpdater.allowPrerelease = nightly
     } catch (error: unknown) {
       Logger.error('Updater: failed to read update channel', error)
+    }
+  }
+
+  /**
+   * Release notes of the newest published release for the configured channel:
+   * the newest nightly prerelease while the nightly channel is selected, else
+   * the newest stable release. Served from a short in-memory cache so repeated
+   * About visits never hit the GitHub API. Returns null when offline or when
+   * the feed cannot be resolved   the renderer shows a quiet fallback.
+   */
+  async fetchChangelog(): Promise<UpdaterChangelog | null> {
+    if (this.changelogCache && Date.now() - this.changelogCache.fetchedAt < CHANGELOG_CACHE_MS) {
+      return this.changelogCache.changelog
+    }
+    let nightlyChannel = false
+    try {
+      nightlyChannel = (await this.storage.getConfig()).updateChannel === 'nightly'
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to read update channel for changelog', error)
+    }
+    try {
+      const response = await fetch(GITHUB_RELEASES_URL, {
+        headers: { Accept: 'application/vnd.github+json' },
+        signal: AbortSignal.timeout(10_000)
+      })
+      if (!response.ok) throw new Error(`GitHub releases responded ${String(response.status)}`)
+      interface GhRelease {
+        tag_name?: unknown
+        published_at?: unknown
+        prerelease?: unknown
+        body?: unknown
+      }
+      const releases = (await response.json()) as GhRelease[]
+      const nightlyPattern = /^v\d+\.\d+\.\d+-nightly[.-]\d+$/
+      const entry = releases.find((release) =>
+        nightlyChannel
+          ? release.prerelease === true && typeof release.tag_name === 'string' && nightlyPattern.test(release.tag_name)
+          : release.prerelease === false
+      )
+      const changelog: UpdaterChangelog | null =
+        entry && typeof entry.tag_name === 'string' && typeof entry.body === 'string'
+          ? {
+              tag: entry.tag_name,
+              publishedAt:
+                typeof entry.published_at === 'string' ? entry.published_at : '',
+              notes: entry.body.slice(0, CHANGELOG_MAX_NOTES_CHARS)
+            }
+          : null
+      this.changelogCache = { changelog, fetchedAt: Date.now() }
+      return changelog
+    } catch (error: unknown) {
+      Logger.error('Updater: changelog fetch failed', error)
+      // Do not cache failures: the next About visit retries the network.
+      return null
     }
   }
 

@@ -3,6 +3,7 @@ import { realpath } from 'fs/promises'
 import { isAbsolute, posix, relative, resolve, sep, win32 } from 'path'
 import type { WebFrameMain } from 'electron'
 import type { GitRestoreTarget } from '../../lib/types'
+import { toPosixPath } from '../../lib/paths'
 import type {
   ChecklistItemStatus,
   CreateProjectInput,
@@ -589,7 +590,7 @@ export function validateGitRelativePath(value: unknown, label = 'Git file path')
   if (!GIT_PATH_PATTERN.test(path)) {
     throw new TypeError(`${label} must not contain control characters`)
   }
-  const segments = path.split('/')
+  const segments = toPosixPath(path).split('/')
   if (segments.some((segment) => segment === '..')) {
     throw new TypeError(`${label} must not escape the repository root`)
   }

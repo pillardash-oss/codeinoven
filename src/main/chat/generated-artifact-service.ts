@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { lstat, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { toPosixPath } from '../../lib/paths'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   INBOX_PROJECT_ID,
@@ -192,7 +193,7 @@ function projectArtifactDirectory(thread: ProjectArtifactThread): string {
 }
 
 function promptPath(path: string): string {
-  return path.split(sep).join('/')
+  return toPosixPath(path)
 }
 
 async function atomicWriteBuffer(path: string, bytes: Buffer): Promise<void> {

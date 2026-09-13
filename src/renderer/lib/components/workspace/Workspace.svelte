@@ -41,6 +41,7 @@
     ChevronDown
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
+  import { keymapKeys } from '$lib/keymap/keymap'
   import WelcomeStart from './WelcomeStart.svelte'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
   import ProjectIdentity from '../shared/ProjectIdentity.svelte'
@@ -1910,6 +1911,7 @@
                 icon: Plus,
                 ariaLabel: `New thread in ${activeProject.name}`,
                 title: `New thread in ${activeProject.name}`,
+                shortcut: keymapKeys('nav-new-thread'),
                 run: () => void createThreadInProject(activeProject)
               } satisfies ViewActionItem
             ]
@@ -1940,6 +1942,7 @@
           icon: SquarePen,
           ariaLabel: 'New chat',
           title: 'New chat',
+          shortcut: keymapKeys('nav-new-thread'),
           run: startNewChat
         }
       ]
@@ -1968,6 +1971,7 @@
           icon: Plus,
           ariaLabel: 'New thread in this scope',
           title: 'New thread in this scope',
+          shortcut: keymapKeys('nav-new-thread'),
           run: () => newThreadInScopeContext()
         },
         {
@@ -3811,6 +3815,7 @@
                                 class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
                                 aria-label="New thread in {project.name}"
                                 title="New thread"
+                                data-shortcut={keymapKeys('nav-new-thread').join(',')}
                                 onclick={() => createThreadInProject(project)}
                               >
                                 <Plus size={12} />
@@ -4023,6 +4028,7 @@
                             class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
                             aria-label="New thread in {project.name}"
                             title="New thread"
+                            data-shortcut={keymapKeys('nav-new-thread').join(',')}
                             onclick={() => createThreadInProject(project)}
                           >
                             <Plus size={12} />

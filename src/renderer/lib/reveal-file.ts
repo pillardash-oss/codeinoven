@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { isAbsoluteishPath } from '$shared/paths'
 import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -44,7 +45,7 @@ async function revealEntry(
 
 async function exactEntry(projectId: string, path: string): Promise<ProjectFileEntry | null> {
   if (!path) return { name: '', path: '', kind: 'directory' }
-  if (path.startsWith('/') || path.split('/').includes('..')) return null
+  if (isAbsoluteishPath(path) || path.split('/').includes('..')) return null
   try {
     const info = await projectFilesWorkspace.fileInfo(projectId, path)
     return { name: info.name, path: info.path, kind: info.kind }
