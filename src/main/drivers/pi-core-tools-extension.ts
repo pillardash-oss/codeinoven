@@ -247,16 +247,51 @@ function isIntrinsicSkillRead(toolName, input, cwd) {
   })
 }
 
-// Filesystem-off chat still has ordinary internet access. Permit a single
-// network curl invocation only when it has no shell composition, interpolation,
-// local-file input, upload, or output flags. Broader shell use remains gated.
+// Filesystem-off chat still has ordinary internet access. Permit an HTTP curl
+// request, including quoted query strings and escaped multiline commands, when
+// it has no shell composition, interpolation, local-file input, upload, or
+// output flags. Broader shell use remains gated.
+function hasUnsafeCurlShellSyntax(command) {
+  let quote = ''
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]
+    if (character === '\\n' || character === '\\r') return true
+    if (character === '\\\\') {
+      if (command[index + 1] === '\\n') {
+        index += 1
+        continue
+      }
+      if (command[index + 1] === '\\r' && command[index + 2] === '\\n') {
+        index += 2
+        continue
+      }
+      if (quote !== "'") index += 1
+      continue
+    }
+    if (character === "'" && quote !== '"') {
+      quote = quote === "'" ? '' : "'"
+      continue
+    }
+    if (character === '"' && quote !== "'") {
+      quote = quote === '"' ? '' : '"'
+      continue
+    }
+    if (quote === "'") continue
+    if (character.charCodeAt(0) === 96) return true
+    if (character === '$' && /[({A-Za-z_]/u.test(command[index + 1] ?? '')) return true
+    if (!quote && /[;&|<>]/u.test(character)) return true
+  }
+  return quote !== ''
+}
+
 function isSafeNetworkCurl(toolName, input) {
   if (toolName !== 'bash' || typeof input['command'] !== 'string') return false
   const command = input['command'].trim()
   if (!/^curl(?:\\s|$)/u.test(command)) return false
-  if (/[\\n\\r;&|\`<>@]/u.test(command) || /\\$(?:\\(|\\{|[A-Za-z_])/u.test(command)) return false
-  if (!/(?:^|\\s)https?:\\/\\/[^\\s"']+/iu.test(command)) return false
-  return !/(?:^|\\s)(?:-o|--output|-T|--upload-file|-K|--config|--unix-socket|--netrc-file|--cookie|--cookie-jar|--cert|--key)(?:\\s|=|$)/u.test(command)
+  if (hasUnsafeCurlShellSyntax(command)) return false
+  if (!/https?:\\/\\//iu.test(command) || /file:\\/\\//iu.test(command)) return false
+  if (/(?:^|\\s)(?:-o|-O|--output|--remote-name|--remote-header-name|--output-dir|-T|--upload-file|-K|--config|--unix-socket|--netrc-file|--cookie|--cookie-jar|--cert|--key|--cacert|--capath)(?:\\s|=|$)/u.test(command)) return false
+  return !/(?:^|\\s)(?:-d|--data|--data-ascii|--data-binary|--data-raw|--data-urlencode|--json|--form|-F)(?:\\s|=)["']?[^\\s"']*@/u.test(command)
 }
 
 function isProtectedPath(candidatePath) {
