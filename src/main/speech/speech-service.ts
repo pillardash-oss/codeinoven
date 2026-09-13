@@ -39,6 +39,7 @@ import type { SpeechUnloadOption } from '../../lib/speech/types'
 import { parseSpeechModelCatalog } from '../../lib/speech/model-catalog'
 import { collapseRepetitiveArtifacts } from '../../lib/speech/transcript-sanitizer'
 import { DEFAULT_REFINEMENT_FLAGS } from '../../lib/speech/types'
+import { posixBasename } from '../../lib/paths'
 import {
   buildParsedIdentityForValidation,
   CAPABILITY_RUNTIMES,
@@ -1886,7 +1887,7 @@ export class SpeechService {
         familyId: 'whisper',
         capability,
         runtime: imported.runtime,
-        label: imported.importPath?.split('/').pop()?.split('\\').pop() ?? imported.artifactId,
+        label: imported.importPath ? posixBasename(imported.importPath) : imported.artifactId,
         description: `Imported model at ${imported.importPath ?? ''}`.trim(),
         tier: 'balanced',
         version: 'imported',

@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { posixBasename } from '$shared/paths'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
 import { mobileState } from '$lib/remote/mobile-state.svelte'
@@ -1012,7 +1013,9 @@ class SpeechController {
             familyId: 'whisper',
             capability: 'asr' as const,
             runtime: chosenInstalled.runtime,
-            label: chosenInstalled.importPath?.split('/').pop() ?? chosenInstalled.artifactId,
+            label: chosenInstalled.importPath
+              ? posixBasename(chosenInstalled.importPath)
+              : chosenInstalled.artifactId,
             description: '',
             tier: 'balanced' as const,
             version: 'imported',
@@ -1152,7 +1155,9 @@ class SpeechController {
             familyId: 'kokoro',
             capability: 'tts' as const,
             runtime: chosenInstalled.runtime,
-            label: chosenInstalled.importPath?.split('/').pop() ?? chosenInstalled.artifactId,
+            label: chosenInstalled.importPath
+              ? posixBasename(chosenInstalled.importPath)
+              : chosenInstalled.artifactId,
             description: '',
             tier: 'balanced' as const,
             version: 'imported',

@@ -13,6 +13,7 @@ import {
 } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { toPosixPath } from '../../lib/paths'
 import { ProjectFileIndexService } from './project-file-index-service'
 import type {
   Project,
@@ -61,10 +62,6 @@ async function isSymlinkedDirectoryInsideRoot(root: string, linkPath: string): P
   } catch {
     return false
   }
-}
-
-function toPosixPath(path: string): string {
-  return path.split(sep).join('/')
 }
 
 function revisionOf(content: Uint8Array): string {

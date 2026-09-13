@@ -37,6 +37,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
+import { pathToFileURL } from 'node:url'
 
 const REPO = 'pillardash-oss/codeinoven'
 
@@ -396,6 +397,8 @@ async function main(): Promise<number> {
 }
 
 // Only run main when executed directly (not when imported by tests).
-if (import.meta.url === `file://${process.argv[1]}`) {
+// `pathToFileURL` keeps the comparison valid on Windows, where argv[1] is a
+// backslash path and a naive `file://` prefix would never equal import.meta.url.
+if (import.meta.url === pathToFileURL(process.argv[1]!).href) {
   process.exitCode = await main()
 }

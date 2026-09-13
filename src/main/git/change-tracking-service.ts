@@ -4,6 +4,7 @@ import { lstat, mkdir, readdir, readFile, realpath, unlink, writeFile } from 'fs
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { APP_SLUG } from '../../lib/brand'
 import { PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
+import { toPosixPath } from '../../lib/paths'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 
 const DEFAULT_EXCLUDED_DIRECTORIES = new Set([
@@ -473,7 +474,7 @@ export class ChangeTrackingService {
     projectRoot: string,
     git: GitCheckpointMetadata
   ): Promise<string[]> {
-    const repositoryRelativeRoot = relative(git.repositoryRoot, projectRoot).replaceAll(sep, '/')
+    const repositoryRelativeRoot = toPosixPath(relative(git.repositoryRoot, projectRoot))
     if (
       repositoryRelativeRoot === '..' ||
       repositoryRelativeRoot.startsWith('../') ||

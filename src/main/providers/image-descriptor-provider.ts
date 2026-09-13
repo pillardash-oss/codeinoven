@@ -4,6 +4,7 @@ import { stat, readdir } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { generateId } from '../../lib/utils'
+import { toPosixPath } from '../../lib/paths'
 import type { PromptAttachment } from '../../lib/types'
 import {
   IMAGE_DESCRIPTOR_MAX_IMAGES,
@@ -300,7 +301,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function pathToFileUrl(path: string): string {
-  const normalized = path.replaceAll('\\', '/')
+  const normalized = toPosixPath(path)
   return normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
 }
 

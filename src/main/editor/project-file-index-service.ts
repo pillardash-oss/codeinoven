@@ -3,6 +3,7 @@ import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { watch, type FSWatcher } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
+import { toPosixPath } from '../../lib/paths'
 import { Logger } from '../system/logger'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 import type { ProjectFileEntry } from '../../lib/types'
@@ -139,7 +140,7 @@ function toProjectRelativePath(root: string, absolutePath: string): string | nul
   ) {
     return null
   }
-  const posixPath = relativePath.split(sep).join('/')
+  const posixPath = toPosixPath(relativePath)
   if (
     posixPath.includes('\\') ||
     posixPath.length === 0 ||
@@ -643,7 +644,7 @@ export class ProjectFileIndexService {
     if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${sep}`)) {
       return false
     }
-    return relativePath.split(/[\\/]/u).some((segment) => INDEX_EXCLUDED_DIRECTORIES.has(segment))
+    return toPosixPath(relativePath).split('/').some((segment) => INDEX_EXCLUDED_DIRECTORIES.has(segment))
   }
 
   private queueEvent(projectId: string, absolutePath: string): void {

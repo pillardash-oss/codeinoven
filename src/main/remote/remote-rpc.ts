@@ -16,6 +16,7 @@ import type { Database } from '../database/database'
 import { appendFile, mkdir, open, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { toPosixPath } from '../../lib/paths'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { EngineeringLifecycleEngine } from '../../lib/engines/engineering-lifecycle-engine'
 import {
@@ -2216,7 +2217,7 @@ export class RemoteRpcDispatcher {
     const configRoot = await realpath(getConfigRoot()).catch(() => resolve(getConfigRoot()))
     const configRelative = relative(configRoot, canonicalPath)
     if (isContainedRelativePath(configRelative)) {
-      const segments = configRelative.split(sep)
+      const segments = toPosixPath(configRelative).split('/')
       const chatAttachment =
         segments[0] === 'chats' && segments.length >= 4 && segments[2] === 'tmp'
       const projectAttachment =

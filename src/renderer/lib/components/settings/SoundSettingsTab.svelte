@@ -16,6 +16,7 @@
   import DownloadProgress from '../ui/DownloadProgress.svelte'
   import { parseModelIdentityFromPath } from '../../../../lib/speech/model-path-validation'
   import type { AppConfigPatch } from '$shared/types'
+  import { posixBasename } from '$shared/paths'
   import type { SpeechDestructiveAction, SpeechSettings } from '../../../../lib/speech/types'
   import type { SpeechModelArtifact } from '../../../../lib/speech/types'
   import { invoke } from '$lib/ipc.svelte'
@@ -163,7 +164,7 @@
     if (imp?.importPath) {
       const parsed = parseModelIdentityFromPath(imp.importPath, imp.runtime)
       if (parsed) return parsed.displayName
-      return imp.importPath.split('/').pop() ?? artifactId
+      return posixBasename(imp.importPath) || artifactId
     }
     return artifactId
   }

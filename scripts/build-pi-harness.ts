@@ -1,7 +1,8 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { dirname, join, relative, sep } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { toPosixPath } from '../src/lib/paths'
 
 /**
  * Copies the pinned pi CLI's compiled bundle into `resources/harnesses/pi`
@@ -52,7 +53,7 @@ await cp(piPackageJsonPath, join(outputDirectory, 'package.json'))
 // destination already exists, and node's `cp` rewrites relative targets into
 // absolute host paths that would be broken links in the packaged app.
 const excludeBuildTimeBin = (source: string): boolean =>
-  !source.split(sep).includes('.bin')
+  !toPosixPath(source).split('/').includes('.bin')
 await cp(jitiPackageDirectory, join(outputDirectory, 'vendor/jiti'), {
   recursive: true,
   filter: excludeBuildTimeBin
@@ -118,7 +119,7 @@ async function rewriteVendorImports(directory: string): Promise<void> {
       // each `\.` collapses to `.` (legacy escape), mangling the specifier
       // into something like `......vendor@earendil-workschorddistindex.js`,
       // which crashes ESM resolution with ERR_INVALID_MODULE_SPECIFIER.
-      const rel = relative(dirname(path), resolvedFile).split(sep).join('/')
+      const rel = toPosixPath(relative(dirname(path), resolvedFile))
       rewritten = rewritten.replaceAll(
         new RegExp(`(["'])${specifier.replaceAll('/', '\\/')}(\\1)`, 'gu'),
         (_match, quote: string) => `${quote}${rel}${quote}`

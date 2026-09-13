@@ -29,6 +29,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import type { Project, TaskManagerProcess, TaskManagerSnapshot } from '$shared/types'
+  import { posixBasename } from '$shared/paths'
 
   interface Props {
     open: boolean
@@ -177,7 +178,7 @@
 
   function processName(command: string): string {
     const executable = command.trim().split(/\s+/u)[0] ?? command
-    return executable.split(/[\\/]/u).at(-1) || 'Process'
+    return posixBasename(executable) || 'Process'
   }
 
   function harnessIdFor(command: string): string | undefined {
@@ -185,10 +186,7 @@
       .trim()
       .split(/\s+/u)[0]
       ?.replace(/^['"]|['"]$/gu, '')
-    const name = executable
-      ?.split(/[\\/]/u)
-      .at(-1)
-      ?.replace(/\.exe$/iu, '')
+    const name = posixBasename(executable ?? '').replace(/\.exe$/iu, '')
     return getAgentIcon(name)?.id
   }
 

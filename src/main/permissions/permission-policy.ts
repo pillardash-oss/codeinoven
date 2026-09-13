@@ -1,4 +1,5 @@
 import { basename, isAbsolute, relative, resolve, sep } from 'path'
+import { toPosixPath } from '../../lib/paths'
 import { tmpdir } from 'os'
 
 export type PermissionRisk = 'low' | 'medium' | 'high' | 'critical'
@@ -336,7 +337,7 @@ export class PermissionPolicy {
   }
 
   private isProtectedPath(path: string): boolean {
-    const relativePath = relative(this.projectRoot, path).split(sep).join('/')
+    const relativePath = toPosixPath(relative(this.projectRoot, path))
     const segments = relativePath.split('/').filter(Boolean)
     const fileName = basename(path).toLowerCase()
 

@@ -5,6 +5,7 @@
   import ProviderLoginTerminal from '../providers/ProviderLoginTerminal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { APP_NAME } from '$shared/brand'
+  import { toPosixPath, posixBasename } from '$shared/paths'
   import type { Project } from '$shared/types'
   import { folderBaseName } from '$lib/project-location'
 
@@ -46,8 +47,7 @@
       void deriveDefaultPath(url).then((p) => {
         if (p && !userEditedDestination) {
           destination = p
-          const seg = p.split('/').filter(Boolean).pop() ?? ''
-          repoName = seg
+          repoName = posixBasename(p)
         }
       })
     }
@@ -87,12 +87,14 @@
     if (!chosen) return
     // If user picks a directory, we treat it as parent; append repoName if present
     const baseName = repoName || deriveRepoNameLocal(gitUrl) || 'repo'
-    const alreadyEndsWithRepo = chosen.endsWith(`/${baseName}`) || chosen.endsWith(baseName)
+    const alreadyEndsWithRepo = chosen.endsWith(baseName)
     if (alreadyEndsWithRepo) {
       destination = chosen
     } else {
-      // If chosen is a directory that exists, append repo name
-      destination = `${chosen.replace(/\/+$/u, '')}/${baseName}`
+      // If chosen is a directory that exists, append repo name. POSIX form is
+      // accepted by git and the fs layer on every platform, and avoids mixed
+      // separators like `C:\repo/myrepo` when the picker returns backslashes.
+      destination = `${toPosixPath(chosen).replace(/\/+$/u, '')}/${baseName}`
     }
     userEditedDestination = true
   }

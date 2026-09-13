@@ -22,6 +22,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { rmSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import { toPosixPath } from '../src/lib/paths'
 
 type SmokeTarget = 'linux' | 'mac' | 'win'
 
@@ -476,7 +477,7 @@ async function main(): Promise<void> {
     process.stderr.write(
       '\n[ci-local] ::error:: ' +
       `${gateFailures.length} CI stage(s) failed:\n  - ${gateFailures.map((failure) => failure.id).join('\n  - ')}\n` +
-      `[ci-local] reports: ${relative(projectRoot, reportDir)}\n` +
+      `[ci-local] reports: ${toPosixPath(relative(projectRoot, reportDir))}\n` +
       '[ci-local] Deployment is blocked until every stage passes.\n'
     )
     process.exit(1)

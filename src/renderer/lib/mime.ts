@@ -1,3 +1,5 @@
+import { toPosixPath } from '$shared/paths'
+
 const EXTENSION_MIME_MAP: Record<string, string> = {
   // Images
   png: 'image/png',
@@ -82,11 +84,19 @@ export function isSvgMime(mime: string): boolean {
   return mime === 'image/svg+xml'
 }
 
-/** Convert an absolute local file path into a `file://` URL for renderer use. */
+/** Convert an absolute local file path into a `file://` URL for renderer use.
+ *  Segments are percent-encoded so `#`, `?`, `%`, and spaces survive. UNC
+ *  paths (rare for local attachments) keep their leading slashes; a fully
+ *  WHATWG-correct UNC `file://host/share` form would need host-aware
+ *  decoding in `fileUrlToPath` and is out of scope here. */
 export function pathToFileUrl(path: string): string {
-  const normalized = path.replace(/\\/g, '/')
+  const normalized = toPosixPath(path)
   const withLeadingSlash = normalized.startsWith('/') ? normalized : `/${normalized}`
-  return `file://${withLeadingSlash}`
+  const encoded = withLeadingSlash
+    .split('/')
+    .map((segment) => (segment ? encodeURIComponent(segment) : segment))
+    .join('/')
+  return `file://${encoded}`
 }
 
 /** Convert a `file://` URL back into an absolute local file path. */

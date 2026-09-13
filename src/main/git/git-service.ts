@@ -10,7 +10,8 @@ import {
   rm,
   unlink
 } from 'fs/promises'
-import { resolve, relative, isAbsolute, sep, dirname } from 'path'
+import { dirname, isAbsolute, relative, resolve, sep } from 'path'
+import { toPosixPath } from '../../lib/paths'
 import { realpathSync } from 'fs'
 import { createHash } from 'node:crypto'
 import { simpleGit } from 'simple-git'
@@ -487,7 +488,7 @@ export class GitService {
           if (metadata?.draftSaved) {
             return {
               analysis,
-              scratchPath: relative(directory, paths.document).split(sep).join('/'),
+              scratchPath: toPosixPath(relative(directory, paths.document)),
               content,
               hunks: metadata.hunks
             }
@@ -504,7 +505,7 @@ export class GitService {
         })
         return {
           analysis,
-          scratchPath: relative(directory, paths.document).split(sep).join('/'),
+          scratchPath: toPosixPath(relative(directory, paths.document)),
           content: initial.content,
           hunks: initial.hunks
         }
@@ -1782,7 +1783,7 @@ export class GitService {
     if (relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
       throw new TypeError('Repository path escapes the project root')
     }
-    return relativePath.split(sep).join('/')
+    return toPosixPath(relativePath)
   }
 
   private async isUntracked(git: SimpleGit, path: string): Promise<boolean> {
@@ -1805,7 +1806,7 @@ export class GitService {
     const conflicted = status.conflicted
     const changes: GitFileChange[] = []
     for (const file of status.files) {
-      const path = file.path.split(sep).join('/')
+      const path = toPosixPath(file.path)
       const indexMarker = file.index?.trim() ?? ''
       const workMarker = file.working_dir?.trim() ?? ''
       const staged = indexMarker.length > 0 && indexMarker !== '?'
@@ -1818,7 +1819,7 @@ export class GitService {
       if (conflicted.includes(path)) {
         push({
           path,
-          ...(file.from ? { oldPath: file.from.split(sep).join('/') } : {}),
+          ...(file.from ? { oldPath: toPosixPath(file.from) } : {}),
           status: 'conflicted',
           staged
         })
@@ -1838,7 +1839,7 @@ export class GitService {
             : 'modified'
       push({
         path,
-        ...(file.from ? { oldPath: file.from.split(sep).join('/') } : {}),
+        ...(file.from ? { oldPath: toPosixPath(file.from) } : {}),
         status: statusKind,
         staged
       })

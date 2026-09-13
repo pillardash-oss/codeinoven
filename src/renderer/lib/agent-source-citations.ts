@@ -1,4 +1,5 @@
 import type { AgentMessage } from '$shared/types'
+import { isAbsoluteishPath, posixBasename, toPosixPath } from '$shared/paths'
 
 export interface FileCitation {
   kind: 'file'
@@ -48,7 +49,7 @@ const CODEX_LINE_END_ATTRIBUTE = /(?:^|\s)line_range_end=(\d+)/u
 
 /** True for absolute filesystem paths (POSIX `/…`, Windows `C:/…`, UNC). */
 export function isAbsoluteCitationPath(value: string): boolean {
-  return /^(\/|[a-zA-Z]:[\\/]|\/\/)/u.test(value)
+  return isAbsoluteishPath(value)
 }
 
 function cleanUrl(value: string): string {
@@ -182,7 +183,7 @@ export function normalizeCitationPath(value: string): string {
   } else {
     path = decodePath(path)
   }
-  path = path.replace(/\\/gu, '/').replace(/\/{2,}/gu, '/')
+  path = toPosixPath(path).replace(/\/{2,}/gu, '/')
   while (path.startsWith('./')) path = path.slice(2)
   if (path.length > 1) path = path.replace(/\/+$/gu, '')
   return path
@@ -419,7 +420,7 @@ function linkifyCodexCitations(text: string, isKnown: (path: string) => boolean)
         return segment.replace(CODEX_CITATION_PATTERN, (match, attributes: string) => {
           const parsed = parseCodexCitation(attributes ?? '')
           if (!parsed || !isKnown(parsed.path)) return match
-          const name = parsed.path.split(/[\\/]/u).at(-1) || parsed.path
+          const name = posixBasename(parsed.path) || parsed.path
           return `[\`${name}\`](${citationHref(parsed)})`
         })
       })

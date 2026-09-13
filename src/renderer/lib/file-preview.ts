@@ -1,9 +1,14 @@
+import { toPosixPath } from '$shared/paths'
+
 const SCHEME = 'appfile'
 
 /** Build an `appfile://` URL for a project-relative file so the renderer can
  *  preview it with a real `src` (iframe/img) instead of a base64 IPC dump. */
 export function projectFilePreviewUrl(projectId: string, relativePath: string): string {
-  const encoded = relativePath.split('/').map(encodeURIComponent).join('/')
+  const encoded = toPosixPath(relativePath)
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/')
   return `${SCHEME}://project/${projectId}/${encoded}`
 }
 

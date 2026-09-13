@@ -37,6 +37,7 @@ import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
 import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
+import { toPosixPath } from '../../lib/paths'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
 import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 import { CheckpointLimitError, type ProjectFingerprint } from '../git/change-tracking-service'
@@ -620,7 +621,7 @@ function projectRelativePath(projectPath: string, candidate: string): string | n
   const trimmed = candidate.trim()
   if (!trimmed || trimmed.includes('\0')) return null
   const absolutePath = isAbsolute(trimmed) ? resolve(trimmed) : resolve(projectPath, trimmed)
-  const relativePath = relative(resolve(projectPath), absolutePath).replaceAll('\\', '/')
+  const relativePath = toPosixPath(relative(resolve(projectPath), absolutePath))
   if (!relativePath || relativePath === '..' || relativePath.startsWith('../')) return null
   return relativePath
 }
@@ -933,7 +934,7 @@ function attributionModeFor(
 }
 
 function engineeringArtifactBoundaryInstruction(artifactDirectory: string): string {
-  const normalizedDirectory = artifactDirectory.replace(/\\/gu, '/')
+  const normalizedDirectory = toPosixPath(artifactDirectory)
   return [
     `CodeInOven is the sole owner of Engineering lifecycle artifacts in ${normalizedDirectory}/, including spec.md, plan.md, progress.md, assignment.md, audit documents, and task evidence.`,
     'The application Agent behavior layer may inform how implementation work is performed, but it is non-authoritative for Engineering lifecycle storage and reporting.',
@@ -5396,7 +5397,7 @@ export class ChatEngine {
    * attributed to a running agent thread's file-changes card.
    */
   recordUserFileSave(projectId: string, relativePath: string): void {
-    const normalized = relativePath.trim().replaceAll('\\', '/')
+    const normalized = toPosixPath(relativePath.trim())
     if (!normalized || normalized.startsWith('../') || normalized === '..') return
     for (const session of this.sessionRegistry.values()) {
       if (session.projectId !== projectId || !session.activeTurnId) continue
@@ -13381,11 +13382,9 @@ export class ChatEngine {
         : []
     if (brainstormWriteRoute) {
       featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
-      const revisionRelativePath = join(
-        featureArtifactDirectory(featureSlug),
-        'versions',
-        `session-${Date.now()}-brainstorm.md`
-      ).replace(/\\/gu, '/')
+      const revisionRelativePath = toPosixPath(
+        join(featureArtifactDirectory(featureSlug), 'versions', `session-${Date.now()}-brainstorm.md`)
+      )
       revisionPathInstruction = [
         '',
         'Session-report revision path (write the report Markdown to EXACTLY this project-relative path, creating parent directories as needed):',

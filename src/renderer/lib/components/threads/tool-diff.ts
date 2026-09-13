@@ -1,4 +1,5 @@
 import type { AgentPart, TurnCheckpointFileDiff } from '$shared/types'
+import { toPosixPath } from '$shared/paths'
 import { computeDiffLines } from '../files/file-diff'
 
 export interface ToolDiffLine {
@@ -273,10 +274,10 @@ export function checkpointPathsForTool(
   part: Extract<AgentPart, { type: 'tool' }>,
   checkpointPaths: string[]
 ): string[] {
-  const canonicalPaths = [...new Set(checkpointPaths.map((path) => path.replaceAll('\\', '/')))]
+  const canonicalPaths = [...new Set(checkpointPaths.map((path) => toPosixPath(path)))]
   const longestFirst = [...canonicalPaths].sort((left, right) => right.length - left.length)
   const resolved = toolChangePaths(part).flatMap((toolPath) => {
-    const normalized = toolPath.replaceAll('\\', '/').replace(/^\.\//u, '')
+    const normalized = toPosixPath(toolPath).replace(/^\.\//u, '')
     const exact = canonicalPaths.find((path) => path === normalized)
     if (exact) return [exact]
 

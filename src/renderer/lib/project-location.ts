@@ -1,3 +1,5 @@
+import { posixBasename, toPosixPath } from '$shared/paths'
+
 export interface ProjectLocationSource {
   name: string
   path?: string
@@ -30,11 +32,11 @@ export function hasProjectNameCollision(
  * POSIX or Windows path (`/a/b/repo`, `C:\a\b\repo`, `a/b/repo`).
  */
 export function folderBaseName(folder: string): string {
-  return folder.split(/[/\\]/u).filter(Boolean).pop() ?? folder
+  return posixBasename(folder) || folder
 }
 
 function abbreviateHomePath(path: string): string {
-  const normalized = path.trim().replace(/\\/gu, '/')
+  const normalized = toPosixPath(path.trim())
   return normalized
     .replace(/^\/(?:Users|home)\/[^/]+(?=\/)/u, '~')
     .replace(/^[A-Za-z]:\/Users\/[^/]+(?=\/)/u, '~')
