@@ -113,7 +113,12 @@ async function rewriteVendorImports(directory: string): Promise<void> {
           ? join('typebox', target)
           : join('@earendil-works/chord', target)
       )
-      const rel = relative(dirname(path), resolvedFile)
+      // Import specifiers must use POSIX separators: `relative()` returns
+      // backslash-separated paths on Windows, and inside a JS string literal
+      // each `\.` collapses to `.` (legacy escape), mangling the specifier
+      // into something like `......vendor@earendil-workschorddistindex.js`,
+      // which crashes ESM resolution with ERR_INVALID_MODULE_SPECIFIER.
+      const rel = relative(dirname(path), resolvedFile).split(sep).join('/')
       rewritten = rewritten.replaceAll(
         new RegExp(`(["'])${specifier.replaceAll('/', '\\/')}(\\1)`, 'gu'),
         (_match, quote: string) => `${quote}${rel}${quote}`
