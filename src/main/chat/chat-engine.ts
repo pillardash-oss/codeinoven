@@ -572,10 +572,23 @@ function rawErrorMessage(error: unknown): string {
 
 /** Full diagnostic error text for the error card's Raw Error view: the stack
  *  trace when a real Error object reached us, otherwise the message string
- *  as-is. Deliberately separate from `rawErrorMessage`, which must stay a
- *  short single-line message for logging and report fields. */
+ *  as-is. Drivers may attach the raw process output (stderr tail, crash trace)
+ *  to an Error's `cause` while keeping `message` short and user-facing, so the
+ *  cause chain is walked and appended here. Deliberately separate from
+ *  `rawErrorMessage`, which must stay a short single-line message for logging
+ *  and report fields. */
 function rawErrorDetail(error: unknown): string {
-  if (error instanceof Error && error.stack?.trim()) return error.stack.trim()
+  if (error instanceof Error) {
+    const parts = [error.stack?.trim() || error.message.trim()]
+    const cause = error.cause
+    if (typeof cause === 'string' && cause.trim()) {
+      parts.push(cause.trim())
+    } else if (cause instanceof Error) {
+      const nested = rawErrorDetail(cause)
+      if (nested) parts.push(nested)
+    }
+    return parts.filter((part) => part.length > 0).join('\n\nCaused by: ')
+  }
   return rawErrorMessage(error)
 }
 
@@ -19008,7 +19021,12 @@ export class ChatEngine {
       // A deliberate user stop must never surface as a session error.
       if (!this.userAbortedSessions.has(event.sessionId)) {
         const issue: AgentProviderIssue =
-          event.issue ?? this.fallbackProviderIssue(driverId, event.error ?? 'Agent session failed')
+          event.issue ??
+          this.fallbackProviderIssue(
+            driverId,
+            event.error ?? 'Agent session failed',
+            event.rawError
+          )
         if (isUsageResetWaitIssue(issue)) {
           // Unified contract: a usage/rate-limit reset is a scheduled wait, not
           // a failure. Re-surface the reset-wait as a `waiting` card and let
@@ -19045,7 +19063,7 @@ export class ChatEngine {
         Logger.dev('compaction message errored (session stays healthy):', event.error)
       } else if (!this.userAbortedSessions.has(event.sessionId)) {
         const issue: AgentProviderIssue =
-          event.issue ?? this.fallbackProviderIssue(driverId, event.error)
+          event.issue ?? this.fallbackProviderIssue(driverId, event.error, event.rawError)
         if (isUsageResetWaitIssue(issue)) {
           // The failed message still broadcasts below; the provider card is
           // replaced by the unified waiting state instead of an error.
