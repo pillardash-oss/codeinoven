@@ -121,6 +121,7 @@
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { modelKey } from '$lib/model-keys'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { logRendererError } from '$lib/system/renderer-logger'
   import {
     threadSort,
     pinnedThreadSort,
@@ -1685,7 +1686,7 @@
         // never linger on a stale unread state when the backend's own
         // broadcast is missed.
         if (!updated.read && document.hasFocus()) {
-          void markThreadReadAndApply(updated.projectId, updated.id).catch(() => undefined)
+          requestThreadRead(updated.projectId, updated.id)
         }
       }
     })
@@ -1701,7 +1702,7 @@
     const onWindowFocus = (): void => {
       const selected = workspaceState.selectedThread
       if (!selected || selected.read || isOrchestrationChildThread(selected)) return
-      void markThreadReadAndApply(selected.projectId, selected.id).catch(() => undefined)
+      requestThreadRead(selected.projectId, selected.id)
     }
     window.addEventListener('focus', onWindowFocus)
     return () => window.removeEventListener('focus', onWindowFocus)
@@ -2204,6 +2205,10 @@
           restoredThread,
           projectList.find((candidate) => candidate.id === restoredThread.projectId) ?? null
         )
+        // A thread restored unread (finished while the app was closed) must
+        // settle to read like any user-opened thread: no later `thread:updated`
+        // may ever arrive for an already-finished turn.
+        markThreadReadAfterPaint(restoredThread)
         void scopeState.ensureBoardLoaded(restoredThread.projectId)
       } else if (saved) {
         // The saved thread may sit beyond the bounded recent hydration list
@@ -2215,6 +2220,7 @@
           if (savedThread && !savedThread.archived) {
             upsertThreadInList(savedThread)
             workspaceState.openThread(savedThread, project)
+            markThreadReadAfterPaint(savedThread)
             void scopeState.ensureBoardLoaded(saved.projectId)
           } else {
             rendererRecovery.clearSelectedThread()
@@ -2275,6 +2281,7 @@
             last,
             projectList.find((candidate) => candidate.id === last.projectId) ?? null
           )
+          markThreadReadAfterPaint(last)
           void scopeState.ensureBoardLoaded(last.projectId)
         }
       }
@@ -3103,30 +3110,81 @@
     }
   }
 
+  /** In-flight mark-read requests keyed by `projectId:threadId`. A thread that
+   *  is already being marked read is never re-requested, but a failure clears
+   *  its key so a later interaction can retry. */
   const pendingReadThreads = new SvelteSet<string>()
+  /** One delayed retry per failed mark-read, keyed the same way. */
+  const readRetryTimers = new SvelteMap<string, ReturnType<typeof setTimeout>>()
 
-  /** Mark a thread read and push the confirmed snapshot into every sidebar
-   *  store (regular list, scope board, selected thread) so the row badge
-   *  settles in the same tick instead of waiting on the backend's own
-   *  broadcast round-trip. */
-  async function markThreadReadAndApply(projectId: string, threadId: string): Promise<void> {
-    const updated = await invoke('thread:markRead', projectId, threadId)
-    upsertThreadInList(updated)
-    scopeState.updateThread(updated)
-    if (workspaceState.selectedThread?.id === updated.id) {
-      workspaceState.updateThread(updated)
+  /** Push a read snapshot into every sidebar store (regular list, scope board,
+   *  selected thread) so the row badge settles in the same tick instead of
+   *  waiting on the backend's own broadcast round-trip. */
+  function applyThreadRead(thread: Thread): void {
+    upsertThreadInList(thread)
+    scopeState.updateThread(thread)
+    if (workspaceState.selectedThread?.id === thread.id) {
+      workspaceState.updateThread(thread)
     }
+  }
+
+  /** Mark a thread read through the backend and apply the confirmed snapshot.
+   *  A failed or lost request must never leave a thread the user has already
+   *  interacted with stuck on unread, so an unconfirmed read still applies
+   *  locally (the next `thread:updated` broadcast reconciles any drift), and
+   *  the request retries once after a short delay before the failure is
+   *  surfaced to the durable log. */
+  async function markThreadReadAndApply(projectId: string, threadId: string): Promise<void> {
+    const key = `${projectId}:${threadId}`
+    try {
+      const updated = await invoke('thread:markRead', projectId, threadId)
+      if (updated.read) {
+        applyThreadRead(updated)
+        return
+      }
+      // The backend answered but did not flip the flag (e.g. the thread row was
+      // momentarily invisible through the worker read). Retry once.
+      const retried = await invoke('thread:markRead', projectId, threadId)
+      applyThreadRead(retried.read ? retried : { ...retried, read: true })
+      if (!retried.read) {
+        logRendererError(
+          `Thread mark-read did not settle on the backend: thread ${threadId} in project ${projectId} stayed unread after retry`
+        )
+      }
+    } catch (error) {
+      // The backend never confirmed. Schedule one delayed retry so a transient
+      // IPC or worker failure cannot leave the badge stuck on unread; clear the
+      // pending key first so the retry is not gated as a duplicate.
+      pendingReadThreads.delete(key)
+      if (readRetryTimers.has(key)) return
+      readRetryTimers.set(
+        key,
+        setTimeout(() => {
+          readRetryTimers.delete(key)
+          void markThreadReadAndApply(projectId, threadId).catch((retryError) => {
+            logRendererError('Thread mark-read retry failed', retryError)
+          })
+        }, 2000)
+      )
+      logRendererError('Thread mark-read request failed; scheduled a retry', error)
+    }
+  }
+
+  /** Entry point that gates duplicate in-flight requests per thread. */
+  function requestThreadRead(projectId: string, threadId: string): void {
+    const key = `${projectId}:${threadId}`
+    if (pendingReadThreads.has(key)) return
+    pendingReadThreads.add(key)
+    void markThreadReadAndApply(projectId, threadId)
+      .catch(() => undefined)
+      .finally(() => pendingReadThreads.delete(key))
   }
 
   function markThreadReadAfterPaint(thread: Thread): void {
     if (thread.read) return
-    const key = `${thread.projectId}:${thread.id}`
-    if (pendingReadThreads.has(key)) return
-    pendingReadThreads.add(key)
     window.requestAnimationFrame(() => {
       window.setTimeout(() => {
-        pendingReadThreads.delete(key)
-        void markThreadReadAndApply(thread.projectId, thread.id).catch(() => undefined)
+        requestThreadRead(thread.projectId, thread.id)
       }, 0)
     })
   }
