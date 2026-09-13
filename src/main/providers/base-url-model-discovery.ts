@@ -82,7 +82,7 @@ function parseModelsResponse(body: unknown): DiscoveredBaseUrlModel[] {
     seen.add(id)
     const name = typeof raw['name'] === 'string' && raw['name'] ? raw['name'] : id
     const contextWindow = positiveInteger(
-      raw['context_length'] ?? raw['context_window'] ?? raw['contextWindow']
+      raw['context_length'] ?? raw['context_window'] ?? raw['contextWindow'] ?? ctxFromMeta(raw)
     )
     models.push({ id, name, ...(contextWindow === undefined ? {} : { contextWindow }) })
   }
@@ -96,6 +96,16 @@ function extractModelList(body: unknown): unknown[] {
     if (Array.isArray(data)) return data
   }
   return []
+}
+
+/** llama.cpp reports model metadata under `meta`: `n_ctx` is the loaded
+ *  context size and `n_ctx_train` the training maximum. Prefer the loaded
+ *  value, falling back to the training one when only that is set. */
+function ctxFromMeta(raw: Record<string, unknown>): number | undefined {
+  const meta = raw['meta']
+  if (typeof meta !== 'object' || meta === null) return undefined
+  const metaRecord = meta as Record<string, unknown>
+  return positiveInteger(metaRecord['n_ctx'] ?? metaRecord['n_ctx_train'])
 }
 
 function positiveInteger(value: unknown): number | undefined {
