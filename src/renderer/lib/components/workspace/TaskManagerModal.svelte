@@ -423,46 +423,6 @@
 
 <Modal {open} title="Task Manager" {onClose} size="xl" fill contentClass="p-0">
   <div class="flex h-full flex-col overflow-hidden">
-    <div
-      class="flex shrink-0 items-center justify-between gap-3 border-b border-border px-5 py-2"
-    >
-      <p class="text-xs font-medium text-muted">Filter & sort</p>
-      <div class="flex items-center gap-1.5">
-        <ProjectSwitch
-          projects={scopeState.projects}
-          activeProjectId={filterProjectId}
-          onSwitch={(projectId) => setFilterProject(projectId)}
-          ariaLabel="Filter processes by project"
-          placeholder="All projects"
-          searchPlaceholder="Search projects…"
-          emptyMessage="No matching projects"
-          class="h-7"
-          compact
-          align="end"
-        />
-        {#if filterProjectId}
-          <button
-            type="button"
-            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-elevated text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-            title="Clear the project filter"
-            aria-label="Clear the project filter"
-            onclick={() => setFilterProject(null)}
-          >
-            <X size={12} />
-          </button>
-        {/if}
-        <button
-          type="button"
-          class="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-          title={SORT_MODE_LABELS[sortMode]}
-          aria-label={SORT_MODE_LABELS[sortMode]}
-          onclick={() => setNextSortMode()}
-        >
-          <ArrowDownUp size={12} />
-          {SORT_MODE_LABELS[sortMode]}
-        </button>
-      </div>
-    </div>
     {#if error}
       <div class="shrink-0 border-b border-border px-5 py-2" role="alert">
         <p class="truncate text-xs text-danger">{error}</p>
@@ -704,6 +664,40 @@
           <Cpu size={13} aria-hidden="true" />
           {formatCpu(totalCpuPercent)}
         </span>
+        <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+        <ProjectSwitch
+          projects={scopeState.projects}
+          activeProjectId={filterProjectId}
+          onSwitch={(projectId) => setFilterProject(projectId)}
+          ariaLabel="Filter processes by project"
+          placeholder="All projects"
+          searchPlaceholder="Search projects…"
+          emptyMessage="No matching projects"
+          class="h-7 shrink-0"
+          compact
+          align="start"
+        />
+        {#if filterProjectId}
+          <button
+            type="button"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-elevated text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+            title="Clear the project filter"
+            aria-label="Clear the project filter"
+            onclick={() => setFilterProject(null)}
+          >
+            <X size={12} />
+          </button>
+        {/if}
+        <button
+          type="button"
+          class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          title={SORT_MODE_LABELS[sortMode]}
+          aria-label={SORT_MODE_LABELS[sortMode]}
+          onclick={() => setNextSortMode()}
+        >
+          <ArrowDownUp size={12} />
+          {SORT_MODE_LABELS[sortMode]}
+        </button>
       </div>
       <div class="flex shrink-0 items-center gap-1.5">
         <button
