@@ -40,7 +40,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
-import { QuestionRequestGoneError } from './driver.interface'
+import { PermissionRequestGoneError, QuestionRequestGoneError } from './driver.interface'
 import type { HarnessCommand, PermissionReply, ThreadSettings } from '../../lib/types'
 import {
   classifyProviderIssue,
@@ -3611,14 +3611,13 @@ export class PiDriver extends PersistentCliDriver {
     requestId: string,
     reply: PermissionReply,
     _message?: string,
-    _sessionId?: string
+    sessionId?: string
   ): Promise<void> {
     void _projectPath
     void _message
-    void _sessionId
     const request = this.pendingUiRequests.get(requestId)
     if (!request || request.method !== 'cio-permission') {
-      throw new Error(`Pi permission request is no longer pending: ${requestId}`)
+      throw new PermissionRequestGoneError(sessionId, requestId, this.name)
     }
     const rawId = request.request['id']
     if (typeof rawId !== 'string' && typeof rawId !== 'number') {

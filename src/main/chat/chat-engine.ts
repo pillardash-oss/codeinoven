@@ -5,6 +5,7 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, relative, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { createHash, randomBytes, randomInt } from 'crypto'
+import { homedir } from 'node:os'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { Logger } from '../system/logger'
 import {
@@ -73,6 +74,7 @@ import {
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import {
   InactiveQuestionTurnError,
+  PermissionRequestGoneError,
   QuestionRequestGoneError,
   type HarnessCapabilities,
   type HarnessDriver,
@@ -80,6 +82,7 @@ import {
   type SteerPromptOptions,
   type StructuredOutputRequest
 } from '../drivers/driver.interface'
+import { SHARED_GLOBAL_SKILL_PATH, harnessGlobalSkillPath } from '../../lib/native-skill-paths'
 import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import type { PreparedUtilityRuntime } from '../drivers/driver.interface'
 import type { Database } from '../database/database'
@@ -10606,7 +10609,8 @@ export class ChatEngine {
     }
     const pending = this.pendingPermissions.get(requestId)
     if (!pending || pending.session.projectId !== projectId) {
-      throw new Error(`Permission request is no longer pending: ${requestId}`)
+      Logger.dev(`Ignoring reply for resolved permission request: ${requestId}`)
+      return
     }
 
     const driver = this.driverForRuntime(pending.driverId, pending.session.accountId)
@@ -10637,13 +10641,25 @@ export class ChatEngine {
     // abort and no re-prompt, both of which used to interrupt the harness's
     // continuation of the current turn.
     const resolvedReply = alternativeInstruction !== undefined ? 'reject' : reply
-    await driver.replyPermission(
-      pending.session.projectPath,
-      requestId,
-      resolvedReply,
-      alternativeInstruction,
-      pending.request.sessionId
-    )
+    try {
+      await driver.replyPermission(
+        pending.session.projectPath,
+        requestId,
+        resolvedReply,
+        alternativeInstruction,
+        pending.request.sessionId
+      )
+    } catch (error) {
+      if (!(error instanceof PermissionRequestGoneError)) throw error
+      this.pendingPermissions.delete(requestId)
+      await this.threadManager.setStatus(
+        pending.session.projectId,
+        pending.session.threadId,
+        pending.resumeStatus
+      )
+      Logger.dev(`Reconciled resolved permission request: ${requestId}`)
+      return
+    }
     await this.recordPermissionDecision(pending, resolvedReply, 'user')
     this.pendingPermissions.delete(requestId)
     if (reply === 'reject' && alternativeInstruction === undefined) {
@@ -20353,12 +20369,12 @@ export class ChatEngine {
   /**
    * The file-access scope for a permission request in a chat session.
    *
-   * Chats (inbox threads) get an attachment allowlist: every file the user
-   * attached across the conversation is always readable. When File System mode
-   * is off, the chat is also restricted to exactly those attached files   any
-   * other path must surface a permission prompt. File-System-on chats keep the
-   * normal project-root + protected-path rules but still auto-allow attached
-   * files regardless of where they live. Non-chat threads are untouched.
+   * Chats (inbox threads) get a read allowlist containing every user attachment
+   * plus the shared and active-harness skill roots. When File System mode is
+   * off, safe read/list/search operations are restricted to those paths. Skill
+   * access never grants writes or shell commands. File-System-on chats keep the
+   * normal project-root + protected-path rules while retaining these read-only
+   * exceptions. Non-chat threads are untouched.
    */
   private async chatPermissionScope(info: SessionInfo): Promise<{
     allowedPaths: string[]
@@ -20374,11 +20390,27 @@ export class ChatEngine {
     // this stays correct without re-scanning on every permission request.
     const cached = this.chatAttachmentAllowlists.get(info.threadId)
     if (cached === undefined) {
-      const allowedPaths = await this.collectChatAttachmentPaths(info)
-      this.chatAttachmentAllowlists.set(info.threadId, allowedPaths)
-      return { allowedPaths, restrictToAllowed: !fileSystemMode }
+      const attachmentPaths = await this.collectChatAttachmentPaths(info)
+      this.chatAttachmentAllowlists.set(info.threadId, attachmentPaths)
+      return {
+        allowedPaths: [...attachmentPaths, ...this.chatSkillPaths(info.driverId)],
+        restrictToAllowed: !fileSystemMode
+      }
     }
-    return { allowedPaths: cached, restrictToAllowed: !fileSystemMode }
+    return {
+      allowedPaths: [...cached, ...this.chatSkillPaths(info.driverId)],
+      restrictToAllowed: !fileSystemMode
+    }
+  }
+
+  /** Global skill roots readable by a chat without enabling File System mode. */
+  private chatSkillPaths(driverId: string): string[] {
+    const paths = new Set([SHARED_GLOBAL_SKILL_PATH, harnessGlobalSkillPath(driverId)])
+    return [...paths]
+      .filter((path): path is string => path !== undefined)
+      .map((path) =>
+        path === '~' ? homedir() : path.startsWith('~/') ? join(homedir(), path.slice(2)) : path
+      )
   }
 
   /** Absolute local paths of every file the user attached to a chat thread. */
