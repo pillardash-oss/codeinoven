@@ -19,6 +19,7 @@ import { toast } from 'svelte-sonner'
     Zap,
     X
   } from '@lucide/svelte'
+  import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { modelKey, parseModelKey } from '$lib/model-keys'
@@ -204,10 +205,15 @@ import { toast } from 'svelte-sonner'
       effectiveThinkingPresets[0]?.label ??
       ''
   )
+  /** Custom base URL providers never carry accounts: their credentials live in
+   *  the provider record itself, so the user always sees the plain provider. */
+  let isCustomProvider = $derived(isCodeInOvenCustomProviderId(providerId))
   let providerAccounts = $derived(
-    accounts.filter(
-      (account) => account.harnessId === harnessId && account.providerId === providerId
-    )
+    isCustomProvider
+      ? []
+      : accounts.filter(
+          (account) => account.harnessId === harnessId && account.providerId === providerId
+        )
   )
   let effectiveAccountId = $derived(
     accountId && providerAccounts.some((account) => account.id === accountId)
@@ -850,10 +856,14 @@ import { toast } from 'svelte-sonner'
     const matchingAccounts = availableAccounts.filter(
       (account) => account.harnessId === nextHarnessId && account.providerId === nextProviderId
     )
-    const nextAccountId =
-      matchingAccounts.find((account) => account.id === accountId)?.id ??
-      (matchingAccounts.find((account) => account.isDefault) ?? matchingAccounts[0])?.id ??
-      `${nextHarnessId}.default`
+    // Custom base URL providers run without accounts: omitting the id keeps the
+    // harness-level `${harness}.default` fallback from attaching a random
+    // account of the whole harness to the provider's turns.
+    const nextAccountId = isCodeInOvenCustomProviderId(nextProviderId)
+      ? undefined
+      : (matchingAccounts.find((account) => account.id === accountId)?.id ??
+        (matchingAccounts.find((account) => account.isDefault) ?? matchingAccounts[0])?.id ??
+        `${nextHarnessId}.default`)
     onSelect(nextProviderId, nextModelId, nextHarnessId, nextAccountId)
     if (nextHarnessId !== harnessId) {
       // Invalidate any in-flight loadAccounts for the previous harness before
