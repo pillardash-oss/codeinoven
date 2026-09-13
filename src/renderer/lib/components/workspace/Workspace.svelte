@@ -1692,6 +1692,23 @@
     })
   })
 
+  // Selecting a thread through any path must settle its unread badge. Sidebar
+  // clicks route through openThread, but every programmatic selection calls
+  // workspaceState.openThread directly and bypasses it: the view-switch
+  // reconcile in App.svelte (entering Chats restores the last chat), history
+  // restore, and the startup restore below. Without this net the thread the
+  // user is looking at would stay unread until they click a different row.
+  // Keyed on the thread id so re-renders of the same selection are no-ops,
+  // while switching away and back re-marks (marking read is idempotent).
+  let readSettledThreadId: string | null = null
+  $effect(() => {
+    const thread = selectedThread
+    if (!thread || thread.id === readSettledThreadId) return
+    readSettledThreadId = thread.id
+    if (thread.read || isOrchestrationChildThread(thread) || !document.hasFocus()) return
+    markThreadReadAfterPaint(thread)
+  })
+
   // Returning to the window with a thread already open must settle its unread
   // badge. While the window was unfocused the focus gate above deliberately
   // left the thread unread, but no further thread:updated may ever arrive once
@@ -2205,10 +2222,8 @@
           restoredThread,
           projectList.find((candidate) => candidate.id === restoredThread.projectId) ?? null
         )
-        // A thread restored unread (finished while the app was closed) must
-        // settle to read like any user-opened thread: no later `thread:updated`
-        // may ever arrive for an already-finished turn.
-        markThreadReadAfterPaint(restoredThread)
+        // Read-settling for programmatic selections is centralized in the
+        // selected-thread effect above; startup restore needs no extra call.
         void scopeState.ensureBoardLoaded(restoredThread.projectId)
       } else if (saved) {
         // The saved thread may sit beyond the bounded recent hydration list
@@ -2220,7 +2235,6 @@
           if (savedThread && !savedThread.archived) {
             upsertThreadInList(savedThread)
             workspaceState.openThread(savedThread, project)
-            markThreadReadAfterPaint(savedThread)
             void scopeState.ensureBoardLoaded(saved.projectId)
           } else {
             rendererRecovery.clearSelectedThread()
@@ -2281,7 +2295,6 @@
             last,
             projectList.find((candidate) => candidate.id === last.projectId) ?? null
           )
-          markThreadReadAfterPaint(last)
           void scopeState.ensureBoardLoaded(last.projectId)
         }
       }
