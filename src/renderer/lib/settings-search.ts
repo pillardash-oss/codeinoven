@@ -251,5 +251,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Update channel, nightly builds, and auto-install.',
     keywords: ['nightly', 'auto-download', 'auto-install', 'channel'],
     icon: Info
+  },
+  {
+    id: 'about-changelog',
+    section: 'about',
+    blockId: 'about-changelog',
+    title: 'Changelog',
+    description: 'Release notes for the latest published build.',
+    keywords: ['release notes', 'what’s new', 'changes'],
+    icon: Info
   }
 ]

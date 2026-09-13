@@ -60,6 +60,7 @@
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
+  import AboutChangelog from './AboutChangelog.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
   import SoundSettingsTab from './SoundSettingsTab.svelte'
   import CommandPalette from '../actions/CommandPalette.svelte'
@@ -962,15 +963,11 @@
       <CloudDeploymentsSettingsTab />
     {:else if section === 'about'}
       <div class="p-6 pb-24">
-        <div class="mb-6">
-          <h1 class="text-xl font-bold tracking-tight">About</h1>
-        </div>
-
         <!-- Identity: icon, version, copyright -->
-        <div class="flex flex-col items-center gap-1.5 pb-2 pt-4 text-center">
+        <div class="flex flex-col items-center gap-1.5 pb-2 pt-1 text-center">
           <VendorIcon name="CodeInOven" size={72} />
           <p
-            class="mt-3 text-[0.9375rem] font-semibold text-foreground"
+            class="mt-1.5 text-[0.9375rem] font-semibold text-foreground"
             title="Installed app version"
           >
             {APP_NAME} v{displayVersion}
@@ -1173,65 +1170,77 @@
           </div>
         </div>
 
-        <!-- Storage -->
-        <div id="settings-block-about-storage" class="mt-4 rounded-xl border bg-surface p-4">
-          <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Storage</h3>
+        <!-- Storage + Diagnostics share one row and wrap apart on narrow screens -->
+        <div class="mt-4 flex flex-wrap gap-4">
           <div
-            class="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between"
+            id="settings-block-about-storage"
+            class="min-w-[18rem] flex-1 rounded-xl border bg-surface p-4"
           >
-            <div>
-              <p class="text-sm font-medium">Data directory</p>
-              <p class="text-xs leading-relaxed text-dimmed">
-                All projects, threads, and history stored here
-              </p>
+            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Storage</h3>
+            <div
+              class="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div>
+                <p class="text-sm font-medium">Data directory</p>
+                <p class="text-xs leading-relaxed text-dimmed">
+                  All projects, threads, and history stored here
+                </p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2 sm:justify-end">
+                <span class="rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted">
+                  ~/.config/{ORG_SLUG}/{APP_SLUG}
+                </span>
+                <button
+                  type="button"
+                  class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+                  title="Open the data directory in the file manager"
+                  onclick={() => void openDataDirectory()}
+                >
+                  <FolderOpen size={13} />
+                  Open in file manager
+                </button>
+              </div>
             </div>
-            <div class="flex flex-wrap items-center gap-2 sm:justify-end">
-              <span class="rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted">
-                ~/.config/{ORG_SLUG}/{APP_SLUG}
-              </span>
+          </div>
+
+          <div
+            id="settings-block-about-diagnostics"
+            class="min-w-[18rem] flex-1 rounded-xl border bg-surface p-4"
+          >
+            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
+              Diagnostics
+            </h3>
+            <div class="flex flex-wrap items-center justify-between gap-4">
+              <div class="min-w-[12rem] flex-1">
+                <p class="text-sm font-medium">Export failure report</p>
+                <p class="text-xs leading-relaxed text-dimmed">
+                  Redacted logs and operational state; prompts and file contents are excluded.
+                </p>
+                {#if diagnosticsResult}
+                  <p class="mt-1 max-w-md break-all text-[0.6875rem] text-muted">
+                    {diagnosticsResult}
+                  </p>
+                {/if}
+              </div>
               <button
-                type="button"
-                class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-                title="Open the data directory in the file manager"
-                onclick={() => void openDataDirectory()}
+                class="flex shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                disabled={diagnosticsBusy}
+                title="Export a redacted diagnostics report"
+                onclick={() => void exportDiagnostics()}
               >
-                <FolderOpen size={13} />
-                Open in file manager
+                {#if diagnosticsBusy}
+                  <Loader2 size={13} class="animate-spin" />
+                {:else}
+                  <Download size={13} />
+                {/if}
+                Export
               </button>
             </div>
           </div>
         </div>
 
-        <!-- Diagnostics -->
-        <div id="settings-block-about-diagnostics" class="mt-4 rounded-xl border bg-surface p-4">
-          <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Diagnostics</h3>
-          <div class="flex items-center justify-between gap-4">
-            <div>
-              <p class="text-sm font-medium">Export failure report</p>
-              <p class="text-xs leading-relaxed text-dimmed">
-                Redacted logs and operational state; prompts and file contents are excluded.
-              </p>
-              {#if diagnosticsResult}
-                <p class="mt-1 max-w-md break-all text-[0.6875rem] text-muted">
-                  {diagnosticsResult}
-                </p>
-              {/if}
-            </div>
-            <button
-              class="flex shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-              disabled={diagnosticsBusy}
-              title="Export a redacted diagnostics report"
-              onclick={() => void exportDiagnostics()}
-            >
-              {#if diagnosticsBusy}
-                <Loader2 size={13} class="animate-spin" />
-              {:else}
-                <Download size={13} />
-              {/if}
-              Export
-            </button>
-          </div>
-        </div>
+        <!-- Latest release notes, channel-aware, rendered as markdown -->
+        <AboutChangelog />
       </div>
     {/if}
   </div>

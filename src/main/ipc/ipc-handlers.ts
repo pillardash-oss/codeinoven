@@ -8092,6 +8092,8 @@ export function registerIpcHandlers(
 
     ipcMain.handle('updater:getStatus', () => updaterService.status)
 
+    ipcMain.handle('updater:getChangelog', () => updaterService.fetchChangelog())
+
     ipcMain.handle('updater:download', () => updaterService.downloadUpdate())
 
     ipcMain.handle('updater:install', () => updaterService.quitAndInstall())
