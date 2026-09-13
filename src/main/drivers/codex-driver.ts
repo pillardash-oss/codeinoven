@@ -621,9 +621,9 @@ export class CodexDriver extends PersistentCliDriver {
         model: options.settings.modelId,
         ...(fastInference ? { serviceTier: 'fast' } : {}),
         effort: codexEffort(options.settings.thinkingLevel),
-        ...(this.modelsWithoutReasoningSummaries.has(options.settings.modelId)
-          ? { summary: 'none' }
-          : {}),
+        summary: this.modelsWithoutReasoningSummaries.has(options.settings.modelId)
+          ? 'none'
+          : 'auto',
         ...(options.structuredOutput ? { outputSchema: options.structuredOutput.schema } : {})
       }
       active.startParams = turnParams
