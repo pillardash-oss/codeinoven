@@ -1170,7 +1170,9 @@ class ThreadMessagesStore {
       const parts =
         partIndex === -1
           ? [...message.parts, update.part]
-          : message.parts.map((part, index) => (index === partIndex ? update.part : part))
+          : message.parts.map((part, index) =>
+              index === partIndex ? mergeStreamedPart(part, update.part) : part
+            )
       this.mergePage(projectId, threadId, [{ ...message, parts }])
       return
     }

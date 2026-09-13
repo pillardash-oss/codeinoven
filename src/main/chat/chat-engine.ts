@@ -19886,10 +19886,13 @@ export class ChatEngine {
   ): void {
     if (event.type === 'message.part.updated') {
       const partPrefix = `${event.sessionId}:${event.part.messageID}:${event.part.id}`
-      for (const key of this.pendingStreamBroadcasts.keys()) {
-        if (key.startsWith(`delta:${partPrefix}:`)) this.pendingStreamBroadcasts.delete(key)
-      }
-      this.pendingStreamBroadcasts.set(`part:${partPrefix}`, event)
+      const key = `part:${partPrefix}`
+      // Keep queued deltas and deliver the latest snapshot after them. Some
+      // harnesses finish reasoning with a shorter or summary-only snapshot;
+      // deleting the deltas here permanently cut text out of the renderer.
+      // Reinsert an existing key so Map iteration keeps causal order.
+      this.pendingStreamBroadcasts.delete(key)
+      this.pendingStreamBroadcasts.set(key, event)
     } else if (event.type === 'message.part.delta') {
       const key = `delta:${event.sessionId}:${event.messageId}:${event.partId}:${event.field}`
       const pending = this.pendingStreamBroadcasts.get(key)
