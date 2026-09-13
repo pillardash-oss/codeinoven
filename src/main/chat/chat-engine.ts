@@ -232,7 +232,10 @@ import { foldTurnStreamEvents, type TurnStreamEvent } from './turn-stream'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
 import { workflowActionPresentation } from '../../lib/workflow-action-presentation'
-import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
+import {
+  DEFAULT_AGENT_BEHAVIOR_PROMPT,
+  gateCuaDriverBehaviorPrompt
+} from '../../lib/agent-behavior'
 import { registerCioPromptDefault, type CioPromptId } from '../../lib/cio-prompts'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -5834,11 +5837,13 @@ export class ChatEngine {
     executionScope: BehaviorExecutionScope = 'project-thread',
     attributionKey?: string
   ): Promise<string> {
+    let behaviorDriver: HarnessDriver | undefined
     try {
       const threadSettings =
         settings ?? (await this.threadManager.getThread(projectId, threadId))?.settings
       const harnessId = threadSettings?.harnessId ?? DEFAULT_HARNESS
       const driver = this.drivers.get(harnessId)
+      behaviorDriver = driver
       const config = await this.storage.getConfig()
       // Trimmed modes get a compact scope guard instead of the full workspace
       // block; pure inbox chat and image description (no project scope) omit it.
@@ -5852,7 +5857,13 @@ export class ChatEngine {
         projectId,
         threadId,
         projectPath,
-        driver ? { id: driver.id, name: driver.name } : null,
+        driver
+          ? {
+              id: driver.id,
+              name: driver.name,
+              nativeComputerUse: driver.capabilities.nativeUtilities?.includes('computer_use')
+            }
+          : null,
         '',
         {
           SPEC_BRAINSTORM_SYSTEM_PROMPT: await this.cioPrompt('engineering-spec'),
@@ -5888,7 +5899,12 @@ export class ChatEngine {
         executionScope,
         error: rawErrorMessage(error)
       })
-      return executionScope === 'project-thread' ? DEFAULT_AGENT_BEHAVIOR_PROMPT : ''
+      return executionScope === 'project-thread'
+        ? gateCuaDriverBehaviorPrompt(
+            DEFAULT_AGENT_BEHAVIOR_PROMPT,
+            behaviorDriver?.capabilities.nativeUtilities?.includes('computer_use') === true
+          )
+        : ''
     }
   }
 

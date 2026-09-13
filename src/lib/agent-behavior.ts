@@ -1,5 +1,7 @@
 import { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID } from './utility-ids'
 
+const APP_CUA_DRIVER_BEHAVIOR_CLAUSE = ` or computer use tool "${APP_CUA_DRIVER_UTILITY_ID}" to test directly on the computer`
+
 /**
  * Default operational behavior for implementation turns.
  *
@@ -60,5 +62,12 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - Always first check for existing components when implementing; if resuable then reuse directly, if extendable, then extend directly; if can be used to compose a new reusable component, then compose. NEVER REPEAT FEATURES UNNECESSARILY, ESPECIALLY WHEN THERE ARE SLIGHT VARIATIONS BETWEEN EACH COPY!! Component here can be anything: functions, class, ui components, widgets, etc.
 
 These are the default application rules for implementation work. A direct user instruction overrides them for that task.`
+
+/** Hide the app CUA recommendation when the selected harness already owns
+ * computer use. The exact app-owned clause keeps unrelated user edits intact. */
+export function gateCuaDriverBehaviorPrompt(prompt: string, hasNativeComputerUse: boolean): string {
+  if (!hasNativeComputerUse) return prompt
+  return prompt.replace(APP_CUA_DRIVER_BEHAVIOR_CLAUSE, '')
+}
 
 export const AGENT_BEHAVIOR_PROMPT_MAX_LENGTH = 32_000

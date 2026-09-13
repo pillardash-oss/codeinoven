@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import { APP_NAME } from '../../lib/brand'
 import {
   AGENT_BEHAVIOR_PROMPT_MAX_LENGTH,
-  DEFAULT_AGENT_BEHAVIOR_PROMPT
+  DEFAULT_AGENT_BEHAVIOR_PROMPT,
+  gateCuaDriverBehaviorPrompt
 } from '../../lib/agent-behavior'
 import type { MemoryService } from './memory-service'
 
@@ -37,6 +38,7 @@ function withLayerAccounting(layer: BehaviorLayer): BehaviorLayer {
 export interface DriverInfo {
   id: string
   name: string
+  nativeComputerUse?: boolean
 }
 
 /**
@@ -138,7 +140,10 @@ export class PromptAssembler {
       layers.push(
         withLayerAccounting({
           title: 'Agent behavior (Project thread)',
-          content: normalizeAgentBehaviorPrompt(agentBehaviorPrompt),
+          content: gateCuaDriverBehaviorPrompt(
+            normalizeAgentBehaviorPrompt(agentBehaviorPrompt),
+            driver?.nativeComputerUse === true
+          ),
           editable: true,
           defaultOpen: false
         })

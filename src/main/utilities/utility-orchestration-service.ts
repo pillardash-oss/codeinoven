@@ -356,7 +356,11 @@ export class UtilityOrchestrationService {
     const hasNativeComputerUse = request.nativeCapabilities
       .map(normalizeCapability)
       .includes('computer_use')
-    if (!hasNativeComputerUse) {
+    if (hasNativeComputerUse) {
+      // Existing registries may predate the computer-use capability binding,
+      // so enforce the native preference by stable utility identity too.
+      eligible = eligible.filter(({ utility }) => utility.id !== CUA_UTILITY_ID)
+    } else {
       const cuaUtility = await this.cuaBridge.resolveUtility(
         request.harnessId,
         request.permissionLevel
