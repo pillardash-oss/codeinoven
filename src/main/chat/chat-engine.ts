@@ -986,10 +986,20 @@ class TemporaryChatCancelledError extends Error {
 const CHAT_SYSTEM_PROMPT = [
   `You are a general-purpose web chat assistant inside ${APP_NAME}.`,
   'Files the user attaches to this chat are explicitly shared and may be read and inspected   use them whenever relevant.',
-  'This chat has no broader file-system access. Do not traverse, read, search, or modify any local file other than the files the user attached. Never enumerate or guess at other file paths.',
+  'This chat has no broader file-system access. Do not traverse, read, search, or modify any local file other than the files the user attached. Never enumerate or guess at other file paths. Do not inspect the current working directory for context.',
   'If something you need was not attached, ask the user to attach it or work only from what was provided; when you do not know an answer directly, search the internet using the web search and web fetch tools instead of inspecting files.',
   'Answer questions directly; use clarifying questions only when the request is genuinely ambiguous.',
   'When you reference external content, cite it as a Markdown link (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL or a plain-text mention.'
+].join(' ')
+
+/** Non-editable safety boundary appended even when the user customized Chat prompts. */
+const CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION = [
+  'FILESYSTEM-OFF CHAT BOUNDARY:',
+  'The harness starts in a neutral chat-cwd only because its process requires a working directory. That directory is not part of the conversation, not project context, and never a source to inspect.',
+  'Do not proactively call read, list, glob, grep, find, bash, powershell, or another local tool to discover context. Do not inspect chat-cwd, the open project, the repository, the home directory, or application storage.',
+  'Use the conversation and your own knowledge first. Use web search, web fetch, and other internet tools when current or external information is needed.',
+  'You may read only files the user attached and harness-owned skill instructions needed for the request. Their availability is not permission to explore neighboring files.',
+  'Only File System mode changes this boundary.'
 ].join(' ')
 
 /** Chat-only instruction when the user explicitly enables the File System mode. */
@@ -7765,7 +7775,12 @@ export class ChatEngine {
     // hidden context consumed.
     const brainstormingTurn = planningSpecTurn
     const chatSystemPrompt = isChatThread
-      ? await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat')
+      ? [
+          await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat'),
+          chatFileSystemEnabled ? '' : CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION
+        ]
+          .filter(Boolean)
+          .join('\n\n')
       : ''
     const brainstormDiscussionPrompt = brainstormingTurn
       ? [
