@@ -139,13 +139,20 @@ class ProjectFilesWorkspace {
   clipboard: ProjectFileClipboard | null = $state(null)
 
   /** The scope bucket the project's file operations must target right now.
-   *  When an inbox chat's artifact directory is mounted (per-thread file tree)
-   *  the mount itself acts as the scope so cache invalidation and load keys
-   *  stay thread-aware. */
+   *  This value is sent to the main process, so it must stay a real scope
+   *  bucket id. A mounted chat artifact directory is threaded separately via
+   *  `threadArg`; only cache keys below use the mount-aware key. */
   private scopeFor(projectId: string): string {
+    return workspaceState.activeScopeBucketIdFor(projectId)
+  }
+
+  /** Internal cache/invalidation key that also distinguishes which chat
+   *  artifact mount (if any) the cached listings belong to. Never sent over
+   *  IPC, so the `thread:` prefix is safe here. */
+  private mountKeyFor(projectId: string): string {
     const threadId = this.projects[projectId]?.chatThreadId ?? null
     if (threadId && projectId === INBOX_PROJECT_ID) return `thread:${threadId}`
-    return workspaceState.activeScopeBucketIdFor(projectId)
+    return this.scopeFor(projectId)
   }
 
   /** Register the inbox thread whose artifact directory the file tree is
@@ -182,11 +189,12 @@ class ProjectFilesWorkspace {
     options: { silent?: boolean } = {}
   ): Promise<void> {
     const state = this.ensureState(projectId)
-    // A scope switch (thread opened in another bucket, sidebar bucket change)
-    // invalidates every cached listing so the tree re-reads the new root.
-    const scope = this.scopeFor(projectId)
-    if (state.activeScope !== scope) {
-      state.activeScope = scope
+    // A scope or chat-mount switch (thread opened in another bucket, sidebar
+    // bucket change, thread change) invalidates every cached listing so the
+    // tree re-reads the new root.
+    const mountKey = this.mountKeyFor(projectId)
+    if (state.activeScope !== mountKey) {
+      state.activeScope = mountKey
       state.entriesByDirectory = {}
       state.loadingDirectories = {}
       state.directoryErrors = {}
@@ -194,7 +202,7 @@ class ProjectFilesWorkspace {
         if (key.startsWith(`${projectId}:`)) this.directoryLoads.delete(key)
       }
     }
-    const loadKey = `${projectId}:${scope}:${directory}`
+    const loadKey = `${projectId}:${mountKey}:${directory}`
     const pending = this.directoryLoads.get(loadKey)
     if (pending) return pending
     if (!force && state.entriesByDirectory[directory]) return
@@ -209,8 +217,8 @@ class ProjectFilesWorkspace {
           'projectFiles:list',
           projectId,
           directory,
-          scope,
-          state.chatThreadId ?? undefined
+          this.scopeFor(projectId),
+          this.threadArg(projectId)
         )
         // The first time the root is listed for a freshly hydrated project,
         // cheaply restore the last-viewed position: only the ancestor chain of
