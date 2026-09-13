@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { BaseUrlProvider, BaseUrlProviderModel, ThinkingLevel } from '../../lib/types'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
+import { Logger } from '../system/logger'
 
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
 const PI_AGENT_DIR = join(homedir(), '.pi', 'agent')
@@ -127,7 +128,8 @@ export class NativeProviderConfigService {
   }
 
   private async listOpenCodeProviders(): Promise<BaseUrlProvider[]> {
-    const config = await readJsoncObject(OPENCODE_CONFIG_PATH)
+    const config = await tryReadJsoncObject(OPENCODE_CONFIG_PATH)
+    if (!config) return []
     const providers = record(config['provider']) ?? {}
     const disabled = new Set(stringArray(config['disabled_providers']))
     return Object.entries(providers).flatMap(([id, value]) => {
@@ -191,7 +193,8 @@ export class NativeProviderConfigService {
   }
 
   private async listPiProviders(modelsPath: string = PI_MODELS_PATH): Promise<BaseUrlProvider[]> {
-    const config = await readJsoncObject(modelsPath)
+    const config = await tryReadJsoncObject(modelsPath)
+    if (!config) return []
     const providers = record(config['providers']) ?? {}
     return Object.entries(providers).flatMap(([id, value]) => {
       const provider = record(value)
@@ -413,6 +416,24 @@ async function readJsoncObject(filePath: string): Promise<Record<string, unknown
   const parsed = parse(raw, errors, { allowTrailingComma: true }) as unknown
   if (errors.length > 0) throw new Error(`Cannot parse native provider config: ${filePath}`)
   return record(parsed) ?? {}
+}
+
+/**
+ * Read-only callers (provider listings, usage probes) must not fail wholesale
+ * when a user hand-edited a native config into invalid JSONC   they degrade to
+ * "no native providers" instead. Write paths use the throwing `readJsoncObject`
+ * so a broken file is never silently overwritten.
+ */
+async function tryReadJsoncObject(filePath: string): Promise<Record<string, unknown> | null> {
+  try {
+    return await readJsoncObject(filePath)
+  } catch (error) {
+    Logger.info('Native provider config unreadable; listing no native providers for it', {
+      filePath,
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return null
+  }
 }
 
 async function readJsoncText(filePath: string): Promise<string> {
