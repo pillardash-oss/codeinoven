@@ -8,15 +8,17 @@ import type { BaseUrlProvider } from '../../lib/types'
  *
  * Keys are referenced as `$ENV_VAR` (resolved by Pi at request time) and
  * injected on the spawned process environment by the driver; keyless local
- * servers get a literal dummy so their models remain selectable.
+ * servers get a literal dummy so their models remain selectable. Native
+ * providers mirrored from `~/.pi/agent/models.json` carry their key as an env
+ * var too (set by the caller), keeping plaintext keys out of the generated
+ * module.
  */
 export function piCustomProvidersExtension(providers: BaseUrlProvider[]): string {
   const registrations = providers
     .map((provider) => {
-      const apiKey =
-        provider.apiKeyRef && provider.apiKeyEnvVar
-          ? `apiKey: ${json(envRef(provider.apiKeyEnvVar))},`
-          : 'apiKey: "local",'
+      const apiKey = provider.apiKeyEnvVar
+        ? `apiKey: ${json(envRef(provider.apiKeyEnvVar))},`
+        : 'apiKey: "local",'
       const api =
         provider.npm === '@ai-sdk/openai'
           ? 'openai-responses'

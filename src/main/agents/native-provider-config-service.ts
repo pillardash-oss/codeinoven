@@ -9,7 +9,8 @@ import type { BaseUrlProvider, BaseUrlProviderModel, ThinkingLevel } from '../..
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
-const PI_MODELS_PATH = join(homedir(), '.pi', 'agent', 'models.json')
+const PI_AGENT_DIR = join(homedir(), '.pi', 'agent')
+const PI_MODELS_PATH = join(PI_AGENT_DIR, 'models.json')
 const NATIVE_HARNESSES = new Set(['opencode', 'pi'])
 const FORMAT_OPTIONS = { tabSize: 2, insertSpaces: true, eol: '\n' }
 const THINKING_LEVELS = new Set<ThinkingLevel>([
@@ -84,6 +85,17 @@ export class NativeProviderConfigService {
   async listProviders(): Promise<BaseUrlProvider[]> {
     const [openCode, pi] = await Promise.all([this.listOpenCodeProviders(), this.listPiProviders()])
     return [...openCode, ...pi]
+  }
+
+  /**
+   * Harness-global native Pi providers from `~/.pi/agent/models.json`.
+   * Managed account containers get their own agent dir with no models.json, so
+   * custom providers (keyless local servers like llama.cpp) must be re-read
+   * from the global file and mirrored into the container via the driver's
+   * overlay extension.
+   */
+  async listGlobalPiProviders(): Promise<BaseUrlProvider[]> {
+    return this.listPiProviders()
   }
 
   async upsertProvider(
@@ -178,8 +190,8 @@ export class NativeProviderConfigService {
     await writeJsonc(OPENCODE_CONFIG_PATH, raw)
   }
 
-  private async listPiProviders(): Promise<BaseUrlProvider[]> {
-    const config = await readJsoncObject(PI_MODELS_PATH)
+  private async listPiProviders(modelsPath: string = PI_MODELS_PATH): Promise<BaseUrlProvider[]> {
+    const config = await readJsoncObject(modelsPath)
     const providers = record(config['providers']) ?? {}
     return Object.entries(providers).flatMap(([id, value]) => {
       const provider = record(value)
