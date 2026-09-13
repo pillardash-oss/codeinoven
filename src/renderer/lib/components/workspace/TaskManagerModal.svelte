@@ -4,6 +4,8 @@
     BatteryCharging,
     BatteryMedium,
     Cpu,
+    Check,
+    ChevronDown,
     ExternalLink,
     MemoryStick,
     MessagesSquare,
@@ -14,6 +16,7 @@
     Trash2,
     X
   } from '@lucide/svelte'
+  import { DropdownMenu } from 'bits-ui'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -35,10 +38,18 @@
   type TaskSortMode = 'memory' | 'cpu' | 'name'
 
   const SORT_MODE_LABELS: Record<TaskSortMode, string> = {
-    memory: 'Sort by RAM usage',
-    cpu: 'Sort by CPU usage',
-    name: 'Sort by name'
+    memory: 'RAM',
+    cpu: 'CPU',
+    name: 'Name'
   }
+
+  const SORT_MODE_DESCRIPTIONS: Record<TaskSortMode, string> = {
+    memory: 'Sort by RAM usage, highest first',
+    cpu: 'Sort by CPU usage, highest first',
+    name: 'Sort by name, alphabetically'
+  }
+
+  const SORT_MODES: readonly TaskSortMode[] = ['memory', 'cpu', 'name']
 
   let { open, onClose }: Props = $props()
 
@@ -70,14 +81,14 @@
    */
   const visibleProcesses = $derived.by(() => {
     const filtered = filterProjectId
-      ? processes.filter(
-          (process) => !process.projectId || process.projectId === filterProjectId
-        )
+      ? processes.filter((process) => !process.projectId || process.projectId === filterProjectId)
       : processes
     return filtered.toSorted(compareFor(sortMode))
   })
 
-  function compareFor(mode: TaskSortMode): (a: TaskManagerProcess, b: TaskManagerProcess) => number {
+  function compareFor(
+    mode: TaskSortMode
+  ): (a: TaskManagerProcess, b: TaskManagerProcess) => number {
     if (mode === 'cpu') {
       return (a, b) => (b.cpuPercent ?? 0) - (a.cpuPercent ?? 0)
     }
@@ -244,13 +255,6 @@
   function formatCpu(percent: number | null): string {
     if (percent === null) return 'Unavailable'
     return `${percent.toFixed(percent < 10 ? 1 : 0)}%`
-  }
-
-  /** Cycle RAM → CPU → name; each mode puts the highest/most relevant first. */
-  function setNextSortMode(): void {
-    const order: TaskSortMode[] = ['memory', 'cpu', 'name']
-    const next = order[(order.indexOf(sortMode) + 1) % order.length]
-    if (next) sortMode = next
   }
 
   function setFilterProject(projectId: string | null): void {
@@ -490,7 +494,10 @@
                     {process.scope === 'app' ? 'Shared' : 'Running'}
                   </span>
                 </div>
-                <p class="mt-1 truncate font-mono text-[0.625rem] text-dimmed" title={process.command}>
+                <p
+                  class="mt-1 truncate font-mono text-[0.625rem] text-dimmed"
+                  title={process.command}
+                >
                   {process.command}
                 </p>
                 <div
@@ -570,13 +577,11 @@
                   type="button"
                   class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                   disabled={process.ports.length === 0 || !process.projectId}
-                  title={
-                    process.ports.length === 0
-                      ? 'No port detected'
-                      : process.projectId
-                        ? 'Open in in-app browser'
-                        : 'No project associated with this process'
-                  }
+                  title={process.ports.length === 0
+                    ? 'No port detected'
+                    : process.projectId
+                      ? 'Open in in-app browser'
+                      : 'No project associated with this process'}
                   aria-label={`Open ${processName(process.command)} in the in-app browser`}
                   onclick={() => void openInBrowser(process)}
                 >
@@ -688,16 +693,45 @@
             <X size={12} />
           </button>
         {/if}
-        <button
-          type="button"
-          class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-          title={SORT_MODE_LABELS[sortMode]}
-          aria-label={SORT_MODE_LABELS[sortMode]}
-          onclick={() => setNextSortMode()}
-        >
-          <ArrowDownUp size={12} />
-          {SORT_MODE_LABELS[sortMode]}
-        </button>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
+            title="Choose sort mode"
+            aria-label="Choose sort mode"
+          >
+            <ArrowDownUp size={12} />
+            {SORT_MODE_LABELS[sortMode]}
+            <ChevronDown size={11} class="text-dimmed" />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="top"
+              align="start"
+              sideOffset={6}
+              collisionPadding={8}
+              class="z-50 w-36 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+            >
+              {#each SORT_MODES as mode (mode)}
+                <DropdownMenu.Item
+                  class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[0.6875rem] outline-none transition-colors hover:bg-elevated focus:bg-elevated max-md:py-2.5 {mode ===
+                  sortMode
+                    ? 'text-foreground'
+                    : 'text-muted'}"
+                  title={SORT_MODE_DESCRIPTIONS[mode]}
+                  aria-label={SORT_MODE_DESCRIPTIONS[mode]}
+                  onSelect={() => (sortMode = mode)}
+                >
+                  <Check
+                    size={12}
+                    class={mode === sortMode ? 'text-primary' : 'opacity-0'}
+                    aria-hidden="true"
+                  />
+                  {SORT_MODE_LABELS[mode]}
+                </DropdownMenu.Item>
+              {/each}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
       </div>
       <div class="flex shrink-0 items-center gap-1.5">
         <button
