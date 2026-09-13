@@ -2205,6 +2205,9 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'providerAccounts:cancelPending': {} as Contract<[pendingAccountId: string], void>,
   'providerAccounts:rename': {} as Contract<[accountId: string, label: string], HarnessAccount>,
+  /** Mark an account as its harness's default for the account's provider.
+   *  Returns the harness's full account list so callers can refresh caches. */
+  'providerAccounts:setDefault': {} as Contract<[accountId: string], HarnessAccount[]>,
   'providerAccounts:remove': {} as Contract<[accountId: string], boolean>,
   'providerAccounts:beginLogin': {} as Contract<
     [harnessId: string, options?: ProviderAccountLoginOptions],

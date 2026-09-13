@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { DropdownMenu, Popover } from 'bits-ui'
+import { toast } from 'svelte-sonner'
   import {
     Brain,
     Check,
@@ -211,7 +212,8 @@
   let effectiveAccountId = $derived(
     accountId && providerAccounts.some((account) => account.id === accountId)
       ? accountId
-      : (providerAccounts[0]?.id ?? `${harnessId}.default`)
+      : ((providerAccounts.find((account) => account.isDefault) ?? providerAccounts[0])?.id ??
+        `${harnessId}.default`)
   )
   let selectedAccount = $derived(
     providerAccounts.find((account) => account.id === effectiveAccountId)
@@ -850,7 +852,7 @@
     )
     const nextAccountId =
       matchingAccounts.find((account) => account.id === accountId)?.id ??
-      matchingAccounts[0]?.id ??
+      (matchingAccounts.find((account) => account.isDefault) ?? matchingAccounts[0])?.id ??
       `${nextHarnessId}.default`
     onSelect(nextProviderId, nextModelId, nextHarnessId, nextAccountId)
     if (nextHarnessId !== harnessId) {
@@ -881,6 +883,19 @@
   function chooseAccount(account: HarnessAccount): void {
     onSelect(providerId, modelId, harnessId, account.id)
     onSelectAccount?.(account)
+  }
+
+  /** Mark an account as its harness's default for this provider. */
+  async function setDefaultAccount(account: HarnessAccount): Promise<void> {
+    try {
+      await harnessAccountCache.setDefault(account)
+    } catch (setDefaultError) {
+      toast.error(
+        setDefaultError instanceof Error
+          ? setDefaultError.message
+          : `The default account was not saved.`
+      )
+    }
   }
 
   function toggleGroup(id: string): void {
@@ -1079,6 +1094,27 @@
                       <span class="w-[11px] shrink-0" aria-hidden="true"></span>
                     {/if}
                     <span class="min-w-0 flex-1 truncate">{account.label}</span>
+                    {#if account.isDefault}
+                      <span
+                        class="shrink-0 rounded bg-raised px-1 text-[0.625rem] font-medium text-muted"
+                        title="Default account for this provider"
+                      >
+                        Default
+                      </span>
+                    {:else if providerAccounts.length > 1}
+                      <button
+                        type="button"
+                        class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-accent"
+                        title={`Set ${account.label} as the default account for this provider`}
+                        aria-label={`Set ${account.label} as the default account for this provider`}
+                        onclick={(event) => {
+                          event.stopPropagation()
+                          void setDefaultAccount(account)
+                        }}
+                      >
+                        <Star size={11} />
+                      </button>
+                    {/if}
                   </DropdownMenu.Item>
                 {/each}
               {/if}

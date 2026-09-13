@@ -55,6 +55,14 @@ class HarnessAccountCache {
     return request
   }
 
+  /** Mark an account as its harness's default for the provider and refresh
+   *  the harness's cached list with the registry's response. */
+  async setDefault(account: HarnessAccount): Promise<HarnessAccount[]> {
+    const accounts = await invoke('providerAccounts:setDefault', account.id)
+    this.cache.set(account.harnessId, { accounts, expiresAt: Date.now() + ACCOUNT_CACHE_MS })
+    return accounts
+  }
+
   /** Reconcile account registries whenever the matching model catalogs refresh. */
   async refreshHarnesses(harnessIds: Iterable<string>): Promise<void> {
     const targets = [...new Set(harnessIds)]
