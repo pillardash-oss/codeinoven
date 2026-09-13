@@ -4,6 +4,7 @@ import type { AgentEvent, BaseUrlProvider, ProviderCatalog } from '$shared/types
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { APP_SLUG } from '$shared/brand'
+import { harnessAccountCache } from '$lib/stores/harness-accounts'
 
 /**
  * Per-project provider catalog cache (stale-while-revalidate) with optional
@@ -121,6 +122,9 @@ class ProviderCatalogStore {
       const event = args[0] as AgentEvent | undefined
       if (event?.type === 'providerCatalog.updated') {
         this.cache.set(event.projectId, event.catalogs)
+        void harnessAccountCache.refreshHarnesses(
+          event.catalogs.map((catalog) => catalog.harnessId)
+        )
         this.knownProjects.add(event.projectId)
         this.refreshedAt.set(event.projectId, Date.now())
         this.failedAt.delete(event.projectId)
@@ -137,6 +141,12 @@ class ProviderCatalogStore {
   async init(projectIds: string[], options: { refresh?: boolean } = {}): Promise<void> {
     const refresh = options.refresh ?? true
     const targets = [...new Set(projectIds)]
+    // Account labels and container identities are persisted beside the catalog.
+    // Hydrate them in one local read so a model switch can render its account
+    // segment immediately, before any harness authentication probe completes.
+    void harnessAccountCache.warm().catch(() => {
+      // The live per-harness refresh below remains the fallback.
+    })
     // Mirror-seeded entries for projects this session has not validated are
     // unvalidated relics: `init` only runs for the active project (plus inbox),
     // so a stale entry for any other project would otherwise sit in the cache
@@ -295,8 +305,14 @@ class ProviderCatalogStore {
    */
   private async probe(projectId: string): Promise<void> {
     try {
+      const cachedHarnessIds = (this.cache.get(projectId) ?? []).map((catalog) => catalog.harnessId)
+      // Keep account discovery on the same refresh lifecycle as model discovery.
+      // It runs independently so a slow authentication probe never delays the
+      // model catalog or the main thread.
+      void harnessAccountCache.refreshHarnesses(cachedHarnessIds)
       const catalogs = await invoke('agent:refreshProviderCatalog', projectId)
       this.cache.set(projectId, catalogs)
+      void harnessAccountCache.refreshHarnesses(catalogs.map((catalog) => catalog.harnessId))
       this.knownProjects.add(projectId)
       this.refreshedAt.set(projectId, Date.now())
       this.failedAt.delete(projectId)

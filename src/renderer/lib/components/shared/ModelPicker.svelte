@@ -139,7 +139,7 @@
   let search = $state('')
   let searchInput: HTMLInputElement | undefined
   let modelList: HTMLDivElement | undefined
-  let accounts = $state.raw<HarnessAccount[]>([])
+  let accounts = $derived(harnessAccountCache.cached(harnessId) ?? [])
   let accountLoading = $state(false)
   let accountLoadGeneration = 0
   const collapsedGroups = new SvelteSet<string>()
@@ -181,7 +181,7 @@
    * means the model does not reason and the thinking controls stay hidden.
    */
   let effectiveThinkingPresets = $derived(thinkingPresets ?? selectedModel?.thinkingPresets ?? [])
-  /** Thinking controls appear whenever the selected model declares presets  
+  /** Thinking controls appear whenever the selected model declares presets
    *  the thinking level depends on the model, not on the caller's opt-in. */
   let supportsThinking = $derived(effectiveThinkingPresets.length > 0)
   /**
@@ -542,10 +542,9 @@
     const generation = ++accountLoadGeneration
     accountLoading = true
     try {
-      const loaded = await harnessAccountCache.list(targetHarnessId, force)
-      if (generation === accountLoadGeneration) accounts = loaded
+      await harnessAccountCache.list(targetHarnessId, force)
     } catch {
-      if (generation === accountLoadGeneration) accounts = []
+      // Preserve the last cached account list when a refresh probe fails.
     } finally {
       if (generation === accountLoadGeneration) accountLoading = false
     }
@@ -856,13 +855,9 @@
     onSelect(nextProviderId, nextModelId, nextHarnessId, nextAccountId)
     if (nextHarnessId !== harnessId) {
       // Invalidate any in-flight loadAccounts for the previous harness before
-      // assigning the cross-harness list. A popover-open reload (forced, and
-      // potentially slow because it re-syncs harness auth) that resolves after
-      // this point would otherwise overwrite `accounts` with the previous
-      // harness's list, emptying `providerAccounts` and hiding the account
-      // segment for a provider that does have accounts.
+      // the parent applies the new harness prop. The shared reactive cache now
+      // owns the list, so the prop change exposes the warmed accounts directly.
       accountLoadGeneration++
-      accounts = availableAccounts
       accountLoading = false
     }
     // Thinking level depends on the model: resolve a level the new model
