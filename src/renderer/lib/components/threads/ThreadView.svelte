@@ -10833,7 +10833,7 @@
                         </div>
                       {/if}
 
-                      {#if turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(absIndex, turnCheckpoint)}
+                      {#if !chatMode && turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(absIndex, turnCheckpoint)}
                         <div class="mt-3">
                           <RunChangesCard
                             checkpoint={turnCheckpoint}

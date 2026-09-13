@@ -7638,42 +7638,43 @@ export class ChatEngine {
     // completed. Attribute the new checkpoint to that user message   label and
     // source id inherited from the thread's latest checkpoint   so the file
     // changes card reports the user's prompt, never the hidden internal text.
-    const checkpointPromise: Promise<string | undefined> = planningSpecTurn
-      ? Promise.resolve(undefined)
-      : this.checkpointManager
-          .getLatestCompleted(projectId, threadId)
-          .catch((error: unknown) => {
-            Logger.dev('Checkpoint attribution lookup failed:', error)
-            return null
-          })
-          .then((previous) =>
-            this.checkpointManager.beginTurn(
-              projectId,
-              threadId,
-              projectPath,
-              origin === 'internal' && previous
-                ? previous.label
-                : text.slice(0, 80) || 'Agent turn',
-              project.changeTrackingMode === 'git',
-              origin === 'internal' && previous?.sourceMessageId
-                ? previous.sourceMessageId
-                : messageId
-            )
-          )
-          .then((checkpoint) => checkpoint.id)
-          .catch((error: unknown) => {
-            if (!(error instanceof CheckpointLimitError)) throw error
-            Logger.info('Checkpoint skipped because the project exceeds snapshot limits', {
-              projectId,
-              threadId,
-              detail: error.message
+    const checkpointPromise: Promise<string | undefined> =
+      planningSpecTurn || (isChatThread && !chatFileSystemEnabled)
+        ? Promise.resolve(undefined)
+        : this.checkpointManager
+            .getLatestCompleted(projectId, threadId)
+            .catch((error: unknown) => {
+              Logger.dev('Checkpoint attribution lookup failed:', error)
+              return null
             })
-            this.broadcastToast(
-              'Rollback checkpoint skipped because this project exceeds the snapshot limit. The agent will continue normally.',
-              'info'
+            .then((previous) =>
+              this.checkpointManager.beginTurn(
+                projectId,
+                threadId,
+                projectPath,
+                origin === 'internal' && previous
+                  ? previous.label
+                  : text.slice(0, 80) || 'Agent turn',
+                project.changeTrackingMode === 'git',
+                origin === 'internal' && previous?.sourceMessageId
+                  ? previous.sourceMessageId
+                  : messageId
+              )
             )
-            return undefined
-          })
+            .then((checkpoint) => checkpoint.id)
+            .catch((error: unknown) => {
+              if (!(error instanceof CheckpointLimitError)) throw error
+              Logger.info('Checkpoint skipped because the project exceeds snapshot limits', {
+                projectId,
+                threadId,
+                detail: error.message
+              })
+              this.broadcastToast(
+                'Rollback checkpoint skipped because this project exceeds the snapshot limit. The agent will continue normally.',
+                'info'
+              )
+              return undefined
+            })
     const utilityBudgetContext: UtilityTurnBudgetContext = {
       selectedModelInputTokens: inputBudget,
       composedTurnTokens: earlyLayers.totalTokens,
@@ -8034,6 +8035,7 @@ export class ChatEngine {
         settings,
         text: driverText,
         attachments,
+        readOnly: isChatThread && !chatFileSystemEnabled,
         systemPrompt:
           composeTurnSystemPrompt({
             chatPrompt: chatSystemPrompt,
