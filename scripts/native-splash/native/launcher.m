@@ -199,7 +199,13 @@ static int launch_electron(int argc, const char *argv[]) {
   char endpoint[sizeof(handoff_path)] = {0};
   if (spawnResult == 0) {
     struct pollfd descriptor = {.fd = readyPipe[0], .events = POLLIN, .revents = 0};
-    if (poll(&descriptor, 1, 2500) > 0) {
+    // The helper writes the endpoint only after the placeholder window is
+    // visible, so this wait bounds how long Electron's start is deferred. A
+    // short fixed timeout raced slow AppKit startup and silently dropped the
+    // native splash handoff. poll() also reports EOF the moment a helper dies
+    // without an endpoint, so a failed helper never delays the launch; the
+    // bound only guards against a wedged helper.
+    if (poll(&descriptor, 1, 10000) > 0) {
       const ssize_t count = read(readyPipe[0], endpoint, sizeof(endpoint) - 1);
       if (count > 0) endpoint[count] = '\0';
     }

@@ -184,7 +184,13 @@ int main(int argc, char **argv) {
   char endpoint[sizeof(handoff_path)] = {0};
   if (helper_pid > 0) {
     struct pollfd descriptor = {.fd = ready_pipe[0], .events = POLLIN, .revents = 0};
-    if (poll(&descriptor, 1, 2500) > 0) {
+    // The helper writes the endpoint only after GTK has shown the placeholder
+    // window, so this wait bounds how long Electron's start is deferred. A
+    // short fixed timeout raced slow GTK startup and silently dropped the
+    // native splash handoff. poll() also reports EOF the moment a helper dies
+    // without an endpoint, so a failed helper never delays the launch; the
+    // bound only guards against a wedged helper.
+    if (poll(&descriptor, 1, 10000) > 0) {
       const ssize_t count = read(ready_pipe[0], endpoint, sizeof(endpoint) - 1);
       if (count > 0) endpoint[count] = '\0';
     }
