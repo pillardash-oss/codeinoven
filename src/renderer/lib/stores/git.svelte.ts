@@ -210,6 +210,13 @@ export class GitState {
    */
   activeScopeBucketId: string | null = $state(null)
 
+  /**
+   * Monotonic identity for the currently activated project/scope target.
+   * Project ids alone cannot distinguish a fast A -> B -> A switch, so this
+   * prevents the second A activation from reusing or accepting A's old work.
+   */
+  private activationGeneration = 0
+
   // Not reactive rendered data — a plain dedup registry for agent-event
   // subscriptions, so SvelteSet is the wrong tool here.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
@@ -239,6 +246,7 @@ export class GitState {
   activate(projectId: string, scopeBucketId?: string): void {
     const nextScopeBucketId = scopeBucketId ?? null
     if (this.activeProjectId === projectId && this.activeScopeBucketId === nextScopeBucketId) return
+    this.activationGeneration += 1
     this.activeProjectId = projectId
     this.activeScopeBucketId = nextScopeBucketId
     this.clearProjectState()
@@ -250,6 +258,7 @@ export class GitState {
    * sibling worktrees never display each other's state.
    */
   notifyScopeChanged(projectId: string, scopeBucketId: string): void {
+    this.activationGeneration += 1
     this.activeProjectId = projectId
     this.activeScopeBucketId = scopeBucketId
     this.clearProjectState()
@@ -291,6 +300,7 @@ export class GitState {
   /** Clear Git state when the active thread has no Git-capable project. */
   deactivate(): void {
     if (this.activeProjectId === null) return
+    this.activationGeneration += 1
     this.activeProjectId = null
     this.clearProjectState()
   }
@@ -583,11 +593,12 @@ export class GitState {
   async refresh(projectId: string): Promise<void> {
     if (projectId === INBOX_PROJECT_ID || projectId !== this.activeProjectId) return
     const scopeBucketId = this.scopeFor(projectId)
-    const targetKey = `${projectId}:${scopeBucketId ?? ''}`
+    const generation = this.activationGeneration
+    const targetKey = `${generation}:${projectId}:${scopeBucketId ?? ''}`
     const inflight = this.refreshes.get(targetKey)
     if (inflight) return inflight
 
-    const refresh = this.runRefresh(projectId)
+    const refresh = this.runRefresh(projectId, generation)
     this.refreshes.set(targetKey, refresh)
     try {
       await refresh
@@ -596,7 +607,7 @@ export class GitState {
     }
   }
 
-  private async runRefresh(projectId: string): Promise<void> {
+  private async runRefresh(projectId: string, generation: number): Promise<void> {
     this.markBusy('refresh', true)
     // The refresh targets whichever project is active right now; if the panel
     // has already switched to another project, the result is stale and must
@@ -620,6 +631,7 @@ export class GitState {
       if (
         targetProject !== this.activeProjectId ||
         targetScope !== this.activeScopeBucketId ||
+        generation !== this.activationGeneration ||
         projectId !== this.activeProjectId
       )
         return
@@ -647,6 +659,7 @@ export class GitState {
       if (
         targetProject !== this.activeProjectId ||
         targetScope !== this.activeScopeBucketId ||
+        generation !== this.activationGeneration ||
         projectId !== this.activeProjectId
       )
         return
@@ -1085,10 +1098,7 @@ export class GitState {
    * panel hands over to the conflict UI. Records the session so the Resolve
    * button can finish the whole flow without manual follow-up.
    */
-  async preparePrResolve(
-    projectId: string,
-    options: PrResolveOptions
-  ): Promise<void> {
+  async preparePrResolve(projectId: string, options: PrResolveOptions): Promise<void> {
     this.markBusy('merge', true)
     this.error = null
     try {
