@@ -60,7 +60,7 @@
       Fetching release notes…
     </div>
   {:else if changelog}
-    <div class="max-h-80 overflow-y-auto pr-1">
+    <div class="max-h-96 overflow-y-auto pr-1">
       <MarkdownView text={changelog.notes} />
     </div>
   {:else if error}

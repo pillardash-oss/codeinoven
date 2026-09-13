@@ -962,7 +962,7 @@
     {:else if section === 'cloud-deployments'}
       <CloudDeploymentsSettingsTab />
     {:else if section === 'about'}
-      <div class="p-6 pb-24">
+      <div class="px-6 pb-8 pt-2">
         <!-- Identity: icon, version, copyright -->
         <div class="flex flex-col items-center gap-1.5 pb-2 pt-1 text-center">
           <VendorIcon name="CodeInOven" size={72} />
