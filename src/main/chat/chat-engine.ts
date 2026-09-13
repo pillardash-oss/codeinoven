@@ -10652,6 +10652,11 @@ export class ChatEngine {
     } catch (error) {
       if (!(error instanceof PermissionRequestGoneError)) throw error
       this.pendingPermissions.delete(requestId)
+      await this.recordPermissionDecision(pending, resolvedReply, 'user:stale-request')
+      if (reply === 'reject' && alternativeInstruction === undefined) {
+        await this.interruptRejectedPermission(pending, driver)
+        return
+      }
       await this.threadManager.setStatus(
         pending.session.projectId,
         pending.session.threadId,
@@ -10663,19 +10668,7 @@ export class ChatEngine {
     await this.recordPermissionDecision(pending, resolvedReply, 'user')
     this.pendingPermissions.delete(requestId)
     if (reply === 'reject' && alternativeInstruction === undefined) {
-      // Plain reject: cancel the blocked turn and finalize the interrupted
-      // thread. The abort emits a `session.idle` for the cancelled run, which
-      // finalizes this interrupted turn's checkpoint.
-      this.userAbortedSessions.add(pending.request.sessionId)
-      await driver.abort(pending.session.projectPath, pending.request.sessionId)
-      this.clearPendingQuestionsForSession(pending.request.sessionId)
-      this.clearPendingPermissionsForSession(pending.request.sessionId)
-      await this.threadManager.setStatus(
-        pending.session.projectId,
-        pending.session.threadId,
-        'interrupted',
-        { read: true }
-      )
+      await this.interruptRejectedPermission(pending, driver)
       return
     }
     await this.threadManager.setStatus(
@@ -10710,6 +10703,26 @@ export class ChatEngine {
         'user'
       )
     }
+  }
+
+  /** Stop a turn after the user plainly rejects its blocked action. */
+  private async interruptRejectedPermission(
+    pending: PendingPermissionInfo,
+    driver: HarnessDriver
+  ): Promise<void> {
+    // The abort emits `session.idle`, finalizing the interrupted checkpoint.
+    // This must also run when the driver's dialog disappeared before the
+    // renderer reply arrived, otherwise the blocked tool turn remains active.
+    this.userAbortedSessions.add(pending.request.sessionId)
+    await driver.abort(pending.session.projectPath, pending.request.sessionId)
+    this.clearPendingQuestionsForSession(pending.request.sessionId)
+    this.clearPendingPermissionsForSession(pending.request.sessionId)
+    await this.threadManager.setStatus(
+      pending.session.projectId,
+      pending.session.threadId,
+      'interrupted',
+      { read: true }
+    )
   }
 
   /** List unresolved permission requests for renderer reconnect recovery. */
