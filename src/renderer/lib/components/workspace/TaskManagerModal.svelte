@@ -707,7 +707,7 @@
               align="start"
               sideOffset={6}
               collisionPadding={8}
-              class="z-50 w-36 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+              class="z-60 w-36 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
             >
               {#each SORT_MODES as mode (mode)}
                 <DropdownMenu.Item
