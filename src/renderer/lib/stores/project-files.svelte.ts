@@ -17,7 +17,8 @@ import {
   isDocumentPreviewMime,
   isImageMime,
   isPdfMime,
-  mimeFromPath
+  mimeFromPath,
+  supportsFilePreview
 } from '$lib/mime'
 
 /** How many levels of subfolders "Expand all" reveals below the project root,
@@ -613,7 +614,10 @@ class ProjectFilesWorkspace {
 
   /** Open a file in preview mode: a transient tab (italicised title) that is
    *  replaced the next time another file is previewed. Double-clicking a file
-   *  (or opening it again in normal mode) pins it as a permanent tab. */
+   *  (or opening it again in normal mode) pins it as a permanent tab. When the
+   *  user is already viewing a file in preview mode and the new file also
+   *  supports preview, the new file opens straight in preview mode instead of
+   *  falling back to the default view. */
   async openFilePreview(projectId: string, path: string): Promise<void> {
     const state = this.ensureState(projectId)
     if (this.focusOpenFileTab(projectId, path)) return
@@ -624,7 +628,10 @@ class ProjectFilesWorkspace {
       await this.replaceWorkingTab(projectId, previewTab, path, true)
       return
     }
-    await this.openWorkingTab(projectId, path, 'source', true)
+    const activeTab = state.tabs.find((candidate) => candidate.id === state.activeTabId)
+    const preferredView: ProjectFileView =
+      activeTab?.view === 'preview' && supportsFilePreview(path) ? 'preview' : 'source'
+    await this.openWorkingTab(projectId, path, preferredView, true)
   }
 
   /** Focus an existing sidebar file tab by path before any caller creates a
@@ -669,6 +676,14 @@ class ProjectFilesWorkspace {
     const state = this.ensureState(projectId)
     const threadId = contextSidebarState.threadIdForProject(projectId)
     if (!threadId) return
+    // Keep the viewer's preview mode sticky while the user walks a checkpoint
+    // file list: when the currently active tab is in preview mode and the new
+    // file also supports preview, open it in preview instead of the diff view
+    // so the user never has to re-select the mode for every file.
+    const activeTab = state.tabs.find((candidate) => candidate.id === state.activeTabId)
+    if (preferredView === 'diff' && activeTab?.view === 'preview' && supportsFilePreview(path)) {
+      preferredView = 'preview'
+    }
     const tabId = `checkpoint:${threadId}:${checkpointId}:${path}`
     if (!state.tabs.some((candidate) => candidate.id === tabId)) {
       state.tabs.push({
@@ -746,6 +761,7 @@ class ProjectFilesWorkspace {
     const tab = state.tabs.find((t) => t.id === currentTabId)
     if (!tab) return
 
+    const wasPreviewView = tab.view === 'preview'
     tab.id = nextTabId
     tab.path = nextPath
     tab.focusLine = null
@@ -753,9 +769,8 @@ class ProjectFilesWorkspace {
     tab.error = null
     const nextMime = mimeFromPath(nextPath)
     if (
-      isPdfMime(nextMime) ||
-      isImageMime(nextMime) ||
-      isDocumentPreviewMime(nextMime)
+      this.isPreviewableBinary(nextMime) ||
+      (wasPreviewView && supportsFilePreview(nextPath))
     )
       tab.view = 'preview'
     state.activeTabId = nextTabId
@@ -786,6 +801,7 @@ class ProjectFilesWorkspace {
     const tab = state.tabs.find((t) => t.id === currentTabId)
     if (!tab) return
 
+    const wasPreviewView = tab.view === 'preview'
     tab.id = nextTabId
     tab.path = nextPath
     tab.focusLine = null
@@ -793,9 +809,8 @@ class ProjectFilesWorkspace {
     tab.error = null
     const nextMime = mimeFromPath(nextPath)
     if (
-      isPdfMime(nextMime) ||
-      isImageMime(nextMime) ||
-      isDocumentPreviewMime(nextMime)
+      this.isPreviewableBinary(nextMime) ||
+      (wasPreviewView && supportsFilePreview(nextPath))
     )
       tab.view = 'preview'
     state.activeTabId = nextTabId
@@ -1099,6 +1114,7 @@ class ProjectFilesWorkspace {
       return
     }
 
+    const wasPreviewView = tab.view === 'preview'
     tab.id = nextTabId
     tab.path = nextPath
     tab.preview = preview
@@ -1109,9 +1125,8 @@ class ProjectFilesWorkspace {
     tab.loadingDiff = false
     const nextMime = mimeFromPath(nextPath)
     if (
-      isPdfMime(nextMime) ||
-      isImageMime(nextMime) ||
-      isDocumentPreviewMime(nextMime)
+      this.isPreviewableBinary(nextMime) ||
+      (wasPreviewView && supportsFilePreview(nextPath))
     )
       tab.view = 'preview'
     state.activeTabId = nextTabId

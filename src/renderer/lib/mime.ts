@@ -215,3 +215,20 @@ export function isDocumentPreviewMime(mime: string): boolean {
 export function isDocumentPreviewPath(path: string): boolean {
   return DOCUMENT_PREVIEW_EXTENSION_PATTERN.test(path)
 }
+
+const MARKDOWN_PREVIEW_EXTENSION_PATTERN = /\.(?:md|mdown|markdown)$/iu
+
+/** True when the files panel can render this path in preview mode (image or
+ *  SVG, PDF, video, audio, converted Office/CSV document, or Markdown). Used
+ *  to keep the viewer's preview mode sticky while navigating file lists. */
+export function supportsFilePreview(path: string): boolean {
+  const mime = mimeFromPath(path)
+  return (
+    isImageMime(mime) ||
+    isPdfMime(mime) ||
+    isVideoMime(mime) ||
+    isAudioMime(mime) ||
+    isDocumentPreviewPath(path) ||
+    MARKDOWN_PREVIEW_EXTENSION_PATTERN.test(path)
+  )
+}
