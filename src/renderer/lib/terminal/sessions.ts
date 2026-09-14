@@ -7,6 +7,16 @@ import { attachTerminalInputCompat } from './input-compat'
 import { attachMouseTracking } from './mouse-tracking'
 import { FileLinkProvider } from './path-links'
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { composerOwnsKeyboardFocus } from '$lib/focus/composer-focus'
+
+/** Options for attaching a terminal session to a visible panel. */
+export interface TerminalAttachOptions {
+  /** Focus the terminal's editor after attaching. Suppressed while a
+   *  thread-switch guard window is open: switching threads must always leave
+   *  keyboard focus in the chat composer, and a user who wants the terminal
+   *  focused clicks on it. */
+  focus?: boolean
+}
 
 export interface TerminalSession {
   id: string
@@ -148,7 +158,8 @@ class TerminalSessionManager {
     container: HTMLDivElement,
     projectId: string,
     threadId: string,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    options: TerminalAttachOptions = {}
   ): Promise<void> {
     if (session.host.parentElement !== container) {
       container.replaceChildren(session.host)
@@ -157,7 +168,7 @@ class TerminalSessionManager {
     session.threadId = threadId
     session.scopeBucketId = scopeBucketId ?? null
     await this.ensurePty(session, projectId, threadId, scopeBucketId)
-    session.term.focus()
+    this.focusIfRequested(session, options)
   }
 
   async attachAction(
@@ -167,7 +178,8 @@ class TerminalSessionManager {
     threadId: string,
     script: string,
     variables: Record<string, string>,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    options: TerminalAttachOptions = {}
   ): Promise<void> {
     if (session.host.parentElement !== container) container.replaceChildren(session.host)
     fitSession(session)
@@ -191,6 +203,14 @@ class TerminalSessionManager {
         throw error
       }
     }
+    this.focusIfRequested(session, options)
+  }
+
+  /** Apply an attach-time focus request, unless a thread-switch guard window
+   *  is open   the chat composer owns keyboard focus right after a switch,
+   *  and a user who wants the terminal focused clicks on it. */
+  private focusIfRequested(session: TerminalSession, options: TerminalAttachOptions): void {
+    if (!options.focus || composerOwnsKeyboardFocus()) return
     session.term.focus()
   }
 

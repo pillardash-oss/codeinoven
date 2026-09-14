@@ -12,6 +12,7 @@ import { contextSidebarState } from './context-sidebar.svelte'
 import { rendererRecovery } from './renderer-recovery.svelte'
 import { notificationPanelState } from './notification-panel.svelte'
 import { gitState } from './git.svelte'
+import { openComposerFocusWindow } from '$lib/focus/composer-focus'
 import { scopeState } from './scope.svelte'
 import { APP_SLUG } from '$shared/brand'
 import { invoke } from '$lib/ipc.svelte'
@@ -157,6 +158,10 @@ class WorkspaceState {
   historyActions: HistoryMessageActions | null = $state(null)
 
   openThread(thread: Thread, project: Project | null, iconUrl?: string | null): void {
+    // The chat composer owns keyboard focus after any thread switch. Open the
+    // guard window so sidebar tools re-attaching around the switch (terminal
+    // panels, action terminals) never steal focus back from the composer.
+    openComposerFocusWindow()
     const visitKey = threadVisitKey(thread)
     this.recentThreadVisits = [
       visitKey,

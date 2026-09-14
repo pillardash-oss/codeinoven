@@ -15,6 +15,10 @@
   let error = $state<string | null>(null)
 
   const attachTerminal: Attachment<HTMLDivElement> = (container) => {
+    // No focus request: action terminals must never pull keyboard focus from
+    // the chat composer. Opening the Actions panel (with an expanded run) or
+    // starting a run only shows the terminal; a user who wants to interact
+    // with it clicks on it.
     let cancelled = false
     void terminalSessions.getOrCreateAction(terminalId).then(async (session: TerminalSession) => {
       if (cancelled) return

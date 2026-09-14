@@ -40,7 +40,8 @@ import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/check
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import { toPosixPath } from '../../lib/paths'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
-import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
+import { buildProcessEnvironment } from '../drivers/cli-environment'
+import { isHarnessCommandAvailable } from '../drivers/harness-runtime'
 import { CheckpointLimitError, type ProjectFingerprint } from '../git/change-tracking-service'
 import {
   broadcastThreadDeleted,
@@ -4022,7 +4023,7 @@ export class ChatEngine {
     const harnessEnv = buildProcessEnvironment()
     const defaultDrivers = [...this.drivers.values()].filter((driver) => {
       const command = findHarness(driver.id)?.command
-      return command !== undefined && resolveExecutablePath(command, harnessEnv) !== undefined
+      return command !== undefined && isHarnessCommandAvailable(command, harnessEnv)
     })
     const managedAccounts = (await this.accountRegistry.list()).filter(
       (account) =>
@@ -4154,12 +4155,12 @@ export class ChatEngine {
     return persisted ?? []
   }
 
-  /** Keep cached/fallback catalogs scoped to harness executables installed on this machine. */
+  /** Keep cached/fallback catalogs scoped to harness runtimes available on this machine. */
   private filterInstalledProviderCatalogs(catalogs: ProviderCatalog[]): ProviderCatalog[] {
     const env = buildProcessEnvironment()
     const installed = new Set(
       listHarnesses()
-        .filter((harness) => resolveExecutablePath(harness.command, env) !== undefined)
+        .filter((harness) => isHarnessCommandAvailable(harness.command, env))
         .map((harness) => harness.id)
     )
     return catalogs.filter((catalog) => installed.has(catalog.harnessId))

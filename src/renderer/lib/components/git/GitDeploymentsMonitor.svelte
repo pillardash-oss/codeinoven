@@ -7,6 +7,7 @@
     ExternalLink,
     GitBranch,
     Loader2,
+    Minus,
     PackageCheck,
     RefreshCw,
     Rocket
@@ -290,6 +291,8 @@
                     <Clock3 size={13} class="mt-0.5 shrink-0 text-warning" />
                   {:else if run.conclusion === 'success'}
                     <CircleCheck size={13} class="mt-0.5 shrink-0 text-success" />
+                  {:else if run.conclusion === 'skipped'}
+                    <Minus size={13} class="mt-0.5 shrink-0 text-dimmed" />
                   {:else}
                     <CircleX size={13} class="mt-0.5 shrink-0 text-danger" />
                   {/if}

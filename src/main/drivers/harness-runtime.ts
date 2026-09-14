@@ -51,6 +51,22 @@ function bundledPiRuntime(command: string): HarnessRuntime | null {
 }
 
 /**
+ * Whether a harness command is usable on this machine: a native PATH install
+ * or, for Pi, the bundled runtime shipped with the app. Provider-catalog
+ * discovery and catalog filtering must use this instead of a bare PATH lookup
+ * (see `resolveExecutablePath`), otherwise a machine without a system `pi`
+ * would exclude the bundled Pi from every model picker even though sessions
+ * run it fine through `prepareHarnessInvocation`.
+ */
+export function isHarnessCommandAvailable(
+  command: string,
+  env: NodeJS.ProcessEnv = buildProcessEnvironment()
+): boolean {
+  if (resolveExecutablePath(command, env) !== undefined) return true
+  return bundledPiRuntime(command) !== null
+}
+
+/**
  * Env overrides for spawning the bundled Pi runtime: `ELECTRON_RUN_AS_NODE`
  * makes Electron's own binary behave as a plain Node runtime, and `NODE_PATH`
  * points at the bundled `vendor/` directory so `require('jiti')` resolves  
