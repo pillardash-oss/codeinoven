@@ -10695,6 +10695,12 @@ export class ChatEngine {
         Logger.dev('Thread artifact directory cleanup was incomplete:', error)
       )
     }
+
+    // The thread utilities bank is per-thread bookkeeping; it dies with the
+    // thread so deleted threads never leave stale utility entries behind.
+    await this.utilityOrchestration
+      .deleteThreadBank(threadId)
+      .catch((error: unknown) => Logger.dev('Thread utilities bank cleanup failed:', error))
   }
 
   /** Reply to a pending permission request (from the UI permission card). */

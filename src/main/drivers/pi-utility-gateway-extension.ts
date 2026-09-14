@@ -41,6 +41,7 @@ import {
   GATEWAY_TOOLS,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
+  UTILITY_DOCS_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_SEARCH_TOOL_NAME,
@@ -52,6 +53,7 @@ export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
   UTILITY_SEARCH_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
+  UTILITY_DOCS_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME
 ] as const
@@ -65,6 +67,7 @@ function gatewayTool(name: string): GatewayToolDefinition {
 const searchTool = gatewayTool(UTILITY_SEARCH_TOOL_NAME)
 const activateTool = gatewayTool(UTILITY_ACTIVATE_TOOL_NAME)
 const invokeTool = gatewayTool(UTILITY_INVOKE_TOOL_NAME)
+const docsTool = gatewayTool(UTILITY_DOCS_TOOL_NAME)
 const manageTool = gatewayTool(UTILITY_MANAGE_TOOL_NAME)
 const diagnosticsTool = gatewayTool(UTILITY_DIAGNOSTICS_TOOL_NAME)
 
@@ -290,6 +293,22 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
         operation: params.operation,
         input: params.input ?? {}
       })
+      return textResult(result)
+    }
+  })
+
+  // Post-compaction docs re-dump: registered without a promptSnippet so it
+  // stays out of the always-on system prompt, but always callable when the
+  // turn instructions mention the thread utilities bank.
+  pi.registerTool({
+    name: ${JSON.stringify(docsTool.name)},
+    label: 'Re-list CodeInOven utility docs',
+    description: ${JSON.stringify(docsTool.description)},
+    parameters: Type.Object({
+      utility_id: Type.String({ description: 'Utility identifier, e.g. from the thread utilities bank.' })
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(${JSON.stringify(docsTool.route)}, { utility_id: params.utility_id })
       return textResult(result)
     }
   })
