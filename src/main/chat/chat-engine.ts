@@ -18962,11 +18962,21 @@ export class ChatEngine {
       }
     }
 
+    // A `message.completed` that arrives after the session's idle was already
+    // handled belongs to work outside the finished turn (e.g. a Codex
+    // collaboration sub-agent reporting late). It must not resurrect the
+    // settled thread back to `executing`: markSessionWorking would flip the
+    // status without arming any watchdog, leaving the thread stuck forever.
+    // A genuinely new turn re-arms through its own part events or an
+    // authoritative `session.status working` before any such completion.
+    const idleAlreadyHandled =
+      event.type === 'message.completed' && this.handledIdleSessions.has(event.sessionId)
     const confirmsActiveWork =
-      event.type === 'message.part.updated' ||
-      event.type === 'message.part.delta' ||
-      (event.type === 'message.completed' && !event.error) ||
-      (event.type === 'session.status' && event.status.state === 'working')
+      !idleAlreadyHandled &&
+      (event.type === 'message.part.updated' ||
+        event.type === 'message.part.delta' ||
+        (event.type === 'message.completed' && !event.error) ||
+        (event.type === 'session.status' && event.status.state === 'working'))
     if (eventOwner && confirmsActiveWork) this.markSessionWorking(event.sessionId)
 
     // Stamp thinking start time on reasoning parts that lack it.
