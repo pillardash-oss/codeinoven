@@ -2135,6 +2135,12 @@ export class ChatEngine {
     }
   >()
 
+  /** Threads whose user has invoked @cio-utility at least once (current turn
+   *  or history). Once recorded, the setup + diagnostics contract stays
+   *  reusable by the agent in every later turn of that thread without
+   *  repeating the invocation. */
+  private cioUtilityThreads = new Map<string, true>()
+
   constructor(
     private storage: StorageEngine,
     private database: Database,
@@ -2165,6 +2171,9 @@ export class ChatEngine {
       },
       async (threads) => {
         for (const thread of threads) broadcastThreadDeleted(thread)
+        for (const threadId of threads.map((thread) => thread.id)) {
+          this.cioUtilityThreads.delete(threadId)
+        }
         for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
           await this.checkpointManager.pruneUnusedBlobs(projectId)
         }
@@ -3449,6 +3458,21 @@ export class ChatEngine {
   }
 
   /**
+   * True when the user has invoked @cio-utility in this thread's history
+   * (including the current turn's message). Only positive results are memoized:
+   * a thread that never invoked must keep re-scanning its (cheap, cached) user
+   * messages so a rollback or edit that restores an @cio-utility prompt still
+   * grants reuse.
+   */
+  private async hasCioUtilityInvocation(projectId: string, threadId: string): Promise<boolean> {
+    if (this.cioUtilityThreads.has(threadId)) return true
+    const userMessages = await this.threadManager.loadUserMessages(projectId, threadId)
+    const invoked = userMessages.some((message) => isCioUtilityRequest(message.content))
+    if (invoked) this.cioUtilityThreads.set(threadId, true)
+    return invoked
+  }
+
+  /**
    * Install one tiny gateway plus always-on utilities for this turn. On-demand
    * schemas remain outside model context until the gateway activates them.
    */
@@ -3656,7 +3680,10 @@ export class ChatEngine {
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
         executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
-        allowManagement: false,
+        // A steered turn keeps the setup + diagnostics contract alive when the
+        // user has invoked @cio-utility in this thread, so reuse survives a
+        // steer landing after the previous turn's gateway cleanup.
+        allowManagement: await this.hasCioUtilityInvocation(projectId, threadId),
         ...(this.pendingBrainstormTurns.has(sessionId)
           ? {
               saveBrainstormNotes: (markdown: string) =>
@@ -6840,6 +6867,7 @@ export class ChatEngine {
       settings: steerSettings,
       references: validatedPromptReferences
     })
+    if (isCioUtilityRequest(text)) this.cioUtilityThreads.set(threadId, true)
     await this.rearmSteerUtilities(
       driver,
       projectId,
@@ -7724,6 +7752,13 @@ export class ChatEngine {
       parentTurnId: messageId
     }
     const utilitySetupRequested = origin === 'user' && isCioUtilityRequest(text)
+    if (utilitySetupRequested) this.cioUtilityThreads.set(threadId, true)
+    // Once @cio-utility has been invoked in this thread (earlier or now), later
+    // turns keep the setup + diagnostics contract reusable without repeating
+    // the invocation. Other utilities were already freely invocable whenever
+    // the gateway runs.
+    const utilitySetupAllowed =
+      utilitySetupRequested || (await this.hasCioUtilityInvocation(projectId, threadId))
     // A web-only chat skips the app gateway only when the harness can search
     // the web natively (claude-code, codex, cline, antigravity) or cannot host
     // the gateway at all. Pi has NO native web tools   the gateway is its only
@@ -7744,9 +7779,9 @@ export class ChatEngine {
       targetThread?.title ?? '',
       isChatThread &&
         !chatFileSystemEnabled &&
-        !utilitySetupRequested &&
+        !utilitySetupAllowed &&
         (driverHasNativeWebSearch || !driverCanPublishGateway),
-      utilitySetupRequested,
+      utilitySetupAllowed,
       activeBrainstormSession
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
@@ -8110,7 +8145,7 @@ export class ChatEngine {
         allowedTools:
           isChatThread &&
           !chatFileSystemEnabled &&
-          !utilitySetupRequested &&
+          !utilitySetupAllowed &&
           settings.providerId &&
           settings.modelId
             ? CHAT_WEB_ONLY_TOOLS
