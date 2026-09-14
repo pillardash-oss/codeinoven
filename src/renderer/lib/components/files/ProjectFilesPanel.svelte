@@ -14,11 +14,13 @@
     FolderOpen,
     Loader2,
     Minimize2,
-    Save
+    Save,
+    TriangleAlert
   } from '@lucide/svelte'
   import { documentPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { supportsFilePreview } from '$lib/mime'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
   import type {
     ConflictResolutionController,
@@ -99,6 +101,23 @@
       : null
   )
   let deletedAtCheckpoint = $derived(checkpointDiff?.kind === 'deleted')
+  /** Reload is available for text files with a session and for previewable
+   *  files without one (media, images, SVG, PDF, documents), which re-read
+   *  their preview content instead. */
+  let reloadDisabled = $derived(
+    deletedAtCheckpoint ||
+      !activeTab ||
+      (!activeSession && !supportsFilePreview(activeTab.path)) ||
+      Boolean(projectState.loadingPaths[activeTab.path]) ||
+      Boolean(activeSession?.saving)
+  )
+  /** The active file has unsaved changes while the disk version moved on:
+   *  the viewer shows the "Viewing an older version" alert (see below). */
+  let staleSession = $derived(
+    activeSession !== null &&
+      !deletedAtCheckpoint &&
+      projectState.staleFiles[activeSession.source.path] === true
+  )
   /** Paths still carrying merge/rebase conflicts, straight from the git store. */
   let conflictedPaths = $derived([...gitState.conflicted])
   /**
@@ -116,9 +135,17 @@
   let svg = $derived(activeTab ? isSvgMime(mimeFromPath(activeTab.path)) : false)
   let video = $derived(activeTab ? isVideoMime(mimeFromPath(activeTab.path)) : false)
   let audio = $derived(activeTab ? isAudioMime(mimeFromPath(activeTab.path)) : false)
+  let previewReloadToken = $derived(
+    activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0
+  )
   let previewUrl = $derived(
     activeTab && (pdf || image || video || audio) && !svg
-      ? projectFilePreviewUrl(projectId, activeTab.path, chatThreadId ?? undefined)
+      ? projectFilePreviewUrl(
+          projectId,
+          activeTab.path,
+          chatThreadId ?? undefined,
+          previewReloadToken
+        )
       : null
   )
   // SVG is rendered natively in the renderer via a blob URL (animated SVGs
@@ -135,6 +162,9 @@
       svgPreviewFailed = false
       return
     }
+    // Reading the reload token keeps the effect reactive to explicit reloads:
+    // bumping it revokes the stale blob and re-reads the file from disk.
+    const reloadToken = projectState.previewReloadTokens[activeTab.path] ?? 0
     let cancelled = false
     svgPreviewFailed = false
     void invoke(
@@ -146,6 +176,9 @@
     )
       .then((source: ProjectTextFile | null) => {
         if (cancelled || !source) return
+        // A newer reload request superseded this read; its own run will land
+        // the fresh blob, so drop the stale content.
+        if ((projectState.previewReloadTokens[activeTab.path] ?? 0) !== reloadToken) return
         const url = URL.createObjectURL(new Blob([source.content], { type: 'image/svg+xml' }))
         svgPreviewUrl = url
       })
@@ -173,6 +206,9 @@
   let documentError = $state<string | null>(null)
   /** Path whose HTML is currently loaded   guards against tab swaps. */
   let documentHtmlPath = $state<string | null>(null)
+  /** Reload token the loaded HTML belongs to; a bumped token forces a re-read
+   *  even though the path is unchanged. Plain companion of `documentHtmlPath`. */
+  let documentHtmlToken: number | null = null
   /** Path whose HTML is currently being fetched   guards against effect
    *  re-runs (driven by `activeTab` reference churn) starting duplicate IPC
    *  chains that would otherwise cancel or pile on top of each other.
@@ -195,6 +231,7 @@
     if (!activeTab || !documentPreview || activeTab.view !== 'preview') {
       documentHtml = null
       documentHtmlPath = null
+      documentHtmlToken = null
       documentInFlightPath = null
       documentFailed = false
       documentError = null
@@ -202,11 +239,18 @@
       return
     }
     const path = activeTab.path
-    // Bail if this path is already loaded OR already being fetched   the
-    // in-flight chain settles its own state. Without the in-flight guard,
-    // every `activeTab` reference change restarts the chain and the previous
-    // one never gets to clear `documentLoading`   the infinite spinner.
-    if (documentHtmlPath === path || documentInFlightPath === path) return
+    const reloadToken = projectState.previewReloadTokens[path] ?? 0
+    // Bail if this path is already loaded (at the same reload token) OR
+    // already being fetched   the in-flight chain settles its own state.
+    // Without the in-flight guard, every `activeTab` reference change restarts
+    // the chain and the previous one never gets to clear `documentLoading`
+    // the infinite spinner. A bumped reload token bypasses both guards so
+    // Reload re-reads the file from disk.
+    if (
+      (documentHtmlPath === path && documentHtmlToken === reloadToken) ||
+      documentInFlightPath === path
+    )
+      return
     documentInFlightPath = path
     const token = ++documentEffectToken
     documentLoading = true
@@ -221,6 +265,7 @@
       if (token !== documentEffectToken) return
       documentHtml = null
       documentHtmlPath = path
+      documentHtmlToken = reloadToken
       documentInFlightPath = null
       documentFailed = true
       documentError = 'Document preview timed out'
@@ -235,6 +280,7 @@
         // chat-attachment document preview instead of rendering transparent.
         documentHtml = html ? documentPreviewFrame(html) : null
         documentHtmlPath = path
+        documentHtmlToken = reloadToken
         documentInFlightPath = null
         documentFailed = html === null
         documentError = html === null ? 'The document could not be converted for preview' : null
@@ -243,6 +289,7 @@
         if (token !== documentEffectToken) return
         documentHtml = null
         documentHtmlPath = path
+        documentHtmlToken = reloadToken
         documentInFlightPath = null
         documentFailed = true
         documentError = error instanceof Error ? error.message : String(error)
@@ -392,8 +439,24 @@
     projectFilesWorkspace.updateDraft(projectId, activeTab.path, input.currentTarget.value)
   }
 
+  function reloadStaleActive(): void {
+    if (!activeTab || !activeSession) return
+    // No confirmation dialog: the alert itself is the explicit choice, and
+    // the editor applies the new content as an undoable transaction, so the
+    // previous draft stays recoverable through undo/redo.
+    void projectFilesWorkspace.reload(projectId, activeTab.path)
+  }
+
   function reloadSelected(): void {
     if (!activeTab) return
+    if (!activeSession) {
+      // Media/image/SVG/PDF/document previews have no editable text session;
+      // bumping the preview reload token re-reads the file from disk.
+      if (supportsFilePreview(activeTab.path)) {
+        projectFilesWorkspace.reloadPreview(projectId, activeTab.path)
+      }
+      return
+    }
     if (dirty && !window.confirm(`Discard unsaved changes to ${activeTab.path} and reload it?`)) {
       return
     }
@@ -595,6 +658,26 @@
 
 <svelte:window onkeydown={handleGlobalKeydown} />
 
+{#snippet staleVersionAlert(positionClass: string)}
+  {#if staleSession}
+    <div
+      class={['absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 shadow-lg', positionClass]}
+      role="alert"
+    >
+      <TriangleAlert size={13} class="shrink-0 text-warning" />
+      <span class="text-[0.625rem] font-medium text-warning">Viewing an older version</span>
+      <button
+        type="button"
+        class="rounded bg-warning/20 px-2 py-0.5 text-[0.625rem] font-semibold text-warning transition-colors hover:bg-warning/30"
+        title="Reload the current file from disk; the previous content stays recoverable with undo"
+        onclick={reloadStaleActive}
+      >
+        Reload file
+      </button>
+    </div>
+  {/if}
+{/snippet}
+
 <div class="flex h-full min-h-0 flex-col bg-app">
   <div class="flex min-h-0 flex-1">
     <section
@@ -752,10 +835,7 @@
             diffView={activeTab.view === 'diff'}
             lineNumbers={showLineNumbers}
             wrap={wrapLines}
-            reloadDisabled={deletedAtCheckpoint ||
-              !activeSession ||
-              Boolean(projectState.loadingPaths[activeTab.path]) ||
-              activeSession.saving}
+            reloadDisabled={reloadDisabled}
             mutationDisabled={deletedAtCheckpoint || mutationPending}
             onReload={reloadSelected}
             onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
@@ -786,6 +866,8 @@
           {/if}
         </div>
       {/if}
+
+      {@render staleVersionAlert('top-[4.5rem]')}
 
       {#if activeSession?.error}
         <div
@@ -1162,10 +1244,7 @@
             diffView={activeTab.view === 'diff'}
             lineNumbers={showLineNumbers}
             wrap={wrapLines}
-            reloadDisabled={deletedAtCheckpoint ||
-              !activeSession ||
-              Boolean(projectState.loadingPaths[activeTab.path]) ||
-              activeSession.saving}
+            reloadDisabled={reloadDisabled}
             mutationDisabled={deletedAtCheckpoint || mutationPending}
             hideFullscreen
             onReload={reloadSelected}
@@ -1177,7 +1256,8 @@
           />
         </div>
       {/if}
-      <div class="flex min-h-0 min-w-0 flex-1">
+      <div class="relative flex min-h-0 min-w-0 flex-1">
+        {@render staleVersionAlert('top-2')}
         <div
           class="relative flex min-h-0 min-w-0 flex-1 flex-col"
           data-region="editor"
