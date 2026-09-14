@@ -7762,6 +7762,10 @@
       })
       auditReport = result.report
       durableAuditThread = result.auditorThread
+      // The main process persists `report_ready`; mirror it locally so the
+      // studio's Review / Complete actions light up without waiting for the
+      // thread-update broadcast.
+      auditState = 'report_ready'
       auditVersions = await invoke(
         'audit:listVersions',
         thread.projectId,

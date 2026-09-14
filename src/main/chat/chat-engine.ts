@@ -14814,9 +14814,32 @@ export class ChatEngine {
     if (!transcript.trim()) {
       throw new Error('The thread has no auditable conversation yet.')
     }
+    // A rework cycle: a previous report exists and the coordinator agent was
+    // sent rework feedback after it. The next audit verifies that rework
+    // against the previous findings instead of re-judging the whole thread.
+    const previousReport =
+      coordinator.activeAuditId !== undefined
+        ? (this.auditEngine
+            .listVersions(projectId, coordinatorThreadId, coordinator.activeAuditId)
+            .sort((left, right) => right.version - left.version)[0] ?? null)
+        : null
+    const previousReportPath = previousReport
+      ? await this.artifactRef(
+          projectId,
+          coordinatorThreadId,
+          join('versions', `${previousReport.id}-audit-v${previousReport.version}.md`)
+        )
+      : undefined
     const basePrompt = [
       'Independently audit the current work of this thread.',
       'No specification exists: the transcript below contains the user\u2019s requests and the agent\u2019s final outputs. Treat it as the contract, and verify the delivered work against the repository with read-only tools before reporting.',
+      ...(previousReport && previousReportPath
+        ? [
+            '',
+            `This is a rework-verification pass. A previous audit report (v${previousReport.version}) exists at ${previousReportPath}; read it first. The transcript below also contains the rework instructions and the agent\u2019s latest response that acted on that report.`,
+            'Judge this run against the previous report: keep every previous finding that is still unresolved (same id, updated evidence), omit findings the rework resolved, report new findings the rework introduced, and state the resolution outcome of every previous finding in the executive summary. Re-run the applicable verification checks against the reworked files.'
+          ]
+        : []),
       '',
       'Thread transcript:',
       '',
@@ -14929,9 +14952,9 @@ export class ChatEngine {
             modelId: auditorSettings.modelId
           }
         })
-        await this.threadManager.updateThread(projectId, coordinatorThreadId, {
-          activeAuditId: report.id,
-          activeAuditVersion: report.version
+        await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'report_ready', {
+          id: report.id,
+          version: report.version
         })
         await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
           read: false
