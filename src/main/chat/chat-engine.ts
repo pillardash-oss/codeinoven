@@ -917,10 +917,17 @@ const SPEC_BRAINSTORM_ALLOWED_TOOLS = [
   'gemini_quota'
 ]
 
-const AUDIT_ALLOWED_TOOLS = [
-  ...SPEC_BRAINSTORM_ALLOWED_TOOLS.filter((tool) => tool !== 'question'),
-  'bash'
-]
+/**
+ * Audit sessions must verify with hard facts (read the codebase, run checks,
+ * tests, lints) but never modify the repository. The list therefore carries
+ * only built-in tool names that exist in every harness: `read` for source
+ * inspection and `bash` for running verification commands, and deliberately
+ * omits every file-mutating tool (edit/write). The app utility gateway tools
+ * (cio_util_find/init/use and its bookkeeping tools) are custom tools the pi
+ * tool gate never restricts, and other harnesses receive them through the
+ * prepared gateway runtime, so they stay reachable without being listed.
+ */
+const AUDIT_ALLOWED_TOOLS = ['read', 'bash']
 
 /** Read-only research tools for disposable generation sessions that read artifact files. */
 const PROMPT_READ_ONLY_TOOLS = ['read', 'glob', 'grep', 'list']
@@ -3641,6 +3648,68 @@ export class ChatEngine {
       }
     })()
     await turn.cleanupPromise
+  }
+
+  /**
+   * Prepare the app utility gateway for one audit turn. Every audit dispatch
+   * path (independent, implementation, achievement, Assignment) routes through
+   * this shared helper so the auditor always reaches cio_util_find / activate
+   * / invoke (and any MCP-backed knowledge utility such as framework docs)
+   * exactly like a regular project thread. On preparation failure the
+   * instructions carry the limitation note the auditor must record in its
+   * report instead of silently auditing without the gateway.
+   */
+  private async prepareAuditUtilities(
+    driver: HarnessDriver,
+    projectId: string,
+    auditorThread: Thread,
+    sessionId: string,
+    projectPath: string,
+    settings: ThreadSettings,
+    budgetContext: UtilityTurnBudgetContext
+  ): Promise<{ instructions: string; runtimeAvailable: boolean }> {
+    try {
+      const instructions = await this.prepareTurnUtilities(
+        driver,
+        projectId,
+        auditorThread.id,
+        sessionId,
+        projectPath,
+        settings,
+        budgetContext,
+        auditorThread.title
+      )
+      return { instructions, runtimeAvailable: Boolean(instructions) }
+    } catch (error) {
+      Logger.error('Audit utility preparation failed', {
+        projectId,
+        threadId: auditorThread.id,
+        sessionId,
+        error: rawErrorMessage(error)
+      })
+      return {
+        instructions: `The app utility gateway could not be prepared for this audit: ${rawErrorMessage(error)}. Record this exact limitation in verification.utilities and verification.limitations.`,
+        runtimeAvailable: false
+      }
+    }
+  }
+
+  /** Turn-scoped utility gateway cleanup shared by every audit dispatch path. */
+  private async cleanupAuditUtilities(
+    scope: string,
+    projectId: string,
+    coordinatorThreadId: string,
+    auditorThreadId: string,
+    sessionId: string
+  ): Promise<void> {
+    await this.cleanupTurnUtilities(sessionId).catch((error) => {
+      Logger.error(`${scope} audit utility cleanup failed`, {
+        projectId,
+        threadId: coordinatorThreadId,
+        auditorThreadId,
+        error: rawErrorMessage(error)
+      })
+    })
   }
 
   /**
@@ -14848,6 +14917,26 @@ export class ChatEngine {
     const auditStartedAt = Date.now()
     const runId = `${auditStartedAt}-${randomBytes(4).toString('hex')}`
     let lastError: Error | null = null
+    // A previous failed run leaves the auditor's durable session intact, so
+    // the next run continues from where it stopped instead of re-auditing
+    // the whole thread from scratch.
+    let promptKind: 'initial' | 'resume' | 'correct' =
+      auditorThread.status === 'failed' ? 'resume' : 'initial'
+    let previousFailure = auditorThread.lastError ?? 'The previous run failed.'
+    let continuationRetries = 0
+
+    /** Continuation prompt for a run that stopped partway: the auditor keeps
+     *  its prior session context, so it resumes rather than restarting. */
+    const resumePrompt = (failure: string): string =>
+      [
+        'Your previous independent audit run stopped partway with an error, and no report was delivered.',
+        `Previous failure: ${failure}`,
+        'Your session still contains the work from that run; continue the audit from where you left off instead of starting over. The transcript below is unchanged and remains the contract. Finish the remaining verification and return exactly one audit-report JSON object with no Markdown fences or commentary.',
+        '',
+        'Thread transcript:',
+        '',
+        transcript
+      ].join('\n')
 
     // The first run permanently initializes the independent audit: the
     // composer switch disappears and the coordinator stays for the thread's
@@ -14861,13 +14950,15 @@ export class ChatEngine {
       this.markSessionWorking(sessionId)
       const messageId = createMessageId()
       const prompt =
-        attemptIndex === 0
+        promptKind === 'initial'
           ? basePrompt
-          : [
-              'Your previous audit response was not valid JSON.',
-              'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
-              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
-            ].join('\n\n')
+          : promptKind === 'resume'
+            ? resumePrompt(previousFailure)
+            : [
+                'Your previous audit response was not valid JSON.',
+                'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
+                `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
+              ].join('\n\n')
       await this.persistOutboundMessage(
         projectId,
         auditorThread.id,
@@ -14877,12 +14968,17 @@ export class ChatEngine {
         [],
         [],
         [],
-        attemptIndex === 0
+        promptKind === 'resume'
           ? {
               action: 'Independent audit',
-              body: 'Auditing the current thread work against its transcript and the repository.'
+              body: 'Continuing the audit from where the previous run stopped.'
             }
-          : undefined,
+          : promptKind === 'initial'
+            ? {
+                action: 'Independent audit',
+                body: 'Auditing the current thread work against its transcript and the repository.'
+              }
+            : undefined,
         'internal'
       )
       const outboundIds = this.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
@@ -14894,12 +14990,35 @@ export class ChatEngine {
         'Independent audit'
       )
       try {
+        const auditUtilityBudgetContext: UtilityTurnBudgetContext = {
+          selectedModelInputTokens: this.selectedModelInputBudget(
+            auditorSettings.providerId,
+            auditorSettings.modelId,
+            projectId
+          ),
+          composedTurnTokens: estimateTextTokens(prompt),
+          parentTurnId: messageId
+        }
+        const utilityTurn = await this.prepareAuditUtilities(
+          driver,
+          projectId,
+          auditorThread,
+          sessionId,
+          projectPath,
+          auditorSettings,
+          auditUtilityBudgetContext
+        )
         await driver.sendPrompt(projectPath, {
           sessionId,
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: await this.cioPrompt('independent-audit-report'),
+          systemPrompt: [
+            await this.cioPrompt('independent-audit-report'),
+            utilityTurn.instructions
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId
         })
@@ -14929,7 +15048,7 @@ export class ChatEngine {
           content,
           messages: await driver.loadMessages(projectPath, sessionId),
           auditStartedAt,
-          utilitySearchRequired: false
+          utilitySearchRequired: utilityTurn.runtimeAvailable
         })
         content = await this.persistAssignmentAuditCheckEvidence({
           projectId,
@@ -14968,13 +15087,31 @@ export class ChatEngine {
         }
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('The Auditor failed.')
+        previousFailure = lastError.message
         const correctableOutput =
           lastError instanceof AuditReportValidationError ||
           lastError instanceof SyntaxError ||
           lastError.message === 'The Auditor returned no response'
-        if (!correctableOutput) break
+        if (correctableOutput) {
+          promptKind = 'correct'
+        } else if (continuationRetries < 1 && attemptIndex < 2) {
+          // A mid-run failure (stream error, timeout, transport crash) gets one
+          // automatic continuation attempt before the run is marked failed:
+          // the auditor resumes its own session rather than starting over.
+          continuationRetries += 1
+          promptKind = 'resume'
+        } else {
+          break
+        }
       } finally {
         this.clearCompletionWaiter(sessionId)
+        await this.cleanupAuditUtilities(
+          'Independent',
+          projectId,
+          coordinatorThreadId,
+          auditorThread.id,
+          sessionId
+        )
       }
     }
 
@@ -16206,27 +16343,17 @@ export class ChatEngine {
       let utilityInstructions = ''
       let utilityRuntimeAvailable = false
       if (!repairing) {
-        try {
-          utilityInstructions = await this.prepareTurnUtilities(
-            driver,
-            projectId,
-            auditorThread.id,
-            sessionId,
-            projectPath,
-            auditorSettings,
-            auditUtilityBudgetContext,
-            auditorThread.title
-          )
-          utilityRuntimeAvailable = Boolean(utilityInstructions)
-        } catch (error) {
-          utilityInstructions = `The app utility gateway could not be prepared for this audit: ${rawErrorMessage(error)}. Record this exact limitation in verification.utilities and verification.limitations.`
-          Logger.error('Assignment audit utility preparation failed', {
-            projectId,
-            threadId: coordinatorThreadId,
-            auditorThreadId: auditorThread.id,
-            error: rawErrorMessage(error)
-          })
-        }
+        const utilityTurn = await this.prepareAuditUtilities(
+          driver,
+          projectId,
+          auditorThread,
+          sessionId,
+          projectPath,
+          auditorSettings,
+          auditUtilityBudgetContext
+        )
+        utilityInstructions = utilityTurn.instructions
+        utilityRuntimeAvailable = utilityTurn.runtimeAvailable
       }
       await this.persistOutboundMessage(
         projectId,
@@ -16268,7 +16395,10 @@ export class ChatEngine {
           text: prompt,
           attachments: [],
           systemPrompt: auditSystemPrompt,
-          allowedTools: utilityRuntimeAvailable ? undefined : AUDIT_ALLOWED_TOOLS,
+          // Audits are read-only regardless of gateway availability: the
+          // allowlist never opens file-mutating tools, even when the gateway
+          // runtime is prepared (previously this branch was unrestricted).
+          allowedTools: AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId
         })
         const streamed = await completion
@@ -16382,14 +16512,13 @@ export class ChatEngine {
         break
       } finally {
         this.clearCompletionWaiter(sessionId)
-        await this.cleanupTurnUtilities(sessionId).catch((error) => {
-          Logger.error('Assignment audit utility cleanup failed', {
-            projectId,
-            threadId: coordinatorThreadId,
-            auditorThreadId: auditorThread.id,
-            error: rawErrorMessage(error)
-          })
-        })
+        await this.cleanupAuditUtilities(
+          'Assignment',
+          projectId,
+          coordinatorThreadId,
+          auditorThread.id,
+          sessionId
+        )
       }
     }
 
@@ -16498,12 +16627,35 @@ export class ChatEngine {
         'Implementation audit'
       )
       try {
+        const auditUtilityBudgetContext: UtilityTurnBudgetContext = {
+          selectedModelInputTokens: this.selectedModelInputBudget(
+            auditorSettings.providerId,
+            auditorSettings.modelId,
+            projectId
+          ),
+          composedTurnTokens: estimateTextTokens(prompt),
+          parentTurnId: messageId
+        }
+        const utilityTurn = await this.prepareAuditUtilities(
+          driver,
+          projectId,
+          auditorThread,
+          sessionId,
+          projectPath,
+          auditorSettings,
+          auditUtilityBudgetContext
+        )
         await driver.sendPrompt(projectPath, {
           sessionId,
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: await this.cioPrompt('audit-report'),
+          systemPrompt: [
+            await this.cioPrompt('audit-report'),
+            utilityTurn.instructions
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId
         })
@@ -16566,6 +16718,13 @@ export class ChatEngine {
         if (!correctableOutput) break
       } finally {
         this.clearCompletionWaiter(sessionId)
+        await this.cleanupAuditUtilities(
+          'Implementation',
+          projectId,
+          coordinatorThreadId,
+          auditorThread.id,
+          sessionId
+        )
       }
     }
 
@@ -16650,12 +16809,35 @@ export class ChatEngine {
         'Achievement audit'
       )
       try {
+        const auditUtilityBudgetContext: UtilityTurnBudgetContext = {
+          selectedModelInputTokens: this.selectedModelInputBudget(
+            auditorSettings.providerId,
+            auditorSettings.modelId,
+            projectId
+          ),
+          composedTurnTokens: estimateTextTokens(prompt),
+          parentTurnId: messageId
+        }
+        const utilityTurn = await this.prepareAuditUtilities(
+          driver,
+          projectId,
+          auditorThread,
+          sessionId,
+          projectPath,
+          auditorSettings,
+          auditUtilityBudgetContext
+        )
         await driver.sendPrompt(projectPath, {
           sessionId,
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: await this.cioPrompt('audit-report'),
+          systemPrompt: [
+            await this.cioPrompt('audit-report'),
+            utilityTurn.instructions
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId
         })
@@ -16726,6 +16908,13 @@ export class ChatEngine {
         break
       } finally {
         this.clearCompletionWaiter(sessionId)
+        await this.cleanupAuditUtilities(
+          'Achievement',
+          projectId,
+          coordinatorThreadId,
+          auditorThread.id,
+          sessionId
+        )
       }
     }
 

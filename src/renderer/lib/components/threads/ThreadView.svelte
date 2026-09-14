@@ -3748,6 +3748,18 @@
         void refreshMessages()
         restoreWorkingState(updatedThread.status, updatedThread.auditState === 'running')
       }
+      // A durable auditor child (independent or Achievement audit) owns its own
+      // lifecycle; mirror status transitions so the coordinator panel and the
+      // thread row reflect failures and completions without waiting for the
+      // next full engineering reconcile (which chat-mode threads skip).
+      if (
+        updatedThread.projectId === thread.projectId &&
+        updatedThread.achievementRole === 'auditor' &&
+        updatedThread.coordinatorThreadId === thread.id &&
+        (thread.auditorThreadId === updatedThread.id || durableAuditThread?.id === updatedThread.id)
+      ) {
+        durableAuditThread = updatedThread
+      }
       if (
         updatedThread.projectId === thread.projectId &&
         (updatedThread.id === thread.id || updatedThread.assignmentId === assignment?.id) &&

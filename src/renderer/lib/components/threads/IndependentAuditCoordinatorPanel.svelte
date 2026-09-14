@@ -59,6 +59,10 @@
     return { provider, model }
   })
 
+  /** The durable auditor records the failure on its own thread, so a failed
+   *  run stays visible here until the next run starts. */
+  let auditFailed = $derived(!running && auditThread?.status === 'failed')
+
   let progress = $derived.by(() => {
     if (running) {
       return {
@@ -66,6 +70,15 @@
         description:
           'The auditor is judging the thread work against its transcript and verifying it in the repository.',
         tone: 'text-info'
+      }
+    }
+    if (auditFailed) {
+      return {
+        label: 'Audit failed',
+        description:
+          auditThread?.lastError?.split('\n', 1)[0]?.trim() ||
+          'The auditor stopped before delivering a report. Resume to continue from where it stopped.',
+        tone: 'text-danger'
       }
     }
     if (reportAvailable) {
@@ -118,10 +131,12 @@
         <button
           type="button"
           class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
-          title="Start an independent audit of the current thread work"
+          title={auditFailed
+            ? 'Continue the audit from where the auditor stopped, without restarting from scratch'
+            : 'Start an independent audit of the current thread work'}
           onclick={onOpenAudit}
         >
-          Run audit
+          {auditFailed ? 'Resume audit' : 'Run audit'}
           <ShieldCheck size={13} />
         </button>
       {/if}
