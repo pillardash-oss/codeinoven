@@ -912,7 +912,7 @@
       selectedThread.auditState === 'report_ready' &&
       (auditor === null || auditor.status === 'completed')
     ) {
-      return 'completed'
+      return 'done'
     }
     if (coordinatorHasActiveDelegates(selectedThread, scopeState.allScopeThreads)) return 'working'
     if (
@@ -936,7 +936,7 @@
         return 'Auditor failed'
       case 'attention':
         return 'Auditor needs attention'
-      case 'completed':
+      case 'done':
         return 'Audit report ready'
       default:
         return undefined
