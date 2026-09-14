@@ -18684,6 +18684,20 @@ export class ChatEngine {
     return projectPath
   }
 
+  /**
+   * Neutral working directory for auxiliary disposable sessions (grading
+   * judges and quota reads) so they never depend on where a conversation
+   * lived: the project row may be gone long before its snapshots are.
+   */
+  private async auxiliaryWorkingDirectory(): Promise<string> {
+    try {
+      return await this.resolveProjectPath(INBOX_PROJECT_ID)
+    } catch {
+      await this.storage.ensureDirectory(CHATS_CWD_DIR)
+      return this.storage.resolve(CHATS_CWD_DIR)
+    }
+  }
+
   /** True when the selected model is explicitly marked as text-only by its catalog
    *  and the app's own vision record does not say otherwise. A model the user
    *  reported as seeing images (e.g. a provider misreports vision) is treated as
@@ -22104,7 +22118,7 @@ export class ChatEngine {
       )
       for (const row of rows) {
         const candidate = this.toRankingCandidate(row)
-        const score = await this.gradeCandidateCore(row.project_id, candidate)
+        const score = await this.gradeCandidateCore(candidate)
         if (score !== null) {
           const durationMs = Math.max(0, row.ended_at - row.started_at)
           const applied = this.rankingSnapshotRepo.deleteScoredInTransaction(
@@ -22145,14 +22159,12 @@ export class ChatEngine {
   }
 
   /** Judge one candidate and persist nothing; returns the 0–10 score, or null on judge failure. */
-  private async gradeCandidateCore(
-    projectId: string,
-    candidate: RankingGradeCandidate
-  ): Promise<number | null> {
+  private async gradeCandidateCore(candidate: RankingGradeCandidate): Promise<number | null> {
     try {
-      const resolved = await this.resolve(projectId, candidate.harnessId)
-      const { driver } = resolved
-      const score = await driver.gradeTurn(resolved.projectPath, {
+      // The snapshot is self-contained: grading judges the conversation payload,
+      // never the project, so a deleted or renamed project cannot block it.
+      const driver = await this.driverForAccount(candidate.harnessId)
+      const score = await driver.gradeTurn(await this.auxiliaryWorkingDirectory(), {
         settings: {
           harnessId: candidate.harnessId,
           providerId: candidate.providerId,

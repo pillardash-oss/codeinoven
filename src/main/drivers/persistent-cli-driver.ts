@@ -311,6 +311,11 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         const messages = titleSession.messages
         const response = [...messages].reverse().find((message) => message.role === 'assistant')
         if (response?.error) {
+          // Surface the CLI's own failure text; without this the reason behind
+          // a null score (session limit, auth, transport) is unrecoverable.
+          Logger.dev(
+            `${this.name} one-shot model ${candidate.providerId}/${candidate.modelId} failed: ${response.error}`
+          )
           accounted.push(
             this.buildTitleAttempt(index + 1, candidate, false, response.error, response)
           )
@@ -325,6 +330,10 @@ export abstract class PersistentCliDriver implements HarnessDriver {
           accounted.push(this.buildTitleAttempt(index + 1, candidate, true, null, response))
           return { value, authFailed: false, attempts: accounted }
         }
+        Logger.dev(
+          `${this.name} one-shot model ${candidate.providerId}/${candidate.modelId} produced no usable response`,
+          raw ? raw.slice(0, 300) : '(empty response)'
+        )
         accounted.push(
           this.buildTitleAttempt(
             index + 1,
