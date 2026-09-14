@@ -48,6 +48,7 @@ import {
   broadcastThreadUpdate,
   markNotificationAborting,
   clearNotificationAborting,
+  notifyIndependentAudit,
   notifyTemporaryChat
 } from './thread-events'
 import { updateRetryWakeWindow } from './thread-events'
@@ -14936,6 +14937,7 @@ export class ChatEngine {
           read: false
         })
         await this.loadMessages(projectId, auditorThread.id)
+        await this.notifyIndependentAuditCompletion(projectId, coordinatorThreadId, 'completed')
         return {
           report,
           auditorThread:
@@ -14958,7 +14960,30 @@ export class ChatEngine {
       error: (lastError ?? new Error('The independent audit failed.')).message,
       errorDetail: lastError ? rawErrorDetail(lastError) : undefined
     })
+    await this.notifyIndependentAuditCompletion(
+      projectId,
+      coordinatorThreadId,
+      'error',
+      lastError ? rawErrorDetail(lastError) : undefined
+    )
     throw lastError ?? new Error('The independent audit failed.')
+  }
+
+  /** Route an independent audit completion through the coordinator thread's
+   *  notification channel, mirroring the temporary-chat completion path. */
+  private async notifyIndependentAuditCompletion(
+    projectId: string,
+    coordinatorThreadId: string,
+    kind: 'completed' | 'error',
+    errorDetail?: string
+  ): Promise<void> {
+    try {
+      const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+      if (!coordinator) return
+      notifyIndependentAudit(coordinator, kind, errorDetail)
+    } catch (error) {
+      Logger.dev('Independent audit notification dispatch failed:', error)
+    }
   }
 
   /** Enable Achievement coordination without changing the thread's workspace scope. */

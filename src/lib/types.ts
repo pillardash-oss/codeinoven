@@ -538,10 +538,13 @@ export function coordinatorHasActiveDelegates(
   coordinator: Thread,
   threads: readonly Thread[]
 ): boolean {
-  if (
-    coordinator.assignmentRole !== 'coordinator' &&
-    coordinator.achievementRole !== 'coordinator'
-  ) {
+  const isOrchestrationCoordinator =
+    coordinator.assignmentRole === 'coordinator' || coordinator.achievementRole === 'coordinator'
+  // An Independent Audit runs on a dedicated (hidden) auditor thread even
+  // though its parent is a plain thread without a coordinator role: the parent
+  // row must still pulse while that auditor works.
+  const isIndependentAuditParent = coordinator.independentAudit === true
+  if (!isOrchestrationCoordinator && !isIndependentAuditParent) {
     return false
   }
   if (coordinator.auditState === 'running') return true

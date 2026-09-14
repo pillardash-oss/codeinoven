@@ -148,3 +148,16 @@ export function notifyTemporaryChat(
 ): void {
   void _notificationService?.notifyTemporaryChat(thread, temporaryChatId, kind, errorDetail)
 }
+
+/**
+ * Pipe an independent (spec-less) audit completion through the coordinator
+ * thread's notification channel so the user learns the audit is done even when
+ * they are not on that thread.
+ */
+export function notifyIndependentAudit(
+  thread: Thread,
+  kind: 'completed' | 'error',
+  errorDetail?: string
+): void {
+  void _notificationService?.notifyIndependentAudit(thread, kind, errorDetail)
+}

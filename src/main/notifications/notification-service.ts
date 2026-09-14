@@ -521,14 +521,35 @@ export class NotificationService {
 
     if (this.lastObservedStatus.get(threadKey) !== thread.status) return
 
-    this.markThreadNotified(threadKey)
-
     const payload = this.notificationPayload(
       thread,
       projectName || APP_NAME,
       projectColor,
       thread.projectId === INBOX_PROJECT_ID ? 'chat' : 'project'
     )
+    await this.deliverNotification(payload, {
+      retainKey: threadKey,
+      badgeThreadKey: threadKey,
+      clickPayload: { projectId: thread.projectId, threadId: thread.id },
+      logLabel: 'Thread'
+    })
+  }
+
+  /**
+   * One shared delivery path for every notification kind: broadcast the
+   * payload to all renderers (plus remote mirrors), then show the OS
+   * notification when the app is not focused.
+   */
+  private async deliverNotification(
+    payload: AgentNotificationPayload,
+    options: {
+      retainKey: string
+      /** Set when the notification should badge the app icon (regular thread notifications only). */
+      badgeThreadKey?: string
+      clickPayload: ThreadClickedPayload
+      logLabel: string
+    }
+  ): Promise<void> {
     const subtitle = payload.source === 'chat' ? 'Chat' : payload.projectName
     const windows = BrowserWindow.getAllWindows()
     for (const window of windows) {
@@ -540,6 +561,8 @@ export class NotificationService {
     void remoteWebPush
       .send(payload)
       .catch((error) => Logger.dev('Remote Web Push notification failed:', error))
+
+    if (options.badgeThreadKey) this.markThreadNotified(options.badgeThreadKey)
 
     if (this.appFocused()) return
     // Errors use the same attention alert: both mean the user must act.
@@ -568,28 +591,25 @@ export class NotificationService {
       })
 
       notification.on('click', (): void => {
-        this.onThreadClicked({
-          projectId: thread.projectId,
-          threadId: thread.id
-        })
+        this.onThreadClicked(options.clickPayload)
       })
       notification.on('show', (): void => {
         this.recordNotificationOutcome('shown')
-        Logger.info('System notification shown', {
+        Logger.info(`${options.logLabel} system notification shown`, {
           kind: payload.kind,
-          projectId: thread.projectId,
-          threadId: thread.id
+          projectId: payload.projectId,
+          threadId: payload.threadId
         })
       })
       notification.on('failed', (_event, error): void => {
         this.recordNotificationOutcome('failed', error)
-        Logger.error('System notification failed:', error)
+        Logger.error(`${options.logLabel} system notification failed:`, error)
       })
 
-      this.retainNotification(threadKey, notification)
+      this.retainNotification(options.retainKey, notification)
       notification.show()
     } catch (error) {
-      Logger.error('Thread notification could not be shown:', error)
+      Logger.error(`${options.logLabel} notification could not be shown:`, error)
     }
   }
 
@@ -631,70 +651,55 @@ export class NotificationService {
       projectColor,
       errorDetail
     )
-    const subtitle = payload.source === 'chat' ? 'Chat' : payload.projectName
-    const windows = BrowserWindow.getAllWindows()
-    for (const window of windows) {
-      if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-        sendToRenderer(window.webContents, 'notification:show', payload)
-      }
-    }
-    forwardRemoteEvent('notification:show', payload)
-    void remoteWebPush
-      .send(payload)
-      .catch((error) => Logger.dev('Remote Web Push notification failed:', error))
+    await this.deliverNotification(payload, {
+      retainKey: `${threadKey}:temp:${temporaryChatId}`,
+      clickPayload: { projectId: thread.projectId, threadId: thread.id, temporaryChatId },
+      logLabel: 'Temporary chat'
+    })
+  }
 
-    if (this.appFocused()) return
-    // Errors use the same attention alert: both mean the user must act.
-    this.dispatchNotificationSound(
-      payload.kind === 'attention' || payload.kind === 'error' ? 'attention' : 'default',
-      windows
-    )
-    const silent = this.appManagesSound(windows)
-    if (!Notification.isSupported()) {
-      if (!this.unsupportedLogged) {
-        this.unsupportedLogged = true
-        Logger.error('System notifications are not supported on this device.')
-      }
-      return
-    }
+  /**
+   * Notify that an independent (spec-less) audit finished, piped through the
+   * coordinator thread's notification channel. The coordinator's own status
+   * never changes when its auditor finishes (the auditor is a suppressed
+   * orchestration child), so this mirrors the temporary-chat path with a
+   * payload that still references the coordinator thread.
+   */
+  async notifyIndependentAudit(
+    thread: Thread,
+    kind: Extract<AgentNotificationKind, 'completed' | 'error'>,
+    errorDetail?: string
+  ): Promise<void> {
+    if (!this.started) return
 
+    const threadKey = `${thread.projectId}:${thread.id}`
+    if (this.abortingThreads.has(threadKey)) return
+    // Audits piped through a worker or auditor parent thread stay quiet in
+    // Achievement/Assignment mode; only the Sr. Engineer thread notifies.
+    if (this.isSuppressedOrchestration(thread)) return
+
+    let projectName = ''
+    let projectColor: string | undefined
     try {
-      const notification = new Notification({
-        id: compactNotificationId(payload.id),
-        groupId: compactNotificationId(payload.id),
-        title: payload.title,
-        subtitle,
-        body: payload.body,
-        urgency: payload.kind === 'error' ? 'critical' : 'normal',
-        silent
-      })
-
-      notification.on('click', (): void => {
-        this.onThreadClicked({
-          projectId: thread.projectId,
-          threadId: thread.id,
-          temporaryChatId
-        })
-      })
-      notification.on('show', (): void => {
-        this.recordNotificationOutcome('shown')
-        Logger.info('Temporary chat system notification shown', {
-          kind: payload.kind,
-          projectId: thread.projectId,
-          threadId: thread.id,
-          temporaryChatId
-        })
-      })
-      notification.on('failed', (_event, error): void => {
-        this.recordNotificationOutcome('failed', error)
-        Logger.error('Temporary chat system notification failed:', error)
-      })
-
-      this.retainNotification(`${threadKey}:temp:${temporaryChatId}`, notification)
-      notification.show()
+      const project = this.projectRepo.get(thread.projectId)
+      projectName = project?.name ?? ''
+      projectColor = project?.color
     } catch (error) {
-      Logger.error('Temporary chat notification could not be shown:', error)
+      Logger.dev('Notification project name resolution failed:', error)
     }
+
+    const payload = this.independentAuditPayload(
+      thread,
+      kind,
+      projectName || APP_NAME,
+      projectColor,
+      errorDetail
+    )
+    await this.deliverNotification(payload, {
+      retainKey: `${threadKey}:independent-audit`,
+      clickPayload: { projectId: thread.projectId, threadId: thread.id },
+      logLabel: 'Independent audit'
+    })
   }
 
   async sendTestNotification(): Promise<SystemNotificationTestResult> {
@@ -843,6 +848,35 @@ export class NotificationService {
       threadId: thread.id,
       temporaryChatId,
       source: 'temporary-chat',
+      projectName,
+      projectColor
+    }
+  }
+
+  /** Payload for an independent audit completion piped through the coordinator thread. */
+  private independentAuditPayload(
+    thread: Thread,
+    kind: Extract<AgentNotificationKind, 'completed' | 'error'>,
+    projectName: string,
+    projectColor: string | undefined,
+    errorDetail?: string
+  ): AgentNotificationPayload {
+    const title = kind === 'completed' ? 'Independent audit ready' : 'Independent audit failed'
+    const trimmedDetail = errorDetail?.trim() || undefined
+    const headline = trimmedDetail?.split('\n', 1)[0]?.trim() || undefined
+    const body =
+      kind === 'completed'
+        ? `${thread.title}: the audit report is ready in ${projectName}.`
+        : (headline ?? `${thread.title}: the audit stopped with an error in ${projectName}.`)
+    return {
+      id: `${APP_SLUG}-${thread.projectId}-${thread.id}-independent-audit-${Date.now()}`,
+      kind,
+      title,
+      body,
+      ...(kind === 'error' && trimmedDetail ? { errorDetail: trimmedDetail } : {}),
+      projectId: thread.projectId,
+      threadId: thread.id,
+      source: 'project',
       projectName,
       projectColor
     }
