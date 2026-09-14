@@ -4,11 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 vi.mock('electron', () => ({
-  BrowserWindow: class {
-    getAllWindows(): unknown[] {
-      return []
-    }
-  },
+  BrowserWindow: { getAllWindows: vi.fn((): unknown[] => []) },
   app: { isPackaged: false, getPath: () => tmpdir() },
   ipcMain: { handle: () => undefined }
 }))
@@ -83,11 +79,10 @@ async function makeEngine(fakeDriver: ReturnType<typeof makeFakeDriver>): Promis
   const storage = new StorageEngine(temporaryConfigRoot)
   const engine = new ChatEngine(storage, db)
   engines.push(engine)
-  // Shadow the private driver resolver so the drain loop hits the fake driver.
-  ;(engine as unknown as Record<string, unknown>)['resolve'] = async () => ({
-    driver: fakeDriver.driver as never,
-    projectPath: temporaryConfigRoot
-  })
+  // Shadow the private account-driver resolver so the drain loop hits the
+  // fake driver without touching the real account registry or CLI binaries.
+  ;(engine as unknown as Record<string, unknown>)['driverForAccount'] = async () =>
+    fakeDriver.driver as never
   return engine
 }
 
