@@ -1366,6 +1366,15 @@ async function waitForNativePiSessionFile(
 ): Promise<string | null> {
   const dir = nativePiSessionDir(projectPath)
   const suffix = `_${sessionId}.jsonl`
+  const deadline = Date.now() + timeoutMs
+  // A sub-agent can spawn before the primary session's first flush has
+  // created the project's native session directory, so `watch(dir)` throws.
+  // Wait for the directory to appear within the same budget instead of
+  // failing immediately with "CLI session is unavailable".
+  while (!existsSync(dir)) {
+    if (Date.now() >= deadline) return null
+    await new Promise((resolve) => setTimeout(resolve, 150))
+  }
   let watcher: FSWatcher
   try {
     watcher = watch(dir)
@@ -1373,7 +1382,7 @@ async function waitForNativePiSessionFile(
     return null
   }
   return new Promise<string | null>((resolve) => {
-    const timer = setTimeout(() => finish(null), timeoutMs)
+    const timer = setTimeout(() => finish(null), Math.max(deadline - Date.now(), 0))
     const finish = (file: string | null): void => {
       clearTimeout(timer)
       watcher.close()
@@ -1384,6 +1393,12 @@ async function waitForNativePiSessionFile(
       if (typeof filename === 'string' && filename.endsWith(suffix)) {
         finish(join(dir, filename))
       }
+    })
+    // The transcript may have been flushed between the caller's existence
+    // check and the watcher attaching   no rename event would fire for it.
+    // Attach the watcher first, then re-check so neither window is missed.
+    void findNativePiSessionFile(projectPath, sessionId).then((file) => {
+      if (file) finish(file)
     })
   })
 }

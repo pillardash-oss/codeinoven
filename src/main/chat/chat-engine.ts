@@ -168,6 +168,7 @@ import type {
   AgentProviderIssue,
   AgentProviderIssueKind,
   AgentSessionStatus,
+  AgentSubagentActivity,
   AgentToolCatalog,
   AgentToolDefinition,
   AgentToolHarness,
@@ -1844,6 +1845,10 @@ export class ChatEngine {
   private sessionRegistry = new Map<string, SessionInfo>()
   private childSessionOwners = new Map<string, ChildSessionInfo>()
   private childCaptureTasks = new Map<string, Promise<AgentMessage[]>>()
+  /** Latest provider lifecycle status reported for each child session id, so
+   *  transcript loads can tell an in-flight worker (transcript not flushed
+   *  yet) from a genuinely unknown session. */
+  private childSessionActivityStatuses = new Map<string, AgentSubagentActivity['status']>()
   private pendingPermissions = new Map<string, PendingPermissionInfo>()
   /** Memoized attachment allowlist per chat thread id. Invalidated whenever a
    *  user message is persisted (attachments may have changed) and dropped when
@@ -3423,6 +3428,7 @@ export class ChatEngine {
     this.sessionRegistry.clear()
     this.childSessionOwners.clear()
     this.childCaptureTasks.clear()
+    this.childSessionActivityStatuses.clear()
     this.sessionStatuses.clear()
     this.pendingPermissions.clear()
     for (const pending of this.pendingQuestions.values()) {
@@ -5643,7 +5649,22 @@ export class ChatEngine {
       )
       return cached
     }
-    return this.captureChildSession(owner, sessionId)
+    try {
+      return await this.captureChildSession(owner, sessionId)
+    } catch (error) {
+      // pi defers a sub-agent's first native transcript write until its first
+      // assistant message completes, so a load while the worker is still
+      // starting legitimately finds no transcript. Returning the cached
+      // (empty) result keeps the view in its loading state instead of
+      // surfacing the raw "CLI session is unavailable" driver error; the view
+      // polls while the worker is busy and reloads once it settles.
+      const status = this.childSessionActivityStatuses.get(sessionId)
+      if (status === 'running' || status === 'pending') {
+        Logger.dev('Sub-agent transcript is not flushed yet:', error)
+        return []
+      }
+      throw error
+    }
   }
 
   /** Resolve and verify that a provider-native child belongs to the requested thread. */
@@ -10760,6 +10781,7 @@ export class ChatEngine {
       })
       this.childCaptureTasks.delete(`${owner.projectId}:${owner.threadId}:${childSessionId}`)
       this.childSessionOwners.delete(childSessionId)
+      this.childSessionActivityStatuses.delete(childSessionId)
     }
     // Temporary audit/loop chats bound to this thread.
     for (const temporaryChatId of [...this.temporaryChats.keys()]) {
@@ -13668,7 +13690,11 @@ export class ChatEngine {
     if (brainstormWriteRoute) {
       featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
       const revisionRelativePath = toPosixPath(
-        join(featureArtifactDirectory(featureSlug), 'versions', `session-${Date.now()}-brainstorm.md`)
+        join(
+          featureArtifactDirectory(featureSlug),
+          'versions',
+          `session-${Date.now()}-brainstorm.md`
+        )
       )
       revisionPathInstruction = [
         '',
@@ -15050,10 +15076,7 @@ export class ChatEngine {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: [
-            await this.cioPrompt('independent-audit-report'),
-            utilityTurn.instructions
-          ]
+          systemPrompt: [await this.cioPrompt('independent-audit-report'), utilityTurn.instructions]
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
@@ -16649,10 +16672,7 @@ export class ChatEngine {
       this.handledIdleSessions.delete(sessionId)
       this.markSessionWorking(sessionId)
       const messageId = createMessageId()
-      const prompt =
-        attemptIndex === 0
-          ? basePrompt
-          : this.auditCorrectionPrompt(lastError)
+      const prompt = attemptIndex === 0 ? basePrompt : this.auditCorrectionPrompt(lastError)
       await this.persistOutboundMessage(
         projectId,
         auditorThread.id,
@@ -16699,10 +16719,7 @@ export class ChatEngine {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: [
-            await this.cioPrompt('audit-report'),
-            utilityTurn.instructions
-          ]
+          systemPrompt: [await this.cioPrompt('audit-report'), utilityTurn.instructions]
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
@@ -16827,10 +16844,7 @@ export class ChatEngine {
       this.handledIdleSessions.delete(sessionId)
       this.markSessionWorking(sessionId)
       const messageId = createMessageId()
-      const prompt =
-        attemptIndex === 0
-          ? basePrompt
-          : this.auditCorrectionPrompt(lastError)
+      const prompt = attemptIndex === 0 ? basePrompt : this.auditCorrectionPrompt(lastError)
       await this.persistOutboundMessage(
         projectId,
         auditorThread.id,
@@ -16877,10 +16891,7 @@ export class ChatEngine {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: [
-            await this.cioPrompt('audit-report'),
-            utilityTurn.instructions
-          ]
+          systemPrompt: [await this.cioPrompt('audit-report'), utilityTurn.instructions]
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
@@ -19958,6 +19969,7 @@ export class ChatEngine {
       if (parent) {
         const childSessionId = event.part.activity.childSessionId
         const alreadyTracked = this.childSessionOwners.has(childSessionId)
+        this.childSessionActivityStatuses.set(childSessionId, event.part.activity.status)
         const owner: ChildSessionInfo = {
           projectId: parent.projectId,
           threadId: parent.threadId,
