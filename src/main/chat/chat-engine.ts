@@ -921,13 +921,16 @@ const SPEC_BRAINSTORM_ALLOWED_TOOLS = [
  * Audit sessions must verify with hard facts (read the codebase, run checks,
  * tests, lints) but never modify the repository. The list therefore carries
  * only built-in tool names that exist in every harness: `read` for source
- * inspection and `bash` for running verification commands, and deliberately
- * omits every file-mutating tool (edit/write). The app utility gateway tools
+ * inspection, and `bash` for running verification commands, plus pi's
+ * Windows-only `powershell` built-in (a harmless unused name elsewhere) so a
+ * Windows auditor is never gated behind permission cards when Git Bash is
+ * absent. File-mutating tools (edit/write) are deliberately omitted. The app
+ * utility gateway tools
  * (cio_util_find/init/use and its bookkeeping tools) are custom tools the pi
  * tool gate never restricts, and other harnesses receive them through the
  * prepared gateway runtime, so they stay reachable without being listed.
  */
-const AUDIT_ALLOWED_TOOLS = ['read', 'bash']
+const AUDIT_ALLOWED_TOOLS = ['read', 'bash', 'powershell']
 
 /** Read-only research tools for disposable generation sessions that read artifact files. */
 const PROMPT_READ_ONLY_TOOLS = ['read', 'glob', 'grep', 'list']
