@@ -16,6 +16,10 @@
   let terminalError: string | undefined = $state(undefined)
   let loading = $state(true)
   let retrySequence = $state(0)
+  /** Whether the panel has attached before: the first attach counts as a
+   *  user-initiated open, later prop-driven re-attaches do not. */
+  let firstAttach = true
+  let lastRetrySequence = 0
 
   function retry(): void {
     retrySequence += 1
@@ -28,7 +32,14 @@
     currentScopeBucketId: string | undefined,
     retry: number
   ): Attachment<HTMLDivElement> {
-    void retry
+    // Focus only when the attach is user-initiated: the first mount (the user
+    // opened or selected the terminal tab) or an explicit retry. Prop-driven
+    // re-attaches (thread switches rebinding the terminal's thread) must never
+    // steal focus from the chat composer — the session layer also drops focus
+    // requests inside the thread-switch guard window.
+    const focus = firstAttach || retry !== lastRetrySequence
+    firstAttach = false
+    lastRetrySequence = retry
     return (container) => {
       let cancelled = false
       loading = true
@@ -43,7 +54,8 @@
             container,
             currentProjectId,
             currentThreadId,
-            currentScopeBucketId
+            currentScopeBucketId,
+            { focus }
           )
           if (!cancelled) loading = false
         })
