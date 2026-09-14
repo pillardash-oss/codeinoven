@@ -727,9 +727,9 @@
             DEFAULT_SCOPE_BUCKET_ID
           scopeState.requestCreateScopedThread(bucketId)
         } else {
-          // Create in the project's active scope: Workspace falls back to the
-          // selected thread's scope bucket via activeScopeBucketIdFor, so a
-          // thread living inside a scope inherits that scope on Cmd+N.
+          // Create in the current thread's scope: Workspace inherits the
+          // active thread's scope bucket onto the new thread, exactly like
+          // settings inheritance  no view or sidebar change.
           workspaceState.requestCreateThread()
         }
         return
@@ -1760,9 +1760,8 @@
         workspaceState.activeProject &&
         workspaceState.activeProject.id !== INBOX_PROJECT_ID
       ) {
-        // Same-scope inheritance: let Workspace derive the project's active
-        // scope bucket (the open thread's bucket) instead of a stale sidebar
-        // bucket from another project or the default fallback.
+        // Same-scope inheritance: the new thread inherits the open thread's
+        // scope bucket (no stale sidebar bucket, no view switch).
         workspaceState.requestCreateThread()
       } else {
         workspaceState.requestAddProject()

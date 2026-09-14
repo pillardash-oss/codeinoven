@@ -2993,11 +2993,15 @@
 
   /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
   async function createThreadInProject(project: Project, requestedBucketId?: string): Promise<void> {
-    // Inherit the project's active scope by default: a thread opened inside a
-    // scope keeps that scope for "New thread" (Cmd+N) instead of dropping to
-    // the default bucket. Explicit callers pass their own bucket id.
-    const scopeBucketId = requestedBucketId ?? workspaceState.activeScopeBucketIdFor(project.id)
+    // Scope inheritance mirrors settings inheritance: the new thread object
+    // carries the current thread's scope bucket, nothing more. It must never
+    // activate the scope sidebar or switch the view  that side effect is
+    // reserved for callers that explicitly ask for a scope bucket (scope
+    // board's new-thread action, file-tree drop, ...).
     const activeThread = workspaceState.selectedThread
+    const inheritedBucketId =
+      activeThread && activeThread.projectId === project.id ? activeThread.scopeBucketId : undefined
+    const scopeBucketId = requestedBucketId ?? inheritedBucketId
     const inheritedSettings = settingsForNewThread(activeThread, threadSettings.lastUsed)
     const existing = findEmptyNewThread(allThreads, project.id, scopeBucketId)
     if (existing) {
@@ -3012,7 +3016,9 @@
         workspaceState.openThread(thread, project)
         if (scopeBucketId) {
           scopeState.updateThread(thread)
-          scopeState.showSidebarForThread(thread, scopeBucketId)
+        }
+        if (requestedBucketId) {
+          scopeState.showSidebarForThread(thread, requestedBucketId)
         }
         if (needsSettingsUpdate) {
           void invoke('thread:updateSettings', existing.projectId, existing.id, inheritedSettings)
@@ -3060,9 +3066,9 @@
     expandedFolders.add(project.id)
     if (scopeBucketId) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      scopeState.updateThread(thread as any)
+      if (scopeBucketId) scopeState.updateThread(thread as any)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      scopeState.showSidebarForThread(thread as any, scopeBucketId)
+      if (requestedBucketId) scopeState.showSidebarForThread(thread as any, requestedBucketId)
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     workspaceState.openThread(thread as any, project)
