@@ -3697,6 +3697,38 @@ export class ChatEngine {
     }
   }
 
+  /** Correction prompt for a rejected audit report. Evidence-gap rejections
+   *  (a missing utility-search call, unmatched commands, untargeted files)
+   *  cannot be fixed by editing JSON, so the auditor is told to actually
+   *  perform the missing verification work in its still-open session before
+   *  re-emitting the corrected report. Shape-only rejections keep the tight
+   *  JSON-only correction contract. */
+  private auditCorrectionPrompt(error: Error | null): string {
+    const issues = error instanceof AuditReportValidationError ? error.issues : []
+    const evidenceGaps = issues.filter(
+      (issue) =>
+        issue.includes(`no ${UTILITY_SEARCH_TOOL_NAME} call`) ||
+        issue.includes('no matching completed command') ||
+        issue.includes('no matching invocation') ||
+        issue.includes('no matched invocation to persist') ||
+        issue.includes('did not explicitly target audited file')
+    )
+    if (evidenceGaps.length === 0) {
+      return [
+        'Your previous audit response was not valid JSON.',
+        'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
+        `Previous validation error: ${error?.message ?? 'unknown format error'}`
+      ].join('\n\n')
+    }
+    return [
+      'Your previous audit report was rejected because its verification claims do not match the executed evidence in this session:',
+      ...evidenceGaps.map((issue) => `- ${issue}`),
+      `This session is still open, so the app utility gateway (search with ${UTILITY_SEARCH_TOOL_NAME}, activate, invoke) and the read-only tools remain available for this turn: perform the missing work now.`,
+      `Call ${UTILITY_SEARCH_TOOL_NAME} for every framework, MCP, or skill utility the report mentions, activate and invoke the relevant result in non-writing mode, and execute the commands the report claims, then return exactly one corrected audit-report JSON object that reflects only evidence you actually observed in this session.`,
+      'Preserve the findings that remain accurate, update the verification evidence for what you just executed, and never invent execution evidence. Return the corrected JSON object with no Markdown fences or commentary.'
+    ].join('\n')
+  }
+
   /** Turn-scoped utility gateway cleanup shared by every audit dispatch path. */
   private async cleanupAuditUtilities(
     scope: string,
@@ -14957,11 +14989,7 @@ export class ChatEngine {
           ? basePrompt
           : promptKind === 'resume'
             ? resumePrompt(previousFailure)
-            : [
-                'Your previous audit response was not valid JSON.',
-                'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
-                `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
-              ].join('\n\n')
+            : this.auditCorrectionPrompt(lastError)
       await this.persistOutboundMessage(
         projectId,
         auditorThread.id,
@@ -16602,11 +16630,7 @@ export class ChatEngine {
       const prompt =
         attemptIndex === 0
           ? basePrompt
-          : [
-              'Your previous audit response was not valid JSON.',
-              'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
-              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
-            ].join('\n\n')
+          : this.auditCorrectionPrompt(lastError)
       await this.persistOutboundMessage(
         projectId,
         auditorThread.id,
@@ -16784,11 +16808,7 @@ export class ChatEngine {
       const prompt =
         attemptIndex === 0
           ? basePrompt
-          : [
-              'Your previous audit response was not valid JSON.',
-              'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
-              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
-            ].join('\n\n')
+          : this.auditCorrectionPrompt(lastError)
       await this.persistOutboundMessage(
         projectId,
         auditorThread.id,
