@@ -2992,7 +2992,11 @@
   // ─── Thread actions ──────────────────────────────────────────────────────
 
   /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
-  async function createThreadInProject(project: Project, scopeBucketId?: string): Promise<void> {
+  async function createThreadInProject(project: Project, requestedBucketId?: string): Promise<void> {
+    // Inherit the project's active scope by default: a thread opened inside a
+    // scope keeps that scope for "New thread" (Cmd+N) instead of dropping to
+    // the default bucket. Explicit callers pass their own bucket id.
+    const scopeBucketId = requestedBucketId ?? workspaceState.activeScopeBucketIdFor(project.id)
     const activeThread = workspaceState.selectedThread
     const inheritedSettings = settingsForNewThread(activeThread, threadSettings.lastUsed)
     const existing = findEmptyNewThread(allThreads, project.id, scopeBucketId)

@@ -2317,7 +2317,9 @@
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: thread.workingDirectory,
       settings: thread.settings,
-      scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
+      // Inherit the current thread's scope so the spun-off thread stays in
+      // the same scope instead of dropping to the default bucket.
+      scopeBucketId: thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
     })
       .then((newThread) => {
         rendererRecovery.setDraft(newThread.projectId, newThread.id, draft)

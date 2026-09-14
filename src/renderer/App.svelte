@@ -726,7 +726,10 @@
             DEFAULT_SCOPE_BUCKET_ID
           scopeState.requestCreateScopedThread(bucketId)
         } else {
-          workspaceState.requestCreateThread(scopeState.sidebarContext?.bucketId)
+          // Create in the project's active scope: Workspace falls back to the
+          // selected thread's scope bucket via activeScopeBucketIdFor, so a
+          // thread living inside a scope inherits that scope on Cmd+N.
+          workspaceState.requestCreateThread()
         }
         return
       case 'app:file-search':
@@ -1748,8 +1751,10 @@
         workspaceState.activeProject &&
         workspaceState.activeProject.id !== INBOX_PROJECT_ID
       ) {
-        const bucketId = scopeState.sidebarContext?.bucketId
-        workspaceState.requestCreateThread(bucketId)
+        // Same-scope inheritance: let Workspace derive the project's active
+        // scope bucket (the open thread's bucket) instead of a stale sidebar
+        // bucket from another project or the default fallback.
+        workspaceState.requestCreateThread()
       } else {
         workspaceState.requestAddProject()
       }
