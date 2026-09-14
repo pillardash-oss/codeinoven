@@ -1674,11 +1674,11 @@
     if (selected && !isOrchestrationChildThread(selected)) upsertThreadInList(selected)
   })
 
-  // Full user-message history is only needed after the history menu opens.
-  // Keeping it out of the thread mount path prevents a hidden database scan on
-  // every switch. Also re-fires when the active thread changes (the callback
-  // pointer swaps on ThreadView mount) so the list refreshes for the new
-  // thread if the menu is already open   without scanning on every mount.
+  // Full user-message history is prefetched by ThreadView shortly after mount
+  // (idle-deferred off the first-paint path), so the panel is already populated
+  // when the menu opens. This effect remains as a fallback: it re-fires when
+  // the active thread changes (the callback pointer swaps on ThreadView mount)
+  // so the list refreshes for the new thread if the menu is already open.
   $effect(() => {
     const load = workspaceState.loadUserMessageHistory
     if (!showHistoryMenu || !load) return

@@ -466,6 +466,8 @@
   let fullUserMessageHistory = $state<UserMessageSummary[]>([])
   let userMessageHistoryLoaded = false
   let userMessageHistoryLoading: Promise<void> | null = null
+  /** Pending post-mount idle prefetch of the history; cancelled on teardown. */
+  let historyPrefetchHandle: number | null = null
   let hasOlderMessages = $derived(
     controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
@@ -3652,6 +3654,17 @@
     if (!controller) {
       workspaceState.jumpToMessage = jumpToMessage
       workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+      // Prefetch the lightweight user-message history shortly after mount so
+      // the history panel is populated the first time it opens, without the
+      // user having to open it once to trigger the load. Deferred past the
+      // first paint (idle callback) so the initial reveal never waits on it.
+      historyPrefetchHandle = requestIdleCallback(
+        () => {
+          if (alive) void refreshUserMessageHistory()
+        },
+        // Bounded: never starve the panel population behind constant work.
+        { timeout: 2000 }
+      )
     }
 
     const onResize = (): void => scheduleResponseBubbleUpdate()
@@ -3677,6 +3690,10 @@
         window.removeEventListener('resize', onResize)
         clearTimeout(copyResetTimer)
         cancelAnimationFrame(initialPaintRevealFrame)
+        if (historyPrefetchHandle !== null) {
+          cancelIdleCallback(historyPrefetchHandle)
+          historyPrefetchHandle = null
+        }
         // Controller-driven views never published the global state below, so
         // their teardown must not clear it either   clearing would clobber the
         // values published by the primary conversation view behind the panel.
@@ -3823,6 +3840,10 @@
       window.removeEventListener('resize', onResize)
       clearTimeout(copyResetTimer)
       cancelAnimationFrame(initialPaintRevealFrame)
+      if (historyPrefetchHandle !== null) {
+        cancelIdleCallback(historyPrefetchHandle)
+        historyPrefetchHandle = null
+      }
       workspaceState.sources = []
       workspaceState.jumpToMessage = null
       if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
