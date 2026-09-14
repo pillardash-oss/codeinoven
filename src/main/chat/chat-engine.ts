@@ -5644,9 +5644,15 @@ export class ChatEngine {
     const owner = await this.resolveChildSessionOwner(projectId, threadId, sessionId)
     const cached = await this.threadManager.loadSubagentMessages(projectId, threadId, sessionId)
     if (cached.length > 0) {
-      void this.captureChildSession(owner, sessionId).catch((error) =>
-        Logger.dev('Sub-agent transcript refresh unavailable:', error)
-      )
+      // The DB mirror is the store of truth for a settled sub-agent: reopen
+      // must be a single DB read, not a harness probe. Only a still-running
+      // worker justifies a background refresh.
+      const status = this.childSessionActivityStatuses.get(sessionId)
+      if (status === 'running' || status === 'pending') {
+        void this.captureChildSession(owner, sessionId).catch((error) =>
+          Logger.dev('Sub-agent transcript refresh unavailable:', error)
+        )
+      }
       return cached
     }
     try {
@@ -5656,7 +5662,13 @@ export class ChatEngine {
       // the view stays in its loading state instead of surfacing the raw
       // "CLI session is unavailable" driver error. The view polls while the
       // worker is busy and reloads once it settles.
-      return await this.captureChildSession(owner, sessionId)
+      const status = this.childSessionActivityStatuses.get(sessionId)
+      return await this.captureChildSession(owner, sessionId, undefined, {
+        // Only a still-running worker justifies blocking on the harness's
+        // transcript flush; an unknown status means pre-restart or settled,
+        // so the mirror/fallback must cover it without any watch delay.
+        waitForFlush: status === 'running' || status === 'pending'
+      })
     } catch (error) {
       // Defensive: any residual failure still degrades to the parent's
       // sub-agent activity rather than throwing into the IPC handler.
@@ -5944,7 +5956,8 @@ export class ChatEngine {
   private captureChildSession(
     owner: ChildSessionInfo,
     sessionId: string,
-    resolvedDriver?: HarnessDriver
+    resolvedDriver?: HarnessDriver,
+    options?: { waitForFlush?: boolean }
   ): Promise<AgentMessage[]> {
     const captureKey = `${owner.projectId}:${owner.threadId}:${sessionId}`
     const existing = this.childCaptureTasks.get(captureKey)
@@ -5956,18 +5969,25 @@ export class ChatEngine {
         throw new Error(`Unknown harness: ${owner.driverId}`)
       }
       let timeout: ReturnType<typeof setTimeout> | undefined
+      const waitForFlush = options?.waitForFlush ?? true
+      const load = (): Promise<AgentMessage[]> =>
+        driver.loadSubagentMessages
+          ? driver.loadSubagentMessages(owner.projectPath, sessionId, { waitForFlush })
+          : driver.loadMessages(owner.projectPath, sessionId)
       try {
         const account = await this.accountRegistry.resolve(owner.driverId, owner.accountId)
         const incoming = stampAccount(
           stampHarnessId(
             await Promise.race([
-              driver.loadMessages(owner.projectPath, sessionId),
+              load(),
               new Promise<never>((_, reject) => {
                 timeout = setTimeout(
                   () =>
                     reject(
                       new Error('The provider took too long to load the sub-agent transcript')
                     ),
+                  // The driver's own file watch (~10 s) stays within this
+                  // race for live children; settled children resolve fast.
                   15_000
                 )
               })
@@ -5992,22 +6012,54 @@ export class ChatEngine {
           restoreMirrorThinkingLevel(mergeAgentMessages(cached, incoming), cached),
           cached
         )
-        await this.threadManager.saveSubagentMessages(
-          owner.projectId,
-          owner.threadId,
-          sessionId,
-          merged
-        )
+        if (merged.length === 0 && !waitForFlush) {
+          // The child session is finished and the harness holds no native
+          // transcript for it (pi never persists child sessions on disk), but
+          // the spawn tool call on the parent thread still carries the
+          // prompt and captured output. Synthesize the transcript from it AND
+          // persist it, so every later open is a single DB read instead of
+          // re-probing the harness.
+          const fallback = await this.subagentMessagesFromParentActivity(owner, sessionId)
+          if (fallback.length > 0) {
+            await this.threadManager.saveSubagentMessages(
+              owner.projectId,
+              owner.threadId,
+              sessionId,
+              fallback
+            )
+          }
+          return fallback
+        }
+        if (merged.length > 0) {
+          await this.threadManager.saveSubagentMessages(
+            owner.projectId,
+            owner.threadId,
+            sessionId,
+            merged
+          )
+        }
         return merged
       } catch (error) {
         // pi child sessions (cio_spawn_agent) are never persisted as CLI
         // session records, so their transcript load can legitimately fail.
         // Never rethrow: fall back to the spawn tool's own transcript, which
         // the parent thread's message parts already carry (prompt + captured
-        // output), so the sub-agent view shows real content instead of a raw
-        // "CLI session is unavailable" error.
+        // output), and persist it so later opens hit the mirror instantly.
         Logger.dev('Sub-agent transcript capture fell back to parent activity:', error)
-        return this.subagentMessagesFromParentActivity(owner, sessionId)
+        const fallback = await this.subagentMessagesFromParentActivity(owner, sessionId)
+        if (fallback.length > 0) {
+          try {
+            await this.threadManager.saveSubagentMessages(
+              owner.projectId,
+              owner.threadId,
+              sessionId,
+              fallback
+            )
+          } catch (persistError) {
+            Logger.dev('Sub-agent fallback transcript persist failed:', persistError)
+          }
+        }
+        return fallback
       } finally {
         if (timeout) clearTimeout(timeout)
       }

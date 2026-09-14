@@ -2739,6 +2739,26 @@ export class PiDriver extends PersistentCliDriver {
    * session look resumable and silently drop all context.
    */
   override async loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]> {
+    return this.loadMessagesInternal(projectPath, sessionId, true)
+  }
+
+  /** Flush-aware transcript load for delegated child sessions: a settled
+   *  child must not block the caller on a directory watch for a transcript
+   *  file that can never appear (reopening a finished sub-agent otherwise
+   *  waits seconds on every open). */
+  loadSubagentMessages(
+    projectPath: string,
+    sessionId: string,
+    options?: { waitForFlush?: boolean }
+  ): Promise<AgentMessage[]> {
+    return this.loadMessagesInternal(projectPath, sessionId, options?.waitForFlush ?? true)
+  }
+
+  private async loadMessagesInternal(
+    projectPath: string,
+    sessionId: string,
+    waitForFlush: boolean
+  ): Promise<AgentMessage[]> {
     if (!this.rpcClients.has(sessionId)) {
       const record = await this.readSessionRecord(projectPath, sessionId)
       if (record) {
@@ -2755,7 +2775,7 @@ export class PiDriver extends PersistentCliDriver {
     try {
       return await super.loadMessages(projectPath, sessionId)
     } catch (error) {
-      const native = await this.loadNativeSubagentMessages(projectPath, sessionId)
+      const native = await this.loadNativeSubagentMessages(projectPath, sessionId, waitForFlush)
       if (native) return native
       // Throwing stays correct whenever a record genuinely exists   including
       // a hash-mismatched one (moved project), where the engine must retire
@@ -2930,7 +2950,8 @@ export class PiDriver extends PersistentCliDriver {
   /** Returns null when no native transcript exists so the caller rethrows. */
   private async loadNativeSubagentMessages(
     projectPath: string,
-    sessionId: string
+    sessionId: string,
+    waitForFlush: boolean
   ): Promise<AgentMessage[] | null> {
     // The chat engine captures a sub-agent's transcript the moment the spawn
     // tool reports its childSessionId   but pi defers a new session's first
@@ -2938,10 +2959,13 @@ export class PiDriver extends PersistentCliDriver {
     // (SessionManager._persist), so the .jsonl can appear seconds later.
     // React to the file's creation instead of polling: watch the session
     // directory and parse as soon as pi flushes it. The engine's capture race
-    // timeout is 15 s, so a ~10 s wait stays inside it.
+    // timeout is 15 s, so a ~10 s wait stays inside it. When the caller
+    // guarantees the child is no longer live (`waitForFlush: false`) a
+    // missing file is final   watching would only burn seconds waiting for
+    // a transcript that can never appear, on every tab reopen.
+    const existing = await findNativePiSessionFile(projectPath, sessionId)
     const file =
-      (await findNativePiSessionFile(projectPath, sessionId)) ??
-      (await waitForNativePiSessionFile(projectPath, sessionId))
+      existing ?? (waitForFlush ? await waitForNativePiSessionFile(projectPath, sessionId) : null)
     if (!file) return null
     // pi writes the flushed file synchronously before closing it, but keep a
     // short stabilization window in case the create event lands mid-flush.
