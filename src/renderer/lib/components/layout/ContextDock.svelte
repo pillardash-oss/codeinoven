@@ -12,7 +12,7 @@
     active: boolean
     /** Renders a small status dot on the icon   e.g. pending memory proposals.
      *  `working` renders as a pulsing dot in the thread-working colour. */
-    badge?: 'completed' | 'attention' | 'error' | 'working'
+    badge?: 'completed' | 'attention' | 'error' | 'working' | 'working-paused'
     /** Accessible description for the badge, required whenever `badge` is set. */
     badgeTitle?: string
     /** Renders a compact neutral count badge above the tool icon. */
@@ -102,9 +102,10 @@
           {/if}
           {#if item.badge}
             <span class="absolute -top-0.5 -right-0.5 flex items-start">
-              {#if item.badge === 'working'}
+              {#if item.badge === 'working' || item.badge === 'working-paused'}
                 <StatusBadge
-                  tone="working"
+                  tone={item.badge}
+                  variant={item.badge === 'working-paused' ? 'spinner' : 'dot'}
                   animated
                   title={item.badgeTitle ?? item.label}
                 />

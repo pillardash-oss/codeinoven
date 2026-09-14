@@ -905,6 +905,9 @@
     const auditor = auditorThread
     if (auditor?.status === 'failed') return 'error'
     if (auditor?.status === 'awaiting_approval') return 'attention'
+    // A usage-limit wait parks the auditor in `working-paused` (the scheduled
+    // auto-resume), which reads as "will retry", not actively working.
+    if (auditor?.status === 'working-paused') return 'working-paused'
     if (
       selectedThread.auditState === 'report_ready' &&
       (auditor === null || auditor.status === 'completed')
@@ -927,6 +930,8 @@
     switch (coordinatorRailBadge) {
       case 'working':
         return 'Auditor working'
+      case 'working-paused':
+        return 'Auditor waiting to retry'
       case 'error':
         return 'Auditor failed'
       case 'attention':
