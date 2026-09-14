@@ -145,6 +145,15 @@
       !activePathIsConflicted &&
       activeTab?.view === 'source'
   )
+  /** The Save button only exists for editable content: a conflicted file being
+   *  resolved, or a text session with unsaved changes. Preview-only content
+   *  (images, PDF, media, documents, SVG) and clean sessions show no button. */
+  let showSaveButton = $derived(
+    activeTab !== null &&
+      activeTab.view !== 'diff' &&
+      !deletedAtCheckpoint &&
+      (activePathIsConflicted || (activeSession !== null && dirty))
+  )
   let markdown = $derived(activeTab ? /\.(?:md|mdown|markdown)$/iu.test(activeTab.path) : false)
   let pdf = $derived(activeTab ? /\.pdf$/iu.test(activeTab.path) : false)
   let image = $derived(activeTab ? isImageMime(mimeFromPath(activeTab.path)) : false)
@@ -863,7 +872,7 @@
             onRename={startRename}
             onDelete={() => (deleteTargetPath = activeTab.path)}
           />
-          {#if activeTab.view !== 'diff'}
+          {#if showSaveButton}
             <button
               type="button"
               class="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
@@ -1129,7 +1138,7 @@
         <Dialog.Description class="sr-only">
           {activeTab?.view === 'diff' ? 'Fullscreen file diff' : 'Fullscreen file editor'}
         </Dialog.Description>
-        {#if activeTab?.view !== 'diff'}
+        {#if showSaveButton}
           <button
             type="button"
             class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
