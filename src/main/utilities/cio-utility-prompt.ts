@@ -135,6 +135,16 @@ MCP config:
 Use global scope for capabilities intended across projects. Use project or thread scope only
 when the user requests it and the required IDs are available in the setup context.`
 
+/** Compact contract for turns that REUSE an earlier @cio-utility invocation in the
+ *  same thread. Deliberately tiny: the full setup briefing above already ran in
+ *  the invoking turn, and re-dumping it every later turn would waste context. */
+export const CIO_UTILITY_REUSE_PROMPT = `CodeInOven utility contract (reuse)
+
+The user invoked @cio-utility earlier in this thread; the contract stays active for reuse without repeating the setup briefing:
+- ${UTILITY_DIAGNOSTICS_TOOL_NAME} is available for app debugging and is strictly read-only (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql); it never modifies app data.
+- ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) is reserved for turns where the user explicitly asks to install a utility; definitions must stay secret-free.
+- Never edit harness config files or stored CodeInOven app data directly; configuration goes through the app API. Report evidence with thread ids and log lines.`
+
 export function isCioUtilityRequest(text: string): boolean {
   for (const match of text.matchAll(CIO_UTILITY_TAG_PATTERN)) {
     const mentionStart = (match.index ?? 0) + (match[1]?.length ?? 0)

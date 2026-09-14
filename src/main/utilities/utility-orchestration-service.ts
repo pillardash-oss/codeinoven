@@ -782,6 +782,27 @@ export class UtilityOrchestrationService {
     const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
     const resolved = state.eligible.get(utilityId)
     if (!resolved) throw new Error('Utility is unavailable in this project, thread, or harness')
+    // Re-activating an already-active utility must be a no-op: re-listing the
+    // full capability would duplicate an unchanged schema into the transcript
+    // for nothing, and for MCP/computer-use kinds the old code also tore down
+    // the live client (killing an in-flight CUA session) just to reconnect it.
+    if (state.activated.has(utilityId) && input['force'] !== true) {
+      await this.audit(state, 'utility.activated', {
+        utilityId,
+        kind: resolved.utility.kind,
+        alreadyActive: true
+      })
+      return {
+        utility: {
+          id: resolved.utility.id,
+          name: resolved.utility.name,
+          kind: resolved.utility.kind
+        },
+        capability: {
+          note: 'Already active in this turn. Its capability description was returned by the earlier activation and is unchanged; invoke it directly. If compaction dropped that description from context, re-activate with input {"force": true} to re-list it.'
+        }
+      }
+    }
     state.activated.set(utilityId, resolved)
 
     let capability: unknown
@@ -791,18 +812,15 @@ export class UtilityOrchestrationService {
       if (!this.browserExecutor) throw new Error('The in-app browser is unavailable')
       capability = { tools: BROWSER_UTILITY_TOOLS }
     } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
-      const previousClient = state.clients.get(utilityId)
-      const previousSessionId = state.cuaSessionIds.get(utilityId)
-      if (previousClient && previousSessionId) {
-        await previousClient
-          .callTool('end_session', { session: previousSessionId })
-          .catch(() => undefined)
+      // Reuse the live client when one exists (a forced re-list after
+      // compaction); the previous unconditional teardown here killed in-flight
+      // CUA sessions and reopened a connection just to repeat listTools.
+      let client = state.clients.get(utilityId)
+      if (!client) {
+        client = await this.mcpClient(resolved.utility)
+        state.clients.set(utilityId, client)
       }
-      await previousClient?.close()
-      state.cuaSessionIds.delete(utilityId)
-      const client = await this.mcpClient(resolved.utility)
-      state.clients.set(utilityId, client)
-      if (this.isComputerUseUtility(resolved)) {
+      if (this.isComputerUseUtility(resolved) && !state.cuaSessionIds.has(utilityId)) {
         await this.prepareComputerUseSession(state, utilityId, client)
       }
       capability = { tools: await client.listTools() }

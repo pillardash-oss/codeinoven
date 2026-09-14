@@ -113,7 +113,11 @@ import { instanceRegistry } from '../system/instance-registry'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRuntimeService } from '../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
-import { CIO_UTILITY_SETUP_PROMPT, isCioUtilityRequest } from '../utilities/cio-utility-prompt'
+import {
+  CIO_UTILITY_REUSE_PROMPT,
+  CIO_UTILITY_SETUP_PROMPT,
+  isCioUtilityRequest
+} from '../utilities/cio-utility-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { isCodeInOvenCustomProviderId, underlyingProviderId } from '../../lib/custom-provider-id'
@@ -3487,7 +3491,8 @@ export class ChatEngine {
     threadTitle: string,
     skipRuntime = false,
     allowManagement = false,
-    brainstormInterview = false
+    brainstormInterview = false,
+    explicitUtilityInvocation = false
   ): Promise<string> {
     // A new agent turn begins here   re-enable a user-dismissed PiP so it may
     // show again if CUA is used, and cancel any auto-dismiss from the last turn.
@@ -3544,6 +3549,15 @@ export class ChatEngine {
             ]
           : []
       )
+      // The full setup briefing belongs to the turn where the user explicitly
+      // typed @cio-utility. Reuse turns (the invocation happened earlier in this
+      // thread) get the compact contract instead so the full docs are never
+      // re-dumped into context.
+      const utilityContract = !allowManagement
+        ? ''
+        : explicitUtilityInvocation
+          ? CIO_UTILITY_SETUP_PROMPT
+          : CIO_UTILITY_REUSE_PROMPT
       if (useDirectGateway) {
         // Harnesses with persistent extension-backed sessions (Pi) receive the
         // turn-scoped endpoint through a session-keyed handoff so their
@@ -3552,11 +3566,7 @@ export class ChatEngine {
           await publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
         }
         this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
-        return [
-          gateway.directInstructions,
-          allowManagement ? CIO_UTILITY_SETUP_PROMPT : '',
-          ...skillInstructions
-        ]
+        return [gateway.directInstructions, utilityContract, ...skillInstructions]
           .filter(Boolean)
           .join('\n\n')
       }
@@ -3572,9 +3582,7 @@ export class ChatEngine {
         await applyRuntime(projectPath, null, sessionId)
         await gateway.cleanup()
         gateway = undefined
-        return [allowManagement ? CIO_UTILITY_SETUP_PROMPT : '', ...skillInstructions]
-          .filter(Boolean)
-          .join('\n\n')
+        return [utilityContract, ...skillInstructions].filter(Boolean).join('\n\n')
       }
       const environment = { ...(overlay.env ?? {}) }
       for (const { utility } of resolvedUtilities) {
@@ -3601,11 +3609,7 @@ export class ChatEngine {
         gateway,
         threadId
       })
-      return [
-        gateway.instructions,
-        allowManagement ? CIO_UTILITY_SETUP_PROMPT : '',
-        ...skillInstructions
-      ]
+      return [gateway.instructions, utilityContract, ...skillInstructions]
         .filter(Boolean)
         .join('\n\n')
     } catch (error) {
@@ -7782,7 +7786,8 @@ export class ChatEngine {
         !utilitySetupAllowed &&
         (driverHasNativeWebSearch || !driverCanPublishGateway),
       utilitySetupAllowed,
-      activeBrainstormSession
+      activeBrainstormSession,
+      utilitySetupRequested
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -8534,6 +8539,7 @@ export class ChatEngine {
             },
             title,
             false,
+            true,
             true
           )
         : ''
