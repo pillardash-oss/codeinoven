@@ -12015,7 +12015,7 @@ export class ChatEngine {
               message:
                 current.auditCycle.status === 'running'
                   ? 'The independent re-audit is already running.'
-                  : 'The independent re-audit is complete and its report is ready for review.'
+                  : 'The independent re-audit is complete and its report is ready for rework decisions.'
             })
             return
           }
@@ -15549,7 +15549,7 @@ export class ChatEngine {
         settings,
         [
           marker,
-          'The Auditor and user review require implementation corrections.',
+          'The Auditor findings and the user rework request require implementation corrections.',
           achievement
             ? 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then allow Achievement to audit again.'
             : 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then request a fresh audit when ready.',
@@ -15714,7 +15714,7 @@ export class ChatEngine {
         coordinator.settings,
         [
           marker,
-          `Audit report v${report.version} and the user's review are ready for your decision. No new Assignment version has been created.`,
+          `Audit report v${report.version} and the user's rework request are ready for your decision. No new Assignment version has been created.`,
           'You are the Sr. Engineer. First digest the audit findings, open annotations, and user feedback below, then explain your proposed response in this coordinator conversation.',
           'Apply the corrections without another user approval gate. Use reopen-task for completed tasks that require correction and add-followup-task only when an audit finding genuinely needs an additional task; assign every ready worker task immediately. Perform senior-owned corrections here. Call request-reaudit only after every correction and focused check is complete. Never call propose-rework-assignment for audit findings or corrective rework.',
           this.assignmentApiInstructions(coordinatorToken),
@@ -15730,7 +15730,7 @@ export class ChatEngine {
         undefined,
         undefined,
         'internal',
-        workflowActionPresentation(`Review audit report v${report.version}`, feedback)
+        workflowActionPresentation(`Rework from audit report v${report.version}`, feedback)
       )
     }
     return updated

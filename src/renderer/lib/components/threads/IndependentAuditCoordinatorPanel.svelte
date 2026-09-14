@@ -84,7 +84,7 @@
     if (reportAvailable) {
       return {
         label: 'Audit report ready',
-        description: 'Review the auditor findings in Spec Studio or run another audit.',
+        description: 'Read the auditor findings in Spec Studio or run another audit.',
         tone: 'text-success'
       }
     }
