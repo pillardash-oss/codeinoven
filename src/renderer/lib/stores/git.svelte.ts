@@ -490,7 +490,9 @@ export class GitState {
       for (const pr of uncomputed) {
         try {
           const detail = await invoke('pr:detail', projectId, owner, repo, pr.number)
-          if (detail.mergeable === false) conflicted.push(pr)
+          // null means the provider request failed (timeout, rate limit) —
+          // treat it as "mergeability unknown" and skip this PR.
+          if (detail?.mergeable === false) conflicted.push(pr)
         } catch {
           // A single PR failing its probe must not discard the whole check.
         }

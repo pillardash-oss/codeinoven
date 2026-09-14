@@ -7308,11 +7308,20 @@ export function registerIpcHandlers(
         repo: safeRepo,
         pullNumber: safeNumber
       } = await pullRequestTarget(projectId, owner, repo, pullNumber)
-      return provider.getPullRequest({
-        owner: safeOwner,
-        repo: safeRepo,
-        pullNumber: safeNumber
-      })
+      try {
+        return await provider.getPullRequest({
+          owner: safeOwner,
+          repo: safeRepo,
+          pullNumber: safeNumber
+        })
+      } catch (reason) {
+        // This channel powers the background mergeability probe, so transient
+        // provider failures (timeouts, rate limits, flaky network) are expected.
+        // Returning null avoids a noisy main-process "Error occurred in handler"
+        // log for every probe retry; the caller already treats null as "unknown".
+        Logger.dev('PR detail fetch failed', reason)
+        return null
+      }
     }
   )
 

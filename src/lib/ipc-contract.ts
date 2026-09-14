@@ -1697,7 +1697,8 @@ export const IPC_INVOKE_CONTRACT = {
    */
   'pr:detail': {} as Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number],
-    PullRequestDetail
+    /** null when the provider request fails (timeout, rate limit, network). */
+    PullRequestDetail | null
   >,
   'deployment:overview': {} as Contract<
     [projectId: string, owner: string, repo: string],
