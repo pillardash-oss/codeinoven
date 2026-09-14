@@ -1508,6 +1508,10 @@ export const IPC_INVOKE_CONTRACT = {
     [projectId: string, name: string, force?: boolean, scopeBucketId?: string],
     GitStatus
   >,
+  'git:deleteRemoteBranch': {} as Contract<
+    [projectId: string, remote: string, name: string, scopeBucketId?: string],
+    GitStatus
+  >,
   'git:log': {} as Contract<
     [projectId: string, limit?: number, offset?: number, query?: string, scopeBucketId?: string],
     GitCommitInfo[]

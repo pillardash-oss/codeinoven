@@ -1854,6 +1854,12 @@ export class RemoteRpcDispatcher {
           this.string(args[1]),
           this.optionalBoolean(args[2]) ?? false
         )
+      case 'git:deleteRemoteBranch':
+        return this.gitService.deleteRemoteBranch(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1]),
+          this.string(args[2])
+        )
       case 'git:log':
         return this.gitService.log(
           await this.resolveProjectPath(this.string(args[0])),

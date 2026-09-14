@@ -861,6 +861,19 @@ export class GitState {
     }
   }
 
+  async deleteRemoteBranch(projectId: string, remote: string, name: string): Promise<void> {
+    this.markBusy('push', true)
+    this.error = null
+    try {
+      await invoke('git:deleteRemoteBranch', ...this.scopedGitArgs(projectId, remote, name))
+      await this.refresh(projectId)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Remote branch deletion failed')
+    } finally {
+      this.markBusy('push', false)
+    }
+  }
+
   async setIdentity(projectId: string, name: string, email: string): Promise<void> {
     this.error = null
     try {

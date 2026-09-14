@@ -792,6 +792,22 @@ export class GitService {
     })
   }
 
+  /** `git push <remote> --delete <name>` removes a branch from a remote. */
+  async deleteRemoteBranch(
+    projectPath: string,
+    remote: string,
+    name: string
+  ): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(projectPath, 'mutation', async () => {
+        const git = this.client(directory)
+        await git.push([remote, '--delete', name])
+      })
+      return this.readStatus(directory)
+    })
+  }
+
   /**
    * Git refuses `branch -d` while the branch is checked out in any worktree.
    * Remove clean owning worktrees and prune stale registrations so the delete
