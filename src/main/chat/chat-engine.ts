@@ -14958,6 +14958,11 @@ export class ChatEngine {
     let promptKind: 'initial' | 'resume' | 'correct' =
       auditorThread.status === 'failed' ? 'resume' : 'initial'
     let previousFailure = auditorThread.lastError ?? 'The previous run failed.'
+    /** Timestamp of the current dispatch. Responses older than this belong to
+     *  the previous attempt (or run) and must never be accepted as this
+     *  attempt's answer: a resumed codex session can replay its prior
+     *  structured output, and validating that stale report re-throws the
+     *  identical evidence error with zero new auditor work. */
     let continuationRetries = 0
 
     /** Continuation prompt for a run that stopped partway: the auditor keeps
@@ -14980,6 +14985,7 @@ export class ChatEngine {
       independentAuditInitialized: true
     })
     for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
+      const attemptStartedAt = Date.now()
       await this.threadManager.setStatus(projectId, auditorThread.id, 'executing')
       this.handledIdleSessions.delete(sessionId)
       this.markSessionWorking(sessionId)
@@ -15061,6 +15067,11 @@ export class ChatEngine {
           const messages = await driver.loadMessages(projectPath, sessionId)
           const response = [...messages].reverse().find((message) => message.role === 'assistant')
           if (!response) throw new Error('The Auditor returned no response')
+          if (response.createdAt < attemptStartedAt - 1_000) {
+            throw new Error(
+              'The Auditor session replayed a stale response from a previous turn instead of answering this attempt.'
+            )
+          }
           if (response.error) throw new Error(response.error)
           content =
             response.structuredOutput !== undefined
@@ -15119,6 +15130,17 @@ export class ChatEngine {
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('The Auditor failed.')
         previousFailure = lastError.message
+        // A provider usage/rate-limit reset parks the session in a retry wait
+        // (sometimes hours away). Every further prompt in this run bounces off
+        // it within seconds, so burning the remaining attempts only delays the
+        // inevitable: fail fast with the reset window instead.
+        const pendingRetry = this.retryScheduler?.getPendingRetry(sessionId)
+        if (pendingRetry?.retryAt !== undefined && pendingRetry.retryAt > Date.now() + 60_000) {
+          lastError = new Error(
+            `The Auditor's provider hit its usage limit before the audit could finish. The provider resets at ${new Date(pendingRetry.retryAt).toLocaleTimeString()}; run the audit again after that window.`
+          )
+          break
+        }
         const correctableOutput =
           lastError instanceof AuditReportValidationError ||
           lastError instanceof SyntaxError ||
