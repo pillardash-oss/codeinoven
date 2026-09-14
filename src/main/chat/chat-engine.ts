@@ -7544,7 +7544,10 @@ export class ChatEngine {
         this.planningSessions.delete(sessionId)
       }
     } catch (error) {
-      await this.threadManager.setStatus(projectId, threadId, 'failed')
+      await this.threadManager.setStatus(projectId, threadId, 'failed', {
+        error: rawErrorMessage(error),
+        errorDetail: rawErrorDetail(error)
+      })
       throw error
     }
     const modelNeedsImageDescriptor = await this.modelLacksVision(projectId, settings)
@@ -8045,7 +8048,10 @@ export class ChatEngine {
         if (shouldScheduleInitialSpec && !promptDispatched) {
           await this.clearPendingInitialSpec(projectId, threadId)
         }
-        await this.threadManager.setStatus(projectId, threadId, 'failed')
+        await this.threadManager.setStatus(projectId, threadId, 'failed', {
+          error: rawErrorMessage(error),
+          errorDetail: rawErrorDetail(error)
+        })
         await this.broadcastThreadSessionError(
           projectId,
           threadId,
@@ -8152,7 +8158,10 @@ export class ChatEngine {
       this.preparedImplementationSessions.delete(sessionId)
       const failure = error instanceof Error ? error.message : String(error)
       await this.finishCheckpoint(sessionId, this.sessionRegistry.get(sessionId), 'failed', failure)
-      await this.threadManager.setStatus(projectId, threadId, 'failed')
+      await this.threadManager.setStatus(projectId, threadId, 'failed', {
+        error: failure,
+        errorDetail: rawErrorDetail(error)
+      })
       await this.broadcastThreadSessionError(
         projectId,
         threadId,
@@ -8413,7 +8422,13 @@ export class ChatEngine {
         Logger.dev('Temporary chat turn cancelled before completion:', error)
         return undefined
       }
-      await this.notifyTemporaryChatCompletion(projectId, threadId, temporary.id, 'error')
+      await this.notifyTemporaryChatCompletion(
+        projectId,
+        threadId,
+        temporary.id,
+        'error',
+        rawErrorDetail(error)
+      )
       throw error
     }
   }
@@ -8812,12 +8827,13 @@ export class ChatEngine {
     projectId: string,
     threadId: string,
     temporaryChatId: string,
-    kind: 'completed' | 'error'
+    kind: 'completed' | 'error',
+    errorDetail?: string
   ): Promise<void> {
     try {
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread) return
-      notifyTemporaryChat(thread, temporaryChatId, kind)
+      notifyTemporaryChat(thread, temporaryChatId, kind, errorDetail)
     } catch (error) {
       Logger.dev('Temporary chat notification dispatch failed:', error)
     }
@@ -12509,7 +12525,11 @@ export class ChatEngine {
         return null
       }
       this.markEngineeringLifecycleFailure(projectId, threadId, error)
-      await this.threadManager.setStatus(projectId, threadId, 'failed', { read: false })
+      await this.threadManager.setStatus(projectId, threadId, 'failed', {
+        read: false,
+        error: rawErrorMessage(error),
+        errorDetail: rawErrorDetail(error)
+      })
       throw error
     } finally {
       this.activeBrainstormOperations.delete(operationKey)
@@ -13073,7 +13093,11 @@ export class ChatEngine {
         }
       })
       this.markEngineeringLifecycleFailure(projectId, threadId, error)
-      await this.threadManager.setStatus(projectId, threadId, 'failed', { read: false })
+      await this.threadManager.setStatus(projectId, threadId, 'failed', {
+        read: false,
+        error: rawErrorMessage(error),
+        errorDetail: rawErrorDetail(error)
+      })
       throw error
     } finally {
       if (sessionId) {
@@ -13220,7 +13244,11 @@ export class ChatEngine {
       return generated
     } catch (error) {
       this.markEngineeringLifecycleFailure(projectId, threadId, error)
-      await this.threadManager.setStatus(projectId, threadId, 'failed', { read: false })
+      await this.threadManager.setStatus(projectId, threadId, 'failed', {
+        read: false,
+        error: rawErrorMessage(error),
+        errorDetail: rawErrorDetail(error)
+      })
       throw error
     } finally {
       this.activeBrainstormOperations.delete(operationKey)
@@ -14878,7 +14906,11 @@ export class ChatEngine {
       }
     }
 
-    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
+    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', {
+      read: false,
+      error: (lastError ?? new Error('The independent audit failed.')).message,
+      errorDetail: lastError ? rawErrorDetail(lastError) : undefined
+    })
     throw lastError ?? new Error('The independent audit failed.')
   }
 
@@ -16294,7 +16326,11 @@ export class ChatEngine {
     await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
       read: false
     })
-    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
+    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', {
+      read: false,
+      error: failure.message,
+      errorDetail: rawErrorDetail(failure)
+    })
     throw failure
   }
 
@@ -16442,7 +16478,11 @@ export class ChatEngine {
     await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
       read: false
     })
-    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
+    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', {
+      read: false,
+      error: (lastError ?? new Error('The Auditor failed.')).message,
+      errorDetail: lastError ? rawErrorDetail(lastError) : undefined
+    })
     throw lastError ?? new Error('The Auditor failed.')
   }
 
@@ -16598,7 +16638,11 @@ export class ChatEngine {
     await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
       read: false
     })
-    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
+    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', {
+      read: false,
+      error: (lastError ?? new Error('The Achievement Auditor failed.')).message,
+      errorDetail: lastError ? rawErrorDetail(lastError) : undefined
+    })
     throw lastError ?? new Error('The Achievement Auditor failed.')
   }
 
@@ -17717,7 +17761,8 @@ export class ChatEngine {
     }
 
     await this.threadManager.setStatus(projectId, threadId, 'failed', {
-      read: false
+      read: false,
+      error: lastError || 'The specification could not be generated.'
     })
     pending = {
       ...pending,
@@ -20253,7 +20298,11 @@ export class ChatEngine {
       ...(issue.attempt === undefined ? {} : { attempt: issue.attempt })
     })
     if (!tracked && scheduler.isEnabled) {
-      await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', { read: false })
+      await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+        read: false,
+        error: issue.message,
+        errorDetail: issue.rawError
+      })
       return false
     }
     return true
@@ -20283,10 +20332,10 @@ export class ChatEngine {
           })
         }
       }
-      await this.onSessionError(sessionId, error, true)
+      await this.onSessionError(sessionId, error, true, issue.rawError)
       return
     }
-    await this.onSessionError(sessionId, error, retryScheduled)
+    await this.onSessionError(sessionId, error, retryScheduled, issue.rawError)
   }
 
   /**
@@ -21041,7 +21090,10 @@ export class ChatEngine {
             rawErrorMessage(error),
             rawErrorDetail(error)
           )
-          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+            error: issue.message,
+            errorDetail: issue.rawError
+          })
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
         return
@@ -21100,7 +21152,10 @@ export class ChatEngine {
               rawErrorMessage(error),
               rawErrorDetail(error)
             )
-            await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+            await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+              error: issue.message,
+              errorDetail: issue.rawError
+            })
             await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
           }
           return
@@ -21140,7 +21195,10 @@ export class ChatEngine {
             rawErrorMessage(error),
             rawErrorDetail(error)
           )
-          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+            error: issue.message,
+            errorDetail: issue.rawError
+          })
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
         return
@@ -21176,7 +21234,10 @@ export class ChatEngine {
             rawErrorMessage(error),
             rawErrorDetail(error)
           )
-          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+            error: issue.message,
+            errorDetail: issue.rawError
+          })
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
         return
@@ -21421,7 +21482,7 @@ export class ChatEngine {
       Logger.error('history mirror failed:', error)
       if (this.userAbortedSessions.has(sessionId)) return
       const issue = historyMirrorIssue(error, info.driverId)
-      await this.onSessionError(sessionId, issue.message)
+      await this.onSessionError(sessionId, issue.message, false, issue.rawError)
       await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
     } finally {
       const interviewWaiting =
@@ -22207,7 +22268,8 @@ export class ChatEngine {
   private async onSessionError(
     sessionId: string,
     error?: string,
-    retryScheduled = false
+    retryScheduled = false,
+    errorDetail?: string
   ): Promise<void> {
     const info = this.sessionRegistry.get(sessionId)
     if (!info) return
@@ -22237,7 +22299,9 @@ export class ChatEngine {
         info.threadId,
         retryPaused ? 'working-paused' : 'failed',
         {
-          read: false
+          read: false,
+          ...(error ? { error } : {}),
+          ...(errorDetail ? { errorDetail } : {})
         }
       )
       await this.finishCheckpoint(sessionId, info, 'failed', error ?? 'Harness session failed')
@@ -22855,7 +22919,7 @@ export class ChatEngine {
     // Surface the issue to every renderer bound to the thread so the user sees
     // the real failure (with a Retry affordance) instead of a silent fail.
     await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
-    await this.onSessionError(sessionId, issue.message)
+    await this.onSessionError(sessionId, issue.message, false, issue.rawError)
     try {
       const driver = this.driverForRuntime(info.driverId, info.accountId)
       if (driver) await driver.abort(info.projectPath, sessionId)

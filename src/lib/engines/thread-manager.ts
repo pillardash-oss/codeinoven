@@ -973,9 +973,26 @@ export class ThreadManager {
     projectId: string,
     threadId: string,
     status: ThreadStatus,
-    opts?: { read?: boolean }
+    opts?: { read?: boolean; error?: string; errorDetail?: string }
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
+
+    // Carry the failure's diagnostic text on the in-memory thread snapshot so
+    // downstream consumers (error notifications, panels) can show what actually
+    // went wrong. Never persisted: `threadUpsertParams` serializes an explicit
+    // column list, so `lastError` is dropped on write and resets on restart.
+    const lastError =
+      status === 'failed'
+        ? (() => {
+            const detail = opts?.errorDetail?.trim()
+            const message =
+              opts?.error?.trim() ||
+              existing.lastError ||
+              (detail ? (detail.split('\n', 1)[0]?.trim() || undefined) : undefined)
+            if (!message) return undefined
+            return detail && detail !== message ? `${message}\n\n${detail}` : message
+          })()
+        : undefined
 
     const updated: Thread = {
       ...existing,
@@ -985,6 +1002,7 @@ export class ThreadManager {
           ? existing.scopeSortOrder
           : undefined,
       read: opts?.read ?? existing.read,
+      lastError,
       updatedAt: Date.now(),
       lastActivity: Date.now()
     }

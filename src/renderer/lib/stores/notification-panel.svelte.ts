@@ -23,6 +23,9 @@ export interface InAppNotification {
   temporaryChatId?: string
   projectName: string
   projectColor?: string
+  /** Full diagnostic text (message plus raw detail/stack) for `error`
+   *  notifications; drives the panel's copy action. */
+  errorDetail?: string
   timestamp: number
 }
 

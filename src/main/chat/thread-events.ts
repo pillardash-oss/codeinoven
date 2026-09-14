@@ -143,7 +143,8 @@ instanceRegistry.onCheckpointUpdated(deliverCrossInstanceCheckpointUpdated)
 export function notifyTemporaryChat(
   thread: Thread,
   temporaryChatId: string,
-  kind: 'completed' | 'error'
+  kind: 'completed' | 'error',
+  errorDetail?: string
 ): void {
-  void _notificationService?.notifyTemporaryChat(thread, temporaryChatId, kind)
+  void _notificationService?.notifyTemporaryChat(thread, temporaryChatId, kind, errorDetail)
 }

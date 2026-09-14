@@ -602,7 +602,8 @@ export class NotificationService {
   async notifyTemporaryChat(
     thread: Thread,
     temporaryChatId: string,
-    kind: Extract<AgentNotificationKind, 'completed' | 'error'>
+    kind: Extract<AgentNotificationKind, 'completed' | 'error'>,
+    errorDetail?: string
   ): Promise<void> {
     if (!this.started) return
 
@@ -627,7 +628,8 @@ export class NotificationService {
       temporaryChatId,
       kind,
       projectName || APP_NAME,
-      projectColor
+      projectColor,
+      errorDetail
     )
     const subtitle = payload.source === 'chat' ? 'Chat' : payload.projectName
     const windows = BrowserWindow.getAllWindows()
@@ -778,6 +780,19 @@ export class NotificationService {
           : kind === 'spec'
             ? `${displayName} spec is ready`
             : `${displayName} hit an error`
+    // Error notifications carry the real failure: the engine records the
+    // diagnostic text on the thread when it marks it `failed`, so the panel can
+    // show what went wrong instead of a generic label. Only the first line is
+    // user-facing prose; the full text (including any stack/raw detail) rides
+    // on `errorDetail` for display and copy actions.
+    const lastError = kind === 'error' ? (thread.lastError?.trim() || undefined) : undefined
+    const errorHeadline = lastError?.split('\n', 1)[0]?.trim() || undefined
+    const errorBody =
+      errorHeadline === undefined
+        ? undefined
+        : errorHeadline.length > 240
+          ? `${errorHeadline.slice(0, 240).trimEnd()}…`
+          : errorHeadline
     const body =
       kind === 'completed'
         ? `${thread.title} finished in ${projectName}.`
@@ -785,13 +800,14 @@ export class NotificationService {
           ? `${thread.title} is waiting for your input in ${projectName}.`
           : kind === 'spec'
             ? `${thread.title} has a reviewable engineering artifact ready in ${projectName}.`
-            : `${thread.title} stopped with an error in ${projectName}.`
+            : (errorBody ?? `${thread.title} stopped with an error in ${projectName}.`)
 
     return {
       id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,
       kind,
       title,
       body,
+      ...(lastError ? { errorDetail: lastError } : {}),
       projectId: thread.projectId,
       threadId: thread.id,
       source,
@@ -805,20 +821,24 @@ export class NotificationService {
     temporaryChatId: string,
     kind: Extract<AgentNotificationKind, 'completed' | 'error'>,
     projectName: string,
-    projectColor: string | undefined
+    projectColor: string | undefined,
+    errorDetail?: string
   ): AgentNotificationPayload {
     const notificationKind: AgentNotificationKind =
       kind === 'completed' ? 'chat-completed' : 'error'
     const title = kind === 'completed' ? 'Chat response available' : 'Chat response failed'
+    const trimmedDetail = errorDetail?.trim() || undefined
+    const headline = trimmedDetail?.split('\n', 1)[0]?.trim() || undefined
     const body =
       kind === 'completed'
         ? `${thread.title}   your chat response is ready in ${projectName}.`
-        : `${thread.title}   your chat response stopped with an error in ${projectName}.`
+        : (headline ?? `${thread.title}   your chat response stopped with an error in ${projectName}.`)
     return {
       id: `${APP_SLUG}-${thread.projectId}-${thread.id}-temp-${temporaryChatId}-${Date.now()}`,
       kind: notificationKind,
       title,
       body,
+      ...(kind === 'error' && trimmedDetail ? { errorDetail: trimmedDetail } : {}),
       projectId: thread.projectId,
       threadId: thread.id,
       temporaryChatId,

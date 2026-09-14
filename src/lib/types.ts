@@ -435,6 +435,12 @@ export interface Thread {
   sessionHarnessId?: string
   /** Account container that owns the bound native session. */
   sessionAccountId?: string
+  /** Diagnostic text of the most recent failure (message plus any raw
+   *  detail/stack the engine captured). In-memory only: it is never persisted
+   *  and exists so error notifications and panels can show what actually went
+   *  wrong instead of a generic "hit an error" label. Cleared whenever the
+   *  thread leaves the `failed` status. */
+  lastError?: string
   /** Last specification card explicitly dismissed by the user. */
   dismissedSpecId?: string
   dismissedSpecVersion?: number
