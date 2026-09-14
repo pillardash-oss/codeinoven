@@ -1,6 +1,6 @@
 <script module lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import type { TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
+  import type { AgentEvent, TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -53,6 +53,8 @@
     scrollContainer = $state<HTMLElement | null>(null)
 
     private refreshGuard = new LatestRequestGuard()
+    private liveRefreshGuard = new LatestRequestGuard()
+    private diffRefreshGuard = new LatestRequestGuard()
     private generation = 0
     private cache: DiffPanelCache | null = null
     private lastSeededKey: string | null = null
@@ -130,18 +132,27 @@
     }
 
     async refreshLive(): Promise<void> {
+      const request = this.liveRefreshGuard.begin()
       const generation = this.generation
       try {
         const next = await invoke('checkpoint:activeSummary', this.projectId, this.threadId)
-        if (generation !== this.generation) return
-        const finished = this.liveTurn !== null && next === null
+        if (generation !== this.generation || !this.liveRefreshGuard.isCurrent(request)) return
+        const previousLive = this.liveTurn
+        const finished = previousLive !== null && next === null
         this.liveTurn = next
         if (next) this.liveRevision += 1
         if (finished) {
           // The turn just completed   pull its authoritative checkpoint in.
           void this.refresh(this.selectedCheckpointId)
-        } else if (next && !this.selectedCheckpointId) {
+        } else if (next && !previousLive) {
+          // A running turn takes focus once it produces its first file change.
+          // Later refreshes preserve an explicit historical-turn selection.
           this.selectedCheckpointId = next.id
+          this.writeback()
+          void this.loadDiffs()
+        } else if (next && this.selectedCheckpointId === next.id) {
+          // The selected live checkpoint keeps its id for the whole turn, so
+          // reload its diff whenever the revision changes.
           void this.loadDiffs()
         }
       } catch {
@@ -149,7 +160,9 @@
       }
     }
 
-    async refresh(preferredCheckpointId = this.checkpointId ?? this.selectedCheckpointId): Promise<void> {
+    async refresh(
+      preferredCheckpointId = this.checkpointId ?? this.selectedCheckpointId
+    ): Promise<void> {
       const request = this.refreshGuard.begin()
       const generation = this.generation
       this.loading = true
@@ -173,7 +186,8 @@
         void this.loadDiffs()
       } catch (reason) {
         if (generation !== this.generation || !this.refreshGuard.isCurrent(request)) return
-        this.error = reason instanceof Error ? reason.message : 'Change history could not be loaded.'
+        this.error =
+          reason instanceof Error ? reason.message : 'Change history could not be loaded.'
       } finally {
         if (generation === this.generation && this.refreshGuard.isCurrent(request)) {
           this.loading = false
@@ -197,6 +211,7 @@
         this.applyReveal()
         return
       }
+      const request = this.diffRefreshGuard.begin()
       const isLive = checkpoint.status === 'active'
       this.loadedDiffKey = key
       this.fileDiffs = []
@@ -212,7 +227,7 @@
           )
         )
       )
-      if (generation !== this.generation) return
+      if (generation !== this.generation || !this.diffRefreshGuard.isCurrent(request)) return
       this.fileDiffs = results.flatMap((result) =>
         result.status === 'fulfilled' ? [result.value as TurnCheckpointFileDiff] : []
       )
@@ -276,7 +291,8 @@
         this.writeback()
       } catch (reason) {
         if (generation !== this.generation) return
-        this.error = reason instanceof Error ? reason.message : 'Selected files could not be restored.'
+        this.error =
+          reason instanceof Error ? reason.message : 'Selected files could not be restored.'
       } finally {
         if (generation === this.generation) this.restoringId = null
       }
@@ -317,7 +333,9 @@
     // The in-progress turn leads the list so opening Changes during a run lands
     // on its live edits instead of the last completed turn.
     get turns(): TurnCheckpointSummary[] {
-      return this.liveTurn ? [this.liveTurn, ...this.completedCheckpoints] : this.completedCheckpoints
+      return this.liveTurn
+        ? [this.liveTurn, ...this.completedCheckpoints]
+        : this.completedCheckpoints
     }
 
     get selectedIndex(): number {
@@ -334,14 +352,14 @@
     start(): void {
       this.pollTimer = setInterval(() => void this.refreshLive(), 2_500)
       this.unsubscribeEvents = subscribe('agent:event', (...args: unknown[]) => {
-        const raw = args[0] as Record<string, unknown>
-        if (raw['projectId'] !== this.projectId || raw['threadId'] !== this.threadId) return
-        const type = raw['type'] as string | undefined
-        if (type === 'checkpoint.updated') {
+        const event = args[0] as AgentEvent
+        if (!('projectId' in event) || !('threadId' in event)) return
+        if (event.projectId !== this.projectId || event.threadId !== this.threadId) return
+        if (event.type === 'checkpoint.updated') {
           void this.refresh()
           return
         }
-        if (type === 'checkpoint.liveUpdated') {
+        if (event.type === 'checkpoint.liveUpdated') {
           void this.refreshLive()
         }
       })
@@ -470,7 +488,9 @@
         type="button"
         class={[
           'flex h-6 items-center gap-1.5 rounded px-2.5 text-[0.625rem] font-medium transition-colors',
-          controller.mode === 'diffs' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
+          controller.mode === 'diffs'
+            ? 'bg-overlay text-foreground'
+            : 'text-muted hover:text-foreground'
         ]}
         aria-pressed={controller.mode === 'diffs'}
         title="Show each file's diff stacked by file"
@@ -482,7 +502,9 @@
         type="button"
         class={[
           'flex h-6 items-center gap-1.5 rounded px-2.5 text-[0.625rem] font-medium transition-colors',
-          controller.mode === 'files' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
+          controller.mode === 'files'
+            ? 'bg-overlay text-foreground'
+            : 'text-muted hover:text-foreground'
         ]}
         aria-pressed={controller.mode === 'files'}
         title="Show the list of changed files with restore options"
@@ -532,7 +554,7 @@
           <div class="space-y-2">
             {#if checkpoint.status === 'active'}
               <p class="px-1 pb-1 text-[0.625rem] leading-relaxed text-dimmed">
-                Live changes   this turn is still running.
+                Live changes this turn is still running.
               </p>
             {/if}
             {#if checkpoint.failure}
@@ -627,7 +649,9 @@
                 <FileDiff size={13} class="shrink-0 text-info" />
                 <span class="min-w-0 flex-1">
                   <span class="flex items-center gap-1.5">
-                    <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
+                    <span
+                      class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground"
+                    >
                       {checkpoint.label}
                     </span>
                     {#if checkpoint.status === 'active'}
@@ -654,7 +678,7 @@
                 {/if}
                 {#if checkpoint.status === 'active'}
                   <p class="px-3 py-1.5 text-[0.625rem] leading-relaxed text-dimmed">
-                    This turn is still running   files update here as the agent edits them.
+                    This turn is still running files update here as the agent edits them.
                   </p>
                 {/if}
                 {#if checkpoint.changes.length === 0}
@@ -666,7 +690,9 @@
                     >
                       {#if checkpoint.status !== 'rolled_back' && checkpoint.status !== 'active'}
                         <Switch
-                          checked={(controller.selections[checkpoint.id] ?? []).includes(change.path)}
+                          checked={(controller.selections[checkpoint.id] ?? []).includes(
+                            change.path
+                          )}
                           disabled={checkpoint.rolledBackPaths?.includes(change.path)}
                           aria-label={`Select ${change.path} to restore`}
                           onchange={() => controller.toggleSelection(checkpoint.id, change.path)}

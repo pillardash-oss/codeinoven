@@ -1,4 +1,4 @@
-import { join, extname, relative, sep } from 'path'
+import { join, extname, relative } from 'path'
 import { copyFile, mkdir, readFile, readdir, rm } from 'fs/promises'
 import type { Dirent } from 'fs'
 import { generateId, getConfigRoot } from '../utils'
@@ -6,6 +6,7 @@ import type { Project, CreateProjectInput } from '../types'
 import { INBOX_PROJECT_ID } from '../types'
 import { pickColorForSeed } from '../project-colors'
 import { ensureProjectScratchSpace } from '../project-artifacts'
+import { toPosixPath } from '../paths'
 import type { Database } from '../../main/database/database'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
@@ -377,7 +378,7 @@ export class ProjectManager {
         continue
       }
 
-      const relDir = relative(projectPath, dir).split(sep).join('/')
+      const relDir = toPosixPath(relative(projectPath, dir))
       const locationRank = this.iconLocationRank(relDir)
 
       for (const entry of entries) {

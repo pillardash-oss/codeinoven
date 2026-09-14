@@ -88,8 +88,15 @@ export class PiRpcClient {
     })
     this.child.on('exit', (code) => {
       const detail = this.stderrBuffer.trim()
+      // The stderr tail (which usually contains the crash's stack trace) must
+      // stay OUT of the error message: the error card renders `message` as the
+      // beautified body and only the Raw Error view may show the full trace.
+      // Carry the stderr tail in `cause` instead; the engine's raw-error
+      // extraction walks the cause chain to surface it there.
       this.failAll(
-        new Error(`Pi process exited with code ${code ?? 'unknown'}${detail ? `: ${detail}` : ''}`)
+        new Error(`Pi process exited with code ${code ?? 'unknown'}`, {
+          ...(detail ? { cause: detail } : {})
+        })
       )
       this.onExit(code)
     })

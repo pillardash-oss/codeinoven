@@ -1,10 +1,11 @@
 import { BrowserWindow, powerMonitor } from 'electron'
-import { readdir, readFile } from 'fs/promises'
+import { readdir, readFile, rm } from 'fs/promises'
 import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, relative, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { createHash, randomBytes, randomInt } from 'crypto'
+import { homedir } from 'node:os'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { Logger } from '../system/logger'
 import {
@@ -37,8 +38,10 @@ import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
 import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
+import { toPosixPath } from '../../lib/paths'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
-import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
+import { buildProcessEnvironment } from '../drivers/cli-environment'
+import { isHarnessCommandAvailable } from '../drivers/harness-runtime'
 import { CheckpointLimitError, type ProjectFingerprint } from '../git/change-tracking-service'
 import {
   broadcastThreadDeleted,
@@ -72,6 +75,7 @@ import {
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import {
   InactiveQuestionTurnError,
+  PermissionRequestGoneError,
   QuestionRequestGoneError,
   type HarnessCapabilities,
   type HarnessDriver,
@@ -79,6 +83,7 @@ import {
   type SteerPromptOptions,
   type StructuredOutputRequest
 } from '../drivers/driver.interface'
+import { SHARED_GLOBAL_SKILL_PATH, harnessGlobalSkillPath } from '../../lib/native-skill-paths'
 import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import type { PreparedUtilityRuntime } from '../drivers/driver.interface'
 import type { Database } from '../database/database'
@@ -231,7 +236,10 @@ import { foldTurnStreamEvents, type TurnStreamEvent } from './turn-stream'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
 import { workflowActionPresentation } from '../../lib/workflow-action-presentation'
-import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
+import {
+  DEFAULT_AGENT_BEHAVIOR_PROMPT,
+  gateCuaDriverBehaviorPrompt
+} from '../../lib/agent-behavior'
 import { registerCioPromptDefault, type CioPromptId } from '../../lib/cio-prompts'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -285,6 +293,8 @@ import {
 } from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
 import {
+  LEGACY_CHAT_ARTIFACTS_DIRECTORY,
+  chatThreadArtifactDirectory,
   ensureFeatureSlug,
   featureArtifactDirectory,
   requireLocalProject
@@ -572,10 +582,23 @@ function rawErrorMessage(error: unknown): string {
 
 /** Full diagnostic error text for the error card's Raw Error view: the stack
  *  trace when a real Error object reached us, otherwise the message string
- *  as-is. Deliberately separate from `rawErrorMessage`, which must stay a
- *  short single-line message for logging and report fields. */
+ *  as-is. Drivers may attach the raw process output (stderr tail, crash trace)
+ *  to an Error's `cause` while keeping `message` short and user-facing, so the
+ *  cause chain is walked and appended here. Deliberately separate from
+ *  `rawErrorMessage`, which must stay a short single-line message for logging
+ *  and report fields. */
 function rawErrorDetail(error: unknown): string {
-  if (error instanceof Error && error.stack?.trim()) return error.stack.trim()
+  if (error instanceof Error) {
+    const parts = [error.stack?.trim() || error.message.trim()]
+    const cause = error.cause
+    if (typeof cause === 'string' && cause.trim()) {
+      parts.push(cause.trim())
+    } else if (cause instanceof Error) {
+      const nested = rawErrorDetail(cause)
+      if (nested) parts.push(nested)
+    }
+    return parts.filter((part) => part.length > 0).join('\n\nCaused by: ')
+  }
   return rawErrorMessage(error)
 }
 
@@ -607,7 +630,7 @@ function projectRelativePath(projectPath: string, candidate: string): string | n
   const trimmed = candidate.trim()
   if (!trimmed || trimmed.includes('\0')) return null
   const absolutePath = isAbsolute(trimmed) ? resolve(trimmed) : resolve(projectPath, trimmed)
-  const relativePath = relative(resolve(projectPath), absolutePath).replaceAll('\\', '/')
+  const relativePath = toPosixPath(relative(resolve(projectPath), absolutePath))
   if (!relativePath || relativePath === '..' || relativePath.startsWith('../')) return null
   return relativePath
 }
@@ -920,7 +943,7 @@ function attributionModeFor(
 }
 
 function engineeringArtifactBoundaryInstruction(artifactDirectory: string): string {
-  const normalizedDirectory = artifactDirectory.replace(/\\/gu, '/')
+  const normalizedDirectory = toPosixPath(artifactDirectory)
   return [
     `CodeInOven is the sole owner of Engineering lifecycle artifacts in ${normalizedDirectory}/, including spec.md, plan.md, progress.md, assignment.md, audit documents, and task evidence.`,
     'The application Agent behavior layer may inform how implementation work is performed, but it is non-authoritative for Engineering lifecycle storage and reporting.',
@@ -966,11 +989,34 @@ class TemporaryChatCancelledError extends Error {
 const CHAT_SYSTEM_PROMPT = [
   `You are a general-purpose web chat assistant inside ${APP_NAME}.`,
   'Files the user attaches to this chat are explicitly shared and may be read and inspected   use them whenever relevant.',
-  'This chat has no broader file-system access. Do not traverse, read, search, or modify any local file other than the files the user attached. Never enumerate or guess at other file paths.',
+  'This chat has no broader file-system access. Do not traverse, read, search, or modify any local file other than the files the user attached. Never enumerate or guess at other file paths. Do not inspect the current working directory for context.',
   'If something you need was not attached, ask the user to attach it or work only from what was provided; when you do not know an answer directly, search the internet using the web search and web fetch tools instead of inspecting files.',
   'Answer questions directly; use clarifying questions only when the request is genuinely ambiguous.',
   'When you reference external content, cite it as a Markdown link (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL or a plain-text mention.'
 ].join(' ')
+
+/** Non-editable safety boundary appended even when the user customized Chat prompts. */
+const CHAT_FILESYSTEM_BOUNDARY_LINES = [
+  'FILESYSTEM-OFF CHAT BOUNDARY:',
+  'The harness starts in a neutral chat-cwd only because its process requires a working directory. That directory is not part of the conversation, not project context, and never a source to inspect.',
+  'Do not proactively call read, list, glob, grep, find, bash, powershell, or another local tool to discover context. Do not inspect chat-cwd, the open project, the repository, the home directory, or application storage.',
+  'Use the conversation and your own knowledge first. Use web search, web fetch, and other internet tools when current or external information is needed.',
+  'You may read only files the user attached and harness-owned skill instructions needed for the request. Their availability is not permission to explore neighboring files.',
+  'Only File System mode changes this boundary.'
+]
+
+const CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION = CHAT_FILESYSTEM_BOUNDARY_LINES.join(' ')
+
+/** File-System-off chats own one carve-out: their artifact directory is part
+ *  of the conversation. Reads and writes inside it are pre-authorized and are
+ *  where chat outputs belong; it never opens the broader file system. */
+function chatFilesystemBoundaryInstruction(chatArtifactRoot?: string): string {
+  if (!chatArtifactRoot) return CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION
+  return [
+    CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION,
+    `One exception: the artifact directory of this chat (${chatArtifactRoot}) is part of this conversation. You may create and read files inside it freely, and outputs you create for the user belong there. This carve-out does not extend to anything outside that directory.`
+  ].join(' ')
+}
 
 /** Chat-only instruction when the user explicitly enables the File System mode. */
 const FILE_SYSTEM_CHAT_SYSTEM_PROMPT = [
@@ -1316,6 +1362,7 @@ export function composeBrainstormSystemPrompt(input: {
 }
 
 interface SessionInfo {
+  sessionId: string
   projectId: string
   threadId: string
   projectPath: string
@@ -1508,6 +1555,8 @@ interface ChildSessionInfo {
 
 interface PendingPermissionInfo {
   driverId: string
+  /** Exact runtime instance that emitted the blocking request. */
+  driver?: HarnessDriver
   session: SessionInfo
   request: PermissionRequest
   policy: PermissionDecisionResult
@@ -2174,7 +2223,7 @@ export class ChatEngine {
     // Wire each driver's event output to the broadcast + permission policy.
     for (const driver of this.drivers.values()) {
       driver.setProcessObserver?.(this.agentProcesses)
-      driver.onEvent((event) => this.handleDriverEvent(driver.id, event))
+      driver.onEvent((event) => this.handleDriverEvent(driver.id, event, driver))
     }
   }
 
@@ -2219,7 +2268,7 @@ export class ChatEngine {
     if (existing) return existing
     const driver = this.createAccountDriver(harnessId, this.accountRegistry.environment(account))
     driver.setProcessObserver?.(this.agentProcesses)
-    driver.onEvent((event) => this.handleDriverEvent(driver.id, event))
+    driver.onEvent((event) => this.handleDriverEvent(driver.id, event, driver))
     this.accountDrivers.set(account.id, driver)
     return driver
   }
@@ -3974,7 +4023,7 @@ export class ChatEngine {
     const harnessEnv = buildProcessEnvironment()
     const defaultDrivers = [...this.drivers.values()].filter((driver) => {
       const command = findHarness(driver.id)?.command
-      return command !== undefined && resolveExecutablePath(command, harnessEnv) !== undefined
+      return command !== undefined && isHarnessCommandAvailable(command, harnessEnv)
     })
     const managedAccounts = (await this.accountRegistry.list()).filter(
       (account) =>
@@ -4106,12 +4155,12 @@ export class ChatEngine {
     return persisted ?? []
   }
 
-  /** Keep cached/fallback catalogs scoped to harness executables installed on this machine. */
+  /** Keep cached/fallback catalogs scoped to harness runtimes available on this machine. */
   private filterInstalledProviderCatalogs(catalogs: ProviderCatalog[]): ProviderCatalog[] {
     const env = buildProcessEnvironment()
     const installed = new Set(
       listHarnesses()
-        .filter((harness) => resolveExecutablePath(harness.command, env) !== undefined)
+        .filter((harness) => isHarnessCommandAvailable(harness.command, env))
         .map((harness) => harness.id)
     )
     return catalogs.filter((catalog) => installed.has(catalog.harnessId))
@@ -5382,7 +5431,7 @@ export class ChatEngine {
    * attributed to a running agent thread's file-changes card.
    */
   recordUserFileSave(projectId: string, relativePath: string): void {
-    const normalized = relativePath.trim().replaceAll('\\', '/')
+    const normalized = toPosixPath(relativePath.trim())
     if (!normalized || normalized.startsWith('../') || normalized === '..') return
     for (const session of this.sessionRegistry.values()) {
       if (session.projectId !== projectId || !session.activeTurnId) continue
@@ -5819,11 +5868,13 @@ export class ChatEngine {
     executionScope: BehaviorExecutionScope = 'project-thread',
     attributionKey?: string
   ): Promise<string> {
+    let behaviorDriver: HarnessDriver | undefined
     try {
       const threadSettings =
         settings ?? (await this.threadManager.getThread(projectId, threadId))?.settings
       const harnessId = threadSettings?.harnessId ?? DEFAULT_HARNESS
       const driver = this.drivers.get(harnessId)
+      behaviorDriver = driver
       const config = await this.storage.getConfig()
       // Trimmed modes get a compact scope guard instead of the full workspace
       // block; pure inbox chat and image description (no project scope) omit it.
@@ -5837,7 +5888,13 @@ export class ChatEngine {
         projectId,
         threadId,
         projectPath,
-        driver ? { id: driver.id, name: driver.name } : null,
+        driver
+          ? {
+              id: driver.id,
+              name: driver.name,
+              nativeComputerUse: driver.capabilities.nativeUtilities?.includes('computer_use')
+            }
+          : null,
         '',
         {
           SPEC_BRAINSTORM_SYSTEM_PROMPT: await this.cioPrompt('engineering-spec'),
@@ -5873,7 +5930,12 @@ export class ChatEngine {
         executionScope,
         error: rawErrorMessage(error)
       })
-      return executionScope === 'project-thread' ? DEFAULT_AGENT_BEHAVIOR_PROMPT : ''
+      return executionScope === 'project-thread'
+        ? gateCuaDriverBehaviorPrompt(
+            DEFAULT_AGENT_BEHAVIOR_PROMPT,
+            behaviorDriver?.capabilities.nativeUtilities?.includes('computer_use') === true
+          )
+        : ''
     }
   }
 
@@ -6772,6 +6834,7 @@ export class ChatEngine {
     // A steer is the latest user expression in the running turn   keep it (and
     // its referenced selections) as the memory signal for when the turn ends,
     // replacing the message that originally dispatched the turn.
+    const previousPendingMemoryDecision = this.pendingMemoryDecisions.get(activeSessionId)
     this.pendingMemoryDecisions.set(activeSessionId, {
       userMessage: text,
       settings: steerSettings,
@@ -6866,6 +6929,14 @@ export class ChatEngine {
         sessionId: activeSessionId,
         error: rawErrorMessage(error)
       })
+      if (previousPendingMemoryDecision) {
+        this.pendingMemoryDecisions.set(activeSessionId, previousPendingMemoryDecision)
+      } else {
+        this.pendingMemoryDecisions.delete(activeSessionId)
+      }
+      this.sessionStatuses.set(activeSessionId, { state: 'idle' })
+      this.handleSessionIdleSignal(activeSessionId)
+      await this.awaitSessionIdleFinalization(activeSessionId)
       return deliverAsRegularSend()
     }
     return withoutTransportParts(userMessage)
@@ -7607,42 +7678,43 @@ export class ChatEngine {
     // completed. Attribute the new checkpoint to that user message   label and
     // source id inherited from the thread's latest checkpoint   so the file
     // changes card reports the user's prompt, never the hidden internal text.
-    const checkpointPromise: Promise<string | undefined> = planningSpecTurn
-      ? Promise.resolve(undefined)
-      : this.checkpointManager
-          .getLatestCompleted(projectId, threadId)
-          .catch((error: unknown) => {
-            Logger.dev('Checkpoint attribution lookup failed:', error)
-            return null
-          })
-          .then((previous) =>
-            this.checkpointManager.beginTurn(
-              projectId,
-              threadId,
-              projectPath,
-              origin === 'internal' && previous
-                ? previous.label
-                : text.slice(0, 80) || 'Agent turn',
-              project.changeTrackingMode === 'git',
-              origin === 'internal' && previous?.sourceMessageId
-                ? previous.sourceMessageId
-                : messageId
-            )
-          )
-          .then((checkpoint) => checkpoint.id)
-          .catch((error: unknown) => {
-            if (!(error instanceof CheckpointLimitError)) throw error
-            Logger.info('Checkpoint skipped because the project exceeds snapshot limits', {
-              projectId,
-              threadId,
-              detail: error.message
+    const checkpointPromise: Promise<string | undefined> =
+      planningSpecTurn || (isChatThread && !chatFileSystemEnabled)
+        ? Promise.resolve(undefined)
+        : this.checkpointManager
+            .getLatestCompleted(projectId, threadId)
+            .catch((error: unknown) => {
+              Logger.dev('Checkpoint attribution lookup failed:', error)
+              return null
             })
-            this.broadcastToast(
-              'Rollback checkpoint skipped because this project exceeds the snapshot limit. The agent will continue normally.',
-              'info'
+            .then((previous) =>
+              this.checkpointManager.beginTurn(
+                projectId,
+                threadId,
+                projectPath,
+                origin === 'internal' && previous
+                  ? previous.label
+                  : text.slice(0, 80) || 'Agent turn',
+                project.changeTrackingMode === 'git',
+                origin === 'internal' && previous?.sourceMessageId
+                  ? previous.sourceMessageId
+                  : messageId
+              )
             )
-            return undefined
-          })
+            .then((checkpoint) => checkpoint.id)
+            .catch((error: unknown) => {
+              if (!(error instanceof CheckpointLimitError)) throw error
+              Logger.info('Checkpoint skipped because the project exceeds snapshot limits', {
+                projectId,
+                threadId,
+                detail: error.message
+              })
+              this.broadcastToast(
+                'Rollback checkpoint skipped because this project exceeds the snapshot limit. The agent will continue normally.',
+                'info'
+              )
+              return undefined
+            })
     const utilityBudgetContext: UtilityTurnBudgetContext = {
       selectedModelInputTokens: inputBudget,
       composedTurnTokens: earlyLayers.totalTokens,
@@ -7698,12 +7770,17 @@ export class ChatEngine {
       transportPromise
     ])
     const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
+    const chatArtifactRoot = this.storage.resolve(chatThreadArtifactDirectory(threadId))
     const generatedArtifactPrompt = artifactInstruction(
       targetThread ?? {
         projectId,
         id: threadId,
         title: 'current-work',
         featureSlug: undefined
+      },
+      {
+        chatArtifactRoot,
+        chatFileSystemMode: isChatThread && chatFileSystemEnabled
       }
     )
     const parkedLifecycleInstruction = lifecycleParked
@@ -7719,7 +7796,16 @@ export class ChatEngine {
     // hidden context consumed.
     const brainstormingTurn = planningSpecTurn
     const chatSystemPrompt = isChatThread
-      ? await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat')
+      ? [
+          await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat'),
+          chatFileSystemEnabled
+            ? ''
+            : chatFilesystemBoundaryInstruction(
+                this.storage.resolve(chatThreadArtifactDirectory(threadId))
+              )
+        ]
+          .filter(Boolean)
+          .join('\n\n')
       : ''
     const brainstormDiscussionPrompt = brainstormingTurn
       ? [
@@ -8003,6 +8089,7 @@ export class ChatEngine {
         settings,
         text: driverText,
         attachments,
+        readOnly: isChatThread && !chatFileSystemEnabled,
         systemPrompt:
           composeTurnSystemPrompt({
             chatPrompt: chatSystemPrompt,
@@ -10540,6 +10627,17 @@ export class ChatEngine {
     this.activeLoopRuns.delete(`${projectId}:${threadId}`)
     this.activeAchievementAuditorEnsures.delete(`${projectId}:${threadId}`)
     this.activeAchievementAuditRuns.delete(`${projectId}:${threadId}`)
+
+    // The thread's own artifact scratch directory (and its legacy inbox-image
+    // root) is per-thread app data; it goes away with the thread.
+    for (const directory of [
+      chatThreadArtifactDirectory(threadId),
+      join(LEGACY_CHAT_ARTIFACTS_DIRECTORY, threadId)
+    ]) {
+      void rm(this.storage.resolve(directory), { recursive: true, force: true }).catch((error) =>
+        Logger.dev('Thread artifact directory cleanup was incomplete:', error)
+      )
+    }
   }
 
   /** Reply to a pending permission request (from the UI permission card). */
@@ -10564,10 +10662,12 @@ export class ChatEngine {
     }
     const pending = this.pendingPermissions.get(requestId)
     if (!pending || pending.session.projectId !== projectId) {
-      throw new Error(`Permission request is no longer pending: ${requestId}`)
+      Logger.dev(`Ignoring reply for resolved permission request: ${requestId}`)
+      return
     }
 
-    const driver = this.driverForRuntime(pending.driverId, pending.session.accountId)
+    const driver =
+      pending.driver ?? this.driverForRuntime(pending.driverId, pending.session.accountId)
     if (!driver) throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
     if (
       pending.policy.approval.expiresAt !== undefined &&
@@ -10595,29 +10695,29 @@ export class ChatEngine {
     // abort and no re-prompt, both of which used to interrupt the harness's
     // continuation of the current turn.
     const resolvedReply = alternativeInstruction !== undefined ? 'reject' : reply
-    await driver.replyPermission(
-      pending.session.projectPath,
-      requestId,
-      resolvedReply,
-      alternativeInstruction,
-      pending.request.sessionId
-    )
+    try {
+      await driver.replyPermission(
+        pending.session.projectPath,
+        requestId,
+        resolvedReply,
+        alternativeInstruction,
+        pending.request.sessionId
+      )
+    } catch (error) {
+      if (!(error instanceof PermissionRequestGoneError)) throw error
+      this.pendingPermissions.delete(requestId)
+      await this.recordPermissionDecision(pending, resolvedReply, 'user:stale-request')
+      // The decision cannot be delivered after the driver's blocking request
+      // disappears. Never pretend the turn resumed: terminate it cleanly so a
+      // stale approval or rejection cannot leave a tool call spinning forever.
+      await this.interruptRejectedPermission(pending, driver)
+      Logger.dev(`Reconciled resolved permission request: ${requestId}`)
+      return
+    }
     await this.recordPermissionDecision(pending, resolvedReply, 'user')
     this.pendingPermissions.delete(requestId)
     if (reply === 'reject' && alternativeInstruction === undefined) {
-      // Plain reject: cancel the blocked turn and finalize the interrupted
-      // thread. The abort emits a `session.idle` for the cancelled run, which
-      // finalizes this interrupted turn's checkpoint.
-      this.userAbortedSessions.add(pending.request.sessionId)
-      await driver.abort(pending.session.projectPath, pending.request.sessionId)
-      this.clearPendingQuestionsForSession(pending.request.sessionId)
-      this.clearPendingPermissionsForSession(pending.request.sessionId)
-      await this.threadManager.setStatus(
-        pending.session.projectId,
-        pending.session.threadId,
-        'interrupted',
-        { read: true }
-      )
+      await this.interruptRejectedPermission(pending, driver)
       return
     }
     await this.threadManager.setStatus(
@@ -10652,6 +10752,26 @@ export class ChatEngine {
         'user'
       )
     }
+  }
+
+  /** Stop a turn after the user plainly rejects its blocked action. */
+  private async interruptRejectedPermission(
+    pending: PendingPermissionInfo,
+    driver: HarnessDriver
+  ): Promise<void> {
+    // The abort emits `session.idle`, finalizing the interrupted checkpoint.
+    // This must also run when the driver's dialog disappeared before the
+    // renderer reply arrived, otherwise the blocked tool turn remains active.
+    this.userAbortedSessions.add(pending.request.sessionId)
+    await driver.abort(pending.session.projectPath, pending.request.sessionId)
+    this.clearPendingQuestionsForSession(pending.request.sessionId)
+    this.clearPendingPermissionsForSession(pending.request.sessionId)
+    await this.threadManager.setStatus(
+      pending.session.projectId,
+      pending.session.threadId,
+      'interrupted',
+      { read: true }
+    )
   }
 
   /** List unresolved permission requests for renderer reconnect recovery. */
@@ -13367,11 +13487,9 @@ export class ChatEngine {
         : []
     if (brainstormWriteRoute) {
       featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
-      const revisionRelativePath = join(
-        featureArtifactDirectory(featureSlug),
-        'versions',
-        `session-${Date.now()}-brainstorm.md`
-      ).replace(/\\/gu, '/')
+      const revisionRelativePath = toPosixPath(
+        join(featureArtifactDirectory(featureSlug), 'versions', `session-${Date.now()}-brainstorm.md`)
+      )
       revisionPathInstruction = [
         '',
         'Session-report revision path (write the report Markdown to EXACTLY this project-relative path, creating parent directories as needed):',
@@ -18557,7 +18675,11 @@ export class ChatEngine {
   }
 
   /** Process an event from a driver: apply permission policy, then broadcast. */
-  private handleDriverEvent(driverId: string, event: AgentEvent): void {
+  private handleDriverEvent(
+    driverId: string,
+    event: AgentEvent,
+    sourceDriver?: HarnessDriver
+  ): void {
     // A driver finished enriching its catalog in the background (e.g. Cline's
     // remote list). Re-merge every project we already exposed a catalog for and
     // push the fresher result so open pickers update without re-opening.
@@ -18949,7 +19071,7 @@ export class ChatEngine {
 
     // Permission events go through the policy filter before reaching the UI.
     if (event.type === 'permission.asked') {
-      void this.handlePermissionAsked(driverId, event).catch((error) =>
+      void this.handlePermissionAsked(driverId, event, sourceDriver).catch((error) =>
         Logger.error('Permission request registration failed:', error)
       )
       return
@@ -19007,7 +19129,12 @@ export class ChatEngine {
       // A deliberate user stop must never surface as a session error.
       if (!this.userAbortedSessions.has(event.sessionId)) {
         const issue: AgentProviderIssue =
-          event.issue ?? this.fallbackProviderIssue(driverId, event.error ?? 'Agent session failed')
+          event.issue ??
+          this.fallbackProviderIssue(
+            driverId,
+            event.error ?? 'Agent session failed',
+            event.rawError
+          )
         if (isUsageResetWaitIssue(issue)) {
           // Unified contract: a usage/rate-limit reset is a scheduled wait, not
           // a failure. Re-surface the reset-wait as a `waiting` card and let
@@ -19044,7 +19171,7 @@ export class ChatEngine {
         Logger.dev('compaction message errored (session stays healthy):', event.error)
       } else if (!this.userAbortedSessions.has(event.sessionId)) {
         const issue: AgentProviderIssue =
-          event.issue ?? this.fallbackProviderIssue(driverId, event.error)
+          event.issue ?? this.fallbackProviderIssue(driverId, event.error, event.rawError)
         if (isUsageResetWaitIssue(issue)) {
           // The failed message still broadcasts below; the provider card is
           // replaced by the unified waiting state instead of an error.
@@ -19795,10 +19922,13 @@ export class ChatEngine {
   ): void {
     if (event.type === 'message.part.updated') {
       const partPrefix = `${event.sessionId}:${event.part.messageID}:${event.part.id}`
-      for (const key of this.pendingStreamBroadcasts.keys()) {
-        if (key.startsWith(`delta:${partPrefix}:`)) this.pendingStreamBroadcasts.delete(key)
-      }
-      this.pendingStreamBroadcasts.set(`part:${partPrefix}`, event)
+      const key = `part:${partPrefix}`
+      // Keep queued deltas and deliver the latest snapshot after them. Some
+      // harnesses finish reasoning with a shorter or summary-only snapshot;
+      // deleting the deltas here permanently cut text out of the renderer.
+      // Reinsert an existing key so Map iteration keeps causal order.
+      this.pendingStreamBroadcasts.delete(key)
+      this.pendingStreamBroadcasts.set(key, event)
     } else if (event.type === 'message.part.delta') {
       const key = `delta:${event.sessionId}:${event.messageId}:${event.partId}:${event.field}`
       const pending = this.pendingStreamBroadcasts.get(key)
@@ -20308,19 +20438,26 @@ export class ChatEngine {
   /**
    * The file-access scope for a permission request in a chat session.
    *
-   * Chats (inbox threads) get an attachment allowlist: every file the user
-   * attached across the conversation is always readable. When File System mode
-   * is off, the chat is also restricted to exactly those attached files   any
-   * other path must surface a permission prompt. File-System-on chats keep the
-   * normal project-root + protected-path rules but still auto-allow attached
-   * files regardless of where they live. Non-chat threads are untouched.
+   * Every session gets the thread's own `chats-artifacts/<threadId>` artifact
+   * directory as a pre-authorized scratch path: non-destructive, path-scoped
+   * file operations inside it never prompt, regardless of permission level or
+   * File System mode.
+   *
+   * Chats (inbox threads) additionally get a read allowlist containing every
+   * user attachment plus the shared and active-harness skill roots. When File
+   * System mode is off, safe read/list/search operations are restricted to
+   * those paths. Skill access never grants writes or shell commands.
+   * File-System-on chats keep the normal project-root + protected-path rules
+   * while retaining these read-only exceptions.
    */
   private async chatPermissionScope(info: SessionInfo): Promise<{
     allowedPaths: string[]
+    scratchPaths: string[]
     restrictToAllowed: boolean
   }> {
     const isChat = info.projectId === INBOX_PROJECT_ID
-    if (!isChat) return { allowedPaths: [], restrictToAllowed: false }
+    const scratchPaths = [this.storage.resolve(chatThreadArtifactDirectory(info.threadId))]
+    if (!isChat) return { allowedPaths: [], scratchPaths, restrictToAllowed: false }
 
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
     const fileSystemMode = thread?.settings?.fileSystemMode === true
@@ -20329,11 +20466,29 @@ export class ChatEngine {
     // this stays correct without re-scanning on every permission request.
     const cached = this.chatAttachmentAllowlists.get(info.threadId)
     if (cached === undefined) {
-      const allowedPaths = await this.collectChatAttachmentPaths(info)
-      this.chatAttachmentAllowlists.set(info.threadId, allowedPaths)
-      return { allowedPaths, restrictToAllowed: !fileSystemMode }
+      const attachmentPaths = await this.collectChatAttachmentPaths(info)
+      this.chatAttachmentAllowlists.set(info.threadId, attachmentPaths)
+      return {
+        allowedPaths: [...attachmentPaths, ...this.chatSkillPaths(info.driverId)],
+        scratchPaths,
+        restrictToAllowed: !fileSystemMode
+      }
     }
-    return { allowedPaths: cached, restrictToAllowed: !fileSystemMode }
+    return {
+      allowedPaths: [...cached, ...this.chatSkillPaths(info.driverId)],
+      scratchPaths,
+      restrictToAllowed: !fileSystemMode
+    }
+  }
+
+  /** Global skill roots readable by a chat without enabling File System mode. */
+  private chatSkillPaths(driverId: string): string[] {
+    const paths = new Set([SHARED_GLOBAL_SKILL_PATH, harnessGlobalSkillPath(driverId)])
+    return [...paths]
+      .filter((path): path is string => path !== undefined)
+      .map((path) =>
+        path === '~' ? homedir() : path.startsWith('~/') ? join(homedir(), path.slice(2)) : path
+      )
   }
 
   /** Absolute local paths of every file the user attached to a chat thread. */
@@ -20353,7 +20508,8 @@ export class ChatEngine {
   /** Resolve a permission request per the thread's permission level. */
   private async handlePermissionAsked(
     driverId: string,
-    event: Extract<AgentEvent, { type: 'permission.asked' }>
+    event: Extract<AgentEvent, { type: 'permission.asked' }>,
+    sourceDriver?: HarnessDriver
   ): Promise<void> {
     const { sessionId, permission: request } = event
     const info = this.sessionRegistry.get(sessionId)
@@ -20364,11 +20520,12 @@ export class ChatEngine {
     }
 
     const commands = permissionCommands(request.metadata)
-    const { allowedPaths, restrictToAllowed } = await this.chatPermissionScope(info)
+    const { allowedPaths, scratchPaths, restrictToAllowed } = await this.chatPermissionScope(info)
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
       mode: level,
       ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
+      ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
       ...(restrictToAllowed ? { restrictToAllowed } : {})
     }).evaluate({
       permission: request.permission,
@@ -20402,6 +20559,7 @@ export class ChatEngine {
       : 'planning'
     const pending: PendingPermissionInfo = {
       driverId,
+      driver: sourceDriver,
       session: info,
       request: enrichedRequest,
       policy,
@@ -20460,7 +20618,8 @@ export class ChatEngine {
     reply: PermissionReply,
     decidedBy: string
   ): Promise<void> {
-    const driver = this.driverForRuntime(pending.driverId, pending.session.accountId)
+    const driver =
+      pending.driver ?? this.driverForRuntime(pending.driverId, pending.session.accountId)
     if (!driver) return
     await driver.replyPermission(
       pending.session.projectPath,
@@ -22520,9 +22679,10 @@ export class ChatEngine {
     // Notify renderers that the live file list changed
     this.broadcast({
       type: 'checkpoint.liveUpdated',
+      sessionId: session.sessionId,
       projectId: session.projectId,
       threadId: session.threadId
-    } as unknown as AgentEvent)
+    })
   }
 
   // ─── Session registry ─────────────────────────────────────────────────────
@@ -22539,6 +22699,7 @@ export class ChatEngine {
   ): void {
     const existing = this.sessionRegistry.get(sessionId)
     this.sessionRegistry.set(sessionId, {
+      sessionId,
       projectId,
       threadId,
       projectPath,

@@ -79,11 +79,27 @@ class CitationPathsState {
     const project = workspaceState.activeProject
     if (
       !project ||
-      project.id === INBOX_PROJECT_ID ||
       project.source !== 'local' ||
-      !project.path.trim() ||
-      candidates.length === 0
+      candidates.length === 0 ||
+      (project.id !== INBOX_PROJECT_ID && !project.path.trim())
     ) {
+      return
+    }
+    // Inbox chats have no project root; absolute artifact citations inside the
+    // open thread's `chats-artifacts/<threadId>/` directory are still probed
+    // externally so they can become clickable links in the conversation.
+    if (project.id === INBOX_PROJECT_ID) {
+      const threadId =
+        workspaceState.selectedThread?.projectId === project.id
+          ? workspaceState.selectedThread.id
+          : null
+      if (!threadId) return
+      const artifactCandidates = candidates.filter(
+        (candidate) =>
+          isAbsoluteCitationPath(candidate) &&
+          candidate.includes(`/chats-artifacts/${threadId}/`)
+      )
+      if (artifactCandidates.length > 0) this.ensureExternalChecked(artifactCandidates)
       return
     }
     const external: string[] = []

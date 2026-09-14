@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { DropdownMenu, Popover } from 'bits-ui'
+import { toast } from 'svelte-sonner'
   import {
     Brain,
     Check,
@@ -18,6 +19,7 @@
     Zap,
     X
   } from '@lucide/svelte'
+  import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { modelKey, parseModelKey } from '$lib/model-keys'
@@ -139,7 +141,7 @@
   let search = $state('')
   let searchInput: HTMLInputElement | undefined
   let modelList: HTMLDivElement | undefined
-  let accounts = $state.raw<HarnessAccount[]>([])
+  let accounts = $derived(harnessAccountCache.cached(harnessId) ?? [])
   let accountLoading = $state(false)
   let accountLoadGeneration = 0
   const collapsedGroups = new SvelteSet<string>()
@@ -181,7 +183,7 @@
    * means the model does not reason and the thinking controls stay hidden.
    */
   let effectiveThinkingPresets = $derived(thinkingPresets ?? selectedModel?.thinkingPresets ?? [])
-  /** Thinking controls appear whenever the selected model declares presets  
+  /** Thinking controls appear whenever the selected model declares presets
    *  the thinking level depends on the model, not on the caller's opt-in. */
   let supportsThinking = $derived(effectiveThinkingPresets.length > 0)
   /**
@@ -203,15 +205,21 @@
       effectiveThinkingPresets[0]?.label ??
       ''
   )
+  /** Custom base URL providers never carry accounts: their credentials live in
+   *  the provider record itself, so the user always sees the plain provider. */
+  let isCustomProvider = $derived(isCodeInOvenCustomProviderId(providerId))
   let providerAccounts = $derived(
-    accounts.filter(
-      (account) => account.harnessId === harnessId && account.providerId === providerId
-    )
+    isCustomProvider
+      ? []
+      : accounts.filter(
+          (account) => account.harnessId === harnessId && account.providerId === providerId
+        )
   )
   let effectiveAccountId = $derived(
     accountId && providerAccounts.some((account) => account.id === accountId)
       ? accountId
-      : (providerAccounts[0]?.id ?? `${harnessId}.default`)
+      : ((providerAccounts.find((account) => account.isDefault) ?? providerAccounts[0])?.id ??
+        `${harnessId}.default`)
   )
   let selectedAccount = $derived(
     providerAccounts.find((account) => account.id === effectiveAccountId)
@@ -542,10 +550,9 @@
     const generation = ++accountLoadGeneration
     accountLoading = true
     try {
-      const loaded = await harnessAccountCache.list(targetHarnessId, force)
-      if (generation === accountLoadGeneration) accounts = loaded
+      await harnessAccountCache.list(targetHarnessId, force)
     } catch {
-      if (generation === accountLoadGeneration) accounts = []
+      // Preserve the last cached account list when a refresh probe fails.
     } finally {
       if (generation === accountLoadGeneration) accountLoading = false
     }
@@ -849,20 +856,20 @@
     const matchingAccounts = availableAccounts.filter(
       (account) => account.harnessId === nextHarnessId && account.providerId === nextProviderId
     )
-    const nextAccountId =
-      matchingAccounts.find((account) => account.id === accountId)?.id ??
-      matchingAccounts[0]?.id ??
-      `${nextHarnessId}.default`
+    // Custom base URL providers run without accounts: omitting the id keeps the
+    // harness-level `${harness}.default` fallback from attaching a random
+    // account of the whole harness to the provider's turns.
+    const nextAccountId = isCodeInOvenCustomProviderId(nextProviderId)
+      ? undefined
+      : (matchingAccounts.find((account) => account.id === accountId)?.id ??
+        (matchingAccounts.find((account) => account.isDefault) ?? matchingAccounts[0])?.id ??
+        `${nextHarnessId}.default`)
     onSelect(nextProviderId, nextModelId, nextHarnessId, nextAccountId)
     if (nextHarnessId !== harnessId) {
       // Invalidate any in-flight loadAccounts for the previous harness before
-      // assigning the cross-harness list. A popover-open reload (forced, and
-      // potentially slow because it re-syncs harness auth) that resolves after
-      // this point would otherwise overwrite `accounts` with the previous
-      // harness's list, emptying `providerAccounts` and hiding the account
-      // segment for a provider that does have accounts.
+      // the parent applies the new harness prop. The shared reactive cache now
+      // owns the list, so the prop change exposes the warmed accounts directly.
       accountLoadGeneration++
-      accounts = availableAccounts
       accountLoading = false
     }
     // Thinking level depends on the model: resolve a level the new model
@@ -886,6 +893,19 @@
   function chooseAccount(account: HarnessAccount): void {
     onSelect(providerId, modelId, harnessId, account.id)
     onSelectAccount?.(account)
+  }
+
+  /** Mark an account as its harness's default for this provider. */
+  async function setDefaultAccount(account: HarnessAccount): Promise<void> {
+    try {
+      await harnessAccountCache.setDefault(account)
+    } catch (setDefaultError) {
+      toast.error(
+        setDefaultError instanceof Error
+          ? setDefaultError.message
+          : `The default account was not saved.`
+      )
+    }
   }
 
   function toggleGroup(id: string): void {
@@ -1084,6 +1104,27 @@
                       <span class="w-[11px] shrink-0" aria-hidden="true"></span>
                     {/if}
                     <span class="min-w-0 flex-1 truncate">{account.label}</span>
+                    {#if account.isDefault}
+                      <span
+                        class="shrink-0 rounded bg-raised px-1 text-[0.625rem] font-medium text-muted"
+                        title="Default account for this provider"
+                      >
+                        Default
+                      </span>
+                    {:else if providerAccounts.length > 1}
+                      <button
+                        type="button"
+                        class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-accent"
+                        title={`Set ${account.label} as the default account for this provider`}
+                        aria-label={`Set ${account.label} as the default account for this provider`}
+                        onclick={(event) => {
+                          event.stopPropagation()
+                          void setDefaultAccount(account)
+                        }}
+                      >
+                        <Star size={11} />
+                      </button>
+                    {/if}
                   </DropdownMenu.Item>
                 {/each}
               {/if}

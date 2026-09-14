@@ -196,6 +196,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
       - name: Determine release tag
         id: tag
         run: |
@@ -219,6 +224,20 @@ jobs:
           echo "SHA256SUMS.txt:"
           cat SHA256SUMS.txt
 
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Notes cover every commit since the last published stable release,
+          # i.e. the full stable cycle including all its nightly builds. The
+          # file feeds the GitHub release body below, which the in-app
+          # updater also surfaces via electron-updater's releaseNotes.
+          if ! bun scripts/generate-release-notes.ts --channel stable --to "$GITHUB_SHA" --out release-notes.md; then
+            echo "::error::Failed to generate release notes"
+            exit 1
+          fi
+          cat release-notes.md
+
       - name: Create or update release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -241,12 +260,12 @@ jobs:
             publish_attempt=$((publish_attempt + 1))
             if gh release view "$tag" >/dev/null 2>&1; then
               gh release upload "$tag" "${files[@]}" --clobber
-              gh release edit "$tag" --title "CodeInOven $version" --prerelease=false --latest
+              gh release edit "$tag" --title "CodeInOven $version" --notes-file release-notes.md --prerelease=false --latest
             else
               gh release create "$tag" "${files[@]}" \
                 --target "$GITHUB_SHA" \
                 --title "CodeInOven $version" \
-                --generate-notes \
+                --notes-file release-notes.md \
                 --latest
             fi
             publish_exit=$?

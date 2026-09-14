@@ -745,6 +745,7 @@
               class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
               aria-label={item.ariaLabel ?? item.title ?? 'Action'}
               title={item.title}
+              data-shortcut={item.shortcut ? item.shortcut.join(',') : undefined}
               onclick={() => item.run?.()}
             >
               <ActionIcon size={15} strokeWidth={1.8} />

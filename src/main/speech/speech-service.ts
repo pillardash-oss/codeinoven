@@ -39,6 +39,7 @@ import type { SpeechUnloadOption } from '../../lib/speech/types'
 import { parseSpeechModelCatalog } from '../../lib/speech/model-catalog'
 import { collapseRepetitiveArtifacts } from '../../lib/speech/transcript-sanitizer'
 import { DEFAULT_REFINEMENT_FLAGS } from '../../lib/speech/types'
+import { posixBasename } from '../../lib/paths'
 import {
   buildParsedIdentityForValidation,
   CAPABILITY_RUNTIMES,
@@ -239,6 +240,11 @@ export class SpeechService {
       JSON.parse(await readFile(this.paths.catalogPath, 'utf8'))
     )
     await this.loadInstalledIndex()
+    // Warm the native capture worker in the background so the first voice
+    // recording starts instantly instead of paying process + audio-unit init.
+    void this.nativeCapture.warm().catch((error) => {
+      Logger.dev('Native speech capture warmup failed (non-fatal):', error)
+    })
   }
 
   /** Resolve the discover-or-download llama.cpp runtime for cleanup inference. */
@@ -1881,7 +1887,7 @@ export class SpeechService {
         familyId: 'whisper',
         capability,
         runtime: imported.runtime,
-        label: imported.importPath?.split('/').pop()?.split('\\').pop() ?? imported.artifactId,
+        label: imported.importPath ? posixBasename(imported.importPath) : imported.artifactId,
         description: `Imported model at ${imported.importPath ?? ''}`.trim(),
         tier: 'balanced',
         version: 'imported',

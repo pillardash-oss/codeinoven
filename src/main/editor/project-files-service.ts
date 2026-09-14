@@ -13,6 +13,8 @@ import {
 } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { toPosixPath } from '../../lib/paths'
+import { INBOX_PROJECT_ID } from '../../lib/types'
 import { ProjectFileIndexService } from './project-file-index-service'
 import type {
   Project,
@@ -35,6 +37,13 @@ export interface ProjectFilesProjectLookup {
 /** Resolves a managed scope's filesystem root; unhealthy scopes fail closed. */
 export interface ProjectFilesScopeRootLookup {
   resolveCompatibilityRoot(projectId: string, scopeBucketId: string): Promise<string | null>
+}
+
+/** Resolves (and creates) one chat thread's `chats-artifacts/<threadId>` root.
+ *  Chat file trees mount here: the directory is app-owned per-thread scratch
+ *  space, so resolution must not depend on a project record. */
+export interface ProjectFilesChatArtifactRootLookup {
+  resolve(threadId: string): Promise<string>
 }
 
 /** Cache/invalidation key for a (project, scope) root pair. */
@@ -63,10 +72,6 @@ async function isSymlinkedDirectoryInsideRoot(root: string, linkPath: string): P
   }
 }
 
-function toPosixPath(path: string): string {
-  return path.split(sep).join('/')
-}
-
 function revisionOf(content: Uint8Array): string {
   return createHash('sha256').update(content).digest('hex')
 }
@@ -93,15 +98,17 @@ export class ProjectFilesService {
 
   constructor(
     private readonly projects: ProjectFilesProjectLookup,
-    private readonly scopeRoots?: ProjectFilesScopeRootLookup
+    private readonly scopeRoots?: ProjectFilesScopeRootLookup,
+    private readonly chatArtifactRoots?: ProjectFilesChatArtifactRootLookup
   ) {}
 
   async listDirectory(
     projectId: string,
     relativeDirectory: string,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    threadId?: string
   ): Promise<ProjectFileEntry[]> {
-    const root = await this.projectRoot(projectId, scopeBucketId)
+    const root = await this.projectRoot(projectId, scopeBucketId, threadId)
     const directory = await this.resolveExistingPath(root, relativeDirectory, true)
     const entries = await readdir(directory, { withFileTypes: true })
     // Symlinked entries are followed so linked files and directories appear in
@@ -167,14 +174,16 @@ export class ProjectFilesService {
     projectId: string,
     query: string,
     category: 'all' | 'rules',
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    threadId?: string
   ): Promise<ProjectFileEntry[]> {
-    const root = await this.projectRoot(projectId, scopeBucketId)
+    const root = await this.projectRoot(projectId, scopeBucketId, threadId)
     const project = await this.projects.getProject(projectId)
     // Scoped searches index their own root: a worktree checkout must never
-    // share (or poison) the project-root index.
+    // share (or poison) the project-root index. Chat thread mounts get their
+    // own index key for the same reason.
     return this.fileIndex.search(
-      scopedKey(projectId, scopeBucketId),
+      threadId !== undefined ? `${projectId}::thread:${threadId}` : scopedKey(projectId, scopeBucketId),
       root,
       query,
       category,
@@ -201,10 +210,13 @@ export class ProjectFilesService {
    *  editors), so searches are instant and stay fresh without a full rebuild
    *  per search. Fire-and-forget: projects without a usable local root
    *  (remote, cloud) simply never get an index or watcher. */
-  async prewarmProject(projectId: string): Promise<void> {
+  async prewarmProject(projectId: string, threadId?: string): Promise<void> {
     try {
-      const root = await this.projectRoot(projectId)
-      await this.fileIndex.prewarm(projectId, root)
+      const root = await this.projectRoot(projectId, undefined, threadId)
+      await this.fileIndex.prewarm(
+        threadId !== undefined ? `${projectId}::thread:${threadId}` : projectId,
+        root
+      )
     } catch {
       // No local root; nothing to index or watch.
     }
@@ -341,9 +353,10 @@ export class ProjectFilesService {
   async readText(
     projectId: string,
     relativePath: string,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    threadId?: string
   ): Promise<ProjectTextFile> {
-    const root = await this.projectRoot(projectId, scopeBucketId)
+    const root = await this.projectRoot(projectId, scopeBucketId, threadId)
     const target = await this.resolveExistingPath(root, relativePath, false)
     return this.readResolvedText(target, relativePath)
   }
@@ -352,10 +365,11 @@ export class ProjectFilesService {
     projectId: string,
     relativeDirectory: string,
     name: string,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    threadId?: string
   ): Promise<ProjectFileEntry> {
     return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId, scopeBucketId)
+      const root = await this.projectRoot(projectId, scopeBucketId, threadId)
       const target = await this.resolveNewPath(root, relativeDirectory, name)
       const file = await open(
         target.absolutePath,
@@ -372,10 +386,11 @@ export class ProjectFilesService {
     projectId: string,
     relativeDirectory: string,
     name: string,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    threadId?: string
   ): Promise<ProjectFileEntry> {
     return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId, scopeBucketId)
+      const root = await this.projectRoot(projectId, scopeBucketId, threadId)
       const target = await this.resolveNewPath(root, relativeDirectory, name)
       await mkdir(target.absolutePath)
       this.invalidateProject(projectId, scopeBucketId)
@@ -387,10 +402,11 @@ export class ProjectFilesService {
     projectId: string,
     relativePath: string,
     name: string,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    threadId?: string
   ): Promise<ProjectFileEntry> {
     return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId, scopeBucketId)
+      const root = await this.projectRoot(projectId, scopeBucketId, threadId)
       const source = await this.resolveExistingEntry(root, relativePath)
       const target = await this.resolveNewPath(root, toPosixPath(dirname(relativePath)), name)
       if (source.kind === 'directory') {
@@ -412,9 +428,10 @@ export class ProjectFilesService {
   async resolveForTrash(
     projectId: string,
     relativePath: string,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    threadId?: string
   ): Promise<string> {
-    const root = await this.projectRoot(projectId, scopeBucketId)
+    const root = await this.projectRoot(projectId, scopeBucketId, threadId)
     return (await this.resolveExistingEntry(root, relativePath)).absolutePath
   }
 
@@ -425,11 +442,17 @@ export class ProjectFilesService {
     destinationDirectory: string,
     mode: ProjectFileTransferMode,
     sourceScopeBucketId?: string,
-    destinationScopeBucketId?: string
+    destinationScopeBucketId?: string,
+    sourceThreadId?: string,
+    destinationThreadId?: string
   ): Promise<ProjectFileEntry> {
     return this.runMutationExclusive(async () => {
-      const sourceRoot = await this.projectRoot(sourceProjectId, sourceScopeBucketId)
-      const destinationRoot = await this.projectRoot(destinationProjectId, destinationScopeBucketId)
+      const sourceRoot = await this.projectRoot(sourceProjectId, sourceScopeBucketId, sourceThreadId)
+      const destinationRoot = await this.projectRoot(
+        destinationProjectId,
+        destinationScopeBucketId,
+        destinationThreadId
+      )
       const source = await this.resolveExistingEntry(sourceRoot, sourcePath)
       if (sourceProjectId === destinationProjectId) {
         const destinationPosix = toPosixPath(destinationDirectory)
@@ -511,10 +534,11 @@ export class ProjectFilesService {
     projectId: string,
     sourcePaths: string[],
     destinationDirectory: string,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    threadId?: string
   ): Promise<ProjectFileEntry[]> {
     return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId, scopeBucketId)
+      const root = await this.projectRoot(projectId, scopeBucketId, threadId)
       const destination = await this.resolveExistingPath(root, destinationDirectory, true)
       const imported: ProjectFileEntry[] = []
       for (const sourcePath of sourcePaths) {
@@ -533,10 +557,11 @@ export class ProjectFilesService {
     projectId: string,
     sourcePaths: string[],
     destinationDirectory: string,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    threadId?: string
   ): Promise<ProjectFileDropResult[]> {
     return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId, scopeBucketId)
+      const root = await this.projectRoot(projectId, scopeBucketId, threadId)
       const destination = await this.resolveExistingPath(root, destinationDirectory, true)
       const dropped: ProjectFileDropResult[] = []
       const candidates: string[] = []
@@ -734,9 +759,10 @@ export class ProjectFilesService {
   async getInfo(
     projectId: string,
     relativePath: string,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    threadId?: string
   ): Promise<ProjectFileInfo> {
-    const root = await this.projectRoot(projectId, scopeBucketId)
+    const root = await this.projectRoot(projectId, scopeBucketId, threadId)
     const entry = await this.resolveExistingEntry(root, relativePath)
     const metadata = await lstat(entry.absolutePath)
     return {
@@ -754,9 +780,10 @@ export class ProjectFilesService {
   async resolveForExternalEditor(
     projectId: string,
     relativePath: string,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    threadId?: string
   ): Promise<string> {
-    const root = await this.projectRoot(projectId, scopeBucketId)
+    const root = await this.projectRoot(projectId, scopeBucketId, threadId)
     return this.resolveExistingPath(root, relativePath, false)
   }
 
@@ -765,12 +792,13 @@ export class ProjectFilesService {
     relativePath: string,
     content: string,
     expectedRevision: string,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    threadId?: string
   ): Promise<ProjectTextFile> {
-    const key = `${projectId}:${scopeBucketId ?? ''}:${relativePath}`
+    const key = `${projectId}:${scopeBucketId ?? ''}:${threadId ?? ''}:${relativePath}`
     return this.runMutationExclusive(() =>
       this.runWriteExclusive(key, async () => {
-        const root = await this.projectRoot(projectId, scopeBucketId)
+        const root = await this.projectRoot(projectId, scopeBucketId, threadId)
         const target = await this.resolveExistingPath(root, relativePath, false)
         const current = await this.readResolvedText(target, relativePath)
         if (current.revision !== expectedRevision) {
@@ -822,7 +850,26 @@ export class ProjectFilesService {
     )
   }
 
-  private async projectRoot(projectId: string, scopeBucketId?: string): Promise<string> {
+  private async projectRoot(
+    projectId: string,
+    scopeBucketId?: string,
+    threadId?: string
+  ): Promise<string> {
+    // A chat thread's artifact directory is its own mount root: per-thread,
+    // app-owned, created on demand, and independent of any project record.
+    if (threadId !== undefined && projectId === INBOX_PROJECT_ID && this.chatArtifactRoots) {
+      const cacheKey = `${projectId}::thread:${threadId}`
+      const cached = this.projectRoots.get(cacheKey)
+      if (cached) return cached
+      const root = await realpath(await this.chatArtifactRoots.resolve(threadId))
+      const metadata = await lstat(root)
+      if (!metadata.isDirectory()) {
+        throw new Error('Chat artifact root is not a directory')
+      }
+      this.projectRoots.set(cacheKey, root)
+      return root
+    }
+
     const cacheKey = scopedKey(projectId, scopeBucketId)
     const cached = this.projectRoots.get(cacheKey)
     if (cached) return cached

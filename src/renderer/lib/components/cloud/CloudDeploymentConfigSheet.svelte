@@ -104,11 +104,21 @@
   )
 
   /** Only providers with an account attached to this project can host monitored
-   *  containers, since resolving a container requires an account credential. */
-  let canAddContainer = $derived(attachedProviderKinds.length > 0)
+   *  containers, since resolving a container requires an account credential.
+   *  Kinds that only have a global (unattached) account are included too:
+   *  selecting one attaches the account(s) automatically instead of forcing a
+   *  detour through the provider flow. */
+  let canAddContainer = $derived(
+    attachedProviderKinds.length > 0 ||
+      PROVIDER_KINDS.some((kind) => cloudAccountsState.accountsByProvider(kind).length > 0)
+  )
 
   let containerProviders = $derived(
-    PROVIDER_KINDS.filter((kind) => attachedProviderKinds.includes(kind))
+    PROVIDER_KINDS.filter(
+      (kind) =>
+        attachedProviderKinds.includes(kind) ||
+        cloudAccountsState.accountsByProvider(kind).length > 0
+    )
   )
 
   /** Accounts attached to this project for the container flow's provider. */
@@ -238,11 +248,15 @@
       return
     }
     selectedKind = kind
-    createMode = 'create'
+    // Surface existing accounts immediately: default to the reuse picker when
+    // this provider already has accounts (preselecting a lone one) instead of
+    // hiding it behind the "Use existing" toggle.
+    const existing = cloudAccountsState.accountsByProvider(kind)
+    createMode = hasProject && existing.length > 0 ? 'reuse' : 'create'
+    selectedExistingAccountId = existing.length === 1 ? existing[0].id : ''
     accountLabel = ''
     baseUrl = ''
     token = ''
-    selectedExistingAccountId = ''
   }
 
   function emptyConfig(projectIdValue: string): CloudDeploymentConfig {
@@ -375,6 +389,40 @@
     returnToContainer = true
     mode = 'provider'
     selectProvider(containerProviderKind)
+  }
+
+  /** React to a provider choice in the container flow: if the provider has
+   *  global accounts that are not attached to this project yet, attach them
+   *  right away (what the provider flow's "Use existing" does) so the account
+   *  picker and container list populate without extra steps. */
+  async function onContainerProviderChange(): Promise<void> {
+    if (containerProviderKind === '') return
+    const attached =
+      config?.project.providerAccounts?.[containerProviderKind]?.attachedAccountIds ?? []
+    if (projectId && attached.length === 0) {
+      const candidates = cloudAccountsState.accountsByProvider(containerProviderKind)
+      if (candidates.length > 0) {
+        try {
+          for (const candidate of candidates) {
+            config = await cloudAccountsState.attachAccount(
+              projectId,
+              containerProviderKind,
+              candidate.id
+            )
+          }
+          toast.success(
+            candidates.length === 1
+              ? `Attached “${candidates[0].label}”.`
+              : `Attached ${candidates.length} accounts.`
+          )
+        } catch {
+          // The container list load below reflects the actual state; the
+          // provider flow remains available for a manual attach.
+        }
+      }
+    }
+    containerAccountId = pickDefaultContainerAccount(containerProviderKind)
+    await loadAvailableContainers()
   }
 
   async function loadAvailableContainers(): Promise<void> {
@@ -877,10 +925,7 @@
           <select
             class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
             bind:value={containerProviderKind}
-            onchange={() => {
-              containerAccountId = pickDefaultContainerAccount(containerProviderKind)
-              void loadAvailableContainers()
-            }}
+            onchange={() => void onContainerProviderChange()}
           >
             <option value="">Select a provider</option>
             {#each containerProviders as kind (kind)}

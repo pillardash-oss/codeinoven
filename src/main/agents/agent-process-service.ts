@@ -16,7 +16,7 @@ const OWNERSHIP_PROBE_CHUNK = 64
 /** Key under which app-wide roots (e.g. the shared opencode server) are tracked. */
 const APP_SCOPE = '__codeinoven_app_scope__'
 
-interface ProcessSnapshotEntry {
+export interface ProcessSnapshotEntry {
   pid: number
   parentPid: number
   command: string
@@ -459,6 +459,13 @@ export class AgentProcessService implements AgentProcessObserver {
    * orphaned, plus   on Linux   any orphaned process still carrying the marker
    * so a dev server whose root already died is reclaimed too. A user's own
    * external claude-code/opencode session is never touched.
+   *
+   * A journaled root with a still-living parent is never killed: it is owned by
+   * a live process   usually another running app instance (the journal lives in
+   * shared userData, and a sibling instance that exits while this one runs
+   * leaves its roots journaled behind). Reaping such a root would SIGTERM a
+   * harness the sibling is actively using, so the entry stays journaled for a
+   * future launch once that instance is gone.
    */
   async reapOrphans(): Promise<ReapOrphansResult> {
     if (!this.journal) return { killed: [], skipped: [] }
@@ -472,20 +479,34 @@ export class AgentProcessService implements AgentProcessObserver {
     for (const root of roots) {
       if (!alive.has(root.pid)) {
         skipped.push(root.pid)
+        this.journal.unregister(root.pid)
         continue
       }
       const parentPid = parentOf.get(root.pid) ?? 0
+      // A journaled root with a live parent is not an orphan: it still belongs
+      // to whoever spawned it (typically another running CodeInOven instance,
+      // since the journal is shared via userData and a sibling instance skips
+      // chat-engine disposal on shutdown). Killing it would SIGTERM a harness
+      // that instance is actively using. Only orphaned roots are crash
+      // leftovers and safe to reap.
+      if (!this.isOrphaned(parentPid, alive)) {
+        skipped.push(root.pid)
+        // Keep the entry journaled: if the owning instance later dies uncleanly,
+        // a future launch must still be able to reap it.
+        continue
+      }
       const owned = await this.isOwnedOrOrphaned(root.pid, parentPid, alive)
       if (owned) {
         await this.killTree(root.pid)
         killed.push(root.pid)
+        this.journal.unregister(root.pid)
       } else {
         skipped.push(root.pid)
+        this.journal.unregister(root.pid)
       }
     }
 
-    if (roots.length > 0) {
-      this.journal.clear()
+    if (killed.length > 0 || skipped.length > 0) {
       await this.journal.flush()
     }
 

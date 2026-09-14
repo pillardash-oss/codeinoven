@@ -6,6 +6,7 @@ import type {
   AssignmentValidationIssue,
   AssignmentValidationResult
 } from '../types'
+import { isAbsoluteishPath, toPosixPath } from '../paths'
 
 function requiredString(value: unknown, label: string): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -189,8 +190,8 @@ export function validateAssignment(content: AssignmentPlanContent): AssignmentVa
       }
     }
     for (const [pathIndex, path] of task.expectedFiles.entries()) {
-      const segments = path.replace(/\\/gu, '/').split('/')
-      if (path.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(path) || segments.includes('..')) {
+      const segments = toPosixPath(path).split('/')
+      if (isAbsoluteishPath(path) || segments.includes('..')) {
         issues.push({
           code: 'invalid_path',
           path: `tasks.${index}.expectedFiles.${pathIndex}`,

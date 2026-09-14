@@ -222,7 +222,9 @@
     <AlertTriangle size={16} class="mt-0.5 shrink-0 text-warning" />
     <p>
       Delete <strong class="text-foreground">{deleteTarget?.label}</strong>? Its API token will be
-      removed from secure storage and it will be detached from any project that uses it.
+      removed from secure storage, it will be detached from every project that uses it, and
+      <strong class="text-foreground">all containers monitored through it will be removed</strong>
+      from those projects. This cannot be undone.
     </p>
   </div>
 </Modal>

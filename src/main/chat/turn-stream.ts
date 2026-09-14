@@ -1,5 +1,18 @@
 import type { AgentPart } from '../../lib/types'
 
+function mergeStreamedPart(existing: AgentPart, incoming: AgentPart): AgentPart {
+  if (incoming.id !== existing.id || incoming.type !== existing.type) return incoming
+  if (incoming.type !== 'text' && incoming.type !== 'reasoning') return incoming
+  if (existing.type !== 'text' && existing.type !== 'reasoning') return incoming
+  if (
+    (incoming.text.length < existing.text.length && existing.text.startsWith(incoming.text)) ||
+    (incoming.type === 'reasoning' && !incoming.text.startsWith(existing.text))
+  ) {
+    return { ...incoming, text: existing.text }
+  }
+  return incoming
+}
+
 /**
  * Durable, append-only per-thread SSE stream log.
  *
@@ -85,9 +98,11 @@ export function foldTurnStreamEvents(
         indexById.set(part.id, parts.length)
         parts.push(part)
       } else {
-        parts[existingIndex] = part
+        parts[existingIndex] = mergeStreamedPart(parts[existingIndex], part)
       }
-      const text = part.type === 'reasoning' || part.type === 'text' ? part.text.length : 0
+      const mergedPart = parts[indexById.get(part.id) ?? parts.length - 1]
+      const text =
+        mergedPart?.type === 'reasoning' || mergedPart?.type === 'text' ? mergedPart.text.length : 0
       textBaseline.set(part.id, text)
       lastActivityTs.set(part.id, event.ts)
       continue

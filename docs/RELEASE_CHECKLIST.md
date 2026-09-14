@@ -42,7 +42,7 @@ Control who can merge, what must pass, and what runs automatically.
   - [x] Only trigger on version tags (`v*`).
   - [x] Upload checksums (`.yml`/`.sha256`) alongside installers.
 - [x] **Add code-signing secrets to GitHub Actions secrets** (never to the repo): `CSC_LINK` (cert p12, base64), `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`   all set. A `GITLEAKS_LICENSE` is also set for the org.
-- [x] **Verify the existing `quality.yml` workflow**: `check + lint + test + production build` on every PR and push to `main`. Confirm it runs on `macos-latest` and has `timeout-minutes` (it does   30).
+- [x] **Verify the existing `quality.yml` workflow**: `check + lint + test + production build` on every PR and push to `nightly`. The nightly → main promotion PR skips the heavy jobs (the same content was just fully checked and built by the nightly workflow) and runs only the cheap "Release promotion policy" gate; pushes to `main` trigger no quality run at all — `main` only ever receives nightly promotion merges.
 - [x] **Add Dependabot** (`.github/dependabot.yml`) for `bun`/npm ecosystem, weekly cadence, `main` target, and label `dependencies`.
 - [x] **Add a secret-scanning step to CI** (`gitleaks-action`) so pushes with secrets fail the build.
 - [x] **Add `concurrency` groups** to workflows so rapid PR pushes cancel superseded runs instead of stacking CI time.

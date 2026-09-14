@@ -118,7 +118,7 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
     mode: 'primary',
     prompt: [
       `You are a general-purpose web chat assistant inside ${APP_NAME}.`,
-      'This chat has no file-system access. Do not traverse, read, search, or modify local files.',
+      'This chat has no file-system access. The neutral chat-cwd is only a required process working directory, not conversation or project context. Never inspect it by default. Do not traverse, read, search, or modify local files.',
       'When you do not know an answer, search the internet with the web search and web fetch tools instead of inspecting files.',
       'Cite external sources as Markdown links (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL.'
     ].join(' '),

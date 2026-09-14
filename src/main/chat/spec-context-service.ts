@@ -1,5 +1,6 @@
 import { constants } from 'fs'
 import { basename, extname, join, relative, sep } from 'path'
+import { toPosixPath } from '../../lib/paths'
 import { pathToFileURL } from 'url'
 import { open, writeFile } from 'fs/promises'
 import { createHash } from 'crypto'
@@ -40,10 +41,6 @@ export interface SpecContextProjectLookup {
 function isWithinRoot(rootPath: string, candidatePath: string): boolean {
   const relativePath = relative(rootPath, candidatePath)
   return relativePath === '' || (!relativePath.startsWith(`..${sep}`) && relativePath !== '..')
-}
-
-function toPosixPath(path: string): string {
-  return path.split(sep).join('/')
 }
 
 async function hashFile(file: FileHandle): Promise<string> {

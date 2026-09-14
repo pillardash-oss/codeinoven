@@ -220,6 +220,18 @@
       })
 
       api.on('browser:popup:permission', function (request, context) {
+        render(request, context)
+      })
+
+      // Pull the prompt on display. First-load delivery is pull-based: an
+      // invoke reply cannot race document load state, which dropped the
+      // pushed first prompt (blank "wants to use ." shell).
+      api.invoke('browser:popupReady').then(function (context) {
+        window.__cioPull = { resolved: true, hasRequest: Boolean(context && context.request) }
+        if (context && context.request) render(context.request, context)
+      }).catch(function (error) { window.__cioPull = { rejected: String(error) } })
+
+      function render(request, context) {
         current = request
         originEl.textContent = request.origin
         permissionEl.textContent = describe(request.permission, request.mediaTypes)
@@ -240,11 +252,8 @@
         }
         var primary = document.getElementById('allow')
         if (primary instanceof HTMLElement) primary.focus()
-      })
+      }
 
-      // Announce readiness so main flushes a request that arrived while this
-      // document was still subscribing (the lost-first-event race).
-      api.invoke('browser:popupReady').catch(function () { })
     })()
   </script>
 </body>

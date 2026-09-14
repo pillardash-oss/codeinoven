@@ -195,7 +195,8 @@ async function runIteration(
     for (const phase of proof.startup.phases) requiredPhases.delete(phase.phase)
     if (requiredPhases.size > 0) {
       fail(
-        `iteration ${iteration} did not prove required startup phases: ${[...requiredPhases].join(', ')}`
+        `iteration ${iteration} did not prove required startup phases: ${[...requiredPhases].join(', ')}\n` +
+          `stdout:\n${stdout}\nstderr:\n${stderr}`
       )
     }
     const splashVisualReadyMs = phaseTime(proof, 'splash:visualReady', iteration)

@@ -1205,8 +1205,8 @@
     }
   }
 
-  function navigateToProjects(): void {
-    navigate('projects')
+  function navigateToScopedThreads(): void {
+    navigate('projects-scope')
   }
 
   async function handleProjectCreated(project: Project): Promise<void> {
@@ -1862,7 +1862,7 @@
     </div>
     {#if activeView === 'scope'}
       {#await import('$lib/components/scope/ScopeView.svelte') then { default: ScopeView }}
-        <ScopeView {navigateToProjects} />
+        <ScopeView {navigateToScopedThreads} />
       {/await}
     {:else if isSettingsView(activeView)}
       <!-- Each settings section is its own dedicated page in the navigation model.

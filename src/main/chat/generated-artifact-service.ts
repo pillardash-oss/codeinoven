@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { lstat, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { toPosixPath } from '../../lib/paths'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   INBOX_PROJECT_ID,
@@ -9,11 +10,16 @@ import {
   type AgentPart,
   type Thread
 } from '../../lib/types'
-import { featureSlugFromTitle, PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
+import {
+  CHATS_ARTIFACTS_DIRECTORY,
+  LEGACY_CHAT_ARTIFACTS_DIRECTORY,
+  featureSlugFromTitle,
+  PROJECT_DATA_DIRECTORY
+} from '../../lib/project-artifacts'
 import { ensureDir } from '../../lib/utils'
 import type { StorageEngine } from '../storage/storage-engine'
 
-export const CHAT_ARTIFACTS_DIRECTORY = 'chat-artifacts'
+export const CHAT_ARTIFACTS_DIRECTORY = CHATS_ARTIFACTS_DIRECTORY
 
 const IMAGE_EXTENSIONS = new Set([
   '.avif',
@@ -66,6 +72,9 @@ interface ArtifactContext {
   projectPath: string
   sourceRoot: string
   artifactRoot: string
+  /** Threads started before `chats-artifacts` materialized images into
+   *  `chat-artifacts/<threadId>`; those files stay in-root for this thread. */
+  legacyArtifactRoot?: string
 }
 
 interface ImageCandidate {
@@ -192,7 +201,7 @@ function projectArtifactDirectory(thread: ProjectArtifactThread): string {
 }
 
 function promptPath(path: string): string {
-  return path.split(sep).join('/')
+  return toPosixPath(path)
 }
 
 async function atomicWriteBuffer(path: string, bytes: Buffer): Promise<void> {
@@ -234,7 +243,10 @@ export class GeneratedArtifactService {
       scope,
       projectPath,
       sourceRoot: scope === 'chat' ? this.storage.resolve('chats-cwd') : projectPath,
-      artifactRoot
+      artifactRoot,
+      ...(scope === 'chat'
+        ? { legacyArtifactRoot: this.storage.resolve(join(LEGACY_CHAT_ARTIFACTS_DIRECTORY, thread.id)) }
+        : {})
     }
   }
 
@@ -413,6 +425,8 @@ export class GeneratedArtifactService {
       const existingPath = resolve(sourcePath)
       if (
         isWithinRoot(context.artifactRoot, existingPath) ||
+        (context.legacyArtifactRoot !== undefined &&
+          isWithinRoot(context.legacyArtifactRoot, existingPath)) ||
         (context.scope === 'project' && isWithinRoot(context.projectPath, existingPath))
       ) {
         return {
@@ -506,10 +520,25 @@ export class GeneratedArtifactService {
 }
 
 export function artifactInstruction(
-  thread: Pick<Thread, 'projectId' | 'id' | 'title' | 'featureSlug'>
+  thread: Pick<Thread, 'projectId' | 'id' | 'title' | 'featureSlug'>,
+  options?: { chatArtifactRoot?: string; chatFileSystemMode?: boolean }
 ): string {
   if (thread.projectId === INBOX_PROJECT_ID) {
-    return `When you generate an image in this chat and the user does not specify a destination, save the bitmap under ${CHAT_ARTIFACTS_DIRECTORY}/${thread.id}/ and include it as an image output or Markdown image. Keep the filename descriptive.`
+    const relativeRoot = `${CHAT_ARTIFACTS_DIRECTORY}/${thread.id}/`
+    const absoluteRoot = options?.chatArtifactRoot
+    const rootLabel = absoluteRoot
+      ? `${relativeRoot} (absolute: ${absoluteRoot})`
+      : relativeRoot
+    const destinationRule =
+      'Save every file you create for the user there: images, Markdown, documents, generated code, exports, anything. That directory is the pre-authorized workspace of this chat: reading and writing inside it never requires approval, and everything you save there appears in the Files panel for the user. Keep filenames descriptive.'
+    const boundaryRule = options?.chatFileSystemMode
+      ? 'If the user asks for a file at a specific location outside that directory, honor the explicitly requested path.'
+      : 'Anything outside that directory is gated: if the user asks you to create or touch files anywhere else on their file system, do not do it silently; tell them to turn on File System mode for this chat so that gate opens.'
+    return [
+      `Your artifact directory in this chat is ${rootLabel}.`,
+      destinationRule,
+      boundaryRule
+    ].join(' ')
   }
   const artifactDirectory = promptPath(projectArtifactDirectory(thread))
   return `When you generate an image while working on this project and the user does not specify a destination, save the bitmap under ${artifactDirectory}/ and include it as an image output or Markdown image. If the user specifies a project path, honor that path instead.`

@@ -343,7 +343,7 @@
                     class="shrink-0 text-[0.5625rem] font-bold leading-none {stepTone(job)}"
                     aria-hidden="true"
                   >
-                    {job.status !== 'completed' ? '•' : job.conclusion === 'success' ? '✓' : '✕'}
+                    {job.status !== 'completed' ? '•' : job.conclusion === 'success' ? '✓' : stepGlyph(job)}
                   </span>
                   <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
                     {job.name}

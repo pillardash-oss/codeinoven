@@ -1,9 +1,12 @@
 name: Security
 
+# Same policy as quality.yml: the suite runs once per change on the nightly
+# side. Nightly -> main promotion PRs skip the scan jobs (identical content
+# was just scanned on the nightly push), and pushes to main are excluded
+# because main only ever receives nightly promotion merges.
 on:
   push:
     branches:
-      - main
       - nightly
   pull_request:
   workflow_dispatch:
@@ -18,6 +21,7 @@ concurrency:
 jobs:
   secrets:
     name: Detect leaked secrets
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -37,6 +41,7 @@ jobs:
 
   audit:
     name: Audit dependencies
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

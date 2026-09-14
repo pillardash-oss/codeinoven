@@ -119,7 +119,7 @@ export class HarnessAccountRegistry {
     const account = accounts.find((candidate) => candidate.id === resolvedId)
     if (account) return account
     if (accounts.length > 0 && (!accountId || resolvedId === legacyHarnessAccountId(harnessId))) {
-      return accounts[0]
+      return defaultAccountFor(accounts)
     }
     if (resolvedId === legacyHarnessAccountId(harnessId)) {
       const now = Date.now()
@@ -150,8 +150,29 @@ export class HarnessAccountRegistry {
     if (providerAccounts.length === 1) return providerAccounts[0]
     const selected = providerAccounts.find((account) => account.id === accountId)
     if (selected) return selected
-    if (providerAccounts.length > 0) return providerAccounts[0]
+    if (providerAccounts.length > 0) return defaultAccountFor(providerAccounts)
     return this.virtualLegacyAccount(harnessId, providerId)
+  }
+
+  /** Mark one account as the harness's default for its provider. The previous
+   *  default for the same harness+provider, if any, is unmarked. */
+  async setDefault(accountId: string): Promise<HarnessAccount> {
+    return this.mutate(async (registry) => {
+      const account = registry.accounts.find((candidate) => candidate.id === accountId)
+      if (!account) throw new Error('Account not found.')
+      for (const candidate of registry.accounts) {
+        if (
+          candidate.harnessId === account.harnessId &&
+          candidate.providerId === account.providerId &&
+          candidate.isDefault
+        ) {
+          delete candidate.isDefault
+        }
+      }
+      account.isDefault = true
+      account.updatedAt = Date.now()
+      return { ...account }
+    })
   }
 
   /** Reserve an isolated home without making it visible as an account. */
@@ -405,6 +426,12 @@ export class HarnessAccountRegistry {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+/** Preferred default for a set of same-provider accounts: an explicitly marked
+ *  account, else the earliest created (accounts arrive createdAt-sorted). */
+function defaultAccountFor(accounts: HarnessAccount[]): HarnessAccount {
+  return accounts.find((account) => account.isDefault) ?? accounts[0]
 }
 
 function generatedLabelFor(label: string, base: string): boolean {

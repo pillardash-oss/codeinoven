@@ -69,7 +69,8 @@ export const CIO_QUESTION_MARKER = 'cio-question:'
 
 export function piCoreToolsExtension(): string {
   return `import { existsSync, readFileSync } from 'node:fs'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { homedir } from 'node:os'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
   createAgentSession,
@@ -221,6 +222,76 @@ function isOutsideCwd(candidatePath, cwd) {
   const abs = isAbsolute(candidatePath) ? resolve(candidatePath) : resolve(cwd, candidatePath)
   const rel = relative(cwd, abs)
   return rel.startsWith('..') || isAbsolute(rel)
+}
+
+const CIO_INTRINSIC_SKILL_ROOTS = [
+  join(homedir(), '.agents', 'skills'),
+  join(homedir(), '.pi', 'agent', 'skills')
+]
+
+function isWithinPath(candidatePath, root) {
+  const rel = relative(root, resolve(candidatePath))
+  return rel === '' || (!rel.startsWith('..' + sep) && rel !== '..' && !isAbsolute(rel))
+}
+
+// Shared and Pi-native skills are part of the harness runtime, not user file
+// access. Resolve these reads before opening a permission dialog so chat mode
+// never flashes a card or races an asynchronous auto-approval.
+function isIntrinsicSkillRead(toolName, input, cwd) {
+  if (!['read', 'grep', 'find', 'ls'].includes(toolName)) return false
+  const rawPath = firstString(input['path'], input['file_path'], input['filePath'], input['filename'])
+  if (!rawPath) return false
+  const candidate = isAbsolute(rawPath) ? resolve(rawPath) : resolve(cwd, rawPath)
+  return CIO_INTRINSIC_SKILL_ROOTS.some(function (root) {
+    return isWithinPath(candidate, root)
+  })
+}
+
+// Filesystem-off chat still has ordinary internet access. Permit an HTTP curl
+// request, including quoted query strings and escaped multiline commands, when
+// it has no shell composition, interpolation, local-file input, upload, or
+// output flags. Broader shell use remains gated.
+function hasUnsafeCurlShellSyntax(command) {
+  let quote = ''
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]
+    if (character === '\\n' || character === '\\r') return true
+    if (character === '\\\\') {
+      if (command[index + 1] === '\\n') {
+        index += 1
+        continue
+      }
+      if (command[index + 1] === '\\r' && command[index + 2] === '\\n') {
+        index += 2
+        continue
+      }
+      if (quote !== "'") index += 1
+      continue
+    }
+    if (character === "'" && quote !== '"') {
+      quote = quote === "'" ? '' : "'"
+      continue
+    }
+    if (character === '"' && quote !== "'") {
+      quote = quote === '"' ? '' : '"'
+      continue
+    }
+    if (quote === "'") continue
+    if (character.charCodeAt(0) === 96) return true
+    if (character === '$' && /[({A-Za-z_]/u.test(command[index + 1] ?? '')) return true
+    if (!quote && /[;&|<>]/u.test(character)) return true
+  }
+  return quote !== ''
+}
+
+function isSafeNetworkCurl(toolName, input) {
+  if (toolName !== 'bash' || typeof input['command'] !== 'string') return false
+  const command = input['command'].trim()
+  if (!/^curl(?:\\s|$)/u.test(command)) return false
+  if (hasUnsafeCurlShellSyntax(command)) return false
+  if (!/https?:\\/\\//iu.test(command) || /file:\\/\\//iu.test(command)) return false
+  if (/(?:^|\\s)(?:-o|-O|--output|--remote-name|--remote-header-name|--output-dir|-T|--upload-file|-K|--config|--unix-socket|--netrc-file|--cookie|--cookie-jar|--cert|--key|--cacert|--capath)(?:\\s|=|$)/u.test(command)) return false
+  return !/(?:^|\\s)(?:-d|--data|--data-ascii|--data-binary|--data-raw|--data-urlencode|--json|--form|-F)(?:\\s|=)["']?[^\\s"']*@/u.test(command)
 }
 
 function isProtectedPath(candidatePath) {
@@ -1036,6 +1107,8 @@ export default function codeInOvenCoreToolsExtension(pi) {
       CIO_PI_BUILTIN_TOOLS.has(event.toolName) &&
       !allowedTools.includes(event.toolName)
     ) {
+      if (isIntrinsicSkillRead(event.toolName, input, ctx.cwd)) return undefined
+      if (isSafeNetworkCurl(event.toolName, input)) return undefined
       const command = typeof input['command'] === 'string' ? input['command'] : undefined
       const path = firstString(input['path'], input['file_path'], input['filePath'], input['filename'])
       const payload = {

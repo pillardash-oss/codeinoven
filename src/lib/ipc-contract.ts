@@ -214,6 +214,16 @@ export interface UpdaterStatus {
   errorMessage?: string
 }
 
+/** Release notes of the newest published release for the configured channel. */
+export interface UpdaterChangelog {
+  /** Release tag, e.g. `v0.5.54-nightly.2` or `v0.5.53`. */
+  tag: string
+  /** ISO publish date of the release, empty when unknown. */
+  publishedAt: string
+  /** Markdown release body, sanitized by the renderer before display. */
+  notes: string
+}
+
 /** Native browser content rectangle in BrowserWindow density-independent pixels. */
 export interface BrowserViewBounds {
   x: number
@@ -246,6 +256,16 @@ export interface BrowserOpenRequestContext {
   threadId: string
   requestedTabId?: string
   reveal: boolean
+}
+
+/** What the permission popup displays for one pending request. Main resolves
+ *  `browser:popupCurrent` with this; the document pulls it on load so the
+ *  first prompt can never be lost to push-delivery load-state races. */
+export interface BrowserPermissionPromptContext {
+  request: BrowserPermissionRequest
+  queueSize: number
+  /** Owning project (and thread) label; null shows only the website. */
+  projectLabel: string | null
 }
 
 /** A permission requested by a page inside the project-scoped browser session. */
@@ -2054,11 +2074,17 @@ export const IPC_INVOKE_CONTRACT = {
     Project
   >,
   'projectFiles:list': {} as Contract<
-    [projectId: string, relativeDirectory: string, scopeBucketId?: string],
+    [projectId: string, relativeDirectory: string, scopeBucketId?: string, threadId?: string],
     ProjectFileEntry[]
   >,
   'projectFiles:search': {} as Contract<
-    [projectId: string, query: string, category: 'all' | 'rules', scopeBucketId?: string],
+    [
+      projectId: string,
+      query: string,
+      category: 'all' | 'rules',
+      scopeBucketId?: string,
+      threadId?: string
+    ],
     ProjectFileEntry[]
   >,
   'projectFiles:resolveCitationPaths': {} as Contract<
@@ -2070,31 +2096,49 @@ export const IPC_INVOKE_CONTRACT = {
     Record<string, boolean>
   >,
   'projectFiles:create': {} as Contract<
-    [projectId: string, relativeDirectory: string, name: string, scopeBucketId?: string],
+    [
+      projectId: string,
+      relativeDirectory: string,
+      name: string,
+      scopeBucketId?: string,
+      threadId?: string
+    ],
     ProjectFileEntry
   >,
   'projectFiles:createDirectory': {} as Contract<
-    [projectId: string, relativeDirectory: string, name: string, scopeBucketId?: string],
+    [
+      projectId: string,
+      relativeDirectory: string,
+      name: string,
+      scopeBucketId?: string,
+      threadId?: string
+    ],
     ProjectFileEntry
   >,
   'projectFiles:delete': {} as Contract<
-    [projectId: string, relativePath: string, scopeBucketId?: string],
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     void
   >,
   'projectFiles:info': {} as Contract<
-    [projectId: string, relativePath: string, scopeBucketId?: string],
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     ProjectFileInfo
   >,
   'projectFiles:openInEditor': {} as Contract<
-    [projectId: string, relativePath: string, scopeBucketId?: string],
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     void
   >,
   'projectFiles:openInEditorWith': {} as Contract<
-    [projectId: string, relativePath: string, editorId: EditorId, scopeBucketId?: string],
+    [
+      projectId: string,
+      relativePath: string,
+      editorId: EditorId,
+      scopeBucketId?: string,
+      threadId?: string
+    ],
     void
   >,
   'projectFiles:saveAs': {} as Contract<
-    [projectId: string, relativePath: string, scopeBucketId?: string],
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     string | null
   >,
   'projectFiles:paste': {} as Contract<
@@ -2105,7 +2149,9 @@ export const IPC_INVOKE_CONTRACT = {
       destinationDirectory: string,
       mode: ProjectFileTransferMode,
       sourceScopeBucketId?: string,
-      destinationScopeBucketId?: string
+      destinationScopeBucketId?: string,
+      sourceThreadId?: string,
+      destinationThreadId?: string
     ],
     ProjectFileEntry
   >,
@@ -2114,7 +2160,8 @@ export const IPC_INVOKE_CONTRACT = {
       projectId: string,
       sourcePaths: string[],
       destinationDirectory: string,
-      scopeBucketId?: string
+      scopeBucketId?: string,
+      threadId?: string
     ],
     ProjectFileEntry[]
   >,
@@ -2123,17 +2170,18 @@ export const IPC_INVOKE_CONTRACT = {
       projectId: string,
       sourcePaths: string[],
       destinationDirectory: string,
-      scopeBucketId?: string
+      scopeBucketId?: string,
+      threadId?: string
     ],
     ProjectFileDropResult[]
   >,
   'projectFiles:read': {} as Contract<
-    [projectId: string, relativePath: string, scopeBucketId?: string],
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     /** null when the file cannot be read as text (binary, too large, missing). */
     ProjectTextFile | null
   >,
   'projectFiles:rename': {} as Contract<
-    [projectId: string, relativePath: string, name: string, scopeBucketId?: string],
+    [projectId: string, relativePath: string, name: string, scopeBucketId?: string, threadId?: string],
     ProjectFileEntry
   >,
   'projectFiles:save': {} as Contract<
@@ -2142,7 +2190,8 @@ export const IPC_INVOKE_CONTRACT = {
       relativePath: string,
       content: string,
       expectedRevision: string,
-      scopeBucketId?: string
+      scopeBucketId?: string,
+      threadId?: string
     ],
     ProjectTextFile
   >,
@@ -2185,6 +2234,9 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'providerAccounts:cancelPending': {} as Contract<[pendingAccountId: string], void>,
   'providerAccounts:rename': {} as Contract<[accountId: string, label: string], HarnessAccount>,
+  /** Mark an account as its harness's default for the account's provider.
+   *  Returns the harness's full account list so callers can refresh caches. */
+  'providerAccounts:setDefault': {} as Contract<[accountId: string], HarnessAccount[]>,
   'providerAccounts:remove': {} as Contract<[accountId: string], boolean>,
   'providerAccounts:beginLogin': {} as Contract<
     [harnessId: string, options?: ProviderAccountLoginOptions],
@@ -2387,9 +2439,11 @@ export const IPC_INVOKE_CONTRACT = {
     [requestId: string, decision: BrowserPermissionDecision],
     void
   >,
-  /** Invoked by the native permission popup document once its permission
-   *  listener is bound; main flushes the request on display in response. */
-  'browser:popupReady': {} as Contract<[], void>,
+  /** Invoked by the native permission popup document when it is ready to
+   *  display a request; main resolves with the request on display, or null.
+   *  This pull model cannot race document load state, which the previous
+   *  push-based first-delivery repeatedly did (blank first prompt). */
+  'browser:popupReady': {} as Contract<[], BrowserPermissionPromptContext | null>,
   'browser:destroy': {} as Contract<[tabId: string], void>,
   'browser:destroyThread': {} as Contract<[projectId: string, threadId: string], void>,
   'browser:destroyProject': {} as Contract<[projectId: string], void>,
@@ -2727,6 +2781,8 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'updater:check': {} as Contract<[explicit?: boolean], UpdaterStatus>,
   'updater:getStatus': {} as Contract<[], UpdaterStatus>,
+  /** Release notes of the newest published release for the configured channel. */
+  'updater:getChangelog': {} as Contract<[], UpdaterChangelog | null>,
   'updater:download': {} as Contract<[], void>,
   'updater:install': {} as Contract<[], void>,
   'remote:getStatus': {} as Contract<[], RemoteModeStatus>,

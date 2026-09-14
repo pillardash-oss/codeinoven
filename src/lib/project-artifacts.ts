@@ -10,6 +10,19 @@ import { APP_NAME } from './brand'
 export const PROJECT_DATA_DIRECTORY = '.cio'
 export const PROJECT_SPECS_DIRECTORY = 'specs'
 
+/** App-storage root directory holding every chat thread's own artifact scratch
+ *  directory. Sibling of `chats-cwd`; each thread gets `chats-artifacts/<threadId>/`
+ *  as its private, pre-authorized read/write route. */
+export const CHATS_ARTIFACTS_DIRECTORY = 'chats-artifacts'
+
+/** Legacy inbox-chat generated-image root kept readable for older threads. */
+export const LEGACY_CHAT_ARTIFACTS_DIRECTORY = 'chat-artifacts'
+
+/** Storage-root-relative artifact directory of one chat thread. */
+export function chatThreadArtifactDirectory(threadId: string): string {
+  return join(CHATS_ARTIFACTS_DIRECTORY, threadId)
+}
+
 const PROJECT_GITIGNORE_BLOCK = `# ${APP_NAME} agent scratch space (context, reports, temp work)\n.cio/\n`
 
 export function featureSlugFromTitle(title: string): string {

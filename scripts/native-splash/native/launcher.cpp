@@ -336,6 +336,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
 
   const int width = 420;
   const int height = 320;
+  // GDI+ must be started (and the icon decoded) before the window is shown:
+  // the first UpdateWindow paints synchronously, and creating GDI+ objects
+  // before GdiplusStartup crashes the process.
+  Gdiplus::GdiplusStartupInput startup_input;
+  Gdiplus::GdiplusStartup(&gdiplus_token, &startup_input, nullptr);
+  log_line("GDI+ started");
+  icon_bitmap = load_icon();
+  log_line(icon_bitmap == nullptr ? "Icon decode failed, continuing without icon"
+                                  : "Icon decoded");
   const int x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
   const int y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
   placeholder_window = CreateWindowExW(
@@ -358,10 +367,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
   }
   ShowWindow(placeholder_window, SW_SHOW);
   UpdateWindow(placeholder_window);
-
-  Gdiplus::GdiplusStartupInput startup_input;
-  Gdiplus::GdiplusStartup(&gdiplus_token, &startup_input, nullptr);
-  icon_bitmap = load_icon();
   InvalidateRect(placeholder_window, nullptr, FALSE);
   UpdateWindow(placeholder_window);
 

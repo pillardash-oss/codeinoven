@@ -100,13 +100,29 @@ export class BaseUrlProviderService {
     )
   }
 
-  async listEnabled(harnessId?: string): Promise<BaseUrlProvider[]> {
+  /**
+   * Enabled providers, optionally scoped to one harness. When `containerAgentDir`
+   * is supplied (managed account containers running pi against an isolated
+   * agent dir with no models.json), harness-global native Pi custom providers
+   * are merged in so local servers like llama.cpp stay reachable.
+   */
+  async listEnabled(harnessId?: string, containerAgentDir?: string): Promise<BaseUrlProvider[]> {
     const providers = (await this.load()).providers.filter((provider) => provider.enabled)
-    return structuredClone(
+    let scoped =
       harnessId === undefined
         ? providers
         : providers.filter((provider) => provider.harnessId === harnessId)
-    )
+    if (containerAgentDir && (harnessId === undefined || harnessId === 'pi')) {
+      const nativePi = await this.nativeProviders.listGlobalPiProviders().catch(() => [])
+      const nativeIds = new Set(nativePi.map((provider) => provider.id))
+      scoped = [
+        ...scoped.filter(
+          (provider) => !(provider.harnessId === 'pi' && nativeIds.has(provider.id))
+        ),
+        ...nativePi
+      ]
+    }
+    return structuredClone(scoped)
   }
 
   async createProvider(
@@ -279,7 +295,8 @@ export class BaseUrlProviderService {
   }
 }
 
-function apiKeyEnvVarFor(providerId: string): string {
+/** Deterministic env var name carrying a provider's resolved API key. */
+export function apiKeyEnvVarFor(providerId: string): string {
   const suffix = providerId.replace(/[^a-zA-Z0-9]/gu, '_').toUpperCase()
   return `CODEINOVEN_BUP_${suffix}_KEY`
 }

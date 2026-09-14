@@ -1,3 +1,4 @@
+import { posixBasename } from '../paths'
 import type { ParsedModelIdentity, SpeechCapability, SpeechRuntime } from './types'
 
 export interface NormalizedPath {
@@ -112,11 +113,6 @@ export function isOnnxPath(lower: string): boolean {
 
 // ---- Model name breakup ----
 
-function basenameFromPath(normalizedPath: string): string {
-  const parts = normalizedPath.split(/[/\\]/).filter((s) => s.length > 0)
-  return parts.length ? parts[parts.length - 1] : ''
-}
-
 function stripKnownExtension(base: string): string {
   const lower = base.toLowerCase()
   for (const ext of ['.mlmodelc', '.mlpackage', '.gguf', '.onnx', '.mlx'] as const) {
@@ -162,7 +158,7 @@ export function parseModelIdentityFromPath(
   runtimeHint?: SpeechRuntime | null
 ): ParsedModelIdentity | null {
   if (!normalizedPath || normalizedPath.trim().length === 0) return null
-  const rawBasename = basenameFromPath(normalizedPath.trim())
+  const rawBasename = posixBasename(normalizedPath.trim())
   if (!rawBasename) return null
   // Drop trailing slash handling already done by split; check for known-ext stripping
   const baseWithoutExtension = stripKnownExtension(rawBasename)

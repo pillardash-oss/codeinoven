@@ -30,7 +30,9 @@
     supportsFastInference
   } from '$shared/fast-inference'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
+  import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { STANDARD_THINKING_PRESETS, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
+  import { posixBasename } from '$shared/paths'
   import { invoke } from '$lib/ipc.svelte'
   import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -1319,11 +1321,16 @@
       harnessId: nextHarnessId ?? resolved.harnessId,
       providerId,
       modelId,
+      // Custom base URL providers run without an account: fall back to the
+      // harness default only for real providers so a turn never gets a random
+      // harness account stamped onto its attribution.
       accountId:
-        accountId ??
-        (nextHarness !== resolved.harnessId
-          ? `${nextHarness}.default`
-          : (resolved.accountId ?? `${nextHarness}.default`)),
+        isCodeInOvenCustomProviderId(providerId)
+          ? undefined
+          : (accountId ??
+            (nextHarness !== resolved.harnessId
+              ? `${nextHarness}.default`
+              : (resolved.accountId ?? `${nextHarness}.default`))),
       ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(fastSupported ? {} : { inferenceMode: 'normal' })
     }
@@ -1434,8 +1441,7 @@
       return
     }
     const addedAttachments = selections.map(({ path, file }) => {
-      const filename =
-        file?.name ?? (path.split('/').pop() ?? path.split('\\').pop() ?? 'file').split('?')[0]
+      const filename = file?.name ?? (posixBasename(path.split('?')[0]) || 'file')
       const mime = file?.type || mimeFromPath(path)
       return { mime, url: pathToFileUrl(path), filename }
     })
@@ -1453,7 +1459,7 @@
   function isEditablePastedTextAttachment(file: PromptAttachment): boolean {
     if (file.mime !== 'text/plain') return false
     const path = fileUrlToPath(file.url)
-    return /^pasted-[0-9a-f-]+\.txt$/u.test(path.split(/[/\\]/u).pop() ?? '')
+    return /^pasted-[0-9a-f-]+\.txt$/u.test(posixBasename(path))
   }
 
   async function addPastedTextAttachment(text: string): Promise<void> {

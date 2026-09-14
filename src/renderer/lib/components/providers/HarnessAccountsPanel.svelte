@@ -7,6 +7,7 @@
     Pencil,
     RefreshCw,
     Search,
+    Star,
     Unplug,
     UserRound,
     X
@@ -75,6 +76,21 @@
 
   let selectedHarnesses = new SvelteSet<string>()
   let harnessFilterActive = $derived(selectedHarnesses.size > 0)
+
+  /** Accounts sharing the same harness+provider; a default only matters when
+   *  there is more than one to choose from. */
+  let siblingCounts = $derived.by(() => {
+    const counts = new SvelteMap<string, number>()
+    for (const account of accounts) {
+      const key = `${account.harnessId}\u0000${account.providerId}`
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return counts
+  })
+
+  function hasSiblingAccounts(account: HarnessAccount): boolean {
+    return (siblingCounts.get(`${account.harnessId}\u0000${account.providerId}`) ?? 0) > 1
+  }
 
   let filteredAccounts = $derived.by(() => {
     const query = search.trim().toLocaleLowerCase('en-US')
@@ -219,6 +235,23 @@
       error = saveError instanceof Error ? saveError.message : 'The account label was not saved.'
     } finally {
       saving = false
+    }
+  }
+
+  /** Mark an account as its harness's default for the provider. */
+  async function setDefault(account: HarnessAccount): Promise<void> {
+    error = ''
+    try {
+      const updated = await harnessAccountCache.setDefault(account)
+      accounts = sortAccounts([
+        ...accounts.filter((candidate) => candidate.harnessId !== account.harnessId),
+        ...updated
+      ])
+    } catch (setDefaultError) {
+      error =
+        setDefaultError instanceof Error
+          ? setDefaultError.message
+          : 'The default account was not saved.'
     }
   }
 
@@ -389,9 +422,30 @@
             {providerLabel(account)}
           </span>
         {:else if column.key === 'label'}
-          <span class="block truncate text-xs">{account.label}</span>
+          <span class="flex min-w-0 items-center gap-1.5">
+            <span class="block truncate text-xs">{account.label}</span>
+            {#if account.isDefault}
+              <span
+                class="shrink-0 rounded bg-raised px-1 text-[0.625rem] font-medium text-muted"
+                title="Default account for this provider"
+              >
+                Default
+              </span>
+            {/if}
+          </span>
         {:else}
           <div class="flex items-center gap-1">
+            {#if hasSiblingAccounts(account) && !account.isDefault}
+              <button
+                type="button"
+                class="flex size-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-accent"
+                title={`Set ${account.label} as the default account for ${providerLabel(account)}`}
+                aria-label={`Set ${account.label} as the default account for ${providerLabel(account)}`}
+                onclick={() => void setDefault(account)}
+              >
+                <Star size={12} />
+              </button>
+            {/if}
             <button
               type="button"
               class="flex size-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
