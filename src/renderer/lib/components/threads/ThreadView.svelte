@@ -469,10 +469,32 @@
   let hasOlderMessages = $derived(
     controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
-  let userMessageTexts = $derived(
-    messages
-      .filter((msg) => msg.role === 'user')
-      .map((msg) => messageText(msg))
+  /** Merge the lazily loaded persisted full history with any live/optimistic
+   *  user messages still pending in the mirror, deduped by id (the live window
+   *  wins, e.g. after an edit) and kept in chronological order. This is the
+   *  single source shared by the history side panel and the composer's
+   *  arrow-up recall, so navigation can reach every message without the whole
+   *  conversation being loaded into the view. */
+  function mergedUserMessageSummaries(): UserMessageSummary[] {
+    const byId: Record<string, UserMessageSummary> = {}
+    for (const entry of fullUserMessageHistory) byId[entry.id] = entry
+    for (const message of messages) {
+      if (message.role !== 'user') continue
+      byId[message.id] = {
+        id: message.id,
+        content: messageText(message),
+        createdAt: message.createdAt
+      }
+    }
+    return Object.values(byId).sort(
+      (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)
+    )
+  }
+  /** Composer recall texts: the merged full history, minus blank entries that
+   *  would only produce an empty recall step. */
+  let composerHistoryTexts = $derived(
+    mergedUserMessageSummaries()
+      .map((entry) => entry.content)
       .filter((text) => text.trim().length > 0)
   )
   let busy = $derived(controller?.busy ?? agentRuns.isBusy(thread.projectId, thread.id))
@@ -3125,24 +3147,12 @@
   // in the mirror, deduped and kept in chronological order. Each message carries
   // a short work-trace preview from the turn that follows it.
   $effect(() => {
-    const byId: Record<string, UserMessageSummary> = {}
-    for (const entry of fullUserMessageHistory) byId[entry.id] = entry
-    for (const message of messages) {
-      if (message.role !== 'user') continue
-      byId[message.id] = {
-        id: message.id,
-        content: messageText(message),
-        createdAt: message.createdAt
-      }
-    }
     const tracePreviews = tracePreviewByUserMessage(messages)
-    const userMessages = Object.values(byId)
-      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-      .map(({ id, content }) => ({
-        id,
-        content,
-        ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
-      }))
+    const userMessages = mergedUserMessageSummaries().map(({ id, content }) => ({
+      id,
+      content,
+      ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
+    }))
     if (hasController) return
     workspaceState.messageCount = userMessages.length
     workspaceState.userMessages = userMessages
@@ -11925,7 +11935,8 @@
                     onRemoveAllReferences={clearComposerReferences}
                     onEditReference={controller ? undefined : editResponseReference}
                     onSend={sendComposerMessage}
-                    historyMessages={userMessageTexts}
+                    historyMessages={composerHistoryTexts}
+                    onHistoryNavigateStart={() => void refreshUserMessageHistory()}
                     hidePermissionSelector={chatMode}
                     favoriteModels={chatMode
                       ? rendererRecovery.chatFavoriteModels

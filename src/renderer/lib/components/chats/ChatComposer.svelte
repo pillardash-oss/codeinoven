@@ -239,6 +239,10 @@
     onActivateBankedReset?: () => void
     /** Previous user messages for terminal-like up-arrow history recall. */
     historyMessages?: string[]
+    /** Fired when the user first engages arrow-up recall, before reading the
+     *  list, so a lazily loaded full history (e.g. the persisted user-message
+     *  history behind the history side panel) can fill in for later presses. */
+    onHistoryNavigateStart?: () => void
     /** Global default vision model used to describe images for text-only models. */
     imageDescriptorDefault?: AgentModelSelection
     /** When true, the vision-model picker card is skipped on image sends. */
@@ -324,6 +328,7 @@
     onCompact,
     onActivateBankedReset,
     historyMessages = [],
+    onHistoryNavigateStart,
     imageDescriptorDefault,
     imageDescriptorAskAgain = false,
     onImageDescriptorDefaultChange,
@@ -1829,9 +1834,18 @@
           e.preventDefault()
           if (historyIndex === -1) {
             savedValue = value
-            historyIndex = history.length - 1
+            onHistoryNavigateStart?.()
+            // Start from the newest entry. When the current draft already
+            // matches a recall entry, resume above it instead of re-showing it.
+            const exact = value === '' ? -1 : history.lastIndexOf(value)
+            historyIndex = exact > 0 ? exact - 1 : history.length - 1
           } else {
-            historyIndex = Math.max(0, historyIndex - 1)
+            // Resolve the position by value, not by the stored index: the list
+            // can grow while navigating (lazy full-history load), which would
+            // otherwise make a positional step land on an unrelated old entry.
+            const current = history.lastIndexOf(value)
+            const position = current === -1 ? historyIndex : current
+            historyIndex = Math.max(0, position - 1)
           }
           value = history[historyIndex]
           onValueChange?.(value)
@@ -1841,12 +1855,16 @@
       if (e.key === 'ArrowDown' && !e.shiftKey && historyIndex >= 0) {
         e.preventDefault()
         const history = historyMessages
-        if (historyIndex >= history.length - 1) {
+        // Value-based position, matching the ArrowUp branch, so a list that
+        // grew mid-navigation keeps the walk coherent.
+        const current = history.lastIndexOf(value)
+        const position = current === -1 ? historyIndex : current
+        if (position >= history.length - 1) {
           value = savedValue
           onValueChange?.(value)
           historyIndex = -1
         } else {
-          historyIndex += 1
+          historyIndex = position + 1
           value = history[historyIndex]
           onValueChange?.(value)
         }
