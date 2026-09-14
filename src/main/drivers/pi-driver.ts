@@ -2757,14 +2757,18 @@ export class PiDriver extends PersistentCliDriver {
     } catch (error) {
       const native = await this.loadNativeSubagentMessages(projectPath, sessionId)
       if (native) return native
-      if (await this.readSessionRecord(projectPath, sessionId)) throw error
-      // pi child sessions (cio_spawn_agent) are never persisted as CLI session
-      // records, so "CLI session is unavailable" is their normal state, not a
-      // failure   and pi never flushes their transcripts to disk either (the
-      // nested SessionManager inherits the parent cwd). Throwing here only
-      // spams the renderer with repeated load errors while the sub-agent
-      // card's own activity already carries the transcript preview; an empty
-      // result tells the engine to keep using that preview.
+      // Throwing stays correct whenever a record genuinely exists   including
+      // a hash-mismatched one (moved project), where the engine must retire
+      // the dead session and create a replacement. Only a truly absent record
+      // takes the child-session fallback: pi child sessions (cio_spawn_agent)
+      // are never persisted as CLI session records, so "CLI session is
+      // unavailable" is their normal state, not a failure   and pi never
+      // flushes their transcripts to disk either (the nested SessionManager
+      // inherits the parent cwd). Throwing there only spams the renderer with
+      // repeated load errors while the sub-agent card's own activity already
+      // carries the transcript preview; an empty result tells the engine to
+      // keep using that preview.
+      if (await this.readSessionRecordIgnoringPath(sessionId)) throw error
       return []
     }
   }
@@ -2779,6 +2783,17 @@ export class PiDriver extends PersistentCliDriver {
     } catch {
       return null
     }
+  }
+
+  /** Like `readSessionRecord`, but matches even a hash-mismatched record. */
+  private async readSessionRecordIgnoringPath(
+    sessionId: string
+  ): Promise<PersistentCliSession | null> {
+    return (
+      (await this.storage
+        .read<PersistentCliSession>(this.sessionPath(sessionId))
+        .catch(() => null)) ?? null
+    )
   }
 
   /**
