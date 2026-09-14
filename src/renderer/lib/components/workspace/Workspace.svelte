@@ -3013,6 +3013,9 @@
         const thread = existing
         upsertThreadInList(thread)
         threadMessages.seedEmpty(thread.projectId, thread.id)
+        // Empty-state creation (no existing thread open): the reused blank
+        // thread still counts as the fresh thread this moment created.
+        if (!activeThread) workspaceState.markThreadFreshFromEmptyState(thread.id)
         workspaceState.openThread(thread, project)
         if (scopeBucketId) {
           scopeState.updateThread(thread)
@@ -3072,6 +3075,10 @@
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     workspaceState.openThread(thread as any, project)
+    // Empty-state creation (no existing thread was open): this new thread gets
+    // the centered composer head start even if the project holds other threads.
+    // Threads created from an existing thread never get the marker.
+    if (!activeThread) workspaceState.markThreadFreshFromEmptyState(thread.id)
     // Persist in background with the same stable id   no ID swap, branch
     // detection runs after the first thread:update broadcast, never blocking typing.
     void invoke('thread:create', {
@@ -4310,8 +4317,9 @@
                   thread={selectedThread}
                   chatMode={mode === 'chats'}
                   allowCenteredComposer={mode === 'chats' ||
-                    ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 &&
-                      !workspaceState.headStartUsedThreadIds.has(selectedThread.id))}
+                    (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
+                      ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 ||
+                        workspaceState.freshEmptyStateThreadIds.has(selectedThread.id)))}
                   onForked={handleForkedThread}
                   projects={visibleProjects}
                   {projectIcons}
