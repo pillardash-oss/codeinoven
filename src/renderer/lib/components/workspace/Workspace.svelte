@@ -875,6 +875,29 @@
     return scopeState.allScopeThreads.find((candidate) => candidate.id === auditorId) ?? null
   })
 
+  /** Auditor threads are orchestration children: the bounded initial paint and
+   *  scope hydration both skip them, so after a reload the scope store only
+   *  knows about one if a live broadcast happened in this session. Fetch it
+   *  once and merge it in, so the rail badge can never silently miss a
+   *  persisted terminal state (failed, report ready). */
+  const auditorFetchRequested = new SvelteSet<string>()
+  $effect(() => {
+    const current = selectedThread
+    const auditorId = current?.auditorThreadId
+    if (!current || !auditorId) return
+    const scopeKey = `${current.projectId}:${auditorId}`
+    if (auditorThread || auditorFetchRequested.has(scopeKey)) return
+    auditorFetchRequested.add(scopeKey)
+    void invoke('thread:get', current.projectId, auditorId)
+      .then((fetched) => {
+        if (fetched) scopeState.updateThread(fetched)
+      })
+      .catch(() => {
+        // Missing or deleted auditor: leave the badge unlit rather than retry
+        // forever on a thread that cannot exist.
+      })
+  })
+
   /** Rail badge for the coordinator dock item, mirroring the auditor's live
    *  state so a hidden context sidebar still reports working / error / done. */
   let coordinatorRailBadge = $derived.by((): ContextDockItem['badge'] => {
