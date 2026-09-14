@@ -48,6 +48,7 @@ import {
   broadcastThreadUpdate,
   markNotificationAborting,
   clearNotificationAborting,
+  notifyIndependentAudit,
   notifyTemporaryChat
 } from './thread-events'
 import { updateRetryWakeWindow } from './thread-events'
@@ -113,7 +114,11 @@ import { instanceRegistry } from '../system/instance-registry'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRuntimeService } from '../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
-import { CIO_UTILITY_SETUP_PROMPT, isCioUtilityRequest } from '../utilities/cio-utility-prompt'
+import {
+  CIO_UTILITY_REUSE_PROMPT,
+  CIO_UTILITY_SETUP_PROMPT,
+  isCioUtilityRequest
+} from '../utilities/cio-utility-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { isCodeInOvenCustomProviderId, underlyingProviderId } from '../../lib/custom-provider-id'
@@ -912,10 +917,20 @@ const SPEC_BRAINSTORM_ALLOWED_TOOLS = [
   'gemini_quota'
 ]
 
-const AUDIT_ALLOWED_TOOLS = [
-  ...SPEC_BRAINSTORM_ALLOWED_TOOLS.filter((tool) => tool !== 'question'),
-  'bash'
-]
+/**
+ * Audit sessions must verify with hard facts (read the codebase, run checks,
+ * tests, lints) but never modify the repository. The list therefore carries
+ * only built-in tool names that exist in every harness: `read` for source
+ * inspection, and `bash` for running verification commands, plus pi's
+ * Windows-only `powershell` built-in (a harmless unused name elsewhere) so a
+ * Windows auditor is never gated behind permission cards when Git Bash is
+ * absent. File-mutating tools (edit/write) are deliberately omitted. The app
+ * utility gateway tools
+ * (cio_util_find/init/use and its bookkeeping tools) are custom tools the pi
+ * tool gate never restricts, and other harnesses receive them through the
+ * prepared gateway runtime, so they stay reachable without being listed.
+ */
+const AUDIT_ALLOWED_TOOLS = ['read', 'bash', 'powershell']
 
 /** Read-only research tools for disposable generation sessions that read artifact files. */
 const PROMPT_READ_ONLY_TOOLS = ['read', 'glob', 'grep', 'list']
@@ -2135,6 +2150,12 @@ export class ChatEngine {
     }
   >()
 
+  /** Threads whose user has invoked @cio-utility at least once (current turn
+   *  or history). Once recorded, the setup + diagnostics contract stays
+   *  reusable by the agent in every later turn of that thread without
+   *  repeating the invocation. */
+  private cioUtilityThreads = new Map<string, true>()
+
   constructor(
     private storage: StorageEngine,
     private database: Database,
@@ -2165,6 +2186,9 @@ export class ChatEngine {
       },
       async (threads) => {
         for (const thread of threads) broadcastThreadDeleted(thread)
+        for (const threadId of threads.map((thread) => thread.id)) {
+          this.cioUtilityThreads.delete(threadId)
+        }
         for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
           await this.checkpointManager.pruneUnusedBlobs(projectId)
         }
@@ -3449,6 +3473,21 @@ export class ChatEngine {
   }
 
   /**
+   * True when the user has invoked @cio-utility in this thread's history
+   * (including the current turn's message). Only positive results are memoized:
+   * a thread that never invoked must keep re-scanning its (cheap, cached) user
+   * messages so a rollback or edit that restores an @cio-utility prompt still
+   * grants reuse.
+   */
+  private async hasCioUtilityInvocation(projectId: string, threadId: string): Promise<boolean> {
+    if (this.cioUtilityThreads.has(threadId)) return true
+    const userMessages = await this.threadManager.loadUserMessages(projectId, threadId)
+    const invoked = userMessages.some((message) => isCioUtilityRequest(message.content))
+    if (invoked) this.cioUtilityThreads.set(threadId, true)
+    return invoked
+  }
+
+  /**
    * Install one tiny gateway plus always-on utilities for this turn. On-demand
    * schemas remain outside model context until the gateway activates them.
    */
@@ -3463,7 +3502,8 @@ export class ChatEngine {
     threadTitle: string,
     skipRuntime = false,
     allowManagement = false,
-    brainstormInterview = false
+    brainstormInterview = false,
+    explicitUtilityInvocation = false
   ): Promise<string> {
     // A new agent turn begins here   re-enable a user-dismissed PiP so it may
     // show again if CUA is used, and cancel any auto-dismiss from the last turn.
@@ -3520,6 +3560,15 @@ export class ChatEngine {
             ]
           : []
       )
+      // The full setup briefing belongs to the turn where the user explicitly
+      // typed @cio-utility. Reuse turns (the invocation happened earlier in this
+      // thread) get the compact contract instead so the full docs are never
+      // re-dumped into context.
+      const utilityContract = !allowManagement
+        ? ''
+        : explicitUtilityInvocation
+          ? CIO_UTILITY_SETUP_PROMPT
+          : CIO_UTILITY_REUSE_PROMPT
       if (useDirectGateway) {
         // Harnesses with persistent extension-backed sessions (Pi) receive the
         // turn-scoped endpoint through a session-keyed handoff so their
@@ -3528,11 +3577,7 @@ export class ChatEngine {
           await publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
         }
         this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
-        return [
-          gateway.directInstructions,
-          allowManagement ? CIO_UTILITY_SETUP_PROMPT : '',
-          ...skillInstructions
-        ]
+        return [gateway.directInstructions, utilityContract, ...skillInstructions]
           .filter(Boolean)
           .join('\n\n')
       }
@@ -3548,9 +3593,7 @@ export class ChatEngine {
         await applyRuntime(projectPath, null, sessionId)
         await gateway.cleanup()
         gateway = undefined
-        return [allowManagement ? CIO_UTILITY_SETUP_PROMPT : '', ...skillInstructions]
-          .filter(Boolean)
-          .join('\n\n')
+        return [utilityContract, ...skillInstructions].filter(Boolean).join('\n\n')
       }
       const environment = { ...(overlay.env ?? {}) }
       for (const { utility } of resolvedUtilities) {
@@ -3577,11 +3620,7 @@ export class ChatEngine {
         gateway,
         threadId
       })
-      return [
-        gateway.instructions,
-        allowManagement ? CIO_UTILITY_SETUP_PROMPT : '',
-        ...skillInstructions
-      ]
+      return [gateway.instructions, utilityContract, ...skillInstructions]
         .filter(Boolean)
         .join('\n\n')
     } catch (error) {
@@ -3612,6 +3651,100 @@ export class ChatEngine {
       }
     })()
     await turn.cleanupPromise
+  }
+
+  /**
+   * Prepare the app utility gateway for one audit turn. Every audit dispatch
+   * path (independent, implementation, achievement, Assignment) routes through
+   * this shared helper so the auditor always reaches cio_util_find / activate
+   * / invoke (and any MCP-backed knowledge utility such as framework docs)
+   * exactly like a regular project thread. On preparation failure the
+   * instructions carry the limitation note the auditor must record in its
+   * report instead of silently auditing without the gateway.
+   */
+  private async prepareAuditUtilities(
+    driver: HarnessDriver,
+    projectId: string,
+    auditorThread: Thread,
+    sessionId: string,
+    projectPath: string,
+    settings: ThreadSettings,
+    budgetContext: UtilityTurnBudgetContext
+  ): Promise<{ instructions: string; runtimeAvailable: boolean }> {
+    try {
+      const instructions = await this.prepareTurnUtilities(
+        driver,
+        projectId,
+        auditorThread.id,
+        sessionId,
+        projectPath,
+        settings,
+        budgetContext,
+        auditorThread.title
+      )
+      return { instructions, runtimeAvailable: Boolean(instructions) }
+    } catch (error) {
+      Logger.error('Audit utility preparation failed', {
+        projectId,
+        threadId: auditorThread.id,
+        sessionId,
+        error: rawErrorMessage(error)
+      })
+      return {
+        instructions: `The app utility gateway could not be prepared for this audit: ${rawErrorMessage(error)}. Record this exact limitation in verification.utilities and verification.limitations.`,
+        runtimeAvailable: false
+      }
+    }
+  }
+
+  /** Correction prompt for a rejected audit report. Evidence-gap rejections
+   *  (a missing utility-search call, unmatched commands, untargeted files)
+   *  cannot be fixed by editing JSON, so the auditor is told to actually
+   *  perform the missing verification work in its still-open session before
+   *  re-emitting the corrected report. Shape-only rejections keep the tight
+   *  JSON-only correction contract. */
+  private auditCorrectionPrompt(error: Error | null): string {
+    const issues = error instanceof AuditReportValidationError ? error.issues : []
+    const evidenceGaps = issues.filter(
+      (issue) =>
+        issue.includes(`no ${UTILITY_SEARCH_TOOL_NAME} call`) ||
+        issue.includes('no matching completed command') ||
+        issue.includes('no matching invocation') ||
+        issue.includes('no matched invocation to persist') ||
+        issue.includes('did not explicitly target audited file')
+    )
+    if (evidenceGaps.length === 0) {
+      return [
+        'Your previous audit response was not valid JSON.',
+        'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
+        `Previous validation error: ${error?.message ?? 'unknown format error'}`
+      ].join('\n\n')
+    }
+    return [
+      'Your previous audit report was rejected because its verification claims do not match the executed evidence in this session:',
+      ...evidenceGaps.map((issue) => `- ${issue}`),
+      `This session is still open, so the app utility gateway (search with ${UTILITY_SEARCH_TOOL_NAME}, activate, invoke) and the read-only tools remain available for this turn: perform the missing work now.`,
+      `Call ${UTILITY_SEARCH_TOOL_NAME} for every framework, MCP, or skill utility the report mentions, activate and invoke the relevant result in non-writing mode, and execute the commands the report claims, then return exactly one corrected audit-report JSON object that reflects only evidence you actually observed in this session.`,
+      'Preserve the findings that remain accurate, update the verification evidence for what you just executed, and never invent execution evidence. Return the corrected JSON object with no Markdown fences or commentary.'
+    ].join('\n')
+  }
+
+  /** Turn-scoped utility gateway cleanup shared by every audit dispatch path. */
+  private async cleanupAuditUtilities(
+    scope: string,
+    projectId: string,
+    coordinatorThreadId: string,
+    auditorThreadId: string,
+    sessionId: string
+  ): Promise<void> {
+    await this.cleanupTurnUtilities(sessionId).catch((error) => {
+      Logger.error(`${scope} audit utility cleanup failed`, {
+        projectId,
+        threadId: coordinatorThreadId,
+        auditorThreadId,
+        error: rawErrorMessage(error)
+      })
+    })
   }
 
   /**
@@ -3656,7 +3789,10 @@ export class ChatEngine {
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
         executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
-        allowManagement: false,
+        // A steered turn keeps the setup + diagnostics contract alive when the
+        // user has invoked @cio-utility in this thread, so reuse survives a
+        // steer landing after the previous turn's gateway cleanup.
+        allowManagement: await this.hasCioUtilityInvocation(projectId, threadId),
         ...(this.pendingBrainstormTurns.has(sessionId)
           ? {
               saveBrainstormNotes: (markdown: string) =>
@@ -6840,6 +6976,7 @@ export class ChatEngine {
       settings: steerSettings,
       references: validatedPromptReferences
     })
+    if (isCioUtilityRequest(text)) this.cioUtilityThreads.set(threadId, true)
     await this.rearmSteerUtilities(
       driver,
       projectId,
@@ -7544,7 +7681,10 @@ export class ChatEngine {
         this.planningSessions.delete(sessionId)
       }
     } catch (error) {
-      await this.threadManager.setStatus(projectId, threadId, 'failed')
+      await this.threadManager.setStatus(projectId, threadId, 'failed', {
+        error: rawErrorMessage(error),
+        errorDetail: rawErrorDetail(error)
+      })
       throw error
     }
     const modelNeedsImageDescriptor = await this.modelLacksVision(projectId, settings)
@@ -7721,6 +7861,13 @@ export class ChatEngine {
       parentTurnId: messageId
     }
     const utilitySetupRequested = origin === 'user' && isCioUtilityRequest(text)
+    if (utilitySetupRequested) this.cioUtilityThreads.set(threadId, true)
+    // Once @cio-utility has been invoked in this thread (earlier or now), later
+    // turns keep the setup + diagnostics contract reusable without repeating
+    // the invocation. Other utilities were already freely invocable whenever
+    // the gateway runs.
+    const utilitySetupAllowed =
+      utilitySetupRequested || (await this.hasCioUtilityInvocation(projectId, threadId))
     // A web-only chat skips the app gateway only when the harness can search
     // the web natively (claude-code, codex, cline, antigravity) or cannot host
     // the gateway at all. Pi has NO native web tools   the gateway is its only
@@ -7741,10 +7888,11 @@ export class ChatEngine {
       targetThread?.title ?? '',
       isChatThread &&
         !chatFileSystemEnabled &&
-        !utilitySetupRequested &&
+        !utilitySetupAllowed &&
         (driverHasNativeWebSearch || !driverCanPublishGateway),
-      utilitySetupRequested,
-      activeBrainstormSession
+      utilitySetupAllowed,
+      activeBrainstormSession,
+      utilitySetupRequested
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -8045,7 +8193,10 @@ export class ChatEngine {
         if (shouldScheduleInitialSpec && !promptDispatched) {
           await this.clearPendingInitialSpec(projectId, threadId)
         }
-        await this.threadManager.setStatus(projectId, threadId, 'failed')
+        await this.threadManager.setStatus(projectId, threadId, 'failed', {
+          error: rawErrorMessage(error),
+          errorDetail: rawErrorDetail(error)
+        })
         await this.broadcastThreadSessionError(
           projectId,
           threadId,
@@ -8104,7 +8255,7 @@ export class ChatEngine {
         allowedTools:
           isChatThread &&
           !chatFileSystemEnabled &&
-          !utilitySetupRequested &&
+          !utilitySetupAllowed &&
           settings.providerId &&
           settings.modelId
             ? CHAT_WEB_ONLY_TOOLS
@@ -8152,7 +8303,10 @@ export class ChatEngine {
       this.preparedImplementationSessions.delete(sessionId)
       const failure = error instanceof Error ? error.message : String(error)
       await this.finishCheckpoint(sessionId, this.sessionRegistry.get(sessionId), 'failed', failure)
-      await this.threadManager.setStatus(projectId, threadId, 'failed')
+      await this.threadManager.setStatus(projectId, threadId, 'failed', {
+        error: failure,
+        errorDetail: rawErrorDetail(error)
+      })
       await this.broadcastThreadSessionError(
         projectId,
         threadId,
@@ -8413,7 +8567,13 @@ export class ChatEngine {
         Logger.dev('Temporary chat turn cancelled before completion:', error)
         return undefined
       }
-      await this.notifyTemporaryChatCompletion(projectId, threadId, temporary.id, 'error')
+      await this.notifyTemporaryChatCompletion(
+        projectId,
+        threadId,
+        temporary.id,
+        'error',
+        rawErrorDetail(error)
+      )
       throw error
     }
   }
@@ -8484,6 +8644,7 @@ export class ChatEngine {
             },
             title,
             false,
+            true,
             true
           )
         : ''
@@ -8812,12 +8973,13 @@ export class ChatEngine {
     projectId: string,
     threadId: string,
     temporaryChatId: string,
-    kind: 'completed' | 'error'
+    kind: 'completed' | 'error',
+    errorDetail?: string
   ): Promise<void> {
     try {
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread) return
-      notifyTemporaryChat(thread, temporaryChatId, kind)
+      notifyTemporaryChat(thread, temporaryChatId, kind, errorDetail)
     } catch (error) {
       Logger.dev('Temporary chat notification dispatch failed:', error)
     }
@@ -10638,6 +10800,12 @@ export class ChatEngine {
         Logger.dev('Thread artifact directory cleanup was incomplete:', error)
       )
     }
+
+    // The thread utilities bank is per-thread bookkeeping; it dies with the
+    // thread so deleted threads never leave stale utility entries behind.
+    await this.utilityOrchestration
+      .deleteThreadBank(threadId)
+      .catch((error: unknown) => Logger.dev('Thread utilities bank cleanup failed:', error))
   }
 
   /** Reply to a pending permission request (from the UI permission card). */
@@ -12509,7 +12677,11 @@ export class ChatEngine {
         return null
       }
       this.markEngineeringLifecycleFailure(projectId, threadId, error)
-      await this.threadManager.setStatus(projectId, threadId, 'failed', { read: false })
+      await this.threadManager.setStatus(projectId, threadId, 'failed', {
+        read: false,
+        error: rawErrorMessage(error),
+        errorDetail: rawErrorDetail(error)
+      })
       throw error
     } finally {
       this.activeBrainstormOperations.delete(operationKey)
@@ -13073,7 +13245,11 @@ export class ChatEngine {
         }
       })
       this.markEngineeringLifecycleFailure(projectId, threadId, error)
-      await this.threadManager.setStatus(projectId, threadId, 'failed', { read: false })
+      await this.threadManager.setStatus(projectId, threadId, 'failed', {
+        read: false,
+        error: rawErrorMessage(error),
+        errorDetail: rawErrorDetail(error)
+      })
       throw error
     } finally {
       if (sessionId) {
@@ -13220,7 +13396,11 @@ export class ChatEngine {
       return generated
     } catch (error) {
       this.markEngineeringLifecycleFailure(projectId, threadId, error)
-      await this.threadManager.setStatus(projectId, threadId, 'failed', { read: false })
+      await this.threadManager.setStatus(projectId, threadId, 'failed', {
+        read: false,
+        error: rawErrorMessage(error),
+        errorDetail: rawErrorDetail(error)
+      })
       throw error
     } finally {
       this.activeBrainstormOperations.delete(operationKey)
@@ -14738,9 +14918,32 @@ export class ChatEngine {
     if (!transcript.trim()) {
       throw new Error('The thread has no auditable conversation yet.')
     }
+    // A rework cycle: a previous report exists and the coordinator agent was
+    // sent rework feedback after it. The next audit verifies that rework
+    // against the previous findings instead of re-judging the whole thread.
+    const previousReport =
+      coordinator.activeAuditId !== undefined
+        ? (this.auditEngine
+            .listVersions(projectId, coordinatorThreadId, coordinator.activeAuditId)
+            .sort((left, right) => right.version - left.version)[0] ?? null)
+        : null
+    const previousReportPath = previousReport
+      ? await this.artifactRef(
+          projectId,
+          coordinatorThreadId,
+          join('versions', `${previousReport.id}-audit-v${previousReport.version}.md`)
+        )
+      : undefined
     const basePrompt = [
       'Independently audit the current work of this thread.',
       'No specification exists: the transcript below contains the user\u2019s requests and the agent\u2019s final outputs. Treat it as the contract, and verify the delivered work against the repository with read-only tools before reporting.',
+      ...(previousReport && previousReportPath
+        ? [
+            '',
+            `This is a rework-verification pass. A previous audit report (v${previousReport.version}) exists at ${previousReportPath}; read it first. The transcript below also contains the rework instructions and the agent\u2019s latest response that acted on that report.`,
+            'Judge this run against the previous report: keep every previous finding that is still unresolved (same id, updated evidence), omit findings the rework resolved, report new findings the rework introduced, and state the resolution outcome of every previous finding in the executive summary. Re-run the applicable verification checks against the reworked files.'
+          ]
+        : []),
       '',
       'Thread transcript:',
       '',
@@ -14749,6 +14952,31 @@ export class ChatEngine {
     const auditStartedAt = Date.now()
     const runId = `${auditStartedAt}-${randomBytes(4).toString('hex')}`
     let lastError: Error | null = null
+    // A previous failed run leaves the auditor's durable session intact, so
+    // the next run continues from where it stopped instead of re-auditing
+    // the whole thread from scratch.
+    let promptKind: 'initial' | 'resume' | 'correct' =
+      auditorThread.status === 'failed' ? 'resume' : 'initial'
+    let previousFailure = auditorThread.lastError ?? 'The previous run failed.'
+    /** Timestamp of the current dispatch. Responses older than this belong to
+     *  the previous attempt (or run) and must never be accepted as this
+     *  attempt's answer: a resumed codex session can replay its prior
+     *  structured output, and validating that stale report re-throws the
+     *  identical evidence error with zero new auditor work. */
+    let continuationRetries = 0
+
+    /** Continuation prompt for a run that stopped partway: the auditor keeps
+     *  its prior session context, so it resumes rather than restarting. */
+    const resumePrompt = (failure: string): string =>
+      [
+        'Your previous independent audit run stopped partway with an error, and no report was delivered.',
+        `Previous failure: ${failure}`,
+        'Your session still contains the work from that run; continue the audit from where you left off instead of starting over. The transcript below is unchanged and remains the contract. Finish the remaining verification and return exactly one audit-report JSON object with no Markdown fences or commentary.',
+        '',
+        'Thread transcript:',
+        '',
+        transcript
+      ].join('\n')
 
     // The first run permanently initializes the independent audit: the
     // composer switch disappears and the coordinator stays for the thread's
@@ -14757,18 +14985,17 @@ export class ChatEngine {
       independentAuditInitialized: true
     })
     for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
+      const attemptStartedAt = Date.now()
       await this.threadManager.setStatus(projectId, auditorThread.id, 'executing')
       this.handledIdleSessions.delete(sessionId)
       this.markSessionWorking(sessionId)
       const messageId = createMessageId()
       const prompt =
-        attemptIndex === 0
+        promptKind === 'initial'
           ? basePrompt
-          : [
-              'Your previous audit response was not valid JSON.',
-              'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
-              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
-            ].join('\n\n')
+          : promptKind === 'resume'
+            ? resumePrompt(previousFailure)
+            : this.auditCorrectionPrompt(lastError)
       await this.persistOutboundMessage(
         projectId,
         auditorThread.id,
@@ -14778,12 +15005,17 @@ export class ChatEngine {
         [],
         [],
         [],
-        attemptIndex === 0
+        promptKind === 'resume'
           ? {
               action: 'Independent audit',
-              body: 'Auditing the current thread work against its transcript and the repository.'
+              body: 'Continuing the audit from where the previous run stopped.'
             }
-          : undefined,
+          : promptKind === 'initial'
+            ? {
+                action: 'Independent audit',
+                body: 'Auditing the current thread work against its transcript and the repository.'
+              }
+            : undefined,
         'internal'
       )
       const outboundIds = this.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
@@ -14795,12 +15027,35 @@ export class ChatEngine {
         'Independent audit'
       )
       try {
+        const auditUtilityBudgetContext: UtilityTurnBudgetContext = {
+          selectedModelInputTokens: this.selectedModelInputBudget(
+            auditorSettings.providerId,
+            auditorSettings.modelId,
+            projectId
+          ),
+          composedTurnTokens: estimateTextTokens(prompt),
+          parentTurnId: messageId
+        }
+        const utilityTurn = await this.prepareAuditUtilities(
+          driver,
+          projectId,
+          auditorThread,
+          sessionId,
+          projectPath,
+          auditorSettings,
+          auditUtilityBudgetContext
+        )
         await driver.sendPrompt(projectPath, {
           sessionId,
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: await this.cioPrompt('independent-audit-report'),
+          systemPrompt: [
+            await this.cioPrompt('independent-audit-report'),
+            utilityTurn.instructions
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId
         })
@@ -14812,6 +15067,11 @@ export class ChatEngine {
           const messages = await driver.loadMessages(projectPath, sessionId)
           const response = [...messages].reverse().find((message) => message.role === 'assistant')
           if (!response) throw new Error('The Auditor returned no response')
+          if (response.createdAt < attemptStartedAt - 1_000) {
+            throw new Error(
+              'The Auditor session replayed a stale response from a previous turn instead of answering this attempt.'
+            )
+          }
           if (response.error) throw new Error(response.error)
           content =
             response.structuredOutput !== undefined
@@ -14830,7 +15090,7 @@ export class ChatEngine {
           content,
           messages: await driver.loadMessages(projectPath, sessionId),
           auditStartedAt,
-          utilitySearchRequired: false
+          utilitySearchRequired: utilityTurn.runtimeAvailable
         })
         content = await this.persistAssignmentAuditCheckEvidence({
           projectId,
@@ -14853,14 +15113,15 @@ export class ChatEngine {
             modelId: auditorSettings.modelId
           }
         })
-        await this.threadManager.updateThread(projectId, coordinatorThreadId, {
-          activeAuditId: report.id,
-          activeAuditVersion: report.version
+        await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'report_ready', {
+          id: report.id,
+          version: report.version
         })
         await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
           read: false
         })
         await this.loadMessages(projectId, auditorThread.id)
+        await this.notifyIndependentAuditCompletion(projectId, coordinatorThreadId, 'completed')
         return {
           report,
           auditorThread:
@@ -14868,18 +15129,74 @@ export class ChatEngine {
         }
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('The Auditor failed.')
+        previousFailure = lastError.message
+        // A provider usage/rate-limit reset parks the session in a retry wait
+        // (sometimes hours away). Every further prompt in this run bounces off
+        // it within seconds, so burning the remaining attempts only delays the
+        // inevitable: fail fast with the reset window instead.
+        const pendingRetry = this.retryScheduler?.getPendingRetry(sessionId)
+        if (pendingRetry?.retryAt !== undefined && pendingRetry.retryAt > Date.now() + 60_000) {
+          lastError = new Error(
+            `The Auditor's provider hit its usage limit before the audit could finish. The provider resets at ${new Date(pendingRetry.retryAt).toLocaleTimeString()}; run the audit again after that window.`
+          )
+          break
+        }
         const correctableOutput =
           lastError instanceof AuditReportValidationError ||
           lastError instanceof SyntaxError ||
           lastError.message === 'The Auditor returned no response'
-        if (!correctableOutput) break
+        if (correctableOutput) {
+          promptKind = 'correct'
+        } else if (continuationRetries < 1 && attemptIndex < 2) {
+          // A mid-run failure (stream error, timeout, transport crash) gets one
+          // automatic continuation attempt before the run is marked failed:
+          // the auditor resumes its own session rather than starting over.
+          continuationRetries += 1
+          promptKind = 'resume'
+        } else {
+          break
+        }
       } finally {
         this.clearCompletionWaiter(sessionId)
+        await this.cleanupAuditUtilities(
+          'Independent',
+          projectId,
+          coordinatorThreadId,
+          auditorThread.id,
+          sessionId
+        )
       }
     }
 
-    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
+    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', {
+      read: false,
+      error: (lastError ?? new Error('The independent audit failed.')).message,
+      errorDetail: lastError ? rawErrorDetail(lastError) : undefined
+    })
+    await this.notifyIndependentAuditCompletion(
+      projectId,
+      coordinatorThreadId,
+      'error',
+      lastError ? rawErrorDetail(lastError) : undefined
+    )
     throw lastError ?? new Error('The independent audit failed.')
+  }
+
+  /** Route an independent audit completion through the coordinator thread's
+   *  notification channel, mirroring the temporary-chat completion path. */
+  private async notifyIndependentAuditCompletion(
+    projectId: string,
+    coordinatorThreadId: string,
+    kind: 'completed' | 'error',
+    errorDetail?: string
+  ): Promise<void> {
+    try {
+      const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+      if (!coordinator) return
+      notifyIndependentAudit(coordinator, kind, errorDetail)
+    } catch (error) {
+      Logger.dev('Independent audit notification dispatch failed:', error)
+    }
   }
 
   /** Enable Achievement coordination without changing the thread's workspace scope. */
@@ -16079,27 +16396,17 @@ export class ChatEngine {
       let utilityInstructions = ''
       let utilityRuntimeAvailable = false
       if (!repairing) {
-        try {
-          utilityInstructions = await this.prepareTurnUtilities(
-            driver,
-            projectId,
-            auditorThread.id,
-            sessionId,
-            projectPath,
-            auditorSettings,
-            auditUtilityBudgetContext,
-            auditorThread.title
-          )
-          utilityRuntimeAvailable = Boolean(utilityInstructions)
-        } catch (error) {
-          utilityInstructions = `The app utility gateway could not be prepared for this audit: ${rawErrorMessage(error)}. Record this exact limitation in verification.utilities and verification.limitations.`
-          Logger.error('Assignment audit utility preparation failed', {
-            projectId,
-            threadId: coordinatorThreadId,
-            auditorThreadId: auditorThread.id,
-            error: rawErrorMessage(error)
-          })
-        }
+        const utilityTurn = await this.prepareAuditUtilities(
+          driver,
+          projectId,
+          auditorThread,
+          sessionId,
+          projectPath,
+          auditorSettings,
+          auditUtilityBudgetContext
+        )
+        utilityInstructions = utilityTurn.instructions
+        utilityRuntimeAvailable = utilityTurn.runtimeAvailable
       }
       await this.persistOutboundMessage(
         projectId,
@@ -16141,7 +16448,10 @@ export class ChatEngine {
           text: prompt,
           attachments: [],
           systemPrompt: auditSystemPrompt,
-          allowedTools: utilityRuntimeAvailable ? undefined : AUDIT_ALLOWED_TOOLS,
+          // Audits are read-only regardless of gateway availability: the
+          // allowlist never opens file-mutating tools, even when the gateway
+          // runtime is prepared (previously this branch was unrestricted).
+          allowedTools: AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId
         })
         const streamed = await completion
@@ -16255,14 +16565,13 @@ export class ChatEngine {
         break
       } finally {
         this.clearCompletionWaiter(sessionId)
-        await this.cleanupTurnUtilities(sessionId).catch((error) => {
-          Logger.error('Assignment audit utility cleanup failed', {
-            projectId,
-            threadId: coordinatorThreadId,
-            auditorThreadId: auditorThread.id,
-            error: rawErrorMessage(error)
-          })
-        })
+        await this.cleanupAuditUtilities(
+          'Assignment',
+          projectId,
+          coordinatorThreadId,
+          auditorThread.id,
+          sessionId
+        )
       }
     }
 
@@ -16294,7 +16603,11 @@ export class ChatEngine {
     await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
       read: false
     })
-    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
+    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', {
+      read: false,
+      error: failure.message,
+      errorDetail: rawErrorDetail(failure)
+    })
     throw failure
   }
 
@@ -16339,11 +16652,7 @@ export class ChatEngine {
       const prompt =
         attemptIndex === 0
           ? basePrompt
-          : [
-              'Your previous audit response was not valid JSON.',
-              'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
-              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
-            ].join('\n\n')
+          : this.auditCorrectionPrompt(lastError)
       await this.persistOutboundMessage(
         projectId,
         auditorThread.id,
@@ -16367,12 +16676,35 @@ export class ChatEngine {
         'Implementation audit'
       )
       try {
+        const auditUtilityBudgetContext: UtilityTurnBudgetContext = {
+          selectedModelInputTokens: this.selectedModelInputBudget(
+            auditorSettings.providerId,
+            auditorSettings.modelId,
+            projectId
+          ),
+          composedTurnTokens: estimateTextTokens(prompt),
+          parentTurnId: messageId
+        }
+        const utilityTurn = await this.prepareAuditUtilities(
+          driver,
+          projectId,
+          auditorThread,
+          sessionId,
+          projectPath,
+          auditorSettings,
+          auditUtilityBudgetContext
+        )
         await driver.sendPrompt(projectPath, {
           sessionId,
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: await this.cioPrompt('audit-report'),
+          systemPrompt: [
+            await this.cioPrompt('audit-report'),
+            utilityTurn.instructions
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId
         })
@@ -16435,6 +16767,13 @@ export class ChatEngine {
         if (!correctableOutput) break
       } finally {
         this.clearCompletionWaiter(sessionId)
+        await this.cleanupAuditUtilities(
+          'Implementation',
+          projectId,
+          coordinatorThreadId,
+          auditorThread.id,
+          sessionId
+        )
       }
     }
 
@@ -16442,7 +16781,11 @@ export class ChatEngine {
     await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
       read: false
     })
-    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
+    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', {
+      read: false,
+      error: (lastError ?? new Error('The Auditor failed.')).message,
+      errorDetail: lastError ? rawErrorDetail(lastError) : undefined
+    })
     throw lastError ?? new Error('The Auditor failed.')
   }
 
@@ -16487,11 +16830,7 @@ export class ChatEngine {
       const prompt =
         attemptIndex === 0
           ? basePrompt
-          : [
-              'Your previous audit response was not valid JSON.',
-              'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
-              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
-            ].join('\n\n')
+          : this.auditCorrectionPrompt(lastError)
       await this.persistOutboundMessage(
         projectId,
         auditorThread.id,
@@ -16515,12 +16854,35 @@ export class ChatEngine {
         'Achievement audit'
       )
       try {
+        const auditUtilityBudgetContext: UtilityTurnBudgetContext = {
+          selectedModelInputTokens: this.selectedModelInputBudget(
+            auditorSettings.providerId,
+            auditorSettings.modelId,
+            projectId
+          ),
+          composedTurnTokens: estimateTextTokens(prompt),
+          parentTurnId: messageId
+        }
+        const utilityTurn = await this.prepareAuditUtilities(
+          driver,
+          projectId,
+          auditorThread,
+          sessionId,
+          projectPath,
+          auditorSettings,
+          auditUtilityBudgetContext
+        )
         await driver.sendPrompt(projectPath, {
           sessionId,
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: await this.cioPrompt('audit-report'),
+          systemPrompt: [
+            await this.cioPrompt('audit-report'),
+            utilityTurn.instructions
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId
         })
@@ -16591,6 +16953,13 @@ export class ChatEngine {
         break
       } finally {
         this.clearCompletionWaiter(sessionId)
+        await this.cleanupAuditUtilities(
+          'Achievement',
+          projectId,
+          coordinatorThreadId,
+          auditorThread.id,
+          sessionId
+        )
       }
     }
 
@@ -16598,7 +16967,11 @@ export class ChatEngine {
     await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
       read: false
     })
-    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
+    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', {
+      read: false,
+      error: (lastError ?? new Error('The Achievement Auditor failed.')).message,
+      errorDetail: lastError ? rawErrorDetail(lastError) : undefined
+    })
     throw lastError ?? new Error('The Achievement Auditor failed.')
   }
 
@@ -17717,7 +18090,8 @@ export class ChatEngine {
     }
 
     await this.threadManager.setStatus(projectId, threadId, 'failed', {
-      read: false
+      read: false,
+      error: lastError || 'The specification could not be generated.'
     })
     pending = {
       ...pending,
@@ -18308,6 +18682,20 @@ export class ChatEngine {
     }
     if (!projectPath) throw new Error(`Project has no working directory: ${projectId}`)
     return projectPath
+  }
+
+  /**
+   * Neutral working directory for auxiliary disposable sessions (grading
+   * judges and quota reads) so they never depend on where a conversation
+   * lived: the project row may be gone long before its snapshots are.
+   */
+  private async auxiliaryWorkingDirectory(): Promise<string> {
+    try {
+      return await this.resolveProjectPath(INBOX_PROJECT_ID)
+    } catch {
+      await this.storage.ensureDirectory(CHATS_CWD_DIR)
+      return this.storage.resolve(CHATS_CWD_DIR)
+    }
   }
 
   /** True when the selected model is explicitly marked as text-only by its catalog
@@ -18917,11 +19305,21 @@ export class ChatEngine {
       }
     }
 
+    // A `message.completed` that arrives after the session's idle was already
+    // handled belongs to work outside the finished turn (e.g. a Codex
+    // collaboration sub-agent reporting late). It must not resurrect the
+    // settled thread back to `executing`: markSessionWorking would flip the
+    // status without arming any watchdog, leaving the thread stuck forever.
+    // A genuinely new turn re-arms through its own part events or an
+    // authoritative `session.status working` before any such completion.
+    const idleAlreadyHandled =
+      event.type === 'message.completed' && this.handledIdleSessions.has(event.sessionId)
     const confirmsActiveWork =
-      event.type === 'message.part.updated' ||
-      event.type === 'message.part.delta' ||
-      (event.type === 'message.completed' && !event.error) ||
-      (event.type === 'session.status' && event.status.state === 'working')
+      !idleAlreadyHandled &&
+      (event.type === 'message.part.updated' ||
+        event.type === 'message.part.delta' ||
+        (event.type === 'message.completed' && !event.error) ||
+        (event.type === 'session.status' && event.status.state === 'working'))
     if (eventOwner && confirmsActiveWork) this.markSessionWorking(event.sessionId)
 
     // Stamp thinking start time on reasoning parts that lack it.
@@ -20253,7 +20651,11 @@ export class ChatEngine {
       ...(issue.attempt === undefined ? {} : { attempt: issue.attempt })
     })
     if (!tracked && scheduler.isEnabled) {
-      await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', { read: false })
+      await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+        read: false,
+        error: issue.message,
+        errorDetail: issue.rawError
+      })
       return false
     }
     return true
@@ -20283,10 +20685,10 @@ export class ChatEngine {
           })
         }
       }
-      await this.onSessionError(sessionId, error, true)
+      await this.onSessionError(sessionId, error, true, issue.rawError)
       return
     }
-    await this.onSessionError(sessionId, error, retryScheduled)
+    await this.onSessionError(sessionId, error, retryScheduled, issue.rawError)
   }
 
   /**
@@ -21041,7 +21443,10 @@ export class ChatEngine {
             rawErrorMessage(error),
             rawErrorDetail(error)
           )
-          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+            error: issue.message,
+            errorDetail: issue.rawError
+          })
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
         return
@@ -21100,7 +21505,10 @@ export class ChatEngine {
               rawErrorMessage(error),
               rawErrorDetail(error)
             )
-            await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+            await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+              error: issue.message,
+              errorDetail: issue.rawError
+            })
             await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
           }
           return
@@ -21140,7 +21548,10 @@ export class ChatEngine {
             rawErrorMessage(error),
             rawErrorDetail(error)
           )
-          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+            error: issue.message,
+            errorDetail: issue.rawError
+          })
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
         return
@@ -21176,7 +21587,10 @@ export class ChatEngine {
             rawErrorMessage(error),
             rawErrorDetail(error)
           )
-          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+            error: issue.message,
+            errorDetail: issue.rawError
+          })
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
         return
@@ -21421,7 +21835,7 @@ export class ChatEngine {
       Logger.error('history mirror failed:', error)
       if (this.userAbortedSessions.has(sessionId)) return
       const issue = historyMirrorIssue(error, info.driverId)
-      await this.onSessionError(sessionId, issue.message)
+      await this.onSessionError(sessionId, issue.message, false, issue.rawError)
       await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
     } finally {
       const interviewWaiting =
@@ -21704,7 +22118,7 @@ export class ChatEngine {
       )
       for (const row of rows) {
         const candidate = this.toRankingCandidate(row)
-        const score = await this.gradeCandidateCore(row.project_id, candidate)
+        const score = await this.gradeCandidateCore(candidate)
         if (score !== null) {
           const durationMs = Math.max(0, row.ended_at - row.started_at)
           const applied = this.rankingSnapshotRepo.deleteScoredInTransaction(
@@ -21745,14 +22159,12 @@ export class ChatEngine {
   }
 
   /** Judge one candidate and persist nothing; returns the 0–10 score, or null on judge failure. */
-  private async gradeCandidateCore(
-    projectId: string,
-    candidate: RankingGradeCandidate
-  ): Promise<number | null> {
+  private async gradeCandidateCore(candidate: RankingGradeCandidate): Promise<number | null> {
     try {
-      const resolved = await this.resolve(projectId, candidate.harnessId)
-      const { driver } = resolved
-      const score = await driver.gradeTurn(resolved.projectPath, {
+      // The snapshot is self-contained: grading judges the conversation payload,
+      // never the project, so a deleted or renamed project cannot block it.
+      const driver = await this.driverForAccount(candidate.harnessId)
+      const score = await driver.gradeTurn(await this.auxiliaryWorkingDirectory(), {
         settings: {
           harnessId: candidate.harnessId,
           providerId: candidate.providerId,
@@ -22207,7 +22619,8 @@ export class ChatEngine {
   private async onSessionError(
     sessionId: string,
     error?: string,
-    retryScheduled = false
+    retryScheduled = false,
+    errorDetail?: string
   ): Promise<void> {
     const info = this.sessionRegistry.get(sessionId)
     if (!info) return
@@ -22237,7 +22650,9 @@ export class ChatEngine {
         info.threadId,
         retryPaused ? 'working-paused' : 'failed',
         {
-          read: false
+          read: false,
+          ...(error ? { error } : {}),
+          ...(errorDetail ? { errorDetail } : {})
         }
       )
       await this.finishCheckpoint(sessionId, info, 'failed', error ?? 'Harness session failed')
@@ -22855,7 +23270,7 @@ export class ChatEngine {
     // Surface the issue to every renderer bound to the thread so the user sees
     // the real failure (with a Retry affordance) instead of a silent fail.
     await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
-    await this.onSessionError(sessionId, issue.message)
+    await this.onSessionError(sessionId, issue.message, false, issue.rawError)
     try {
       const driver = this.driverForRuntime(info.driverId, info.accountId)
       if (driver) await driver.abort(info.projectPath, sessionId)

@@ -104,6 +104,10 @@
   /** Backed by the per-project files store so sidebar tab remounts keep it. */
   let lastTurnOnly = $derived(projectState.lastTurnOnly)
   let autoFiltered = $state(false)
+  /** Set when the user manually turns the auto-applied "Last turn" filter
+   *  off. While set, checkpoint navigation must not silently re-enable the
+   *  filter; it clears once the user leaves checkpoint files entirely. */
+  let lastTurnAutoOverride = $state(false)
   let searchRequestId = 0
   /** Directories the user explicitly collapsed while a filter (search query or
    *  last-turn mode) is active. Filtered trees force-render matching folders
@@ -244,12 +248,16 @@
     const checkpointId = activeCheckpointId
     if (checkpointId && checkpointId !== lastAppliedCheckpointId) {
       lastAppliedCheckpointId = checkpointId
+      if (lastTurnAutoOverride) return
       projectFilesWorkspace.setLastTurnOnly(projectId, true)
       autoFiltered = true
-    } else if (!checkpointId && autoFiltered) {
+    } else if (!checkpointId) {
       lastAppliedCheckpointId = null
-      projectFilesWorkspace.setLastTurnOnly(projectId, false)
-      autoFiltered = false
+      if (autoFiltered) {
+        projectFilesWorkspace.setLastTurnOnly(projectId, false)
+        autoFiltered = false
+      }
+      lastTurnAutoOverride = false
     }
   })
 
@@ -325,7 +333,10 @@
   function toggleLastTurnFilter(): void {
     const next = !lastTurnOnly
     projectFilesWorkspace.setLastTurnOnly(projectId, next)
-    if (!next) autoFiltered = false
+    if (!next) {
+      if (autoFiltered) lastTurnAutoOverride = true
+      autoFiltered = false
+    }
     clearCollapsedOverrides()
     if (!next) void revealActivePathAfterFilterChange()
   }

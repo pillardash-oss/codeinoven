@@ -140,6 +140,7 @@
     INBOX_PROJECT_ID,
     DEFAULT_THREAD_TITLE,
     DEFAULT_SCOPE_BUCKET_ID,
+    isThreadBusy,
     isThreadWorking,
     isOrchestrationChildThread
   } from '$shared/types'
@@ -865,6 +866,83 @@
     coordinatorDockState.forThread(selectedThread?.projectId, selectedThread?.id)
   )
 
+  /** The auditor thread of the on-screen coordinator, if one exists. Orchestration
+   *  children stay out of the visible thread list but land in the scope store
+   *  through their broadcast updates, so the rail can mirror their state. */
+  let auditorThread = $derived.by(() => {
+    const auditorId = selectedThread?.auditorThreadId
+    if (!auditorId) return null
+    return scopeState.allScopeThreads.find((candidate) => candidate.id === auditorId) ?? null
+  })
+
+  /** Auditor threads are orchestration children: the bounded initial paint and
+   *  scope hydration both skip them, so after a reload the scope store only
+   *  knows about one if a live broadcast happened in this session. Fetch it
+   *  once and merge it in, so the rail badge can never silently miss a
+   *  persisted terminal state (failed, report ready). */
+  const auditorFetchRequested = new SvelteSet<string>()
+  $effect(() => {
+    const current = selectedThread
+    const auditorId = current?.auditorThreadId
+    if (!current || !auditorId) return
+    const scopeKey = `${current.projectId}:${auditorId}`
+    if (auditorThread || auditorFetchRequested.has(scopeKey)) return
+    auditorFetchRequested.add(scopeKey)
+    void invoke('thread:get', current.projectId, auditorId)
+      .then((fetched) => {
+        if (fetched) scopeState.updateThread(fetched)
+      })
+      .catch(() => {
+        // Missing or deleted auditor: leave the badge unlit rather than retry
+        // forever on a thread that cannot exist.
+      })
+  })
+
+  /** Rail badge for the coordinator dock item, mirroring the auditor's live
+   *  state so a hidden context sidebar still reports working / error / done. */
+  let coordinatorRailBadge = $derived.by((): ContextDockItem['badge'] => {
+    if (!selectedThread) return undefined
+    const auditor = auditorThread
+    if (auditor?.status === 'failed') return 'error'
+    if (auditor?.status === 'awaiting_approval') return 'attention'
+    // A usage-limit wait parks the auditor in `working-paused` (the scheduled
+    // auto-resume), which reads as "will retry", not actively working.
+    if (auditor?.status === 'working-paused') return 'working-paused'
+    if (
+      selectedThread.auditState === 'report_ready' &&
+      (auditor === null || auditor.status === 'completed')
+    ) {
+      return 'done'
+    }
+    if (coordinatorHasActiveDelegates(selectedThread, scopeState.allScopeThreads)) return 'working'
+    if (
+      auditor &&
+      (isThreadBusy(auditor) ||
+        (agentRuns.hasSettled(auditor.projectId, auditor.id) &&
+          agentRuns.isBusy(auditor.projectId, auditor.id)))
+    ) {
+      return 'working'
+    }
+    return undefined
+  })
+
+  let coordinatorRailBadgeTitle = $derived.by(() => {
+    switch (coordinatorRailBadge) {
+      case 'working':
+        return 'Auditor working'
+      case 'working-paused':
+        return 'Auditor waiting to retry'
+      case 'error':
+        return 'Auditor failed'
+      case 'attention':
+        return 'Auditor needs attention'
+      case 'done':
+        return 'Audit report ready'
+      default:
+        return undefined
+    }
+  })
+
   function openCoordinatorTab(): void {
     if (!coordinator) return
     coordinatorDockState.setAutoOpen(true)
@@ -1200,6 +1278,8 @@
             label: coordinator.label,
             icon: coordinator.icon,
             active: dockKindActive('coordinator'),
+            badge: coordinatorRailBadge,
+            badgeTitle: coordinatorRailBadgeTitle,
             onSelect: () => toggleDockPanel('coordinator', openCoordinatorTab)
           }
         ]
@@ -1674,11 +1754,11 @@
     if (selected && !isOrchestrationChildThread(selected)) upsertThreadInList(selected)
   })
 
-  // Full user-message history is only needed after the history menu opens.
-  // Keeping it out of the thread mount path prevents a hidden database scan on
-  // every switch. Also re-fires when the active thread changes (the callback
-  // pointer swaps on ThreadView mount) so the list refreshes for the new
-  // thread if the menu is already open   without scanning on every mount.
+  // Full user-message history is prefetched by ThreadView shortly after mount
+  // (idle-deferred off the first-paint path), so the panel is already populated
+  // when the menu opens. This effect remains as a fallback: it re-fires when
+  // the active thread changes (the callback pointer swaps on ThreadView mount)
+  // so the list refreshes for the new thread if the menu is already open.
   $effect(() => {
     const load = workspaceState.loadUserMessageHistory
     if (!showHistoryMenu || !load) return
@@ -2992,8 +3072,16 @@
   // ─── Thread actions ──────────────────────────────────────────────────────
 
   /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
-  async function createThreadInProject(project: Project, scopeBucketId?: string): Promise<void> {
+  async function createThreadInProject(project: Project, requestedBucketId?: string): Promise<void> {
+    // Scope inheritance mirrors settings inheritance: the new thread object
+    // carries the current thread's scope bucket, nothing more. It must never
+    // activate the scope sidebar or switch the view  that side effect is
+    // reserved for callers that explicitly ask for a scope bucket (scope
+    // board's new-thread action, file-tree drop, ...).
     const activeThread = workspaceState.selectedThread
+    const inheritedBucketId =
+      activeThread && activeThread.projectId === project.id ? activeThread.scopeBucketId : undefined
+    const scopeBucketId = requestedBucketId ?? inheritedBucketId
     const inheritedSettings = settingsForNewThread(activeThread, threadSettings.lastUsed)
     const existing = findEmptyNewThread(allThreads, project.id, scopeBucketId)
     if (existing) {
@@ -3005,10 +3093,15 @@
         const thread = existing
         upsertThreadInList(thread)
         threadMessages.seedEmpty(thread.projectId, thread.id)
+        // Empty-state creation (no existing thread open): the reused blank
+        // thread still counts as the fresh thread this moment created.
+        if (!activeThread) workspaceState.markThreadFreshFromEmptyState(thread.id)
         workspaceState.openThread(thread, project)
         if (scopeBucketId) {
           scopeState.updateThread(thread)
-          scopeState.showSidebarForThread(thread, scopeBucketId)
+        }
+        if (requestedBucketId) {
+          scopeState.showSidebarForThread(thread, requestedBucketId)
         }
         if (needsSettingsUpdate) {
           void invoke('thread:updateSettings', existing.projectId, existing.id, inheritedSettings)
@@ -3056,12 +3149,16 @@
     expandedFolders.add(project.id)
     if (scopeBucketId) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      scopeState.updateThread(thread as any)
+      if (scopeBucketId) scopeState.updateThread(thread as any)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      scopeState.showSidebarForThread(thread as any, scopeBucketId)
+      if (requestedBucketId) scopeState.showSidebarForThread(thread as any, requestedBucketId)
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     workspaceState.openThread(thread as any, project)
+    // Empty-state creation (no existing thread was open): this new thread gets
+    // the centered composer head start even if the project holds other threads.
+    // Threads created from an existing thread never get the marker.
+    if (!activeThread) workspaceState.markThreadFreshFromEmptyState(thread.id)
     // Persist in background with the same stable id   no ID swap, branch
     // detection runs after the first thread:update broadcast, never blocking typing.
     void invoke('thread:create', {
@@ -4300,8 +4397,9 @@
                   thread={selectedThread}
                   chatMode={mode === 'chats'}
                   allowCenteredComposer={mode === 'chats' ||
-                    ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 &&
-                      !workspaceState.headStartUsedThreadIds.has(selectedThread.id))}
+                    (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
+                      ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 ||
+                        workspaceState.freshEmptyStateThreadIds.has(selectedThread.id)))}
                   onForked={handleForkedThread}
                   projects={visibleProjects}
                   {projectIcons}

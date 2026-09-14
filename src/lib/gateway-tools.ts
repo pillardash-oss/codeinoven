@@ -8,6 +8,8 @@ export const UTILITY_INVOKE_TOOL_NAME = 'cio_util_use'
 export const UTILITY_MANAGE_TOOL_NAME = 'cio_util_manage'
 /** Explicit-turn-only, read-only app diagnostics for debugging user-reported issues. */
 export const UTILITY_DIAGNOSTICS_TOOL_NAME = 'cio_util_diagnose'
+/** Post-compaction capability re-dump: re-lists one utility's full docs by id. */
+export const UTILITY_DOCS_TOOL_NAME = 'cio_util_docs_lookup'
 /** Shell-callable, turn-bound host recovery tool; intentionally never transported through MCP. */
 export const RETRIEVE_MCP_HOST_TOOL_NAME = 'retrieve_mcp_host'
 
@@ -55,7 +57,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_ACTIVATE_TOOL_NAME,
     description:
-      'Activate one installed utility for the current turn and inspect the operations it exposes.',
+      "Activate one installed utility for the current turn and inspect the operations it exposes. The first activation registers the utility in this thread's utilities bank; later turns can invoke it directly by id without re-activating.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -69,7 +71,8 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   },
   {
     name: UTILITY_INVOKE_TOOL_NAME,
-    description: 'Invoke an operation on a utility activated for the current turn.',
+    description:
+      'Invoke an operation on an app utility — activated this turn, or already registered in the thread utilities bank (invoke directly by id; no re-activation needed).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -82,6 +85,24 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
     },
     route: '/invoke',
     sentWhen: 'After a utility has been activated for the current turn'
+  },
+  {
+    name: UTILITY_DOCS_TOOL_NAME,
+    description:
+      "Re-list one utility's full capability documentation (tool schemas, operations, or skill instructions) by its id. Use after context compaction, when an earlier activation result is no longer in your context. Accepts only the utility id; the utility must be available to this turn.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        utility_id: {
+          type: 'string',
+          description: 'Utility identifier, e.g. from the thread utilities bank.'
+        }
+      },
+      required: ['utility_id'],
+      additionalProperties: false
+    },
+    route: '/docs-lookup',
+    sentWhen: "After compaction, when a known utility's capability docs are no longer in context"
   },
   {
     name: UTILITY_MANAGE_TOOL_NAME,

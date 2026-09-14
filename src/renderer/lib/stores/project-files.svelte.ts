@@ -17,7 +17,8 @@ import {
   isDocumentPreviewMime,
   isImageMime,
   isPdfMime,
-  mimeFromPath
+  mimeFromPath,
+  supportsFilePreview
 } from '$lib/mime'
 
 /** How many levels of subfolders "Expand all" reveals below the project root,
@@ -77,6 +78,15 @@ export interface ProjectFilesState {
    *  (per project) instead of local component state so panel remounts from
    *  sidebar tab changes (e.g. previewing a file) do not reset it. */
   lastTurnOnly: boolean
+  /** Monotonic reload tokens per path. Appended to `appfile://` preview URLs
+   *  as a cache-busting `?v=` so previewable files without a text session
+   *  (media, images, SVG, PDF, documents) can be re-read after the underlying
+   *  file changed on disk instead of showing a stale version forever. */
+  previewReloadTokens: Record<string, number>
+  /** Paths whose disk content moved on after the session was read while the
+   *  session still carries unsaved changes. The viewer shows a "Viewing an
+   *  older version" alert for these instead of silently clobbering the draft. */
+  staleFiles: Record<string, boolean>
 }
 
 export interface ProjectFileClipboard {
@@ -112,7 +122,9 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     sessions: {},
     activeScope: DEFAULT_SCOPE_BUCKET_ID,
     chatThreadId: null,
-    lastTurnOnly: false
+    lastTurnOnly: false,
+    previewReloadTokens: {},
+    staleFiles: {}
   }
 }
 
@@ -613,7 +625,10 @@ class ProjectFilesWorkspace {
 
   /** Open a file in preview mode: a transient tab (italicised title) that is
    *  replaced the next time another file is previewed. Double-clicking a file
-   *  (or opening it again in normal mode) pins it as a permanent tab. */
+   *  (or opening it again in normal mode) pins it as a permanent tab. When the
+   *  user is already viewing a file in preview mode and the new file also
+   *  supports preview, the new file opens straight in preview mode instead of
+   *  falling back to the default view. */
   async openFilePreview(projectId: string, path: string): Promise<void> {
     const state = this.ensureState(projectId)
     if (this.focusOpenFileTab(projectId, path)) return
@@ -624,7 +639,10 @@ class ProjectFilesWorkspace {
       await this.replaceWorkingTab(projectId, previewTab, path, true)
       return
     }
-    await this.openWorkingTab(projectId, path, 'source', true)
+    const activeTab = state.tabs.find((candidate) => candidate.id === state.activeTabId)
+    const preferredView: ProjectFileView =
+      activeTab?.view === 'preview' && supportsFilePreview(path) ? 'preview' : 'source'
+    await this.openWorkingTab(projectId, path, preferredView, true)
   }
 
   /** Focus an existing sidebar file tab by path before any caller creates a
@@ -650,14 +668,94 @@ class ProjectFilesWorkspace {
     const state = this.ensureState(projectId)
     const fileTab = state.tabs.find((tab) => tab.id === target.fileTabId)
     if (!fileTab) return false
+    const wasActive = state.activeTabId === fileTab.id
     state.activeTabId = fileTab.id
     if (focusLine !== undefined && fileTab.origin === 'working') {
       fileTab.view = 'source'
       fileTab.focusLine = Math.max(1, Math.floor(focusLine))
       fileTab.focusLineRequest += 1
     }
+    // Re-selecting a previewable file re-reads it: the file may have changed
+    // on disk since it was last previewed (agent writes, git operations,
+    // external editors), and a stable `appfile://` URL would keep showing the
+    // stale version. Only non-active tabs re-read; an explicit Reload is
+    // always available for the already-active one.
+    if (!wasActive && supportsFilePreview(path)) {
+      this.reloadPreview(projectId, path)
+    }
+    // Navigating to an already-open text file re-reads it from disk (unless
+    // dirty   see reconcileFile), so switching tabs never shows stale text.
+    if (!wasActive && state.sessions[path]) {
+      void this.reconcileFile(projectId, path)
+    }
     contextSidebarState.focus(target.id)
     return true
+  }
+
+  /** Force a previewable file's media/SVG/PDF/document preview to re-read the
+   *  file from disk. These files have no editable text session, so the
+   *  ordinary text Reload path does not apply; bumping the reload token
+   *  changes the preview URL, which re-creates the element and re-fetches. */
+  reloadPreview(projectId: string, path: string): void {
+    const state = this.ensureState(projectId)
+    state.previewReloadTokens[path] = (state.previewReloadTokens[path] ?? 0) + 1
+  }
+
+  /** Reconcile a cached session with the file on disk after navigation.
+   *  Cheap first: when mtime and size still match the session's snapshot,
+   *  nothing happens. When the file moved on, a not-dirty session is silently
+   *  re-read (navigation reloads the file); a session with unsaved changes is
+   *  flagged stale so the viewer can show the "Viewing an older version"
+   *  alert instead of clobbering the draft. */
+  private async reconcileFile(projectId: string, path: string): Promise<void> {
+    const state = this.ensureState(projectId)
+    const session = state.sessions[path]
+    if (!session) return
+    try {
+      const info = await invoke(
+        'projectFiles:info',
+        projectId,
+        path,
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
+      )
+      if (
+        info.modifiedAt === session.source.modifiedAt &&
+        info.size === session.source.size
+      ) {
+        delete state.staleFiles[path]
+        return
+      }
+      const source = await invoke(
+        'projectFiles:read',
+        projectId,
+        path,
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
+      )
+      if (!source) return
+      const current = state.sessions[path]
+      if (!current || current.source.revision === source.revision) {
+        delete state.staleFiles[path]
+        return
+      }
+      if (current.draft !== current.source.content) {
+        // Unsaved changes must survive: flag the session as viewing an older
+        // version so the user can copy their changes and reload explicitly.
+        state.staleFiles[path] = true
+        return
+      }
+      state.sessions[path] = {
+        source,
+        draft: source.content,
+        saving: false,
+        error: null
+      }
+      delete state.staleFiles[path]
+    } catch {
+      // A failed background reconcile keeps the cached session; explicit
+      // reloads and saves surface real errors.
+    }
   }
 
   async openCheckpointFile(
@@ -669,6 +767,14 @@ class ProjectFilesWorkspace {
     const state = this.ensureState(projectId)
     const threadId = contextSidebarState.threadIdForProject(projectId)
     if (!threadId) return
+    // Keep the viewer's preview mode sticky while the user walks a checkpoint
+    // file list: when the currently active tab is in preview mode and the new
+    // file also supports preview, open it in preview instead of the diff view
+    // so the user never has to re-select the mode for every file.
+    const activeTab = state.tabs.find((candidate) => candidate.id === state.activeTabId)
+    if (preferredView === 'diff' && activeTab?.view === 'preview' && supportsFilePreview(path)) {
+      preferredView = 'preview'
+    }
     const tabId = `checkpoint:${threadId}:${checkpointId}:${path}`
     if (!state.tabs.some((candidate) => candidate.id === tabId)) {
       state.tabs.push({
@@ -708,6 +814,10 @@ class ProjectFilesWorkspace {
         (!session || session.draft === session.source.content)
       ) {
         await this.loadCurrentFile(projectId, path)
+      } else if (diff.kind !== 'deleted' && session) {
+        // Navigating between checkpoint files also reconciles the working
+        // session with the disk version (auto-reload or stale flag).
+        void this.reconcileFile(projectId, path)
       }
     } catch (error) {
       const currentTab = state.tabs.find((candidate) => candidate.id === tabId)
@@ -740,12 +850,14 @@ class ProjectFilesWorkspace {
     if (existingTab) {
       state.activeTabId = nextTabId
       this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, existingTab.preview)
+      if (state.sessions[nextPath]) void this.reconcileFile(projectId, nextPath)
       return
     }
 
     const tab = state.tabs.find((t) => t.id === currentTabId)
     if (!tab) return
 
+    const wasPreviewView = tab.view === 'preview'
     tab.id = nextTabId
     tab.path = nextPath
     tab.focusLine = null
@@ -753,16 +865,18 @@ class ProjectFilesWorkspace {
     tab.error = null
     const nextMime = mimeFromPath(nextPath)
     if (
-      isPdfMime(nextMime) ||
-      isImageMime(nextMime) ||
-      isDocumentPreviewMime(nextMime)
+      this.isPreviewableBinary(nextMime) ||
+      (wasPreviewView && supportsFilePreview(nextPath))
     )
       tab.view = 'preview'
     state.activeTabId = nextTabId
 
     this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, tab.preview)
 
-    if (state.sessions[nextPath]) return
+    if (state.sessions[nextPath]) {
+      void this.reconcileFile(projectId, nextPath)
+      return
+    }
     if (this.isPreviewableBinary(nextMime)) return
 
     try {
@@ -780,12 +894,14 @@ class ProjectFilesWorkspace {
     const existingTab = state.tabs.find((t) => t.id === nextTabId)
     if (existingTab) {
       state.activeTabId = nextTabId
+      if (state.sessions[nextPath]) void this.reconcileFile(projectId, nextPath)
       return
     }
 
     const tab = state.tabs.find((t) => t.id === currentTabId)
     if (!tab) return
 
+    const wasPreviewView = tab.view === 'preview'
     tab.id = nextTabId
     tab.path = nextPath
     tab.focusLine = null
@@ -793,14 +909,16 @@ class ProjectFilesWorkspace {
     tab.error = null
     const nextMime = mimeFromPath(nextPath)
     if (
-      isPdfMime(nextMime) ||
-      isImageMime(nextMime) ||
-      isDocumentPreviewMime(nextMime)
+      this.isPreviewableBinary(nextMime) ||
+      (wasPreviewView && supportsFilePreview(nextPath))
     )
       tab.view = 'preview'
     state.activeTabId = nextTabId
 
-    if (state.sessions[nextPath]) return
+    if (state.sessions[nextPath]) {
+      void this.reconcileFile(projectId, nextPath)
+      return
+    }
     if (this.isPreviewableBinary(nextMime)) return
 
     try {
@@ -959,6 +1077,8 @@ class ProjectFilesWorkspace {
       )
       session.source = source
       if (session.draft === submittedDraft) session.draft = source.content
+      // After saving, the session matches the disk version by construction.
+      delete this.ensureState(projectId).staleFiles[path]
       await this.reconcileConflictAfterSave(projectId, path)
     } catch (error) {
       session.error = errorMessage(error)
@@ -999,6 +1119,8 @@ class ProjectFilesWorkspace {
         saving: false,
         error: null
       }
+      // The re-read content is current, so any stale-version flag is moot.
+      delete state.staleFiles[path]
     } catch (error) {
       if (session) session.error = errorMessage(error)
       else {
@@ -1024,9 +1146,16 @@ class ProjectFilesWorkspace {
     const path = activePath ?? state.tabs.find((tab) => tab.id === state.activeTabId)?.path
     if (!path) return
     const session = state.sessions[path]
-    if (session && session.draft === session.source.content) {
-      await this.reload(projectId, path)
+    if (session) {
+      if (session.draft === session.source.content) {
+        await this.reload(projectId, path)
+      }
+      return
     }
+    // Previewable files without a text session (media, images, SVG, PDF,
+    // documents) re-read their preview content instead of being skipped, so
+    // Refresh also picks up files that changed on disk.
+    if (supportsFilePreview(path)) this.reloadPreview(projectId, path)
   }
 
   private async openWorkingTab(
@@ -1096,9 +1225,11 @@ class ProjectFilesWorkspace {
     if (existingTab) {
       state.activeTabId = nextTabId
       this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, preview)
+      if (state.sessions[nextPath]) void this.reconcileFile(projectId, nextPath)
       return
     }
 
+    const wasPreviewView = tab.view === 'preview'
     tab.id = nextTabId
     tab.path = nextPath
     tab.preview = preview
@@ -1109,16 +1240,18 @@ class ProjectFilesWorkspace {
     tab.loadingDiff = false
     const nextMime = mimeFromPath(nextPath)
     if (
-      isPdfMime(nextMime) ||
-      isImageMime(nextMime) ||
-      isDocumentPreviewMime(nextMime)
+      this.isPreviewableBinary(nextMime) ||
+      (wasPreviewView && supportsFilePreview(nextPath))
     )
       tab.view = 'preview'
     state.activeTabId = nextTabId
 
     this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, preview)
 
-    if (state.sessions[nextPath]) return
+    if (state.sessions[nextPath]) {
+      void this.reconcileFile(projectId, nextPath)
+      return
+    }
     if (this.isPreviewableBinary(nextMime)) return
 
     try {
@@ -1264,6 +1397,12 @@ class ProjectFilesWorkspace {
     for (const candidate of Object.keys(state.directoryErrors)) {
       if (isWithin(candidate)) delete state.directoryErrors[candidate]
     }
+    for (const candidate of Object.keys(state.previewReloadTokens)) {
+      if (isWithin(candidate)) delete state.previewReloadTokens[candidate]
+    }
+    for (const candidate of Object.keys(state.staleFiles)) {
+      if (isWithin(candidate)) delete state.staleFiles[candidate]
+    }
     if (state.revealedPath && isWithin(state.revealedPath)) state.revealedPath = null
     state.selectedPaths = state.selectedPaths.filter((candidate) => !isWithin(candidate))
     this.persistExplorer(projectId)
@@ -1336,6 +1475,14 @@ class ProjectFilesWorkspace {
     for (const path of Object.keys(state.directoryErrors).filter(isWithin)) {
       state.directoryErrors[translate(path)] = state.directoryErrors[path]
       delete state.directoryErrors[path]
+    }
+    for (const path of Object.keys(state.previewReloadTokens).filter(isWithin)) {
+      state.previewReloadTokens[translate(path)] = state.previewReloadTokens[path]
+      delete state.previewReloadTokens[path]
+    }
+    for (const path of Object.keys(state.staleFiles).filter(isWithin)) {
+      state.staleFiles[translate(path)] = state.staleFiles[path]
+      delete state.staleFiles[path]
     }
     if (state.revealedPath && isWithin(state.revealedPath)) {
       state.revealedPath = translate(state.revealedPath)

@@ -1697,7 +1697,8 @@ export const IPC_INVOKE_CONTRACT = {
    */
   'pr:detail': {} as Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number],
-    PullRequestDetail
+    /** null when the provider request fails (timeout, rate limit, network). */
+    PullRequestDetail | null
   >,
   'deployment:overview': {} as Contract<
     [projectId: string, owner: string, repo: string],
@@ -2876,6 +2877,11 @@ export interface AgentNotificationPayload extends ThreadClickedPayload {
   projectName: string
   /** Accent colour of the owning project, when known. */
   projectColor?: string
+  /** Full diagnostic text of the failure (message plus raw detail/stack) for
+   *  `error` notifications, so the panel can show what actually went wrong and
+   *  offer a faithful copy action. Absent for non-error notifications and when
+   *  the engine had no readable error. */
+  errorDetail?: string
 }
 
 export type SystemNotificationTestResult =

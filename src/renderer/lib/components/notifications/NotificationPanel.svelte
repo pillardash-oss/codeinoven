@@ -5,7 +5,11 @@
     type NotificationFilter,
     type InAppNotification
   } from '$lib/stores/notification-panel.svelte'
-  import { appErrorState, type AppErrorEntry } from '$lib/stores/app-errors.svelte'
+  import {
+    appErrorState,
+    errorHeadline,
+    type AppErrorEntry
+  } from '$lib/stores/app-errors.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -76,10 +80,31 @@
 
   async function copyError(e: AppErrorEntry): Promise<void> {
     try {
-      await copyText(e.message)
+      await copyText(e.details ? `${e.message}\n\n${e.details}` : e.message)
       copiedId = e.id
       window.setTimeout(() => {
         if (copiedId === e.id) copiedId = null
+      }, 1500)
+    } catch {
+      // Clipboard unavailable; nothing to surface here
+    }
+  }
+
+  /** Full clipboard text for a thread-error notification: title, headline and
+   *  the complete diagnostic detail (raw error/stack) when available. */
+  function notificationErrorText(n: InAppNotification): string {
+    const headline = errorHeadline(n.body)
+    const parts = [n.title, headline]
+    if (n.errorDetail && n.errorDetail.trim() !== headline) parts.push(n.errorDetail.trim())
+    return parts.join('\n\n')
+  }
+
+  async function copyNotificationError(n: InAppNotification): Promise<void> {
+    try {
+      await copyText(notificationErrorText(n))
+      copiedId = n.id
+      window.setTimeout(() => {
+        if (copiedId === n.id) copiedId = null
       }, 1500)
     } catch {
       // Clipboard unavailable; nothing to surface here
@@ -327,6 +352,23 @@
                 </p>
               {/if}
             </div>
+            {#if n.kind === 'error'}
+              <button
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                aria-label="Copy error details and stack trace"
+                title="Copy error details"
+                onclick={(e: MouseEvent) => {
+                  e.stopPropagation()
+                  void copyNotificationError(n)
+                }}
+              >
+                {#if copiedId === n.id}
+                  <Check size={11} />
+                {:else}
+                  <Copy size={11} />
+                {/if}
+              </button>
+            {/if}
             <button
               class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
               aria-label="Dismiss notification"

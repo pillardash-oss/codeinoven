@@ -31,6 +31,7 @@
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
   import { toast } from 'svelte-sonner'
+  import { captureError, errorHeadline, showToastError } from '$lib/stores/app-errors.svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
@@ -726,7 +727,10 @@
             DEFAULT_SCOPE_BUCKET_ID
           scopeState.requestCreateScopedThread(bucketId)
         } else {
-          workspaceState.requestCreateThread(scopeState.sidebarContext?.bucketId)
+          // Create in the current thread's scope: Workspace inherits the
+          // active thread's scope bucket onto the new thread, exactly like
+          // settings inheritance  no view or sidebar change.
+          workspaceState.requestCreateThread()
         }
         return
       case 'app:file-search':
@@ -1396,7 +1400,15 @@
     } else if (payload.kind === 'spec') {
       toast.info(payload.title, options)
     } else {
-      toast.error(payload.title, options)
+      // Record the real failure (message plus raw detail/stack) for the app
+      // errors panel, then toast the generic title directly so the wrapper does
+      // not re-capture a details-less duplicate entry.
+      const detail = payload.errorDetail?.trim()
+      captureError(detail ? errorHeadline(detail) : payload.title, {
+        ...(detail ? { details: detail } : {}),
+        thread: { projectId: payload.projectId, threadId: payload.threadId }
+      })
+      showToastError(payload.title, options)
     }
   }
 
@@ -1748,8 +1760,9 @@
         workspaceState.activeProject &&
         workspaceState.activeProject.id !== INBOX_PROJECT_ID
       ) {
-        const bucketId = scopeState.sidebarContext?.bucketId
-        workspaceState.requestCreateThread(bucketId)
+        // Same-scope inheritance: the new thread inherits the open thread's
+        // scope bucket (no stale sidebar bucket, no view switch).
+        workspaceState.requestCreateThread()
       } else {
         workspaceState.requestAddProject()
       }

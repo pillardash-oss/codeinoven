@@ -466,13 +466,37 @@
   let fullUserMessageHistory = $state<UserMessageSummary[]>([])
   let userMessageHistoryLoaded = false
   let userMessageHistoryLoading: Promise<void> | null = null
+  /** Pending post-mount idle prefetch of the history; cancelled on teardown. */
+  let historyPrefetchHandle: number | null = null
   let hasOlderMessages = $derived(
     controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
-  let userMessageTexts = $derived(
-    messages
-      .filter((msg) => msg.role === 'user')
-      .map((msg) => messageText(msg))
+  /** Merge the lazily loaded persisted full history with any live/optimistic
+   *  user messages still pending in the mirror, deduped by id (the live window
+   *  wins, e.g. after an edit) and kept in chronological order. This is the
+   *  single source shared by the history side panel and the composer's
+   *  arrow-up recall, so navigation can reach every message without the whole
+   *  conversation being loaded into the view. */
+  function mergedUserMessageSummaries(): UserMessageSummary[] {
+    const byId: Record<string, UserMessageSummary> = {}
+    for (const entry of fullUserMessageHistory) byId[entry.id] = entry
+    for (const message of messages) {
+      if (message.role !== 'user') continue
+      byId[message.id] = {
+        id: message.id,
+        content: messageText(message),
+        createdAt: message.createdAt
+      }
+    }
+    return Object.values(byId).sort(
+      (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)
+    )
+  }
+  /** Composer recall texts: the merged full history, minus blank entries that
+   *  would only produce an empty recall step. */
+  let composerHistoryTexts = $derived(
+    mergedUserMessageSummaries()
+      .map((entry) => entry.content)
       .filter((text) => text.trim().length > 0)
   )
   let busy = $derived(controller?.busy ?? agentRuns.isBusy(thread.projectId, thread.id))
@@ -2317,7 +2341,9 @@
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: thread.workingDirectory,
       settings: thread.settings,
-      scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
+      // Inherit the current thread's scope so the spun-off thread stays in
+      // the same scope instead of dropping to the default bucket.
+      scopeBucketId: thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
     })
       .then((newThread) => {
         rendererRecovery.setDraft(newThread.projectId, newThread.id, draft)
@@ -3123,24 +3149,12 @@
   // in the mirror, deduped and kept in chronological order. Each message carries
   // a short work-trace preview from the turn that follows it.
   $effect(() => {
-    const byId: Record<string, UserMessageSummary> = {}
-    for (const entry of fullUserMessageHistory) byId[entry.id] = entry
-    for (const message of messages) {
-      if (message.role !== 'user') continue
-      byId[message.id] = {
-        id: message.id,
-        content: messageText(message),
-        createdAt: message.createdAt
-      }
-    }
     const tracePreviews = tracePreviewByUserMessage(messages)
-    const userMessages = Object.values(byId)
-      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-      .map(({ id, content }) => ({
-        id,
-        content,
-        ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
-      }))
+    const userMessages = mergedUserMessageSummaries().map(({ id, content }) => ({
+      id,
+      content,
+      ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
+    }))
     if (hasController) return
     workspaceState.messageCount = userMessages.length
     workspaceState.userMessages = userMessages
@@ -3640,6 +3654,17 @@
     if (!controller) {
       workspaceState.jumpToMessage = jumpToMessage
       workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+      // Prefetch the lightweight user-message history shortly after mount so
+      // the history panel is populated the first time it opens, without the
+      // user having to open it once to trigger the load. Deferred past the
+      // first paint (idle callback) so the initial reveal never waits on it.
+      historyPrefetchHandle = requestIdleCallback(
+        () => {
+          if (alive) void refreshUserMessageHistory()
+        },
+        // Bounded: never starve the panel population behind constant work.
+        { timeout: 2000 }
+      )
     }
 
     const onResize = (): void => scheduleResponseBubbleUpdate()
@@ -3665,6 +3690,10 @@
         window.removeEventListener('resize', onResize)
         clearTimeout(copyResetTimer)
         cancelAnimationFrame(initialPaintRevealFrame)
+        if (historyPrefetchHandle !== null) {
+          cancelIdleCallback(historyPrefetchHandle)
+          historyPrefetchHandle = null
+        }
         // Controller-driven views never published the global state below, so
         // their teardown must not clear it either   clearing would clobber the
         // values published by the primary conversation view behind the panel.
@@ -3746,6 +3775,18 @@
         void refreshMessages()
         restoreWorkingState(updatedThread.status, updatedThread.auditState === 'running')
       }
+      // A durable auditor child (independent or Achievement audit) owns its own
+      // lifecycle; mirror status transitions so the coordinator panel and the
+      // thread row reflect failures and completions without waiting for the
+      // next full engineering reconcile (which chat-mode threads skip).
+      if (
+        updatedThread.projectId === thread.projectId &&
+        updatedThread.achievementRole === 'auditor' &&
+        updatedThread.coordinatorThreadId === thread.id &&
+        (thread.auditorThreadId === updatedThread.id || durableAuditThread?.id === updatedThread.id)
+      ) {
+        durableAuditThread = updatedThread
+      }
       if (
         updatedThread.projectId === thread.projectId &&
         (updatedThread.id === thread.id || updatedThread.assignmentId === assignment?.id) &&
@@ -3799,6 +3840,10 @@
       window.removeEventListener('resize', onResize)
       clearTimeout(copyResetTimer)
       cancelAnimationFrame(initialPaintRevealFrame)
+      if (historyPrefetchHandle !== null) {
+        cancelIdleCallback(historyPrefetchHandle)
+        historyPrefetchHandle = null
+      }
       workspaceState.sources = []
       workspaceState.jumpToMessage = null
       if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
@@ -7760,6 +7805,10 @@
       })
       auditReport = result.report
       durableAuditThread = result.auditorThread
+      // The main process persists `report_ready`; mirror it locally so the
+      // studio's Review / Complete actions light up without waiting for the
+      // thread-update broadcast.
+      auditState = 'report_ready'
       auditVersions = await invoke(
         'audit:listVersions',
         thread.projectId,
@@ -11907,7 +11956,8 @@
                     onRemoveAllReferences={clearComposerReferences}
                     onEditReference={controller ? undefined : editResponseReference}
                     onSend={sendComposerMessage}
-                    historyMessages={userMessageTexts}
+                    historyMessages={composerHistoryTexts}
+                    onHistoryNavigateStart={() => void refreshUserMessageHistory()}
                     hidePermissionSelector={chatMode}
                     favoriteModels={chatMode
                       ? rendererRecovery.chatFavoriteModels

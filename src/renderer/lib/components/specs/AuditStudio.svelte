@@ -757,6 +757,17 @@
                     >
                       {finding.severity}
                     </button>
+                  {:else}
+                    <!-- Read-only views (older versions, review-complete reports) still show the
+                        severity badge; only the edit affordance is gated on workflow actions. -->
+                    <span
+                      class="rounded-md px-2 py-1 text-xs font-medium capitalize {severityClass(
+                        finding.severity
+                      )}"
+                      title={`Finding severity: ${finding.severity}`}
+                    >
+                      {finding.severity}
+                    </span>
                   {/if}
                   {#if workflowActionsVisible}
                     <button
