@@ -5650,20 +5650,18 @@ export class ChatEngine {
       return cached
     }
     try {
+      // captureChildSession never rejects: on a driver load failure it falls
+      // back to the spawn tool's own transcript from the parent thread, and
+      // while a live worker has not flushed anything yet it resolves empty so
+      // the view stays in its loading state instead of surfacing the raw
+      // "CLI session is unavailable" driver error. The view polls while the
+      // worker is busy and reloads once it settles.
       return await this.captureChildSession(owner, sessionId)
     } catch (error) {
-      // pi defers a sub-agent's first native transcript write until its first
-      // assistant message completes, so a load while the worker is still
-      // starting legitimately finds no transcript. Returning the cached
-      // (empty) result keeps the view in its loading state instead of
-      // surfacing the raw "CLI session is unavailable" driver error; the view
-      // polls while the worker is busy and reloads once it settles.
-      const status = this.childSessionActivityStatuses.get(sessionId)
-      if (status === 'running' || status === 'pending') {
-        Logger.dev('Sub-agent transcript is not flushed yet:', error)
-        return []
-      }
-      throw error
+      // Defensive: any residual failure still degrades to the parent's
+      // sub-agent activity rather than throwing into the IPC handler.
+      Logger.dev('Sub-agent transcript load failed:', error)
+      return this.subagentMessagesFromParentActivity(owner, sessionId)
     }
   }
 
@@ -6001,6 +5999,15 @@ export class ChatEngine {
           merged
         )
         return merged
+      } catch (error) {
+        // pi child sessions (cio_spawn_agent) are never persisted as CLI
+        // session records, so their transcript load can legitimately fail.
+        // Never rethrow: fall back to the spawn tool's own transcript, which
+        // the parent thread's message parts already carry (prompt + captured
+        // output), so the sub-agent view shows real content instead of a raw
+        // "CLI session is unavailable" error.
+        Logger.dev('Sub-agent transcript capture fell back to parent activity:', error)
+        return this.subagentMessagesFromParentActivity(owner, sessionId)
       } finally {
         if (timeout) clearTimeout(timeout)
       }
@@ -6014,6 +6021,76 @@ export class ChatEngine {
     }
     void capture.then(clearCapture, clearCapture)
     return capture
+  }
+
+  /**
+   * Build a best-effort transcript from the spawn tool call stored on the
+   * parent thread: the input carries the prompt, the tool result carries the
+   * sub-agent's final output. Used when the driver cannot load the child
+   * session natively (pi never persists child sessions).
+   */
+  private async subagentMessagesFromParentActivity(
+    owner: ChildSessionInfo,
+    sessionId: string
+  ): Promise<AgentMessage[]> {
+    try {
+      const records = await this.threadManager.loadMessageRecords(owner.projectId, owner.threadId)
+      const parts = records.flatMap((message) => [
+        ...message.parts,
+        ...(message.transportParts ?? [])
+      ])
+      const part = parts.find(
+        (candidate): candidate is Extract<AgentPart, { type: 'subagent' }> =>
+          candidate.type === 'subagent' && candidate.activity.childSessionId === sessionId
+      )
+      if (!part) return []
+      const now = Date.now()
+      const prompt = part.activity.prompt
+      const output = part.activity.output
+      const error = part.activity.error
+      if (!prompt && !output && !error) return []
+      const messages: AgentMessage[] = []
+      if (prompt) {
+        messages.push({
+          id: `${sessionId}:fallback-prompt`,
+          role: 'user',
+          visibility: 'subagent_trace',
+          parts: [
+            {
+              type: 'text',
+              id: `${sessionId}:fallback-prompt-text`,
+              messageID: `${sessionId}:fallback-prompt`,
+              text: prompt
+            }
+          ],
+          createdAt: part.activity.time?.start ?? now
+        })
+      }
+      if (output || error) {
+        const outputText = error
+          ? `${output ? `${output}\n\n` : ''}Sub-agent error: ${error}`
+          : (output ?? '')
+        messages.push({
+          id: `${sessionId}:fallback-output`,
+          role: 'assistant',
+          visibility: 'subagent_trace',
+          parts: [
+            {
+              type: 'text',
+              id: `${sessionId}:fallback-output-text`,
+              messageID: `${sessionId}:fallback-output`,
+              text: outputText
+            }
+          ],
+          createdAt: part.activity.time?.start ?? now,
+          completedAt: part.activity.time?.end ?? now
+        })
+      }
+      return messages
+    } catch (error) {
+      Logger.dev('Sub-agent parent-activity fallback failed:', error)
+      return []
+    }
   }
 
   private async getBehaviorPrompt(
