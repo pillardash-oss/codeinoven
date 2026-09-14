@@ -6,8 +6,10 @@
     ListOrdered,
     Maximize2,
     Pencil,
+    Redo2,
     RefreshCw,
     Trash2,
+    Undo2,
     WrapText
   } from '@lucide/svelte'
 
@@ -17,7 +19,12 @@
     wrap: boolean
     reloadDisabled: boolean
     mutationDisabled: boolean
+    /** Show undo/redo buttons ahead of the wrap button; only the file editor
+     *  (editable source view) sets this. */
+    showUndoRedo?: boolean
     hideFullscreen?: boolean
+    onUndo: () => void
+    onRedo: () => void
     onReload: () => void
     onToggleLineNumbers: () => void
     onToggleWrap: () => void
@@ -32,7 +39,10 @@
     wrap,
     reloadDisabled,
     mutationDisabled,
+    showUndoRedo = false,
     hideFullscreen = false,
+    onUndo,
+    onRedo,
     onReload,
     onToggleLineNumbers,
     onToggleWrap,
@@ -52,6 +62,26 @@
   const wrapTitle = $derived(wrap ? 'Unwrap text' : 'Wrap text')
 </script>
 
+{#if showUndoRedo}
+  <button
+    type="button"
+    class={btnClass}
+    aria-label="Undo (Cmd+Z)"
+    title="Undo (Cmd+Z)"
+    onclick={onUndo}
+  >
+    <Undo2 size={13} />
+  </button>
+  <button
+    type="button"
+    class={btnClass}
+    aria-label="Redo (Shift+Cmd+Z)"
+    title="Redo (Shift+Cmd+Z)"
+    onclick={onRedo}
+  >
+    <Redo2 size={13} />
+  </button>
+{/if}
 {#if !diffView}
   <button
     type="button"

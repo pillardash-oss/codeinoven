@@ -118,6 +118,13 @@
       !deletedAtCheckpoint &&
       projectState.staleFiles[activeSession.source.path] === true
   )
+  let editRequest = $state<{ nonce: number; action: 'undo' | 'redo' } | null>(null)
+  let editNonce = 0
+
+  function requestEdit(action: 'undo' | 'redo'): void {
+    if (!activeTab) return
+    editRequest = { nonce: ++editNonce, action }
+  }
   /** Paths still carrying merge/rebase conflicts, straight from the git store. */
   let conflictedPaths = $derived([...gitState.conflicted])
   /**
@@ -128,6 +135,15 @@
   let conflictsOnly = $derived(gitState.conflictsMode)
   let activePathIsConflicted = $derived(
     activeTab?.origin === 'working' && conflictedPaths.includes(activeTab.path)
+  )
+  /** Undo/redo toolbar buttons apply to the plain file editor only: the
+   *  editable source view with a session, not diffs, previews, the
+   *  conflict-resolution editor, or read-only deleted files. */
+  let canUndoRedo = $derived(
+    activeSession !== null &&
+      !deletedAtCheckpoint &&
+      !activePathIsConflicted &&
+      activeTab?.view === 'source'
   )
   let markdown = $derived(activeTab ? /\.(?:md|mdown|markdown)$/iu.test(activeTab.path) : false)
   let pdf = $derived(activeTab ? /\.pdf$/iu.test(activeTab.path) : false)
@@ -837,6 +853,9 @@
             wrap={wrapLines}
             reloadDisabled={reloadDisabled}
             mutationDisabled={deletedAtCheckpoint || mutationPending}
+            showUndoRedo={canUndoRedo}
+            onUndo={() => requestEdit('undo')}
+            onRedo={() => requestEdit('redo')}
             onReload={reloadSelected}
             onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
             onToggleWrap={() => wrapTextState.toggle()}
@@ -847,10 +866,13 @@
           {#if activeTab.view !== 'diff'}
             <button
               type="button"
-              class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+              class="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
               disabled={deletedAtCheckpoint ||
                 (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
                 (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
+              aria-label={activePathIsConflicted
+                ? 'Replace the original file and mark it resolved'
+                : 'Save file (Cmd/Ctrl+S)'}
               title={activePathIsConflicted
                 ? 'Replace the original file and mark it resolved'
                 : 'Save file (Cmd/Ctrl+S)'}
@@ -861,7 +883,6 @@
               {:else}
                 <Save size={11} />
               {/if}
-              {activePathIsConflicted ? 'Mark as resolved' : 'Save'}
             </button>
           {/if}
         </div>
@@ -1057,6 +1078,7 @@
             findActiveIndex={editorFindActive}
             findNonce={editorFindNonce}
             replaceRequest={editorReplaceRequest}
+            {editRequest}
             focusLine={activeTab.focusLine}
             focusLineRequest={activeTab.focusLineRequest}
             onFindMatches={fullscreenOpen ? undefined : handleEditorFindMatches}
@@ -1246,6 +1268,9 @@
             wrap={wrapLines}
             reloadDisabled={reloadDisabled}
             mutationDisabled={deletedAtCheckpoint || mutationPending}
+            showUndoRedo={canUndoRedo}
+            onUndo={() => requestEdit('undo')}
+            onRedo={() => requestEdit('redo')}
             hideFullscreen
             onReload={reloadSelected}
             onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
@@ -1380,6 +1405,7 @@
                 findActiveIndex={editorFindActive}
                 findNonce={editorFindNonce}
                 replaceRequest={editorReplaceRequest}
+                {editRequest}
                 focusLine={activeTab.focusLine}
                 focusLineRequest={activeTab.focusLineRequest}
                 onFindMatches={handleEditorFindMatches}

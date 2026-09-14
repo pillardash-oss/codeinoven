@@ -17,6 +17,9 @@
     replaceRequest?: { nonce: number; action: 'one' | 'all'; query: string; replacement: string } | null
     focusLine?: number | null
     focusLineRequest?: number
+    /** Editor command request driven by toolbar buttons (undo/redo); the
+     *  nonce makes each request fire exactly once. */
+    editRequest?: { nonce: number; action: 'undo' | 'redo' } | null
     onInput: (input: { currentTarget: { value: string } }) => void
     onFindMatches?: (matches: number) => void
     onReplaceDone?: (replaced: number) => void
@@ -36,6 +39,7 @@
     replaceRequest = null,
     focusLine = null,
     focusLineRequest = 0,
+    editRequest = null,
     onInput,
     onFindMatches = undefined,
     onReplaceDone = undefined
@@ -47,6 +51,7 @@
   let controller = $state.raw<FileEditorController | null>(null)
   let handledFocusLineRequest = 0
   let handledReplaceNonce = 0
+  let handledEditNonce = 0
 
   onMount(() => {
     const hostElement = host
@@ -120,6 +125,14 @@
         ? 1
         : 0
     onReplaceDone?.(replaced)
+  })
+
+  $effect(() => {
+    const request = editRequest
+    if (!controller || !request || request.nonce === handledEditNonce) return
+    handledEditNonce = request.nonce
+    if (request.action === 'undo') controller.undo()
+    else controller.redo()
   })
 
   $effect(() => {
