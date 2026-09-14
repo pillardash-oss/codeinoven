@@ -10,8 +10,9 @@
     /** Renders as plain text instead of `icon`   e.g. the message-history count. */
     countLabel?: string
     active: boolean
-    /** Renders a small status dot on the icon   e.g. pending memory proposals. */
-    badge?: 'completed' | 'attention' | 'error'
+    /** Renders a small status dot on the icon   e.g. pending memory proposals.
+     *  `working` renders as a pulsing dot in the thread-working colour. */
+    badge?: 'completed' | 'attention' | 'error' | 'working'
     /** Accessible description for the badge, required whenever `badge` is set. */
     badgeTitle?: string
     /** Renders a compact neutral count badge above the tool icon. */
@@ -101,7 +102,15 @@
           {/if}
           {#if item.badge}
             <span class="absolute -top-0.5 -right-0.5 flex items-start">
-              <StatusBadge kind={item.badge} title={item.badgeTitle ?? item.label} />
+              {#if item.badge === 'working'}
+                <StatusBadge
+                  tone="working"
+                  animated
+                  title={item.badgeTitle ?? item.label}
+                />
+              {:else}
+                <StatusBadge kind={item.badge} title={item.badgeTitle ?? item.label} />
+              {/if}
             </span>
           {/if}
           {#if item.countBadge !== undefined}

@@ -140,6 +140,7 @@
     INBOX_PROJECT_ID,
     DEFAULT_THREAD_TITLE,
     DEFAULT_SCOPE_BUCKET_ID,
+    isThreadBusy,
     isThreadWorking,
     isOrchestrationChildThread
   } from '$shared/types'
@@ -865,6 +866,55 @@
     coordinatorDockState.forThread(selectedThread?.projectId, selectedThread?.id)
   )
 
+  /** The auditor thread of the on-screen coordinator, if one exists. Orchestration
+   *  children stay out of the visible thread list but land in the scope store
+   *  through their broadcast updates, so the rail can mirror their state. */
+  let auditorThread = $derived.by(() => {
+    const auditorId = selectedThread?.auditorThreadId
+    if (!auditorId) return null
+    return scopeState.allScopeThreads.find((candidate) => candidate.id === auditorId) ?? null
+  })
+
+  /** Rail badge for the coordinator dock item, mirroring the auditor's live
+   *  state so a hidden context sidebar still reports working / error / done. */
+  let coordinatorRailBadge = $derived.by((): ContextDockItem['badge'] => {
+    if (!selectedThread) return undefined
+    const auditor = auditorThread
+    if (auditor?.status === 'failed') return 'error'
+    if (auditor?.status === 'awaiting_approval') return 'attention'
+    if (
+      selectedThread.auditState === 'report_ready' &&
+      (auditor === null || auditor.status === 'completed')
+    ) {
+      return 'completed'
+    }
+    if (coordinatorHasActiveDelegates(selectedThread, scopeState.allScopeThreads)) return 'working'
+    if (
+      auditor &&
+      (isThreadBusy(auditor) ||
+        (agentRuns.hasSettled(auditor.projectId, auditor.id) &&
+          agentRuns.isBusy(auditor.projectId, auditor.id)))
+    ) {
+      return 'working'
+    }
+    return undefined
+  })
+
+  let coordinatorRailBadgeTitle = $derived.by(() => {
+    switch (coordinatorRailBadge) {
+      case 'working':
+        return 'Auditor working'
+      case 'error':
+        return 'Auditor failed'
+      case 'attention':
+        return 'Auditor needs attention'
+      case 'completed':
+        return 'Audit report ready'
+      default:
+        return undefined
+    }
+  })
+
   function openCoordinatorTab(): void {
     if (!coordinator) return
     coordinatorDockState.setAutoOpen(true)
@@ -1200,6 +1250,8 @@
             label: coordinator.label,
             icon: coordinator.icon,
             active: dockKindActive('coordinator'),
+            badge: coordinatorRailBadge,
+            badgeTitle: coordinatorRailBadgeTitle,
             onSelect: () => toggleDockPanel('coordinator', openCoordinatorTab)
           }
         ]
