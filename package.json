@@ -113,7 +113,7 @@
     "bits-ui": "^2.19.0",
     "builder-util": "26.15.3",
     "dompurify": "^3.4.14",
-    "electron": "^44.1.1",
+    "electron": "^44.3.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "eslint": "^10.9.1",
