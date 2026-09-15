@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { PreparedHarnessInvocation } from './harness-runtime'
+import { spawnInUtilityHost } from './harness-utility-host'
 import { PI_COMPACTION_EXTENSION_KEY } from './pi-compaction-extension'
 
 /**
@@ -69,12 +70,18 @@ export class PiRpcClient {
     this.onUiRequest = options.onUiRequest ?? ((record) => this.dismissUiDialog(record))
     this.onExtensionStatus = options.onExtensionStatus ?? (() => undefined)
     this.onExit = options.onExit ?? (() => undefined)
-    this.child = spawn(options.invocation.command, options.invocation.args, {
-      ...(options.invocation.cwd ? { cwd: options.invocation.cwd } : {}),
-      env: options.invocation.env,
-      shell: options.invocation.shell,
-      stdio: ['pipe', 'pipe', 'pipe']
-    })
+    // Bundled Pi (electron run-as-node) must run in-process inside Electron's
+    // utilityProcess helper; a direct child registers a standalone LaunchServices
+    // app on macOS and bounces a terminal-like Dock icon per session.
+    this.child =
+      options.invocation.runtime?.target?.kind === 'bundled'
+        ? spawnInUtilityHost(options.invocation)
+        : spawn(options.invocation.command, options.invocation.args, {
+            ...(options.invocation.cwd ? { cwd: options.invocation.cwd } : {}),
+            env: options.invocation.env,
+            shell: options.invocation.shell,
+            stdio: ['pipe', 'pipe', 'pipe']
+          })
     this.child.stdout?.on('data', (chunk: Buffer) => this.consume(chunk.toString()))
     // Capped rolling tail so a crash reason (missing dependency, bad flag,
     // uncaught exception) reaches the error surfaced to the user instead of

@@ -132,6 +132,8 @@
   let checkoutConfirm = $state<GitBranchInfo | null>(null)
   let deleteBranchConfirm = $state<string | null>(null)
   let forceDeleteBranchConfirm = $state<string | null>(null)
+  /** Remote-branch delete confirmation: which remote and which branch name. */
+  let deleteRemoteBranchConfirm = $state<{ remote: string; name: string } | null>(null)
   let creatingBranch = $state(false)
   let newBranchName = $state('')
   /** Add/Replace Git Origin modal on the branch picker. */
@@ -395,6 +397,19 @@
     if (!target) return
     forceDeleteBranchConfirm = null
     await deleteBranchAction(target, true)
+  }
+
+  function requestDeleteRemoteBranch(branch: GitBranchInfo): void {
+    const remote = branch.remote
+    if (!remote) return
+    deleteRemoteBranchConfirm = { remote, name: branch.name }
+  }
+
+  async function confirmDeleteRemoteBranch(): Promise<void> {
+    const target = deleteRemoteBranchConfirm
+    if (!target) return
+    deleteRemoteBranchConfirm = null
+    await gitState.deleteRemoteBranch(projectId, target.remote, target.name)
   }
 
   /** `git fetch <remote> <name>`   updates that branch's tracking ref without touching HEAD. */
@@ -1131,6 +1146,7 @@
     checkoutConfirm = null
     deleteBranchConfirm = null
     forceDeleteBranchConfirm = null
+    deleteRemoteBranchConfirm = null
     creatingBranch = false
     newBranchName = ''
     discardConfirm = null
@@ -3063,14 +3079,17 @@
                                     isCurrent={branch.current}
                                     canCheckout={!hasLocalCounterpart && !inWorktree}
                                     canDelete={branch.kind === 'local'}
+                                    canDeleteRemote={branch.kind === 'remote'}
                                     {canFetch}
                                     checkoutLabel={branch.kind === 'local'
                                       ? 'Check out'
                                       : 'Create local branch'}
                                     busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
+                                    remoteBusy={gitState.isBusy('push')}
                                     onCheckout={() => requestCheckout(branch)}
                                     onFetch={() => void fetchBranchAction(branch)}
                                     onDelete={() => requestDeleteBranch(branch.name)}
+                                    onDeleteRemote={() => requestDeleteRemoteBranch(branch)}
                                   />
                                 </DropdownMenu.Content>
                               </DropdownMenu.Portal>
@@ -3097,14 +3116,17 @@
                             isCurrent={branch.current}
                             canCheckout={!hasLocalCounterpart && !inWorktree}
                             canDelete={branch.kind === 'local'}
+                            canDeleteRemote={branch.kind === 'remote'}
                             {canFetch}
                             checkoutLabel={branch.kind === 'local'
                               ? 'Check out'
                               : 'Create local branch'}
                             busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
+                            remoteBusy={gitState.isBusy('push')}
                             onCheckout={() => requestCheckout(branch)}
                             onFetch={() => void fetchBranchAction(branch)}
                             onDelete={() => requestDeleteBranch(branch.name)}
+                            onDeleteRemote={() => requestDeleteRemoteBranch(branch)}
                           />
                         </ContextMenu.Content>
                       </ContextMenu.Portal>
@@ -4091,6 +4113,43 @@
                 <Loader2 size={12} class="animate-spin" />
               {/if}
               Delete branch
+            </AlertDialog.Action>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
+  {/if}
+
+  {#if deleteRemoteBranchConfirm}
+    {@const target = deleteRemoteBranchConfirm}
+    <AlertDialog.Root open onOpenChange={() => (deleteRemoteBranchConfirm = null)}>
+      <AlertDialog.Portal>
+        <AlertDialog.Content
+          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+        >
+          <AlertDialog.Title class="text-sm font-semibold text-foreground">
+            Delete remote branch “{target.remote}/{target.name}”?
+          </AlertDialog.Title>
+          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+            Branch <strong class="font-medium text-foreground">{target.name}</strong> will be deleted
+            from <strong class="font-medium text-foreground">{target.remote}</strong>. Local branches
+            are not affected, and the deletion cannot be undone from here.
+          </AlertDialog.Description>
+          <div class="mt-5 flex justify-end gap-2">
+            <AlertDialog.Cancel
+              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+            >
+              Cancel
+            </AlertDialog.Cancel>
+            <AlertDialog.Action
+              class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+              disabled={gitState.isBusy('push')}
+              onclick={() => void confirmDeleteRemoteBranch()}
+            >
+              {#if gitState.isBusy('push')}
+                <Loader2 size={12} class="animate-spin" />
+              {/if}
+              Delete remote branch
             </AlertDialog.Action>
           </div>
         </AlertDialog.Content>

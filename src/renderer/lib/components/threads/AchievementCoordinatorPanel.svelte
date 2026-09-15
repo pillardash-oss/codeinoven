@@ -88,7 +88,7 @@
     if (auditState === 'report_ready') {
       return {
         label: 'Audit report ready',
-        description: 'Review the auditor findings and continue the feedback loop if needed.',
+        description: 'Read the auditor findings and continue the feedback loop if needed.',
         tone: 'text-success'
       }
     }

@@ -805,6 +805,24 @@ export class CodexDriver extends PersistentCliDriver {
     }
   }
 
+  /** Whether the driver still has a registered live turn for this session.
+   *  The engine's watchdog uses this to distinguish a session whose turn
+   *  settled without finalization (stale working state) from one that is
+   *  legitimately streaming a long turn. */
+  hasActiveTurn(sessionId: string): boolean {
+    return this.activeTurns.has(sessionId)
+  }
+
+  /** Codex runs as a shared app-server daemon, so the base implementation's
+   *  process-liveness check cannot tell one session's turn from another's:
+   *  the host process is alive for every session while the daemon runs.
+   *  Report per-turn registration instead so a silent session whose turn has
+   *  already finished is probed as idle (letting the watchdog reconcile or
+   *  abort it) while a genuinely active silent turn stays preserved. */
+  override async isSessionBusy(_projectPath: string, sessionId: string): Promise<boolean> {
+    return this.activeTurns.has(sessionId)
+  }
+
   override async abort(projectPath: string, sessionId: string): Promise<void> {
     await this.requireSession(projectPath, sessionId)
     const active = this.activeTurns.get(sessionId)
@@ -2628,7 +2646,7 @@ function parseItem(
     return parseCollaboration(item, messageId, completed, sessionId)
   if (itemType === 'plan_update' || itemType === 'todo_list' || itemType === 'plan')
     return parseTool(item, messageId, completed, sessionId, itemType)
-  if (itemType === 'mcp_tool_call' || itemType === 'function_call')
+  if (itemType === 'mcp_tool_call')
     return parseTool(
       item,
       messageId,
@@ -2636,6 +2654,23 @@ function parseItem(
       sessionId,
       stringValue(item['tool']) ?? stringValue(item['name']) ?? 'mcp_tool_call'
     )
+  if (itemType === 'function_call') {
+    // Codex's collaboration mode (native sub-agents) surfaces as plain
+    // function calls (`send_message`, `wait_agent`, ...) instead of the
+    // richer `collab_tool_call` item type. Route those to the collaboration
+    // parser so the UI renders a sub-agent card instead of an opaque tool
+    // row with an encrypted payload the user cannot interpret.
+    if (isCollaborationCallItem(item)) {
+      return parseCollaboration(item, messageId, completed, sessionId)
+    }
+    return parseTool(
+      item,
+      messageId,
+      completed,
+      sessionId,
+      stringValue(item['tool']) ?? stringValue(item['name']) ?? 'function_call'
+    )
+  }
   return null
 }
 
@@ -2687,6 +2722,23 @@ function parseUserMessage(
   return { events, messages: [message] }
 }
 
+/** Function-call names Codex uses for its collaboration (sub-agent) tooling. */
+const COLLABORATION_FUNCTION_TOOLS = new Set(['spawn_agent', 'send_message', 'wait_agent'])
+
+/** Human-readable labels so sub-agent activity stays understandable even when
+ *  Codex encrypts the collaboration payloads themselves. */
+const COLLABORATION_TOOL_LABELS: Record<string, string> = {
+  spawn_agent: 'Spawning a Codex sub-agent',
+  send_message: 'Delegating work to a Codex sub-agent',
+  wait_agent: 'Waiting for a Codex sub-agent to finish'
+}
+
+function isCollaborationCallItem(item: Record<string, unknown>): boolean {
+  if (stringValue(item['namespace']) === 'collaboration') return true
+  const tool = stringValue(item['tool']) ?? stringValue(item['name'])
+  return tool !== undefined && COLLABORATION_FUNCTION_TOOLS.has(tool)
+}
+
 function parseCollaboration(
   item: Record<string, unknown>,
   itemId: string,
@@ -2696,7 +2748,7 @@ function parseCollaboration(
   const providerStatus = stringValue(item['status'])
   const failed =
     providerStatus === 'failed' || providerStatus === 'error' || providerStatus === 'declined'
-  const tool = stringValue(item['tool']) ?? 'collaboration'
+  const tool = stringValue(item['tool']) ?? stringValue(item['name']) ?? 'collaboration'
   const prompt = stringValue(item['prompt'])
   const childSessionId =
     stringValue(item['newThreadId']) ??
@@ -2724,7 +2776,8 @@ function parseCollaboration(
     activity: {
       status,
       agent,
-      description: stringValue(item['description']) ?? prompt ?? tool,
+      description:
+        stringValue(item['description']) ?? COLLABORATION_TOOL_LABELS[tool] ?? prompt ?? tool,
       ...(prompt ? { prompt } : {}),
       ...(childSessionId ? { childSessionId } : {}),
       providerTaskId: itemId,

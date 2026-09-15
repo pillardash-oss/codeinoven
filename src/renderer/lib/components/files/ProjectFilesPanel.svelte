@@ -14,9 +14,10 @@
     FolderOpen,
     Loader2,
     Minimize2,
-    Save
+    Save,
+    TriangleAlert
   } from '@lucide/svelte'
-  import { documentPreviewFrame } from '$lib/document-preview-frame'
+  import { documentPreviewFrame, htmlPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
@@ -27,11 +28,13 @@
   import { motionDuration } from '$lib/motion'
   import {
     isAudioMime,
+    isDocumentPreviewPath,
+    isHtmlPreviewPath,
     isImageMime,
     isSvgMime,
     isVideoMime,
     mimeFromPath,
-    isDocumentPreviewPath
+    supportsFilePreview
   } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -54,6 +57,7 @@
   import ProjectTextEditor from './ProjectTextEditor.svelte'
   import ProjectFileViewerMenu from './ProjectFileViewerMenu.svelte'
   import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
+  import { posixDirname } from '$shared/paths'
   import type { ProjectTextFile } from '$shared/types'
   import type { ProjectFileInfo } from '$shared/types'
   import { INBOX_PROJECT_ID } from '$shared/types'
@@ -99,6 +103,30 @@
       : null
   )
   let deletedAtCheckpoint = $derived(checkpointDiff?.kind === 'deleted')
+  /** Reload is available for text files with a session and for previewable
+   *  files without one (media, images, SVG, PDF, documents), which re-read
+   *  their preview content instead. */
+  let reloadDisabled = $derived(
+    deletedAtCheckpoint ||
+      !activeTab ||
+      (!activeSession && !supportsFilePreview(activeTab.path)) ||
+      Boolean(projectState.loadingPaths[activeTab.path]) ||
+      Boolean(activeSession?.saving)
+  )
+  /** The active file has unsaved changes while the disk version moved on:
+   *  the viewer shows the "Viewing an older version" alert (see below). */
+  let staleSession = $derived(
+    activeSession !== null &&
+      !deletedAtCheckpoint &&
+      projectState.staleFiles[activeSession.source.path] === true
+  )
+  let editRequest = $state<{ nonce: number; action: 'undo' | 'redo' } | null>(null)
+  let editNonce = 0
+
+  function requestEdit(action: 'undo' | 'redo'): void {
+    if (!activeTab) return
+    editRequest = { nonce: ++editNonce, action }
+  }
   /** Paths still carrying merge/rebase conflicts, straight from the git store. */
   let conflictedPaths = $derived([...gitState.conflicted])
   /**
@@ -110,15 +138,42 @@
   let activePathIsConflicted = $derived(
     activeTab?.origin === 'working' && conflictedPaths.includes(activeTab.path)
   )
+  /** Undo/redo toolbar buttons apply to the plain file editor only: the
+   *  editable source view with a session, not diffs, previews, the
+   *  conflict-resolution editor, or read-only deleted files. */
+  let canUndoRedo = $derived(
+    activeSession !== null &&
+      !deletedAtCheckpoint &&
+      !activePathIsConflicted &&
+      activeTab?.view === 'source'
+  )
+  /** The Save button only exists for editable content: a conflicted file being
+   *  resolved, or a text session with unsaved changes. Preview-only content
+   *  (images, PDF, media, documents, SVG) and clean sessions show no button. */
+  let showSaveButton = $derived(
+    activeTab !== null &&
+      activeTab.view !== 'diff' &&
+      !deletedAtCheckpoint &&
+      (activePathIsConflicted || (activeSession !== null && dirty))
+  )
   let markdown = $derived(activeTab ? /\.(?:md|mdown|markdown)$/iu.test(activeTab.path) : false)
+  let htmlPreview = $derived(activeTab ? isHtmlPreviewPath(activeTab.path) : false)
   let pdf = $derived(activeTab ? /\.pdf$/iu.test(activeTab.path) : false)
   let image = $derived(activeTab ? isImageMime(mimeFromPath(activeTab.path)) : false)
   let svg = $derived(activeTab ? isSvgMime(mimeFromPath(activeTab.path)) : false)
   let video = $derived(activeTab ? isVideoMime(mimeFromPath(activeTab.path)) : false)
   let audio = $derived(activeTab ? isAudioMime(mimeFromPath(activeTab.path)) : false)
+  let previewReloadToken = $derived(
+    activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0
+  )
   let previewUrl = $derived(
     activeTab && (pdf || image || video || audio) && !svg
-      ? projectFilePreviewUrl(projectId, activeTab.path, chatThreadId ?? undefined)
+      ? projectFilePreviewUrl(
+          projectId,
+          activeTab.path,
+          chatThreadId ?? undefined,
+          previewReloadToken
+        )
       : null
   )
   // SVG is rendered natively in the renderer via a blob URL (animated SVGs
@@ -135,6 +190,9 @@
       svgPreviewFailed = false
       return
     }
+    // Reading the reload token keeps the effect reactive to explicit reloads:
+    // bumping it revokes the stale blob and re-reads the file from disk.
+    const reloadToken = projectState.previewReloadTokens[activeTab.path] ?? 0
     let cancelled = false
     svgPreviewFailed = false
     void invoke(
@@ -146,6 +204,9 @@
     )
       .then((source: ProjectTextFile | null) => {
         if (cancelled || !source) return
+        // A newer reload request superseded this read; its own run will land
+        // the fresh blob, so drop the stale content.
+        if ((projectState.previewReloadTokens[activeTab.path] ?? 0) !== reloadToken) return
         const url = URL.createObjectURL(new Blob([source.content], { type: 'image/svg+xml' }))
         svgPreviewUrl = url
       })
@@ -166,6 +227,23 @@
   let imagePreviewFailed = $derived(svg ? svgPreviewFailed : false)
   /** Office/CSV documents render as sanitized converted HTML (no PDF path). */
   let documentPreview = $derived(activeTab ? isDocumentPreviewPath(activeTab.path) : false)
+  /** Name of the preview renderer for the active file; keeps the Eye toggle's
+   *  labels identical in the inline and fullscreen toolbars. */
+  let previewKindLabel = $derived(
+    pdf
+      ? 'PDF'
+      : video
+        ? 'Video'
+        : audio
+          ? 'Audio'
+          : documentPreview
+            ? 'Document'
+            : htmlPreview
+              ? 'HTML'
+              : image
+                ? 'Image'
+                : 'Markdown'
+  )
   let documentHtml = $state<string | null>(null)
   let documentLoading = $state(false)
   let documentFailed = $state(false)
@@ -173,6 +251,9 @@
   let documentError = $state<string | null>(null)
   /** Path whose HTML is currently loaded   guards against tab swaps. */
   let documentHtmlPath = $state<string | null>(null)
+  /** Reload token the loaded HTML belongs to; a bumped token forces a re-read
+   *  even though the path is unchanged. Plain companion of `documentHtmlPath`. */
+  let documentHtmlToken: number | null = null
   /** Path whose HTML is currently being fetched   guards against effect
    *  re-runs (driven by `activeTab` reference churn) starting duplicate IPC
    *  chains that would otherwise cancel or pile on top of each other.
@@ -195,6 +276,7 @@
     if (!activeTab || !documentPreview || activeTab.view !== 'preview') {
       documentHtml = null
       documentHtmlPath = null
+      documentHtmlToken = null
       documentInFlightPath = null
       documentFailed = false
       documentError = null
@@ -202,11 +284,18 @@
       return
     }
     const path = activeTab.path
-    // Bail if this path is already loaded OR already being fetched   the
-    // in-flight chain settles its own state. Without the in-flight guard,
-    // every `activeTab` reference change restarts the chain and the previous
-    // one never gets to clear `documentLoading`   the infinite spinner.
-    if (documentHtmlPath === path || documentInFlightPath === path) return
+    const reloadToken = projectState.previewReloadTokens[path] ?? 0
+    // Bail if this path is already loaded (at the same reload token) OR
+    // already being fetched   the in-flight chain settles its own state.
+    // Without the in-flight guard, every `activeTab` reference change restarts
+    // the chain and the previous one never gets to clear `documentLoading`
+    // the infinite spinner. A bumped reload token bypasses both guards so
+    // Reload re-reads the file from disk.
+    if (
+      (documentHtmlPath === path && documentHtmlToken === reloadToken) ||
+      documentInFlightPath === path
+    )
+      return
     documentInFlightPath = path
     const token = ++documentEffectToken
     documentLoading = true
@@ -221,6 +310,7 @@
       if (token !== documentEffectToken) return
       documentHtml = null
       documentHtmlPath = path
+      documentHtmlToken = reloadToken
       documentInFlightPath = null
       documentFailed = true
       documentError = 'Document preview timed out'
@@ -235,6 +325,7 @@
         // chat-attachment document preview instead of rendering transparent.
         documentHtml = html ? documentPreviewFrame(html) : null
         documentHtmlPath = path
+        documentHtmlToken = reloadToken
         documentInFlightPath = null
         documentFailed = html === null
         documentError = html === null ? 'The document could not be converted for preview' : null
@@ -243,6 +334,7 @@
         if (token !== documentEffectToken) return
         documentHtml = null
         documentHtmlPath = path
+        documentHtmlToken = reloadToken
         documentInFlightPath = null
         documentFailed = true
         documentError = error instanceof Error ? error.message : String(error)
@@ -257,6 +349,23 @@
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')
   let visibleContent = $derived(
     deletedAtCheckpoint ? historicalContent : (activeSession?.draft ?? historicalContent)
+  )
+  /** Directory the active HTML file sits in, as an `appfile://` base URL, so
+   *  the document's relative images and media resolve beside it. The scheme
+   *  serves media only, so project stylesheets and scripts still never load. */
+  let htmlPreviewBaseHref = $derived.by(() => {
+    if (!activeTab || !htmlPreview) return undefined
+    const directory = posixDirname(activeTab.path)
+    return projectFilePreviewUrl(
+      projectId,
+      directory ? `${directory}/` : '',
+      chatThreadId ?? undefined
+    )
+  })
+  /** Sanitized page for the active HTML file, built from the live session draft
+   *  so the preview follows unsaved edits. Mounted with `sandbox=""` below. */
+  let htmlPreviewSrcdoc = $derived(
+    htmlPreview ? htmlPreviewFrame(visibleContent, htmlPreviewBaseHref) : null
   )
   let breadcrumbParts = $derived(activeTab?.path.split('/') ?? [])
   let visibleLineCount = $derived(visibleContent.split('\n').length)
@@ -392,8 +501,24 @@
     projectFilesWorkspace.updateDraft(projectId, activeTab.path, input.currentTarget.value)
   }
 
+  function reloadStaleActive(): void {
+    if (!activeTab || !activeSession) return
+    // No confirmation dialog: the alert itself is the explicit choice, and
+    // the editor applies the new content as an undoable transaction, so the
+    // previous draft stays recoverable through undo/redo.
+    void projectFilesWorkspace.reload(projectId, activeTab.path)
+  }
+
   function reloadSelected(): void {
     if (!activeTab) return
+    if (!activeSession) {
+      // Media/image/SVG/PDF/document previews have no editable text session;
+      // bumping the preview reload token re-reads the file from disk.
+      if (supportsFilePreview(activeTab.path)) {
+        projectFilesWorkspace.reloadPreview(projectId, activeTab.path)
+      }
+      return
+    }
     if (dirty && !window.confirm(`Discard unsaved changes to ${activeTab.path} and reload it?`)) {
       return
     }
@@ -595,6 +720,26 @@
 
 <svelte:window onkeydown={handleGlobalKeydown} />
 
+{#snippet staleVersionAlert(positionClass: string)}
+  {#if staleSession}
+    <div
+      class={['absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 shadow-lg', positionClass]}
+      role="alert"
+    >
+      <TriangleAlert size={13} class="shrink-0 text-warning" />
+      <span class="text-[0.625rem] font-medium text-warning">Viewing an older version</span>
+      <button
+        type="button"
+        class="rounded bg-warning/20 px-2 py-0.5 text-[0.625rem] font-semibold text-warning transition-colors hover:bg-warning/30"
+        title="Reload the current file from disk; the previous content stays recoverable with undo"
+        onclick={reloadStaleActive}
+      >
+        Reload file
+      </button>
+    </div>
+  {/if}
+{/snippet}
+
 <div class="flex h-full min-h-0 flex-col bg-app">
   <div class="flex min-h-0 flex-1">
     <section
@@ -676,7 +821,7 @@
           >
             <FileDiff size={12} />
           </button>
-          {#if markdown || pdf || image || video || audio || documentPreview}
+          {#if markdown || htmlPreview || pdf || image || video || audio || documentPreview}
             <button
               type="button"
               class={[
@@ -685,29 +830,9 @@
                   ? 'bg-overlay text-foreground'
                   : 'text-dimmed hover:bg-elevated hover:text-foreground'
               ]}
-              aria-label={pdf
-                ? 'Preview PDF'
-                : video
-                  ? 'Preview video'
-                  : audio
-                    ? 'Preview audio'
-                    : documentPreview
-                      ? 'Preview document'
-                      : image
-                        ? 'Preview image'
-                        : 'Preview Markdown'}
+              aria-label={`Preview ${previewKindLabel}`}
               aria-pressed={activeTab.view === 'preview'}
-              title={pdf
-                ? 'PDF preview'
-                : video
-                  ? 'Video preview'
-                  : audio
-                    ? 'Audio preview'
-                    : documentPreview
-                      ? 'Document preview'
-                      : image
-                        ? 'Image preview'
-                        : 'Markdown preview'}
+              title={`${previewKindLabel} preview`}
               onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'preview')}
             >
               <Eye size={12} />
@@ -752,11 +877,11 @@
             diffView={activeTab.view === 'diff'}
             lineNumbers={showLineNumbers}
             wrap={wrapLines}
-            reloadDisabled={deletedAtCheckpoint ||
-              !activeSession ||
-              Boolean(projectState.loadingPaths[activeTab.path]) ||
-              activeSession.saving}
+            reloadDisabled={reloadDisabled}
             mutationDisabled={deletedAtCheckpoint || mutationPending}
+            showUndoRedo={canUndoRedo}
+            onUndo={() => requestEdit('undo')}
+            onRedo={() => requestEdit('redo')}
             onReload={reloadSelected}
             onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
             onToggleWrap={() => wrapTextState.toggle()}
@@ -764,13 +889,16 @@
             onRename={startRename}
             onDelete={() => (deleteTargetPath = activeTab.path)}
           />
-          {#if activeTab.view !== 'diff'}
+          {#if showSaveButton}
             <button
               type="button"
-              class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+              class="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
               disabled={deletedAtCheckpoint ||
                 (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
                 (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
+              aria-label={activePathIsConflicted
+                ? 'Replace the original file and mark it resolved'
+                : 'Save file (Cmd/Ctrl+S)'}
               title={activePathIsConflicted
                 ? 'Replace the original file and mark it resolved'
                 : 'Save file (Cmd/Ctrl+S)'}
@@ -781,11 +909,12 @@
               {:else}
                 <Save size={11} />
               {/if}
-              {activePathIsConflicted ? 'Mark as resolved' : 'Save'}
             </button>
           {/if}
         </div>
       {/if}
+
+      {@render staleVersionAlert('top-[4.5rem]')}
 
       {#if activeSession?.error}
         <div
@@ -873,6 +1002,17 @@
       {:else if activeTab.view === 'preview' && markdown}
         <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
           <MarkdownView text={visibleContent} class="text-sm text-foreground" />
+        </div>
+      {:else if activeTab.view === 'preview' && htmlPreview}
+        <div class="min-h-0 flex-1 bg-surface">
+          {#if htmlPreviewSrcdoc}
+            <iframe
+              srcdoc={htmlPreviewSrcdoc}
+              sandbox=""
+              class="h-full w-full border-0"
+              title={`Preview ${activeTab.path}`}
+            ></iframe>
+          {/if}
         </div>
       {:else if activeTab.view === 'preview' && pdf}
         <div class="min-h-0 flex-1 overflow-auto">
@@ -975,6 +1115,7 @@
             findActiveIndex={editorFindActive}
             findNonce={editorFindNonce}
             replaceRequest={editorReplaceRequest}
+            {editRequest}
             focusLine={activeTab.focusLine}
             focusLineRequest={activeTab.focusLineRequest}
             onFindMatches={fullscreenOpen ? undefined : handleEditorFindMatches}
@@ -1025,7 +1166,7 @@
         <Dialog.Description class="sr-only">
           {activeTab?.view === 'diff' ? 'Fullscreen file diff' : 'Fullscreen file editor'}
         </Dialog.Description>
-        {#if activeTab?.view !== 'diff'}
+        {#if showSaveButton}
           <button
             type="button"
             class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
@@ -1086,7 +1227,7 @@
           >
             <FileDiff size={12} />
           </button>
-          {#if markdown || pdf || image || video || audio || documentPreview}
+          {#if markdown || htmlPreview || pdf || image || video || audio || documentPreview}
             <button
               type="button"
               class={[
@@ -1095,29 +1236,9 @@
                   ? 'bg-overlay text-foreground'
                   : 'text-dimmed hover:bg-elevated hover:text-foreground'
               ]}
-              aria-label={pdf
-                ? 'Preview PDF'
-                : video
-                  ? 'Preview video'
-                  : audio
-                    ? 'Preview audio'
-                    : documentPreview
-                      ? 'Preview document'
-                      : image
-                        ? 'Preview image'
-                        : 'Preview Markdown'}
+              aria-label={`Preview ${previewKindLabel}`}
               aria-pressed={activeTab.view === 'preview'}
-              title={pdf
-                ? 'PDF preview'
-                : video
-                  ? 'Video preview'
-                  : audio
-                    ? 'Audio preview'
-                    : documentPreview
-                      ? 'Document preview'
-                      : image
-                        ? 'Image preview'
-                        : 'Markdown preview'}
+              title={`${previewKindLabel} preview`}
               onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'preview')}
             >
               <Eye size={12} />
@@ -1162,11 +1283,11 @@
             diffView={activeTab.view === 'diff'}
             lineNumbers={showLineNumbers}
             wrap={wrapLines}
-            reloadDisabled={deletedAtCheckpoint ||
-              !activeSession ||
-              Boolean(projectState.loadingPaths[activeTab.path]) ||
-              activeSession.saving}
+            reloadDisabled={reloadDisabled}
             mutationDisabled={deletedAtCheckpoint || mutationPending}
+            showUndoRedo={canUndoRedo}
+            onUndo={() => requestEdit('undo')}
+            onRedo={() => requestEdit('redo')}
             hideFullscreen
             onReload={reloadSelected}
             onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
@@ -1177,7 +1298,8 @@
           />
         </div>
       {/if}
-      <div class="flex min-h-0 min-w-0 flex-1">
+      <div class="relative flex min-h-0 min-w-0 flex-1">
+        {@render staleVersionAlert('top-2')}
         <div
           class="relative flex min-h-0 min-w-0 flex-1 flex-col"
           data-region="editor"
@@ -1215,6 +1337,17 @@
           {:else if activeTab?.view === 'preview' && markdown}
             <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
               <MarkdownView text={visibleContent} class="text-sm text-foreground" />
+            </div>
+          {:else if activeTab?.view === 'preview' && htmlPreview}
+            <div class="min-h-0 flex-1 bg-surface">
+              {#if htmlPreviewSrcdoc}
+                <iframe
+                  srcdoc={htmlPreviewSrcdoc}
+                  sandbox=""
+                  class="h-full w-full border-0"
+                  title={`Preview ${activeTab.path}`}
+                ></iframe>
+              {/if}
             </div>
           {:else if activeTab?.view === 'preview' && pdf}
             <div class="min-h-0 flex-1 overflow-auto">
@@ -1300,6 +1433,7 @@
                 findActiveIndex={editorFindActive}
                 findNonce={editorFindNonce}
                 replaceRequest={editorReplaceRequest}
+                {editRequest}
                 focusLine={activeTab.focusLine}
                 focusLineRequest={activeTab.focusLineRequest}
                 onFindMatches={handleEditorFindMatches}

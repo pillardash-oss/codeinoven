@@ -355,6 +355,19 @@ class WorkspaceState {
     this.headStartUsedThreadIds.add(threadId)
   }
 
+  /** Thread ids created this session while the user was on the empty state
+   *  (no existing thread open): a new thread requested for a project, or a
+   *  newly added project landing in its first thread. These open with the
+   *  vertical centered composer head start even when the project already
+   *  holds other threads. Threads derived from an existing thread (fork,
+   *  continue-in-project, new thread while a thread was open) never enter
+   *  this set, so they stay docked. Session-scoped like headStartUsed. */
+  freshEmptyStateThreadIds: SvelteSet<string> = new SvelteSet<string>()
+
+  markThreadFreshFromEmptyState(threadId: string): void {
+    this.freshEmptyStateThreadIds.add(threadId)
+  }
+
   /** A project added externally (e.g. from Scope view) that Workspace needs to pick up. */
   pendingAddedProject: Project | null = $state(null)
 

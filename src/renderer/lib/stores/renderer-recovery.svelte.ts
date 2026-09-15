@@ -5,7 +5,12 @@ import type {
 } from '$shared/types'
 import { parseModelKey } from '$lib/model-keys'
 import { setDraftLabelCookie } from './draft-label'
-import { publishDraftActivity } from './draft-activity.svelte'
+import {
+  commitDraftStateNow,
+  flushAllDraftCommits,
+  publishDraftActivity,
+  scheduleDraftCommit
+} from './draft-activity.svelte'
 import {
   MAX_DRAFT_LENGTH,
   MAX_RECOVERY_DRAFTS,
@@ -14,6 +19,7 @@ import {
   isRecoveryIdentifier,
   isSettingsView,
   loadRendererRecoveryState,
+  parseComposerDraftEntry,
   persistRendererRecoveryState,
   recoveryDraftKey,
   removeRendererRecoveryState,
@@ -43,7 +49,7 @@ export {
   settingsSectionForView,
   settingsViewForSection
 } from './renderer-recovery'
-export { publishDraftActivity } from './draft-activity.svelte'
+export { publishDraftActivity, flushAllDraftCommits } from './draft-activity.svelte'
 
 /** How long to wait after the last mutation before writing recovery state to
  *  storage. Long enough that bursts of mutations (draft typing, model toggles)
@@ -96,7 +102,8 @@ export class RendererRecoveryStore {
     this.queuedMessages = saved.queuedMessages
 
     // Flush any pending write when the page is hidden or torn down so a quit or
-    // backgrounding never loses the latest recovery state.
+    // backgrounding never loses the latest recovery state — including any
+    // pending DB draft commit.
     if (typeof window !== 'undefined') {
       const flush = (): void => this.flushPersist()
       window.addEventListener('pagehide', flush)
@@ -168,7 +175,12 @@ export class RendererRecoveryStore {
     // across a restart made on a Settings page — lands back on the same view.
     // 'projects-scope' renders the same workspace page as 'projects' (just
     // with the scope sidebar focused), so it records as the projects view.
-    if (view === 'projects' || view === 'projects-scope' || view === 'chats' || view === 'threads') {
+    if (
+      view === 'projects' ||
+      view === 'projects-scope' ||
+      view === 'chats' ||
+      view === 'threads'
+    ) {
       this.lastContentView = view === 'projects-scope' ? 'projects' : view
     }
     // Remember the last non-settings view for the Settings back button.
@@ -199,6 +211,37 @@ export class RendererRecoveryStore {
 
   draftFor(projectId: string, threadId: string): string {
     return this.entryFor(projectId, threadId).text
+  }
+
+  /** Latest composer draft serialized for the DB commit, or null when empty. */
+  composerDraftJson(projectId: string, threadId: string): string | null {
+    const entry = this.composerDrafts[recoveryDraftKey(projectId, threadId)]
+    return entry ? JSON.stringify(entry) : null
+  }
+
+  /**
+   * Seed a locally-missing composer draft from the DB commit (restart or a
+   * second instance). A thread that already holds any local draft content
+   * wins: local edits are always newer than the 10s-delayed DB snapshot.
+   */
+  importDbDraft(projectId: string, threadId: string, rawDraftJson: string | null): void {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId) || !rawDraftJson) {
+      return
+    }
+    const key = recoveryDraftKey(projectId, threadId)
+    if (this.composerDrafts[key]) return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(rawDraftJson)
+    } catch {
+      return
+    }
+    const entry = parseComposerDraftEntry(parsed)
+    if (!entry) return
+    this.composerDrafts = { ...this.composerDrafts, [key]: entry }
+    setDraftLabelCookie(threadId, entry.text)
+    this.persist()
+    publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
   }
 
   /** Every thread whose composer holds unsent content, as (projectId, threadId)
@@ -342,6 +385,14 @@ export class RendererRecoveryStore {
     setDraftLabelCookie(threadId, draft)
     this.persist()
     publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
+    // Persist to the DB: an emptied draft flushes immediately so a sent or
+    // cleared composer never leaves a stale draft behind; a non-empty draft
+    // commits 10s after the last edit (debounced).
+    if (key in next) {
+      scheduleDraftCommit(projectId, threadId, true, JSON.stringify(next[key]))
+    } else {
+      commitDraftStateNow(projectId, threadId, false, null)
+    }
   }
 
   clearDraft(projectId: string, threadId: string): void {
@@ -702,6 +753,7 @@ export class RendererRecoveryStore {
       this.persistTimer = undefined
     }
     persistRendererRecoveryState(this.storage, this.snapshot())
+    flushAllDraftCommits()
   }
 }
 

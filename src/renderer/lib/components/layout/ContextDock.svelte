@@ -1,5 +1,6 @@
 <script module lang="ts">
   import type { Component, Snippet } from 'svelte'
+  import type { ThreadStatusTone } from '$shared/thread-status-policy'
 
   export interface ContextDockItem {
     id: string
@@ -10,8 +11,11 @@
     /** Renders as plain text instead of `icon`   e.g. the message-history count. */
     countLabel?: string
     active: boolean
-    /** Renders a small status dot on the icon   e.g. pending memory proposals. */
-    badge?: 'completed' | 'attention' | 'error'
+    /** Renders a small status dot on the icon   e.g. pending memory proposals.
+     *  Colours and variants flow through the global `ThreadStatusTone` palette
+     *  (same vocabulary as thread rows and `StatusBadge`), so the rail can
+     *  mirror any thread tone, including `working-paused` for will-retry. */
+    badge?: ThreadStatusTone
     /** Accessible description for the badge, required whenever `badge` is set. */
     badgeTitle?: string
     /** Renders a compact neutral count badge above the tool icon. */
@@ -101,7 +105,16 @@
           {/if}
           {#if item.badge}
             <span class="absolute -top-0.5 -right-0.5 flex items-start">
-              <StatusBadge kind={item.badge} title={item.badgeTitle ?? item.label} />
+              {#if item.badge === 'working' || item.badge === 'working-paused'}
+                <StatusBadge
+                  tone={item.badge}
+                  variant="spinner"
+                  animated
+                  title={item.badgeTitle ?? item.label}
+                />
+              {:else}
+                <StatusBadge tone={item.badge} title={item.badgeTitle ?? item.label} />
+              {/if}
             </span>
           {/if}
           {#if item.countBadge !== undefined}

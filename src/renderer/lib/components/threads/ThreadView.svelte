@@ -153,6 +153,7 @@
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import {
     responseReferencesState,
@@ -257,6 +258,9 @@
     ThreadSettings,
     'harnessId' | 'accountId' | 'providerId' | 'modelId' | 'thinkingLevel'
   >
+
+  /** Stable empty queue so a controller-driven view never allocates per read. */
+  const EMPTY_PERMISSION_REQUESTS: PermissionRequest[] = []
 
   interface Props {
     thread: Thread
@@ -466,13 +470,35 @@
   let fullUserMessageHistory = $state<UserMessageSummary[]>([])
   let userMessageHistoryLoaded = false
   let userMessageHistoryLoading: Promise<void> | null = null
+  /** Pending post-mount idle prefetch of the history; cancelled on teardown. */
+  let historyPrefetchHandle: number | null = null
   let hasOlderMessages = $derived(
     controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
-  let userMessageTexts = $derived(
-    messages
-      .filter((msg) => msg.role === 'user')
-      .map((msg) => messageText(msg))
+  /** Merge the lazily loaded persisted full history with any live/optimistic
+   *  user messages still pending in the mirror, deduped by id (the live window
+   *  wins, e.g. after an edit) and kept in chronological order. This is the
+   *  single source shared by the history side panel and the composer's
+   *  arrow-up recall, so navigation can reach every message without the whole
+   *  conversation being loaded into the view. */
+  function mergedUserMessageSummaries(): UserMessageSummary[] {
+    const byId: Record<string, UserMessageSummary> = {}
+    for (const entry of fullUserMessageHistory) byId[entry.id] = entry
+    for (const message of messages) {
+      if (message.role !== 'user') continue
+      byId[message.id] = {
+        id: message.id,
+        content: messageText(message),
+        createdAt: message.createdAt
+      }
+    }
+    return Object.values(byId).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+  }
+  /** Composer recall texts: the merged full history, minus blank entries that
+   *  would only produce an empty recall step. */
+  let composerHistoryTexts = $derived(
+    mergedUserMessageSummaries()
+      .map((entry) => entry.content)
       .filter((text) => text.trim().length > 0)
   )
   let busy = $derived(controller?.busy ?? agentRuns.isBusy(thread.projectId, thread.id))
@@ -717,7 +743,7 @@
     )
     lifecycleCancelModalOpen = false
     pendingLifecycleSelection = null
-    // The staged intent was either applied or discarded by this confirmation  
+    // The staged intent was either applied or discarded by this confirmation
     // it must not resurface on the next mount.
     clearLifecycleIntent(thread.projectId, thread.id)
     if (replacement.stages.length > 0 || replacement.autopilot) {
@@ -914,6 +940,20 @@
   let capabilitySkills = $state<AgentCapabilityEntry[]>([])
   let capabilityHarnessName = $state('')
   let pendingPermissions = $state<PermissionRequest[]>([])
+  /**
+   * Permission requests of a controller-driven conversation come from the shared
+   * attention store instead: a temporary side chat's card has to appear in the
+   * side chat's own window, and its tab has to keep saying it needs attention
+   * while the transcript is not mounted (the sidebar mounts only the active
+   * tab). Threads keep their request queue in this view.
+   */
+  const controllerPermissions = $derived(
+    controller
+      ? conversationAttention.permissions(controller.projectId, controller.conversationId)
+      : EMPTY_PERMISSION_REQUESTS
+  )
+  /** The queue the composer's blocking card renders from. */
+  let visiblePermissions = $derived(controller ? controllerPermissions : pendingPermissions)
   let pendingImageDescriptorError = $state<ImageDescriptorErrorRequest | null>(null)
   /**
    * Todo updates are working-trace parts too. The durable stream is written
@@ -1236,7 +1276,7 @@
     if (!chatMode && !orchestrationChild) {
       // Engineering is a set of lifecycle stages, not one switch: expose every
       // stage as its own toggle so "turn engineering on/off" is never ambiguous.
-      // Each action stages the selection exactly like the Engineering Toolbox  
+      // Each action stages the selection exactly like the Engineering Toolbox
       // intent only, applied when the next message is sent.
       const lifecycle = effectiveLifecycleSelection
       for (const stage of engineeringStageActions) {
@@ -1260,7 +1300,7 @@
       })
     }
 
-    // Chat mode only surfaces permission levels once File System is enabled  
+    // Chat mode only surfaces permission levels once File System is enabled
     // chats run with auto permission review until the user opts into files.
     if (!chatMode || settings.fileSystemMode === true) {
       for (const permission of actionPermissionLevels) {
@@ -1477,7 +1517,8 @@
     )?.models.find((candidate) => candidate.id === modelId)
     const contextWindow = latestMessage?.contextWindow ?? model?.contextWindow
     const contextEstimated = latestReportedContextUsed === undefined
-    const contextUsed = latestReportedContextUsed ?? latestEstimatedContextUsed ?? latestTokens?.total
+    const contextUsed =
+      latestReportedContextUsed ?? latestEstimatedContextUsed ?? latestTokens?.total
     if (
       contextWindow === undefined &&
       contextUsed === undefined &&
@@ -2317,7 +2358,9 @@
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: thread.workingDirectory,
       settings: thread.settings,
-      scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
+      // Inherit the current thread's scope so the spun-off thread stays in
+      // the same scope instead of dropping to the default bucket.
+      scopeBucketId: thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
     })
       .then((newThread) => {
         rendererRecovery.setDraft(newThread.projectId, newThread.id, draft)
@@ -3001,7 +3044,7 @@
     }
   }
 
-  /** Scroll the transcript to a section heading inside a specific message  
+  /** Scroll the transcript to a section heading inside a specific message
    *  the jump target used by section sources in the Sources panel. Loads a
    *  window around the message when it lies outside the loaded cache. */
   async function scrollToMessageSection(messageId: string, section: string): Promise<void> {
@@ -3123,24 +3166,12 @@
   // in the mirror, deduped and kept in chronological order. Each message carries
   // a short work-trace preview from the turn that follows it.
   $effect(() => {
-    const byId: Record<string, UserMessageSummary> = {}
-    for (const entry of fullUserMessageHistory) byId[entry.id] = entry
-    for (const message of messages) {
-      if (message.role !== 'user') continue
-      byId[message.id] = {
-        id: message.id,
-        content: messageText(message),
-        createdAt: message.createdAt
-      }
-    }
     const tracePreviews = tracePreviewByUserMessage(messages)
-    const userMessages = Object.values(byId)
-      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-      .map(({ id, content }) => ({
-        id,
-        content,
-        ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
-      }))
+    const userMessages = mergedUserMessageSummaries().map(({ id, content }) => ({
+      id,
+      content,
+      ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
+    }))
     if (hasController) return
     workspaceState.messageCount = userMessages.length
     workspaceState.userMessages = userMessages
@@ -3270,7 +3301,7 @@
     const away = !isAtBottom(scrollEl)
     // Pin the window to what the reader is reading the moment they leave the
     // tail, and release it back to the tail-relative window when they return.
-    // While pinned, a streaming turn grows the window instead of sliding it  
+    // While pinned, a streaming turn grows the window instead of sliding it
     // the message and trace under the reader can never be unmounted by new
     // entries arriving at the tail.
     if (away && !userScrolledAway) {
@@ -3501,7 +3532,7 @@
     if (!el || !(content instanceof Element)) return
     const observer = new ResizeObserver(() => {
       if (!scrollEl || !mayReanchorToLatest(userScrolledAway)) return
-      // Re-anchor only when the viewport actually drifted from the bottom  
+      // Re-anchor only when the viewport actually drifted from the bottom
       // a no-op write here would fire a pointless scroll event per resize.
       if (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight > 1) {
         scrollEl.scrollTop = scrollEl.scrollHeight
@@ -3640,6 +3671,17 @@
     if (!controller) {
       workspaceState.jumpToMessage = jumpToMessage
       workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+      // Prefetch the lightweight user-message history shortly after mount so
+      // the history panel is populated the first time it opens, without the
+      // user having to open it once to trigger the load. Deferred past the
+      // first paint (idle callback) so the initial reveal never waits on it.
+      historyPrefetchHandle = requestIdleCallback(
+        () => {
+          if (alive) void refreshUserMessageHistory()
+        },
+        // Bounded: never starve the panel population behind constant work.
+        { timeout: 2000 }
+      )
     }
 
     const onResize = (): void => scheduleResponseBubbleUpdate()
@@ -3652,6 +3694,9 @@
       sessionReady = Promise.resolve('')
       void refreshCommands()
       void refreshCapabilitySkills()
+      // Remounting into a side chat that is already blocked on a permission
+      // request rehydrates its card; the parent thread is never asked for it.
+      void refreshPendingPermissions()
 
       return () => {
         alive = false
@@ -3665,6 +3710,10 @@
         window.removeEventListener('resize', onResize)
         clearTimeout(copyResetTimer)
         cancelAnimationFrame(initialPaintRevealFrame)
+        if (historyPrefetchHandle !== null) {
+          cancelIdleCallback(historyPrefetchHandle)
+          historyPrefetchHandle = null
+        }
         // Controller-driven views never published the global state below, so
         // their teardown must not clear it either   clearing would clobber the
         // values published by the primary conversation view behind the panel.
@@ -3746,6 +3795,18 @@
         void refreshMessages()
         restoreWorkingState(updatedThread.status, updatedThread.auditState === 'running')
       }
+      // A durable auditor child (independent or Achievement audit) owns its own
+      // lifecycle; mirror status transitions so the coordinator panel and the
+      // thread row reflect failures and completions without waiting for the
+      // next full engineering reconcile (which chat-mode threads skip).
+      if (
+        updatedThread.projectId === thread.projectId &&
+        updatedThread.achievementRole === 'auditor' &&
+        updatedThread.coordinatorThreadId === thread.id &&
+        (thread.auditorThreadId === updatedThread.id || durableAuditThread?.id === updatedThread.id)
+      ) {
+        durableAuditThread = updatedThread
+      }
       if (
         updatedThread.projectId === thread.projectId &&
         (updatedThread.id === thread.id || updatedThread.assignmentId === assignment?.id) &&
@@ -3799,6 +3860,10 @@
       window.removeEventListener('resize', onResize)
       clearTimeout(copyResetTimer)
       cancelAnimationFrame(initialPaintRevealFrame)
+      if (historyPrefetchHandle !== null) {
+        cancelIdleCallback(historyPrefetchHandle)
+        historyPrefetchHandle = null
+      }
       workspaceState.sources = []
       workspaceState.jumpToMessage = null
       if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
@@ -4705,10 +4770,38 @@
     await Promise.all([refreshMessages(), checkpointRefresh])
   }
 
+  /**
+   * Discovery scope for the slash menu's commands and skills. Temporary side
+   * chats own no Thread row, so their skills are discovered against the parent
+   * thread's project scope combined with the side chat's own harness, which
+   * the composer can switch before the first turn.
+   */
+  function capabilityScope(): { projectId: string; threadId: string; harnessId?: string } {
+    if (controller?.parentThreadId) {
+      return {
+        projectId: controller.projectId,
+        threadId: controller.parentThreadId,
+        harnessId: settings.harnessId
+      }
+    }
+    return { projectId: thread.projectId, threadId: thread.id }
+  }
+
   async function refreshCommands(): Promise<void> {
-    const { projectId, id } = thread
+    const scope = capabilityScope()
     try {
-      commands = await invoke('agent:listCommands', projectId, id)
+      const discovered = await invoke(
+        'agent:listCommands',
+        scope.projectId,
+        scope.threadId,
+        scope.harnessId
+      )
+      // A side chat is read-only and owns no thread row, so its harness session
+      // commands (config, settings, usage-credits) cannot run there. Only its
+      // skills stay on the menu; they ride the read-only prompt path below.
+      commands = hasController
+        ? discovered.filter((command) => command.source === 'skill')
+        : discovered
     } catch {
       // Command discovery is supplementary; messaging remains available.
       commands = []
@@ -4719,9 +4812,14 @@
    *  CodeInOven-registered). Discovery is supplementary   the composer keeps
    *  working when it fails. */
   async function refreshCapabilitySkills(): Promise<void> {
-    const { projectId, id } = thread
+    const scope = capabilityScope()
     try {
-      const capabilities = await invoke('agent:listContextCapabilities', projectId, id)
+      const capabilities = await invoke(
+        'agent:listContextCapabilities',
+        scope.projectId,
+        scope.threadId,
+        scope.harnessId
+      )
       if (capabilities.harnessId !== settings.harnessId) return
       capabilityHarnessName = capabilities.harnessName
       capabilitySkills = capabilities.skill
@@ -4748,6 +4846,23 @@
   async function refreshPendingPermissions(): Promise<void> {
     const { projectId, id } = thread
     try {
+      if (controller) {
+        // The side chat's own queue is authoritative for its own conversation
+        // the parent thread must never show a card the side chat owns.
+        const knownIds = new Set(
+          conversationAttention
+            .permissions(controller.projectId, controller.conversationId)
+            .map((request) => request.id)
+        )
+        const pending = await invoke('agent:listPermissions', projectId, id)
+        conversationAttention.reconcile(
+          controller.projectId,
+          controller.conversationId,
+          pending,
+          knownIds
+        )
+        return
+      }
       pendingPermissions = await invoke('agent:listPermissions', projectId, id)
     } catch (error) {
       errorMessage =
@@ -5454,18 +5569,26 @@
     sendComposerMessage(request ? `@cio-utility ${request}` : '@cio-utility', [])
   }
 
+  /** Ask the agent to load and follow a skill by name. This is the route for
+   *  skills with no runnable native command in the current conversation (a
+   *  side chat owns no thread row, and a global or CodeInOven skill is not a
+   *  harness slash command at all). */
+  function requestSkillUse(skillName: string, args: string): void {
+    const request = args.trim()
+    sendComposerMessage(
+      request
+        ? `${request}\n\n(Use the "${skillName}" skill for this.)`
+        : `Use the "${skillName}" skill.`,
+      []
+    )
+  }
+
   /** Invoke a capability skill the harness does not expose as a native slash
    *  command by sending a turn that asks the agent to load and follow it. */
   function triggerCapabilitySkill(actionKey: string, args: string): void {
     const skill = capabilitySkills.find((candidate) => `cio-skill:${candidate.id}` === actionKey)
     if (!skill) return
-    const request = args.trim()
-    sendComposerMessage(
-      request
-        ? `${request}\n\n(Use the "${skill.name}" skill for this.)`
-        : `Use the "${skill.name}" skill.`,
-      []
-    )
+    requestSkillUse(skill.name, args)
   }
 
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
@@ -5481,6 +5604,13 @@
     const { projectId, id } = thread
     const command = commands.find((candidate) => actionId(candidate.id) === commandId)
     if (!command) return
+    if (hasController) {
+      // A side chat owns no thread row, so a harness-native command cannot run
+      // against it (runCommand needs the thread's session). Its skills ride
+      // the read-only prompt path instead; anything else is not offered there.
+      if (command.source === 'skill') requestSkillUse(command.name, args)
+      return
+    }
     errorMessage = ''
     providerStatus = null
     commandExecuting = true
@@ -5751,17 +5881,17 @@
 
   async function allowPermissionOnce(requestId: string): Promise<void> {
     await invoke('agent:replyPermission', thread.projectId, requestId, 'once')
-    pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
+    resolvePendingPermission(requestId)
   }
 
   async function allowPermissionAlways(requestId: string): Promise<void> {
     await invoke('agent:replyPermission', thread.projectId, requestId, 'always')
-    pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
+    resolvePendingPermission(requestId)
   }
 
   async function rejectPermission(requestId: string): Promise<void> {
     await invoke('agent:replyPermission', thread.projectId, requestId, 'reject')
-    pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
+    resolvePendingPermission(requestId)
   }
 
   async function providePermissionAlternative(
@@ -5769,8 +5899,27 @@
     alternative: string
   ): Promise<void> {
     await invoke('agent:replyPermission', thread.projectId, requestId, 'reject', alternative)
-    pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
+    resolvePendingPermission(requestId)
+    // The engine commits the alternative straight into the side chat's own
+    // transcript, so the view has to re-read it from there.
+    if (controller) {
+      await controller.load()
+      return
+    }
     await refreshMessages()
+  }
+
+  /**
+   * Drop an answered request from whichever queue owns it: a controller-driven
+   * conversation publishes through the shared attention store, threads keep the
+   * queue in this view.
+   */
+  function resolvePendingPermission(requestId: string): void {
+    if (controller) {
+      conversationAttention.resolve(controller.projectId, controller.conversationId, requestId)
+      return
+    }
+    pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
   }
 
   function checkpointForTurn(messageIndex: number): TurnCheckpointSummary | null {
@@ -5779,7 +5928,7 @@
 
     // A checkpoint's turn spans beginTurn (createdAt) → completeTurn
     // (completedAt). Every message of that turn   including steers,
-    // question-answers, permission prompts, sub-agent spawns, and compaction  
+    // question-answers, permission prompts, sub-agent spawns, and compaction
     // falls inside this window, so match the card by time instead of walking
     // back to a "user" message (whose role/shape varies with what the agent
     // did mid-turn). Choosing the most recent window resolves
@@ -7760,6 +7909,10 @@
       })
       auditReport = result.report
       durableAuditThread = result.auditorThread
+      // The main process persists `report_ready`; mirror it locally so the
+      // studio's Review / Complete actions light up without waiting for the
+      // thread-update broadcast.
+      auditState = 'report_ready'
       auditVersions = await invoke(
         'audit:listVersions',
         thread.projectId,
@@ -7773,6 +7926,57 @@
     } finally {
       auditBusy = false
     }
+  }
+
+  /** Replace the auditor thread with a brand-new one and run a fresh audit.
+   *  The main process deletes the previous auditor thread (session, transcript,
+   *  disk artifacts) before creating the new one, so a stuck or repeatedly
+   *  failing auditor is escaped rather than resumed. The report lineage on the
+   *  coordinator survives, so the fresh auditor still verifies rework against
+   *  the previous report when one exists. */
+  async function startFreshIndependentAudit(selected: ThreadSettings): Promise<void> {
+    auditBusy = true
+    auditError = ''
+    errorMessage = ''
+    auditSettings = selected
+    rendererRecovery.addRecentModel(
+      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    )
+    try {
+      const result = await invoke('agent:startFreshIndependentAudit', thread.projectId, thread.id, {
+        settings: selected
+      })
+      auditReport = result.report
+      durableAuditThread = result.auditorThread
+      auditState = 'report_ready'
+      auditVersions = await invoke(
+        'audit:listVersions',
+        thread.projectId,
+        thread.id,
+        auditReport.id
+      )
+    } catch (error) {
+      const rawError = error instanceof Error ? error.message : 'The new audit could not start.'
+      errorMessage = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+      auditError = errorMessage
+      // The previous auditor is gone and the failed run still created a fresh
+      // one, so resolve it instead of leaving a deleted thread on screen.
+      durableAuditThread = await invoke(
+        'agent:ensureIndependentAuditorThread',
+        thread.projectId,
+        thread.id,
+        selected
+      ).catch(() => undefined)
+    } finally {
+      auditBusy = false
+    }
+  }
+
+  /** Remove the auditor thread without starting an audit. The next "Run audit"
+   *  creates a brand-new auditor because the deleted one no longer resolves. */
+  async function deleteAuditorThread(auditor: Thread): Promise<void> {
+    await invoke('agent:deleteIndependentAuditorThread', thread.projectId, thread.id)
+    if (durableAuditThread?.id === auditor.id) durableAuditThread = undefined
   }
 
   /** Toggle the independent audit. Enabling is permanent once the first run
@@ -8804,6 +9008,12 @@
     if (controller) {
       commitSettings(normalized)
       controller.updateSettings(normalized)
+      // Side chats pick their harness in the composer before the first turn, so
+      // the slash menu must follow the same switch logic threads have.
+      if (harnessChanged) {
+        void refreshCommands()
+        void refreshCapabilitySkills()
+      }
       return
     }
     if (harnessChanged || providerChanged) {
@@ -9436,7 +9646,7 @@
       visibleMessages.length === 0 &&
       !busy &&
       !failureRetryVisible &&
-      pendingPermissions.length === 0 &&
+      visiblePermissions.length === 0 &&
       pendingQuestionRequests.length === 0
   )
 
@@ -11528,8 +11738,8 @@
                 onJumpToSpec={() => chooseBrainstormEntry('spec')}
                 onClose={revertEngineeringEntryChoice}
               />
-            {:else if pendingPermissions.length > 0 && !achievementAutonomous}
-              {@const pendingPermission = pendingPermissions[0]}
+            {:else if visiblePermissions.length > 0 && !achievementAutonomous}
+              {@const pendingPermission = visiblePermissions[0]}
               {#key pendingPermission.id}
                 <PermissionRequestCard
                   request={pendingPermission}
@@ -11811,7 +12021,7 @@
                     }}
                     projectId={thread.projectId}
                     threadId={thread.id}
-                    scopeShoe={scopeShoe}
+                    {scopeShoe}
                     attachmentStorage={{
                       kind: chatMode ? 'chat' : 'project',
                       projectId: thread.projectId,
@@ -11907,7 +12117,8 @@
                     onRemoveAllReferences={clearComposerReferences}
                     onEditReference={controller ? undefined : editResponseReference}
                     onSend={sendComposerMessage}
-                    historyMessages={userMessageTexts}
+                    historyMessages={composerHistoryTexts}
+                    onHistoryNavigateStart={() => void refreshUserMessageHistory()}
                     hidePermissionSelector={chatMode}
                     favoriteModels={chatMode
                       ? rendererRecovery.chatFavoriteModels
@@ -12034,6 +12245,8 @@
       onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
       onOpenAudit={() => void generateIndependentAudit(auditSettings)}
       onViewReport={openAuditStudio}
+      onNewAudit={() => startFreshIndependentAudit(auditSettings)}
+      onDeleteThread={deleteAuditorThread}
       onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
       onModelChange={changeAuditModel}
       onToggleFavorite={(providerId, modelId, harnessId) =>

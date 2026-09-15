@@ -5,6 +5,7 @@ import { setTerminalFocused } from './focus'
 import { patchSelectionCopy } from './selection-copy'
 import { attachTerminalInputCompat } from './input-compat'
 import { attachMouseTracking } from './mouse-tracking'
+import { registerTerminalHost } from './host-registry'
 import { FileLinkProvider } from './path-links'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { composerOwnsKeyboardFocus } from '$lib/focus/composer-focus'
@@ -322,6 +323,18 @@ class TerminalSessionManager {
     const subs: Array<() => void> = []
     const cursorShape = new CursorShapeDecoder()
     subs.push(cleanupFocus, observeTerminalResize(host, session))
+
+    // Let the shared context menu resolve this session from its host element:
+    // it needs the live Terminal (selection, select-all) and the PTY channel
+    // (paste) but has no other way to reach the session object.
+    subs.push(
+      registerTerminalHost(host, {
+        term,
+        write: (data) => {
+          window.api.send('pty:write', id, data)
+        }
+      })
+    )
 
     // PTY output → terminal buffer. Always active so the buffer stays current
     // even while the panel is hidden or the component is unmounted. DECSCUSR

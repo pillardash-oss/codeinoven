@@ -414,6 +414,15 @@ export interface Thread {
   archived: boolean
   /** Whether the user has viewed this thread since its last activity. */
   read: boolean
+  /** Whether the user is actively composing into this thread — typing in the
+   *  composer or dictating a voice recording. Persisted edge-triggered so
+   *  bounded DB listings always keep a thread that is being drafted, whatever
+   *  its age, and other instances can surface it too. */
+  drafting?: boolean
+  /** Latest committed composer draft (JSON `ComposerDraftEntry` shape),
+   *  written ~10s after the last draft activity. Restores drafts across
+   *  restarts and surfaces them to other instances. */
+  draftJson?: string | null
   /** Git branch associated with this thread, when known. */
   branch?: string
   /** Stable agent-work directory name shared by forks of the same feature. */
@@ -435,6 +444,12 @@ export interface Thread {
   sessionHarnessId?: string
   /** Account container that owns the bound native session. */
   sessionAccountId?: string
+  /** Diagnostic text of the most recent failure (message plus any raw
+   *  detail/stack the engine captured). In-memory only: it is never persisted
+   *  and exists so error notifications and panels can show what actually went
+   *  wrong instead of a generic "hit an error" label. Cleared whenever the
+   *  thread leaves the `failed` status. */
+  lastError?: string
   /** Last specification card explicitly dismissed by the user. */
   dismissedSpecId?: string
   dismissedSpecVersion?: number
@@ -532,10 +547,13 @@ export function coordinatorHasActiveDelegates(
   coordinator: Thread,
   threads: readonly Thread[]
 ): boolean {
-  if (
-    coordinator.assignmentRole !== 'coordinator' &&
-    coordinator.achievementRole !== 'coordinator'
-  ) {
+  const isOrchestrationCoordinator =
+    coordinator.assignmentRole === 'coordinator' || coordinator.achievementRole === 'coordinator'
+  // An Independent Audit runs on a dedicated (hidden) auditor thread even
+  // though its parent is a plain thread without a coordinator role: the parent
+  // row must still pulse while that auditor works.
+  const isIndependentAuditParent = coordinator.independentAudit === true
+  if (!isOrchestrationCoordinator && !isIndependentAuditParent) {
     return false
   }
   if (coordinator.auditState === 'running') return true

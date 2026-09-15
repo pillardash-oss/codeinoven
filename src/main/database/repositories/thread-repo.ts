@@ -47,6 +47,8 @@ interface ThreadRow {
   user_input_locked: number
   independent_audit: number
   independent_audit_initialized: number
+  drafting: number
+  draft_json: string | null
   created_at: number
   updated_at: number
   last_activity: number
@@ -149,7 +151,15 @@ function rowToThread(row: ThreadRow): Thread {
     sessionAccountId: row.session_account_id ?? undefined,
     dismissedSpecId: row.dismissed_spec_id ?? undefined,
     dismissedSpecVersion: row.dismissed_spec_version ?? undefined,
-    auditState: (row.audit_state as Thread['auditState']) ?? undefined,
+    // Legacy independent audits persisted the active report pointer without
+    // an audit state, stranding the review surface (no Review/Complete
+    // buttons, no severity badges, no next verification pass). Every current
+    // writer keeps the pointer and the state in lockstep — clearing one
+    // clears both — so a pointer without a state can only be a legacy report
+    // awaiting review.
+    auditState:
+      (row.audit_state as Thread['auditState']) ??
+      (row.active_audit_id !== null ? 'report_ready' : undefined),
     loopIteration: row.loop_iteration ?? undefined,
     activeAuditId: row.active_audit_id ?? undefined,
     activeAuditVersion: row.active_audit_version ?? undefined,
@@ -162,6 +172,8 @@ function rowToThread(row: ThreadRow): Thread {
     userInputLocked: row.user_input_locked === 1,
     independentAudit: row.independent_audit === 1,
     independentAuditInitialized: row.independent_audit_initialized === 1,
+    ...(row.drafting === 1 ? { drafting: true } : {}),
+    ...(row.draft_json !== null ? { draftJson: row.draft_json } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastActivity: row.last_activity,
@@ -279,6 +291,10 @@ interface MessageMatchRow {
   snippet_timestamp: number
 }
 
+// Draft state (`drafting`, `draft_json`) is intentionally absent from the
+// generic upsert: only the dedicated draft writer below may change it, so
+// unrelated thread writes (title, status, settings...) can never clobber a
+// draft that is actively being composed in another window.
 const THREAD_UPSERT_SQL = `INSERT INTO threads(
   id, project_id, provider_id, title, title_source, status,
   pinned, pinned_at, sort_order, scope_sort_order, archived, read,
@@ -289,6 +305,7 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
   independent_audit, independent_audit_initialized,
   created_at, updated_at, last_activity, working_directory
+
 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
@@ -486,6 +503,58 @@ export class ThreadRepo {
     return { thread, changed: wasUnread }
   }
 
+  /**
+   * Persist a thread's draft state on the database worker: the edge-triggered
+   * `drafting` flag (immediately, so listings never drop a thread that is
+   * being composed or dictated) and the debounce-committed draft content.
+   * The generic upsert never touches these columns — see `THREAD_UPSERT_SQL`.
+   */
+  async setDraftStateViaWorker(
+    projectId: string,
+    id: string,
+    drafting: boolean,
+    draftJson: string | null
+  ): Promise<Thread | null> {
+    const result = await this.db.queryViaWorker(
+      'SELECT * FROM threads WHERE id = ? AND project_id = ?',
+      [id, projectId],
+      1
+    )
+    if (!result.ok) return null
+    const row = (result.rows as unknown as ThreadRow[])[0]
+    if (!row) return null
+    const updated = await this.db.executeViaWorker(
+      'UPDATE threads SET drafting = ?, draft_json = ?, updated_at = ? WHERE id = ? AND project_id = ?',
+      [drafting ? 1 : 0, draftJson, Date.now(), id, projectId]
+    )
+    if (!updated.ok) return null
+    const thread = rowToThread(row)
+    if (drafting) thread.drafting = true
+    else delete thread.drafting
+    thread.draftJson = draftJson
+    return thread
+  }
+
+  /** Every non-archived thread currently flagged as drafting, regardless of
+   *  any listing quota. Used by the workspace to rescue drafting threads that
+   *  fell outside a bounded first-paint hydration slice. */
+  async listDraftingThreadsViaWorker(): Promise<Thread[]> {
+    const result = await this.db.queryViaWorker(
+      `SELECT * FROM threads
+       WHERE archived = 0
+         AND drafting = 1
+         AND assignment_role IS NOT 'worker'
+         AND achievement_role IS NOT 'auditor'
+         AND coordinator_thread_id IS NULL
+         AND assignment_id IS NULL
+       ORDER BY last_activity DESC, id ASC`,
+      [],
+      0
+    )
+    if (!result.ok) return []
+    return (result.rows as unknown as ThreadRow[]).map(rowToThread)
+  }
+
   /** Map of thread id → distinct harness ids used in its session, newest first. */
   private usedHarnessesFor(threadIds: string[]): Map<string, string[]> {
     const result = new Map<string, string[]>()
@@ -655,7 +724,7 @@ export class ThreadRepo {
            AND achievement_role IS NOT 'auditor'
            AND coordinator_thread_id IS NULL
            AND assignment_id IS NULL
-       ) WHERE rn <= ${quotaExpr} OR read = 0
+       ) WHERE rn <= ${quotaExpr} OR read = 0 OR drafting = 1
        ORDER BY pinned DESC, pinned_at DESC, last_activity DESC, id ASC`,
       [],
       0

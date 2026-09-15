@@ -25,6 +25,7 @@ import {
   setPowerWakeService,
   broadcastThreadUpdate
 } from './chat/thread-events'
+import { flushDraftWrites } from './chat/draft-commit-gate'
 import {
   installProductionApplicationMenu,
   lockDownProductionWindow
@@ -584,16 +585,20 @@ async function bootPostPaintServices(): Promise<void> {
     scopeManager,
     scopeWorktreeService
   )
-  const projectFilesService = new ProjectFilesService(projectManager, scopeRootProvider(scopeRootResolver), {
-    // Chat file trees mount on the thread's own `chats-artifacts/<threadId>`
-    // directory; resolution creates it on demand so an empty thread still has
-    // a browsable root.
-    resolve: async (threadId: string) => {
-      const root = storage.resolve(chatThreadArtifactDirectory(threadId))
-      await ensureDir(root)
-      return root
+  const projectFilesService = new ProjectFilesService(
+    projectManager,
+    scopeRootProvider(scopeRootResolver),
+    {
+      // Chat file trees mount on the thread's own `chats-artifacts/<threadId>`
+      // directory; resolution creates it on demand so an empty thread still has
+      // a browsable root.
+      resolve: async (threadId: string) => {
+        const root = storage.resolve(chatThreadArtifactDirectory(threadId))
+        await ensureDir(root)
+        return root
+      }
     }
-  })
+  )
   appfileProjectFiles = projectFilesService
   computerUsePipService = new ComputerUsePipService(storage)
   harnessManifestService = new HarnessManifestService(storage)
@@ -1639,6 +1644,10 @@ async function runShutdownPipeline(): Promise<void> {
   }
 
   try {
+    // Flush any in-flight thread draft commits BEFORE the database closes so a
+    // debounced draft write delivered during the quit grace period can never
+    // land on an already-closed database.
+    await flushDraftWrites()
     // Await the graceful database close (typed worker shutdown acknowledged +
     // primary connection closed) so app.quit() never races the storage teardown.
     await database.close()

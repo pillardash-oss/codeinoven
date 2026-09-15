@@ -1,11 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { ClipboardPaste, Copy, ExternalLink, Link, Scissors, TextSelect } from '@lucide/svelte'
+  import {
+    ClipboardPaste,
+    Copy,
+    Eraser,
+    ExternalLink,
+    Link,
+    Scissors,
+    TextSelect
+  } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
+  import { terminalEntryForHost, type TerminalHostEntry } from '$lib/terminal/host-registry'
+  import { buildPasteData } from '$lib/terminal/input-compat'
+  import { selectWordAt } from '$lib/terminal/word-select'
 
-  type MenuKind = 'text' | 'editable'
+  type MenuKind = 'text' | 'editable' | 'terminal'
 
   interface TextMenuTarget {
     kind: MenuKind
@@ -15,6 +26,8 @@
     linkHref: string | null
     /** Editable element for Cut / Paste / Select All actions. */
     editable: HTMLInputElement | HTMLTextAreaElement | HTMLElement | null
+    /** Live terminal for terminal Copy / Paste / Select All / Clear actions. */
+    terminal: TerminalHostEntry | null
   }
 
   let target = $state<TextMenuTarget | null>(null)
@@ -80,13 +93,43 @@
     const element = event.target instanceof Element ? event.target : null
     if (!element) return null
 
+    // Terminals own their selection on canvas (no DOM selection) and render
+    // text via the GPU, so they must be resolved before the editable and text
+    // heuristics below — both of which would decline and fall through to the
+    // native menu, whose Copy item is blind to the terminal selection.
+    const terminalHost = element.closest('.terminal-host')
+    if (terminalHost instanceof HTMLElement) {
+      const terminal = terminalEntryForHost(terminalHost)
+      if (terminal) {
+        let text = terminal.term.hasSelection() ? terminal.term.getSelection() : ''
+        if (!text) text = selectWordAt(terminal.term, terminalHost, event.clientX, event.clientY)
+        return {
+          kind: 'terminal',
+          x: event.clientX,
+          y: event.clientY,
+          text,
+          linkHref: null,
+          editable: null,
+          terminal
+        }
+      }
+    }
+
     const editable = asEditableField(element)
     if (editable) {
       const text =
         editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement
           ? editableSelection(editable)
           : selectionText()
-      return { kind: 'editable', x: event.clientX, y: event.clientY, text, linkHref: null, editable }
+      return {
+        kind: 'editable',
+        x: event.clientX,
+        y: event.clientY,
+        text,
+        linkHref: null,
+        editable,
+        terminal: null
+      }
     }
 
     // Citation links have their own dedicated context menu.
@@ -102,7 +145,15 @@
     // otherwise the native menu is more useful (e.g. spellcheck, inspect).
     if (!text && !linkHref) return null
 
-    return { kind: 'text', x: event.clientX, y: event.clientY, text, linkHref, editable: null }
+    return {
+      kind: 'text',
+      x: event.clientX,
+      y: event.clientY,
+      text,
+      linkHref,
+      editable: null,
+      terminal: null
+    }
   }
 
   function handleContextMenu(event: MouseEvent): void {
@@ -212,6 +263,33 @@
     close()
   }
 
+  async function pasteIntoTerminal(t: TextMenuTarget): Promise<void> {
+    const terminal = t.terminal
+    if (!terminal) {
+      close()
+      return
+    }
+    try {
+      const clipboardText = await invoke('clipboard:readText')
+      if (clipboardText) {
+        terminal.write(buildPasteData(terminal.term, clipboardText))
+      }
+    } catch {
+      toast.error('Failed to paste into terminal')
+    }
+    close()
+  }
+
+  function selectAllInTerminal(t: TextMenuTarget): void {
+    t.terminal?.term.selectAll()
+    close()
+  }
+
+  function clearTerminal(t: TextMenuTarget): void {
+    t.terminal?.term.clear()
+    close()
+  }
+
   onMount(() => {
     // Capture phase so we run before bits-ui citation menu triggers and can
     // stop them when an editable field or text selection takes priority.
@@ -269,6 +347,44 @@
       <button type="button" class={itemClass} role="menuitem" onclick={() => selectAll(target!)}>
         <TextSelect class="size-3.5 shrink-0 text-text-muted" />
         Select All
+      </button>
+    {:else if target.kind === 'terminal'}
+      <button
+        type="button"
+        class={itemClass}
+        role="menuitem"
+        disabled={!target.text}
+        onclick={() => copy(target!.text, 'text')}
+      >
+        <Copy class="size-3.5 shrink-0 text-text-muted" />
+        Copy
+      </button>
+      <button
+        type="button"
+        class={itemClass}
+        role="menuitem"
+        onclick={() => pasteIntoTerminal(target!)}
+      >
+        <ClipboardPaste class="size-3.5 shrink-0 text-text-muted" />
+        Paste
+      </button>
+      <button
+        type="button"
+        class={itemClass}
+        role="menuitem"
+        onclick={() => selectAllInTerminal(target!)}
+      >
+        <TextSelect class="size-3.5 shrink-0 text-text-muted" />
+        Select All
+      </button>
+      <button
+        type="button"
+        class={itemClass}
+        role="menuitem"
+        onclick={() => clearTerminal(target!)}
+      >
+        <Eraser class="size-3.5 shrink-0 text-text-muted" />
+        Clear
       </button>
     {:else}
       {#if target.text}

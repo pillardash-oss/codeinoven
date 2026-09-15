@@ -52,7 +52,13 @@
 
   $effect(() => {
     const projectId = scopeState.activeProjectId
-    if (projectId) void scopeState.loadBoard(projectId)
+    if (!projectId) return
+    // Board first, then hydrate the project's full thread list: custom scopes
+    // must show every bucket thread even when it is older than the bounded
+    // first-paint recent slice, without paging the sidebar first.
+    void scopeState.loadBoard(projectId).then(() => {
+      void scopeState.ensureScopeBoardThreadsLoaded(projectId)
+    })
   })
 
   // Keep the typed health of every managed worktree on the active board
@@ -273,6 +279,15 @@
     } catch (error) {
       actionError = errorMessage(error, 'The thread could not be created.')
     }
+  }
+
+  /** Dock a scope: land on the scoped-threads view with it current and no
+   *  thread open, so the conversation screen shows its empty state. */
+  function dockBucket(bucket: ScopeBucket): void {
+    if (!scopeState.activeProjectId) return
+    scopeState.dockScope(bucket.id)
+    if (workspaceState.selectedThread) workspaceState.clearThread()
+    navigateToScopedThreads?.()
   }
 
   function askEditBucket(bucket: ScopeBucket): void {
@@ -506,6 +521,7 @@
               onToggle={() => toggleBucket(bucket.id)}
               onToggleSlice={(stage) => toggleSlice(bucket.id, stage)}
               onEditBucket={() => askEditBucket(bucket)}
+              onDock={() => dockBucket(bucket)}
               onDeleteBucket={() => (deleteBucketTarget = bucket)}
               onTogglePinned={() => void togglePinned(bucket)}
               onArchive={() => void toggleArchive(bucket, true)}

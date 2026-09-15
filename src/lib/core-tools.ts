@@ -8,10 +8,22 @@ export const CIO_TODO_WRITE_TOOL_NAME = 'cio_todo_write'
 export const CIO_REQUEST_FILES_TOOL_NAME = 'cio_request_files'
 /** Spawns nested sub-agent worker threads controlled by the primary agent. */
 export const CIO_SPAWN_AGENT_TOOL_NAME = 'cio_spawn_agent'
-/** Checks or waits for spawned sub-agent threads and collects their results. */
+/** Checks or waits for spawned sub-agent threads; returns metadata only. */
 export const CIO_AGENT_STATUS_TOOL_NAME = 'cio_agent_status'
+/** Reads the final output of finished sub-agent threads, keyed by agent id. */
+export const CIO_AGENT_OUTPUT_TOOL_NAME = 'cio_agent_output'
 /** Custom-message type that announces a finished background sub-agent to the driver. */
 export const CIO_SUBAGENT_DONE_MESSAGE_TYPE = 'cio-subagent-done'
+/**
+ * `ctx.ui.setStatus` key the core-tools extension uses to stream a live sub-agent
+ * (child pi session) event feed to the driver. The payload is a JSON envelope
+ * `{ childSessionId, records: [...pi records] }`, and the driver maps each record
+ * through the same `mapPiRecord` mapper a root thread uses, emitting child-scoped
+ * `agent:event`s so the sub-agent transcript streams like a normal thread. The
+ * channel is fire-and-forget, so it never blocks the child, and it never enters
+ * the primary agent's model context.
+ */
+export const CIO_SUBAGENT_STREAM_STATUS_KEY = 'codeinoven-subagent-stream'
 
 /** Tool names registered by the core-tools extension (exported for tests). */
 export const PI_CORE_TOOLS_TOOL_NAMES = [
@@ -19,5 +31,6 @@ export const PI_CORE_TOOLS_TOOL_NAMES = [
   CIO_TODO_WRITE_TOOL_NAME,
   CIO_REQUEST_FILES_TOOL_NAME,
   CIO_SPAWN_AGENT_TOOL_NAME,
-  CIO_AGENT_STATUS_TOOL_NAME
+  CIO_AGENT_STATUS_TOOL_NAME,
+  CIO_AGENT_OUTPUT_TOOL_NAME
 ] as const

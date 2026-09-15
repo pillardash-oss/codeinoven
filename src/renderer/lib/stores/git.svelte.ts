@@ -490,7 +490,9 @@ export class GitState {
       for (const pr of uncomputed) {
         try {
           const detail = await invoke('pr:detail', projectId, owner, repo, pr.number)
-          if (detail.mergeable === false) conflicted.push(pr)
+          // null means the provider request failed (timeout, rate limit) —
+          // treat it as "mergeability unknown" and skip this PR.
+          if (detail?.mergeable === false) conflicted.push(pr)
         } catch {
           // A single PR failing its probe must not discard the whole check.
         }
@@ -856,6 +858,19 @@ export class GitState {
       return 'failed'
     } finally {
       this.markBusy('checkout', false)
+    }
+  }
+
+  async deleteRemoteBranch(projectId: string, remote: string, name: string): Promise<void> {
+    this.markBusy('push', true)
+    this.error = null
+    try {
+      await invoke('git:deleteRemoteBranch', ...this.scopedGitArgs(projectId, remote, name))
+      await this.refresh(projectId)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Remote branch deletion failed')
+    } finally {
+      this.markBusy('push', false)
     }
   }
 

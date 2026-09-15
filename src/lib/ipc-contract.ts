@@ -835,6 +835,14 @@ export const IPC_INVOKE_CONTRACT = {
     [projectId: string, threadId: string, request: AuditGenerationRequest],
     { report: AuditReport; auditorThread: Thread }
   >,
+  'agent:startFreshIndependentAudit': {} as Contract<
+    [projectId: string, threadId: string, request: AuditGenerationRequest],
+    { report: AuditReport; auditorThread: Thread }
+  >,
+  'agent:deleteIndependentAuditorThread': {} as Contract<
+    [projectId: string, threadId: string],
+    void
+  >,
   'agent:ensureIndependentAuditorThread': {} as Contract<
     [projectId: string, threadId: string, settings: ThreadSettings],
     Thread
@@ -904,7 +912,7 @@ export const IPC_INVOKE_CONTRACT = {
     AssignmentPlan
   >,
   'agent:listCommands': {} as Contract<
-    [projectId: string, threadId: string],
+    [projectId: string, threadId: string, harnessId?: string],
     ScopedHarnessCommand[]
   >,
   'agent:listQuestions': {} as Contract<
@@ -957,7 +965,7 @@ export const IPC_INVOKE_CONTRACT = {
     AgentToolCatalog
   >,
   'agent:listContextCapabilities': {} as Contract<
-    [projectId: string, threadId: string],
+    [projectId: string, threadId: string, harnessId?: string],
     AgentContextCapabilities
   >,
   'agent:listArtifacts': {} as Contract<[projectId: string, threadId: string], AgentArtifact[]>,
@@ -1508,6 +1516,10 @@ export const IPC_INVOKE_CONTRACT = {
     [projectId: string, name: string, force?: boolean, scopeBucketId?: string],
     GitStatus
   >,
+  'git:deleteRemoteBranch': {} as Contract<
+    [projectId: string, remote: string, name: string, scopeBucketId?: string],
+    GitStatus
+  >,
   'git:log': {} as Contract<
     [projectId: string, limit?: number, offset?: number, query?: string, scopeBucketId?: string],
     GitCommitInfo[]
@@ -1697,7 +1709,8 @@ export const IPC_INVOKE_CONTRACT = {
    */
   'pr:detail': {} as Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number],
-    PullRequestDetail
+    /** null when the provider request fails (timeout, rate limit, network). */
+    PullRequestDetail | null
   >,
   'deployment:overview': {} as Contract<
     [projectId: string, owner: string, repo: string],
@@ -2181,7 +2194,13 @@ export const IPC_INVOKE_CONTRACT = {
     ProjectTextFile | null
   >,
   'projectFiles:rename': {} as Contract<
-    [projectId: string, relativePath: string, name: string, scopeBucketId?: string, threadId?: string],
+    [
+      projectId: string,
+      relativePath: string,
+      name: string,
+      scopeBucketId?: string,
+      threadId?: string
+    ],
     ProjectFileEntry
   >,
   'projectFiles:save': {} as Contract<
@@ -2729,6 +2748,15 @@ export const IPC_INVOKE_CONTRACT = {
     [projectId: string, threadId: string, drafting: boolean],
     void
   >,
+  /** Persist a thread's draft state: edge-triggered drafting flag plus the
+   *  debounced (10s-inactive) committed draft content. `draftJson` is null
+   *  when the draft was cleared/sent. */
+  'thread:setDraftState': {} as Contract<
+    [projectId: string, threadId: string, drafting: boolean, draftJson: string | null],
+    void
+  >,
+  /** Every thread currently flagged as drafting in the DB, quota-independent. */
+  'thread:listDrafting': {} as Contract<[], Thread[]>,
   'thread:setPinned': {} as Contract<
     [projectId: string, threadId: string, pinned: boolean],
     Thread
@@ -2876,6 +2904,11 @@ export interface AgentNotificationPayload extends ThreadClickedPayload {
   projectName: string
   /** Accent colour of the owning project, when known. */
   projectColor?: string
+  /** Full diagnostic text of the failure (message plus raw detail/stack) for
+   *  `error` notifications, so the panel can show what actually went wrong and
+   *  offer a faithful copy action. Absent for non-error notifications and when
+   *  the engine had no readable error. */
+  errorDetail?: string
 }
 
 export type SystemNotificationTestResult =
@@ -2988,6 +3021,15 @@ export const IPC_EVENT_CONTRACT = {
   'thread:deleted': [] as unknown as [projectId: string, threadId: string],
   /** Live thread snapshot push so sidebar indicators react without polling. */
   'thread:updated': [] as unknown as [thread: Thread],
+  /** Lightweight draft-state push (flag + committed draft content). Kept
+   *  separate from `thread:updated` so commits land while the user is typing
+   *  without triggering the full-transcript reconcile. */
+  'thread:draftUpdated': [] as unknown as [
+    projectId: string,
+    threadId: string,
+    drafting: boolean,
+    draftJson: string | null
+  ],
   /** Branch association changed for a thread. */
   'thread:branchUpdated': [] as unknown as [projectId: string, threadId: string, branch: string],
   /** Note presence changed for a thread (saved or deleted). */

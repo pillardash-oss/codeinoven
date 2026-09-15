@@ -239,6 +239,10 @@
     onActivateBankedReset?: () => void
     /** Previous user messages for terminal-like up-arrow history recall. */
     historyMessages?: string[]
+    /** Fired when the user first engages arrow-up recall, before reading the
+     *  list, so a lazily loaded full history (e.g. the persisted user-message
+     *  history behind the history side panel) can fill in for later presses. */
+    onHistoryNavigateStart?: () => void
     /** Global default vision model used to describe images for text-only models. */
     imageDescriptorDefault?: AgentModelSelection
     /** When true, the vision-model picker card is skipped on image sends. */
@@ -324,6 +328,7 @@
     onCompact,
     onActivateBankedReset,
     historyMessages = [],
+    onHistoryNavigateStart,
     imageDescriptorDefault,
     imageDescriptorAskAgain = false,
     onImageDescriptorDefaultChange,
@@ -1829,9 +1834,18 @@
           e.preventDefault()
           if (historyIndex === -1) {
             savedValue = value
-            historyIndex = history.length - 1
+            onHistoryNavigateStart?.()
+            // Start from the newest entry. When the current draft already
+            // matches a recall entry, resume above it instead of re-showing it.
+            const exact = value === '' ? -1 : history.lastIndexOf(value)
+            historyIndex = exact > 0 ? exact - 1 : history.length - 1
           } else {
-            historyIndex = Math.max(0, historyIndex - 1)
+            // Resolve the position by value, not by the stored index: the list
+            // can grow while navigating (lazy full-history load), which would
+            // otherwise make a positional step land on an unrelated old entry.
+            const current = history.lastIndexOf(value)
+            const position = current === -1 ? historyIndex : current
+            historyIndex = Math.max(0, position - 1)
           }
           value = history[historyIndex]
           onValueChange?.(value)
@@ -1841,12 +1855,16 @@
       if (e.key === 'ArrowDown' && !e.shiftKey && historyIndex >= 0) {
         e.preventDefault()
         const history = historyMessages
-        if (historyIndex >= history.length - 1) {
+        // Value-based position, matching the ArrowUp branch, so a list that
+        // grew mid-navigation keeps the walk coherent.
+        const current = history.lastIndexOf(value)
+        const position = current === -1 ? historyIndex : current
+        if (position >= history.length - 1) {
           value = savedValue
           onValueChange?.(value)
           historyIndex = -1
         } else {
-          historyIndex += 1
+          historyIndex = position + 1
           value = history[historyIndex]
           onValueChange?.(value)
         }
@@ -2480,17 +2498,19 @@
     <!-- Permission level selector -->
     {#if readOnlyMode}
       <span
-        class="flex items-center gap-1 rounded-lg bg-raised px-2 py-1.5 text-[0.6875rem] text-muted"
+        class="flex min-w-0 items-center gap-1 overflow-hidden rounded-lg bg-raised px-2 py-1.5 text-[0.6875rem] whitespace-nowrap text-muted"
         title="Temporary chats can inspect context but cannot modify files or run commands"
       >
-        <Shield size={12} />
-        <span class="composer-control-label">Read only</span>
+        <Shield size={12} class="shrink-0" />
+        <span class="composer-control-label min-w-0 truncate">Read only</span>
       </span>
     {:else if !hidePermissionSelector || resolved.fileSystemMode === true}
-      <div class="relative">
+      <!-- Shrinkable: the label ellipsizes instead of wrapping, and disappears
+           entirely at the narrow tier so only the shield icon remains. -->
+      <div class="relative min-w-0 shrink">
         <button
           type="button"
-          class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[0.6875rem] transition-colors hover:bg-elevated {resolved.permissionLevel ===
+          class="flex min-w-0 max-w-full items-center gap-1 overflow-hidden rounded-lg px-2 py-1.5 text-[0.6875rem] whitespace-nowrap transition-colors hover:bg-elevated {resolved.permissionLevel ===
           'full_access'
             ? 'font-bold text-warning'
             : 'text-muted hover:text-foreground'}"
@@ -2506,11 +2526,13 @@
           }}
         >
           {#if resolved.permissionLevel === 'full_access'}
-            <ShieldAlert size={12} strokeWidth={2.75} />
+            <ShieldAlert size={12} strokeWidth={2.75} class="shrink-0" />
           {:else}
-            <Shield size={12} />
+            <Shield size={12} class="shrink-0" />
           {/if}
-          <span class="composer-control-label">{permissionLabels[resolved.permissionLevel]}</span>
+          <span class="composer-control-label min-w-0 truncate"
+            >{permissionLabels[resolved.permissionLevel]}</span
+          >
         </button>
 
         {#if permissionMenuOpen}
@@ -2773,6 +2795,9 @@
     display: none;
   }
 
+  /* Control labels ellipsize as the composer tightens   they never wrap to a
+     second line. At the narrow tier they drop out entirely so only the icon is
+     left behind. */
   @container (max-width: 520px) {
     .composer-control-label {
       display: none;

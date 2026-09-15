@@ -12,6 +12,8 @@
  *                          detection, so AgentTodoCard works unchanged.
  *  - `cio_request_files`   asks the user for file paths, validates them, and
  *                          returns a structured file list for the agent.
+ *  - `cio_agent_status`    polls or waits for the sub-agent worker threads.
+ *  - `cio_agent_output`    reads the final output of finished workers.
  *
  * The permission gate intercepts every built-in tool call via
  * `pi.on('tool_call')` and evaluates it against an OpenCode-style
@@ -38,6 +40,15 @@
  * primary thread through the parent extension-UI context. Permission cards
  * are pure UI on the primary thread: the primary agent's context only ever
  * receives the sub-agent's final message, never its transcript.
+ * A session that publishes a tool allowlist (audits, read-only prompt turns,
+ * filesystem-off chat, brainstorm turns) never gets the sub-agent tools, and
+ * pi drops an inactive tool from the request, so their descriptions and
+ * guidelines leave the prompt as well.
+ * Status and output are deliberately two tools. `cio_agent_status` answers
+ * "is it still running?" with metadata only (id, purpose, status, error), so
+ * polling never injects a finished worker's output into the primary agent's
+ * context; `cio_agent_output` fetches the final message of the finished ids
+ * the primary actually wants to read, as `agentId -> final output` pairs.
  *
  * Background sub-agents announce completion to the primary agent through a
  * display:false custom message delivered with pi.sendMessage   steer while
@@ -54,10 +65,12 @@
 
 import {
   CIO_ASK_USER_TOOL_NAME,
+  CIO_AGENT_OUTPUT_TOOL_NAME,
   CIO_AGENT_STATUS_TOOL_NAME,
   CIO_REQUEST_FILES_TOOL_NAME,
   CIO_SPAWN_AGENT_TOOL_NAME,
   CIO_SUBAGENT_DONE_MESSAGE_TYPE,
+  CIO_SUBAGENT_STREAM_STATUS_KEY,
   CIO_TODO_WRITE_TOOL_NAME
 } from '../../lib/core-tools'
 
@@ -91,7 +104,8 @@ const CIO_ALLOWED_TOOLS_PATH = '__CIO_ALLOWED_TOOLS_PATH__'
 // allowlist (File-System-OFF chat threads), every call to one of these that
 // the allowlist does not name is routed through the permission card so the
 // app's policy can auto-approve attached files and ask for everything else.
-// Custom tools (question, todo, gateway, spawn) are never restricted here.
+// Interactive custom tools (question, todo, file requests, gateway) are never
+// restricted here.
 const CIO_PI_BUILTIN_TOOLS = new Set([
   'read',
   'write',
@@ -102,6 +116,24 @@ const CIO_PI_BUILTIN_TOOLS = new Set([
   'ls',
   'powershell'
 ])
+
+// Sub-agent tools belong to an unrestricted primary session. Any session that
+// publishes a tool allowlist (audits, read-only prompt turns, filesystem-off
+// chat, brainstorm turns) never gets them: an auditor has to run every check
+// itself, and a restricted scope must not be able to open a full-access
+// worker. The allowlist names them explicitly if a future scope needs them.
+const CIO_SUBAGENT_TOOL_NAMES = new Set([
+  '${CIO_SPAWN_AGENT_TOOL_NAME}',
+  '${CIO_AGENT_STATUS_TOOL_NAME}',
+  '${CIO_AGENT_OUTPUT_TOOL_NAME}'
+])
+
+// The sub-agent prompt text lives in one place so a scoped session can drop the
+// exact lines from its base prompt before the model ever sees them.
+const CIO_SUBAGENT_PROMPT_GUIDELINES = [
+  'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
+  'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work. Never end your turn while sub-agents are still running: wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read every finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME}   successful or failed   because the primary agent owns committing the files the workers changed.'
+]
 
 // Pi's own bundled system prompt opens with a "you are an assistant" framing
 // that pushes models toward generic chatbot hedging (permission-seeking,
@@ -235,8 +267,9 @@ function isWithinPath(candidatePath, root) {
 }
 
 // Shared and Pi-native skills are part of the harness runtime, not user file
-// access. Resolve these reads before opening a permission dialog so chat mode
-// never flashes a card or races an asynchronous auto-approval.
+// access. Resolve these reads before any permission gate so no session mode
+// flashes a card, races an asynchronous auto-approval, or blocks a read-only
+// chat that only wants to load the skill its turn matches.
 function isIntrinsicSkillRead(toolName, input, cwd) {
   if (!['read', 'grep', 'find', 'ls'].includes(toolName)) return false
   const rawPath = firstString(input['path'], input['file_path'], input['filePath'], input['filename'])
@@ -407,6 +440,42 @@ function questionDialogTitle(questions) {
 }
 
 export default function codeInOvenCoreToolsExtension(pi) {
+  // Disable the sub-agent tools whenever this session published a tool
+  // allowlist that does not name them. Pi drops an inactive tool from the
+  // request, so its description and guidelines leave the prompt too, and the
+  // model stops treating delegation as an option. Called on session start and
+  // before every agent start, so a scope change applies to the next turn
+  // without restarting the pi session.
+  function applyCioSubAgentScope() {
+    const allowedTools = loadCioAllowedTools()
+    if (allowedTools.length === 0) return
+    if (allowedTools.some(function (name) { return CIO_SUBAGENT_TOOL_NAMES.has(name) })) return
+    const active = pi.getActiveTools()
+    const scoped = active.filter(function (name) { return !CIO_SUBAGENT_TOOL_NAMES.has(name) })
+    if (scoped.length === active.length) return
+    pi.setActiveTools(scoped)
+  }
+
+  // Pi builds the base prompt before this turn's scope is published, so the
+  // first request of a fresh scoped session still advertised the sub-agent
+  // tools and their "delegate by default" guidance. Drop those exact lines from
+  // the prompt text as well, on top of disabling the tools above.
+  function stripCioSubAgentPrompt(prompt) {
+    const allowedTools = loadCioAllowedTools()
+    if (allowedTools.length === 0) return prompt
+    if (allowedTools.some(function (name) { return CIO_SUBAGENT_TOOL_NAMES.has(name) })) return prompt
+    const lines = prompt.split('\\n')
+    const kept = lines.filter(function (line) {
+      const trimmed = line.trim()
+      const entry = /^- ([a-z0-9_]+):/.exec(trimmed)
+      if (entry && CIO_SUBAGENT_TOOL_NAMES.has(entry[1])) return false
+      return !CIO_SUBAGENT_PROMPT_GUIDELINES.some(function (guideline) {
+        return trimmed === '- ' + guideline
+      })
+    })
+    return kept.length === lines.length ? prompt : kept.join('\\n')
+  }
+
   pi.registerTool({
     name: '${CIO_ASK_USER_TOOL_NAME}',
     label: 'Ask the user a question',
@@ -660,6 +729,246 @@ export default function codeInOvenCoreToolsExtension(pi) {
     } catch {}
   }
 
+  // ── Live sub-agent event stream ──────────────────────────────────────
+  // A child session runs in-process, so the app can only see it through
+  // this extension. Every child event is forwarded to the host over pi's
+  // fire-and-forget \`setStatus\` channel: not the tool-update channel (pi
+  // stops delivering updates once a background spawn's tool call returns)
+  // and never \`sendMessage\` (that would leak the whole transcript into the
+  // primary agent's context). The driver maps each forwarded record with the
+  // same record mapper a root thread uses and emits child-scoped events, so
+  // a sub-agent transcript streams exactly like a normal thread instead of
+  // waiting for pi to flush the child's session file to disk.
+  const CIO_SUBAGENT_STREAM_KEY = '${CIO_SUBAGENT_STREAM_STATUS_KEY}'
+  // One stdout record per flush window: a chatty worker must not flood the
+  // harness pipe with one record per streamed token.
+  const CIO_SUBAGENT_STREAM_FLUSH_MS = 120
+  const CIO_SUBAGENT_STREAM_MAX_RECORD = 24000
+  const CIO_SUBAGENT_STREAM_MAX_CHUNK = 48000
+  const CIO_SUBAGENT_STREAM_MAX_TEXT = 8000
+
+  function capStreamText(value) {
+    if (typeof value !== 'string') return value
+    if (value.length <= CIO_SUBAGENT_STREAM_MAX_TEXT) return value
+    return value.slice(0, CIO_SUBAGENT_STREAM_MAX_TEXT) + '\\n…(truncated for the live view)'
+  }
+
+  function streamContent(content) {
+    if (!Array.isArray(content)) return []
+    const blocks = []
+    for (const block of content) {
+      const value = recordValue(block)
+      if (!value) continue
+      if (value.type === 'text') {
+        blocks.push({ type: 'text', text: capStreamText(value.text) })
+        continue
+      }
+      if (value.type === 'thinking') {
+        blocks.push({ type: 'thinking', thinking: capStreamText(value.thinking) })
+        continue
+      }
+      if (value.type === 'toolCall') {
+        blocks.push({
+          type: 'toolCall',
+          id: value.id,
+          name: value.name,
+          arguments: streamArgs(value.arguments)
+        })
+      }
+    }
+    return blocks
+  }
+
+  function streamArgs(args) {
+    const value = recordValue(args)
+    if (!value) return undefined
+    const trimmed = {}
+    for (const [key, item] of Object.entries(value)) {
+      trimmed[key] = typeof item === 'string' ? capStreamText(item) : item
+    }
+    return trimmed
+  }
+
+  function streamMessage(message) {
+    const value = recordValue(message)
+    if (!value) return undefined
+    return {
+      ...(value.id ? { id: value.id } : {}),
+      ...(value.role ? { role: value.role } : {}),
+      ...(value.model ? { model: value.model } : {}),
+      ...(value.provider ? { provider: value.provider } : {}),
+      ...(value.usage ? { usage: value.usage } : {}),
+      ...(value.stopReason ? { stopReason: value.stopReason } : {}),
+      ...(value.isError === true ? { isError: true } : {}),
+      ...(value.toolCallId ? { toolCallId: value.toolCallId } : {}),
+      ...(value.toolName ? { toolName: value.toolName } : {}),
+      ...(typeof value.errorMessage === 'string'
+        ? { errorMessage: capStreamText(value.errorMessage) }
+        : {}),
+      content: streamContent(value.content)
+    }
+  }
+
+  function streamResult(result) {
+    const value = recordValue(result)
+    if (!value) return undefined
+    return {
+      ...(value.isError === true ? { isError: true } : {}),
+      ...(typeof value.error === 'string' ? { error: capStreamText(value.error) } : {}),
+      content: streamContent(value.content)
+    }
+  }
+
+  /**
+   * Trim one child session event down to the fields the driver's Pi record
+   * mapper needs. Dropping the bulk (partial messages, image data, oversized
+   * tool output) keeps the forwarded stream roughly the size of a root
+   * thread's own event stream.
+   */
+  function trimStreamRecord(event) {
+    if (!event || typeof event !== 'object') return null
+    const lifecycle = {
+      ...(event.reason ? { reason: event.reason } : {}),
+      ...(event.aborted === true ? { aborted: true } : {}),
+      ...(typeof event.errorMessage === 'string'
+        ? { errorMessage: capStreamText(event.errorMessage) }
+        : {}),
+      ...(typeof event.success === 'boolean' ? { success: event.success } : {}),
+      ...(typeof event.finalError === 'string'
+        ? { finalError: capStreamText(event.finalError) }
+        : {}),
+      ...(event.result ? { result: streamResult(event.result) } : {})
+    }
+    if (
+      event.type === 'turn_start' ||
+      event.type === 'agent_start' ||
+      event.type === 'agent_settled' ||
+      event.type === 'compaction_start' ||
+      event.type === 'compaction_end' ||
+      event.type === 'auto_compaction_start' ||
+      event.type === 'auto_compaction_end' ||
+      event.type === 'auto_retry_start' ||
+      event.type === 'auto_retry_end'
+    ) {
+      return { type: event.type, ...lifecycle }
+    }
+    if (event.type === 'message_start') {
+      return { type: 'message_start', message: streamMessage(event.message) }
+    }
+    if (event.type === 'message_update') {
+      const delta = recordValue(event.assistantMessageEvent)
+      const message = recordValue(event.message)
+      if (!delta) return null
+      return {
+        type: 'message_update',
+        message: { ...(message && message.id ? { id: message.id } : {}), role: message && message.role },
+        assistantMessageEvent: {
+          type: delta.type,
+          contentIndex: delta.contentIndex,
+          ...(typeof delta.delta === 'string' ? { delta: delta.delta } : {})
+        }
+      }
+    }
+    if (event.type === 'message_end') {
+      return { type: 'message_end', message: streamMessage(event.message) }
+    }
+    if (event.type === 'tool_execution_start') {
+      return {
+        type: 'tool_execution_start',
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        args: streamArgs(event.args)
+      }
+    }
+    if (event.type === 'tool_execution_update') {
+      return {
+        type: 'tool_execution_update',
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        args: streamArgs(event.args),
+        partialResult: streamResult(event.partialResult)
+      }
+    }
+    if (event.type === 'tool_execution_end') {
+      return {
+        type: 'tool_execution_end',
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        args: streamArgs(event.args),
+        isError: event.isError === true,
+        result: streamResult(event.result)
+      }
+    }
+    if (event.type === 'turn_end') {
+      // Tool results already streamed as \`tool_execution_end\`; the turn end
+      // only contributes the completion (usage, stop reason, failure).
+      return { type: 'turn_end', message: streamMessage(event.message), toolResults: [] }
+    }
+    return null
+  }
+
+  /**
+   * Batched forwarder for one child session. Records are queued and flushed
+   * every window, split into bounded records, and the final flush carries the
+   * settle signal so the driver can close the child's transcript.
+   */
+  function createSubAgentStream(parentCtx, childSessionId) {
+    let queue = []
+    let timer = null
+
+    function send(records, extra) {
+      if (records.length === 0 && !extra) return
+      const ui = parentCtx && parentCtx.ui
+      if (!ui || typeof ui.setStatus !== 'function') return
+      try {
+        ui.setStatus(
+          CIO_SUBAGENT_STREAM_KEY,
+          JSON.stringify({ childSessionId, records, ...(extra || {}) })
+        )
+      } catch {}
+    }
+
+    function flush(extra) {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      const pending = queue
+      queue = []
+      let batch = []
+      let size = 0
+      for (const record of pending) {
+        let encoded
+        try {
+          encoded = JSON.stringify(record)
+        } catch {
+          continue
+        }
+        if (encoded.length > CIO_SUBAGENT_STREAM_MAX_RECORD) continue
+        if (size > 0 && size + encoded.length > CIO_SUBAGENT_STREAM_MAX_CHUNK) {
+          send(batch)
+          batch = []
+          size = 0
+        }
+        batch.push(record)
+        size += encoded.length
+      }
+      send(batch, extra)
+    }
+
+    return {
+      push(event) {
+        const record = trimStreamRecord(event)
+        if (!record) return
+        queue.push(record)
+        if (!timer) timer = setTimeout(function () { flush() }, CIO_SUBAGENT_STREAM_FLUSH_MS)
+      },
+      settle(status, error) {
+        flush({ settled: true, status, ...(error ? { error } : {}) })
+      }
+    }
+  }
+
   /**
    * What the primary agent receives: metadata plus ONLY the sub-agent's
    * final message   never the running transcript. The full transcript stays
@@ -679,6 +988,34 @@ export default function codeInOvenCoreToolsExtension(pi) {
       output: record.finalOutput || record.output,
       ...(record.endedAt ? { durationMs: record.endedAt - record.startedAt } : {})
     }
+  }
+
+  /**
+   * What a status poll receives: metadata only, deliberately WITHOUT the
+   * worker output. Polling is the hot path (every turn end waits on it) and
+   * a finished worker's final message can be tens of thousands of characters,
+   * so shipping it on a "is it still running?" question pollutes the primary
+   * agent's context with text it may never need. Use ${CIO_AGENT_OUTPUT_TOOL_NAME}
+   * to read a finished worker's output on demand.
+   */
+  function subAgentStatus(record) {
+    return {
+      agentId: record.agentId,
+      purpose: record.purpose,
+      status: record.status,
+      ...(record.error ? { error: record.error } : {})
+    }
+  }
+
+  /** Final output of a finished worker; the live preview is the fallback. */
+  function subAgentOutput(record) {
+    return record.finalOutput || record.output || '(the sub-agent produced no text output)'
+  }
+
+  /** Flag a failed worker in the error map returned by ${CIO_AGENT_OUTPUT_TOOL_NAME}. */
+  function recordSubAgentError(errors, record) {
+    if (record.status !== 'error') return
+    errors[record.agentId] = 'Sub-agent failed: ' + (record.error || 'unknown error')
   }
 
   /**
@@ -799,7 +1136,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
     if (runningCount >= CIO_SUBAGENT_MAX_CONCURRENT) {
       return {
         error:
-          'Too many sub-agents are running (' + CIO_SUBAGENT_MAX_CONCURRENT + ' max). Collect finished results with ${CIO_AGENT_STATUS_TOOL_NAME} before spawning another.'
+          'Too many sub-agents are running (' + CIO_SUBAGENT_MAX_CONCURRENT + ' max). Wait for one to finish (${CIO_AGENT_STATUS_TOOL_NAME} with wait: true), read its result with ${CIO_AGENT_OUTPUT_TOOL_NAME}, and only then spawn another.'
       }
     }
     let resolvedModel = parentCtx.model
@@ -857,6 +1194,10 @@ export default function codeInOvenCoreToolsExtension(pi) {
       session
     }
     subAgents.set(agentId, record)
+    // The child's transcript streams to the app from the moment the session
+    // exists: no waiting for pi to flush the child's session file, and no
+    // polling on the renderer side.
+    const stream = createSubAgentStream(parentCtx, session.sessionId)
     const onAbort = function () {
       void session.abort()
     }
@@ -865,6 +1206,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
       else signal.addEventListener('abort', onAbort, { once: true })
     }
     session.subscribe(function (event) {
+      stream.push(event)
       if (event.type !== 'message_end') return
       const text = subAgentText(event.message)
       if (!text) return
@@ -884,6 +1226,9 @@ export default function codeInOvenCoreToolsExtension(pi) {
         record.finalOutput = capOutput(subAgentText(lastAssistant(session)))
         record.endedAt = Date.now()
         sendSubAgentUpdate(onUpdate, record)
+        // Flush the tail of the transcript and close the live stream so the
+        // view settles on its final transcript instead of a stuck spinner.
+        stream.settle(record.status === 'error' ? 'error' : 'idle', record.error)
         // Background workers announce themselves; foreground spawns are
         // awaited inline by the primary and need no notification.
         if (spec.background) notifySubAgentDone(record)
@@ -920,10 +1265,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
     description:
       'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default, unless the user explicitly asks you to use sub-agents differently, delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Run several sub-agents concurrently with background:true; each one automatically steers you a notification with its final output the moment it finishes, so you can keep working and act on results as they land. Omit background to block until the sub-agent finishes and returns its result directly; use that whenever you need the output before proceeding. You must never end your turn while any sub-agent is still running, regardless of outcome; workers report every file they touched because you are responsible for committing approved work. Sub-agents cannot spawn further sub-agents, and they inherit your model and thinking level unless you pass model/thinking_level overrides.',
     promptSnippet: 'Spawn sub-agent worker threads for focused or parallelizable tasks (explore, implement, tests, cleanup, docs)',
-    promptGuidelines: [
-      'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
-      'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work and collect results with ${CIO_AGENT_STATUS_TOOL_NAME}. Never end your turn while sub-agents are still running   wait for every result (successful or failed) with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true) first, because the primary agent owns committing the files the workers changed.'
-    ],
+    promptGuidelines: CIO_SUBAGENT_PROMPT_GUIDELINES,
     parameters: Type.Object({
       purpose: Type.String({
         description: 'Short task category, e.g. explore, implementation, tests, cleanup, documentation.'
@@ -968,7 +1310,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
           agentId: result.record.agentId,
           childSessionId: result.record.childSessionId,
           status: result.record.status,
-          note: 'Sub-agent is running in the background. When it finishes you will receive a steer message (sub-agent done for task …) carrying its final output   keep working until then; ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true) is available for explicit polling.'
+          note: 'Sub-agent is running in the background. When it finishes you will receive a steer message (sub-agent done for task …) carrying its final output   keep working until then; ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true) polls status, and ${CIO_AGENT_OUTPUT_TOOL_NAME} (agent_ids) reads an output again at any time.'
         })
       }
       await result.record.promise
@@ -980,10 +1322,11 @@ export default function codeInOvenCoreToolsExtension(pi) {
     name: '${CIO_AGENT_STATUS_TOOL_NAME}',
     label: 'Check sub-agent status',
     description:
-      'Check the status and output of spawned sub-agent threads. Background sub-agents steer you a completion notification with their final output automatically; use this tool to poll explicitly, or wait:true to block until every running sub-agent finishes (with or without a specific agent_id)   always do this before ending your turn so no result is lost.',
-    promptSnippet: 'Check or wait for spawned sub-agent threads and collect their results',
+      'Check spawned sub-agent worker threads and wait for them. Returns metadata only per agent   agentId, purpose, status, and the error when there is one   never the worker output, so polling cannot flood your context; read output with ${CIO_AGENT_OUTPUT_TOOL_NAME}. Background sub-agents steer you a completion notification with their final output automatically; use this tool to poll explicitly, or wait:true to block until every running sub-agent finishes (with or without a specific agent_id)   always do this before ending your turn so no result is lost.',
+    promptSnippet: 'Check or wait for spawned sub-agent threads (metadata only, no output)',
     promptGuidelines: [
-      'Background sub-agents announce completion themselves with a steer message containing their final output; use ${CIO_AGENT_STATUS_TOOL_NAME} to poll explicitly, with wait:true before finishing the turn so no result is lost.'
+      'Background sub-agents announce completion themselves with a steer message; use ${CIO_AGENT_STATUS_TOOL_NAME} to poll status only, with wait:true before finishing the turn, then read the finished workers with ${CIO_AGENT_OUTPUT_TOOL_NAME}.',
+      'Never treat a ${CIO_AGENT_STATUS_TOOL_NAME} result as the sub-agent result: it carries no output, so call ${CIO_AGENT_OUTPUT_TOOL_NAME} for the ids you still need.'
     ],
     parameters: Type.Object({
       agent_id: Type.Optional(
@@ -1017,8 +1360,82 @@ export default function codeInOvenCoreToolsExtension(pi) {
           await Promise.all(running.map(function (record) { return record.promise }))
         }
       }
-      return textResult({ agents: records.map(function (record) { return subAgentResult(record) }) })
+      return textResult({
+        agents: records.map(function (record) { return subAgentStatus(record) }),
+        note:
+          'Status only, no output. Read the final output of the finished agents with ' +
+          '${CIO_AGENT_OUTPUT_TOOL_NAME} (agent_ids).'
+      })
     }
+  })
+
+  pi.registerTool({
+    name: '${CIO_AGENT_OUTPUT_TOOL_NAME}',
+    label: 'Read sub-agent output',
+    description:
+      'Read the final output of sub-agent worker threads, keyed by agent id. Pass the ids you actually need (from ${CIO_SPAWN_AGENT_TOOL_NAME} or ${CIO_AGENT_STATUS_TOOL_NAME}); each finished worker returns its final message, and each still-running one is reported back so you can wait and ask again. This is the on-demand output channel   ${CIO_AGENT_STATUS_TOOL_NAME} deliberately returns no output   and a worker final message lists the files it changed, which you are responsible for committing.',
+    promptSnippet: 'Read the final output of finished sub-agent threads as agentId -> output pairs',
+    promptGuidelines: [
+      'After ${CIO_AGENT_STATUS_TOOL_NAME} reports a sub-agent as completed or error, read what it actually produced with ${CIO_AGENT_OUTPUT_TOOL_NAME} (agent_ids) before you continue or commit; never guess a sub-agent result.',
+      'Request only the ids you need: one call may carry several ids, and their outputs come back as a key/value map.'
+    ],
+    parameters: Type.Object({
+      agent_ids: Type.Array(Type.String(), {
+        description: 'One or more sub-agent ids to read output from.',
+        minItems: 1
+      }),
+      wait: Type.Optional(
+        Type.Boolean({
+          description:
+            'Wait for the requested agents that are still running to finish before returning their output.'
+        })
+      )
+    }),
+    async execute(_toolCallId, params) {
+      const wait = params.wait === true
+      const ids = Array.isArray(params.agent_ids) ? params.agent_ids : []
+      const agents = {}
+      const errors = {}
+      if (ids.length === 0) {
+        return textResult({ agents, errors: { agent_ids: 'Provide at least one sub-agent id.' } })
+      }
+      const pending = []
+      for (const id of ids) {
+        const record = subAgents.get(id)
+        if (!record) {
+          errors[id] = 'Unknown sub-agent id: ' + id
+          continue
+        }
+        if (record.status === 'running') {
+          pending.push(record)
+          continue
+        }
+        recordSubAgentError(errors, record)
+        agents[id] = subAgentOutput(record)
+      }
+      if (wait && pending.length > 0) {
+        await Promise.all(pending.map(function (record) { return record.promise }))
+        for (const record of pending) {
+          recordSubAgentError(errors, record)
+          agents[record.agentId] = subAgentOutput(record)
+        }
+      } else {
+        for (const record of pending) {
+          errors[record.agentId] =
+            'Still running (' + record.purpose + '). Call ${CIO_AGENT_OUTPUT_TOOL_NAME} again with wait: true, or wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read it.'
+        }
+      }
+      return textResult({
+        agents,
+        ...(Object.keys(errors).length > 0 ? { errors } : {})
+      })
+    }
+  })
+
+  // A fresh, resumed, or forked session must not expose sub-agent tools before
+  // its first turn: apply the published scope as soon as the session starts.
+  pi.on('session_start', async () => {
+    applyCioSubAgentScope()
   })
 
   // Abort every live sub-agent when the owning session shuts down.
@@ -1053,7 +1470,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
           content:
             'Your turn ended while sub-agents are still running: ' +
             running.join(', ') +
-            '. Do not finish your work yet. Call ${CIO_AGENT_STATUS_TOOL_NAME} with agent_id set to each running id (or omit agent_id) and wait:true to block until they finish, then incorporate every result   successful or failed   before ending your turn. Sub-agents report the files they changed; you are responsible for committing approved work.',
+            '. Do not finish your work yet. Call ${CIO_AGENT_STATUS_TOOL_NAME} with wait:true (or omit agent_id to cover them all) to let them finish, read each finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME} (agent_ids), and incorporate every result   successful or failed   before ending your turn. Sub-agents report the files they changed; you are responsible for committing approved work.',
           display: false
         },
         { triggerTurn: true }
@@ -1065,12 +1482,14 @@ export default function codeInOvenCoreToolsExtension(pi) {
   // instead of duplicating them inside every user turn's text (see
   // loadCioSystemPrompt above for why).
   pi.on('before_agent_start', (event) => {
+    applyCioSubAgentScope()
     const extra = loadCioSystemPrompt()
     const isProjectMode = extra.includes(CIO_PROJECT_MODE_MARKER)
-    const base =
+    const withIdentity =
       isProjectMode && event.systemPrompt.includes(PI_ASSISTANT_IDENTITY_LINE)
         ? event.systemPrompt.replace(PI_ASSISTANT_IDENTITY_LINE, CIO_AGENT_IDENTITY_LINE)
         : event.systemPrompt
+    const base = stripCioSubAgentPrompt(withIdentity)
     if (base === event.systemPrompt && !extra) return undefined
     return { systemPrompt: extra ? base + '\\n\\n' + extra : base }
   })
@@ -1094,20 +1513,39 @@ export default function codeInOvenCoreToolsExtension(pi) {
           '", meaning the previous response stream did not terminate the tool call cleanly and leaked raw text (reasoning, or a second tool-call attempt) into the argument. This is a streaming artifact, not a real command or file content, and not evidence of prompt injection or a fabricated transcript. Re-issue this tool call now with a single, clean argument containing only the intended command/content, and continue normally.'
       }
     }
+    const allowedTools = loadCioAllowedTools()
+    // Backstop for the window between a scope change and the next agent start:
+    // a scoped session must never run a sub-agent tool, even when the model
+    // still saw it in an earlier request.
+    if (
+      allowedTools.length > 0 &&
+      CIO_SUBAGENT_TOOL_NAMES.has(event.toolName) &&
+      !allowedTools.includes(event.toolName)
+    ) {
+      return {
+        block: true,
+        reason:
+          'Sub-agent tools are not available in this session: it runs with a restricted tool scope, and a session with a restricted scope does every step itself. Perform this step directly with the tools you have.'
+      }
+    }
     const hit = evaluateGate(event.toolName, input, ctx.cwd)
+    // Shared and Pi-native skill roots are harness runtime, not user file
+    // access: a skill read resolves before every gate below, so no session mode
+    // opens a permission card for it. Without this, a read-only temporary chat
+    // (whose allowlist already names read/find/grep/ls) falls through to the
+    // outside-the-project gate and blocks on a card just to load a skill.
+    if (isIntrinsicSkillRead(event.toolName, input, ctx.cwd)) return undefined
     // File-System-OFF chat threads publish a tool allowlist; any pi built-in
     // the allowlist does not name requires an explicit permission card. The
     // app's policy auto-approves reads of files the user attached and asks
     // for everything else, so attachment access keeps working while the
     // broader file system stays gated.
-    const allowedTools = loadCioAllowedTools()
     if (
       !hit &&
       allowedTools.length > 0 &&
       CIO_PI_BUILTIN_TOOLS.has(event.toolName) &&
       !allowedTools.includes(event.toolName)
     ) {
-      if (isIntrinsicSkillRead(event.toolName, input, ctx.cwd)) return undefined
       if (isSafeNetworkCurl(event.toolName, input)) return undefined
       const command = typeof input['command'] === 'string' ? input['command'] : undefined
       const path = firstString(input['path'], input['file_path'], input['filePath'], input['filename'])

@@ -22,7 +22,11 @@ import type {
 } from '../../lib/types'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
-import { CIO_SPAWN_AGENT_TOOL_NAME, CIO_SUBAGENT_DONE_MESSAGE_TYPE } from '../../lib/core-tools'
+import {
+  CIO_SPAWN_AGENT_TOOL_NAME,
+  CIO_SUBAGENT_DONE_MESSAGE_TYPE,
+  CIO_SUBAGENT_STREAM_STATUS_KEY
+} from '../../lib/core-tools'
 import { RETRIEVE_MCP_HOST_TOOL_NAME } from '../../lib/gateway-tools'
 import { buildProcessEnvironment } from './cli-environment'
 import { piNativeProviderIds } from '../agents/native-provider-config-service'
@@ -83,6 +87,13 @@ import {
 
 const THINKING_PRESETS = PI_THINKING_PRESETS
 const PI_CHEAP_MODEL_DISCOVERY_TIMEOUT_MS = 10_000
+/**
+ * Child sessions whose live transcript is retained in memory. Each entry is a
+ * few dozen kilobytes for a long worker, and every entry is worth keeping for
+ * as long as an open sub-agent tab might read it, so the map is bounded to the
+ * recent few rather than the whole app session.
+ */
+const PI_CHILD_STREAM_MAX = 16
 
 /** Pi thinking levels accepted by `set_thinking_level`. */
 const PI_THINKING_LEVELS: Record<string, string> = {
@@ -470,7 +481,7 @@ function cioSubagentPart(
 
 /** Find the running sub-agent part for a spawn call id. */
 function findSubagentPart(
-  context: CliLineParseContext,
+  context: PiStreamContext,
   callId: string
 ): Extract<AgentPart, { type: 'subagent' }> | undefined {
   for (const message of [...context.session.messages].reverse()) {
@@ -485,7 +496,7 @@ function findSubagentPart(
 
 /** Find a sub-agent part by its child session id (spawn call id may be unknown). */
 function findSubagentPartByChildSession(
-  context: CliLineParseContext,
+  context: PiStreamContext,
   childSessionId: string | undefined
 ): Extract<AgentPart, { type: 'subagent' }> | undefined {
   if (!childSessionId) return undefined
@@ -574,7 +585,7 @@ function spawnFailurePatch(output: string | undefined): AgentSubagentActivity | 
  */
 function spawnDoneCustomEvent(
   message: Record<string, unknown>,
-  context: CliLineParseContext
+  context: PiStreamContext
 ): CliLineParseResult | null {
   if (stringValue(message['customType']) !== CIO_SUBAGENT_DONE_MESSAGE_TYPE) {
     return { events: [] }
@@ -681,7 +692,7 @@ function serializeContent(value: unknown): string | undefined {
 
 /** Find the running tool part for a call id so results preserve its input. */
 function findToolPart(
-  context: CliLineParseContext,
+  context: PiStreamContext,
   callId: string
 ): Extract<AgentPart, { type: 'tool' }> | undefined {
   for (const message of [...context.session.messages].reverse()) {
@@ -692,6 +703,35 @@ function findToolPart(
     if (part) return part
   }
   return undefined
+}
+
+/**
+ * The minimum a Pi record mapper needs from its host: the app session id the
+ * produced events belong to, plus the transcript accumulated so far so tool
+ * results and sub-agent cards correlate with the parts that opened them. A
+ * root turn passes its CLI session record; a delegated child session (which
+ * has no app session record of its own) passes a plain message list.
+ */
+export interface PiStreamContext {
+  sessionId: string
+  session: { messages: AgentMessage[] }
+}
+
+/**
+ * Live transcript of one delegated child pi session, fed by the core-tools
+ * extension's streamed `setStatus` records. The child session runs in-process
+ * inside the harness, so nothing else can observe it while it works; keeping
+ * the folded transcript here lets a tab open mid-run render the trace so far
+ * instantly (no disk probe) and lets the engine persist the final transcript
+ * without waiting for pi to flush the child's session file.
+ */
+interface PiChildStreamState {
+  context: PiStreamContext
+  turnState: PiTurnState
+  /** True once a working status was emitted for this child. */
+  announcedWorking: boolean
+  /** True once the child reported its terminal settle record. */
+  settled: boolean
 }
 
 /** Turn-scoped state kept so parts of one assistant message can be correlated. */
@@ -774,7 +814,7 @@ const OVERSIZED_COMPACT_MAX_ATTEMPTS = 3
 /** Map one documented Pi JSON print-mode record into CodeInOven's stable shapes. */
 export function mapPiRecord(
   value: unknown,
-  context: CliLineParseContext,
+  context: PiStreamContext,
   turnState: PiTurnState
 ): CliLineParseResult | null {
   const entry = record(value)
@@ -1366,6 +1406,15 @@ async function waitForNativePiSessionFile(
 ): Promise<string | null> {
   const dir = nativePiSessionDir(projectPath)
   const suffix = `_${sessionId}.jsonl`
+  const deadline = Date.now() + timeoutMs
+  // A sub-agent can spawn before the primary session's first flush has
+  // created the project's native session directory, so `watch(dir)` throws.
+  // Wait for the directory to appear within the same budget instead of
+  // failing immediately with "CLI session is unavailable".
+  while (!existsSync(dir)) {
+    if (Date.now() >= deadline) return null
+    await new Promise((resolve) => setTimeout(resolve, 150))
+  }
   let watcher: FSWatcher
   try {
     watcher = watch(dir)
@@ -1373,7 +1422,7 @@ async function waitForNativePiSessionFile(
     return null
   }
   return new Promise<string | null>((resolve) => {
-    const timer = setTimeout(() => finish(null), timeoutMs)
+    const timer = setTimeout(() => finish(null), Math.max(deadline - Date.now(), 0))
     const finish = (file: string | null): void => {
       clearTimeout(timer)
       watcher.close()
@@ -1384,6 +1433,12 @@ async function waitForNativePiSessionFile(
       if (typeof filename === 'string' && filename.endsWith(suffix)) {
         finish(join(dir, filename))
       }
+    })
+    // The transcript may have been flushed between the caller's existence
+    // check and the watcher attaching   no rename event would fire for it.
+    // Attach the watcher first, then re-check so neither window is missed.
+    void findNativePiSessionFile(projectPath, sessionId).then((file) => {
+      if (file) finish(file)
     })
   })
 }
@@ -1648,6 +1703,14 @@ export class PiDriver extends PersistentCliDriver {
 
   private turnStates = new Map<string, PiTurnState>()
   private rpcClients = new Map<string, PiRpcClient>()
+  /**
+   * Live transcripts of delegated child pi sessions, keyed by child session id
+   * and bounded (insertion order = recency) so a long app session cannot grow
+   * without limit. Fed by the core-tools extension's streamed records; read
+   * back so a sub-agent tab paints its trace immediately and the engine can
+   * persist the final transcript without probing pi's session file.
+   */
+  private childStreams = new Map<string, PiChildStreamState>()
   /**
    * Sessions whose native `get_session_stats` RPC is known to crash. Pi's
    * `AgentSession.getSessionStats` reads `usage.input` unguarded on assistant
@@ -2532,6 +2595,7 @@ export class PiDriver extends PersistentCliDriver {
     this.rpcClients.clear()
     this.activeTurns.clear()
     this.turnStates.clear()
+    this.childStreams.clear()
     this.silentContinues.clear()
     this.pendingUiRequests.clear()
     for (const sessionId of this.gatewayHandoffPaths.keys()) {
@@ -2724,6 +2788,36 @@ export class PiDriver extends PersistentCliDriver {
    * session look resumable and silently drop all context.
    */
   override async loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]> {
+    return this.loadMessagesInternal(projectPath, sessionId, true)
+  }
+
+  /** Flush-aware transcript load for delegated child sessions: a settled
+   *  child must not block the caller on a directory watch for a transcript
+   *  file that can never appear (reopening a finished sub-agent otherwise
+   *  waits seconds on every open). */
+  loadSubagentMessages(
+    projectPath: string,
+    sessionId: string,
+    options?: { waitForFlush?: boolean }
+  ): Promise<AgentMessage[]> {
+    // The extension streams a child session's transcript while it works, so
+    // the trace so far is already in memory: return it instead of waiting for
+    // pi to flush the child's session file (which it defers until the child's
+    // first assistant message completes). Reopening a settled child keeps
+    // working the same way until the entry is evicted, after which the session
+    // file and the engine's mirror take over as before.
+    const live = this.childStreams.get(sessionId)
+    if (live && live.context.session.messages.length > 0) {
+      return Promise.resolve(structuredClone(live.context.session.messages))
+    }
+    return this.loadMessagesInternal(projectPath, sessionId, options?.waitForFlush ?? true)
+  }
+
+  private async loadMessagesInternal(
+    projectPath: string,
+    sessionId: string,
+    waitForFlush: boolean
+  ): Promise<AgentMessage[]> {
     if (!this.rpcClients.has(sessionId)) {
       const record = await this.readSessionRecord(projectPath, sessionId)
       if (record) {
@@ -2740,9 +2834,21 @@ export class PiDriver extends PersistentCliDriver {
     try {
       return await super.loadMessages(projectPath, sessionId)
     } catch (error) {
-      const native = await this.loadNativeSubagentMessages(projectPath, sessionId)
+      const native = await this.loadNativeSubagentMessages(projectPath, sessionId, waitForFlush)
       if (native) return native
-      throw error
+      // Throwing stays correct whenever a record genuinely exists   including
+      // a hash-mismatched one (moved project), where the engine must retire
+      // the dead session and create a replacement. Only a truly absent record
+      // takes the child-session fallback: pi child sessions (cio_spawn_agent)
+      // are never persisted as CLI session records, so "CLI session is
+      // unavailable" is their normal state, not a failure   and pi never
+      // flushes their transcripts to disk either (the nested SessionManager
+      // inherits the parent cwd). Throwing there only spams the renderer with
+      // repeated load errors while the sub-agent card's own activity already
+      // carries the transcript preview; an empty result tells the engine to
+      // keep using that preview.
+      if (await this.readSessionRecordIgnoringPath(sessionId)) throw error
+      return []
     }
   }
 
@@ -2756,6 +2862,17 @@ export class PiDriver extends PersistentCliDriver {
     } catch {
       return null
     }
+  }
+
+  /** Like `readSessionRecord`, but matches even a hash-mismatched record. */
+  private async readSessionRecordIgnoringPath(
+    sessionId: string
+  ): Promise<PersistentCliSession | null> {
+    return (
+      (await this.storage
+        .read<PersistentCliSession>(this.sessionPath(sessionId))
+        .catch(() => null)) ?? null
+    )
   }
 
   /**
@@ -2892,7 +3009,8 @@ export class PiDriver extends PersistentCliDriver {
   /** Returns null when no native transcript exists so the caller rethrows. */
   private async loadNativeSubagentMessages(
     projectPath: string,
-    sessionId: string
+    sessionId: string,
+    waitForFlush: boolean
   ): Promise<AgentMessage[] | null> {
     // The chat engine captures a sub-agent's transcript the moment the spawn
     // tool reports its childSessionId   but pi defers a new session's first
@@ -2900,10 +3018,13 @@ export class PiDriver extends PersistentCliDriver {
     // (SessionManager._persist), so the .jsonl can appear seconds later.
     // React to the file's creation instead of polling: watch the session
     // directory and parse as soon as pi flushes it. The engine's capture race
-    // timeout is 15 s, so a ~10 s wait stays inside it.
+    // timeout is 15 s, so a ~10 s wait stays inside it. When the caller
+    // guarantees the child is no longer live (`waitForFlush: false`) a
+    // missing file is final   watching would only burn seconds waiting for
+    // a transcript that can never appear, on every tab reopen.
+    const existing = await findNativePiSessionFile(projectPath, sessionId)
     const file =
-      (await findNativePiSessionFile(projectPath, sessionId)) ??
-      (await waitForNativePiSessionFile(projectPath, sessionId))
+      existing ?? (waitForFlush ? await waitForNativePiSessionFile(projectPath, sessionId) : null)
     if (!file) return null
     // pi writes the flushed file synchronously before closing it, but keep a
     // short stabilization window in case the create event lands mid-flush.
@@ -3384,6 +3505,10 @@ export class PiDriver extends PersistentCliDriver {
       void this.handleUsageStatus(record, sessionId)
       return
     }
+    if (stringValue(record['statusKey']) === CIO_SUBAGENT_STREAM_STATUS_KEY) {
+      this.handleSubagentStreamStatus(record)
+      return
+    }
     if (stringValue(record['statusKey']) !== PI_STATUS_EXTENSION_KEY) return
     const text = stringValue(record['statusText'])
     if (!text) return
@@ -3398,6 +3523,114 @@ export class PiDriver extends PersistentCliDriver {
     // `agent_settled` remains the sole finalization trigger (usage stats +
     // session persistence); the idle status here only clears the busy flag.
     this.emit({ type: 'session.status', sessionId, status: state })
+  }
+
+  /**
+   * Fold one batch of streamed child-session records into that child's live
+   * transcript and re-emit them as child-scoped events. Records carry pi's own
+   * shapes, so they go through `mapPiRecord`   the exact mapper a root thread
+   * uses   which is what makes a sub-agent stream and render like a normal
+   * thread: the engine broadcasts whatever session id the driver reports, and
+   * the sub-agent view already filters on the child session id.
+   */
+  private handleSubagentStreamStatus(record: Record<string, unknown>): void {
+    const payload = parseRecord(record['statusText'])
+    if (!payload) return
+    const childSessionId = stringValue(payload['childSessionId'])
+    if (!childSessionId) return
+    const state = this.childStreamState(childSessionId)
+    const records = Array.isArray(payload['records']) ? payload['records'] : []
+    if (records.length > 0 && !state.announcedWorking && !state.settled) {
+      state.announcedWorking = true
+      this.emit({ type: 'session.status', sessionId: childSessionId, status: { state: 'working' } })
+    }
+    for (const value of records) {
+      const result = mapPiRecord(value, state.context, state.turnState)
+      if (!result) continue
+      for (const message of result.messages ?? []) {
+        const messages = state.context.session.messages
+        const index = messages.findIndex((candidate) => candidate.id === message.id)
+        if (index === -1) messages.push(message)
+        else messages[index] = message
+      }
+      for (const event of result.events ?? []) {
+        this.applyChildStreamEvent(state, event)
+        this.emit({ ...event, sessionId: childSessionId })
+      }
+    }
+    if (payload['settled'] !== true) return
+    state.settled = true
+    const error = stringValue(payload['error'])
+    if (!error) {
+      this.emit({ type: 'session.status', sessionId: childSessionId, status: { state: 'idle' } })
+      return
+    }
+    // The child's failure belongs to the child's transcript: report it on the
+    // child session so the sub-agent view shows the reason and offers a retry,
+    // never on the parent thread.
+    const kind = classifyProviderIssue(error)
+    this.emit({
+      type: 'session.status',
+      sessionId: childSessionId,
+      status: {
+        state: 'error',
+        issue: {
+          kind,
+          message: extractProviderErrorEnvelope(error).message,
+          rawError: error,
+          harnessId: this.id,
+          retryable: kind !== 'billing'
+        }
+      }
+    })
+  }
+
+  /**
+   * Fold one child event into that child's transcript. A root session's
+   * transcript is rebuilt from the harness (the driver only stamps it), but a
+   * child session's transcript exists nowhere else until pi flushes its file
+   *   so a streamed part whose message has not been materialized yet creates
+   * that message here. Without this the live snapshot would be empty and the
+   * final tool inputs could not be correlated with their results.
+   */
+  private applyChildStreamEvent(state: PiChildStreamState, event: SessionAgentEvent): void {
+    const messages = state.context.session.messages
+    if (event.type === 'message.part.updated' && event.part.type !== 'subagent') {
+      if (!messages.some((message) => message.id === event.part.messageID)) {
+        messages.push({
+          id: event.part.messageID,
+          role: 'assistant',
+          parts: [],
+          createdAt: Date.now(),
+          harnessId: this.id
+        })
+      }
+    }
+    this.applyEventToMessages(messages, event)
+  }
+
+  /** The live transcript state of one child session, capped and LRU-ordered. */
+  private childStreamState(childSessionId: string): PiChildStreamState {
+    const existing = this.childStreams.get(childSessionId)
+    if (existing) {
+      // Re-insert so the oldest entry is always the least recently used.
+      this.childStreams.delete(childSessionId)
+      this.childStreams.set(childSessionId, existing)
+      return existing
+    }
+    const created: PiChildStreamState = {
+      context: { sessionId: childSessionId, session: { messages: [] } },
+      turnState: { assistantMessageId: null, turnIndex: 0 },
+      announcedWorking: false,
+      settled: false
+    }
+    this.childStreams.set(childSessionId, created)
+    while (this.childStreams.size > PI_CHILD_STREAM_MAX) {
+      const oldest = this.childStreams.keys().next().value
+      if (oldest === undefined) break
+      this.childStreams.delete(oldest)
+    }
+    return created
   }
 
   /**

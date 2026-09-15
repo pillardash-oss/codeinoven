@@ -593,16 +593,16 @@
       <button
         class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-overlay"
         disabled={busy || reviewSubmitting}
-        title="Send review notes to the primary agent"
+        title="Send rework notes to the primary agent"
         onclick={() => (reviewOpen = true)}
       >
-        Review
+        Rework
       </button>
       {#if !reviewStarted}
         <button
           class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
           disabled={busy}
-          title="Complete this audit without review notes"
+          title="Complete this audit without rework notes"
           onclick={onComplete}
         >
           Complete <Check size={13} />
@@ -621,13 +621,13 @@
             class="mt-1 min-h-14 w-full rounded-lg border bg-elevated px-3 py-2 text-xs"
             bind:value={reviewNotes}
             placeholder="Optional rework instructions"
-            ariaLabel="Audit review instructions"
+            ariaLabel="Audit rework instructions"
           />
         </label>
         <button
           class="rounded-lg px-3 py-2 text-xs text-muted"
           disabled={reviewSubmitting}
-          title="Discard review notes"
+          title="Discard rework notes"
           onclick={() => (reviewOpen = false)}
         >
           Cancel
@@ -644,7 +644,7 @@
           title="Send review notes to the primary agent"
           onclick={() => void submitReview()}
         >
-          {reviewSubmitting ? 'Submitting…' : 'Review'}
+          {reviewSubmitting ? 'Submitting…' : 'Rework'}
         </button>
       </div>
     {/if}
@@ -757,6 +757,17 @@
                     >
                       {finding.severity}
                     </button>
+                  {:else}
+                    <!-- Read-only views (older versions, review-complete reports) still show the
+                        severity badge; only the edit affordance is gated on workflow actions. -->
+                    <span
+                      class="rounded-md px-2 py-1 text-xs font-medium capitalize {severityClass(
+                        finding.severity
+                      )}"
+                      title={`Finding severity: ${finding.severity}`}
+                    >
+                      {finding.severity}
+                    </span>
                   {/if}
                   {#if workflowActionsVisible}
                     <button

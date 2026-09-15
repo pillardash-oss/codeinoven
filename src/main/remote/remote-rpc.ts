@@ -986,7 +986,11 @@ export class RemoteRpcDispatcher {
           typeof args[5] === 'number' ? args[5] : undefined
         )
       case 'agent:listCommands':
-        return chatEngine.listCommands(this.string(args[0]), this.string(args[1]))
+        return chatEngine.listCommands(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.optionalString(args[2])
+        )
       case 'agent:runCommand':
         return chatEngine.runCommand(
           this.string(args[0]),
@@ -1010,7 +1014,11 @@ export class RemoteRpcDispatcher {
           this.string(args[3]) as 'down' | 'single' | 'up'
         )
       case 'agent:listContextCapabilities':
-        return chatEngine.listContextCapabilities(this.string(args[0]), this.string(args[1]))
+        return chatEngine.listContextCapabilities(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.optionalString(args[2])
+        )
       case 'agent:listProcesses':
         return chatEngine.listProcesses(this.string(args[0]), this.string(args[1]))
       case 'agent:listArtifacts':
@@ -1853,6 +1861,12 @@ export class RemoteRpcDispatcher {
           await this.resolveProjectPath(this.string(args[0])),
           this.string(args[1]),
           this.optionalBoolean(args[2]) ?? false
+        )
+      case 'git:deleteRemoteBranch':
+        return this.gitService.deleteRemoteBranch(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1]),
+          this.string(args[2])
         )
       case 'git:log':
         return this.gitService.log(

@@ -20,7 +20,7 @@ export interface AppErrorEntry {
   threadId?: string
 }
 
-interface CaptureOptions {
+export interface CaptureOptions {
   details?: string
   thread?: AppErrorThreadRef
 }
@@ -136,6 +136,30 @@ function messageFrom(error: unknown, fallback: string): string {
 /** Full clipboard text for an error: message plus any details/stack. */
 function errorText(message: string, details?: string): string {
   return details ? `${message}\n\n${details}` : message
+}
+
+/** First user-facing line of a multi-line diagnostic text. */
+export function errorHeadline(text: string): string {
+  const first = text.split('\n', 1)[0]?.trim()
+  return first && first.length > 0 ? first : text.trim()
+}
+
+/**
+ * Record an error in the app-errors panel without showing a toast. For callers
+ * that own their toast (e.g. agent error notifications with a thread-navigating
+ * action) so the panel still gets the full diagnostic text.
+ */
+export function captureError(message: string, options?: CaptureOptions): void {
+  appErrorState.capture('error', message, options)
+}
+
+/** Show an error toast without re-capturing it. Pair with `captureError` when
+ *  the caller records the error itself (with details) before toasting. */
+export function showToastError(
+  message: string,
+  data?: Parameters<typeof toast.error>[1]
+): string | number {
+  return originalError(message, data)
 }
 
 /** Copy action shown alongside the primary action on error toasts. */

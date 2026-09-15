@@ -1715,6 +1715,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     ) {
       return true
     }
+    // Silent nulls here made auxiliary runs (titles, grading) undiagnosable.
+    Logger.dev('Claude Code auxiliary transport gate: parent session not authenticated')
     return false
   }
 

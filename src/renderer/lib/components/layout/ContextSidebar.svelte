@@ -27,6 +27,7 @@
   import type { ContextSidebarTab, TerminalPlacement } from '$lib/stores/context-sidebar.svelte'
   import { faviconState } from '$lib/stores/favicons.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
 
@@ -79,9 +80,7 @@
 
   // Resolve favicons for browser tab URLs so the strip can show the site's icon
   // once available. Resolution is deduped per hostname inside the store.
-  let browserTabUrls = $derived(
-    tabs.flatMap((tab) => (tab.kind === 'browser' ? [tab.url] : []))
-  )
+  let browserTabUrls = $derived(tabs.flatMap((tab) => (tab.kind === 'browser' ? [tab.url] : [])))
   $effect(() => faviconState.ensureResolved(browserTabUrls))
 
   // Every other tool opens from the context dock rail and owns the whole panel,
@@ -136,7 +135,7 @@
   let siblingTabs = $derived(
     activeTab && !tabbedMode ? tabs.filter((tab) => tab.kind === activeTab.kind) : []
   )
-  /** Temporary chats close from their own tab, so they need no header cluster  
+  /** Temporary chats close from their own tab, so they need no header cluster
    *  rendering it anyway would leave a stray divider on the right edge. */
   let showHeaderControls = $derived(
     terminalMode || browserMode || (activeTab !== null && !tabbedMode)
@@ -263,7 +262,7 @@
     {:else if tab.kind === 'browser'}
       {#if tab.favicon ?? faviconState.faviconFor(tab.url)}
         <img
-          src={(tab.favicon ?? faviconState.faviconFor(tab.url)) ?? ''}
+          src={tab.favicon ?? faviconState.faviconFor(tab.url) ?? ''}
           alt=""
           class="h-3 w-3 shrink-0"
           aria-hidden="true"
@@ -342,12 +341,17 @@
                 >
                   {@render tabIcon(tab)}
                   <span
-                    class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' && tab.preview
+                    class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' &&
+                    tab.preview
                       ? 'italic'
                       : ''}">{tab.title}</span
                   >
-                  {#if tab.kind === 'temporary-chat' && agentRuns.isBusy(tab.projectId, tab.temporaryChatId)}
-                    <StatusBadge stage="working" animated title="Working" />
+                  {#if tab.kind === 'temporary-chat'}
+                    {#if conversationAttention.hasAttention(tab.projectId, tab.temporaryChatId)}
+                      <StatusBadge kind="attention" animated title="Needs attention" />
+                    {:else if agentRuns.isBusy(tab.projectId, tab.temporaryChatId)}
+                      <StatusBadge stage="working" animated title="Working" />
+                    {/if}
                   {/if}
                 </button>
                 <button
@@ -367,7 +371,8 @@
         <div class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-foreground">
           {@render tabIcon(activeTab)}
           <span
-            class="truncate text-[0.6875rem] font-medium {activeTab.kind === 'files' && activeTab.preview
+            class="truncate text-[0.6875rem] font-medium {activeTab.kind === 'files' &&
+            activeTab.preview
               ? 'italic'
               : ''}"
           >

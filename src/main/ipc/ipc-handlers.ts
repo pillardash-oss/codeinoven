@@ -239,6 +239,8 @@ type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentV
 
 const THEMES = new Set(['light', 'dark', 'system'])
 const MAX_PATHLESS_ATTACHMENT_BYTES = 32 * 1024 * 1024
+/** Persistence cap for a debounce-committed composer draft (JSON payload). */
+const MAX_DRAFT_JSON_LENGTH = 256 * 1024
 /** Pull requests fetched per sidebar page. */
 const PR_PAGE_SIZE = 20
 const GITHUB_REPOSITORY_ACCESS_MESSAGE =
@@ -1961,7 +1963,13 @@ function validateCloudDeploymentContainer(value: unknown, index: number): CloudD
     ),
     status: validateCloudDeploymentStatus(value.status, `Cloud deployment container ${index}`),
     ...(typeof value.accountId === 'string'
-      ? { accountId: requireString(value.accountId, `Cloud deployment container ${index} account ID`, true) }
+      ? {
+          accountId: requireString(
+            value.accountId,
+            `Cloud deployment container ${index} account ID`,
+            true
+          )
+        }
       : {}),
     ...(typeof value.url === 'string' ? { url: value.url } : {}),
     ...(value.createdAt === undefined
@@ -4552,7 +4560,7 @@ export function registerIpcHandlers(
   // constrained to registered project, config-root, or user-selected scopes.
   // Read a pasted-file source for the Sound Playground's read-aloud section:
   // plain text files directly, and rich documents (PDF, Word, PowerPoint, Excel,
-  // OpenDocument, RTF, EPUB) through the `@firecrawl/anydoc` Rust library  
+  // OpenDocument, RTF, EPUB) through the `@firecrawl/anydoc` Rust library
   // fully local, no network, OCR never invoked. Only scoped paths (e.g. a file
   // the user just picked from the system dialog) are read.
   // Text is capped below the prepared-playback text limit.
@@ -5158,7 +5166,9 @@ export function registerIpcHandlers(
       return projectFilesService.listDirectory(
         validatedProjectId,
         directory,
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        scopeBucketId === undefined
+          ? undefined
+          : validateEntityId(scopeBucketId, 'Scope bucket ID'),
         threadIdArg(threadId)
       )
     }
@@ -5180,7 +5190,9 @@ export function registerIpcHandlers(
         validateEntityId(projectId, 'Project ID'),
         requireString(query, 'Project file search query', true),
         category,
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        scopeBucketId === undefined
+          ? undefined
+          : validateEntityId(scopeBucketId, 'Scope bucket ID'),
         threadIdArg(threadId)
       )
     }
@@ -5213,7 +5225,9 @@ export function registerIpcHandlers(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativeDirectory, 'Project directory', true),
         requireString(name, 'File name'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        scopeBucketId === undefined
+          ? undefined
+          : validateEntityId(scopeBucketId, 'Scope bucket ID'),
         threadIdArg(threadId)
       )
   )
@@ -5231,7 +5245,9 @@ export function registerIpcHandlers(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativeDirectory, 'Project directory', true),
         requireString(name, 'Folder name'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        scopeBucketId === undefined
+          ? undefined
+          : validateEntityId(scopeBucketId, 'Scope bucket ID'),
         threadIdArg(threadId)
       )
   )
@@ -5259,17 +5275,13 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'projectFiles:info',
-    (
-      _,
-      projectId: unknown,
-      relativePath: unknown,
-      scopeBucketId?: unknown,
-      threadId?: unknown
-    ) =>
+    (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown, threadId?: unknown) =>
       projectFilesService.getInfo(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativePath, 'Project file path'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        scopeBucketId === undefined
+          ? undefined
+          : validateEntityId(scopeBucketId, 'Scope bucket ID'),
         threadIdArg(threadId)
       )
   )
@@ -5286,7 +5298,9 @@ export function registerIpcHandlers(
       const target = await projectFilesService.resolveForExternalEditor(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativePath, 'Project file path'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        scopeBucketId === undefined
+          ? undefined
+          : validateEntityId(scopeBucketId, 'Scope bucket ID'),
         threadIdArg(threadId)
       )
       await editorService.openInEditor(config.preferredEditor, target, 'file')
@@ -5352,7 +5366,9 @@ export function registerIpcHandlers(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativePath, 'Project file path'),
         requireString(name, 'File name'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        scopeBucketId === undefined
+          ? undefined
+          : validateEntityId(scopeBucketId, 'Scope bucket ID'),
         threadIdArg(threadId)
       )
   )
@@ -5404,7 +5420,9 @@ export function registerIpcHandlers(
         validateEntityId(projectId, 'Project ID'),
         validateStringArray(sourcePaths, 'Import source paths'),
         requireString(destinationDirectory, 'Destination directory', true),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        scopeBucketId === undefined
+          ? undefined
+          : validateEntityId(scopeBucketId, 'Scope bucket ID'),
         threadIdArg(threadId)
       )
   )
@@ -5422,7 +5440,9 @@ export function registerIpcHandlers(
         validateEntityId(projectId, 'Project ID'),
         validateStringArray(sourcePaths, 'Dropped paths'),
         requireString(destinationDirectory, 'Destination directory', true),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        scopeBucketId === undefined
+          ? undefined
+          : validateEntityId(scopeBucketId, 'Scope bucket ID'),
         threadIdArg(threadId)
       )
   )
@@ -5498,7 +5518,9 @@ export function registerIpcHandlers(
       const textFile = await projectFilesService.readText(
         validateEntityId(projectId, 'Project ID'),
         safeRelativePath,
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        scopeBucketId === undefined
+          ? undefined
+          : validateEntityId(scopeBucketId, 'Scope bucket ID'),
         threadIdArg(threadId)
       )
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
@@ -5828,6 +5850,20 @@ export function registerIpcHandlers(
         force === undefined ? false : validateBoolean(force, 'Force delete')
       )
     }
+  )
+  ipcMain.handle(
+    'git:deleteRemoteBranch',
+    async (_, projectId: unknown, remote: unknown, name: unknown, scopeBucketId?: unknown) =>
+      gitService.deleteRemoteBranch(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateRemoteName(remote),
+        validateBranchName(name)
+      )
   )
   ipcMain.handle(
     'git:log',
@@ -6417,7 +6453,7 @@ export function registerIpcHandlers(
         base: safeBase,
         head: safeHead
       }
-      // Warn when an open PR already exists for this exact head→base pair  
+      // Warn when an open PR already exists for this exact head→base pair
       // GitHub would reject a duplicate creation with a 422. The lookup is
       // advisory and never allowed to block the compare itself.
       let existing = null
@@ -6559,7 +6595,7 @@ export function registerIpcHandlers(
             accessError: GITHUB_REPOSITORY_ACCESS_MESSAGE
           }
         }
-        // An unreachable GitHub is a transient state, not a broken feature  
+        // An unreachable GitHub is a transient state, not a broken feature
         // degrade to an offline page so the renderer keeps its last known data.
         if (isNetworkError(error)) {
           return { items: [], page: safePage, hasMore: false, accessError: GITHUB_OFFLINE_MESSAGE }
@@ -6986,8 +7022,7 @@ export function registerIpcHandlers(
       } else {
         providerAccounts[kind] = {
           attachedAccountIds: remaining,
-          activeAccountId:
-            wasActive ? (remaining[0] ?? null) : association.activeAccountId
+          activeAccountId: wasActive ? (remaining[0] ?? null) : association.activeAccountId
         }
         config.project.providerAccounts = providerAccounts
       }
@@ -7039,11 +7074,9 @@ export function registerIpcHandlers(
       explicitAccountId !== null &&
       !(association?.attachedAccountIds ?? []).includes(explicitAccountId)
     ) {
-      throw new TypeError(
-        `Cloud deployment account is not attached to this project for ${kind}`
-      )
+      throw new TypeError(`Cloud deployment account is not attached to this project for ${kind}`)
     }
-    const activeAccountId = explicitAccountId ?? (association?.activeAccountId ?? null)
+    const activeAccountId = explicitAccountId ?? association?.activeAccountId ?? null
     const registry = activeAccountId === null ? null : await storage.getCloudDeploymentAccounts()
     const activeAccount =
       activeAccountId === null
@@ -7099,11 +7132,7 @@ export function registerIpcHandlers(
         )
         const liveContainers = await provider.listContainers()
         return {
-          containers: mergeCloudDeploymentContainers(
-            liveContainers,
-            liveMappings,
-            kind
-          ),
+          containers: mergeCloudDeploymentContainers(liveContainers, liveMappings, kind),
           fetchedAt: Date.now(),
           hasDeployments
         }
@@ -7136,9 +7165,7 @@ export function registerIpcHandlers(
             await resolveDeploymentContext(safeProjectId, kind, accountId)
           )
           const containers = await provider.listContainers()
-          liveContainers.push(
-            ...containers.map((container) => ({ ...container, accountId }))
-          )
+          liveContainers.push(...containers.map((container) => ({ ...container, accountId })))
         } catch (error) {
           const label = accountLabel(accountId)
           failures.push(
@@ -7147,11 +7174,7 @@ export function registerIpcHandlers(
         }
       })
     )
-    const containers = mergeCloudDeploymentContainers(
-      liveContainers,
-      liveMappings,
-      kind
-    )
+    const containers = mergeCloudDeploymentContainers(liveContainers, liveMappings, kind)
     return {
       containers,
       fetchedAt: Date.now(),
@@ -7308,11 +7331,20 @@ export function registerIpcHandlers(
         repo: safeRepo,
         pullNumber: safeNumber
       } = await pullRequestTarget(projectId, owner, repo, pullNumber)
-      return provider.getPullRequest({
-        owner: safeOwner,
-        repo: safeRepo,
-        pullNumber: safeNumber
-      })
+      try {
+        return await provider.getPullRequest({
+          owner: safeOwner,
+          repo: safeRepo,
+          pullNumber: safeNumber
+        })
+      } catch (reason) {
+        // This channel powers the background mergeability probe, so transient
+        // provider failures (timeouts, rate limits, flaky network) are expected.
+        // Returning null avoids a noisy main-process "Error occurred in handler"
+        // log for every probe retry; the caller already treats null as "unknown".
+        Logger.dev('PR detail fetch failed', reason)
+        return null
+      }
     }
   )
 
@@ -8077,6 +8109,24 @@ export function registerIpcHandlers(
       validateBoolean(drafting, 'Drafting')
     }
   )
+  ipcMain.handle(
+    'thread:setDraftState',
+    async (_, projectId: string, threadId: string, drafting: boolean, draftJson: string | null) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      validateBoolean(drafting, 'Drafting')
+      if (draftJson !== null) {
+        if (typeof draftJson !== 'string') {
+          throw new TypeError('Draft JSON must be a string or null')
+        }
+        if (draftJson.length > MAX_DRAFT_JSON_LENGTH) {
+          throw new TypeError('Draft JSON exceeds the persistence limit')
+        }
+      }
+      await threadManager.setDraftState(safeProjectId, safeThreadId, drafting, draftJson)
+    }
+  )
+  ipcMain.handle('thread:listDrafting', async () => threadManager.listDraftingThreads())
   ipcMain.handle('thread:reorder', (_, projectId: unknown, orderedIds: unknown) =>
     threadManager.reorderThreads(
       validateEntityId(projectId, 'Project ID'),

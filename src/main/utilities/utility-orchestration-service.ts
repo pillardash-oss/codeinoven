@@ -28,6 +28,7 @@ import {
   UTILITY_SEARCH_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
+  UTILITY_DOCS_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME
 } from '../../lib/gateway-tools'
@@ -246,7 +247,27 @@ interface TurnState {
   diagnostics: CioDiagnosticsService | null
   /** Lazily derived once because a turn may issue several refined searches. */
   projectSearchTerms: Promise<Set<string>> | null
+  /** This thread's utilities bank, restricted to utilities eligible this turn. */
+  bank: Map<string, ThreadBankEntry>
 }
+
+/**
+ * One entry of the per-thread utilities bank: the durable bookkeeping of every
+ * utility this thread has activated at least once. Deliberately tiny (id,
+ * name, kind, description) so later turns can invoke the utility directly by
+ * id and re-list its docs with cio_util_docs_lookup after compaction.
+ */
+interface ThreadBankEntry {
+  id: string
+  name: string
+  kind: UtilityKind
+  description: string
+}
+
+/** Thread bank entries survive app restarts as one small JSON file per thread. */
+const THREAD_BANK_DIRECTORY = 'utility-banks'
+const THREAD_BANK_MAX_ENTRIES = 64
+const THREAD_BANK_DESCRIPTION_LIMIT = 400
 
 /** Bridge handler for one gateway route: receives state plus the parsed body. */
 type GatewayBridgeHandler = (state: TurnState, input: Record<string, unknown>) => Promise<unknown>
@@ -271,6 +292,8 @@ export class UtilityOrchestrationService {
     ((pid: number, threadId: string, sessionId?: string) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
+  /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
+  private readonly bankWrites = new Map<string, Promise<void>>()
   constructor(
     private readonly storage: StorageEngine,
     private readonly database?: import('../database/database').Database,
@@ -304,6 +327,8 @@ export class UtilityOrchestrationService {
         return (state, input) => this.activate(state, input)
       case UTILITY_INVOKE_TOOL_NAME:
         return (state, input) => this.invoke(state, input)
+      case UTILITY_DOCS_TOOL_NAME:
+        return (state, input) => this.docsLookup(state, input)
       case UTILITY_MANAGE_TOOL_NAME:
         return (state, input) => this.manage(state, input)
       case UTILITY_DIAGNOSTICS_TOOL_NAME:
@@ -421,7 +446,15 @@ export class UtilityOrchestrationService {
       cuaSessionIds: new Map(),
       managedUtilities: [],
       diagnostics: null,
-      projectSearchTerms: null
+      projectSearchTerms: null,
+      bank: new Map()
+    }
+    // Surface the thread's durable utilities bank so later turns can go
+    // straight to usage: only banked utilities that are still eligible this
+    // turn are advertised (the rest would fail the eligibility gate anyway).
+    const bankEntries = await this.loadThreadBank(request.threadId)
+    for (const entry of bankEntries) {
+      if (state.eligible.has(entry.id)) state.bank.set(entry.id, entry)
     }
     const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
@@ -436,6 +469,22 @@ export class UtilityOrchestrationService {
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       ...(hasOnDemand
         ? [
+            "A utility you activate is registered in this thread's utilities bank for the whole thread lifecycle: in later turns you can invoke it directly with " +
+              UTILITY_INVOKE_TOOL_NAME +
+              ' and its id, no re-activation needed. If context compaction dropped its capability docs, re-list them with ' +
+              UTILITY_DOCS_TOOL_NAME +
+              ' (accepts only the utility id). MCP clients are reconnected per turn as needed, so direct reuse costs nothing until you actually invoke.',
+            ...(state.bank.size > 0
+              ? [
+                  `Thread utilities bank (registered in earlier turns; invoke directly with ${UTILITY_INVOKE_TOOL_NAME}): ${[
+                    ...state.bank.values()
+                  ]
+                    .map(
+                      (entry) => `${entry.id} (${entry.kind}) ${entry.name} — ${entry.description}`
+                    )
+                    .join('; ')}`
+                ]
+              : []),
             'A search result reports an explicit `notFound` boolean and may return project-aware candidates (`matchType: "candidates"`) to evaluate semantically. Before concluding that any capability (MCP, skill, tool, utility) is unavailable or does not exist, call ' +
               UTILITY_SEARCH_TOOL_NAME +
               ' first; only conclude unavailability when the result reports notFound:true. Never treat "the tools are not exposed in this session" as proof of absence. If you already know an eligible utility id, activate it directly without searching first.',
@@ -495,6 +544,102 @@ export class UtilityOrchestrationService {
   /** Snapshot of utilities installed by an explicit setup turn. */
   managedUtilities(gatewayId: string): UtilityDefinition[] {
     return structuredClone(this.turns.get(gatewayId)?.state.managedUtilities ?? [])
+  }
+
+  // ─── Thread utilities bank — durable per-thread bookkeeping ─────────────
+
+  /** Bank file path for one thread; rejects anything path-like. */
+  private bankPath(threadId: string): string {
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(threadId)) {
+      throw new Error('Invalid thread id for the utilities bank')
+    }
+    return `${THREAD_BANK_DIRECTORY}/${threadId}.json`
+  }
+
+  /** Load the persisted bank for one thread; corrupt or missing files read as empty. */
+  private async loadThreadBank(threadId: string): Promise<ThreadBankEntry[]> {
+    try {
+      const raw = await this.storage.readRaw(this.bankPath(threadId))
+      if (!raw) return []
+      const parsed: unknown = JSON.parse(raw)
+      if (!Array.isArray(parsed)) return []
+      return parsed
+        .flatMap((value: unknown) => {
+          if (typeof value !== 'object' || value === null) return []
+          const record = value as Record<string, unknown>
+          const id = record['id']
+          const name = record['name']
+          const kind = record['kind']
+          const description = record['description']
+          if (
+            typeof id !== 'string' ||
+            typeof name !== 'string' ||
+            typeof kind !== 'string' ||
+            !UTILITY_KIND_VALUES.includes(kind as UtilityKind) ||
+            typeof description !== 'string'
+          ) {
+            return []
+          }
+          return [
+            {
+              id,
+              name,
+              kind: kind as UtilityKind,
+              description: description.slice(0, THREAD_BANK_DESCRIPTION_LIMIT)
+            }
+          ]
+        })
+        .slice(0, THREAD_BANK_MAX_ENTRIES)
+    } catch (error) {
+      Logger.dev('Thread utilities bank could not be read:', error)
+      return []
+    }
+  }
+
+  /** Persist the bank for one thread; serialized per thread to avoid clobbering. */
+  private async saveThreadBank(threadId: string, entries: ThreadBankEntry[]): Promise<void> {
+    const previous = this.bankWrites.get(threadId) ?? Promise.resolve()
+    const next = previous
+      .then(() => this.storage.writeRaw(this.bankPath(threadId), JSON.stringify(entries)))
+      .catch((error: unknown) => Logger.dev('Thread utilities bank write failed:', error))
+    this.bankWrites.set(threadId, next)
+    await next
+  }
+
+  /**
+   * Record one utility in its thread's bank the first time it is activated.
+   * Transient per-turn capabilities (the gateway itself, interview-bound
+   * alignment) are never banked.
+   */
+  private async registerThreadBankEntry(
+    state: TurnState,
+    utility: UtilityDefinition
+  ): Promise<void> {
+    if (
+      utility.id.startsWith('cio:utility-gateway:') ||
+      utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID
+    ) {
+      return
+    }
+    const threadId = state.request.threadId
+    const entries = await this.loadThreadBank(threadId)
+    if (entries.some((entry) => entry.id === utility.id)) return
+    entries.push({
+      id: utility.id,
+      name: utility.name,
+      kind: utility.kind,
+      description: utility.description.slice(0, THREAD_BANK_DESCRIPTION_LIMIT)
+    })
+    await this.saveThreadBank(threadId, entries.slice(-THREAD_BANK_MAX_ENTRIES))
+  }
+
+  /** Drop one thread's bank; called when the thread itself is deleted. */
+  async deleteThreadBank(threadId: string): Promise<void> {
+    try {
+      await this.storage.remove(this.bankPath(threadId))
+    } catch {
+      // A missing file is the desired end state; nothing to report.
+    }
   }
 
   private async manage(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
@@ -749,7 +894,8 @@ export class UtilityOrchestrationService {
         name: utility.name,
         kind: utility.kind,
         description: utility.description,
-        active: state.activated.has(utility.id)
+        active: state.activated.has(utility.id),
+        banked: state.bank.has(utility.id)
       }))
     // Lexical mismatch is not proof of semantic irrelevance. Candidate results
     // are intentionally left for the calling agent to evaluate against the
@@ -782,50 +928,122 @@ export class UtilityOrchestrationService {
     const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
     const resolved = state.eligible.get(utilityId)
     if (!resolved) throw new Error('Utility is unavailable in this project, thread, or harness')
+    // Re-activating an already-active utility must be a no-op: re-listing the
+    // full capability would duplicate an unchanged schema into the transcript
+    // for nothing, and for MCP/computer-use kinds the old code also tore down
+    // the live client (killing an in-flight CUA session) just to reconnect it.
+    if (state.activated.has(utilityId) && input['force'] !== true) {
+      await this.audit(state, 'utility.activated', {
+        utilityId,
+        kind: resolved.utility.kind,
+        alreadyActive: true
+      })
+      return {
+        utility: {
+          id: resolved.utility.id,
+          name: resolved.utility.name,
+          kind: resolved.utility.kind
+        },
+        capability: {
+          note: 'Already active in this turn. Its capability description was returned by the earlier activation and is unchanged; invoke it directly. If compaction dropped that description from context, re-list it with cio_util_docs_lookup (or re-activate with input {"force": true}).'
+        }
+      }
+    }
     state.activated.set(utilityId, resolved)
+    // First activation in this thread registers the utility in the durable
+    // thread utilities bank so every later turn can invoke it by id directly.
+    await this.registerThreadBankEntry(state, resolved.utility)
+    const capability = await this.capabilityFor(state, resolved)
+    await this.audit(state, 'utility.activated', {
+      utilityId,
+      kind: resolved.utility.kind
+    })
+    return {
+      utility: {
+        id: resolved.utility.id,
+        name: resolved.utility.name,
+        kind: resolved.utility.kind
+      },
+      capability
+    }
+  }
 
-    let capability: unknown
+  /** Build the capability payload (tools, operations, or instructions) that
+   *  activation and cio_util_docs_lookup hand back to the model. Shared so a
+   *  post-compaction docs re-dump is byte-identical to the original listing. */
+  private async capabilityFor(state: TurnState, resolved: ResolvedUtility): Promise<unknown> {
     if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
-      capability = { tools: BRAINSTORM_ALIGNMENT_OPERATIONS }
-    } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
+      return { tools: BRAINSTORM_ALIGNMENT_OPERATIONS }
+    }
+    if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       if (!this.browserExecutor) throw new Error('The in-app browser is unavailable')
-      capability = { tools: BROWSER_UTILITY_TOOLS }
-    } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
-      const previousClient = state.clients.get(utilityId)
-      const previousSessionId = state.cuaSessionIds.get(utilityId)
-      if (previousClient && previousSessionId) {
-        await previousClient
-          .callTool('end_session', { session: previousSessionId })
-          .catch(() => undefined)
-      }
-      await previousClient?.close()
-      state.cuaSessionIds.delete(utilityId)
-      const client = await this.mcpClient(resolved.utility)
-      state.clients.set(utilityId, client)
-      if (this.isComputerUseUtility(resolved)) {
-        await this.prepareComputerUseSession(state, utilityId, client)
-      }
-      capability = { tools: await client.listTools() }
-    } else if (resolved.utility.kind === 'skill') {
-      capability = { instructions: resolved.utility.config.instructions }
-    } else if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
-      capability = {
+      return { tools: BROWSER_UTILITY_TOOLS }
+    }
+    if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
+      const client = await this.ensureMcpClient(state, resolved)
+      return { tools: await client.listTools() }
+    }
+    if (resolved.utility.kind === 'skill') {
+      return { instructions: resolved.utility.config.instructions }
+    }
+    if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
+      return {
         operations: [resolved.utility.kind],
         inputSchema: WEB_TOOL_INPUT_SCHEMAS[resolved.utility.kind],
         outputSchema: WEB_TOOL_OUTPUT_SCHEMAS[resolved.utility.kind]
       }
-    } else if (resolved.utility.kind === 'image_descriptor') {
-      capability = {
+    }
+    if (resolved.utility.kind === 'image_descriptor') {
+      return {
         operations: ['describe'],
         inputSchema: IMAGE_DESCRIPTOR_INPUT_SCHEMA,
         outputSchema: IMAGE_DESCRIPTOR_OUTPUT_SCHEMA
       }
-    } else {
-      capability = {
-        note: 'Provider activation changes launch configuration and cannot safely mutate a running turn.'
-      }
     }
-    await this.audit(state, 'utility.activated', {
+    return {
+      note: 'Provider activation changes launch configuration and cannot safely mutate a running turn.'
+    }
+  }
+
+  /** Lazily connect (or reuse) the MCP client for one utility, preparing the
+   *  turn-scoped CUA cursor session for computer-use utilities. Used by both
+   *  activation and straight-to-usage banked invocation. */
+  private async ensureMcpClient(state: TurnState, resolved: ResolvedUtility): Promise<McpClient> {
+    const utilityId = resolved.utility.id
+    if (resolved.utility.kind !== 'mcp' && resolved.utility.kind !== 'computer_use') {
+      throw new Error(`Utility kind "${resolved.utility.kind}" does not expose an MCP client`)
+    }
+    let client = state.clients.get(utilityId)
+    if (!client) {
+      client = await this.mcpClient(resolved.utility)
+      state.clients.set(utilityId, client)
+    }
+    if (this.isComputerUseUtility(resolved) && !state.cuaSessionIds.has(utilityId)) {
+      await this.prepareComputerUseSession(state, utilityId, client)
+    }
+    return client
+  }
+
+  /**
+   * Re-dump one utility's full capability docs by id alone. This is the
+   * post-compaction recovery path: the model may have forgotten the original
+   * activation payload, so the banked id is all it needs to re-list the docs.
+   * It also marks the utility active so a following invoke works directly.
+   */
+  private async docsLookup(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
+    const resolved = state.activated.get(utilityId) ?? state.eligible.get(utilityId)
+    if (!resolved) {
+      throw new Error(
+        state.bank.has(utilityId)
+          ? 'This banked utility is not available to the current turn (disabled, out of scope, or filtered); ask the user to re-enable it in Utilities'
+          : 'Utility is unavailable in this project, thread, or harness'
+      )
+    }
+    state.activated.set(utilityId, resolved)
+    await this.registerThreadBankEntry(state, resolved.utility)
+    const capability = await this.capabilityFor(state, resolved)
+    await this.audit(state, 'utility.docs_looked_up', {
       utilityId,
       kind: resolved.utility.kind
     })
@@ -843,8 +1061,24 @@ export class UtilityOrchestrationService {
     const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
     const operation = requiredString(input['operation'], 'operation', 256)
     const operationInput = recordValue(input['input'] ?? {})
-    const resolved = state.activated.get(utilityId)
-    if (!resolved) throw new Error('Activate this utility before invoking it')
+    let resolved = state.activated.get(utilityId)
+    if (!resolved) {
+      // Straight-to-usage banked reuse: a utility registered in this thread's
+      // utilities bank can be invoked by id without re-activating it. The
+      // per-turn eligibility gate still applies; the MCP client is reconnected
+      // lazily below (stateless per turn, id persistent per thread).
+      if (!state.bank.has(utilityId)) {
+        throw new Error('Activate this utility before invoking it')
+      }
+      const eligible = state.eligible.get(utilityId)
+      if (!eligible) {
+        throw new Error(
+          'This banked utility is not available to the current turn (disabled, out of scope, or filtered); search for a replacement or ask the user to re-enable it in Utilities'
+        )
+      }
+      resolved = eligible
+      state.activated.set(utilityId, resolved)
+    }
 
     let result: unknown
     if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
@@ -865,8 +1099,7 @@ export class UtilityOrchestrationService {
         threadId: state.request.threadId
       })
     } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
-      const client = state.clients.get(utilityId)
-      if (!client) throw new Error('Activated MCP client is unavailable')
+      const client = await this.ensureMcpClient(state, resolved)
       const routedInput = this.routeComputerUseInput(state, utilityId, operationInput)
       result = await client.callTool(operation, routedInput)
       if (this.isComputerUseUtility(resolved)) {

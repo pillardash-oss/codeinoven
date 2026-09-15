@@ -4,11 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 vi.mock('electron', () => ({
-  BrowserWindow: class {
-    getAllWindows(): unknown[] {
-      return []
-    }
-  },
+  BrowserWindow: { getAllWindows: vi.fn((): unknown[] => []) },
   app: { isPackaged: false, getPath: () => tmpdir() },
   ipcMain: { handle: () => undefined }
 }))
@@ -83,11 +79,10 @@ async function makeEngine(fakeDriver: ReturnType<typeof makeFakeDriver>): Promis
   const storage = new StorageEngine(temporaryConfigRoot)
   const engine = new ChatEngine(storage, db)
   engines.push(engine)
-  // Shadow the private driver resolver so the drain loop hits the fake driver.
-  ;(engine as unknown as Record<string, unknown>)['resolve'] = async () => ({
-    driver: fakeDriver.driver as never,
-    projectPath: temporaryConfigRoot
-  })
+  // Shadow the private account-driver resolver so the drain loop hits the
+  // fake driver without touching the real account registry or CLI binaries.
+  ;(engine as unknown as Record<string, unknown>)['driverForAccount'] = async () =>
+    fakeDriver.driver as never
   return engine
 }
 
@@ -181,12 +176,6 @@ function snapshotRow(db: Database): Record<string, unknown> | undefined {
   return db.get('SELECT * FROM model_ranking_snapshots LIMIT 1') as
     | Record<string, unknown>
     | undefined
-}
-
-/** Let pending microtasks (drain claim, judge dispatch) settle. */
-async function flushMicrotasksLikeTurnPipeline(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 function aggregateRow(db: Database): Record<string, unknown> | undefined {
@@ -469,10 +458,13 @@ describe('ChatEngine model-ranking pipeline', () => {
     const repo = privateOf<ModelRankingSnapshotRepo>(engine, 'rankingSnapshotRepo')
     repo.insert(snapshotInput('t1', { dueAtMs: Date.now() - 1_000 }))
 
-    // Drain 1 claims the row; its judge hangs in flight.
+    // Drain 1 claims the row; its judge hangs in flight. The drain hops
+    // through real async work (claim, fs-backed working directory) before it
+    // dispatches the judge, so wait for the dispatch instead of assuming a
+    // fixed number of event-loop turns   a slow filesystem (Windows CI
+    // threadpool) legitimately needs more of them.
     const drain1 = engine.recoverPendingRankingGrades()
-    await flushMicrotasksLikeTurnPipeline()
-    expect(gradeTurnCalls).toHaveLength(1)
+    await vi.waitFor(() => expect(gradeTurnCalls).toHaveLength(1))
 
     // The follow-up lands mid-flight: the claimed row is pulled back to
     // pending and its claim token is cleared.
@@ -489,8 +481,7 @@ describe('ChatEngine model-ranking pipeline', () => {
     // conversation; only this result may apply.
     db.run('UPDATE model_ranking_snapshots SET due_at_ms = ?', Date.now() - 1_000)
     const drain2 = engine.recoverPendingRankingGrades()
-    await flushMicrotasksLikeTurnPipeline()
-    expect(gradeTurnCalls).toHaveLength(2)
+    await vi.waitFor(() => expect(gradeTurnCalls).toHaveLength(2))
     expect(gradeTurnCalls[1]?.options.followUp).toBe('late follow-up')
     releases[1]?.(8)
     await drain2

@@ -15,7 +15,10 @@ import type {
 
 const spawnMock = vi.hoisted(() => vi.fn())
 const execFileMock = vi.hoisted(() => vi.fn())
-vi.mock('child_process', () => ({ spawn: spawnMock, execFile: execFileMock }))
+vi.mock('child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof import('child_process')>()
+  return { ...original, spawn: spawnMock, execFile: execFileMock }
+})
 // Default: resolve the pre-flight `claude auth status` probe as authenticated so
 // existing sendPrompt tests exercise the real turn path unchanged.
 execFileMock.mockImplementation((_cmd: string, _args: string[], _opts: unknown, callback) =>

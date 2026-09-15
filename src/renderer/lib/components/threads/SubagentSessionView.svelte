@@ -20,6 +20,12 @@
   let messages: AgentMessage[] = $state([])
   let loading = $state(false)
   let loadError = $state('')
+  // Set as soon as this child session streams an event of its own. A harness
+  // that streams the child transcript (pi) needs no polling: the events build
+  // the transcript live, the driver replays everything already produced when
+  // the tab opens, and the view keeps the streamed transcript when the run
+  // settles. A harness that reports nothing child-scoped keeps the poll.
+  let liveStreamed = $state(false)
   let liveStatus: AgentSessionStatus | null = $state(null)
   let actionError = $state('')
   let retrying = $state(false)
@@ -27,8 +33,13 @@
   let recoveryNotice: { message: string; recoveredAt: number } | null = $state(null)
   let scrollElement: HTMLDivElement | null = $state(null)
   let userScrolledAway = $state(false)
+  // Non-reactive run-state marker: when the worker settles after having been
+  // busy, one fresh transcript load covers the gap between the last poll and
+  // pi's final flush. Kept plain so tracking it never re-triggers effects.
+  let workerWasBusy = false
 
   const SCROLL_AT_BOTTOM_THRESHOLD = 60
+  const TRANSCRIPT_POLL_INTERVAL_MS = 3_000
 
   function isAtBottom(el: HTMLDivElement): boolean {
     return el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_AT_BOTTOM_THRESHOLD
@@ -105,10 +116,12 @@
   // it when the loaded transcript carries no assistant text to cover it and
   // the session is no longer streaming.
   const transcriptHasAssistantText = $derived(
-    [...messages].reverse().some(
-      (message) =>
-        message.role === 'assistant' && textParts(message).some((part) => part.text.trim())
-    )
+    [...messages]
+      .reverse()
+      .some(
+        (message) =>
+          message.role === 'assistant' && textParts(message).some((part) => part.text.trim())
+      )
   )
   const showCapturedOutput = $derived(
     finalOutput.length > 0 &&
@@ -124,6 +137,7 @@
       if (!event || !sessionId || !('sessionId' in event) || event.sessionId !== sessionId) {
         return
       }
+      liveStreamed = true
       handleEvent(event)
     })
     return unsubscribe
@@ -166,10 +180,40 @@
     })
   })
 
+  // pi flushes a sub-agent's native transcript only after its first assistant
+  // message completes, so an early load legitimately returns nothing (the
+  // engine reports an empty result while the worker is still starting). Poll
+  // while the worker is busy instead of surfacing a load error, and reload
+  // once more when the run settles so the final transcript is picked up even
+  // if the last poll raced the terminal flush. A child that streams its own
+  // events needs neither: the stream is the transcript, so polling stops the
+  // moment the first child event arrives.
+  $effect(() => {
+    if (!sessionId) return
+    if (busy && !liveStreamed) {
+      workerWasBusy = true
+      const poll = setInterval(() => {
+        if (!loading) void loadMessages()
+      }, TRANSCRIPT_POLL_INTERVAL_MS)
+      return () => clearInterval(poll)
+    }
+    if (busy) {
+      workerWasBusy = true
+      return
+    }
+    if (workerWasBusy) {
+      workerWasBusy = false
+      // A streamed transcript already holds the worker's final messages; only
+      // a polled (or not yet streamed) one needs the settle reconcile.
+      if (!liveStreamed) void loadMessages()
+    }
+  })
+
   async function loadMessages(): Promise<void> {
     if (!sessionId) return
     loading = true
     loadError = ''
+    const mergeWithStream = liveStreamed
     let timeout: ReturnType<typeof setTimeout> | undefined
     try {
       const loadedMessages = await Promise.race([
@@ -181,7 +225,10 @@
           )
         })
       ])
-      messages = loadedMessages
+      // A load that raced the live stream must not roll the transcript back:
+      // the streamed transcript is the newer, richer half of the same mapper
+      // output, so merge by message id with the live copy winning.
+      messages = mergeWithStream ? mergeTranscript(loadedMessages, messages) : loadedMessages
       const lastAssistant = [...loadedMessages]
         .reverse()
         .find((message) => message.role === 'assistant')
@@ -204,6 +251,18 @@
       if (timeout) clearTimeout(timeout)
       loading = false
     }
+  }
+
+  /** Keep the live transcript as the newer half of a raced load. */
+  function mergeTranscript(loaded: AgentMessage[], streamed: AgentMessage[]): AgentMessage[] {
+    if (streamed.length === 0) return loaded
+    const merged = loaded.map(
+      (message) => streamed.find((candidate) => candidate.id === message.id) ?? message
+    )
+    for (const message of streamed) {
+      if (!loaded.some((candidate) => candidate.id === message.id)) merged.push(message)
+    }
+    return merged.sort((left, right) => left.createdAt - right.createdAt)
   }
 
   function handleEvent(event: AgentEvent): void {
@@ -462,7 +521,9 @@
           <CheckCircle2 size={14} class="mt-0.5 shrink-0 text-success" />
           <div class="min-w-0 flex-1">
             <p class="text-xs font-semibold text-foreground">Sub-agent connection recovered</p>
-            <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">{recoveryNotice.message}</p>
+            <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">
+              {recoveryNotice.message}
+            </p>
             <p class="mt-1 text-[0.625rem] text-dimmed">
               {formatTime(recoveryNotice.recoveredAt)}
             </p>
@@ -486,12 +547,12 @@
         </div>
       {/if}
 
-      {#if loading && messages.length === 0}
+      {#if (loading || busy) && messages.length === 0 && !liveStreamed}
         <div class="flex items-center justify-center gap-2 py-8 text-xs text-muted">
           <Loader2 size={13} class="animate-spin text-info" />
           Loading sub-agent session…
         </div>
-      {:else if loadError}
+      {:else if loadError && !busy && !liveStreamed}
         <div class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5">
           <p class="text-xs font-medium text-danger">Could not load the sub-agent session</p>
           <p class="mt-1 text-[0.6875rem] text-muted">{loadError}</p>
@@ -513,7 +574,9 @@
                 <MarkdownView text={part.text} />
               {/each}
             </div>
-            <p class="mt-1 text-right text-[0.5625rem] text-dimmed">{formatTime(message.createdAt)}</p>
+            <p class="mt-1 text-right text-[0.5625rem] text-dimmed">
+              {formatTime(message.createdAt)}
+            </p>
           </div>
         {:else}
           {@const traceParts = workingParts(message)}
@@ -560,7 +623,9 @@
             No further output was recorded for this sub-agent.
           </p>
         {:else}
-          <p class="text-[0.625rem] text-dimmed">Sub-agent output will appear here as it is produced.</p>
+          <p class="text-[0.625rem] text-dimmed">
+            Sub-agent output will appear here as it is produced.
+          </p>
         {/if}
       {/if}
 

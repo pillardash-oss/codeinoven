@@ -58,7 +58,7 @@ import { LlamaRuntimeService } from './llama-runtime-service'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
 import { SpeechCleanupService } from './speech-cleanup-service'
-import { downloadFileResumable } from './resumable-download'
+import { downloadFileResumable } from '../util/resumable-download'
 import { SpeechLearningService } from './speech-learning-service'
 import { normalizeSpeechMarkdown } from '../../lib/speech/tts-normalizer'
 import { TtsPlaybackService } from './tts-playback-service'
@@ -1842,14 +1842,14 @@ export class SpeechService {
     signal: AbortSignal,
     onProgress?: (receivedSoFar: number) => void
   ): Promise<number> {
-    return downloadFileResumable(
+    return downloadFileResumable({
       url,
       destination,
       expectedBytes,
-      expectedSha256,
+      checksum: { algorithm: 'sha256', encoding: 'hex', digest: expectedSha256 },
       signal,
       onProgress
-    )
+    })
   }
 
   private requireSelectableArtifact(
