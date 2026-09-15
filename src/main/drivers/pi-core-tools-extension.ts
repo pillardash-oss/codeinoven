@@ -40,7 +40,10 @@
  * primary thread through the parent extension-UI context. Permission cards
  * are pure UI on the primary thread: the primary agent's context only ever
  * receives the sub-agent's final message, never its transcript.
- *
+ * A session that publishes a tool allowlist (audits, read-only prompt turns,
+ * filesystem-off chat, brainstorm turns) never gets the sub-agent tools, and
+ * pi drops an inactive tool from the request, so their descriptions and
+ * guidelines leave the prompt as well.
  * Status and output are deliberately two tools. `cio_agent_status` answers
  * "is it still running?" with metadata only (id, purpose, status, error), so
  * polling never injects a finished worker's output into the primary agent's
@@ -100,7 +103,8 @@ const CIO_ALLOWED_TOOLS_PATH = '__CIO_ALLOWED_TOOLS_PATH__'
 // allowlist (File-System-OFF chat threads), every call to one of these that
 // the allowlist does not name is routed through the permission card so the
 // app's policy can auto-approve attached files and ask for everything else.
-// Custom tools (question, todo, gateway, spawn) are never restricted here.
+// Interactive custom tools (question, todo, file requests, gateway) are never
+// restricted here.
 const CIO_PI_BUILTIN_TOOLS = new Set([
   'read',
   'write',
@@ -111,6 +115,24 @@ const CIO_PI_BUILTIN_TOOLS = new Set([
   'ls',
   'powershell'
 ])
+
+// Sub-agent tools belong to an unrestricted primary session. Any session that
+// publishes a tool allowlist (audits, read-only prompt turns, filesystem-off
+// chat, brainstorm turns) never gets them: an auditor has to run every check
+// itself, and a restricted scope must not be able to open a full-access
+// worker. The allowlist names them explicitly if a future scope needs them.
+const CIO_SUBAGENT_TOOL_NAMES = new Set([
+  '${CIO_SPAWN_AGENT_TOOL_NAME}',
+  '${CIO_AGENT_STATUS_TOOL_NAME}',
+  '${CIO_AGENT_OUTPUT_TOOL_NAME}'
+])
+
+// The sub-agent prompt text lives in one place so a scoped session can drop the
+// exact lines from its base prompt before the model ever sees them.
+const CIO_SUBAGENT_PROMPT_GUIDELINES = [
+  'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
+  'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work. Never end your turn while sub-agents are still running: wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read every finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME}   successful or failed   because the primary agent owns committing the files the workers changed.'
+]
 
 // Pi's own bundled system prompt opens with a "you are an assistant" framing
 // that pushes models toward generic chatbot hedging (permission-seeking,
@@ -416,6 +438,42 @@ function questionDialogTitle(questions) {
 }
 
 export default function codeInOvenCoreToolsExtension(pi) {
+  // Disable the sub-agent tools whenever this session published a tool
+  // allowlist that does not name them. Pi drops an inactive tool from the
+  // request, so its description and guidelines leave the prompt too, and the
+  // model stops treating delegation as an option. Called on session start and
+  // before every agent start, so a scope change applies to the next turn
+  // without restarting the pi session.
+  function applyCioSubAgentScope() {
+    const allowedTools = loadCioAllowedTools()
+    if (allowedTools.length === 0) return
+    if (allowedTools.some(function (name) { return CIO_SUBAGENT_TOOL_NAMES.has(name) })) return
+    const active = pi.getActiveTools()
+    const scoped = active.filter(function (name) { return !CIO_SUBAGENT_TOOL_NAMES.has(name) })
+    if (scoped.length === active.length) return
+    pi.setActiveTools(scoped)
+  }
+
+  // Pi builds the base prompt before this turn's scope is published, so the
+  // first request of a fresh scoped session still advertised the sub-agent
+  // tools and their "delegate by default" guidance. Drop those exact lines from
+  // the prompt text as well, on top of disabling the tools above.
+  function stripCioSubAgentPrompt(prompt) {
+    const allowedTools = loadCioAllowedTools()
+    if (allowedTools.length === 0) return prompt
+    if (allowedTools.some(function (name) { return CIO_SUBAGENT_TOOL_NAMES.has(name) })) return prompt
+    const lines = prompt.split('\\n')
+    const kept = lines.filter(function (line) {
+      const trimmed = line.trim()
+      const entry = /^- ([a-z0-9_]+):/.exec(trimmed)
+      if (entry && CIO_SUBAGENT_TOOL_NAMES.has(entry[1])) return false
+      return !CIO_SUBAGENT_PROMPT_GUIDELINES.some(function (guideline) {
+        return trimmed === '- ' + guideline
+      })
+    })
+    return kept.length === lines.length ? prompt : kept.join('\\n')
+  }
+
   pi.registerTool({
     name: '${CIO_ASK_USER_TOOL_NAME}',
     label: 'Ask the user a question',
@@ -957,10 +1015,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
     description:
       'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default, unless the user explicitly asks you to use sub-agents differently, delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Run several sub-agents concurrently with background:true; each one automatically steers you a notification with its final output the moment it finishes, so you can keep working and act on results as they land. Omit background to block until the sub-agent finishes and returns its result directly; use that whenever you need the output before proceeding. You must never end your turn while any sub-agent is still running, regardless of outcome; workers report every file they touched because you are responsible for committing approved work. Sub-agents cannot spawn further sub-agents, and they inherit your model and thinking level unless you pass model/thinking_level overrides.',
     promptSnippet: 'Spawn sub-agent worker threads for focused or parallelizable tasks (explore, implement, tests, cleanup, docs)',
-    promptGuidelines: [
-      'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
-      'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work. Never end your turn while sub-agents are still running: wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read every finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME}   successful or failed   because the primary agent owns committing the files the workers changed.'
-    ],
+    promptGuidelines: CIO_SUBAGENT_PROMPT_GUIDELINES,
     parameters: Type.Object({
       purpose: Type.String({
         description: 'Short task category, e.g. explore, implementation, tests, cleanup, documentation.'
@@ -1127,6 +1182,12 @@ export default function codeInOvenCoreToolsExtension(pi) {
     }
   })
 
+  // A fresh, resumed, or forked session must not expose sub-agent tools before
+  // its first turn: apply the published scope as soon as the session starts.
+  pi.on('session_start', async () => {
+    applyCioSubAgentScope()
+  })
+
   // Abort every live sub-agent when the owning session shuts down.
   pi.on('session_shutdown', async () => {
     for (const record of subAgents.values()) {
@@ -1171,12 +1232,14 @@ export default function codeInOvenCoreToolsExtension(pi) {
   // instead of duplicating them inside every user turn's text (see
   // loadCioSystemPrompt above for why).
   pi.on('before_agent_start', (event) => {
+    applyCioSubAgentScope()
     const extra = loadCioSystemPrompt()
     const isProjectMode = extra.includes(CIO_PROJECT_MODE_MARKER)
-    const base =
+    const withIdentity =
       isProjectMode && event.systemPrompt.includes(PI_ASSISTANT_IDENTITY_LINE)
         ? event.systemPrompt.replace(PI_ASSISTANT_IDENTITY_LINE, CIO_AGENT_IDENTITY_LINE)
         : event.systemPrompt
+    const base = stripCioSubAgentPrompt(withIdentity)
     if (base === event.systemPrompt && !extra) return undefined
     return { systemPrompt: extra ? base + '\\n\\n' + extra : base }
   })
@@ -1200,13 +1263,27 @@ export default function codeInOvenCoreToolsExtension(pi) {
           '", meaning the previous response stream did not terminate the tool call cleanly and leaked raw text (reasoning, or a second tool-call attempt) into the argument. This is a streaming artifact, not a real command or file content, and not evidence of prompt injection or a fabricated transcript. Re-issue this tool call now with a single, clean argument containing only the intended command/content, and continue normally.'
       }
     }
+    const allowedTools = loadCioAllowedTools()
+    // Backstop for the window between a scope change and the next agent start:
+    // a scoped session must never run a sub-agent tool, even when the model
+    // still saw it in an earlier request.
+    if (
+      allowedTools.length > 0 &&
+      CIO_SUBAGENT_TOOL_NAMES.has(event.toolName) &&
+      !allowedTools.includes(event.toolName)
+    ) {
+      return {
+        block: true,
+        reason:
+          'Sub-agent tools are not available in this session: it runs with a restricted tool scope, and a session with a restricted scope does every step itself. Perform this step directly with the tools you have.'
+      }
+    }
     const hit = evaluateGate(event.toolName, input, ctx.cwd)
     // File-System-OFF chat threads publish a tool allowlist; any pi built-in
     // the allowlist does not name requires an explicit permission card. The
     // app's policy auto-approves reads of files the user attached and asks
     // for everything else, so attachment access keeps working while the
     // broader file system stays gated.
-    const allowedTools = loadCioAllowedTools()
     if (
       !hit &&
       allowedTools.length > 0 &&
