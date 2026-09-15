@@ -8,12 +8,31 @@ import { Logger } from '../system/logger'
 const DOWNLOAD_CHUNK_BYTES = 256 * 1024
 const DOWNLOAD_MAX_ATTEMPTS = 6
 
+/** Checksum algorithm + digest encoding a resumable download is verified against. */
+export interface DownloadChecksum {
+  algorithm: 'sha256' | 'sha512'
+  encoding: 'hex' | 'base64'
+  digest: string
+}
+
+export interface ResumableDownloadRequest {
+  url: string
+  destination: string
+  /** Expected total byte count. When `0` the size checks are skipped and only the checksum is trusted. */
+  expectedBytes: number
+  checksum: DownloadChecksum
+  signal: AbortSignal
+  /** Bytes already safely on disk from an earlier interrupted download (possibly a previous app launch). */
+  resumeFromBytes?: number
+  onProgress?: (receivedSoFar: number) => void
+}
+
 /**
  * A download failure that retrying cannot fix (HTTP status, oversize payload,
  * checksum mismatch). Everything else   dropped connections, terminated
  * bodies, socket resets   is transient and worth resuming.
  */
-class PermanentDownloadError extends Error {}
+export class PermanentDownloadError extends Error {}
 
 /** Feed the first `byteCount` bytes of a partial download into a running hash. */
 async function hashPrefix(path: string, byteCount: number, hash: Hash): Promise<void> {
@@ -49,23 +68,17 @@ function backoffDelay(attempt: number): number {
  * byte offset and the checksum is verified over the complete file. Cancelling
  * the signal aborts immediately with a cancellation error.
  */
-export async function downloadFileResumable(
-  url: string,
-  destination: string,
-  expectedBytes: number,
-  expectedSha256: string,
-  signal: AbortSignal,
-  onProgress?: (receivedSoFar: number) => void
-): Promise<number> {
+export async function downloadFileResumable(request: ResumableDownloadRequest): Promise<number> {
+  const { url, destination, expectedBytes, checksum, signal, onProgress } = request
   // Survives failed attempts: the number of bytes safely on disk. A failed
   // attempt truncates the file to this count before the next one resumes.
-  const state = { received: 0 }
+  const state = { received: Math.max(0, request.resumeFromBytes ?? 0) }
   let lastCause: unknown = new Error('The download did not start.')
   for (let attempt = 1; attempt <= DOWNLOAD_MAX_ATTEMPTS; attempt += 1) {
     if (signal.aborted) throw new Error('Download cancelled.')
     // Streamed hash of the bytes already on disk so a resumed download can
     // still be checksum-verified as a whole at the end.
-    const hash = createHash('sha256')
+    const hash = createHash(checksum.algorithm)
     if (state.received > 0) await hashPrefix(destination, state.received, hash)
     try {
       const received = await downloadRange(
@@ -77,9 +90,11 @@ export async function downloadFileResumable(
         signal,
         onProgress
       )
-      const digest = hash.digest('hex')
-      if (digest !== expectedSha256)
-        throw new PermanentDownloadError('Downloaded model checksum does not match the catalog.')
+      const digest = hash.digest(checksum.encoding)
+      if (digest !== checksum.digest)
+        throw new PermanentDownloadError(
+          'The downloaded file does not match its expected checksum.'
+        )
       return received
     } catch (cause) {
       if (signal.aborted) throw new Error('Download cancelled.', { cause })
@@ -87,7 +102,7 @@ export async function downloadFileResumable(
       lastCause = cause
       if (attempt === DOWNLOAD_MAX_ATTEMPTS) break
       Logger.dev(
-        `Model download interrupted at ${state.received} bytes (attempt ${attempt}/${DOWNLOAD_MAX_ATTEMPTS}); resuming:`,
+        `Download interrupted at ${state.received} bytes (attempt ${attempt}/${DOWNLOAD_MAX_ATTEMPTS}); resuming:`,
         cause
       )
       await new Promise<void>((resolve, reject) => {
@@ -159,8 +174,8 @@ async function downloadRange(
       for (let offset = 0; offset < value.byteLength; offset += DOWNLOAD_CHUNK_BYTES) {
         const chunk = value.subarray(offset, offset + DOWNLOAD_CHUNK_BYTES)
         received += chunk.byteLength
-        if (received > expectedBytes) {
-          throw new PermanentDownloadError('Downloaded model exceeds its catalog byte count.')
+        if (expectedBytes > 0 && received > expectedBytes) {
+          throw new PermanentDownloadError('The downloaded file exceeds its expected byte count.')
         }
         hash.update(chunk)
         onProgress?.(received)
@@ -183,7 +198,7 @@ async function downloadRange(
     throw cause
   }
   state.received = received
-  if (received !== expectedBytes)
+  if (expectedBytes > 0 && received !== expectedBytes)
     throw new Error(`Downloaded ${received} bytes; expected ${expectedBytes}.`)
   return received
 }

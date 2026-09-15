@@ -4,16 +4,26 @@ import { Logger } from '../system/logger'
 import type { UpdaterStatus, UpdaterChangelog } from '../../lib/ipc-contract'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+import {
+  resolveUpdateArtifact,
+  resolveUpdaterCacheLocation,
+  seedUpdaterCache,
+  type UpdateArtifactInfo
+} from './updater-download'
 
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const DEFERRED_POLL_MS = 5_000
 const PENDING_INSTALL_FILE = 'updater/install-pending.json'
 /** GitHub releases API for the published feed (public repo, no auth needed). */
-const GITHUB_RELEASES_URL = 'https://api.github.com/repos/pillardash-oss/codeinoven/releases?per_page=40'
+const GITHUB_RELEASES_URL =
+  'https://api.github.com/repos/pillardash-oss/codeinoven/releases?per_page=40'
 /** Refetch window for the cached changelog; avoids hammering the API per visit. */
 const CHANGELOG_CACHE_MS = 15 * 60 * 1000
 /** Hard cap on the notes body sent over IPC and rendered. */
 const CHANGELOG_MAX_NOTES_CHARS = 40_000
+/** Release download base of the published feed (public repo, no auth needed). */
+const GITHUB_RELEASES_DOWNLOAD_URL =
+  'https://github.com/pillardash-oss/codeinoven/releases/download'
 const { autoUpdater } = electronUpdater
 
 /** Anything that can report how much interactive work would be interrupted by a restart. */
@@ -41,6 +51,10 @@ export class UpdaterService {
   /** True while a check initiated by this service is still resolving. */
   private checkInFlight = false
   private changelogCache: { changelog: UpdaterChangelog | null; fetchedAt: number } | null = null
+  /** Feed info of the newest available update, captured for the resumable seed. */
+  private pendingUpdateInfo: UpdateArtifactInfo | null = null
+  /** True while a download (seed or electron-updater) is in flight. */
+  private downloadInFlight = false
 
   constructor(storage: StorageEngine) {
     this.storage = storage
@@ -68,6 +82,10 @@ export class UpdaterService {
 
     autoUpdater.on('update-available', (info) => {
       Logger.dev('Updater: update available', info)
+      this.pendingUpdateInfo = {
+        version: info.version,
+        files: info.files
+      }
       this.updateState({
         state: 'available',
         availableVersion: info.version
@@ -77,6 +95,7 @@ export class UpdaterService {
 
     autoUpdater.on('update-not-available', () => {
       Logger.dev('Updater: no update available')
+      this.pendingUpdateInfo = null
       this.updateState({ state: 'idle' })
     })
 
@@ -274,15 +293,16 @@ export class UpdaterService {
       const nightlyPattern = /^v\d+\.\d+\.\d+-nightly[.-]\d+$/
       const entry = releases.find((release) =>
         nightlyChannel
-          ? release.prerelease === true && typeof release.tag_name === 'string' && nightlyPattern.test(release.tag_name)
+          ? release.prerelease === true &&
+            typeof release.tag_name === 'string' &&
+            nightlyPattern.test(release.tag_name)
           : release.prerelease === false
       )
       const changelog: UpdaterChangelog | null =
         entry && typeof entry.tag_name === 'string' && typeof entry.body === 'string'
           ? {
               tag: entry.tag_name,
-              publishedAt:
-                typeof entry.published_at === 'string' ? entry.published_at : '',
+              publishedAt: typeof entry.published_at === 'string' ? entry.published_at : '',
               notes: entry.body.slice(0, CHANGELOG_MAX_NOTES_CHARS)
             }
           : null
@@ -296,15 +316,79 @@ export class UpdaterService {
   }
 
   async downloadUpdate(): Promise<void> {
-    if (this._status.state !== 'available') return
+    if (this._status.state !== 'available' || this.downloadInFlight) return
+    this.downloadInFlight = true
+    void this.runDownload().finally(() => {
+      this.downloadInFlight = false
+    })
+  }
+
+  private async runDownload(): Promise<void> {
     try {
-      autoUpdater.downloadUpdate().catch((error: unknown) => {
-        Logger.error('Updater: download failed', error)
-        this.updateState({
-          state: 'error',
-          errorMessage: error instanceof Error ? error.message : 'Download failed'
-        })
+      await this.seedResumableDownload()
+      // electron-updater validates the seeded cache (sha512) and skips its own
+      // network download on a hit; on a cache miss it falls back to a normal
+      // (non-resumable) download, so this call is always the final word.
+      await this.downloadWithAutoUpdater()
+    } catch (error: unknown) {
+      Logger.error('Updater: download failed', error)
+      this.updateState({
+        state: 'error',
+        errorMessage: error instanceof Error ? error.message : 'Download failed'
       })
+    }
+  }
+
+  /**
+   * Resumably pre-download the available update into electron-updater's own
+   * pending cache so its next `downloadUpdate()` validates the cached file
+   * (sha512) and skips the network entirely. A dropped connection then resumes
+   * from the received byte offset instead of restarting from zero.
+   *
+   * Returns true when the cache is seeded, false when seeding could not be
+   * set up (no artifact resolved, no cache dir). The caller always finishes
+   * with `autoUpdater.downloadUpdate()`, which on a seeded cache validates it
+   * offline and otherwise falls back to its own download path. A failed
+   * transfer keeps the partial file on disk and throws, surfacing the error
+   * state: the next attempt continues from where it left.
+   */
+  private async seedResumableDownload(): Promise<boolean> {
+    const info = this.pendingUpdateInfo
+    if (info === null) return false
+    const artifact = resolveUpdateArtifact(
+      info,
+      process.platform,
+      process.arch,
+      GITHUB_RELEASES_DOWNLOAD_URL
+    )
+    const cacheLocation = artifact === null ? null : resolveUpdaterCacheLocation()
+    if (artifact === null || cacheLocation === null) {
+      Logger.dev('Updater: resumable seed not available, using electron-updater download')
+      return false
+    }
+    const seedProgress = (receivedBytes: number, totalBytes: number): void => {
+      if (totalBytes <= 0) return
+      const percent = Math.min(100, Math.round((receivedBytes / totalBytes) * 100))
+      if (percent !== this._status.downloadProgress) {
+        this.updateState({ state: 'downloading', downloadProgress: percent })
+      }
+    }
+    await seedUpdaterCache(
+      artifact,
+      cacheLocation.pendingDir,
+      new AbortController().signal,
+      seedProgress
+    )
+    Logger.dev(
+      'Updater: update pre-downloaded into the updater cache; validating with electron-updater'
+    )
+    return true
+  }
+
+  /** Plain electron-updater download (the previous, non-resumable behavior). */
+  private async downloadWithAutoUpdater(): Promise<void> {
+    try {
+      await autoUpdater.downloadUpdate()
     } catch (error: unknown) {
       Logger.error('Updater: download failed', error)
       this.updateState({
