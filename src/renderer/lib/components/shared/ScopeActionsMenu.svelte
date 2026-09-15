@@ -17,6 +17,7 @@
   import type { Component, Snippet } from 'svelte'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
   import { hasRepairableScopeIssue, scopeState } from '$lib/stores/scope.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import type { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
 
   interface Props {
@@ -51,6 +52,18 @@
   )
   /** Cached health of this scope; drives the repair item like the board's warning button. */
   const repairable = $derived(hasRepairableScopeIssue(scopeState.healthFor(bucket.id)))
+  /**
+   * Dock puts a scope into the scoped-threads sidebar. While that sidebar
+   * already shows this very scope, docking again only re-navigates (and drops
+   * the focused thread), so the item is offered only when it changes something.
+   * The scope board renders this same menu and stays fully dockable, since the
+   * sidebar is not the destination there.
+   */
+  const alreadyDocked = $derived(
+    scopeState.sidebarContext?.bucketId === bucket.id &&
+      (rendererRecovery.activeView === 'projects' ||
+        rendererRecovery.activeView === 'projects-scope')
+  )
 
   function closeMenu(): void {
     showMenu = false
@@ -65,14 +78,16 @@
   const items: Item[] = $derived(
     (() => {
       const list: Item[] = []
-      list.push({
-        label: 'Dock',
-        icon: PanelsLeftBottom,
-        run: () => {
-          closeMenu()
-          actions.dock(bucket)
-        }
-      })
+      if (!alreadyDocked) {
+        list.push({
+          label: 'Dock',
+          icon: PanelsLeftBottom,
+          run: () => {
+            closeMenu()
+            actions.dock(bucket)
+          }
+        })
+      }
       list.push({
         label: 'Edit',
         icon: Pencil,
