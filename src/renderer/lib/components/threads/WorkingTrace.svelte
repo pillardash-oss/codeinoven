@@ -1,18 +1,5 @@
 <script lang="ts">
-  import {
-    Archive,
-    Bot,
-    Brain,
-    CheckCircle2,
-    Clock,
-    Cog,
-    FileText,
-    Layers3,
-    Loader2,
-    RefreshCw,
-    XCircle,
-    Zap
-  } from '@lucide/svelte'
+  import { Archive, Bot, Brain, Cog, FileText, Loader2, RefreshCw, Zap } from '@lucide/svelte'
   import { onDestroy, tick } from 'svelte'
   import { DropdownMenu } from 'bits-ui'
   import ToolCard from './ToolCard.svelte'
@@ -24,10 +11,21 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import ActionSheet from '../ui/ActionSheet.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
-  import type { AgentPart, AgentToolStatus, ThinkingLevel } from '$shared/types'
+  import type { AgentPart, ThinkingLevel } from '$shared/types'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { latestWorkingTraceParts } from '$lib/working-trace-parts'
+  import { ElapsedTimer } from '$lib/elapsed.svelte'
+  import { formatDurationSeconds } from '$lib/format/duration'
+  import {
+    subagentIsRunning,
+    subagentModelLabel,
+    subagentStatusLabel,
+    subagentTaskDetail,
+    subagentTaskLabel
+  } from '$lib/subagent-presentation'
+  import SubagentModeBadge from './SubagentModeBadge.svelte'
+  import SubagentStatusIcon from './SubagentStatusIcon.svelte'
 
   interface Props {
     parts: AgentPart[]
@@ -100,7 +98,6 @@
   let wasLatest = $state(latest)
   let closeTimer: ReturnType<typeof setTimeout> | null = null
   let imageUrls = new FileBlobUrlManager()
-  let elapsed = $state(0)
   const visibleParts = $derived(latestWorkingTraceParts(parts))
   const TRACE_SCROLL_THRESHOLD = 32
   let traceScrollEl = $state<HTMLDivElement>()
@@ -177,35 +174,23 @@
   const liveActivity = $derived(busy && !rehydrated)
 
   // Live count of how long the agent has been working. Ticks every second
-  // while the trace is genuinely live; a restored trace snapshots once so the
-  // timer never keeps counting after the run it belonged to is over.
+  // while the trace is genuinely live; a restored trace pins one snapshot so
+  // the timer never keeps counting after the run it belonged to is over.
+  const agentClock = new ElapsedTimer()
   $effect(() => {
     if (!busy || !effectiveStartTime) {
-      elapsed = 0
+      agentClock.stop()
       return
     }
-    if (!liveActivity) {
-      if (elapsed === 0) {
-        elapsed = Math.max(0, Math.floor((Date.now() - effectiveStartTime) / 1000))
-      }
-      return
+    if (liveActivity) agentClock.start()
+    else {
+      agentClock.stop()
+      agentClock.snapshot()
     }
-    elapsed = Math.max(0, Math.floor((Date.now() - effectiveStartTime) / 1000))
-    const interval = setInterval(() => {
-      elapsed = Math.max(0, Math.floor((Date.now() - effectiveStartTime) / 1000))
-    }, 1000)
-    return () => clearInterval(interval)
+    return () => agentClock.stop()
   })
 
-  function formatDuration(seconds: number): string {
-    if (seconds < 60) return `${seconds}s`
-    const h = Math.floor(seconds / 3600)
-    const m = Math.floor((seconds % 3600) / 60)
-    if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`
-    const s = seconds % 60
-    return s > 0 ? `${m}m ${s}s` : `${m}m`
-  }
-
+  const elapsed = $derived(busy && effectiveStartTime ? agentClock.seconds(effectiveStartTime) : 0)
   // Convert file:// image URLs to blob: Object URLs so attached images render
   // reliably in the Electron renderer.
   $effect(() => {
@@ -312,39 +297,43 @@
     visibleParts.filter((part): part is SubagentPart => part.type === 'subagent')
   )
   const subagentCount = $derived(subagentParts.length)
-  const activeSubagentCount = $derived(
-    subagentParts.filter((part) => part.activity.status === 'running').length
+  const runningSubagents = $derived(
+    subagentParts.filter((part) => subagentIsRunning(part.activity))
   )
+  const activeSubagentCount = $derived(runningSubagents.length)
+  /** What the single running worker was asked to do, so the header badge can
+   *  name the task instead of only counting heads. */
+  const soleActiveTask = $derived(
+    runningSubagents.length === 1 ? subagentTaskLabel(runningSubagents[0].activity) : null
+  )
+  const subagentBadgeTitle = $derived(
+    soleActiveTask
+      ? `${soleActiveTask} is working - ${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} - open list`
+      : `Sub-agents spawned: ${subagentCount}, ${activeSubagentCount} running - open list`
+  )
+  const subagentBadgeLabel = $derived.by(() => {
+    if (soleActiveTask) return soleActiveTask
+    if (activeSubagentCount > 0) return `${activeSubagentCount} active · ${subagentCount} total`
+    return `${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'}`
+  })
   const hasCompaction = $derived(
     visibleParts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
   )
 
-  // Live clock for the sub-agent dropdown list   ticks only while any sub-agent is running.
-  let listNow = $state(0)
+  // One clock for the whole dropdown list: it ticks only while a worker is
+  // actually live, so a finished or restored list shows frozen durations.
+  const listClock = new ElapsedTimer()
   $effect(() => {
-    if (subagentParts.every((part) => part.activity.status !== 'running')) {
-      listNow = 0
-      return
+    if (activeSubagentCount > 0 && liveActivity) listClock.start()
+    else {
+      listClock.stop()
+      if (activeSubagentCount > 0) listClock.snapshot()
     }
-    listNow = Date.now()
-    const interval = setInterval(() => {
-      listNow = Date.now()
-    }, 1000)
-    return () => clearInterval(interval)
+    return () => listClock.stop()
   })
 
   function subagentElapsed(part: SubagentPart): number {
-    const start = part.activity.time?.start
-    if (!start) return 0
-    const end = part.activity.time?.end
-    return Math.max(0, Math.floor(((end ?? (listNow || Date.now())) - start) / 1000))
-  }
-
-  function subagentStatusLabel(status: AgentToolStatus): string {
-    if (status === 'running') return 'Working'
-    if (status === 'completed') return 'Completed'
-    if (status === 'error') return 'Failed'
-    return 'Starting'
+    return listClock.seconds(part.activity.time?.start, part.activity.time?.end)
   }
 
   // Touch devices get a bottom-sheet list instead of the hover-oriented
@@ -356,9 +345,7 @@
 
   function subagentSheetItems(): MenuItem[] {
     return subagentParts.map((part) => ({
-      label: `${part.activity.agent || 'Sub-agent'}   ${
-        part.activity.description || subagentStatusLabel(part.activity.status)
-      }`,
+      label: `${subagentTaskLabel(part.activity)} - ${subagentStatusLabel(part.activity.status)}`,
       icon: Bot,
       onClick: () => onOpenSubagent?.(part)
     }))
@@ -394,8 +381,8 @@
             <button
               type="button"
               class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-1 text-[0.5625rem] text-info transition-colors active:bg-info/20"
-              aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned   open list`}
-              title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned   open list`}
+              aria-label={subagentBadgeTitle}
+              title={subagentBadgeTitle}
               onclick={(e: MouseEvent) => {
                 e.preventDefault()
                 e.stopPropagation()
@@ -403,29 +390,21 @@
               }}
             >
               <Bot size={10} />
-              {#if activeSubagentCount > 0}
-                {activeSubagentCount} active · {subagentCount} total
-              {:else}
-                {subagentCount} {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
-              {/if}
+              {subagentBadgeLabel}
             </button>
           {:else}
             <DropdownMenu.Root>
               <DropdownMenu.Trigger
                 class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info transition-colors hover:bg-info/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-info/40"
-                aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned   open list`}
-                title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned   open list`}
+                aria-label={subagentBadgeTitle}
+                title={subagentBadgeTitle}
                 onclick={(e: MouseEvent) => {
                   e.preventDefault()
                   e.stopPropagation()
                 }}
               >
                 <Bot size={10} />
-                {#if activeSubagentCount > 0}
-                  {activeSubagentCount} active · {subagentCount} total
-                {:else}
-                  {subagentCount} {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
-                {/if}
+                {subagentBadgeLabel}
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content
@@ -433,7 +412,7 @@
                   align="end"
                   sideOffset={6}
                   collisionPadding={8}
-                  class="z-50 w-80 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+                  class="z-50 w-96 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
                 >
                   <div class="flex items-center gap-1.5 px-2.5 py-1.5">
                     <Bot size={12} class="shrink-0 text-info" />
@@ -450,48 +429,41 @@
                   <DropdownMenu.Separator class="mx-1 my-1 h-px bg-border" />
                   <div class="max-h-60 overflow-y-auto p-0.5">
                     {#each subagentParts as part (part.id)}
-                      {@const status = part.activity.status}
+                      {@const taskLabel = subagentTaskLabel(part.activity)}
+                      {@const taskDetail = subagentTaskDetail(part.activity)}
+                      {@const workerModel = subagentModelLabel(part.activity, true)}
                       <DropdownMenu.Item
                         class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                         onSelect={() => onOpenSubagent?.(part)}
                       >
-                        {#if status === 'running'}
-                          <Loader2 size={13} class="shrink-0 animate-spin text-info" />
-                        {:else if status === 'completed'}
-                          <CheckCircle2 size={13} class="shrink-0 text-success" />
-                        {:else if status === 'error'}
-                          <XCircle size={13} class="shrink-0 text-danger" />
+                        <SubagentStatusIcon status={part.activity.status} />
+                        <span
+                          class="max-w-32 shrink-0 truncate text-[0.6875rem] font-semibold text-foreground"
+                          title={taskLabel}
+                        >
+                          {taskLabel}
+                        </span>
+                        {#if taskDetail}
+                          <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted">
+                            {taskDetail}
+                          </span>
                         {:else}
-                          <Clock size={13} class="shrink-0 text-dimmed" />
+                          <span class="min-w-0 flex-1"></span>
                         {/if}
-                        <span class="shrink-0 text-[0.6875rem] font-semibold text-foreground">
-                          {part.activity.agent || 'Sub-agent'}
-                        </span>
-                        <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted">
-                          {part.activity.description}
-                        </span>
-                        {#if part.activity.background}
+                        <SubagentModeBadge background={part.activity.background} />
+                        {#if workerModel}
                           <span
-                            class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.5625rem] text-dimmed"
+                            class="max-w-24 shrink-0 truncate text-[0.625rem] text-dimmed"
+                            title={part.activity.modelId ?? workerModel}
                           >
-                            <Layers3 size={9} />
-                            Background
+                            {workerModel}
                           </span>
                         {/if}
                         {#if part.activity.time?.start}
                           <span class="shrink-0 tabular-nums text-[0.625rem] text-dimmed">
-                            {formatDuration(subagentElapsed(part))}
+                            {formatDurationSeconds(subagentElapsed(part))}
                           </span>
                         {/if}
-                        <span
-                          class="shrink-0 text-[0.625rem] {status === 'error'
-                            ? 'text-danger'
-                            : status === 'running'
-                              ? 'text-info'
-                              : 'text-dimmed'}"
-                        >
-                          {subagentStatusLabel(status)}
-                        </span>
                       </DropdownMenu.Item>
                     {/each}
                   </div>
@@ -613,7 +585,7 @@
               </span>
               {#if effectiveStartTime}
                 <span class="shrink-0 tabular-nums text-[0.625rem] text-info/80">
-                  · {formatDuration(elapsed)}
+                  · {formatDurationSeconds(elapsed)}
                 </span>
               {/if}
             </span>
@@ -623,7 +595,7 @@
               <span class="shrink-0 text-[0.625rem] text-info/80">Agent working…</span>
               {#if effectiveStartTime}
                 <span class="shrink-0 tabular-nums text-[0.625rem] text-info/80">
-                  · {formatDuration(elapsed)}
+                  · {formatDurationSeconds(elapsed)}
                 </span>
               {/if}
             </span>

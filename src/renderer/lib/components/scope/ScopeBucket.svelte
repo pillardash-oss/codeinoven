@@ -12,17 +12,23 @@
   import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
   import { pickColorForSeed } from '$lib/project-colors'
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
-  import { scopeState, STAGE_ORDER, type ThreadStage } from '$lib/stores/scope.svelte'
+  import {
+    scopeState,
+    STAGE_ORDER,
+    hasRepairableScopeIssue,
+    type ThreadStage
+  } from '$lib/stores/scope.svelte'
+  import type { ScopeActionsController } from './ScopeActionsController.svelte'
   import { type ScopeBucket, type Thread } from '$shared/types'
 
   interface Props {
     bucket: ScopeBucket
+    /** Scope-level actions (edit, pin, archive, worktree lifecycle, merge, delete). */
+    actions: ScopeActionsController
     fill?: boolean
     selectedThreadId: string | null
     onToggle: () => void
     onToggleSlice: (stage: ThreadStage) => void
-    onEditBucket: () => void
-    onDeleteBucket: () => void
     onMoveBucket: (draggedId: string, targetId: string, position: 'before' | 'after') => void
     onCreateThread: () => void
     onOpen: (thread: Thread) => void
@@ -37,27 +43,15 @@
       targetId: string,
       position: 'before' | 'after'
     ) => void
-    /** Lifecycle callbacks surfaced through the scope actions menu. */
-    onDock?: () => void
-    onTogglePinned?: () => void
-    onArchive?: () => void
-    onRestore?: () => void
-    onCreateWorktree?: () => void
-    onAdoptWorktree?: () => void
-    onRetrySetup?: () => void
-    onRepairWorktree?: () => void
-    onMerge?: () => void
-    onDetach?: () => void
   }
 
   let {
     bucket,
+    actions,
     fill = false,
     selectedThreadId,
     onToggle,
     onToggleSlice,
-    onEditBucket,
-    onDeleteBucket,
     onMoveBucket,
     onCreateThread,
     onOpen,
@@ -66,17 +60,7 @@
     onDelete,
     onFork,
     onMoveThread,
-    onReorderThread,
-    onDock,
-    onTogglePinned,
-    onArchive,
-    onRestore,
-    onCreateWorktree,
-    onAdoptWorktree,
-    onRetrySetup,
-    onRepairWorktree,
-    onMerge,
-    onDetach
+    onReorderThread
   }: Props = $props()
 
   let scopeDropPosition = $state<'before' | 'after' | null>(null)
@@ -93,21 +77,9 @@
     isArchived ? 'var(--color-border-strong)' : (bucket.color ?? pickColorForSeed(bucket.id))
   )
 
-  const REPAIRABLE_HEALTH_CATEGORIES = new Set([
-    'missing',
-    'unregistered',
-    'locked',
-    'prunable',
-    'branch-mismatch',
-    'path-mismatch'
-  ])
-
-  let healthKey = $derived(`${scopeState.activeProjectId ?? ''}:${bucket.id}`)
-  let health = $derived(scopeState.healthByTarget.get(healthKey))
+  let health = $derived(scopeState.healthFor(bucket.id))
   let unhealthy = $derived(health !== undefined && health.category !== 'healthy')
-  let repairable = $derived(
-    unhealthy && health !== undefined && REPAIRABLE_HEALTH_CATEGORIES.has(health.category)
-  )
+  let repairable = $derived(unhealthy && hasRepairableScopeIssue(health))
   let healthDetail = $derived(
     health === undefined ? '' : (health.detail ?? `Worktree is ${health.category}`)
   )
@@ -236,7 +208,7 @@
           : ''}"
         title="{healthDetail}{repairable ? ' Click to repair.' : ''}"
         onclick={() => {
-          if (repairable) onRepairWorktree?.()
+          if (repairable) void actions.repairWorktree(bucket)
         }}
       >
         <TriangleAlert size={13} />
@@ -252,22 +224,7 @@
       <Plus size={14} />
     </button>
 
-    <ScopeActionsMenu
-      {bucket}
-      onEdit={onEditBucket}
-      {onDock}
-      onDelete={onDeleteBucket}
-      {onTogglePinned}
-      {onArchive}
-      {onRestore}
-      {onCreateWorktree}
-      {onAdoptWorktree}
-      {onRetrySetup}
-      {onRepairWorktree}
-      hasRepairableIssue={repairable}
-      {onMerge}
-      {onDetach}
-    />
+    <ScopeActionsMenu {bucket} {actions} />
   </div>
 
   {#if !bucket.collapsed}

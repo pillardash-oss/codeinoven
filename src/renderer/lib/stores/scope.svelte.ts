@@ -22,6 +22,7 @@ import {
   type ScopeTarget,
   type ScopeWorktreeDefaults,
   type ScopeWorktreeHealth,
+  type ScopeWorktreeHealthCategory,
   type ScopeWorktreeProgress,
   type ScopeWorktreeSourceInfo,
   type Thread,
@@ -185,6 +186,22 @@ export function threadStage(thread: Thread, draftThreadId?: string | null): Thre
   return scopeSliceForStatus(thread.status)
 }
 
+/** Typed health categories a repair action can fix (mirrors main's repair guard). */
+const REPAIRABLE_HEALTH_CATEGORIES: readonly ScopeWorktreeHealthCategory[] = [
+  'missing',
+  'unregistered',
+  'locked',
+  'prunable',
+  'branch-mismatch',
+  'path-mismatch'
+]
+
+/** True while cached health reports a problem the user can repair. */
+export function hasRepairableScopeIssue(health: ScopeWorktreeHealth | undefined): boolean {
+  if (!health) return false
+  return REPAIRABLE_HEALTH_CATEGORIES.includes(health.category)
+}
+
 function orderedBuckets(board: ScopeBoard): ScopeBucket[] {
   return [...board.buckets].sort((a, b) => a.sortOrder - b.sortOrder)
 }
@@ -241,6 +258,9 @@ class ScopeState {
   pendingCreateBucketId: string | null = $state(null)
   /** Target-keyed health of managed worktrees, refreshed on demand. */
   healthByTarget: Map<string, ScopeWorktreeHealth> = $state(new SvelteMap())
+  /** Board signature of the last background health refresh, so views can ask
+   *  for a refresh from any reactive block without hammering the IPC channel. */
+  private healthSyncSignature = ''
   /** Transient worktree creation/setup progress. */
   worktreeProgress = $state<ScopeWorktreeProgress>({ stage: 'none' })
   private loadSequence = 0
@@ -960,6 +980,33 @@ class ScopeState {
       this.worktreeProgress = { stage: 'failed' }
       this.error = error instanceof Error ? error.message : 'The worktree could not be adopted.'
       throw error
+    }
+  }
+
+  /** Cached typed health of one scope (undefined until it has been refreshed). */
+  healthFor(bucketId: string, projectId?: string | null): ScopeWorktreeHealth | undefined {
+    const targetProjectId = projectId ?? this.activeProjectId
+    if (!targetProjectId) return undefined
+    return this.healthByTarget.get(`${targetProjectId}:${bucketId}`)
+  }
+
+  /**
+   * Refresh managed-worktree health for a board in the background. Deduped by
+   * board signature, so reactive callers (the scope board and the scoped-threads
+   * sidebar) can call it on every update while the health they render stays fresh.
+   */
+  syncBoardWorktreeHealth(
+    projectId: string | null | undefined,
+    buckets: readonly ScopeBucket[] | undefined
+  ): void {
+    if (!projectId || !buckets) return
+    const managed = buckets.filter((bucket) => bucket.root.kind === 'worktree')
+    if (managed.length === 0) return
+    const signature = `${projectId}:${managed.map((bucket) => bucket.id).join(',')}`
+    if (signature === this.healthSyncSignature) return
+    this.healthSyncSignature = signature
+    for (const bucket of managed) {
+      void this.worktreeHealth({ projectId, scopeBucketId: bucket.id }).catch(() => undefined)
     }
   }
 

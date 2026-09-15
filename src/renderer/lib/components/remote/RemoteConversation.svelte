@@ -50,6 +50,7 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import BottomSheet from '../ui/BottomSheet.svelte'
   import type { SubagentContextTab } from '$lib/stores/context-sidebar.svelte'
+  import { subagentTaskLabel } from '$lib/subagent-presentation'
   import type {
     AgentMessage,
     AgentPart,
@@ -1013,7 +1014,7 @@
     openSubagentTab = {
       id: part.id,
       kind: 'subagent',
-      title: part.activity.description || part.activity.agent || 'Subagent',
+      title: subagentTaskLabel(part.activity),
       projectId: thread.projectId,
       threadId: thread.id,
       sourcePartId: part.id,

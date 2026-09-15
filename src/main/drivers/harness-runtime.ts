@@ -70,10 +70,17 @@ export function isHarnessCommandAvailable(
 /**
  * Env overrides for spawning the bundled Pi runtime: `ELECTRON_RUN_AS_NODE`
  * makes Electron's own binary behave as a plain Node runtime, and `NODE_PATH`
- * points at the bundled `vendor/` directory so `require('jiti')` resolves  
- * electron-builder's extraResources copy drops nested `node_modules`
- * directories, so that dependency ships under a differently named folder and
- * needs NODE_PATH instead of Node's standard `node_modules` upward walk.
+ * points at the bundled `vendor/` directory for the launches that spawn a
+ * plain run-as-node child (the fallback used when `utility-bridge.cjs` is
+ * unavailable), where Node does honor it.
+ *
+ * `NODE_PATH` is deliberately NOT the mechanism that makes the bundled runtime
+ * work: the vendored libraries are rewritten to relative specifiers at build
+ * time (`scripts/pi-harness-bundle.ts`, guarded by
+ * `tests/main/harness/bundled-pi-harness.test.ts`). Electron's `utilityProcess`
+ * helpers (which run every bundled-harness invocation) ignore `NODE_PATH`
+ * because Node initializes its global lookup paths before the fork env is
+ * applied, so nothing here may depend on it resolving a package by name.
  */
 function bundledPiEnv(env: NodeJS.ProcessEnv, runtime: HarnessRuntime): NodeJS.ProcessEnv {
   const vendorDir = join(runtime.resolvedPath, '../../../vendor')

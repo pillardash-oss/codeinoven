@@ -75,6 +75,9 @@
 <svelte:window
   onkeydown={(e: KeyboardEvent) => {
     if (!open) return
+    // While the nested New Scope modal is up it owns Escape, so this modal
+    // keeps the typed query instead of being dismissed underneath it.
+    if (createModalOpen) return
     if (e.key === 'Escape') onClose()
   }}
 />
@@ -190,10 +193,15 @@
   </Portal>
 {/if}
 
-<ScopeCreateModal
-  open={createModalOpen}
-  {projectId}
-  initialName={query.trim()}
-  onCreated={(bucketId) => void selectCreatedScope(bucketId)}
-  onClose={() => (createModalOpen = false)}
-/>
+<!-- Mounted only while open so the typed query seeds the New Scope form on
+     every launch   a persistent instance would freeze `initialName` at its
+     first (empty) mount and force a retype. -->
+{#if createModalOpen}
+  <ScopeCreateModal
+    open={createModalOpen}
+    {projectId}
+    initialName={query.trim()}
+    onCreated={(bucketId) => void selectCreatedScope(bucketId)}
+    onClose={() => (createModalOpen = false)}
+  />
+{/if}

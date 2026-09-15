@@ -1307,9 +1307,11 @@ export default function codeInOvenCoreToolsExtension(pi) {
       if (spec.background) {
         return textResult({
           spawned: true,
-          agentId: result.record.agentId,
-          childSessionId: result.record.childSessionId,
-          status: result.record.status,
+          // The same structured payload the progress stream and the done
+          // notification carry, so the card shows the delegated task, model and
+          // thinking level from the moment the worker is spawned instead of an
+          // unlabeled placeholder until it finishes.
+          ...subAgentPayload(result.record),
           note: 'Sub-agent is running in the background. When it finishes you will receive a steer message (sub-agent done for task …) carrying its final output   keep working until then; ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true) polls status, and ${CIO_AGENT_OUTPUT_TOOL_NAME} (agent_ids) reads an output again at any time.'
         })
       }
