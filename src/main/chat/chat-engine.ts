@@ -6643,6 +6643,18 @@ export class ChatEngine {
         active: (existing?.active ?? false) || active
       })
     }
+    // A delegated worker keeps its project busy even when the thread that
+    // spawned it looks idle: the worker lives inside its parent harness
+    // process, so releasing that process would silently kill work in flight.
+    for (const [childSessionId, owner] of this.childSessionOwners) {
+      const status = this.sessionStatuses.get(childSessionId)?.state
+      const active = status === 'working' || status === 'waiting'
+      const existing = projects.get(owner.projectId)
+      projects.set(owner.projectId, {
+        projectPaths: new Set([...(existing?.projectPaths ?? []), owner.projectPath]),
+        active: (existing?.active ?? false) || active
+      })
+    }
 
     const now = Date.now()
     for (const [projectId, project] of projects) {
