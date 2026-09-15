@@ -41,6 +41,10 @@ export interface ConversationController {
   readonly kind: 'thread' | 'temporary-chat'
   readonly projectId: string
   readonly conversationId: string
+  /** Durable thread the conversation hangs off (temporary side chats only).
+   *  Capability discovery for a side chat resolves project scope against this
+   *  thread, because the side chat itself owns no Thread row. */
+  readonly parentThreadId?: string
   readonly settings: ThreadSettings
   /** Persist updated composer settings back to the conversation's store. */
   updateSettings(updated: ThreadSettings): void

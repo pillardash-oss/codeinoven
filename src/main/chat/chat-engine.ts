@@ -2473,8 +2473,10 @@ export class ChatEngine {
         force = false
       ) => this.listTools(projectId, harnessId, providerId, modelId, force)
     )
-    ipcMain.handle('agent:listContextCapabilities', (_, projectId: string, threadId: string) =>
-      this.listContextCapabilities(projectId, threadId)
+    ipcMain.handle(
+      'agent:listContextCapabilities',
+      (_, projectId: string, threadId: string, harnessId?: string) =>
+        this.listContextCapabilities(projectId, threadId, harnessId)
     )
     ipcMain.handle('agent:listArtifacts', (_, projectId: string, threadId: string) =>
       this.listArtifacts(projectId, threadId)
@@ -2866,8 +2868,10 @@ export class ChatEngine {
           nextQuestionIndex
         )
     )
-    ipcMain.handle('agent:listCommands', (_, projectId: string, threadId: string) =>
-      this.listCommands(projectId, threadId)
+    ipcMain.handle(
+      'agent:listCommands',
+      (_, projectId: string, threadId: string, harnessId?: string) =>
+        this.listCommands(projectId, threadId, harnessId)
     )
     ipcMain.handle(
       'agent:generateSpec',
@@ -4649,13 +4653,23 @@ export class ChatEngine {
     return { providerId: provider?.id, modelId: provider?.models[0]?.id }
   }
 
-  /** MCP servers and skills actually available to the thread's active harness. */
+  /**
+   * MCP servers and skills actually available to the thread's active harness.
+   *
+   * `harnessId` overrides the thread's persisted harness. Temporary side chats
+   * own no Thread row and pick their harness in the composer before their first
+   * turn, so their view supplies the parent thread for project scope and utility
+   * scoping together with the side chat's own harness.
+   */
   async listContextCapabilities(
     projectId: string,
-    threadId: string
+    threadId: string,
+    harnessId?: string
   ): Promise<AgentContextCapabilities> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    const harnessOverride =
+      harnessId === undefined ? undefined : validateBoundedString(harnessId, 'Harness ID', 1, 64)
     // A thread created optimistically may still be finalizing its DB row; wait
     // for persistence before querying it, mirroring ensureSession/sendMessage.
     await this.threadCreation?.awaitReady(threadId)
@@ -4664,13 +4678,13 @@ export class ChatEngine {
     }
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
-    const harnessId = thread.settings?.harnessId ?? DEFAULT_HARNESS
-    const driver = this.drivers.get(harnessId)
-    const harnessName = driver?.name ?? harnessId
+    const resolvedHarnessId = harnessOverride ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
+    const driver = this.drivers.get(resolvedHarnessId)
+    const harnessName = driver?.name ?? resolvedHarnessId
     const projectPath = await this.resolveProjectPath(projectId)
 
     const [native, utilities] = await Promise.all([
-      this.capabilityDiscovery.discover(projectPath, harnessId),
+      this.capabilityDiscovery.discover(projectPath, resolvedHarnessId),
       this.utilityRegistry.list()
     ])
 
@@ -4694,7 +4708,7 @@ export class ChatEngine {
     }
 
     return {
-      harnessId,
+      harnessId: resolvedHarnessId,
       harnessName,
       mcp: dedupeCapabilities(mcp),
       skill: dedupeCapabilities(skill)
@@ -11296,10 +11310,23 @@ export class ChatEngine {
     return entry
   }
 
-  /** List slash commands exposed by the thread's active harness. */
-  async listCommands(projectId: string, threadId: string): Promise<ScopedHarnessCommand[]> {
+  /**
+   * List slash commands exposed by the thread's active harness.
+   *
+   * `harnessId` overrides the thread's persisted harness. Temporary side chats
+   * own no Thread row and pick their harness in the composer before their first
+   * turn, so their view supplies the parent thread for project/scope resolution
+   * together with the side chat's own harness.
+   */
+  async listCommands(
+    projectId: string,
+    threadId: string,
+    harnessId?: string
+  ): Promise<ScopedHarnessCommand[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    const harnessOverride =
+      harnessId === undefined ? undefined : validateBoundedString(harnessId, 'Harness ID', 1, 64)
     // A thread created optimistically may still be finalizing its DB row; wait
     // for persistence before querying it, mirroring ensureSession/sendMessage.
     await this.threadCreation?.awaitReady(threadId)
@@ -11308,8 +11335,19 @@ export class ChatEngine {
     }
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
-    const driverId = thread.settings?.harnessId ?? DEFAULT_HARNESS
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    const driverId = harnessOverride ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
+    // An override can name a harness this install cannot run (the composer
+    // offers every known harness). Fail closed to an app-only menu instead of
+    // rejecting the whole query.
+    const scope = await this.resolve(projectId, driverId, threadId).catch((error: unknown) => {
+      Logger.info('Harness command resolution skipped', {
+        driverId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return null
+    })
+    if (!scope) return []
+    const { driver, projectPath } = scope
     if (!driver.capabilities?.commands) return []
 
     try {
