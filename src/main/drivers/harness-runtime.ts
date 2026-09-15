@@ -76,7 +76,8 @@ export function isHarnessCommandAvailable(
  *
  * `NODE_PATH` is deliberately NOT the mechanism that makes the bundled runtime
  * work: the vendored libraries are rewritten to relative specifiers at build
- * time (see `scripts/build-pi-harness.ts`). Electron's `utilityProcess`
+ * time (`scripts/pi-harness-bundle.ts`, guarded by
+ * `tests/main/harness/bundled-pi-harness.test.ts`). Electron's `utilityProcess`
  * helpers (which run every bundled-harness invocation) ignore `NODE_PATH`
  * because Node initializes its global lookup paths before the fork env is
  * applied, so nothing here may depend on it resolving a package by name.
