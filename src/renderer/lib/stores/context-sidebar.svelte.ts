@@ -8,6 +8,7 @@ import { temporaryChatUnread } from './temporary-chat-unread.svelte'
 import { gitState } from './git.svelte'
 import { APP_SLUG } from '$shared/brand'
 import type { AgentSubagentActivity, ThreadSettings } from '$shared/types'
+import { subagentTaskLabel } from '$lib/subagent-presentation'
 
 const TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
 const CONTEXT_SIDEBAR_MIN_WIDTH = 340
@@ -1434,7 +1435,7 @@ class ContextSidebarState {
     const next: SubagentContextTab = {
       id,
       kind: 'subagent',
-      title: activity.description || activity.agent || 'Sub-agent',
+      title: subagentTaskLabel(activity),
       projectId,
       threadId,
       sourcePartId: partId,
@@ -1472,7 +1473,7 @@ class ContextSidebarState {
     const current = context.tabs[index]
     if (current.kind !== 'subagent') return
     const nextId = `subagent:${projectId}:${threadId}:${activity.childSessionId ?? partId}`
-    const nextTitle = activity.agent || 'Sub-agent'
+    const nextTitle = subagentTaskLabel(activity)
     if (
       current.id === nextId &&
       current.title === nextTitle &&

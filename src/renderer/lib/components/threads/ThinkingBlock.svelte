@@ -3,6 +3,8 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import SmoothMarkdown from '../markdown/SmoothMarkdown.svelte'
   import type { AgentPart } from '$shared/types'
+  import { ElapsedTimer } from '$lib/elapsed.svelte'
+  import { formatDurationSeconds } from '$lib/format/duration'
 
   interface Props {
     part: Extract<AgentPart, { type: 'reasoning' }>
@@ -15,37 +17,27 @@
   let { part, active = false, live = false, onCiteFile }: Props = $props()
 
   let open = $state(false)
-  let elapsed = $state(0)
+  const clock = new ElapsedTimer()
 
   let start = $derived(part.time?.start)
   let end = $derived(part.time?.end)
 
   $effect(() => {
-    if (start && end) {
-      // Finished: the duration is a frozen snapshot of the reasoning itself.
-      elapsed = Math.floor((end - start) / 1000)
-    } else if (start && active && live) {
-      const interval = setInterval(() => {
-        elapsed = Math.floor((Date.now() - start) / 1000)
-      }, 1000)
-      return () => clearInterval(interval)
-    } else if (start && elapsed === 0) {
-      // Inactive without an end timestamp: snapshot once, never re-derive from
-      // the wall clock on later re-renders.
-      elapsed = Math.floor((Date.now() - start) / 1000)
+    if (start && active && live) clock.start()
+    else {
+      clock.stop()
+      // Finished, or inactive without an end timestamp: pin one snapshot so
+      // the reasoning duration never re-derives from the wall clock.
+      if (start && !end) clock.snapshot()
     }
+    return () => clock.stop()
   })
+
+  const elapsed = $derived(clock.seconds(start, end))
 
   $effect(() => {
     if (active) open = true
   })
-
-  function formatDuration(seconds: number): string {
-    if (seconds < 60) return `${seconds}s`
-    const m = Math.floor(seconds / 60)
-    const s = seconds % 60
-    return s > 0 ? `${m}m ${s}s` : `${m}m`
-  }
 </script>
 
 <details class="overflow-hidden rounded-lg border border-border/60 bg-elevated/30" bind:open>
@@ -55,7 +47,7 @@
     <Brain size={13} class="shrink-0 text-info/70" />
     <span class="shrink-0">Thinking</span>
     <span class="tabular-nums text-[0.625rem] text-dimmed">
-      {formatDuration(elapsed)}
+      {formatDurationSeconds(elapsed)}
     </span>
     {#if active}
       <span class="h-1.5 w-1.5 rounded-full bg-info animate-pulse"></span>
@@ -69,7 +61,12 @@
   <div class="border-t border-border/40 px-3 py-2">
     <div class="max-h-80 overflow-y-auto">
       {#if part.text.trim()}
-        <SmoothMarkdown text={part.text} streaming={active && live} class="text-xs text-muted" {onCiteFile} />
+        <SmoothMarkdown
+          text={part.text}
+          streaming={active && live}
+          class="text-xs text-muted"
+          {onCiteFile}
+        />
       {:else if !part.summary?.trim()}
         <p class="text-xs text-muted/70 italic">No thinking text was recorded for this step.</p>
       {/if}

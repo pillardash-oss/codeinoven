@@ -1,14 +1,31 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { AlertCircle, CheckCircle2, Clock, Loader2, X } from '@lucide/svelte'
+  import { CheckCircle2, Loader2, X } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import type { SubagentContextTab } from '$lib/stores/context-sidebar.svelte'
-  import type { AgentEvent, AgentMessage, AgentPart, AgentSessionStatus } from '$shared/types'
+  import type {
+    AgentEvent,
+    AgentMessage,
+    AgentPart,
+    AgentSessionStatus,
+    AgentToolStatus
+  } from '$shared/types'
   import MarkdownView from '../markdown/MarkdownView.svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
+  import SubagentModeBadge from './SubagentModeBadge.svelte'
+  import SubagentStatusIcon from './SubagentStatusIcon.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
   import { mergeStreamedPart } from '$lib/agent-part-merge'
+  import { ElapsedTimer } from '$lib/elapsed.svelte'
+  import { formatDurationSeconds } from '$lib/format/duration'
+  import {
+    SUBAGENT_STATUS_TONE,
+    subagentStatusLabel,
+    subagentTaskDetail,
+    subagentTaskLabel
+  } from '$lib/subagent-presentation'
 
   interface Props {
     tab: SubagentContextTab
@@ -76,16 +93,49 @@
     return tab.activity.status
   })
   const busy = $derived(effectiveStatus === 'running')
+  const taskLabel = $derived(subagentTaskLabel(tab.activity))
+  const taskDetail = $derived(subagentTaskDetail(tab.activity))
+  /** Lifecycle view for the header chip: 'waiting' is a paused provider
+   *  connection, which the sub-agent status vocabulary has no state for. */
+  const headerStatus = $derived.by((): { icon: AgentToolStatus; label: string; tone: string } => {
+    if (effectiveStatus === 'waiting') {
+      return { icon: 'pending', label: 'Paused', tone: SUBAGENT_STATUS_TONE.pending }
+    }
+    return {
+      icon: effectiveStatus,
+      label: subagentStatusLabel(effectiveStatus),
+      tone: SUBAGENT_STATUS_TONE[effectiveStatus]
+    }
+  })
+  // The header answers "how long has this been going" without scrolling, so it
+  // owns the same live clock the trace rows use.
+  const clock = new ElapsedTimer()
+  $effect(() => {
+    if (busy) clock.start()
+    else {
+      clock.stop()
+      if (!tab.activity.time?.end) clock.snapshot()
+    }
+    return () => clock.stop()
+  })
+  const elapsed = $derived(clock.seconds(tab.activity.time?.start, tab.activity.time?.end))
+  const showDuration = $derived(
+    tab.activity.time?.start !== undefined &&
+      (busy || tab.activity.time?.end !== undefined || elapsed > 0)
+  )
   let providers = $derived(providerCatalog.cached(tab.projectId) ?? providerCatalog.allCached())
   let modelLabel = $derived.by((): string | null => {
     const modelId = tab.activity.modelId
     if (!modelId) return null
-    const model = providers
-      .flatMap((p) => p.models)
-      .find(
+    const models = providers.flatMap((p) => p.models)
+    const model =
+      models.find(
         (m) =>
           m.id === modelId && (!tab.activity.providerId || m.providerId === tab.activity.providerId)
-      )
+      ) ??
+      // Harnesses that report `provider/model` (pi) still resolve to the
+      // catalog's display name.
+      models.find((m) => modelId.endsWith(`/${m.id}`))
     return model?.name ?? modelId
   })
   let providerName = $derived(
@@ -437,51 +487,43 @@
 
 <div class="flex h-full min-h-0 flex-col">
   <header class="shrink-0 border-b border-border px-4 py-3">
-    <div class="flex items-start gap-2.5">
-      <div class="min-w-0 flex-1">
-        <div class="flex items-center gap-2">
-          <h2 class="truncate text-xs font-semibold text-foreground">
-            {tab.activity.agent || 'Sub-agent'}
-          </h2>
-          <span
-            class="flex shrink-0 items-center gap-1 text-[0.625rem] {effectiveStatus === 'error'
-              ? 'text-danger'
-              : effectiveStatus === 'completed'
-                ? 'text-success'
-                : 'text-info'}"
-          >
-            {#if effectiveStatus === 'running'}
-              <Loader2 size={10} class="animate-spin" />
-              Working
-            {:else if effectiveStatus === 'waiting'}
-              <Clock size={10} />
-              Paused
-            {:else if effectiveStatus === 'completed'}
-              <CheckCircle2 size={10} />
-              Completed
-            {:else if effectiveStatus === 'error'}
-              <AlertCircle size={10} />
-              Failed
-            {:else}
-              <Clock size={10} />
-              Starting
-            {/if}
-          </span>
-        </div>
-        <div class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-xs text-dimmed">
-          {#if modelLabel}
-            <span>
-              {providerName ? `${providerName} · ${modelLabel}` : modelLabel}
-            </span>
-          {/if}
-          {#if tab.activity.providerTaskId && tab.activity.providerTaskId !== sessionId}
-            <span title={tab.activity.providerTaskId}>
-              task {tab.activity.providerTaskId}
-            </span>
-          {/if}
-        </div>
-      </div>
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <h2 class="min-w-0 truncate text-xs font-semibold text-foreground">{taskLabel}</h2>
+      <span
+        class="flex shrink-0 items-center gap-1 text-[0.625rem] {headerStatus.tone}"
+        aria-live="polite"
+      >
+        <SubagentStatusIcon status={headerStatus.icon} size={11} />
+        {headerStatus.label}
+      </span>
+      {#if showDuration}
+        <span
+          class="ml-auto shrink-0 tabular-nums text-[0.625rem] text-muted"
+          title={busy ? 'Elapsed time for this sub-agent' : 'Total time this sub-agent took'}
+        >
+          {formatDurationSeconds(elapsed)}
+        </span>
+      {/if}
     </div>
+    <div class="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[0.625rem] text-dimmed">
+      {#if modelLabel}
+        <span class="flex min-w-0 items-center gap-1">
+          <VendorIcon name={providerName ?? modelLabel} id={tab.activity.providerId} size={11} />
+          <span class="truncate">
+            {providerName ? `${providerName} · ${modelLabel}` : modelLabel}
+          </span>
+        </span>
+      {/if}
+      <SubagentModeBadge background={tab.activity.background} variant="chip" />
+      {#if tab.activity.providerTaskId && tab.activity.providerTaskId !== sessionId}
+        <span class="truncate font-mono" title={tab.activity.providerTaskId}>
+          task {tab.activity.providerTaskId}
+        </span>
+      {/if}
+    </div>
+    {#if taskDetail}
+      <p class="mt-1 min-w-0 truncate text-[0.625rem] text-muted">{taskDetail}</p>
+    {/if}
   </header>
 
   <div
@@ -627,13 +669,6 @@
             Sub-agent output will appear here as it is produced.
           </p>
         {/if}
-      {/if}
-
-      {#if busy}
-        <div class="flex items-center gap-2 text-[0.625rem] text-info">
-          <Loader2 size={11} class="animate-spin" />
-          Sub-agent working…
-        </div>
       {/if}
     </div>
   </div>

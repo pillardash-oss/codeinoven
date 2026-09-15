@@ -68,11 +68,6 @@
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
   import FullscreenPanelDialog from '../workspace/FullscreenPanelDialog.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
-  import SubagentSessionView from '../threads/SubagentSessionView.svelte'
-  import SourcesPanel from '../threads/SourcesPanel.svelte'
-  import TemporaryChatView from '../chats/TemporaryChatView.svelte'
-  import NotificationPanel from '../notifications/NotificationPanel.svelte'
-  import MemoryPanel from '../memory/MemoryPanel.svelte'
   import Modal from '../ui/Modal.svelte'
   import StatusPill from '../ui/StatusPill.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -84,6 +79,7 @@
   import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
   import SidebarAccountControls from './SidebarAccountControls.svelte'
   import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
+  import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
@@ -152,7 +148,6 @@
     AppConfigPatch,
     Project,
     PromptAttachment,
-    ScopeBucket,
     Thread,
     ThreadSearchResult,
     AgentHarnessUsage
@@ -746,15 +741,12 @@
   let editProjectIconType = $state<string | undefined>()
   let editProjectPendingIcon = $state<{ path: string; dataUrl: string } | undefined>()
 
-  // Edit-scope modal
-  let editBucketTarget = $state<ScopeBucket | null>(null)
-  let editBucketName = $state('')
-  let editBucketColor = $state<string | undefined>()
-  let editBucketIconType = $state<string | undefined>()
-
-  // Delete-scope confirmation
-  let deleteBucketTarget = $state<ScopeBucket | null>(null)
-  let deleteThreads = $state(false)
+  // Scope actions (edit, pin, archive, worktree lifecycle, merge, delete) shared
+  // with the scope board, so the sidebar scope and the board offer the same set.
+  const scopeActions = new ScopeActionsController({
+    getProjectId: () => scopeState.sidebarContext?.projectId ?? scopeState.activeProjectId,
+    onNavigateToScopedThreads: () => navigate('projects-scope')
+  })
 
   async function openFiles(): Promise<void> {
     if (!selectedThread) return
@@ -2224,6 +2216,16 @@
     }
   })
 
+  // Keep managed-worktree health fresh for the scoped sidebar too, so the scope
+  // menu offers "Repair worktree" exactly when the board would (deduped in the store).
+  $effect(() => {
+    const projectId = scopeState.sidebarContext?.projectId
+    scopeState.syncBoardWorktreeHealth(
+      projectId,
+      projectId ? scopeState.boards.get(projectId)?.buckets : undefined
+    )
+  })
+
   // While a thread is selected, keep its row (and project) in focus in the
   // sidebar. Selection changes expand the owning folder and reset any scroll
   // suppression; list changes re-reveal the row if background activity pushed
@@ -2919,64 +2921,8 @@
 
   // ─── Scope bucket actions ──────────────────────────────────────────────────
 
-  function askEditBucket(bucket: ScopeBucket): void {
-    editBucketTarget = bucket
-    editBucketName = bucket.name
-    editBucketColor = bucket.color
-    editBucketIconType = bucket.iconType
-  }
-
-  async function confirmEditBucket(event: SubmitEvent): Promise<void> {
-    event.preventDefault()
-    if (!editBucketTarget || !editBucketName.trim()) return
-    try {
-      await scopeState.editBucket(editBucketTarget.id, {
-        name: editBucketName,
-        color: editBucketColor,
-        iconType: editBucketIconType
-      })
-      editBucketTarget = null
-    } catch {
-      // Silently fail   revert is handled by the store
-    }
-  }
-
-  async function confirmDeleteBucket(): Promise<void> {
-    const target = deleteBucketTarget
-    if (!target || target.id === DEFAULT_SCOPE_BUCKET_ID) return
-    try {
-      const affectedThreads = scopeState.currentProjectThreads.filter(
-        (thread) => scopeState.bucketForThread(thread) === target.id
-      )
-      if (deleteThreads) {
-        await Promise.all(
-          affectedThreads.map((thread) => invoke('thread:delete', thread.projectId, thread.id))
-        )
-        for (const thread of affectedThreads) {
-          allThreads = allThreads.filter((candidate) => candidate.id !== thread.id)
-          scopeState.removeThread(thread.id)
-          if (selectedThread?.id === thread.id) workspaceState.clearThread()
-        }
-      } else {
-        const reassigned = await Promise.all(
-          affectedThreads.map((thread) =>
-            invoke('thread:update', thread.projectId, thread.id, {
-              scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
-            })
-          )
-        )
-        for (const thread of reassigned) {
-          scopeState.updateThread(thread)
-          workspaceState.updateThread(thread)
-        }
-      }
-      await scopeState.removeBucket(target.id)
-      deleteBucketTarget = null
-      deleteThreads = false
-    } catch {
-      // Silently fail   revert is handled by the store
-    }
-  }
+  // Scope actions live in the shared controller (see `scopeActions` above) so the
+  // board and the scoped-threads sidebar run identical code paths.
 
   // ─── Drag-to-reorder ──────────────────────────────────────────────────────
 
@@ -3677,7 +3623,19 @@
                   <FolderTree size={12} class="text-warning" />
                 </span>
               {/if}
-              <ScopeBadge bucket={scopeBucket} size="xs" />
+              <!-- The scope itself is the menu trigger: click or right-click it to
+                   reach every scope action the scope board offers. -->
+              <ScopeActionsMenu
+                bucket={scopeBucket}
+                actions={scopeActions}
+                triggerClass="flex shrink-0 cursor-pointer items-center rounded-md transition-opacity hover:opacity-85"
+                triggerTitle="Scope actions"
+                menuClass="right-0 top-6"
+              >
+                {#snippet trigger()}
+                  <ScopeBadge bucket={scopeBucket} size="xs" />
+                {/snippet}
+              </ScopeActionsMenu>
             {/if}
             <ProjectSwitch
               activeProjectId={scopeProject?.id ?? null}
@@ -3687,6 +3645,22 @@
               <FolderKanban size={12} />
             </ProjectSwitch>
           </div>
+
+          {#if scopeActions.error}
+            <div
+              class="flex shrink-0 items-center gap-2 border-b bg-danger/10 px-3 py-1.5 text-xs text-danger"
+            >
+              <span class="min-w-0 flex-1">{scopeActions.error}</span>
+              <button
+                class="shrink-0 rounded-md px-1.5 py-0.5 transition-colors hover:bg-danger/10"
+                aria-label="Dismiss scope action error"
+                title="Dismiss"
+                onclick={() => scopeActions.dismissError()}
+              >
+                Dismiss
+              </button>
+            </div>
+          {/if}
 
           {#if otherBuckets.length > 0}
             <div class="shrink-0 border-b px-3 py-2">
@@ -3761,11 +3735,7 @@
                       <span class="truncate">{bucket.name}</span>
                     </button>
                     <div class="opacity-0 transition-opacity group-hover:opacity-100">
-                      <ScopeActionsMenu
-                        {bucket}
-                        onEdit={() => askEditBucket(bucket)}
-                        onDelete={() => (deleteBucketTarget = bucket)}
-                      />
+                      <ScopeActionsMenu {bucket} actions={scopeActions} />
                     </div>
                   </div>
                 {/each}
@@ -3847,6 +3817,13 @@
               </div>
             </div>
           {/key}
+
+          <!-- Scope action dialogs (edit, delete, worktree lifecycle, merge).
+               Loaded on demand so their heavy worktree forms stay out of the
+               main shell chunk. -->
+          {#await import('../scope/ScopeActionsModals.svelte') then { default: ScopeActionsModals }}
+            <ScopeActionsModals actions={scopeActions} />
+          {/await}
         </div>
       {:else if loading}
         <p class="px-2 py-4 text-sm text-dimmed">Loading...</p>
@@ -4667,11 +4644,13 @@
               {:else if activeContextTab.kind === 'debugger'}
                 <AgentDebugPanel />
               {:else if activeContextTab.kind === 'sources'}
-                <SourcesPanel
-                  sources={workspaceState.sources}
-                  projectId={activeContextTab.projectId}
-                  threadId={activeContextTab.threadId}
-                />
+                {#await import('../threads/SourcesPanel.svelte') then { default: SourcesPanel }}
+                  <SourcesPanel
+                    sources={workspaceState.sources}
+                    projectId={activeContextTab.projectId}
+                    threadId={activeContextTab.threadId}
+                  />
+                {/await}
               {:else if activeContextTab.kind === 'git'}
                 <!-- Rendered by the persistent, keep-mounted block above. -->
               {:else if activeContextTab.kind === 'cloud-deployment'}
@@ -4682,27 +4661,35 @@
                   />
                 {/await}
               {:else if activeContextTab.kind === 'temporary-chat'}
-                <TemporaryChatView
-                  tabId={activeContextTab.id}
-                  onContinueInThread={handleContinueInThread}
-                />
+                {#await import('../chats/TemporaryChatView.svelte') then { default: TemporaryChatView }}
+                  <TemporaryChatView
+                    tabId={activeContextTab.id}
+                    onContinueInThread={handleContinueInThread}
+                  />
+                {/await}
               {:else if activeContextTab.kind === 'notifications'}
-                <NotificationPanel />
+                {#await import('../notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
+                  <NotificationPanel />
+                {/await}
               {:else if activeContextTab.kind === 'coordinator'}
                 {#if coordinator}
                   {@render coordinator.panel()}
                 {/if}
               {:else if activeContextTab.kind === 'memory'}
-                <MemoryPanel
-                  variant="sidebar"
-                  projectId={activeContextTab.projectId}
-                  threadId={activeContextTab.threadId}
-                  bind:activeSection={activeContextTab.memorySection}
-                />
+                {#await import('../memory/MemoryPanel.svelte') then { default: MemoryPanel }}
+                  <MemoryPanel
+                    variant="sidebar"
+                    projectId={activeContextTab.projectId}
+                    threadId={activeContextTab.threadId}
+                    bind:activeSection={activeContextTab.memorySection}
+                  />
+                {/await}
               {:else if activeContextTab.kind === 'thread-note'}
                 <ThreadNotePanel tab={activeContextTab} />
               {:else}
-                <SubagentSessionView tab={activeContextTab} onOpenSubagent={openNestedSubagent} />
+                {#await import('../threads/SubagentSessionView.svelte') then { default: SubagentSessionView }}
+                  <SubagentSessionView tab={activeContextTab} onOpenSubagent={openNestedSubagent} />
+                {/await}
               {/if}
             {/key}
           {/if}
@@ -5228,120 +5215,6 @@
         title="Save project settings"
       >
         Save
-      </button>
-    {/if}
-  {/snippet}
-</Modal>
-
-<!-- Edit Scope Modal -->
-<Modal
-  open={editBucketTarget !== null}
-  title="Edit Scope"
-  onClose={() => (editBucketTarget = null)}
->
-  {#if editBucketTarget}
-    <form
-      id="edit-scope-form"
-      class="space-y-4"
-      onsubmit={(e: SubmitEvent) => void confirmEditBucket(e)}
-    >
-      <AppearancePicker
-        name={editBucketName}
-        color={editBucketColor}
-        iconType={editBucketIconType}
-        onColorChange={(color) => (editBucketColor = color)}
-        onIconTypeChange={(iconType) => (editBucketIconType = iconType)}
-        onReset={() => {
-          editBucketColor = editBucketTarget?.color
-          editBucketIconType = editBucketTarget?.iconType
-        }}
-      />
-
-      <div>
-        <label class="mb-1 block text-xs font-medium text-muted" for="edit-scope-name">
-          Scope Name
-        </label>
-        <input
-          id="edit-scope-name"
-          type="text"
-          class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
-          bind:value={editBucketName}
-        />
-      </div>
-    </form>
-  {/if}
-
-  {#snippet footer()}
-    {#if editBucketTarget}
-      <button
-        type="button"
-        class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-        title="Cancel"
-        onclick={() => (editBucketTarget = null)}
-      >
-        Cancel
-      </button>
-      <button
-        type="submit"
-        form="edit-scope-form"
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-        disabled={!editBucketName.trim()}
-        title="Save scope settings"
-      >
-        Save
-      </button>
-    {/if}
-  {/snippet}
-</Modal>
-
-<!-- Delete Scope Confirmation -->
-<Modal
-  open={deleteBucketTarget !== null}
-  title="Delete Scope"
-  onClose={() => (deleteBucketTarget = null)}
->
-  {#if deleteBucketTarget}
-    <p class="text-sm text-muted">
-      Are you sure you want to delete the scope <strong class="text-foreground"
-        >{deleteBucketTarget.name}</strong
-      >? {deleteThreads
-        ? 'All threads in this scope will be permanently deleted.'
-        : 'All threads in this scope will be moved back to the Default scope.'}
-    </p>
-
-    <div
-      class="mt-4 flex items-center justify-between rounded-lg border bg-elevated/50 px-3 py-2.5"
-    >
-      <div class="min-w-0">
-        <p class="text-sm font-medium text-foreground">Delete associated threads</p>
-        <p class="text-xs text-muted">Also permanently delete every thread in this scope.</p>
-      </div>
-      <Switch
-        checked={deleteThreads}
-        onchange={(checked) => (deleteThreads = checked)}
-        activeClass="bg-danger"
-        aria-label="Delete associated threads"
-      />
-    </div>
-  {/if}
-
-  {#snippet footer()}
-    {#if deleteBucketTarget}
-      <button
-        type="button"
-        class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-        title="Cancel"
-        onclick={() => (deleteBucketTarget = null)}
-      >
-        Cancel
-      </button>
-      <button
-        type="button"
-        class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90"
-        title="Delete scope"
-        onclick={() => void confirmDeleteBucket()}
-      >
-        Delete
       </button>
     {/if}
   {/snippet}

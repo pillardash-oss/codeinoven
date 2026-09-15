@@ -15,6 +15,8 @@
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { AgentPart } from '$shared/types'
+  import { ElapsedTimer } from '$lib/elapsed.svelte'
+  import { formatDurationSeconds } from '$lib/format/duration'
   import LongTextBlock from '../markdown/LongTextBlock.svelte'
   import InlineToolDiff from './InlineToolDiff.svelte'
   import {
@@ -46,7 +48,7 @@
 
   let open = $state(false)
   let userToggled = $state(false)
-  let elapsed = $state(0)
+  const clock = new ElapsedTimer()
   let checkpointDiffs = $state<ToolFileDiff[]>([])
   let loadedCheckpointKey = $state<string | null>(null)
 
@@ -96,21 +98,17 @@
   })
 
   $effect(() => {
-    if (start && end) {
-      // Completed: the duration is a frozen snapshot of the call itself.
-      elapsed = Math.floor((end - start) / 1000)
-    } else if (start && isRunning && live) {
-      const interval = setInterval(() => {
-        elapsed = Math.floor((Date.now() - start) / 1000)
-      }, 1000)
-      return () => clearInterval(interval)
-    } else if (start && elapsed === 0) {
-      // Terminal state without an end timestamp (e.g. an interrupted run):
-      // snapshot once, then never re-derive from the wall clock, or the card
-      // would keep counting while the agent moves on to other tools.
-      elapsed = Math.floor((Date.now() - start) / 1000)
+    if (start && isRunning && live) clock.start()
+    else {
+      clock.stop()
+      // Terminal, or a restored run with no end timestamp: pin one snapshot
+      // instead of letting the card keep counting on later re-renders.
+      if (start && !end) clock.snapshot()
     }
+    return () => clock.stop()
   })
+
+  const elapsed = $derived(clock.seconds(start, end))
 
   const statusMeta = $derived.by(() => {
     switch (part.state.status) {
@@ -153,13 +151,6 @@
     const value = typeof first[1] === 'string' ? first[1] : JSON.stringify(first[1])
     const preview = value.length > 80 ? `${value.slice(0, 80)}…` : value
     return `${first[0]}: ${preview}`
-  }
-
-  function formatDuration(seconds: number): string {
-    if (seconds < 60) return `${seconds}s`
-    const m = Math.floor(seconds / 60)
-    const s = seconds % 60
-    return s > 0 ? `${m}m ${s}s` : `${m}m`
   }
 
   /** Display-side threshold for giant tool strings. Mirrors the persistence
@@ -223,7 +214,7 @@
       {part.state.title ?? part.tool}
     </span>
     {#if start}
-      <span class="tabular-nums text-[0.625rem] text-dimmed">{formatDuration(elapsed)}</span>
+      <span class="tabular-nums text-[0.625rem] text-dimmed">{formatDurationSeconds(elapsed)}</span>
     {/if}
     {#if !open && inputPreview}
       <span class="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-dimmed"
