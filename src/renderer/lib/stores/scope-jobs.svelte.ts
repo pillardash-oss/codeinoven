@@ -12,8 +12,7 @@ import { subscribe } from '$lib/ipc.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { APP_SLUG } from '$shared/brand'
 import type {
-  ScopeEnvironmentMode,
-  ScopeSetupCommandSpec,
+  ScopeWorktreeCreateInput,
   ScopeWorktreeProgress,
   ScopeWorktreeProgressEvent
 } from '$shared/types'
@@ -88,14 +87,9 @@ export interface ScopeJob {
   finishedAt: number | null
 }
 
-export interface ScopeCreateJobInput {
-  title: string
+export interface ScopeCreateJobInput extends ScopeWorktreeCreateInput {
   /** Whether an isolated worktree is requested; shared-directory scopes skip setup entirely. */
   isolated: boolean
-  runSetup: boolean
-  environmentMode: ScopeEnvironmentMode
-  baseBranch?: string
-  setupCommands?: ScopeSetupCommandSpec[]
 }
 
 export interface ScopeCreateJobOptions {

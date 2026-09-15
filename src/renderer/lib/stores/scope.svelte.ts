@@ -10,15 +10,14 @@ import {
   type Project,
   type ScopeBoard,
   type ScopeBucket,
-  type ScopeEnvironmentMode,
   type ScopeLifecycleAction,
   type ScopeLifecyclePreflight,
   type ScopeMergeMode,
   type ScopeMergeOutcome,
   type ScopeMergePreflight,
-  type ScopeSetupCommandSpec,
   type ScopeSlice,
   type ScopeTarget,
+  type ScopeWorktreeCreateInput,
   type ScopeWorktreeDefaults,
   type ScopeWorktreeHealth,
   type ScopeWorktreeHealthCategory,
@@ -848,25 +847,27 @@ class ScopeState {
 
   // ─── Managed worktree lifecycle ─────────────────────────────────────────
 
-  /** Create an isolated managed worktree for an existing scope bucket. */
+  /** Create a managed worktree for an existing scope bucket. */
   async createWorktree(
     projectId: string,
     bucketId: string,
-    input: {
-      title: string
-      runSetup: boolean
-      environmentMode: ScopeEnvironmentMode
-      /** Source branch the worktree forks from; defaults to the current branch. */
-      baseBranch?: string
-      /** Setup commands executed for exactly this worktree. */
-      setupCommands?: ScopeSetupCommandSpec[]
-    }
+    input: ScopeWorktreeCreateInput
   ): Promise<ManagedWorktreeDescriptor | null> {
     try {
+      // Build the payload from the wire contract instead of forwarding the
+      // caller's object: main rejects unknown fields, and callers hold richer
+      // inputs (the worktree job carries an `isolated` flag the service has no
+      // field for).
       const descriptor = await invoke(
         'scope:worktree:create',
         { projectId, scopeBucketId: bucketId },
-        input
+        {
+          title: input.title,
+          runSetup: input.runSetup,
+          environmentMode: input.environmentMode,
+          ...(input.baseBranch === undefined ? {} : { baseBranch: input.baseBranch }),
+          ...(input.setupCommands === undefined ? {} : { setupCommands: input.setupCommands })
+        }
       )
       await this.reloadBoard(projectId)
       return descriptor
