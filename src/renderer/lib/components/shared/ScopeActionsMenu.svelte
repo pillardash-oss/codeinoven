@@ -70,10 +70,10 @@
    * A live harness session in this scope keeps its process in the directory the
    * scope points at right now. Creating or adopting a worktree moves that root,
    * which would leave the running session stranded in the old directory while
-   * every later turn resolves to the new one, so both options are withheld
+   * every later turn resolves to the new one, so both options stay disabled
    * until the scope's threads settle. `isConversationBusy` covers interactive
    * sessions only, so background work (Brainstorm report generation) never
-   * hides them.
+   * disables them.
    */
   const scopeHasLiveSession = $derived(
     scopeState.allScopeThreads.some(
@@ -85,6 +85,10 @@
     )
   )
 
+  /** Tooltip and ARIA text for the worktree items while a session owns this scope. */
+  const liveSessionReason =
+    'A thread in this scope is in session. Wait for it to finish before creating or adopting a worktree.'
+
   function closeMenu(): void {
     showMenu = false
   }
@@ -93,6 +97,8 @@
     label: string
     icon: Component
     run: () => void
+    /** When set, the item renders disabled and this text explains why. */
+    disabledReason?: string
   }
 
   const items: Item[] = $derived(
@@ -145,14 +151,15 @@
           })
         }
       }
-      if (!isManaged && bucket.id !== DEFAULT_SCOPE_BUCKET_ID && !scopeHasLiveSession) {
+      if (!isManaged && bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
         list.push({
           label: 'Create Git worktree',
           icon: GitBranch,
           run: () => {
             closeMenu()
             actions.askCreateWorktree(bucket)
-          }
+          },
+          ...(scopeHasLiveSession ? { disabledReason: liveSessionReason } : {})
         })
         list.push({
           label: 'Adopt Git worktree…',
@@ -160,7 +167,8 @@
           run: () => {
             closeMenu()
             actions.askAdoptWorktree(bucket)
-          }
+          },
+          ...(scopeHasLiveSession ? { disabledReason: liveSessionReason } : {})
         })
       }
       if (isManaged && repairable) {
@@ -248,9 +256,19 @@
       {#each items as item (item.label)}
         {@const Icon = item.icon}
         <button
-          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground hover:bg-elevated"
+          type="button"
+          class={[
+            'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem]',
+            item.disabledReason
+              ? 'cursor-not-allowed text-dimmed opacity-60'
+              : 'text-foreground hover:bg-elevated'
+          ]}
           role="menuitem"
-          onclick={item.run}
+          aria-disabled={Boolean(item.disabledReason)}
+          title={item.disabledReason}
+          onclick={() => {
+            if (!item.disabledReason) item.run()
+          }}
         >
           <Icon size={13} class="text-muted" />
           {item.label}
