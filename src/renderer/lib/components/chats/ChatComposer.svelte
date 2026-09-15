@@ -2498,17 +2498,19 @@
     <!-- Permission level selector -->
     {#if readOnlyMode}
       <span
-        class="flex items-center gap-1 rounded-lg bg-raised px-2 py-1.5 text-[0.6875rem] text-muted"
+        class="flex min-w-0 items-center gap-1 overflow-hidden rounded-lg bg-raised px-2 py-1.5 text-[0.6875rem] whitespace-nowrap text-muted"
         title="Temporary chats can inspect context but cannot modify files or run commands"
       >
-        <Shield size={12} />
-        <span class="composer-control-label">Read only</span>
+        <Shield size={12} class="shrink-0" />
+        <span class="composer-control-label min-w-0 truncate">Read only</span>
       </span>
     {:else if !hidePermissionSelector || resolved.fileSystemMode === true}
-      <div class="relative">
+      <!-- Shrinkable: the label ellipsizes instead of wrapping, and disappears
+           entirely at the narrow tier so only the shield icon remains. -->
+      <div class="relative min-w-0 shrink">
         <button
           type="button"
-          class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[0.6875rem] transition-colors hover:bg-elevated {resolved.permissionLevel ===
+          class="flex min-w-0 max-w-full items-center gap-1 overflow-hidden rounded-lg px-2 py-1.5 text-[0.6875rem] whitespace-nowrap transition-colors hover:bg-elevated {resolved.permissionLevel ===
           'full_access'
             ? 'font-bold text-warning'
             : 'text-muted hover:text-foreground'}"
@@ -2524,11 +2526,13 @@
           }}
         >
           {#if resolved.permissionLevel === 'full_access'}
-            <ShieldAlert size={12} strokeWidth={2.75} />
+            <ShieldAlert size={12} strokeWidth={2.75} class="shrink-0" />
           {:else}
-            <Shield size={12} />
+            <Shield size={12} class="shrink-0" />
           {/if}
-          <span class="composer-control-label">{permissionLabels[resolved.permissionLevel]}</span>
+          <span class="composer-control-label min-w-0 truncate"
+            >{permissionLabels[resolved.permissionLevel]}</span
+          >
         </button>
 
         {#if permissionMenuOpen}
@@ -2791,6 +2795,9 @@
     display: none;
   }
 
+  /* Control labels ellipsize as the composer tightens   they never wrap to a
+     second line. At the narrow tier they drop out entirely so only the icon is
+     left behind. */
   @container (max-width: 520px) {
     .composer-control-label {
       display: none;
