@@ -14,59 +14,30 @@
     RefreshCw,
     Wrench
   } from '@lucide/svelte'
+  import type { Component, Snippet } from 'svelte'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
-
-  export type ScopeMenuAction =
-    | 'dock'
-    | 'edit'
-    | 'pin'
-    | 'unpin'
-    | 'archive'
-    | 'restore'
-    | 'create-worktree'
-    | 'adopt-worktree'
-    | 'retry-setup'
-    | 'repair-worktree'
-    | 'merge'
-    | 'detach'
-    | 'delete'
+  import { hasRepairableScopeIssue, scopeState } from '$lib/stores/scope.svelte'
+  import type { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
 
   interface Props {
     bucket: ScopeBucket
-    onEdit: () => void
-    /** Dock this scope: switch to the scoped-threads view with it current.
-     *  Provided only on surfaces that can dock (the scope board). */
-    onDock?: () => void
-    onDelete: () => void
-    /** Provided only on surfaces where pinning is allowed (the scope view). */
-    onTogglePinned?: () => void
-    onArchive?: () => void
-    onRestore?: () => void
-    onCreateWorktree?: () => void
-    onAdoptWorktree?: () => void
-    onRetrySetup?: () => void
-    onRepairWorktree?: () => void
-    /** Cached health reports a repairable managed-worktree problem. */
-    hasRepairableIssue?: boolean
-    onMerge?: () => void
-    onDetach?: () => void
+    /** Owns every scope action this menu can trigger. */
+    actions: ScopeActionsController
+    /** Custom trigger content (e.g. the scope badge); defaults to an ellipsis icon. */
+    trigger?: Snippet
+    triggerClass?: string
+    triggerTitle?: string
+    /** Positions the menu panel relative to the trigger. */
+    menuClass?: string
   }
 
   let {
     bucket,
-    onEdit,
-    onDock,
-    onDelete,
-    onTogglePinned,
-    onArchive,
-    onRestore,
-    onCreateWorktree,
-    onAdoptWorktree,
-    onRetrySetup,
-    onRepairWorktree,
-    hasRepairableIssue = false,
-    onMerge,
-    onDetach
+    actions,
+    trigger,
+    triggerClass = 'flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground',
+    triggerTitle = 'Scope actions',
+    menuClass = 'right-0 top-8'
   }: Props = $props()
 
   let showMenu = $state(false)
@@ -78,6 +49,8 @@
       bucket.root.kind === 'worktree' &&
       (bucket.root.setup.state === 'failed' || bucket.root.setup.state === 'interrupted')
   )
+  /** Cached health of this scope; drives the repair item like the board's warning button. */
+  const repairable = $derived(hasRepairableScopeIssue(scopeState.healthFor(bucket.id)))
 
   function closeMenu(): void {
     showMenu = false
@@ -85,52 +58,54 @@
 
   interface Item {
     label: string
+    icon: Component
     run: () => void
   }
 
   const items: Item[] = $derived(
     (() => {
       const list: Item[] = []
-      if (onDock) {
-        list.push({
-          label: 'Dock',
-          run: () => {
-            closeMenu()
-            onDock()
-          }
-        })
-      }
       list.push({
-        label: 'Edit',
+        label: 'Dock',
+        icon: PanelsLeftBottom,
         run: () => {
           closeMenu()
-          onEdit()
+          actions.dock(bucket)
         }
       })
-      if (onTogglePinned && bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
+      list.push({
+        label: 'Edit',
+        icon: Pencil,
+        run: () => {
+          closeMenu()
+          actions.askEdit(bucket)
+        }
+      })
+      if (bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
         list.push({
           label: bucket.pinned ? 'Unpin scope' : 'Pin scope',
+          icon: bucket.pinned ? PinOff : Pin,
           run: () => {
             closeMenu()
-            onTogglePinned()
+            void actions.togglePinned(bucket)
           }
         })
-      }
-      if (bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
         if (isArchived) {
           list.push({
             label: 'Restore',
+            icon: ArchiveRestore,
             run: () => {
-              onRestore?.()
               closeMenu()
+              void actions.setArchived(bucket, false)
             }
           })
         } else {
           list.push({
             label: 'Archive',
+            icon: Archive,
             run: () => {
-              onArchive?.()
               closeMenu()
+              void actions.setArchived(bucket, true)
             }
           })
         }
@@ -138,59 +113,66 @@
       if (!isManaged && bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
         list.push({
           label: 'Create Git worktree',
+          icon: GitBranch,
           run: () => {
-            onCreateWorktree?.()
             closeMenu()
+            actions.askCreateWorktree(bucket)
           }
         })
         list.push({
           label: 'Adopt Git worktree…',
+          icon: FolderInput,
           run: () => {
-            onAdoptWorktree?.()
             closeMenu()
+            actions.askAdoptWorktree(bucket)
           }
         })
       }
-      if (isManaged && hasRepairableIssue) {
+      if (isManaged && repairable) {
         list.push({
           label: 'Repair worktree',
+          icon: Wrench,
           run: () => {
-            onRepairWorktree?.()
             closeMenu()
+            void actions.repairWorktree(bucket)
           }
         })
       }
       if (isManaged) {
         list.push({
           label: 'Merge into project…',
+          icon: GitMerge,
           run: () => {
-            onMerge?.()
             closeMenu()
+            actions.askMerge(bucket)
           }
         })
         if (setupFailed) {
           list.push({
             label: 'Retry setup',
+            icon: RefreshCw,
             run: () => {
-              onRetrySetup?.()
               closeMenu()
+              void actions.retrySetup(bucket)
             }
           })
         }
         list.push({
           label: 'Detach worktree',
+          icon: GitBranch,
           run: () => {
-            onDetach?.()
             closeMenu()
+            actions.openLifecycle(bucket, 'detach')
           }
         })
       }
       if (bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
         list.push({
           label: 'Delete scope',
+          icon: Trash2,
           run: () => {
             closeMenu()
-            onDelete()
+            actions.askDelete(bucket)
           }
         })
       }
@@ -201,18 +183,22 @@
 
 <div class="relative shrink-0">
   <button
-    class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+    class={triggerClass}
     aria-label={`Actions for ${bucket.name}`}
     aria-haspopup="menu"
     aria-expanded={showMenu}
-    title="Scope actions"
+    title={triggerTitle}
     onclick={() => (showMenu = !showMenu)}
     oncontextmenu={(e: MouseEvent) => {
       e.preventDefault()
       showMenu = true
     }}
   >
-    <Ellipsis size={14} />
+    {#if trigger}
+      {@render trigger()}
+    {:else}
+      <Ellipsis size={14} />
+    {/if}
   </button>
   {#if showMenu}
     <button
@@ -221,42 +207,17 @@
       onclick={closeMenu}
     ></button>
     <div
-      class="absolute right-0 top-8 z-50 w-52 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+      class="absolute {menuClass} z-50 w-52 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
       role="menu"
     >
       {#each items as item (item.label)}
+        {@const Icon = item.icon}
         <button
           class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground hover:bg-elevated"
           role="menuitem"
           onclick={item.run}
         >
-          {#if item.label === 'Retry setup'}
-            <RefreshCw size={13} class="text-muted" />
-          {:else if item.label === 'Repair worktree'}
-            <Wrench size={13} class="text-muted" />
-          {:else if item.label === 'Adopt Git worktree…'}
-            <FolderInput size={13} class="text-muted" />
-          {:else if item.label === 'Archive'}
-            <Archive size={13} class="text-muted" />
-          {:else if item.label === 'Restore'}
-            <ArchiveRestore size={13} class="text-muted" />
-          {:else if item.label === 'Delete scope'}
-            <Trash2 size={13} class="text-muted" />
-          {:else if item.label === 'Dock'}
-            <PanelsLeftBottom size={13} class="text-muted" />
-          {:else if item.label === 'Edit'}
-            <Pencil size={13} class="text-muted" />
-          {:else if item.label === 'Merge into project…'}
-            <GitMerge size={13} class="text-muted" />
-          {:else if item.label === 'Pin scope' || item.label === 'Unpin scope'}
-            {#if item.label === 'Pin scope'}
-              <Pin size={13} class="text-muted" />
-            {:else}
-              <PinOff size={13} class="text-muted" />
-            {/if}
-          {:else}
-            <GitBranch size={13} class="text-muted" />
-          {/if}
+          <Icon size={13} class="text-muted" />
           {item.label}
         </button>
       {/each}
