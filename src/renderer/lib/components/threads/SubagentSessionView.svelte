@@ -20,6 +20,12 @@
   let messages: AgentMessage[] = $state([])
   let loading = $state(false)
   let loadError = $state('')
+  // Set as soon as this child session streams an event of its own. A harness
+  // that streams the child transcript (pi) needs no polling: the events build
+  // the transcript live, the driver replays everything already produced when
+  // the tab opens, and the view keeps the streamed transcript when the run
+  // settles. A harness that reports nothing child-scoped keeps the poll.
+  let liveStreamed = $state(false)
   let liveStatus: AgentSessionStatus | null = $state(null)
   let actionError = $state('')
   let retrying = $state(false)
@@ -131,6 +137,7 @@
       if (!event || !sessionId || !('sessionId' in event) || event.sessionId !== sessionId) {
         return
       }
+      liveStreamed = true
       handleEvent(event)
     })
     return unsubscribe
@@ -178,19 +185,27 @@
   // engine reports an empty result while the worker is still starting). Poll
   // while the worker is busy instead of surfacing a load error, and reload
   // once more when the run settles so the final transcript is picked up even
-  // if the last poll raced the terminal flush.
+  // if the last poll raced the terminal flush. A child that streams its own
+  // events needs neither: the stream is the transcript, so polling stops the
+  // moment the first child event arrives.
   $effect(() => {
     if (!sessionId) return
-    if (busy) {
+    if (busy && !liveStreamed) {
       workerWasBusy = true
       const poll = setInterval(() => {
         if (!loading) void loadMessages()
       }, TRANSCRIPT_POLL_INTERVAL_MS)
       return () => clearInterval(poll)
     }
+    if (busy) {
+      workerWasBusy = true
+      return
+    }
     if (workerWasBusy) {
       workerWasBusy = false
-      void loadMessages()
+      // A streamed transcript already holds the worker's final messages; only
+      // a polled (or not yet streamed) one needs the settle reconcile.
+      if (!liveStreamed) void loadMessages()
     }
   })
 
@@ -198,6 +213,7 @@
     if (!sessionId) return
     loading = true
     loadError = ''
+    const mergeWithStream = liveStreamed
     let timeout: ReturnType<typeof setTimeout> | undefined
     try {
       const loadedMessages = await Promise.race([
@@ -209,7 +225,10 @@
           )
         })
       ])
-      messages = loadedMessages
+      // A load that raced the live stream must not roll the transcript back:
+      // the streamed transcript is the newer, richer half of the same mapper
+      // output, so merge by message id with the live copy winning.
+      messages = mergeWithStream ? mergeTranscript(loadedMessages, messages) : loadedMessages
       const lastAssistant = [...loadedMessages]
         .reverse()
         .find((message) => message.role === 'assistant')
@@ -232,6 +251,18 @@
       if (timeout) clearTimeout(timeout)
       loading = false
     }
+  }
+
+  /** Keep the live transcript as the newer half of a raced load. */
+  function mergeTranscript(loaded: AgentMessage[], streamed: AgentMessage[]): AgentMessage[] {
+    if (streamed.length === 0) return loaded
+    const merged = loaded.map(
+      (message) => streamed.find((candidate) => candidate.id === message.id) ?? message
+    )
+    for (const message of streamed) {
+      if (!loaded.some((candidate) => candidate.id === message.id)) merged.push(message)
+    }
+    return merged.sort((left, right) => left.createdAt - right.createdAt)
   }
 
   function handleEvent(event: AgentEvent): void {
@@ -516,12 +547,12 @@
         </div>
       {/if}
 
-      {#if (loading || busy) && messages.length === 0}
+      {#if (loading || busy) && messages.length === 0 && !liveStreamed}
         <div class="flex items-center justify-center gap-2 py-8 text-xs text-muted">
           <Loader2 size={13} class="animate-spin text-info" />
           Loading sub-agent session…
         </div>
-      {:else if loadError && !busy}
+      {:else if loadError && !busy && !liveStreamed}
         <div class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5">
           <p class="text-xs font-medium text-danger">Could not load the sub-agent session</p>
           <p class="mt-1 text-[0.6875rem] text-muted">{loadError}</p>

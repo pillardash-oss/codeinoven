@@ -20282,12 +20282,12 @@ export class ChatEngine {
     }
 
     const owner = this.childSessionOwners.get(event.sessionId)
-    if (
-      owner &&
-      (event.type === 'message.completed' ||
-        event.type === 'session.idle' ||
-        event.type === 'session.error')
-    ) {
+    if (owner && (event.type === 'session.idle' || event.type === 'session.error')) {
+      // Only the child's terminal signal persists its transcript. While a
+      // worker streams, its events are already mirrored live by the view and
+      // the driver holds the live transcript, so capturing on every child
+      // `message.completed` would only re-probe the harness and rewrite the
+      // mirror row by row mid-run.
       void this.captureCompletedChildSession(owner, event.sessionId).catch((error) =>
         Logger.dev('Sub-agent transcript capture unavailable:', error)
       )

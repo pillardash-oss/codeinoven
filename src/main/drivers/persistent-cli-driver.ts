@@ -1264,10 +1264,19 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   }
 
   protected applyEventToSession(session: PersistentCliSession, event: AgentEvent): void {
+    this.applyEventToMessages(session.messages, event)
+  }
+
+  /**
+   * Apply one stream event to a transcript. Sessions keep their transcript on
+   * the session record, but a harness-native child session has no app session
+   * record of its own   the pi driver tracks delegated sub-agent transcripts
+   * as a plain message list, and both paths must fold events identically so a
+   * child transcript renders exactly like a root one.
+   */
+  protected applyEventToMessages(messages: AgentMessage[], event: AgentEvent): void {
     if (event.type === 'message.part.updated') {
-      const message = session.messages.findLast(
-        (candidate) => candidate.id === event.part.messageID
-      )
+      const message = messages.findLast((candidate) => candidate.id === event.part.messageID)
       if (!message) return
       const index = message.parts.findLastIndex((part) => part.id === event.part.id)
       if (index === -1) message.parts.push(event.part)
@@ -1275,7 +1284,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       return
     }
     if (event.type === 'message.part.delta') {
-      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
+      const message = messages.findLast((candidate) => candidate.id === event.messageId)
       const part = message?.parts.findLast((candidate) => candidate.id === event.partId)
       if (part && (part.type === 'text' || part.type === 'reasoning') && event.field === 'text') {
         part.text += event.delta
@@ -1283,7 +1292,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       return
     }
     if (event.type === 'message.completed') {
-      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
+      const message = messages.findLast((candidate) => candidate.id === event.messageId)
       if (message) {
         message.completedAt = Date.now()
         message.error = event.error
@@ -1299,7 +1308,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       }
     }
     if (event.type === 'usage.updated') {
-      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
+      const message = messages.findLast((candidate) => candidate.id === event.messageId)
       if (message) {
         if (event.tokens) message.tokens = event.tokens
         if (event.normalizedUsage) message.normalizedUsage = event.normalizedUsage

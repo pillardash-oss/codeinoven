@@ -70,6 +70,7 @@ import {
   CIO_REQUEST_FILES_TOOL_NAME,
   CIO_SPAWN_AGENT_TOOL_NAME,
   CIO_SUBAGENT_DONE_MESSAGE_TYPE,
+  CIO_SUBAGENT_STREAM_STATUS_KEY,
   CIO_TODO_WRITE_TOOL_NAME
 } from '../../lib/core-tools'
 
@@ -727,6 +728,246 @@ export default function codeInOvenCoreToolsExtension(pi) {
     } catch {}
   }
 
+  // ── Live sub-agent event stream ──────────────────────────────────────
+  // A child session runs in-process, so the app can only see it through
+  // this extension. Every child event is forwarded to the host over pi's
+  // fire-and-forget \`setStatus\` channel: not the tool-update channel (pi
+  // stops delivering updates once a background spawn's tool call returns)
+  // and never \`sendMessage\` (that would leak the whole transcript into the
+  // primary agent's context). The driver maps each forwarded record with the
+  // same record mapper a root thread uses and emits child-scoped events, so
+  // a sub-agent transcript streams exactly like a normal thread instead of
+  // waiting for pi to flush the child's session file to disk.
+  const CIO_SUBAGENT_STREAM_KEY = '${CIO_SUBAGENT_STREAM_STATUS_KEY}'
+  // One stdout record per flush window: a chatty worker must not flood the
+  // harness pipe with one record per streamed token.
+  const CIO_SUBAGENT_STREAM_FLUSH_MS = 120
+  const CIO_SUBAGENT_STREAM_MAX_RECORD = 24000
+  const CIO_SUBAGENT_STREAM_MAX_CHUNK = 48000
+  const CIO_SUBAGENT_STREAM_MAX_TEXT = 8000
+
+  function capStreamText(value) {
+    if (typeof value !== 'string') return value
+    if (value.length <= CIO_SUBAGENT_STREAM_MAX_TEXT) return value
+    return value.slice(0, CIO_SUBAGENT_STREAM_MAX_TEXT) + '\\n…(truncated for the live view)'
+  }
+
+  function streamContent(content) {
+    if (!Array.isArray(content)) return []
+    const blocks = []
+    for (const block of content) {
+      const value = recordValue(block)
+      if (!value) continue
+      if (value.type === 'text') {
+        blocks.push({ type: 'text', text: capStreamText(value.text) })
+        continue
+      }
+      if (value.type === 'thinking') {
+        blocks.push({ type: 'thinking', thinking: capStreamText(value.thinking) })
+        continue
+      }
+      if (value.type === 'toolCall') {
+        blocks.push({
+          type: 'toolCall',
+          id: value.id,
+          name: value.name,
+          arguments: streamArgs(value.arguments)
+        })
+      }
+    }
+    return blocks
+  }
+
+  function streamArgs(args) {
+    const value = recordValue(args)
+    if (!value) return undefined
+    const trimmed = {}
+    for (const [key, item] of Object.entries(value)) {
+      trimmed[key] = typeof item === 'string' ? capStreamText(item) : item
+    }
+    return trimmed
+  }
+
+  function streamMessage(message) {
+    const value = recordValue(message)
+    if (!value) return undefined
+    return {
+      ...(value.id ? { id: value.id } : {}),
+      ...(value.role ? { role: value.role } : {}),
+      ...(value.model ? { model: value.model } : {}),
+      ...(value.provider ? { provider: value.provider } : {}),
+      ...(value.usage ? { usage: value.usage } : {}),
+      ...(value.stopReason ? { stopReason: value.stopReason } : {}),
+      ...(value.isError === true ? { isError: true } : {}),
+      ...(value.toolCallId ? { toolCallId: value.toolCallId } : {}),
+      ...(value.toolName ? { toolName: value.toolName } : {}),
+      ...(typeof value.errorMessage === 'string'
+        ? { errorMessage: capStreamText(value.errorMessage) }
+        : {}),
+      content: streamContent(value.content)
+    }
+  }
+
+  function streamResult(result) {
+    const value = recordValue(result)
+    if (!value) return undefined
+    return {
+      ...(value.isError === true ? { isError: true } : {}),
+      ...(typeof value.error === 'string' ? { error: capStreamText(value.error) } : {}),
+      content: streamContent(value.content)
+    }
+  }
+
+  /**
+   * Trim one child session event down to the fields the driver's Pi record
+   * mapper needs. Dropping the bulk (partial messages, image data, oversized
+   * tool output) keeps the forwarded stream roughly the size of a root
+   * thread's own event stream.
+   */
+  function trimStreamRecord(event) {
+    if (!event || typeof event !== 'object') return null
+    const lifecycle = {
+      ...(event.reason ? { reason: event.reason } : {}),
+      ...(event.aborted === true ? { aborted: true } : {}),
+      ...(typeof event.errorMessage === 'string'
+        ? { errorMessage: capStreamText(event.errorMessage) }
+        : {}),
+      ...(typeof event.success === 'boolean' ? { success: event.success } : {}),
+      ...(typeof event.finalError === 'string'
+        ? { finalError: capStreamText(event.finalError) }
+        : {}),
+      ...(event.result ? { result: streamResult(event.result) } : {})
+    }
+    if (
+      event.type === 'turn_start' ||
+      event.type === 'agent_start' ||
+      event.type === 'agent_settled' ||
+      event.type === 'compaction_start' ||
+      event.type === 'compaction_end' ||
+      event.type === 'auto_compaction_start' ||
+      event.type === 'auto_compaction_end' ||
+      event.type === 'auto_retry_start' ||
+      event.type === 'auto_retry_end'
+    ) {
+      return { type: event.type, ...lifecycle }
+    }
+    if (event.type === 'message_start') {
+      return { type: 'message_start', message: streamMessage(event.message) }
+    }
+    if (event.type === 'message_update') {
+      const delta = recordValue(event.assistantMessageEvent)
+      const message = recordValue(event.message)
+      if (!delta) return null
+      return {
+        type: 'message_update',
+        message: { ...(message && message.id ? { id: message.id } : {}), role: message && message.role },
+        assistantMessageEvent: {
+          type: delta.type,
+          contentIndex: delta.contentIndex,
+          ...(typeof delta.delta === 'string' ? { delta: delta.delta } : {})
+        }
+      }
+    }
+    if (event.type === 'message_end') {
+      return { type: 'message_end', message: streamMessage(event.message) }
+    }
+    if (event.type === 'tool_execution_start') {
+      return {
+        type: 'tool_execution_start',
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        args: streamArgs(event.args)
+      }
+    }
+    if (event.type === 'tool_execution_update') {
+      return {
+        type: 'tool_execution_update',
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        args: streamArgs(event.args),
+        partialResult: streamResult(event.partialResult)
+      }
+    }
+    if (event.type === 'tool_execution_end') {
+      return {
+        type: 'tool_execution_end',
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        args: streamArgs(event.args),
+        isError: event.isError === true,
+        result: streamResult(event.result)
+      }
+    }
+    if (event.type === 'turn_end') {
+      // Tool results already streamed as \`tool_execution_end\`; the turn end
+      // only contributes the completion (usage, stop reason, failure).
+      return { type: 'turn_end', message: streamMessage(event.message), toolResults: [] }
+    }
+    return null
+  }
+
+  /**
+   * Batched forwarder for one child session. Records are queued and flushed
+   * every window, split into bounded records, and the final flush carries the
+   * settle signal so the driver can close the child's transcript.
+   */
+  function createSubAgentStream(parentCtx, childSessionId) {
+    let queue = []
+    let timer = null
+
+    function send(records, extra) {
+      if (records.length === 0 && !extra) return
+      const ui = parentCtx && parentCtx.ui
+      if (!ui || typeof ui.setStatus !== 'function') return
+      try {
+        ui.setStatus(
+          CIO_SUBAGENT_STREAM_KEY,
+          JSON.stringify({ childSessionId, records, ...(extra || {}) })
+        )
+      } catch {}
+    }
+
+    function flush(extra) {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      const pending = queue
+      queue = []
+      let batch = []
+      let size = 0
+      for (const record of pending) {
+        let encoded
+        try {
+          encoded = JSON.stringify(record)
+        } catch {
+          continue
+        }
+        if (encoded.length > CIO_SUBAGENT_STREAM_MAX_RECORD) continue
+        if (size > 0 && size + encoded.length > CIO_SUBAGENT_STREAM_MAX_CHUNK) {
+          send(batch)
+          batch = []
+          size = 0
+        }
+        batch.push(record)
+        size += encoded.length
+      }
+      send(batch, extra)
+    }
+
+    return {
+      push(event) {
+        const record = trimStreamRecord(event)
+        if (!record) return
+        queue.push(record)
+        if (!timer) timer = setTimeout(function () { flush() }, CIO_SUBAGENT_STREAM_FLUSH_MS)
+      },
+      settle(status, error) {
+        flush({ settled: true, status, ...(error ? { error } : {}) })
+      }
+    }
+  }
+
   /**
    * What the primary agent receives: metadata plus ONLY the sub-agent's
    * final message   never the running transcript. The full transcript stays
@@ -952,6 +1193,10 @@ export default function codeInOvenCoreToolsExtension(pi) {
       session
     }
     subAgents.set(agentId, record)
+    // The child's transcript streams to the app from the moment the session
+    // exists: no waiting for pi to flush the child's session file, and no
+    // polling on the renderer side.
+    const stream = createSubAgentStream(parentCtx, session.sessionId)
     const onAbort = function () {
       void session.abort()
     }
@@ -960,6 +1205,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
       else signal.addEventListener('abort', onAbort, { once: true })
     }
     session.subscribe(function (event) {
+      stream.push(event)
       if (event.type !== 'message_end') return
       const text = subAgentText(event.message)
       if (!text) return
@@ -979,6 +1225,9 @@ export default function codeInOvenCoreToolsExtension(pi) {
         record.finalOutput = capOutput(subAgentText(lastAssistant(session)))
         record.endedAt = Date.now()
         sendSubAgentUpdate(onUpdate, record)
+        // Flush the tail of the transcript and close the live stream so the
+        // view settles on its final transcript instead of a stuck spinner.
+        stream.settle(record.status === 'error' ? 'error' : 'idle', record.error)
         // Background workers announce themselves; foreground spawns are
         // awaited inline by the primary and need no notification.
         if (spec.background) notifySubAgentDone(record)
