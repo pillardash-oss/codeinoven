@@ -4770,10 +4770,38 @@
     await Promise.all([refreshMessages(), checkpointRefresh])
   }
 
+  /**
+   * Discovery scope for the slash menu's commands and skills. Temporary side
+   * chats own no Thread row, so their skills are discovered against the parent
+   * thread's project scope combined with the side chat's own harness, which
+   * the composer can switch before the first turn.
+   */
+  function capabilityScope(): { projectId: string; threadId: string; harnessId?: string } {
+    if (controller?.parentThreadId) {
+      return {
+        projectId: controller.projectId,
+        threadId: controller.parentThreadId,
+        harnessId: settings.harnessId
+      }
+    }
+    return { projectId: thread.projectId, threadId: thread.id }
+  }
+
   async function refreshCommands(): Promise<void> {
-    const { projectId, id } = thread
+    const scope = capabilityScope()
     try {
-      commands = await invoke('agent:listCommands', projectId, id)
+      const discovered = await invoke(
+        'agent:listCommands',
+        scope.projectId,
+        scope.threadId,
+        scope.harnessId
+      )
+      // A side chat is read-only and owns no thread row, so its harness session
+      // commands (config, settings, usage-credits) cannot run there. Only its
+      // skills stay on the menu; they ride the read-only prompt path below.
+      commands = hasController
+        ? discovered.filter((command) => command.source === 'skill')
+        : discovered
     } catch {
       // Command discovery is supplementary; messaging remains available.
       commands = []
@@ -4784,9 +4812,14 @@
    *  CodeInOven-registered). Discovery is supplementary   the composer keeps
    *  working when it fails. */
   async function refreshCapabilitySkills(): Promise<void> {
-    const { projectId, id } = thread
+    const scope = capabilityScope()
     try {
-      const capabilities = await invoke('agent:listContextCapabilities', projectId, id)
+      const capabilities = await invoke(
+        'agent:listContextCapabilities',
+        scope.projectId,
+        scope.threadId,
+        scope.harnessId
+      )
       if (capabilities.harnessId !== settings.harnessId) return
       capabilityHarnessName = capabilities.harnessName
       capabilitySkills = capabilities.skill
@@ -5536,18 +5569,26 @@
     sendComposerMessage(request ? `@cio-utility ${request}` : '@cio-utility', [])
   }
 
+  /** Ask the agent to load and follow a skill by name. This is the route for
+   *  skills with no runnable native command in the current conversation (a
+   *  side chat owns no thread row, and a global or CodeInOven skill is not a
+   *  harness slash command at all). */
+  function requestSkillUse(skillName: string, args: string): void {
+    const request = args.trim()
+    sendComposerMessage(
+      request
+        ? `${request}\n\n(Use the "${skillName}" skill for this.)`
+        : `Use the "${skillName}" skill.`,
+      []
+    )
+  }
+
   /** Invoke a capability skill the harness does not expose as a native slash
    *  command by sending a turn that asks the agent to load and follow it. */
   function triggerCapabilitySkill(actionKey: string, args: string): void {
     const skill = capabilitySkills.find((candidate) => `cio-skill:${candidate.id}` === actionKey)
     if (!skill) return
-    const request = args.trim()
-    sendComposerMessage(
-      request
-        ? `${request}\n\n(Use the "${skill.name}" skill for this.)`
-        : `Use the "${skill.name}" skill.`,
-      []
-    )
+    requestSkillUse(skill.name, args)
   }
 
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
@@ -5563,6 +5604,13 @@
     const { projectId, id } = thread
     const command = commands.find((candidate) => actionId(candidate.id) === commandId)
     if (!command) return
+    if (hasController) {
+      // A side chat owns no thread row, so a harness-native command cannot run
+      // against it (runCommand needs the thread's session). Its skills ride
+      // the read-only prompt path instead; anything else is not offered there.
+      if (command.source === 'skill') requestSkillUse(command.name, args)
+      return
+    }
     errorMessage = ''
     providerStatus = null
     commandExecuting = true
@@ -8960,6 +9008,12 @@
     if (controller) {
       commitSettings(normalized)
       controller.updateSettings(normalized)
+      // Side chats pick their harness in the composer before the first turn, so
+      // the slash menu must follow the same switch logic threads have.
+      if (harnessChanged) {
+        void refreshCommands()
+        void refreshCapabilitySkills()
+      }
       return
     }
     if (harnessChanged || providerChanged) {

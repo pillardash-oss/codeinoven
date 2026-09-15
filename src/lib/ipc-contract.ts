@@ -912,7 +912,7 @@ export const IPC_INVOKE_CONTRACT = {
     AssignmentPlan
   >,
   'agent:listCommands': {} as Contract<
-    [projectId: string, threadId: string],
+    [projectId: string, threadId: string, harnessId?: string],
     ScopedHarnessCommand[]
   >,
   'agent:listQuestions': {} as Contract<
@@ -965,7 +965,7 @@ export const IPC_INVOKE_CONTRACT = {
     AgentToolCatalog
   >,
   'agent:listContextCapabilities': {} as Contract<
-    [projectId: string, threadId: string],
+    [projectId: string, threadId: string, harnessId?: string],
     AgentContextCapabilities
   >,
   'agent:listArtifacts': {} as Contract<[projectId: string, threadId: string], AgentArtifact[]>,

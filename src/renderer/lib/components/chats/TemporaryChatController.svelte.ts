@@ -34,6 +34,9 @@ export class TemporaryChatController implements ConversationController {
   readonly kind = 'temporary-chat' as const
   readonly projectId: string
   readonly conversationId: string
+  /** Durable thread this side chat hangs off; capability discovery resolves
+   *  project scope against it because a side chat owns no Thread row. */
+  readonly parentThreadId: string
 
   #tab: TemporaryChatContextTab
   #unsubscribeEvent: (() => void) | null = null
@@ -44,6 +47,7 @@ export class TemporaryChatController implements ConversationController {
     this.#tab = tab
     this.projectId = tab.projectId
     this.conversationId = tab.temporaryChatId
+    this.parentThreadId = tab.threadId
   }
 
   get settings(): ThreadSettings {
@@ -198,7 +202,7 @@ export class TemporaryChatController implements ConversationController {
     }
 
     if (alreadyStarted) {
-      // Remount hygiene: expire a side chat whose backend counterpart is gone  
+      // Remount hygiene: expire a side chat whose backend counterpart is gone
       // but never while a turn is in flight, since `sendTemporaryPrompt` only
       // registers the backend chat after assembling the isolated session.
       const temporaryChatId = this.#tab.temporaryChatId
