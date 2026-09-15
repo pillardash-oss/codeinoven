@@ -10,7 +10,10 @@ import type { IsolatedHandle } from '../../../src/main/drivers/opencode-driver'
 import type { SendPromptOptions } from '../../../src/main/drivers/driver.interface'
 import { LEAN_AGENT_NAMES } from '../../../src/main/opencode/opencode-agent-definitions'
 
-vi.mock('child_process', () => ({ execFile: vi.fn(), spawn: vi.fn() }))
+vi.mock('child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof import('child_process')>()
+  return { ...original, execFile: vi.fn(), spawn: vi.fn() }
+})
 
 describe('parseOpenCodeModels', () => {
   it('parses verbose CLI output without starting a server', () => {

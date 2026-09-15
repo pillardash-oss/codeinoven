@@ -14,7 +14,10 @@ import {
 import { parseBrainTraceLine } from '../../../src/main/drivers/antigravity-brain-trace'
 
 const spawnMock = vi.hoisted(() => vi.fn())
-vi.mock('child_process', () => ({ spawn: spawnMock }))
+vi.mock('child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof import('child_process')>()
+  return { ...original, spawn: spawnMock }
+})
 
 class FakeChild extends EventEmitter {
   stdout = new EventEmitter()
