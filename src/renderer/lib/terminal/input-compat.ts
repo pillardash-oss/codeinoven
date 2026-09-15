@@ -25,6 +25,17 @@ function normalizePastedText(text: string): string {
 }
 
 /**
+ * Build the data written to the PTY for one paste: line separators are CR and
+ * multi-line text is wrapped in the bracketed-paste delimiters the shell
+ * negotiated, exactly like a desktop terminal.
+ */
+export function buildPasteData(term: Terminal, text: string): string {
+  const normalized = normalizePastedText(text)
+  const bracketed = term.wasmTerm?.hasBracketedPaste()
+  return bracketed ? `${BRACKETED_PASTE_START}${normalized}${BRACKETED_PASTE_END}` : normalized
+}
+
+/**
  * Restores two behaviors ghostty-web does not provide out of the box:
  *
  * 1. Multi-line paste: ghostty's element-level paste handler forwards raw text
@@ -65,9 +76,7 @@ export function attachTerminalInputCompat(
     if (!text) return
     event.preventDefault()
     event.stopPropagation()
-    const normalized = normalizePastedText(text)
-    const bracketed = term.wasmTerm?.hasBracketedPaste()
-    send(bracketed ? `${BRACKETED_PASTE_START}${normalized}${BRACKETED_PASTE_END}` : normalized)
+    send(buildPasteData(term, text))
   }
 
   const options: AddEventListenerOptions = { capture: true }

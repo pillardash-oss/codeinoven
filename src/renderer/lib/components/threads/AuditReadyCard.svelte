@@ -87,7 +87,7 @@
     <div class="min-w-0 flex-1">
       <h3 class="text-sm font-semibold">Auditor is done</h3>
       <p class="mt-1 text-xs text-muted">
-        Review the findings, add annotations, and send required changes to the primary agent.
+        Read the findings, add annotations, and send required changes to the primary agent.
       </p>
       <p class="mt-1 text-[0.6875rem] text-dimmed">
         Audited by {report.provenance.providerId ?? 'provider'} /

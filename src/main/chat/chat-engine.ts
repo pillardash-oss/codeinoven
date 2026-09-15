@@ -168,6 +168,7 @@ import type {
   AgentProviderIssue,
   AgentProviderIssueKind,
   AgentSessionStatus,
+  AgentSubagentActivity,
   AgentToolCatalog,
   AgentToolDefinition,
   AgentToolHarness,
@@ -1844,6 +1845,10 @@ export class ChatEngine {
   private sessionRegistry = new Map<string, SessionInfo>()
   private childSessionOwners = new Map<string, ChildSessionInfo>()
   private childCaptureTasks = new Map<string, Promise<AgentMessage[]>>()
+  /** Latest provider lifecycle status reported for each child session id, so
+   *  transcript loads can tell an in-flight worker (transcript not flushed
+   *  yet) from a genuinely unknown session. */
+  private childSessionActivityStatuses = new Map<string, AgentSubagentActivity['status']>()
   private pendingPermissions = new Map<string, PendingPermissionInfo>()
   /** Memoized attachment allowlist per chat thread id. Invalidated whenever a
    *  user message is persisted (attachments may have changed) and dropped when
@@ -3423,6 +3428,7 @@ export class ChatEngine {
     this.sessionRegistry.clear()
     this.childSessionOwners.clear()
     this.childCaptureTasks.clear()
+    this.childSessionActivityStatuses.clear()
     this.sessionStatuses.clear()
     this.pendingPermissions.clear()
     for (const pending of this.pendingQuestions.values()) {
@@ -5638,12 +5644,37 @@ export class ChatEngine {
     const owner = await this.resolveChildSessionOwner(projectId, threadId, sessionId)
     const cached = await this.threadManager.loadSubagentMessages(projectId, threadId, sessionId)
     if (cached.length > 0) {
-      void this.captureChildSession(owner, sessionId).catch((error) =>
-        Logger.dev('Sub-agent transcript refresh unavailable:', error)
-      )
+      // The DB mirror is the store of truth for a settled sub-agent: reopen
+      // must be a single DB read, not a harness probe. Only a still-running
+      // worker justifies a background refresh.
+      const status = this.childSessionActivityStatuses.get(sessionId)
+      if (status === 'running' || status === 'pending') {
+        void this.captureChildSession(owner, sessionId).catch((error) =>
+          Logger.dev('Sub-agent transcript refresh unavailable:', error)
+        )
+      }
       return cached
     }
-    return this.captureChildSession(owner, sessionId)
+    try {
+      // captureChildSession never rejects: on a driver load failure it falls
+      // back to the spawn tool's own transcript from the parent thread, and
+      // while a live worker has not flushed anything yet it resolves empty so
+      // the view stays in its loading state instead of surfacing the raw
+      // "CLI session is unavailable" driver error. The view polls while the
+      // worker is busy and reloads once it settles.
+      const status = this.childSessionActivityStatuses.get(sessionId)
+      return await this.captureChildSession(owner, sessionId, undefined, {
+        // Only a still-running worker justifies blocking on the harness's
+        // transcript flush; an unknown status means pre-restart or settled,
+        // so the mirror/fallback must cover it without any watch delay.
+        waitForFlush: status === 'running' || status === 'pending'
+      })
+    } catch (error) {
+      // Defensive: any residual failure still degrades to the parent's
+      // sub-agent activity rather than throwing into the IPC handler.
+      Logger.dev('Sub-agent transcript load failed:', error)
+      return this.subagentMessagesFromParentActivity(owner, sessionId)
+    }
   }
 
   /** Resolve and verify that a provider-native child belongs to the requested thread. */
@@ -5925,7 +5956,8 @@ export class ChatEngine {
   private captureChildSession(
     owner: ChildSessionInfo,
     sessionId: string,
-    resolvedDriver?: HarnessDriver
+    resolvedDriver?: HarnessDriver,
+    options?: { waitForFlush?: boolean }
   ): Promise<AgentMessage[]> {
     const captureKey = `${owner.projectId}:${owner.threadId}:${sessionId}`
     const existing = this.childCaptureTasks.get(captureKey)
@@ -5937,18 +5969,25 @@ export class ChatEngine {
         throw new Error(`Unknown harness: ${owner.driverId}`)
       }
       let timeout: ReturnType<typeof setTimeout> | undefined
+      const waitForFlush = options?.waitForFlush ?? true
+      const load = (): Promise<AgentMessage[]> =>
+        driver.loadSubagentMessages
+          ? driver.loadSubagentMessages(owner.projectPath, sessionId, { waitForFlush })
+          : driver.loadMessages(owner.projectPath, sessionId)
       try {
         const account = await this.accountRegistry.resolve(owner.driverId, owner.accountId)
         const incoming = stampAccount(
           stampHarnessId(
             await Promise.race([
-              driver.loadMessages(owner.projectPath, sessionId),
+              load(),
               new Promise<never>((_, reject) => {
                 timeout = setTimeout(
                   () =>
                     reject(
                       new Error('The provider took too long to load the sub-agent transcript')
                     ),
+                  // The driver's own file watch (~10 s) stays within this
+                  // race for live children; settled children resolve fast.
                   15_000
                 )
               })
@@ -5973,13 +6012,54 @@ export class ChatEngine {
           restoreMirrorThinkingLevel(mergeAgentMessages(cached, incoming), cached),
           cached
         )
-        await this.threadManager.saveSubagentMessages(
-          owner.projectId,
-          owner.threadId,
-          sessionId,
-          merged
-        )
+        if (merged.length === 0 && !waitForFlush) {
+          // The child session is finished and the harness holds no native
+          // transcript for it (pi never persists child sessions on disk), but
+          // the spawn tool call on the parent thread still carries the
+          // prompt and captured output. Synthesize the transcript from it AND
+          // persist it, so every later open is a single DB read instead of
+          // re-probing the harness.
+          const fallback = await this.subagentMessagesFromParentActivity(owner, sessionId)
+          if (fallback.length > 0) {
+            await this.threadManager.saveSubagentMessages(
+              owner.projectId,
+              owner.threadId,
+              sessionId,
+              fallback
+            )
+          }
+          return fallback
+        }
+        if (merged.length > 0) {
+          await this.threadManager.saveSubagentMessages(
+            owner.projectId,
+            owner.threadId,
+            sessionId,
+            merged
+          )
+        }
         return merged
+      } catch (error) {
+        // pi child sessions (cio_spawn_agent) are never persisted as CLI
+        // session records, so their transcript load can legitimately fail.
+        // Never rethrow: fall back to the spawn tool's own transcript, which
+        // the parent thread's message parts already carry (prompt + captured
+        // output), and persist it so later opens hit the mirror instantly.
+        Logger.dev('Sub-agent transcript capture fell back to parent activity:', error)
+        const fallback = await this.subagentMessagesFromParentActivity(owner, sessionId)
+        if (fallback.length > 0) {
+          try {
+            await this.threadManager.saveSubagentMessages(
+              owner.projectId,
+              owner.threadId,
+              sessionId,
+              fallback
+            )
+          } catch (persistError) {
+            Logger.dev('Sub-agent fallback transcript persist failed:', persistError)
+          }
+        }
+        return fallback
       } finally {
         if (timeout) clearTimeout(timeout)
       }
@@ -5993,6 +6073,76 @@ export class ChatEngine {
     }
     void capture.then(clearCapture, clearCapture)
     return capture
+  }
+
+  /**
+   * Build a best-effort transcript from the spawn tool call stored on the
+   * parent thread: the input carries the prompt, the tool result carries the
+   * sub-agent's final output. Used when the driver cannot load the child
+   * session natively (pi never persists child sessions).
+   */
+  private async subagentMessagesFromParentActivity(
+    owner: ChildSessionInfo,
+    sessionId: string
+  ): Promise<AgentMessage[]> {
+    try {
+      const records = await this.threadManager.loadMessageRecords(owner.projectId, owner.threadId)
+      const parts = records.flatMap((message) => [
+        ...message.parts,
+        ...(message.transportParts ?? [])
+      ])
+      const part = parts.find(
+        (candidate): candidate is Extract<AgentPart, { type: 'subagent' }> =>
+          candidate.type === 'subagent' && candidate.activity.childSessionId === sessionId
+      )
+      if (!part) return []
+      const now = Date.now()
+      const prompt = part.activity.prompt
+      const output = part.activity.output
+      const error = part.activity.error
+      if (!prompt && !output && !error) return []
+      const messages: AgentMessage[] = []
+      if (prompt) {
+        messages.push({
+          id: `${sessionId}:fallback-prompt`,
+          role: 'user',
+          visibility: 'subagent_trace',
+          parts: [
+            {
+              type: 'text',
+              id: `${sessionId}:fallback-prompt-text`,
+              messageID: `${sessionId}:fallback-prompt`,
+              text: prompt
+            }
+          ],
+          createdAt: part.activity.time?.start ?? now
+        })
+      }
+      if (output || error) {
+        const outputText = error
+          ? `${output ? `${output}\n\n` : ''}Sub-agent error: ${error}`
+          : (output ?? '')
+        messages.push({
+          id: `${sessionId}:fallback-output`,
+          role: 'assistant',
+          visibility: 'subagent_trace',
+          parts: [
+            {
+              type: 'text',
+              id: `${sessionId}:fallback-output-text`,
+              messageID: `${sessionId}:fallback-output`,
+              text: outputText
+            }
+          ],
+          createdAt: part.activity.time?.start ?? now,
+          completedAt: part.activity.time?.end ?? now
+        })
+      }
+      return messages
+    } catch (error) {
+      Logger.dev('Sub-agent parent-activity fallback failed:', error)
+      return []
+    }
   }
 
   private async getBehaviorPrompt(
@@ -10760,6 +10910,7 @@ export class ChatEngine {
       })
       this.childCaptureTasks.delete(`${owner.projectId}:${owner.threadId}:${childSessionId}`)
       this.childSessionOwners.delete(childSessionId)
+      this.childSessionActivityStatuses.delete(childSessionId)
     }
     // Temporary audit/loop chats bound to this thread.
     for (const temporaryChatId of [...this.temporaryChats.keys()]) {
@@ -12015,7 +12166,7 @@ export class ChatEngine {
               message:
                 current.auditCycle.status === 'running'
                   ? 'The independent re-audit is already running.'
-                  : 'The independent re-audit is complete and its report is ready for review.'
+                  : 'The independent re-audit is complete and its report is ready for rework decisions.'
             })
             return
           }
@@ -13668,7 +13819,11 @@ export class ChatEngine {
     if (brainstormWriteRoute) {
       featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
       const revisionRelativePath = toPosixPath(
-        join(featureArtifactDirectory(featureSlug), 'versions', `session-${Date.now()}-brainstorm.md`)
+        join(
+          featureArtifactDirectory(featureSlug),
+          'versions',
+          `session-${Date.now()}-brainstorm.md`
+        )
       )
       revisionPathInstruction = [
         '',
@@ -15050,10 +15205,7 @@ export class ChatEngine {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: [
-            await this.cioPrompt('independent-audit-report'),
-            utilityTurn.instructions
-          ]
+          systemPrompt: [await this.cioPrompt('independent-audit-report'), utilityTurn.instructions]
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
@@ -15549,7 +15701,7 @@ export class ChatEngine {
         settings,
         [
           marker,
-          'The Auditor and user review require implementation corrections.',
+          'The Auditor findings and the user rework request require implementation corrections.',
           achievement
             ? 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then allow Achievement to audit again.'
             : 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then request a fresh audit when ready.',
@@ -15714,7 +15866,7 @@ export class ChatEngine {
         coordinator.settings,
         [
           marker,
-          `Audit report v${report.version} and the user's review are ready for your decision. No new Assignment version has been created.`,
+          `Audit report v${report.version} and the user's rework request are ready for your decision. No new Assignment version has been created.`,
           'You are the Sr. Engineer. First digest the audit findings, open annotations, and user feedback below, then explain your proposed response in this coordinator conversation.',
           'Apply the corrections without another user approval gate. Use reopen-task for completed tasks that require correction and add-followup-task only when an audit finding genuinely needs an additional task; assign every ready worker task immediately. Perform senior-owned corrections here. Call request-reaudit only after every correction and focused check is complete. Never call propose-rework-assignment for audit findings or corrective rework.',
           this.assignmentApiInstructions(coordinatorToken),
@@ -15730,7 +15882,7 @@ export class ChatEngine {
         undefined,
         undefined,
         'internal',
-        workflowActionPresentation(`Review audit report v${report.version}`, feedback)
+        workflowActionPresentation(`Rework from audit report v${report.version}`, feedback)
       )
     }
     return updated
@@ -16649,10 +16801,7 @@ export class ChatEngine {
       this.handledIdleSessions.delete(sessionId)
       this.markSessionWorking(sessionId)
       const messageId = createMessageId()
-      const prompt =
-        attemptIndex === 0
-          ? basePrompt
-          : this.auditCorrectionPrompt(lastError)
+      const prompt = attemptIndex === 0 ? basePrompt : this.auditCorrectionPrompt(lastError)
       await this.persistOutboundMessage(
         projectId,
         auditorThread.id,
@@ -16699,10 +16848,7 @@ export class ChatEngine {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: [
-            await this.cioPrompt('audit-report'),
-            utilityTurn.instructions
-          ]
+          systemPrompt: [await this.cioPrompt('audit-report'), utilityTurn.instructions]
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
@@ -16827,10 +16973,7 @@ export class ChatEngine {
       this.handledIdleSessions.delete(sessionId)
       this.markSessionWorking(sessionId)
       const messageId = createMessageId()
-      const prompt =
-        attemptIndex === 0
-          ? basePrompt
-          : this.auditCorrectionPrompt(lastError)
+      const prompt = attemptIndex === 0 ? basePrompt : this.auditCorrectionPrompt(lastError)
       await this.persistOutboundMessage(
         projectId,
         auditorThread.id,
@@ -16877,10 +17020,7 @@ export class ChatEngine {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: [
-            await this.cioPrompt('audit-report'),
-            utilityTurn.instructions
-          ]
+          systemPrompt: [await this.cioPrompt('audit-report'), utilityTurn.instructions]
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
@@ -19958,6 +20098,7 @@ export class ChatEngine {
       if (parent) {
         const childSessionId = event.part.activity.childSessionId
         const alreadyTracked = this.childSessionOwners.has(childSessionId)
+        this.childSessionActivityStatuses.set(childSessionId, event.part.activity.status)
         const owner: ChildSessionInfo = {
           projectId: parent.projectId,
           threadId: parent.threadId,

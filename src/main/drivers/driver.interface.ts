@@ -411,6 +411,19 @@ export interface HarnessDriver {
   /** Load the full message history for a session. */
   loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]>
 
+  /** Flush-aware transcript load for a delegated child session. When
+   *  `waitForFlush` is false the caller guarantees the child session is no
+   *  longer live, so a pi driver must not block on a transcript file that
+   *  can never appear. Optional: drivers without special child-session
+   *  semantics treat it like `loadMessages`. */
+  loadSubagentMessages?(
+    projectPath: string,
+    sessionId: string,
+    options?: {
+      waitForFlush?: boolean
+    }
+  ): Promise<AgentMessage[]>
+
   /**
    * Carry a replaced session's native conversation binding over to its
    * replacement, so a harness that persists its own transcript (native resume)

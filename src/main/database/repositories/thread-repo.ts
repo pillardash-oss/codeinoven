@@ -149,7 +149,15 @@ function rowToThread(row: ThreadRow): Thread {
     sessionAccountId: row.session_account_id ?? undefined,
     dismissedSpecId: row.dismissed_spec_id ?? undefined,
     dismissedSpecVersion: row.dismissed_spec_version ?? undefined,
-    auditState: (row.audit_state as Thread['auditState']) ?? undefined,
+    // Legacy independent audits persisted the active report pointer without
+    // an audit state, stranding the review surface (no Review/Complete
+    // buttons, no severity badges, no next verification pass). Every current
+    // writer keeps the pointer and the state in lockstep — clearing one
+    // clears both — so a pointer without a state can only be a legacy report
+    // awaiting review.
+    auditState:
+      (row.audit_state as Thread['auditState']) ??
+      (row.active_audit_id !== null ? 'report_ready' : undefined),
     loopIteration: row.loop_iteration ?? undefined,
     activeAuditId: row.active_audit_id ?? undefined,
     activeAuditVersion: row.active_audit_version ?? undefined,

@@ -3,6 +3,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { TerminalCursorController } from '$lib/terminal/cursor-visibility'
   import { patchSelectionCopy } from '$lib/terminal/selection-copy'
+  import { registerTerminalHost } from '$lib/terminal/host-registry'
   import type { Attachment } from 'svelte/attachments'
 
   interface Props {
@@ -89,12 +90,22 @@
       host.addEventListener('focusin', onFocusIn)
       host.addEventListener('focusout', onFocusOut)
 
+      // Expose the live terminal to the shared context menu (Copy / Paste /
+      // Select All) through the host registry.
+      const unregisterHost = registerTerminalHost(host, {
+        term: terminal,
+        write: (data) => {
+          window.api.send('pty:write', terminalId, data)
+        }
+      })
+
       term = terminal
 
       unsubs.push(
         () => {
           host.removeEventListener('focusin', onFocusIn)
           host.removeEventListener('focusout', onFocusOut)
+          unregisterHost()
         },
         subscribe(`pty:data:${terminalId}`, (data) => {
           terminal.write(data as string)

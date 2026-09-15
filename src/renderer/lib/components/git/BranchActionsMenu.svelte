@@ -6,24 +6,30 @@
     isCurrent: boolean
     canCheckout?: boolean
     canDelete?: boolean
+    canDeleteRemote?: boolean
     canFetch: boolean
     checkoutLabel?: string
     busy?: boolean
+    remoteBusy?: boolean
     onCheckout: () => void
     onFetch: () => void
     onDelete: () => void
+    onDeleteRemote: () => void
   }
 
   let {
     isCurrent,
     canCheckout = true,
     canDelete = true,
+    canDeleteRemote = false,
     canFetch,
     checkoutLabel = 'Check out',
     busy = false,
+    remoteBusy = false,
     onCheckout,
     onFetch,
-    onDelete
+    onDelete,
+    onDeleteRemote
   }: Props = $props()
 
   const itemClass =
@@ -46,6 +52,18 @@
   <DropdownMenu.Item class={itemClass} onSelect={onFetch} disabled={busy}>
     <Download size={12} class="shrink-0 text-dimmed" />
     Fetch this branch
+  </DropdownMenu.Item>
+{/if}
+
+{#if canDeleteRemote}
+  <DropdownMenu.Separator class="my-1 h-px bg-border" />
+  <DropdownMenu.Item
+    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+    onSelect={onDeleteRemote}
+    disabled={remoteBusy}
+  >
+    <Trash2 size={12} class="shrink-0" />
+    Delete remote branch
   </DropdownMenu.Item>
 {/if}
 

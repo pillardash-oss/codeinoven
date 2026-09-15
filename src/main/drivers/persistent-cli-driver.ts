@@ -1421,7 +1421,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     await this.storage.write(this.sessionPath(session.id), session)
   }
 
-  private sessionPath(sessionId: string): string {
+  protected sessionPath(sessionId: string): string {
     return `drivers/${this.id}/sessions/${sessionId}.json`
   }
 
