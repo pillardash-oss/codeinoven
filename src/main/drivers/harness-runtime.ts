@@ -8,6 +8,7 @@ import {
   commandRequiresShell,
   resolveExecutablePath
 } from './cli-environment'
+import { spawnInUtilityHost } from './harness-utility-host'
 
 /**
  * Base directory of the bundled Pi resource (see `scripts/build-pi-harness.ts`),
@@ -159,6 +160,73 @@ function decodeWslOutput(value: Buffer): string {
   return zeroBytes > value.length / 8 ? value.toString('utf16le') : value.toString('utf8')
 }
 
+/** Whether a probe command would launch the app's own Electron binary as a raw
+ *  run-as-node child (which macOS surfaces as a separate Dock app). */
+function isBundledElectronCommand(command: string, args: string[]): boolean {
+  return command === process.execPath && /\.(?:[cm]?js)$/iu.test(args[0] ?? '')
+}
+
+/** Run a bundled-harness probe in-process through the Electron utility helper. */
+function captureInUtilityHost(
+  command: string,
+  args: string[],
+  options: {
+    cwd?: string
+    env: NodeJS.ProcessEnv
+    shell?: boolean
+    timeoutMs?: number
+    maxOutputBytes?: number
+  }
+): Promise<CaptureResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawnInUtilityHost({
+      command,
+      args,
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      env: options.env,
+      shell: options.shell ?? false
+    })
+    const stdout: Buffer[] = []
+    const stderr: Buffer[] = []
+    let capturedBytes = 0
+    let settled = false
+    const finish = (result: CaptureResult): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+    const append = (target: Buffer[], chunk: Buffer): void => {
+      capturedBytes += chunk.byteLength
+      if (capturedBytes > (options.maxOutputBytes ?? MAX_CAPTURE_BYTES)) {
+        settled = true
+        clearTimeout(timer)
+        child.kill()
+        reject(new Error('Harness probe produced too much output'))
+        return
+      }
+      target.push(chunk)
+    }
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      child.kill()
+      reject(new Error('Harness probe timed out'))
+    }, options.timeoutMs ?? DISCOVERY_TIMEOUT_MS)
+    child.stdout?.on('data', (chunk: Buffer) => append(stdout, chunk))
+    child.stderr?.on('data', (chunk: Buffer) => append(stderr, chunk))
+    child.on('error', (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(error)
+    })
+    child.on('exit', (code) => {
+      finish({ code, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) })
+    })
+  })
+}
+
 function capture(
   command: string,
   args: string[],
@@ -170,6 +238,12 @@ function capture(
     maxOutputBytes?: number
   }
 ): Promise<CaptureResult> {
+  // Bundled-harness probes (electron run-as-node) must run in-process inside
+  // Electron's utilityProcess helper; a direct child registers a standalone
+  // LaunchServices app on macOS and bounces a terminal-like Dock icon.
+  if (isBundledElectronCommand(command, args)) {
+    return captureInUtilityHost(command, args, options)
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       ...(options.cwd ? { cwd: options.cwd } : {}),

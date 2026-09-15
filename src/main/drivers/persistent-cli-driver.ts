@@ -24,6 +24,7 @@ import { estimateTokenCostUsd } from '../providers/pricing'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment, OWNED_SESSION_MARKER } from './cli-environment'
 import { prepareHarnessInvocation } from './harness-runtime'
+import { spawnInUtilityHost } from './harness-utility-host'
 import type {
   AgentEventCallback,
   AgentProcessObserver,
@@ -574,12 +575,17 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         cwd: projectPath,
         env: invocationEnv
       })
-      child = spawn(prepared.command, prepared.args, {
-        ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
-        env: prepared.env,
-        shell: prepared.shell,
-        stdio: ['pipe', 'pipe', 'pipe']
-      })
+      // Bundled harnesses (electron run-as-node) run in-process inside Electron's
+      // utilityProcess helper so macOS never shows a bouncing Dock app per session.
+      child =
+        prepared.runtime?.target?.kind === 'bundled'
+          ? spawnInUtilityHost(prepared)
+          : spawn(prepared.command, prepared.args, {
+              ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
+              env: prepared.env,
+              shell: prepared.shell,
+              stdio: ['pipe', 'pipe', 'pipe']
+            })
     } catch (error) {
       invocation.onProcessExit?.()
       throw error
