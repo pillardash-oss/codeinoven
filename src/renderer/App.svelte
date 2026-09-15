@@ -373,6 +373,20 @@
         shortcut: ['Ctrl', 'N'],
         keywords: ['task', 'conversation', 'project']
       })
+    } else if (activeView === 'projects-scope' && scopeState.sidebarContext) {
+      const project = scopeState.projectRecords.find(
+        (candidate) => candidate.id === scopeState.sidebarContext?.projectId
+      )
+      actions.unshift({
+        id: 'app:new-thread',
+        title: 'New thread',
+        description: project ? `Create a thread in ${project.name}` : 'Create a project thread',
+        category: 'command',
+        source: applicationSource,
+        icon: SquarePen,
+        shortcut: ['Ctrl', 'N'],
+        keywords: ['task', 'conversation', 'project', 'scope']
+      })
     } else if (
       (activeView === 'projects' || activeView === 'threads') &&
       workspaceState.activeProject &&
@@ -726,6 +740,9 @@
             scopeState.buckets[0]?.id ??
             DEFAULT_SCOPE_BUCKET_ID
           scopeState.requestCreateScopedThread(bucketId)
+        } else if (activeView === 'projects-scope' && scopeState.sidebarContext) {
+          // Docked scoped-threads sidebar: create in the docked scope.
+          workspaceState.requestCreateThread(scopeState.sidebarContext.bucketId)
         } else {
           // Create in the current thread's scope: Workspace inherits the
           // active thread's scope bucket onto the new thread, exactly like
@@ -1750,6 +1767,15 @@
             DEFAULT_SCOPE_BUCKET_ID
           scopeState.requestCreateScopedThread(bucketId)
         }
+        return
+      }
+
+      if (activeView === 'projects-scope') {
+        // Docked scoped-threads sidebar: create a thread in the docked scope's
+        // project and bucket, same as the sidebar's new-thread action. Works
+        // from the empty state too (no thread open, so no active project).
+        const context = scopeState.sidebarContext
+        if (context) workspaceState.requestCreateThread(context.bucketId)
         return
       }
 

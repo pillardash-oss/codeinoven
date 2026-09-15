@@ -478,6 +478,20 @@
     }
   })
 
+  /** Resolve the project a pending create-thread request targets: an explicit
+   *  scope bucket matching the docked scoped-threads sidebar overrides the
+   *  active project (which is null in that sidebar's empty state, when no
+   *  thread is open yet). */
+  function createThreadRequestProject(): Project | null {
+    const pendingBucket = workspaceState.pendingScopeBucketId
+    const context = scopeState.sidebarContext
+    if (pendingBucket && context && context.bucketId === pendingBucket) {
+      const scopedProject = projects.find((candidate) => candidate.id === context.projectId)
+      if (scopedProject) return scopedProject
+    }
+    return workspaceState.activeProject
+  }
+
   /** React to Cmd/Ctrl+N → create thread in active project (optionally in a scope bucket). */
   $effect(() => {
     const current = workspaceState.requestCreateThreadCount
@@ -487,11 +501,9 @@
       workspaceState.consumeCreateThreadRequest()
     ) {
       prevCreateThreadCount = current
-      if (workspaceState.activeProject) {
-        handleCreateThreadRequest(
-          workspaceState.activeProject,
-          workspaceState.pendingScopeBucketId ?? undefined
-        )
+      const project = createThreadRequestProject()
+      if (project) {
+        handleCreateThreadRequest(project, workspaceState.pendingScopeBucketId ?? undefined)
       }
       workspaceState.pendingScopeBucketId = null
     }
@@ -512,11 +524,9 @@
         workspaceState.consumeCreateThreadRequest()
       ) {
         prevCreateThreadCount = workspaceState.requestCreateThreadCount
-        if (workspaceState.activeProject) {
-          handleCreateThreadRequest(
-            workspaceState.activeProject,
-            workspaceState.pendingScopeBucketId ?? undefined
-          )
+        const queuedProject = createThreadRequestProject()
+        if (queuedProject) {
+          handleCreateThreadRequest(queuedProject, workspaceState.pendingScopeBucketId ?? undefined)
         }
         workspaceState.pendingScopeBucketId = null
       }
