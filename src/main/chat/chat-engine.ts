@@ -980,6 +980,7 @@ const TEMPORARY_CHAT_SYSTEM_PROMPT = [
   `You are answering inside a temporary, read-only ${APP_NAME} chat.`,
   'Answer questions and explain findings using the supplied conversation context.',
   'You may inspect project files and use read-only research tools.',
+  'Skill instructions are readable: when one of the available skills matches the request, load its SKILL.md with the read tool and follow it.',
   'Do not modify files, create specifications or plans, run tests, execute shell commands, or perform any other mutating action.',
   'Do not ask to broaden the task. Respond only to the user request in this temporary chat.',
   CITATION_SYSTEM_INSTRUCTION,
@@ -9381,6 +9382,9 @@ export class ChatEngine {
     this.temporaryChats.delete(temporaryChatId)
     this.temporaryChatDisplayMessages.delete(temporaryChatId)
     this.outboundMessageIdsBySession.delete(temporary.sessionId)
+    // A closed side chat can never receive a reply for its blocking request, so
+    // drop the gate instead of leaving an unanswerable request behind.
+    this.clearPendingPermissionsForSession(temporary.sessionId)
     clearTimeout(temporary.expiryTimer)
     const completion = this.completionWaiters.get(temporary.sessionId)
     if (completion) {
@@ -11057,15 +11061,34 @@ export class ChatEngine {
       await this.interruptRejectedPermission(pending, driver)
       return
     }
-    await this.threadManager.setStatus(
-      pending.session.projectId,
-      pending.session.threadId,
-      pending.resumeStatus
-    )
+    const sideChat = this.temporaryChatForSession(pending.session.sessionId)
+    // A side chat blocks only its own turn: resuming a permission never rewrites
+    // the parent thread's status, which stayed untouched when the request came up.
+    if (!sideChat) {
+      await this.threadManager.setStatus(
+        pending.session.projectId,
+        pending.session.threadId,
+        pending.resumeStatus
+      )
+    }
     if (alternativeInstruction !== undefined) {
+      const alternativeMessageId = createMessageId()
+      if (sideChat) {
+        // The side chat owns its transcript: the alternative is shown there and
+        // never written into the parent thread's conversation.
+        this.recordTemporaryDisplayMessage(
+          sideChat.id,
+          sideChat.sessionId,
+          alternativeMessageId,
+          alternativeInstruction,
+          [],
+          []
+        )
+        this.refreshTemporaryChatExpiry(sideChat)
+        return
+      }
       // Surface the alternative as a visible user message; the harness already
       // received it as corrective feedback on the permission reply.
-      const alternativeMessageId = createMessageId()
       const alternativeText = [
         `The requested ${pending.request.permission} action was rejected.`,
         `Do not perform the requested ${pending.request.permission} action.`,
@@ -11103,12 +11126,16 @@ export class ChatEngine {
     await driver.abort(pending.session.projectPath, pending.request.sessionId)
     this.clearPendingQuestionsForSession(pending.request.sessionId)
     this.clearPendingPermissionsForSession(pending.request.sessionId)
-    await this.threadManager.setStatus(
-      pending.session.projectId,
-      pending.session.threadId,
-      'interrupted',
-      { read: true }
-    )
+    // A rejected side chat request interrupts only the side chat's turn; the
+    // parent thread keeps whatever status it owned before the request.
+    if (!this.temporaryChatForSession(pending.request.sessionId)) {
+      await this.threadManager.setStatus(
+        pending.session.projectId,
+        pending.session.threadId,
+        'interrupted',
+        { read: true }
+      )
+    }
   }
 
   /** List unresolved permission requests for renderer reconnect recovery. */
@@ -11116,10 +11143,14 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     return [...this.pendingPermissions.values()]
-      .filter(
-        (pending) =>
-          pending.session.projectId === projectId && pending.session.threadId === threadId
-      )
+      .filter((pending) => {
+        if (pending.session.projectId !== projectId) return false
+        // A side chat's request belongs to the side chat's own conversation
+        // never to the parent thread it was opened from. The parent thread's
+        // composer, queued messages, and status must stay untouched by it.
+        const sideChat = this.temporaryChatForSession(pending.session.sessionId)
+        return sideChat ? sideChat.id === threadId : pending.session.threadId === threadId
+      })
       .map((pending) => pending.request)
   }
 
@@ -21255,6 +21286,11 @@ export class ChatEngine {
    * those paths. Skill access never grants writes or shell commands.
    * File-System-on chats keep the normal project-root + protected-path rules
    * while retaining these read-only exceptions.
+   *
+   * Temporary side chats get the same read-only skill roots as chats even
+   * though they keep their project read scope: skills are harness runtime, not
+   * user file access, and a read-only side chat must be able to load the skill
+   * instructions its turn matches.
    */
   private async chatPermissionScope(info: SessionInfo): Promise<{
     allowedPaths: string[]
@@ -21263,7 +21299,12 @@ export class ChatEngine {
   }> {
     const isChat = info.projectId === INBOX_PROJECT_ID
     const scratchPaths = [this.storage.resolve(chatThreadArtifactDirectory(info.threadId))]
-    if (!isChat) return { allowedPaths: [], scratchPaths, restrictToAllowed: false }
+    if (!isChat) {
+      const skillPaths = this.temporaryChatForSession(info.sessionId)
+        ? this.chatSkillPaths(info.driverId)
+        : []
+      return { allowedPaths: skillPaths, scratchPaths, restrictToAllowed: false }
+    }
 
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
     const fileSystemMode = thread?.settings?.fileSystemMode === true
@@ -21295,6 +21336,21 @@ export class ChatEngine {
       .map((path) =>
         path === '~' ? homedir() : path.startsWith('~/') ? join(homedir(), path.slice(2)) : path
       )
+  }
+
+  /**
+   * The temporary side chat that owns a live session, if any.
+   *
+   * Side chats register their isolated session against the parent thread   that
+   * thread owns the project root, the audit trail, and the completion waiter  
+   * so this lookup is the only way to tell a side chat's session apart from the
+   * parent thread's own turn.
+   */
+  private temporaryChatForSession(sessionId: string): TemporaryChatSession | undefined {
+    for (const temporary of this.temporaryChats.values()) {
+      if (temporary.sessionId === sessionId) return temporary
+    }
+    return undefined
   }
 
   /** Absolute local paths of every file the user attached to a chat thread. */
@@ -21375,13 +21431,20 @@ export class ChatEngine {
     this.markProjectActive(info.projectId)
 
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
+    // A temporary side chat registers its session against the parent thread, but
+    // its permission gate is the side chat's own: the parent thread is idle and
+    // must keep its status, unread flag, and headline untouched by a blocking
+    // request the user answers inside the side chat's window.
+    const sideChat = this.temporaryChatForSession(info.sessionId)
     // When an automatic resolution fails (e.g. the gated harness turn had not
     // settled so the continuation could not start), surface the request as
     // needing attention instead of stranding the thread silently.
     const surfaceForApproval = async (): Promise<void> => {
-      await this.threadManager.setStatus(info.projectId, info.threadId, 'awaiting_approval', {
-        read: false
-      })
+      if (!sideChat) {
+        await this.threadManager.setStatus(info.projectId, info.threadId, 'awaiting_approval', {
+          read: false
+        })
+      }
       if (this.pendingPermissions.get(request.id) !== pending) return
       this.broadcast({ ...event, permission: enrichedRequest })
     }

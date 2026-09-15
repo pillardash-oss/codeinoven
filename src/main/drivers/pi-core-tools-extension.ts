@@ -267,8 +267,9 @@ function isWithinPath(candidatePath, root) {
 }
 
 // Shared and Pi-native skills are part of the harness runtime, not user file
-// access. Resolve these reads before opening a permission dialog so chat mode
-// never flashes a card or races an asynchronous auto-approval.
+// access. Resolve these reads before any permission gate so no session mode
+// flashes a card, races an asynchronous auto-approval, or blocks a read-only
+// chat that only wants to load the skill its turn matches.
 function isIntrinsicSkillRead(toolName, input, cwd) {
   if (!['read', 'grep', 'find', 'ls'].includes(toolName)) return false
   const rawPath = firstString(input['path'], input['file_path'], input['filePath'], input['filename'])
@@ -1528,6 +1529,12 @@ export default function codeInOvenCoreToolsExtension(pi) {
       }
     }
     const hit = evaluateGate(event.toolName, input, ctx.cwd)
+    // Shared and Pi-native skill roots are harness runtime, not user file
+    // access: a skill read resolves before every gate below, so no session mode
+    // opens a permission card for it. Without this, a read-only temporary chat
+    // (whose allowlist already names read/find/grep/ls) falls through to the
+    // outside-the-project gate and blocks on a card just to load a skill.
+    if (isIntrinsicSkillRead(event.toolName, input, ctx.cwd)) return undefined
     // File-System-OFF chat threads publish a tool allowlist; any pi built-in
     // the allowlist does not name requires an explicit permission card. The
     // app's policy auto-approves reads of files the user attached and asks
@@ -1539,7 +1546,6 @@ export default function codeInOvenCoreToolsExtension(pi) {
       CIO_PI_BUILTIN_TOOLS.has(event.toolName) &&
       !allowedTools.includes(event.toolName)
     ) {
-      if (isIntrinsicSkillRead(event.toolName, input, ctx.cwd)) return undefined
       if (isSafeNetworkCurl(event.toolName, input)) return undefined
       const command = typeof input['command'] === 'string' ? input['command'] : undefined
       const path = firstString(input['path'], input['file_path'], input['filePath'], input['filename'])

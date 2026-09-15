@@ -265,6 +265,20 @@ class ThreadMessagesStore {
     }
   }
 
+  /**
+   * The conversation a live session currently streams into, or null when no
+   * conversation owns it.
+   *
+   * Events that carry nothing but a session id (permission requests) have no
+   * conversation identity of their own; this is the same routing table the
+   * streaming path uses, so temporary side chats and threads resolve
+   * identically.
+   */
+  conversationForSession(sessionId: string): { projectId: string; conversationId: string } | null {
+    const owner = this.#threadsBySession.get(sessionId)
+    return owner ? { projectId: owner.projectId, conversationId: owner.threadId } : null
+  }
+
   /** Load the authoritative mirror and merge it with local optimistic state. */
   async load(projectId: string, threadId: string, recentLimit?: number): Promise<void> {
     const key = threadKey(projectId, threadId)

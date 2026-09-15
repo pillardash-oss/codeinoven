@@ -153,6 +153,7 @@
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import {
     responseReferencesState,
@@ -257,6 +258,9 @@
     ThreadSettings,
     'harnessId' | 'accountId' | 'providerId' | 'modelId' | 'thinkingLevel'
   >
+
+  /** Stable empty queue so a controller-driven view never allocates per read. */
+  const EMPTY_PERMISSION_REQUESTS: PermissionRequest[] = []
 
   interface Props {
     thread: Thread
@@ -488,9 +492,7 @@
         createdAt: message.createdAt
       }
     }
-    return Object.values(byId).sort(
-      (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)
-    )
+    return Object.values(byId).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
   }
   /** Composer recall texts: the merged full history, minus blank entries that
    *  would only produce an empty recall step. */
@@ -741,7 +743,7 @@
     )
     lifecycleCancelModalOpen = false
     pendingLifecycleSelection = null
-    // The staged intent was either applied or discarded by this confirmation  
+    // The staged intent was either applied or discarded by this confirmation
     // it must not resurface on the next mount.
     clearLifecycleIntent(thread.projectId, thread.id)
     if (replacement.stages.length > 0 || replacement.autopilot) {
@@ -938,6 +940,20 @@
   let capabilitySkills = $state<AgentCapabilityEntry[]>([])
   let capabilityHarnessName = $state('')
   let pendingPermissions = $state<PermissionRequest[]>([])
+  /**
+   * Permission requests of a controller-driven conversation come from the shared
+   * attention store instead: a temporary side chat's card has to appear in the
+   * side chat's own window, and its tab has to keep saying it needs attention
+   * while the transcript is not mounted (the sidebar mounts only the active
+   * tab). Threads keep their request queue in this view.
+   */
+  const controllerPermissions = $derived(
+    controller
+      ? conversationAttention.permissions(controller.projectId, controller.conversationId)
+      : EMPTY_PERMISSION_REQUESTS
+  )
+  /** The queue the composer's blocking card renders from. */
+  let visiblePermissions = $derived(controller ? controllerPermissions : pendingPermissions)
   let pendingImageDescriptorError = $state<ImageDescriptorErrorRequest | null>(null)
   /**
    * Todo updates are working-trace parts too. The durable stream is written
@@ -1260,7 +1276,7 @@
     if (!chatMode && !orchestrationChild) {
       // Engineering is a set of lifecycle stages, not one switch: expose every
       // stage as its own toggle so "turn engineering on/off" is never ambiguous.
-      // Each action stages the selection exactly like the Engineering Toolbox  
+      // Each action stages the selection exactly like the Engineering Toolbox
       // intent only, applied when the next message is sent.
       const lifecycle = effectiveLifecycleSelection
       for (const stage of engineeringStageActions) {
@@ -1284,7 +1300,7 @@
       })
     }
 
-    // Chat mode only surfaces permission levels once File System is enabled  
+    // Chat mode only surfaces permission levels once File System is enabled
     // chats run with auto permission review until the user opts into files.
     if (!chatMode || settings.fileSystemMode === true) {
       for (const permission of actionPermissionLevels) {
@@ -1501,7 +1517,8 @@
     )?.models.find((candidate) => candidate.id === modelId)
     const contextWindow = latestMessage?.contextWindow ?? model?.contextWindow
     const contextEstimated = latestReportedContextUsed === undefined
-    const contextUsed = latestReportedContextUsed ?? latestEstimatedContextUsed ?? latestTokens?.total
+    const contextUsed =
+      latestReportedContextUsed ?? latestEstimatedContextUsed ?? latestTokens?.total
     if (
       contextWindow === undefined &&
       contextUsed === undefined &&
@@ -3027,7 +3044,7 @@
     }
   }
 
-  /** Scroll the transcript to a section heading inside a specific message  
+  /** Scroll the transcript to a section heading inside a specific message
    *  the jump target used by section sources in the Sources panel. Loads a
    *  window around the message when it lies outside the loaded cache. */
   async function scrollToMessageSection(messageId: string, section: string): Promise<void> {
@@ -3284,7 +3301,7 @@
     const away = !isAtBottom(scrollEl)
     // Pin the window to what the reader is reading the moment they leave the
     // tail, and release it back to the tail-relative window when they return.
-    // While pinned, a streaming turn grows the window instead of sliding it  
+    // While pinned, a streaming turn grows the window instead of sliding it
     // the message and trace under the reader can never be unmounted by new
     // entries arriving at the tail.
     if (away && !userScrolledAway) {
@@ -3515,7 +3532,7 @@
     if (!el || !(content instanceof Element)) return
     const observer = new ResizeObserver(() => {
       if (!scrollEl || !mayReanchorToLatest(userScrolledAway)) return
-      // Re-anchor only when the viewport actually drifted from the bottom  
+      // Re-anchor only when the viewport actually drifted from the bottom
       // a no-op write here would fire a pointless scroll event per resize.
       if (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight > 1) {
         scrollEl.scrollTop = scrollEl.scrollHeight
@@ -3677,6 +3694,9 @@
       sessionReady = Promise.resolve('')
       void refreshCommands()
       void refreshCapabilitySkills()
+      // Remounting into a side chat that is already blocked on a permission
+      // request rehydrates its card; the parent thread is never asked for it.
+      void refreshPendingPermissions()
 
       return () => {
         alive = false
@@ -4793,6 +4813,23 @@
   async function refreshPendingPermissions(): Promise<void> {
     const { projectId, id } = thread
     try {
+      if (controller) {
+        // The side chat's own queue is authoritative for its own conversation
+        // the parent thread must never show a card the side chat owns.
+        const knownIds = new Set(
+          conversationAttention
+            .permissions(controller.projectId, controller.conversationId)
+            .map((request) => request.id)
+        )
+        const pending = await invoke('agent:listPermissions', projectId, id)
+        conversationAttention.reconcile(
+          controller.projectId,
+          controller.conversationId,
+          pending,
+          knownIds
+        )
+        return
+      }
       pendingPermissions = await invoke('agent:listPermissions', projectId, id)
     } catch (error) {
       errorMessage =
@@ -5796,17 +5833,17 @@
 
   async function allowPermissionOnce(requestId: string): Promise<void> {
     await invoke('agent:replyPermission', thread.projectId, requestId, 'once')
-    pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
+    resolvePendingPermission(requestId)
   }
 
   async function allowPermissionAlways(requestId: string): Promise<void> {
     await invoke('agent:replyPermission', thread.projectId, requestId, 'always')
-    pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
+    resolvePendingPermission(requestId)
   }
 
   async function rejectPermission(requestId: string): Promise<void> {
     await invoke('agent:replyPermission', thread.projectId, requestId, 'reject')
-    pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
+    resolvePendingPermission(requestId)
   }
 
   async function providePermissionAlternative(
@@ -5814,8 +5851,27 @@
     alternative: string
   ): Promise<void> {
     await invoke('agent:replyPermission', thread.projectId, requestId, 'reject', alternative)
-    pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
+    resolvePendingPermission(requestId)
+    // The engine commits the alternative straight into the side chat's own
+    // transcript, so the view has to re-read it from there.
+    if (controller) {
+      await controller.load()
+      return
+    }
     await refreshMessages()
+  }
+
+  /**
+   * Drop an answered request from whichever queue owns it: a controller-driven
+   * conversation publishes through the shared attention store, threads keep the
+   * queue in this view.
+   */
+  function resolvePendingPermission(requestId: string): void {
+    if (controller) {
+      conversationAttention.resolve(controller.projectId, controller.conversationId, requestId)
+      return
+    }
+    pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
   }
 
   function checkpointForTurn(messageIndex: number): TurnCheckpointSummary | null {
@@ -5824,7 +5880,7 @@
 
     // A checkpoint's turn spans beginTurn (createdAt) → completeTurn
     // (completedAt). Every message of that turn   including steers,
-    // question-answers, permission prompts, sub-agent spawns, and compaction  
+    // question-answers, permission prompts, sub-agent spawns, and compaction
     // falls inside this window, so match the card by time instead of walking
     // back to a "user" message (whose role/shape varies with what the agent
     // did mid-turn). Choosing the most recent window resolves
@@ -9536,7 +9592,7 @@
       visibleMessages.length === 0 &&
       !busy &&
       !failureRetryVisible &&
-      pendingPermissions.length === 0 &&
+      visiblePermissions.length === 0 &&
       pendingQuestionRequests.length === 0
   )
 
@@ -11628,8 +11684,8 @@
                 onJumpToSpec={() => chooseBrainstormEntry('spec')}
                 onClose={revertEngineeringEntryChoice}
               />
-            {:else if pendingPermissions.length > 0 && !achievementAutonomous}
-              {@const pendingPermission = pendingPermissions[0]}
+            {:else if visiblePermissions.length > 0 && !achievementAutonomous}
+              {@const pendingPermission = visiblePermissions[0]}
               {#key pendingPermission.id}
                 <PermissionRequestCard
                   request={pendingPermission}
@@ -11911,7 +11967,7 @@
                     }}
                     projectId={thread.projectId}
                     threadId={thread.id}
-                    scopeShoe={scopeShoe}
+                    {scopeShoe}
                     attachmentStorage={{
                       kind: chatMode ? 'chat' : 'project',
                       projectId: thread.projectId,
