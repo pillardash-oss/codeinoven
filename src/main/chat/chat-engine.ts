@@ -16128,29 +16128,93 @@ export class ChatEngine {
         normalizedInvocation: normalizeInvocationEvidence(invocation)
       }
     })
-    const observedCommands = observedInvocations
+    /** The shell text an auditor actually executed, when the harness exposes it. */
+    const toolCommandText = (part: Extract<AgentPart, { type: 'tool' }>): string => {
+      const command = part.state.input.command
+      if (typeof command === 'string' && command.trim()) return command
+      return part.state.title ?? ''
+    }
+    const sourceFileTokenPattern =
+      /(?:^|\/)[\w.@+-]+\.(?:[cm]?[jt]sx?|svelte|json|jsonc|css|scss|html|vue|py|go|rs|java|kt|kts|swift|yml|yaml|toml|sh|sql)$/u
+    const isPathToken = (token: string): boolean =>
+      token.includes('/') || sourceFileTokenPattern.test(token)
+    /** Compare two path-ish tokens while tolerating the workspace-relative vs
+     *  package-relative prefixes an auditor mixes (`src/lib/x.ts` against
+     *  `apps/application/src/lib/x.ts`). */
+    const pathTokensMatch = (left: string, right: string): boolean =>
+      left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`)
+    /** Reduce a shell command to its logical body: drop the `cd <dir> &&`
+     *  wrapper, exit-code echoes, and output tailing an auditor wraps around the
+     *  command it reports, because the report records the intent rather than the
+     *  exact shell line. */
+    const commandBody = (value: string): string =>
+      normalizeCommandEvidence(value)
+        .replace(/2>&1/gu, ' ')
+        .replace(/\|\s*(?:tail|head)\s+-\d+/gu, ' ')
+        .replace(/;\s*(?:echo|printf)\s+[^;|]*/gu, ' ')
+        .replace(/\|\|\s*true/gu, ' ')
+        .replace(/(?:^|[;&|]\s*)cd\s+\S+\s*&&\s*/gu, ' ')
+        .replace(/\s+/gu, ' ')
+        .trim()
+    const commandDirectories = (value: string): string[] =>
+      [...value.matchAll(/(?:^|[;&|]\s*)cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)/gu)]
+        .map((match) => match[1].replace(/["']/gu, '').replace(/\/+$/u, '').trim())
+        .filter((directory) => /[\p{L}\p{N}]/u.test(directory))
+    const observedCommands = observedTools
       .filter(
-        ({ part }) =>
-          part.state.status === 'completed' && /bash|command|shell|exec/iu.test(part.tool)
+        (part) => part.state.status === 'completed' && /bash|command|shell|exec/iu.test(part.tool)
       )
-      .map(({ part, invocation }) => ({
-        part,
-        invocation,
-        normalizedInvocation: normalizeCommandEvidence(invocation)
-      }))
+      .map((part) => {
+        const invocation = [part.tool, part.state.title, JSON.stringify(part.state.input)]
+          .filter((value): value is string => Boolean(value))
+          .join('\n')
+        const rawCommand = toolCommandText(part)
+        return {
+          part,
+          invocation,
+          /** Every token the harness saw, command body plus raw invocation, so a
+           *  harness that only exposes `state.title` still matches. */
+          observedTokens: [
+            ...commandBody(rawCommand).split(' '),
+            ...normalizeCommandEvidence(invocation).split(' ')
+          ].filter(Boolean),
+          observedDirectories: commandDirectories(rawCommand)
+        }
+      })
     const verification = input.content.verification
     for (const check of verification?.checks ?? []) {
       if (check.status === 'not_applicable') continue
-      const command = check.command.replace(/^\$\s*/u, '').trim()
-      const normalizedCommand = normalizeCommandEvidence(command)
+      const rawCommand = check.command.replace(/^\$\s*/u, '').trim()
+      const tokens = commandBody(rawCommand).split(' ').filter(Boolean)
+      const pathTokens = tokens.filter(isPathToken)
+      const requiredTokens = tokens.filter((token) => token !== '--' && !isPathToken(token))
+      const requiredDirectories = commandDirectories(rawCommand)
+      const declaredTokenCount = requiredTokens.length + pathTokens.length
+      /** Tokens of this check's command that a given observed command never
+       *  contains. Empty means the auditor really executed this check. */
+      const missingTokens = (observed: (typeof observedCommands)[number]): string[] => [
+        ...requiredTokens.filter((token) => !observed.observedTokens.includes(token)),
+        ...pathTokens.filter(
+          (token) =>
+            !observed.observedTokens.some((candidate) => pathTokensMatch(candidate, token))
+        )
+      ]
       const observedCommand = observedCommands.find(
         (observed) =>
-          observed.normalizedInvocation.includes(normalizedCommand) ||
-          normalizedCommand.includes(observed.normalizedInvocation)
+          missingTokens(observed).length === 0 &&
+          requiredDirectories.every((directory) =>
+            observed.observedDirectories.some((candidate) => pathTokensMatch(candidate, directory))
+          )
       )
       if (!observedCommand) {
+        const closest = observedCommands
+          .map((observed) => missingTokens(observed))
+          .filter((missing) => missing.length > 0 && missing.length < declaredTokenCount)
+          .sort((left, right) => left.length - right.length)[0]
         issues.push(
-          `verification.checks ${check.id} has no matching completed command in the auditor transcript`
+          `verification.checks ${check.id} has no matching completed command in the auditor transcript${
+            closest ? ` (never observed: ${closest.slice(0, 6).join(', ')})` : ''
+          }`
         )
         continue
       }
@@ -16159,7 +16223,7 @@ export class ChatEngine {
         for (const file of check.files) {
           if (
             !observedCommand.invocation.includes(file) &&
-            !observedCommand.normalizedInvocation.includes(normalizeCommandEvidence(file))
+            !observedCommand.observedTokens.some((token) => pathTokensMatch(token, file))
           ) {
             issues.push(
               `verification.checks ${check.id} did not explicitly target audited file ${file}`
