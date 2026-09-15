@@ -334,6 +334,11 @@ export interface ScopeWorktreeProgress {
   detail?: string
 }
 
+export interface ScopeWorktreeProgressEvent extends ScopeWorktreeProgress {
+  projectId: string
+  scopeBucketId: string
+}
+
 export interface ProjectFileEntry {
   name: string
   path: string

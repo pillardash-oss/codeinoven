@@ -1,5 +1,4 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import { APP_SLUG } from '$shared/brand'
@@ -23,7 +22,6 @@ import {
   type ScopeWorktreeDefaults,
   type ScopeWorktreeHealth,
   type ScopeWorktreeHealthCategory,
-  type ScopeWorktreeProgress,
   type ScopeWorktreeSourceInfo,
   type Thread,
   scopeSliceForStatus
@@ -261,8 +259,6 @@ class ScopeState {
   /** Board signature of the last background health refresh, so views can ask
    *  for a refresh from any reactive block without hammering the IPC channel. */
   private healthSyncSignature = ''
-  /** Transient worktree creation/setup progress. */
-  worktreeProgress = $state<ScopeWorktreeProgress>({ stage: 'none' })
   private loadSequence = 0
   private saveSequence = 0
   /** Projects whose full non-archived thread list has been merged into memory. */
@@ -866,79 +862,18 @@ class ScopeState {
       setupCommands?: ScopeSetupCommandSpec[]
     }
   ): Promise<ManagedWorktreeDescriptor | null> {
-    this.worktreeProgress = { stage: 'naming' }
     try {
       const descriptor = await invoke(
         'scope:worktree:create',
         { projectId, scopeBucketId: bucketId },
         input
       )
-      this.worktreeProgress = { stage: 'done' }
       await this.reloadBoard(projectId)
       return descriptor
     } catch (error) {
-      this.worktreeProgress = { stage: 'failed' }
       this.error = error instanceof Error ? error.message : 'The worktree could not be created.'
       throw error
     }
-  }
-
-  /**
-   * Kick the full new-scope creation off in the background so the app stays
-   * usable while git + setup commands run. A persistent loading toast tracks the
-   * run and is replaced by its outcome: a success check that auto-dismisses, or
-   * an error toast carrying the failure and its Copy button.
-   */
-  beginWorktreeCreation(
-    projectId: string,
-    input: {
-      title: string
-      /** Whether an isolated worktree is requested; shared-directory scopes skip setup entirely. */
-      isolated: boolean
-      runSetup: boolean
-      environmentMode: ScopeEnvironmentMode
-      baseBranch?: string
-      setupCommands?: ScopeSetupCommandSpec[]
-    },
-    options: { existingBucketId?: string | null; onCreated?: (bucketId: string) => void } = {}
-  ): void {
-    const creation = (async (): Promise<string> => {
-      let bucketId = options.existingBucketId ?? null
-      if (!bucketId) {
-        const bucket = await this.createBucketForProject(projectId, input.title)
-        bucketId = bucket?.id ?? null
-        if (!bucketId) throw new Error('The scope could not be created')
-      }
-      if (input.isolated) {
-        // Persist the entered configuration as project defaults BEFORE creating
-        // so the saved defaults can never race ahead of this worktree.
-        await this.setWorktreeDefaults(projectId, {
-          setupCommands: input.setupCommands ?? [],
-          runSetupByDefault: input.runSetup,
-          environmentMode: input.environmentMode
-        })
-        await this.createWorktree(projectId, bucketId, input)
-      }
-      options.onCreated?.(bucketId)
-      return input.title
-    })()
-    // A plain loading toast is not promise-bound, so it is pinned open for as
-    // long as git and the setup commands run, then replaced by the outcome.
-    const progressToast = toast.loading(`Creating “${input.title}”…`, {
-      duration: Number.POSITIVE_INFINITY
-    })
-    void creation.then(
-      () => {
-        toast.dismiss(progressToast)
-        toast.success(`“${input.title}” is ready`)
-      },
-      (cause: unknown) => {
-        // The rejection is handled here, so it never surfaces as an unhandled
-        // rejection, and the error toast still carries its Copy button.
-        toast.dismiss(progressToast)
-        toast.error(cause instanceof Error ? cause.message : 'The scope could not be created.')
-      }
-    )
   }
 
   /** Inspect the source checkout before creating a worktree. */
@@ -972,19 +907,16 @@ class ScopeState {
     bucketId: string,
     input: { sourcePath: string; runSetup: boolean }
   ): Promise<ManagedWorktreeDescriptor | null> {
-    this.worktreeProgress = { stage: 'naming' }
     try {
       const descriptor = await invoke(
         'scope:worktree:adopt',
         { projectId, scopeBucketId: bucketId },
         input
       )
-      this.worktreeProgress = { stage: 'done' }
       await this.reloadBoard(projectId)
       await this.worktreeHealth({ projectId, scopeBucketId: bucketId })
       return descriptor
     } catch (error) {
-      this.worktreeProgress = { stage: 'failed' }
       this.error = error instanceof Error ? error.message : 'The worktree could not be adopted.'
       throw error
     }

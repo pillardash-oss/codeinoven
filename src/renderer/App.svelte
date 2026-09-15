@@ -69,6 +69,7 @@
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { clearDraftLabelCookie } from '$lib/stores/draft-label'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
@@ -2059,6 +2060,13 @@
     <!-- Floats above every view   survives thread/project/view and sidebar visibility. -->
     {#await import('$lib/components/git/PrDockHost.svelte') then { default: PrDockHost }}
       <PrDockHost />
+    {/await}
+  {/if}
+
+  {#if scopeJobs.jobs.length}
+    <!-- Floats above every view so a worktree run keeps reporting while the user works. -->
+    {#await import('$lib/components/scope/ScopeJobDockHost.svelte') then { default: ScopeJobDockHost }}
+      <ScopeJobDockHost />
     {/await}
   {/if}
 
