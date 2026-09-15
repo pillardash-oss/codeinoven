@@ -38,6 +38,7 @@
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import {
     rendererRecovery,
+    flushAllDraftCommits,
     isSettingsSection,
     isSettingsView,
     settingsSectionForView,
@@ -1315,9 +1316,9 @@
   ): Promise<void> {
     const isChat = thread.projectId === INBOX_PROJECT_ID
     const inScopeState =
-      activeView === 'scope'
-      || activeView === 'projects-scope'
-      || (activeView === 'projects' && Boolean(scopeState.sidebarContext))
+      activeView === 'scope' ||
+      activeView === 'projects-scope' ||
+      (activeView === 'projects' && Boolean(scopeState.sidebarContext))
 
     if (isChat) {
       // Chat notifications always land in the chats view.
@@ -1549,6 +1550,10 @@
       // Renderer should release event subscriptions   the main process
       // will dispose services and flush logs 500ms after this signal.
       // The component tree unmounts naturally as the window closes.
+      // Push any debounced DB draft commits now: the main process closes the
+      // database later in its shutdown pipeline, and these invokes must land
+      // while the grace period is still open.
+      flushAllDraftCommits()
     })
   }
 
@@ -1876,23 +1881,19 @@
          mounted across Settings/Scope so returning never reloads the thread
          list or reconnects the harness; it's simply hidden while away. -->
     <div
-      class={
-        activeView === 'projects'
-        || activeView === 'projects-scope'
-        || activeView === 'chats'
-        || activeView === 'threads'
-          ? 'h-full'
-          : 'hidden'
-      }
+      class={activeView === 'projects' ||
+      activeView === 'projects-scope' ||
+      activeView === 'chats' ||
+      activeView === 'threads'
+        ? 'h-full'
+        : 'hidden'}
     >
       <Workspace
         mode={lastContentView}
-        active={
-          activeView === 'projects'
-          || activeView === 'projects-scope'
-          || activeView === 'chats'
-          || activeView === 'threads'
-        }
+        active={activeView === 'projects' ||
+          activeView === 'projects-scope' ||
+          activeView === 'chats' ||
+          activeView === 'threads'}
         scopeViewActive={activeView === 'scope'}
         {navigate}
         {config}

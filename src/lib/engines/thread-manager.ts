@@ -8,6 +8,7 @@ import { messageId as createMessageId } from '../id'
 import { featureSlugFromTitle } from '../project-artifacts'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import { broadcastThreadDraftUpdated } from '../../main/chat/thread-events'
+import { trackDraftWrite } from '../../main/chat/draft-commit-gate'
 import { validateEntityId } from '../../main/ipc/ipc-validation'
 import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage-repo'
 import { EngineeringLifecycleEngine } from './engineering-lifecycle-engine'
@@ -1113,14 +1114,15 @@ export class ThreadManager {
     draftJson: string | null
   ): Promise<void> {
     validateEntityId(threadId, 'Thread ID')
-    const updated = await this.threadRepo.setDraftStateViaWorker(
-      projectId,
-      threadId,
-      drafting,
-      draftJson
+    // Tracked by the draft-commit gate so shutdown can await the write before
+    // the database closes (an in-flight commit hitting a closed DB throws).
+    return trackDraftWrite(
+      this.threadRepo
+        .setDraftStateViaWorker(projectId, threadId, drafting, draftJson)
+        .then((updated) => {
+          if (updated) broadcastThreadDraftUpdated(projectId, threadId, drafting, draftJson)
+        })
     )
-    if (!updated) return
-    broadcastThreadDraftUpdated(projectId, threadId, drafting, draftJson)
   }
 
   /** Every thread currently flagged as drafting in the DB, quota-independent. */
