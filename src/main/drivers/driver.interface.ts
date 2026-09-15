@@ -479,6 +479,21 @@ export interface HarnessDriver {
   abort(projectPath: string, sessionId: string): Promise<void>
 
   /**
+   * Stop one delegated child (sub-agent) session without touching its parent.
+   *
+   * Harnesses that expose a child as an addressable session can just abort it.
+   * Harnesses that keep children inside their own process (pi runs sub-agents
+   * as nested in-process sessions) must implement this to reach them at all:
+   * their `abort` only knows the root session, so calling `abort` with a child
+   * id is a no-op and a stopped worker would keep running and editing files.
+   */
+  abortSubagent?(
+    projectPath: string,
+    parentSessionId: string,
+    childSessionId: string
+  ): Promise<void>
+
+  /**
    * Forcefully stop the harness process backing a session (SIGTERM). Called when
    * the user explicitly confirms a forced close so a still-streaming local
    * project stops immediately instead of lingering after the app exits. Drivers

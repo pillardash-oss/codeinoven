@@ -89,7 +89,11 @@
     if (liveStatus?.state === 'working') return 'running'
     if (liveStatus?.state === 'waiting') return 'waiting'
     if (liveStatus?.state === 'error') return 'error'
-    if (liveStatus?.state === 'idle') return 'completed'
+    // A child session reports a plain `idle` once its run ends; a worker the
+    // user stopped must not be described as completed.
+    if (liveStatus?.state === 'idle') {
+      return tab.activity.status === 'aborted' ? 'aborted' : 'completed'
+    }
     return tab.activity.status
   })
   const busy = $derived(effectiveStatus === 'running')

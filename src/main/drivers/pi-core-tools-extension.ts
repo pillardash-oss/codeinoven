@@ -61,6 +61,14 @@
  * result and notification because the primary agent owns committing. An
  * agent_settled guard wakes the primary with a fresh turn whenever it tries
  * to end its work while sub-agents are still running.
+ *
+ * Stopping: pi's abort RPC only reaches the root run, so the nested worker
+ * sessions can never be addressed by the app directly. The driver therefore
+ * publishes a stop request into this session's stop-flag file whenever the
+ * user stops the thread (or one worker), and this extension applies it: every
+ * live worker is aborted, reports `aborted` instead of a completion, and is
+ * barred from waking the primary. The same request disarms the turn-end guard,
+ * which would otherwise start a fresh primary turn right after the stop.
  */
 
 import {
@@ -81,7 +89,7 @@ export const CIO_SUBAGENT_MARKER = 'cio-subagent:'
 export const CIO_QUESTION_MARKER = 'cio-question:'
 
 export function piCoreToolsExtension(): string {
-  return `import { existsSync, readFileSync } from 'node:fs'
+  return `import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
@@ -681,6 +689,110 @@ export default function codeInOvenCoreToolsExtension(pi) {
   const subAgents = new Map()
   let subAgentCounter = 0
 
+  // ── App-owned stop requests ──────────────────────────────────────────
+  // Pi's abort RPC reaches only the root run; workers are nested in-process
+  // sessions the app cannot address. The driver publishes a stop request into
+  // this session's stop-flag file when the user stops the thread (or one
+  // worker), and this is the only code that can act on it.
+  const CIO_STOP_FLAG_PATH = '__CIO_STOP_FLAG_PATH__'
+  // Poll window while workers are live: two orders of magnitude below a
+  // worker's own turn latency, and armed only while a worker runs, so an idle
+  // session never polls.
+  const CIO_STOP_POLL_MS = 400
+  let stopFlagMtimeMs = -1
+  let stopRequestToken = ''
+  let stopRequestChildIds = []
+  let consumedStopToken = ''
+  let stopApplied = false
+  let stopPollTimer = null
+
+  /** Read the app's stop request (mtime-cached). The driver clears the token
+   *  when the next turn starts, so an old request can never stop fresh work. */
+  function readStopRequest() {
+    try {
+      const info = statSync(CIO_STOP_FLAG_PATH)
+      if (info.mtimeMs !== stopFlagMtimeMs) {
+        stopFlagMtimeMs = info.mtimeMs
+        const parsed = JSON.parse(readFileSync(CIO_STOP_FLAG_PATH, 'utf8'))
+        const source = typeof parsed === 'object' && parsed !== null ? parsed : {}
+        stopRequestToken = typeof source.token === 'string' ? source.token : ''
+        stopRequestChildIds = Array.isArray(source.childSessionIds) ? source.childSessionIds : []
+      }
+    } catch {
+      stopFlagMtimeMs = -1
+      stopRequestToken = ''
+      stopRequestChildIds = []
+    }
+    return stopRequestToken
+  }
+
+  /** True while the app has a stop request this session has not applied yet. */
+  function hasStopRequest() {
+    const token = readStopRequest()
+    return token !== '' && token !== consumedStopToken
+  }
+
+  /**
+   * Apply the pending stop request. Each request is applied exactly once, and
+   * an applied stop stays sticky until the next agent start: a worker spawned
+   * after the sweep still belongs to the stopped turn, and the turn-end guard
+   * must not wake the primary afterwards.
+   */
+  function applyStopRequest() {
+    if (hasStopRequest()) {
+      consumedStopToken = stopRequestToken
+      const ids = stopRequestChildIds
+      for (const record of subAgents.values()) {
+        if (record.status !== 'running') continue
+        if (ids.length > 0 && !ids.includes(record.childSessionId)) continue
+        stopSubAgent(record)
+      }
+      stopApplied = true
+    }
+    return stopApplied
+  }
+
+  /** True when the app's pending stop request covers this worker. */
+  function stopRequestCovers(record) {
+    if (!hasStopRequest()) return false
+    const ids = stopRequestChildIds
+    return ids.length === 0 || ids.includes(record.childSessionId)
+  }
+
+  /**
+   * Stop one worker for good: abort its run and remember the stop, so its
+   * settle reports 'aborted' instead of a completed run and it never wakes the
+   * primary with a done notification.
+   */
+  function stopSubAgent(record) {
+    if (record.status !== 'running') return
+    record.status = 'aborted'
+    record.stopRequested = true
+    try {
+      void record.session.abort()
+    } catch {}
+  }
+
+  /** Poll for stop requests, only while workers are live. */
+  function ensureStopWatcher() {
+    if (stopPollTimer) return
+    stopPollTimer = setInterval(function () {
+      applyStopRequest()
+      let running = false
+      for (const record of subAgents.values()) {
+        if (record.status === 'running') {
+          running = true
+          break
+        }
+      }
+      if (running) return
+      clearInterval(stopPollTimer)
+      stopPollTimer = null
+    }, CIO_STOP_POLL_MS)
+    // Never hold pi's event loop open on the app's behalf.
+    if (typeof stopPollTimer.unref === 'function') stopPollTimer.unref()
+  }
+
   function capOutput(text) {
     return text.length > CIO_SUBAGENT_OUTPUT_CAP
       ? text.slice(0, CIO_SUBAGENT_OUTPUT_CAP) + '\\n…(output truncated)'
@@ -1027,6 +1139,10 @@ export default function codeInOvenCoreToolsExtension(pi) {
    */
   function notifySubAgentDone(record) {
     if (!pi || typeof pi.sendMessage !== 'function') return
+    // A worker the user stopped must never wake the primary: the point of the
+    // stop was to end its work, and a triggerTurn here would start a fresh
+    // primary turn seconds after the user pressed stop.
+    if (!record || record.stopRequested) return
     const files = subAgentFiles(record)
     const text =
       'Sub-agent done for task ' + record.purpose + ' (' + record.agentId + ', status: ' + record.status + ').' +
@@ -1191,6 +1307,10 @@ export default function codeInOvenCoreToolsExtension(pi) {
       output: '',
       files: touchedFiles,
       startedAt: Date.now(),
+      // Set when the app's stop request reaches this worker: it decides the
+      // settle status ('aborted') and bars the done notification from waking
+      // the primary after the user stopped the session.
+      stopRequested: false,
       session
     }
     subAgents.set(agentId, record)
@@ -1198,13 +1318,21 @@ export default function codeInOvenCoreToolsExtension(pi) {
     // exists: no waiting for pi to flush the child's session file, and no
     // polling on the renderer side.
     const stream = createSubAgentStream(parentCtx, session.sessionId)
+    // The run that spawned this worker was aborted, so the worker's own run
+    // ends with it and its result is not a completion. The stop-request sweep
+    // is the app-initiated path; this covers an abort pi raised itself.
     const onAbort = function () {
-      void session.abort()
+      if (record.status !== 'running') return
+      record.status = 'aborted'
+      try {
+        void session.abort()
+      } catch {}
     }
     if (signal) {
       if (signal.aborted) onAbort()
       else signal.addEventListener('abort', onAbort, { once: true })
     }
+    ensureStopWatcher()
     session.subscribe(function (event) {
       stream.push(event)
       if (event.type !== 'message_end') return
@@ -1216,11 +1344,24 @@ export default function codeInOvenCoreToolsExtension(pi) {
     record.promise = (async function () {
       try {
         await session.prompt(spec.instructions, { expandPromptTemplates: false })
-        record.status = 'completed'
+        // A worker the user stopped never resolves as a completion: an aborted
+        // child run resolves its prompt, so the status must not be reset here.
+        if (record.status !== 'aborted') record.status = 'completed'
       } catch (error) {
-        record.status = 'error'
-        record.error = error && error.message ? error.message : String(error)
+        if (record.status !== 'aborted') {
+          record.status = 'error'
+          record.error = error && error.message ? error.message : String(error)
+        }
       } finally {
+        // A stop request that landed while this worker was finishing applies to
+        // this record too: a raced stop must never be reported as a completion.
+        // The sweep is applied as well, so the remaining workers stop with it.
+        const coveredByStop = stopRequestCovers(record)
+        applyStopRequest()
+        if (coveredByStop) {
+          record.status = 'aborted'
+          record.stopRequested = true
+        }
         // Only the sub-agent's final message goes back to the primary agent;
         // the accumulated output stays a live preview for the UI card.
         record.finalOutput = capOutput(subAgentText(lastAssistant(session)))
@@ -1228,10 +1369,13 @@ export default function codeInOvenCoreToolsExtension(pi) {
         sendSubAgentUpdate(onUpdate, record)
         // Flush the tail of the transcript and close the live stream so the
         // view settles on its final transcript instead of a stuck spinner.
-        stream.settle(record.status === 'error' ? 'error' : 'idle', record.error)
+        stream.settle(
+          record.status === 'aborted' ? 'aborted' : record.status === 'error' ? 'error' : 'idle',
+          record.error
+        )
         // Background workers announce themselves; foreground spawns are
         // awaited inline by the primary and need no notification.
-        if (spec.background) notifySubAgentDone(record)
+        if (spec.background && !record.stopRequested) notifySubAgentDone(record)
       }
     })()
     return { record }
@@ -1442,13 +1586,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
 
   // Abort every live sub-agent when the owning session shuts down.
   pi.on('session_shutdown', async () => {
-    for (const record of subAgents.values()) {
-      if (record.status === 'running') {
-        try {
-          await record.session.abort()
-        } catch {}
-      }
-    }
+    for (const record of subAgents.values()) stopSubAgent(record)
   })
 
   // Turn-end guard: the primary must never finish its work while sub-agents
@@ -1457,6 +1595,11 @@ export default function codeInOvenCoreToolsExtension(pi) {
   // failed) before finishing. Loop terminates because the wait blocks until
   // the workers resolve.
   pi.on('agent_settled', async () => {
+    // A settled run the app just stopped must not wake the primary: the stop
+    // request aborted every worker, and the guard below would otherwise start a
+    // fresh turn defending work the user cancelled. The suppression stays until
+    // the next agent start, which is a new turn by definition.
+    if (applyStopRequest()) return
     const running = []
     for (const record of subAgents.values()) {
       if (record.status === 'running') {
@@ -1478,6 +1621,12 @@ export default function codeInOvenCoreToolsExtension(pi) {
         { triggerTurn: true }
       )
     } catch {}
+  })
+
+  // A new agent start is a new turn, never a continuation of a stop the user
+  // requested earlier: the driver clears the stop-flag token before prompting.
+  pi.on('agent_start', async () => {
+    stopApplied = false
   })
 
   // Deliver the CodeInOven-composed instructions as a real system-role field

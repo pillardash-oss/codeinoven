@@ -1830,7 +1830,14 @@ export interface ResolvedUtility {
 
 // ─── Agent message parts (harness wire format) ─────────────────────────────
 
-export type AgentToolStatus = 'pending' | 'running' | 'completed' | 'error'
+/**
+ * Lifecycle state of one tool invocation or delegated sub-agent task.
+ *
+ * `aborted` is distinct from `error` on purpose: a deliberate user stop is not
+ * a failure, and a surface that reported it as `completed` would claim work
+ * that never finished.
+ */
+export type AgentToolStatus = 'pending' | 'running' | 'completed' | 'error' | 'aborted'
 
 /** State of a tool invocation as reported by the harness. */
 export interface AgentToolState {

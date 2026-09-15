@@ -393,6 +393,20 @@ function formatAttachedImageDescriptions(results: readonly ImageDescriptorResult
 const PROVIDER_CATALOG_TTL_MS = 60 * 60 * 1000
 /** How long a resolved agent tool catalog stays fresh before re-discovery. */
 const TOOL_CATALOG_TTL_MS = 30 * 1000
+
+/**
+ * A terminal sub-agent card patch (completed / failed / stopped) reports a
+ * worker that has already ended. It is bookkeeping for the card, never
+ * evidence of new work: treating it as activity flips the thread's live
+ * "working" state back on   which is exactly what a stopped worker's card did
+ * seconds after the user stopped the thread.
+ */
+function isTerminalSubagentPatch(event: SessionAgentEvent): boolean {
+  if (event.type !== 'message.part.updated' || event.part.type !== 'subagent') return false
+  const status = event.part.activity.status
+  return status === 'completed' || status === 'error' || status === 'aborted'
+}
+
 /**
  * Cooldown used to schedule an automatic retry for a quota/rate-limit wait
  * when the provider's error carries no parseable reset time (or one already
@@ -5796,6 +5810,9 @@ export class ChatEngine {
 
     this.userAbortedSessions.delete(sessionId)
     this.sessionStatuses.set(sessionId, { state: 'working' })
+    // The worker is running again, so transcript loads must treat it as live
+    // instead of reusing the terminal state the stop (or failure) left behind.
+    this.childSessionActivityStatuses.set(sessionId, 'running')
     this.handledIdleSessions.delete(sessionId)
     this.broadcast({ type: 'session.status', sessionId, status: { state: 'working' } })
     try {
@@ -5981,7 +5998,15 @@ export class ChatEngine {
     const driver = this.driverForRuntime(owner.driverId, owner.accountId)
     if (!driver) throw new Error(`Harness driver is unavailable: ${owner.driverId}`)
     this.userAbortedSessions.add(sessionId)
-    await driver.abort(owner.projectPath, sessionId)
+    if (owner.parentSessionId && driver.abortSubagent) {
+      // The harness keeps this worker inside its parent's process, so aborting
+      // the child id alone would silently do nothing.
+      await driver.abortSubagent(owner.projectPath, owner.parentSessionId, sessionId)
+    } else {
+      await driver.abort(owner.projectPath, sessionId)
+    }
+    this.childSessionActivityStatuses.set(sessionId, 'aborted')
+    this.clearSessionWatchdog(sessionId)
     this.sessionStatuses.set(sessionId, { state: 'idle' })
     this.broadcast({ type: 'session.status', sessionId, status: { state: 'idle' } })
   }
@@ -10842,6 +10867,9 @@ export class ChatEngine {
       threadId,
       this.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
     )
+    // Workers run in their own sessions and must stop with the thread they
+    // were spawned from   see stopThreadChildSessions.
+    await this.stopThreadChildSessions(projectId, threadId)
     await driver.abort(projectPath, thread.sessionId)
     await this.cleanupTurnUtilities(thread.sessionId)
     updateRetryWakeWindow(thread.sessionId, null)
@@ -10868,11 +10896,62 @@ export class ChatEngine {
     this.sessionStatuses.set(thread.sessionId, { state: 'idle' })
     this.clearPendingQuestionsForSession(thread.sessionId)
     this.clearPendingPermissionsForSession(thread.sessionId)
+    // A stop must leave nothing running on this thread, and the watchdog armed
+    // for the turn it just ended would only re-check a session that is done.
+    this.clearSessionWatchdog(thread.sessionId)
     // The user stopped this run deliberately   reflect it immediately so the
     // sidebar indicator never stays stuck on "working". A deliberate stop is
     // "done (read)": it is not an error and not pending the user's attention.
     await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
     clearNotificationAborting(projectId, threadId)
+  }
+
+  /**
+   * Stop every delegated worker session owned by one thread.
+   *
+   * A sub-agent runs as its own session (pi keeps them nested inside its own
+   * process), so stopping the thread's own session leaves the workers running:
+   * they keep editing files, their cards keep spinning, and a finishing worker
+   * can even wake the stopped thread with its completion notification. A user
+   * stop therefore addresses the children too   the same sweep the Assignment
+   * stop path already performs.
+   */
+  private async stopThreadChildSessions(projectId: string, threadId: string): Promise<void> {
+    const children = [...this.childSessionOwners.entries()].filter(
+      ([, owner]) => owner.projectId === projectId && owner.threadId === threadId
+    )
+    if (children.length === 0) return
+    await Promise.allSettled(
+      children.map(async ([childSessionId, owner]) => {
+        this.userAbortedSessions.add(childSessionId)
+        this.activeCompactions.delete(childSessionId)
+        this.rejectCompletionWaiter(childSessionId, 'Agent run stopped by user')
+        const driver = this.driverForRuntime(owner.driverId, owner.accountId)
+        try {
+          if (driver && owner.parentSessionId && driver.abortSubagent) {
+            await driver.abortSubagent(owner.projectPath, owner.parentSessionId, childSessionId)
+          } else if (driver && this.sessionStatuses.get(childSessionId)?.state === 'working') {
+            await driver.abort(owner.projectPath, childSessionId)
+          }
+        } catch (error) {
+          Logger.dev('Sub-agent stop was incomplete:', error)
+        } finally {
+          await this.cleanupTurnUtilities(childSessionId)
+          this.retryScheduler?.clear(childSessionId)
+          updateRetryWakeWindow(childSessionId, null)
+          this.clearSessionWatchdog(childSessionId)
+          this.clearPendingQuestionsForSession(childSessionId)
+          this.clearPendingPermissionsForSession(childSessionId)
+          this.childSessionActivityStatuses.set(childSessionId, 'aborted')
+          this.sessionStatuses.set(childSessionId, { state: 'idle' })
+          this.broadcast({
+            type: 'session.status',
+            sessionId: childSessionId,
+            status: { state: 'idle' }
+          })
+        }
+      })
+    )
   }
 
   /**
@@ -19699,7 +19778,11 @@ export class ChatEngine {
     const stoppedSessionTerminalEvent =
       event.type === 'session.idle' ||
       event.type === 'session.error' ||
-      (event.type === 'session.status' && event.status.state === 'idle')
+      (event.type === 'session.status' && event.status.state === 'idle') ||
+      // A delegated worker's terminal card patch must still land on a stopped
+      // thread, or the card it closes   and the trace row that mirrors it
+      // keeps spinning after the stop that produced it.
+      isTerminalSubagentPatch(event)
     if (stoppedSessionEvent && !stoppedSessionTerminalEvent) return
     this.updateCompletionWaiter(event)
     this.observeChildSession(driverId, event)
@@ -19772,7 +19855,10 @@ export class ChatEngine {
         this.retryScheduler?.clear(event.sessionId)
       }
     } else {
-      if (event.type === 'message.part.updated' || event.type === 'message.part.delta') {
+      if (
+        (event.type === 'message.part.updated' || event.type === 'message.part.delta') &&
+        !isTerminalSubagentPatch(event)
+      ) {
         this.handledIdleSessions.delete(event.sessionId)
       }
     }
@@ -19788,7 +19874,7 @@ export class ChatEngine {
       event.type === 'message.completed' && this.handledIdleSessions.has(event.sessionId)
     const confirmsActiveWork =
       !idleAlreadyHandled &&
-      (event.type === 'message.part.updated' ||
+      ((event.type === 'message.part.updated' && !isTerminalSubagentPatch(event)) ||
         event.type === 'message.part.delta' ||
         (event.type === 'message.completed' && !event.error) ||
         (event.type === 'session.status' && event.status.state === 'working'))
@@ -20451,7 +20537,9 @@ export class ChatEngine {
           if (ownerSession) this.claimSubagentFiles(ownerSession, event.part.activity.files)
         }
         const isTerminal =
-          event.part.activity.status === 'completed' || event.part.activity.status === 'error'
+          event.part.activity.status === 'completed' ||
+          event.part.activity.status === 'error' ||
+          event.part.activity.status === 'aborted'
         if (isTerminal) {
           void this.captureCompletedChildSession(owner, childSessionId).catch((error) =>
             Logger.dev('Sub-agent transcript capture unavailable:', error)

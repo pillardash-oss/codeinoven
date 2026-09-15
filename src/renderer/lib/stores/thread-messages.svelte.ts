@@ -8,6 +8,7 @@
  */
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { mergeStreamedPart } from '$lib/agent-part-merge'
+import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageId as createMessageId } from '$shared/id'
 import { classifyProviderIssue, parseUsageResetAt } from '$shared/provider-issue'
@@ -1248,7 +1249,18 @@ class ThreadMessagesStore {
     // working. A stray idle/status snapshot between activity blips must never
     // leave the thread idle — and fold its working trace — while parts keep
     // streaming (the definitive session.idle that ends the turn clears it).
-    if (event.type === 'message.part.updated' || event.type === 'message.part.delta') {
+    //
+    // A terminal sub-agent card patch is the exception: it closes a worker that
+    // already ended (completed, failed, or stopped by the user), so treating it
+    // as activity would flip the row back to "working" right after the stop.
+    const terminalSubagentPatch =
+      event.type === 'message.part.updated' &&
+      event.part.type === 'subagent' &&
+      subagentStatusIsTerminal(event.part.activity.status)
+    if (
+      !terminalSubagentPatch &&
+      (event.type === 'message.part.updated' || event.type === 'message.part.delta')
+    ) {
       this.setRunIssue(projectId, threadId, null)
       agentRuns.setBusy(projectId, threadId, true, this.#latestUserMessageId(projectId, threadId))
     }
