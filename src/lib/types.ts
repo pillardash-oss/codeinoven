@@ -414,6 +414,15 @@ export interface Thread {
   archived: boolean
   /** Whether the user has viewed this thread since its last activity. */
   read: boolean
+  /** Whether the user is actively composing into this thread — typing in the
+   *  composer or dictating a voice recording. Persisted edge-triggered so
+   *  bounded DB listings always keep a thread that is being drafted, whatever
+   *  its age, and other instances can surface it too. */
+  drafting?: boolean
+  /** Latest committed composer draft (JSON `ComposerDraftEntry` shape),
+   *  written ~10s after the last draft activity. Restores drafts across
+   *  restarts and surfaces them to other instances. */
+  draftJson?: string | null
   /** Git branch associated with this thread, when known. */
   branch?: string
   /** Stable agent-work directory name shared by forks of the same feature. */

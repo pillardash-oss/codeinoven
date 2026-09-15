@@ -308,7 +308,13 @@ function parseContentView(value: unknown): 'projects' | 'chats' | 'threads' {
 }
 
 function parseNonSettingsView(value: unknown, fallback: MainView): MainView {
-  if (value === 'projects' || value === 'projects-scope' || value === 'chats' || value === 'scope' || value === 'threads') {
+  if (
+    value === 'projects' ||
+    value === 'projects-scope' ||
+    value === 'chats' ||
+    value === 'scope' ||
+    value === 'threads'
+  ) {
     return value
   }
   return fallback
@@ -368,6 +374,34 @@ function parseCollapsedFolders(value: unknown): string[] {
   return value.filter((id): id is string => isRecoveryIdentifier(id))
 }
 
+/** Validate and normalize one raw draft entry. Returns null when unusable. */
+export function parseComposerDraftEntry(value: unknown): ComposerDraftEntry | null {
+  if (!isRecord(value)) return null
+  const text = typeof value.text === 'string' ? value.text : ''
+  if (text.length > MAX_DRAFT_LENGTH) return null
+  const attachments = Array.isArray(value.attachments)
+    ? value.attachments.filter(isPromptAttachment)
+    : []
+  const projectReferences = Array.isArray(value.projectReferences)
+    ? value.projectReferences.filter(isPromptProjectReference).slice(0, 20)
+    : []
+  const taskReferences = Array.isArray(value.taskReferences)
+    ? value.taskReferences.filter(isPromptAssignmentTaskReference).slice(0, 20)
+    : []
+  const promptReferences = Array.isArray(value.promptReferences)
+    ? value.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
+    : []
+  const startAfterThreads = parseStartAfterThreads(value.startAfterThreads)
+  return {
+    text,
+    attachments,
+    projectReferences,
+    taskReferences,
+    promptReferences,
+    startAfterThreads
+  }
+}
+
 function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
   if (!isRecord(value)) return {}
 
@@ -376,32 +410,9 @@ function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
   for (const [key, raw] of Object.entries(value)) {
     if (count >= MAX_RECOVERY_DRAFTS) break
     if (!isDraftKey(key)) continue
-
-    if (!isRecord(raw)) continue
-    const text = typeof raw.text === 'string' ? raw.text : ''
-    if (text.length > MAX_DRAFT_LENGTH) continue
-
-    const attachments = Array.isArray(raw.attachments)
-      ? raw.attachments.filter(isPromptAttachment)
-      : []
-    const projectReferences = Array.isArray(raw.projectReferences)
-      ? raw.projectReferences.filter(isPromptProjectReference).slice(0, 20)
-      : []
-    const taskReferences = Array.isArray(raw.taskReferences)
-      ? raw.taskReferences.filter(isPromptAssignmentTaskReference).slice(0, 20)
-      : []
-    const promptReferences = Array.isArray(raw.promptReferences)
-      ? raw.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
-      : []
-    const startAfterThreads = parseStartAfterThreads(raw.startAfterThreads)
-    drafts[key] = {
-      text,
-      attachments,
-      projectReferences,
-      taskReferences,
-      promptReferences,
-      startAfterThreads
-    }
+    const entry = parseComposerDraftEntry(raw)
+    if (!entry) continue
+    drafts[key] = entry
     count += 1
   }
   return drafts

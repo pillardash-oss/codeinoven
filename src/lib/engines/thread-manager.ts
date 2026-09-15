@@ -7,6 +7,8 @@ import { rm } from 'fs/promises'
 import { messageId as createMessageId } from '../id'
 import { featureSlugFromTitle } from '../project-artifacts'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
+import { broadcastThreadDraftUpdated } from '../../main/chat/thread-events'
+import { validateEntityId } from '../../main/ipc/ipc-validation'
 import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage-repo'
 import { EngineeringLifecycleEngine } from './engineering-lifecycle-engine'
 import {
@@ -988,7 +990,7 @@ export class ThreadManager {
             const message =
               opts?.error?.trim() ||
               existing.lastError ||
-              (detail ? (detail.split('\n', 1)[0]?.trim() || undefined) : undefined)
+              (detail ? detail.split('\n', 1)[0]?.trim() || undefined : undefined)
             if (!message) return undefined
             return detail && detail !== message ? `${message}\n\n${detail}` : message
           })()
@@ -1095,6 +1097,35 @@ export class ThreadManager {
     }
     if (result.changed) this.onChange?.(result.thread)
     return result.thread
+  }
+
+  /**
+   * Persist a thread's draft state: the edge-triggered `drafting` flag and the
+   * debounce-committed draft content. Broadcasts a lightweight draft event so
+   * every renderer (and remote view) keeps its draft indicators in sync
+   * without the expensive full-thread reconcile that `broadcastThreadUpdate`
+   * triggers — commits land while the user is actively typing.
+   */
+  async setDraftState(
+    projectId: string,
+    threadId: string,
+    drafting: boolean,
+    draftJson: string | null
+  ): Promise<void> {
+    validateEntityId(threadId, 'Thread ID')
+    const updated = await this.threadRepo.setDraftStateViaWorker(
+      projectId,
+      threadId,
+      drafting,
+      draftJson
+    )
+    if (!updated) return
+    broadcastThreadDraftUpdated(projectId, threadId, drafting, draftJson)
+  }
+
+  /** Every thread currently flagged as drafting in the DB, quota-independent. */
+  async listDraftingThreads(): Promise<Thread[]> {
+    return this.threadRepo.listDraftingThreadsViaWorker()
   }
 
   /** Persist the thread's agent settings (harness, model, thinking, permissions). */

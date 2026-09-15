@@ -55,6 +55,26 @@ export function broadcastThreadUpdate(thread: Thread): void {
 }
 
 /**
+ * Push just a thread's draft state (drafting flag + committed draft content)
+ * to every renderer window. Deliberately lighter than `broadcastThreadUpdate`:
+ * draft commits happen while the user is actively typing, and the full thread
+ * broadcast forces ThreadView's message reconcile to reload and re-merge the
+ * whole transcript, which would freeze the composer mid-keystroke on large
+ * conversations. Only surfaces that render draft state need this event.
+ */
+export function broadcastThreadDraftUpdated(
+  projectId: string,
+  threadId: string,
+  drafting: boolean,
+  draftJson: string | null
+): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'thread:draftUpdated', projectId, threadId, drafting, draftJson)
+  }
+  forwardRemoteEvent('thread:draftUpdated', { projectId, threadId, drafting, draftJson })
+}
+
+/**
  * Push just a settled git branch to every renderer window. Deliberately
  * lighter than `broadcastThreadUpdate`: branch settlement is cosmetic and can
  * land at any time after a thread is opened (creation-time detection, or a

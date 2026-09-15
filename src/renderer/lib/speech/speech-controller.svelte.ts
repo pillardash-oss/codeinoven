@@ -1,9 +1,12 @@
 import { invoke } from '$lib/ipc.svelte'
 import { posixBasename } from '$shared/paths'
+import { INBOX_PROJECT_ID } from '$shared/types'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
 import { mobileState } from '$lib/remote/mobile-state.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+import { commitDraftStateNow, scheduleDraftCommit } from '$lib/stores/draft-activity.svelte'
 import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
 import { toast } from 'svelte-sonner'
 import { pauseCurrentHistoryAudio } from './global-audio'
@@ -330,9 +333,7 @@ class SpeechController {
         return scope.kind !== 'project' || sidebarTab.projectId === scope.projectId
       }
     }
-    const viewed = isRemotePwaRuntime()
-      ? mobileState.selectedThread
-      : workspaceState.selectedThread
+    const viewed = isRemotePwaRuntime() ? mobileState.selectedThread : workspaceState.selectedThread
     if (!viewed || viewed.id !== scope.threadId) return false
     if (scope.kind === 'project') return viewed.projectId === scope.projectId
     return true
@@ -422,6 +423,46 @@ class SpeechController {
     return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
   }
 
+  /** The thread target of a dictation scope, when it dictates into a thread
+   *  composer. Global scope and thread-less scopes have no draft surface. */
+  private draftTargetFromScope(scope: SpeechScope): { projectId: string; threadId: string } | null {
+    if (scope.kind === 'global' || !scope.threadId) return null
+    const projectId = scope.kind === 'project' ? scope.projectId : INBOX_PROJECT_ID
+    return { projectId, threadId: scope.threadId }
+  }
+
+  /** Flag the thread as drafting in the DB the moment a capture starts, so a
+   *  thread being dictated survives every bounded DB listing (and other
+   *  instances see it) even before any transcript lands. */
+  private flagCaptureDrafting(scope: SpeechScope): void {
+    const target = this.draftTargetFromScope(scope)
+    if (!target) return
+    scheduleDraftCommit(
+      target.projectId,
+      target.threadId,
+      true,
+      rendererRecovery.composerDraftJson(target.projectId, target.threadId)
+    )
+  }
+
+  /** After a capture fully settles — transcript landed in the composer, or the
+   *  pipeline failed/cancelled with nothing inserted — commit the thread's
+   *  authoritative draft state so the DB flag never outlives the dictation. */
+  private settleCaptureDraft(scope: SpeechScope): void {
+    const target = this.draftTargetFromScope(scope)
+    if (!target) return
+    if (rendererRecovery.hasDraftContent(target.projectId, target.threadId)) {
+      scheduleDraftCommit(
+        target.projectId,
+        target.threadId,
+        true,
+        rendererRecovery.composerDraftJson(target.projectId, target.threadId)
+      )
+    } else {
+      commitDraftStateNow(target.projectId, target.threadId, false, null)
+    }
+  }
+
   async start(
     target: SpeechEditorTarget,
     scope: SpeechScope,
@@ -476,6 +517,7 @@ class SpeechController {
       }
       this.startElapsedTimer(capture)
       this.scheduleAsrPreload(capture)
+      this.flagCaptureDrafting(capture.scope)
       this.playCue('started')
       return
     }
@@ -565,6 +607,7 @@ class SpeechController {
       }
       this.startElapsedTimer(capture)
       this.scheduleAsrPreload(capture)
+      this.flagCaptureDrafting(capture.scope)
       this.playCue('started')
     } catch (cause) {
       this.clearElapsedTimer()
@@ -584,6 +627,7 @@ class SpeechController {
       }
       for (const track of stream.getTracks()) track.stop()
       this.active = null
+      this.settleCaptureDraft(scope)
       this.surfaceFailure(target.id, 'capture', cause)
     }
   }
@@ -647,6 +691,7 @@ class SpeechController {
           : invoke('speech:failCapture', active.sessionId, message)
       ).catch(() => undefined)
       this.surfaceFailure(active.target.id, 'capture', cause)
+      this.settleCaptureDraft(active.scope)
     } finally {
       if (active.stream) for (const track of active.stream.getTracks()) track.stop()
       this.active = null
@@ -665,7 +710,10 @@ class SpeechController {
   ): Promise<void> {
     const transcribingScope = structuredClone(active.scope)
     this.transcribingTargets = [...this.transcribingTargets, active.target.id]
-    this.transcribingScopes = [...this.transcribingScopes, { attemptId: active.attemptId, scope: transcribingScope }]
+    this.transcribingScopes = [
+      ...this.transcribingScopes,
+      { attemptId: active.attemptId, scope: transcribingScope }
+    ]
     try {
       const transcript = await this.transcribeActive(active)
       await invoke('clipboard:writeText', transcript)
@@ -699,19 +747,20 @@ class SpeechController {
       await invoke('speech:markAttemptFailure', active.attemptId, errorMessage(cause)).catch(
         () => undefined
       )
-      logRendererError(`Voice transcription failed for attempt ${active.attemptId}: ${errorMessage(cause)}`)
+      logRendererError(
+        `Voice transcription failed for attempt ${active.attemptId}: ${errorMessage(cause)}`
+      )
       try {
         reportErrorWithDetails('Voice transcription failed.', { details: errorMessage(cause) })
       } catch {
         // Toast failures must never break the detached job.
       }
     } finally {
-      this.transcribingTargets = this.transcribingTargets.filter(
-        (id) => id !== active.target.id
-      )
+      this.transcribingTargets = this.transcribingTargets.filter((id) => id !== active.target.id)
       this.transcribingScopes = this.transcribingScopes.filter(
         (entry) => entry.attemptId !== active.attemptId
       )
+      this.settleCaptureDraft(transcribingScope)
     }
   }
 

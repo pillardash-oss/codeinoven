@@ -51,6 +51,7 @@
   import FolderRow from './FolderRow.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import PinnedSection from '../threads/PinnedSection.svelte'
+  import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
   import ThreadRow from '../threads/ThreadRow.svelte'
   import ThreadNotePanel from '../threads/ThreadNotePanel.svelte'
@@ -1802,6 +1803,31 @@
     })
   })
 
+  /** Live draft-state updates pushed from the main process (this window's own
+   *  commits plus other windows/instances): merge the drafting flag into every
+   *  thread list and seed the local draft when this window does not have it. */
+  $effect(() => {
+    return subscribe('thread:draftUpdated', (...args: unknown[]) => {
+      const [projectId, threadId, drafting, draftJson] = args as [
+        string,
+        string,
+        boolean,
+        string | null
+      ]
+      rendererRecovery.importDbDraft(projectId, threadId, draftJson)
+      const withDraftState = (thread: Thread): Thread =>
+        thread.id === threadId && thread.projectId === projectId
+          ? { ...thread, drafting: drafting || undefined, draftJson }
+          : thread
+      allThreads = allThreads.map(withDraftState)
+      for (const thread of scopeState.allScopeThreads) {
+        if (thread.id === threadId && thread.projectId === projectId) {
+          scopeState.updateThread(withDraftState(thread))
+        }
+      }
+    })
+  })
+
   // Selecting a thread through any path must settle its unread badge. Sidebar
   // clicks route through openThread, but every programmatic selection calls
   // workspaceState.openThread directly and bypasses it: the view-switch
@@ -2470,6 +2496,25 @@
         upsertThreadInList(thread)
         scopeState.updateThread(thread)
       }
+      // Threads flagged drafting in the DB (this or another instance's draft
+      // commits) must surface too, even when they fell outside the bounded
+      // first-paint slice: a thread being dictated in another window can never
+      // be dropped from the listing. Their drafts seed the local recovery
+      // store whenever this window does not hold a newer local draft.
+      const draftingThreads = await invoke('thread:listDrafting').catch(() => [] as Thread[])
+      for (const thread of draftingThreads) {
+        rendererRecovery.importDbDraft(thread.projectId, thread.id, thread.draftJson ?? null)
+        if (
+          thread.archived ||
+          isOrchestrationChildThread(thread) ||
+          allThreads.some((t) => t.id === thread.id) ||
+          scopeState.allScopeThreads.some((t) => t.id === thread.id)
+        ) {
+          continue
+        }
+        upsertThreadInList(thread)
+        scopeState.updateThread(thread)
+      }
     } finally {
       rescuingDraftThreads = false
     }
@@ -3082,7 +3127,10 @@
   // ─── Thread actions ──────────────────────────────────────────────────────
 
   /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
-  async function createThreadInProject(project: Project, requestedBucketId?: string): Promise<void> {
+  async function createThreadInProject(
+    project: Project,
+    requestedBucketId?: string
+  ): Promise<void> {
     // Scope inheritance mirrors settings inheritance: the new thread object
     // carries the current thread's scope bucket, nothing more. It must never
     // activate the scope sidebar or switch the view  that side effect is
@@ -4522,7 +4570,9 @@
           </div>
         {:else}
           <WelcomeStart
+            variant="projects"
             onNewChat={() => navigate('chats')}
+            onToggleSidebar={() => sidebarState.toggle()}
             onAddProject={() => {
               navigate('projects')
               projectCreateTriggerKind = 'local'
@@ -4565,11 +4615,9 @@
               {#if activeContextTab.kind === 'files'}
                 <ProjectFilesPanel
                   projectId={activeContextTab.projectId}
-                  projectName={
-                    activeContextTab.projectId === INBOX_PROJECT_ID
-                      ? 'Chat artifacts'
-                      : (activeProject?.name ?? 'Project files')
-                  }
+                  projectName={activeContextTab.projectId === INBOX_PROJECT_ID
+                    ? 'Chat artifacts'
+                    : (activeProject?.name ?? 'Project files')}
                   projectIconUrl={activeProject
                     ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
                     : null}
