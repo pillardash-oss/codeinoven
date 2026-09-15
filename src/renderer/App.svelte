@@ -38,6 +38,7 @@
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import {
     rendererRecovery,
+    flushAllDraftCommits,
     isSettingsSection,
     isSettingsView,
     settingsSectionForView,
@@ -372,6 +373,20 @@
         icon: SquarePen,
         shortcut: ['Ctrl', 'N'],
         keywords: ['task', 'conversation', 'project']
+      })
+    } else if (activeView === 'projects-scope' && scopeState.sidebarContext) {
+      const project = scopeState.projectRecords.find(
+        (candidate) => candidate.id === scopeState.sidebarContext?.projectId
+      )
+      actions.unshift({
+        id: 'app:new-thread',
+        title: 'New thread',
+        description: project ? `Create a thread in ${project.name}` : 'Create a project thread',
+        category: 'command',
+        source: applicationSource,
+        icon: SquarePen,
+        shortcut: ['Ctrl', 'N'],
+        keywords: ['task', 'conversation', 'project', 'scope']
       })
     } else if (
       (activeView === 'projects' || activeView === 'threads') &&
@@ -726,6 +741,9 @@
             scopeState.buckets[0]?.id ??
             DEFAULT_SCOPE_BUCKET_ID
           scopeState.requestCreateScopedThread(bucketId)
+        } else if (activeView === 'projects-scope' && scopeState.sidebarContext) {
+          // Docked scoped-threads sidebar: create in the docked scope.
+          workspaceState.requestCreateThread(scopeState.sidebarContext.bucketId)
         } else {
           // Create in the current thread's scope: Workspace inherits the
           // active thread's scope bucket onto the new thread, exactly like
@@ -1298,9 +1316,9 @@
   ): Promise<void> {
     const isChat = thread.projectId === INBOX_PROJECT_ID
     const inScopeState =
-      activeView === 'scope'
-      || activeView === 'projects-scope'
-      || (activeView === 'projects' && Boolean(scopeState.sidebarContext))
+      activeView === 'scope' ||
+      activeView === 'projects-scope' ||
+      (activeView === 'projects' && Boolean(scopeState.sidebarContext))
 
     if (isChat) {
       // Chat notifications always land in the chats view.
@@ -1532,6 +1550,10 @@
       // Renderer should release event subscriptions   the main process
       // will dispose services and flush logs 500ms after this signal.
       // The component tree unmounts naturally as the window closes.
+      // Push any debounced DB draft commits now: the main process closes the
+      // database later in its shutdown pipeline, and these invokes must land
+      // while the grace period is still open.
+      flushAllDraftCommits()
     })
   }
 
@@ -1753,6 +1775,15 @@
         return
       }
 
+      if (activeView === 'projects-scope') {
+        // Docked scoped-threads sidebar: create a thread in the docked scope's
+        // project and bucket, same as the sidebar's new-thread action. Works
+        // from the empty state too (no thread open, so no active project).
+        const context = scopeState.sidebarContext
+        if (context) workspaceState.requestCreateThread(context.bucketId)
+        return
+      }
+
       if (activeView !== 'projects' && activeView !== 'chats' && activeView !== 'threads') return
       if (activeView === 'chats') {
         workspaceState.requestNewChat()
@@ -1850,23 +1881,19 @@
          mounted across Settings/Scope so returning never reloads the thread
          list or reconnects the harness; it's simply hidden while away. -->
     <div
-      class={
-        activeView === 'projects'
-        || activeView === 'projects-scope'
-        || activeView === 'chats'
-        || activeView === 'threads'
-          ? 'h-full'
-          : 'hidden'
-      }
+      class={activeView === 'projects' ||
+      activeView === 'projects-scope' ||
+      activeView === 'chats' ||
+      activeView === 'threads'
+        ? 'h-full'
+        : 'hidden'}
     >
       <Workspace
         mode={lastContentView}
-        active={
-          activeView === 'projects'
-          || activeView === 'projects-scope'
-          || activeView === 'chats'
-          || activeView === 'threads'
-        }
+        active={activeView === 'projects' ||
+          activeView === 'projects-scope' ||
+          activeView === 'chats' ||
+          activeView === 'threads'}
         scopeViewActive={activeView === 'scope'}
         {navigate}
         {config}

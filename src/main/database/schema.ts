@@ -115,6 +115,8 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   user_input_locked    INTEGER NOT NULL DEFAULT 0,
   independent_audit    INTEGER NOT NULL DEFAULT 0,
   independent_audit_initialized INTEGER NOT NULL DEFAULT 0,
+  drafting             INTEGER NOT NULL DEFAULT 0,
+  draft_json           TEXT,
   created_at           INTEGER NOT NULL,
   updated_at           INTEGER NOT NULL,
   last_activity        INTEGER NOT NULL,

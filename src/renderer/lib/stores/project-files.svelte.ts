@@ -9,6 +9,7 @@ import type {
 import { DEFAULT_SCOPE_BUCKET_ID, INBOX_PROJECT_ID } from '$shared/types'
 import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { invoke } from '$lib/ipc.svelte'
+import { posixDirname } from '$shared/paths'
 import { contextSidebarState, type FilesContextTab } from '$lib/stores/context-sidebar.svelte'
 import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import { gitState } from '$lib/stores/git.svelte'
@@ -1365,9 +1366,7 @@ class ProjectFilesWorkspace {
   }
 
   private parentDirectory(path: string): string {
-    const segments = path.split('/')
-    segments.pop()
-    return segments.join('/')
+    return posixDirname(path)
   }
 
   private isPreviewableBinary(mime: string): boolean {

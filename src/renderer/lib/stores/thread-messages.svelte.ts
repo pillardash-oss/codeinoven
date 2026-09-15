@@ -10,10 +10,7 @@ import { invoke, subscribe } from '$lib/ipc.svelte'
 import { mergeStreamedPart } from '$lib/agent-part-merge'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageId as createMessageId } from '$shared/id'
-import {
-  classifyProviderIssue,
-  parseUsageResetAt
-} from '$shared/provider-issue'
+import { classifyProviderIssue, parseUsageResetAt } from '$shared/provider-issue'
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type {
   AgentEvent,
@@ -266,6 +263,20 @@ class ThreadMessagesStore {
     } else {
       this.#sessionIds.delete(key)
     }
+  }
+
+  /**
+   * The conversation a live session currently streams into, or null when no
+   * conversation owns it.
+   *
+   * Events that carry nothing but a session id (permission requests) have no
+   * conversation identity of their own; this is the same routing table the
+   * streaming path uses, so temporary side chats and threads resolve
+   * identically.
+   */
+  conversationForSession(sessionId: string): { projectId: string; conversationId: string } | null {
+    const owner = this.#threadsBySession.get(sessionId)
+    return owner ? { projectId: owner.projectId, conversationId: owner.threadId } : null
   }
 
   /** Load the authoritative mirror and merge it with local optimistic state. */
@@ -640,13 +651,28 @@ class ThreadMessagesStore {
     this.#notify(projectId, threadId)
   }
 
+  /**
+   * Reject an optimistic user message after its backend invoke failed.
+   *
+   * A temporary turn failure (`markNotSent: false`) is settled through the
+   * provider-issue card pipeline instead: `agent:sendTemporaryPrompt` spans the
+   * whole turn, so the invoke can reject mid-stream after the prompt was
+   * already dispatched and even partially streamed, so stamping it "Not sent"
+   * would be misleading; the card carries the classified message plus raw
+   * error instead.
+   */
   private rejectOptimistic(
     projectId: string,
     threadId: string,
     entry: ThreadMessagesEntry,
     messageId: string,
-    error: unknown
+    error: unknown,
+    options: { markNotSent?: boolean } = {}
   ): void {
+    if (options.markNotSent === false) {
+      // Keep the optimistic user prompt as-is; the card carries the failure.
+      return
+    }
     const messageError = error instanceof Error ? error.message : 'Message failed to send.'
     entry.error = messageError
     // Keep the user's prompt when transport fails. Removing it makes a send
@@ -675,7 +701,8 @@ class ThreadMessagesStore {
     const raw = error instanceof Error ? error.message : 'Message failed to send.'
     const message = raw.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
     const kind = classifyProviderIssue(message)
-    const retryAt = kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
+    const retryAt =
+      kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
     this.setRunIssue(projectId, conversationId, {
       kind,
       message,
@@ -859,8 +886,15 @@ class ThreadMessagesStore {
       // through the same never-downgrade snapshot path a thread's mirror uses.
       if (response) this.mergePage(projectId, conversationId, [response])
     } catch (error) {
+      // Do NOT stamp the optimistic user message "Not sent":
+      // `agent:sendTemporaryPrompt` spans the entire turn, so a rejection can
+      // arrive mid-stream after the prompt was dispatched and even partially
+      // streamed. The failure settles through the provider-issue card pipeline
+      // below, which shows the classified message plus the raw error modal.
       this.#settleFailedTemporaryTurn(projectId, conversationId, settings.harnessId, error)
-      this.rejectOptimistic(projectId, conversationId, entry, messageId, error)
+      this.rejectOptimistic(projectId, conversationId, entry, messageId, error, {
+        markNotSent: false
+      })
       throw error
     }
   }
@@ -899,8 +933,12 @@ class ThreadMessagesStore {
         text
       )
     } catch (error) {
+      // Same as `sendTemporary`: never stamp "Not sent" onto a temporary turn;
+      // the provider-issue card is the single, deep error surface.
       this.#settleFailedTemporaryTurn(projectId, conversationId, settings.harnessId, error)
-      this.rejectOptimistic(projectId, conversationId, entry, messageId, error)
+      this.rejectOptimistic(projectId, conversationId, entry, messageId, error, {
+        markNotSent: false
+      })
       throw error
     }
   }

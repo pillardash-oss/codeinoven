@@ -26,6 +26,14 @@ export function posixBasename(path: string): string {
   return segments[segments.length - 1] ?? ''
 }
 
+/** Directory portion of a path, without a trailing slash (`a/b/c.txt` → `a/b`,
+ *  `c.txt` → `''`, `/a/b` → `/a`). */
+export function posixDirname(path: string): string {
+  const segments = toPosixPath(path).split('/')
+  segments.pop()
+  return segments.join('/')
+}
+
 /** Whether a path is absolute in any mainstream form: POSIX (`/x`), UNC
  *  (`\\srv\share`, `//srv/share`), or Windows drive-letter (`C:\x`, `C:/x`). */
 export function isAbsoluteishPath(path: string): boolean {

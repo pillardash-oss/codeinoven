@@ -2,6 +2,7 @@ import { invoke } from '$lib/ipc.svelte'
 import { messageId } from '$shared/id'
 import { SvelteSet } from 'svelte/reactivity'
 import { agentRuns } from './agent-runs.svelte'
+import { conversationAttention } from './conversation-attention.svelte'
 import { threadMessages } from './thread-messages.svelte'
 import { temporaryChatUnread } from './temporary-chat-unread.svelte'
 import { gitState } from './git.svelte'
@@ -1342,6 +1343,7 @@ class ContextSidebarState {
     // an expired side chat leaves nothing behind.
     threadMessages.clear(tab.projectId, temporaryChatId)
     agentRuns.clear(tab.projectId, temporaryChatId)
+    conversationAttention.clear(tab.projectId, temporaryChatId)
     this.clearTemporaryChatExpiry(temporaryChatId)
     if (closeRemote) void invoke('agent:closeTemporaryChat', temporaryChatId)
   }
@@ -1350,6 +1352,7 @@ class ContextSidebarState {
     // A fresh conversation identity: drop the old cache, then regenerate the id.
     threadMessages.clear(tab.projectId, tab.temporaryChatId)
     agentRuns.clear(tab.projectId, tab.temporaryChatId)
+    conversationAttention.clear(tab.projectId, tab.temporaryChatId)
     temporaryChatUnread.clear(tab.projectId, tab.threadId, tab.temporaryChatId)
     this.clearTemporaryChatExpiry(tab.temporaryChatId)
     tab.temporaryChatId = crypto.randomUUID()
@@ -1530,6 +1533,8 @@ class ContextSidebarState {
     if (tab.kind === 'temporary-chat') {
       this.clearTemporaryChatExpiry(tab.temporaryChatId)
       temporaryChatUnread.clear(tab.projectId, tab.threadId, tab.temporaryChatId)
+      // A closed side chat can no longer answer its blocked request.
+      conversationAttention.clear(tab.projectId, tab.temporaryChatId)
     }
     const closedKind = tab.kind
     context.tabs = context.tabs.filter((tab) => tab.id !== id)

@@ -310,6 +310,7 @@ export const REMOTE_FORWARDED_EVENTS: readonly string[] = [
   'agent:event',
   'agent:processesChanged',
   'thread:updated',
+  'thread:draftUpdated',
   'thread:deleted',
   'notification:show',
   'providers:status'

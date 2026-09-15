@@ -430,10 +430,17 @@ export const CITATION_SYSTEM_INSTRUCTION = [
   'Never cite a source you did not inspect or retrieve; when a claim cannot be verified, state that limitation instead of padding the report with references.'
 ].join(' ')
 
+/** Auditors verify evidence in their own session. Delegated work lands in a
+ *  sub-agent transcript, which is outside both the auditor's context and the
+ *  evidence the platform validates, so an audit report must never depend on it. */
+const AUDIT_SOLE_AGENT_RULE =
+  'You are the only agent on this audit: inspect the repository and run every check yourself in this session. Do not delegate verification to sub-agents, helper agents, background workers, or parallel threads, and never report an inspection or a command you did not run yourself. Perform the work sequentially in this session, one check at a time.'
+
 const AUDIT_GENERATION_SYSTEM_PROMPT = [
   `You are an independent ${APP_NAME} audit agent.`,
   'Audit the completed implementation strictly against the supplied approved specification.',
   'Inspect the project using read-only tools. Check every success criterion, correctness, regressions, security weaknesses, memory/resource leaks, and missing validation or tests.',
+  AUDIT_SOLE_AGENT_RULE,
   'When deployment URLs are relevant, verify that the implementation discovers or documents explicit public environment variables, uses only a documented localhost fallback in development, and never treats an invented or example domain as production configuration.',
   'If the code safely requires deployment-provided production values but those external values are not yet configured, record an informational deployment-readiness note and allow implementation to pass. Treat a silent production fallback or hardcoded invented domain as an actionable finding.',
   'Report concrete evidence. Do not modify files.',
@@ -476,6 +483,7 @@ const INDEPENDENT_AUDIT_SYSTEM_PROMPT = [
   `You are an independent ${APP_NAME} audit agent.`,
   'No specification exists for this work. The user’s requests and the agent’s final outputs in the supplied transcript are the contract; judge the delivered work against them.',
   'Verify claims against the repository using read-only tools. Check every user request, correctness, completeness, regressions, security weaknesses, memory/resource leaks, and missing validation or tests.',
+  AUDIT_SOLE_AGENT_RULE,
   'When deployment URLs are relevant, verify that the implementation discovers or documents explicit public environment variables, uses only a documented localhost fallback in development, and never treats an invented or example domain as production configuration.',
   'If the code safely requires deployment-provided production values but those external values are not yet configured, record an informational deployment-readiness note and allow implementation to pass. Treat a silent production fallback or hardcoded invented domain as an actionable finding.',
   'Report concrete evidence. Do not modify files.',
@@ -972,6 +980,7 @@ const TEMPORARY_CHAT_SYSTEM_PROMPT = [
   `You are answering inside a temporary, read-only ${APP_NAME} chat.`,
   'Answer questions and explain findings using the supplied conversation context.',
   'You may inspect project files and use read-only research tools.',
+  'Skill instructions are readable: when one of the available skills matches the request, load its SKILL.md with the read tool and follow it.',
   'Do not modify files, create specifications or plans, run tests, execute shell commands, or perform any other mutating action.',
   'Do not ask to broaden the task. Respond only to the user request in this temporary chat.',
   CITATION_SYSTEM_INSTRUCTION,
@@ -2874,6 +2883,16 @@ export class ChatEngine {
       'agent:generateIndependentAudit',
       (_, projectId: string, threadId: string, request: AuditGenerationRequest) =>
         this.generateIndependentAudit(projectId, threadId, request)
+    )
+    ipcMain.handle(
+      'agent:startFreshIndependentAudit',
+      (_, projectId: string, threadId: string, request: AuditGenerationRequest) =>
+        this.startFreshIndependentAudit(projectId, threadId, request)
+    )
+    ipcMain.handle(
+      'agent:deleteIndependentAuditorThread',
+      (_, projectId: string, threadId: string) =>
+        this.deleteIndependentAuditorThread(projectId, threadId)
     )
     ipcMain.handle(
       'agent:ensureIndependentAuditorThread',
@@ -9363,6 +9382,9 @@ export class ChatEngine {
     this.temporaryChats.delete(temporaryChatId)
     this.temporaryChatDisplayMessages.delete(temporaryChatId)
     this.outboundMessageIdsBySession.delete(temporary.sessionId)
+    // A closed side chat can never receive a reply for its blocking request, so
+    // drop the gate instead of leaving an unanswerable request behind.
+    this.clearPendingPermissionsForSession(temporary.sessionId)
     clearTimeout(temporary.expiryTimer)
     const completion = this.completionWaiters.get(temporary.sessionId)
     if (completion) {
@@ -11039,15 +11061,34 @@ export class ChatEngine {
       await this.interruptRejectedPermission(pending, driver)
       return
     }
-    await this.threadManager.setStatus(
-      pending.session.projectId,
-      pending.session.threadId,
-      pending.resumeStatus
-    )
+    const sideChat = this.temporaryChatForSession(pending.session.sessionId)
+    // A side chat blocks only its own turn: resuming a permission never rewrites
+    // the parent thread's status, which stayed untouched when the request came up.
+    if (!sideChat) {
+      await this.threadManager.setStatus(
+        pending.session.projectId,
+        pending.session.threadId,
+        pending.resumeStatus
+      )
+    }
     if (alternativeInstruction !== undefined) {
+      const alternativeMessageId = createMessageId()
+      if (sideChat) {
+        // The side chat owns its transcript: the alternative is shown there and
+        // never written into the parent thread's conversation.
+        this.recordTemporaryDisplayMessage(
+          sideChat.id,
+          sideChat.sessionId,
+          alternativeMessageId,
+          alternativeInstruction,
+          [],
+          []
+        )
+        this.refreshTemporaryChatExpiry(sideChat)
+        return
+      }
       // Surface the alternative as a visible user message; the harness already
       // received it as corrective feedback on the permission reply.
-      const alternativeMessageId = createMessageId()
       const alternativeText = [
         `The requested ${pending.request.permission} action was rejected.`,
         `Do not perform the requested ${pending.request.permission} action.`,
@@ -11085,12 +11126,16 @@ export class ChatEngine {
     await driver.abort(pending.session.projectPath, pending.request.sessionId)
     this.clearPendingQuestionsForSession(pending.request.sessionId)
     this.clearPendingPermissionsForSession(pending.request.sessionId)
-    await this.threadManager.setStatus(
-      pending.session.projectId,
-      pending.session.threadId,
-      'interrupted',
-      { read: true }
-    )
+    // A rejected side chat request interrupts only the side chat's turn; the
+    // parent thread keeps whatever status it owned before the request.
+    if (!this.temporaryChatForSession(pending.request.sessionId)) {
+      await this.threadManager.setStatus(
+        pending.session.projectId,
+        pending.session.threadId,
+        'interrupted',
+        { read: true }
+      )
+    }
   }
 
   /** List unresolved permission requests for renderer reconnect recovery. */
@@ -11098,10 +11143,14 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     return [...this.pendingPermissions.values()]
-      .filter(
-        (pending) =>
-          pending.session.projectId === projectId && pending.session.threadId === threadId
-      )
+      .filter((pending) => {
+        if (pending.session.projectId !== projectId) return false
+        // A side chat's request belongs to the side chat's own conversation
+        // never to the parent thread it was opened from. The parent thread's
+        // composer, queued messages, and status must stay untouched by it.
+        const sideChat = this.temporaryChatForSession(pending.session.sessionId)
+        return sideChat ? sideChat.id === threadId : pending.session.threadId === threadId
+      })
       .map((pending) => pending.request)
   }
 
@@ -14955,6 +15004,62 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * Delete the durable auditor thread that owns this coordinator's independent
+   * audits. The next audit then creates a brand-new auditor session instead of
+   * resuming the deleted one. Reports live on the coordinator thread, so the
+   * report history is preserved.
+   */
+  async deleteIndependentAuditorThread(
+    projectId: string,
+    coordinatorThreadId: string
+  ): Promise<void> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator || coordinator.independentAudit !== true) {
+      throw new Error('Independent audit is not enabled for this thread.')
+    }
+    if (this.activeIndependentAuditRuns.has(`${projectId}:${coordinatorThreadId}`)) {
+      throw new Error('The independent audit is still running.')
+    }
+    await this.removeIndependentAuditorThread(projectId, coordinatorThreadId, coordinator)
+  }
+
+  /**
+   * Start a brand-new independent audit with a fresh auditor thread.
+   *
+   * The auditor session is deliberately durable across audits: it resumes its
+   * own context so a rework pass can verify the previous findings. That also
+   * means a thread that gets stuck, keeps failing validation, or drifts stays
+   * that way. This replaces it: the previous auditor thread is deleted and a
+   * new auditor is created for a fresh independent audit of the same work. The
+   * coordinator keeps its report lineage, so a new auditor still reads the
+   * previous report and verifies the rework against it when one exists, and
+   * audits the thread transcript alone when it does not.
+   */
+  async startFreshIndependentAudit(
+    projectId: string,
+    threadId: string,
+    request: AuditGenerationRequest
+  ): Promise<{ report: AuditReport; auditorThread: Thread }> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const settings = validateThreadSettings(request.settings)
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread || thread.independentAudit !== true) {
+      throw new Error('Independent audit is not enabled for this thread.')
+    }
+    if (isOrchestrationChildThread(thread)) {
+      throw new Error('Independent audit is not available on orchestration threads.')
+    }
+    if (this.activeIndependentAuditRuns.has(`${projectId}:${threadId}`)) {
+      throw new Error('The independent audit is still running.')
+    }
+    await this.removeIndependentAuditorThread(projectId, threadId, thread)
+    return this.generateIndependentAudit(projectId, threadId, { settings })
+  }
+
   async ensureIndependentAuditorThread(
     projectId: string,
     coordinatorThreadId: string,
@@ -14977,6 +15082,59 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * The durable auditor thread that owns independent audits for this
+   * coordinator: the recorded pointer when it still resolves to a live auditor,
+   * otherwise the matching orchestration child looked up by coordinator id.
+   * Returns null when the coordinator has no auditor yet, or any more.
+   */
+  private async findIndependentAuditorThread(
+    projectId: string,
+    coordinatorThreadId: string,
+    coordinator?: Thread
+  ): Promise<Thread | null> {
+    const owner =
+      coordinator ?? (await this.threadManager.getThread(projectId, coordinatorThreadId))
+    if (!owner) return null
+    if (owner.auditorThreadId) {
+      const auditor = await this.threadManager.getThread(projectId, owner.auditorThreadId)
+      if (
+        auditor &&
+        auditor.achievementRole === 'auditor' &&
+        auditor.coordinatorThreadId === coordinatorThreadId
+      ) {
+        return auditor
+      }
+    }
+    const candidates = await this.threadManager.listThreads(projectId)
+    return (
+      candidates.find(
+        (candidate) =>
+          candidate.achievementRole === 'auditor' &&
+          candidate.coordinatorThreadId === coordinatorThreadId
+      ) ?? null
+    )
+  }
+
+  /**
+   * Delete the durable auditor thread for an independent audit coordinator, so
+   * the next audit starts from a brand-new auditor session. Reports are stored
+   * on the coordinator thread, so the report lineage is untouched.
+   */
+  private async removeIndependentAuditorThread(
+    projectId: string,
+    coordinatorThreadId: string,
+    coordinator: Thread
+  ): Promise<void> {
+    const auditor = await this.findIndependentAuditorThread(
+      projectId,
+      coordinatorThreadId,
+      coordinator
+    )
+    if (!auditor) return
+    await this.threadManager.deleteThread(projectId, auditor.id)
+  }
+
   private async createOrUpdateIndependentAuditor(
     projectId: string,
     coordinatorThreadId: string,
@@ -14993,21 +15151,11 @@ export class ChatEngine {
       loopMode: false,
       loopAuditor: undefined
     }
-    let auditor = coordinator.auditorThreadId
-      ? await this.threadManager.getThread(projectId, coordinator.auditorThreadId)
-      : null
-    if (
-      !auditor ||
-      auditor.achievementRole !== 'auditor' ||
-      auditor.coordinatorThreadId !== coordinatorThreadId
-    ) {
-      auditor =
-        (await this.threadManager.listThreads(projectId)).find(
-          (candidate) =>
-            candidate.achievementRole === 'auditor' &&
-            candidate.coordinatorThreadId === coordinatorThreadId
-        ) ?? null
-    }
+    let auditor = await this.findIndependentAuditorThread(
+      projectId,
+      coordinatorThreadId,
+      coordinator
+    )
     if (!auditor) {
       const names = await this.storage.getWorkerNames()
       const name = names[randomInt(names.length)]
@@ -16128,45 +16276,191 @@ export class ChatEngine {
         normalizedInvocation: normalizeInvocationEvidence(invocation)
       }
     })
-    const observedCommands = observedInvocations
+    /** The shell text an auditor actually executed, when the harness exposes it. */
+    const toolCommandText = (part: Extract<AgentPart, { type: 'tool' }>): string => {
+      const command = part.state.input.command
+      if (typeof command === 'string' && command.trim()) return command
+      return part.state.title ?? ''
+    }
+    const sourceFileTokenPattern =
+      /(?:^|\/)[\w.@+-]+\.(?:[cm]?[jt]sx?|svelte|json|jsonc|css|scss|html|vue|py|go|rs|java|kt|kts|swift|yml|yaml|toml|sh|sql)$/u
+    const isPathToken = (token: string): boolean =>
+      token.includes('/') || sourceFileTokenPattern.test(token)
+    /** Compare two path-ish tokens while tolerating the workspace-relative vs
+     *  package-relative prefixes an auditor mixes (`src/lib/x.ts` against
+     *  `apps/application/src/lib/x.ts`). */
+    const pathTokensMatch = (left: string, right: string): boolean =>
+      left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`)
+    /** Reduce a shell command to its logical body: drop the `cd <dir> &&`
+     *  wrapper, exit-code echoes, and output tailing an auditor wraps around the
+     *  command it reports, because the report records the intent rather than the
+     *  exact shell line. */
+    const commandBody = (value: string): string =>
+      normalizeCommandEvidence(value)
+        .replace(/2>&1/gu, ' ')
+        .replace(/\|\s*(?:tail|head)\s+-\d+/gu, ' ')
+        .replace(/;\s*(?:echo|printf)\s+[^;|]*/gu, ' ')
+        .replace(/\|\|\s*true/gu, ' ')
+        .replace(/(?:^|[;&|]\s*)cd\s+\S+\s*&&\s*/gu, ' ')
+        .replace(/\s+/gu, ' ')
+        .trim()
+    const commandDirectories = (value: string): string[] =>
+      [...value.matchAll(/(?:^|[;&|]\s*)cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)/gu)]
+        .map((match) => match[1].replace(/["']/gu, '').replace(/\/+$/u, '').trim())
+        .filter((directory) => /[\p{L}\p{N}]/u.test(directory))
+    const observedCommands = observedTools
       .filter(
-        ({ part }) =>
-          part.state.status === 'completed' && /bash|command|shell|exec/iu.test(part.tool)
+        (part) => part.state.status === 'completed' && /bash|command|shell|exec/iu.test(part.tool)
       )
-      .map(({ part, invocation }) => ({
-        part,
-        invocation,
-        normalizedInvocation: normalizeCommandEvidence(invocation)
-      }))
+      .map((part) => {
+        const invocation = [part.tool, part.state.title, JSON.stringify(part.state.input)]
+          .filter((value): value is string => Boolean(value))
+          .join('\n')
+        const rawCommand = toolCommandText(part)
+        return {
+          part,
+          invocation,
+          /** Every token the harness saw, command body plus raw invocation, so a
+           *  harness that only exposes `state.title` still matches. */
+          observedTokens: [
+            ...commandBody(rawCommand).split(' '),
+            ...normalizeCommandEvidence(invocation).split(' ')
+          ].filter(Boolean),
+          observedDirectories: commandDirectories(rawCommand)
+        }
+      })
+    /** Tool calls the harness exposes directly instead of through a shell
+     *  (`cio_util_use`, `read`, `grep`, `lsp`). A non-shell analysis such as the
+     *  Svelte autofixer can only ever be evidenced by one of these, never by a
+     *  shell command, so a command-only matcher rejects work the auditor did. */
+    const isShellTool = (tool: string): boolean => /bash|command|shell|exec/iu.test(tool)
+    const observedToolCalls = observedInvocations.map((observed) => ({
+      ...observed,
+      toolName: observed.part.tool.toLowerCase(),
+      normalizedTokens: new Set(observed.normalizedInvocation.split(' ').filter(Boolean))
+    }))
+    /** Names an auditor can use to reference a tool call, including the short
+     *  MCP-qualified suffix (`cio_util_use` for `mcp__gateway__cio_util_use`). */
+    const observableToolNames = new Set<string>()
+    for (const call of observedToolCalls) {
+      if (isShellTool(call.toolName)) continue
+      observableToolNames.add(call.toolName)
+      const suffix = call.toolName.split('__').pop()
+      if (suffix) observableToolNames.add(suffix)
+    }
+    const callMatchesToolName = (
+      call: (typeof observedToolCalls)[number],
+      named: string
+    ): boolean => call.toolName === named || call.toolName.endsWith(`__${named}`)
+    /** Auditors annotate the tool line with prose (`(non-writing)`) that is not
+     *  part of the call; drop it, but keep identifier-shaped parentheticals so a
+     *  gateway id still has to match. */
+    const stripIncidentalParentheticals = (value: string): string =>
+      value.replace(/\((?![0-9a-f]{6,}\))[^()]*\)/gu, ' ')
+    /** Identifier-shaped tokens carry evidence (`svelte-autofixer`, a gateway
+     *  id, a version); plain prose such as a utility's display name carries none
+     *  and must not be treated as an unverifiable claim. */
+    const isIdentifierToken = (token: string): boolean =>
+      /\d/u.test(token) ||
+      (token.length > 1 && /[^a-z0-9]/iu.test(token) && /[a-z0-9]/iu.test(token))
+    /** Match a check whose command names a tool call rather than a shell line.
+     *  Returns the closest observed call with the identifier tokens it is
+     *  missing, so a fabrication still fails with actionable detail. */
+    const matchToolInvocation = (
+      rawCommand: string,
+      files: readonly string[]
+    ): { call: (typeof observedToolCalls)[number]; missing: string[] } | null => {
+      const reportTokens = commandBody(stripIncidentalParentheticals(rawCommand))
+        .split(' ')
+        .filter(Boolean)
+      const namedTool = reportTokens.find((token) => observableToolNames.has(token.toLowerCase()))
+      if (!namedTool) return null
+      const calls = observedToolCalls.filter(
+        (call) =>
+          callMatchesToolName(call, namedTool.toLowerCase()) &&
+          call.part.state.status === 'completed'
+      )
+      if (calls.length === 0) return null
+      const requiredTokens = [
+        ...new Set(
+          reportTokens
+            .filter(
+              (token) => !isPathToken(token) && !token.startsWith('-') && isIdentifierToken(token)
+            )
+            .flatMap((token) => normalizeInvocationEvidence(token).split(' '))
+            .filter(Boolean)
+        )
+      ]
+      const requiredPaths = [...new Set([...files, ...reportTokens.filter(isPathToken)])]
+      const missingFor = (call: (typeof observedToolCalls)[number]): string[] => [
+        ...requiredTokens.filter((token) => !call.normalizedTokens.has(token)),
+        ...requiredPaths.filter(
+          (path) => !call.normalizedInvocation.includes(normalizeInvocationEvidence(path))
+        )
+      ]
+      return (
+        calls
+          .map((call) => ({ call, missing: missingFor(call) }))
+          .sort((left, right) => left.missing.length - right.missing.length)[0] ?? null
+      )
+    }
     const verification = input.content.verification
     for (const check of verification?.checks ?? []) {
       if (check.status === 'not_applicable') continue
-      const command = check.command.replace(/^\$\s*/u, '').trim()
-      const normalizedCommand = normalizeCommandEvidence(command)
+      const rawCommand = check.command.replace(/^\$\s*/u, '').trim()
+      const tokens = commandBody(rawCommand).split(' ').filter(Boolean)
+      const pathTokens = tokens.filter(isPathToken)
+      const requiredTokens = tokens.filter((token) => token !== '--' && !isPathToken(token))
+      const requiredDirectories = commandDirectories(rawCommand)
+      const declaredTokenCount = requiredTokens.length + pathTokens.length
+      /** Tokens of this check's command that a given observed command never
+       *  contains. Empty means the auditor really executed this check. */
+      const missingTokens = (observed: (typeof observedCommands)[number]): string[] => [
+        ...requiredTokens.filter((token) => !observed.observedTokens.includes(token)),
+        ...pathTokens.filter(
+          (token) => !observed.observedTokens.some((candidate) => pathTokensMatch(candidate, token))
+        )
+      ]
       const observedCommand = observedCommands.find(
         (observed) =>
-          observed.normalizedInvocation.includes(normalizedCommand) ||
-          normalizedCommand.includes(observed.normalizedInvocation)
+          missingTokens(observed).length === 0 &&
+          requiredDirectories.every((directory) =>
+            observed.observedDirectories.some((candidate) => pathTokensMatch(candidate, directory))
+          )
       )
-      if (!observedCommand) {
-        issues.push(
-          `verification.checks ${check.id} has no matching completed command in the auditor transcript`
-        )
-        continue
-      }
-      checkInvocations.set(check.id, observedCommand.part)
-      if (check.kind === 'format' || check.kind === 'lint') {
-        for (const file of check.files) {
-          if (
-            !observedCommand.invocation.includes(file) &&
-            !observedCommand.normalizedInvocation.includes(normalizeCommandEvidence(file))
-          ) {
-            issues.push(
-              `verification.checks ${check.id} did not explicitly target audited file ${file}`
-            )
+      if (observedCommand) {
+        checkInvocations.set(check.id, observedCommand.part)
+        if (check.kind === 'format' || check.kind === 'lint') {
+          for (const file of check.files) {
+            if (
+              !observedCommand.invocation.includes(file) &&
+              !observedCommand.observedTokens.some((token) => pathTokensMatch(token, file))
+            ) {
+              issues.push(
+                `verification.checks ${check.id} did not explicitly target audited file ${file}`
+              )
+            }
           }
         }
+        continue
       }
+      const toolMatch = matchToolInvocation(rawCommand, check.files)
+      if (toolMatch && toolMatch.missing.length === 0) {
+        checkInvocations.set(check.id, toolMatch.call.part)
+        continue
+      }
+      const closest = toolMatch
+        ? toolMatch.missing
+        : observedCommands
+            .map((observed) => missingTokens(observed))
+            .filter((missing) => missing.length > 0 && missing.length < declaredTokenCount)
+            .sort((left, right) => left.length - right.length)[0]
+      issues.push(
+        `verification.checks ${check.id} has no matching completed command in the auditor transcript${
+          closest ? ` (never observed: ${closest.slice(0, 6).join(', ')})` : ''
+        }`
+      )
+      continue
     }
 
     const observedToolNames = observedTools.map((part) => part.tool.toLowerCase())
@@ -20133,12 +20427,12 @@ export class ChatEngine {
     }
 
     const owner = this.childSessionOwners.get(event.sessionId)
-    if (
-      owner &&
-      (event.type === 'message.completed' ||
-        event.type === 'session.idle' ||
-        event.type === 'session.error')
-    ) {
+    if (owner && (event.type === 'session.idle' || event.type === 'session.error')) {
+      // Only the child's terminal signal persists its transcript. While a
+      // worker streams, its events are already mirrored live by the view and
+      // the driver holds the live transcript, so capturing on every child
+      // `message.completed` would only re-probe the harness and rewrite the
+      // mirror row by row mid-run.
       void this.captureCompletedChildSession(owner, event.sessionId).catch((error) =>
         Logger.dev('Sub-agent transcript capture unavailable:', error)
       )
@@ -20992,6 +21286,11 @@ export class ChatEngine {
    * those paths. Skill access never grants writes or shell commands.
    * File-System-on chats keep the normal project-root + protected-path rules
    * while retaining these read-only exceptions.
+   *
+   * Temporary side chats get the same read-only skill roots as chats even
+   * though they keep their project read scope: skills are harness runtime, not
+   * user file access, and a read-only side chat must be able to load the skill
+   * instructions its turn matches.
    */
   private async chatPermissionScope(info: SessionInfo): Promise<{
     allowedPaths: string[]
@@ -21000,7 +21299,12 @@ export class ChatEngine {
   }> {
     const isChat = info.projectId === INBOX_PROJECT_ID
     const scratchPaths = [this.storage.resolve(chatThreadArtifactDirectory(info.threadId))]
-    if (!isChat) return { allowedPaths: [], scratchPaths, restrictToAllowed: false }
+    if (!isChat) {
+      const skillPaths = this.temporaryChatForSession(info.sessionId)
+        ? this.chatSkillPaths(info.driverId)
+        : []
+      return { allowedPaths: skillPaths, scratchPaths, restrictToAllowed: false }
+    }
 
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
     const fileSystemMode = thread?.settings?.fileSystemMode === true
@@ -21032,6 +21336,21 @@ export class ChatEngine {
       .map((path) =>
         path === '~' ? homedir() : path.startsWith('~/') ? join(homedir(), path.slice(2)) : path
       )
+  }
+
+  /**
+   * The temporary side chat that owns a live session, if any.
+   *
+   * Side chats register their isolated session against the parent thread   that
+   * thread owns the project root, the audit trail, and the completion waiter  
+   * so this lookup is the only way to tell a side chat's session apart from the
+   * parent thread's own turn.
+   */
+  private temporaryChatForSession(sessionId: string): TemporaryChatSession | undefined {
+    for (const temporary of this.temporaryChats.values()) {
+      if (temporary.sessionId === sessionId) return temporary
+    }
+    return undefined
   }
 
   /** Absolute local paths of every file the user attached to a chat thread. */
@@ -21112,13 +21431,20 @@ export class ChatEngine {
     this.markProjectActive(info.projectId)
 
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
+    // A temporary side chat registers its session against the parent thread, but
+    // its permission gate is the side chat's own: the parent thread is idle and
+    // must keep its status, unread flag, and headline untouched by a blocking
+    // request the user answers inside the side chat's window.
+    const sideChat = this.temporaryChatForSession(info.sessionId)
     // When an automatic resolution fails (e.g. the gated harness turn had not
     // settled so the continuation could not start), surface the request as
     // needing attention instead of stranding the thread silently.
     const surfaceForApproval = async (): Promise<void> => {
-      await this.threadManager.setStatus(info.projectId, info.threadId, 'awaiting_approval', {
-        read: false
-      })
+      if (!sideChat) {
+        await this.threadManager.setStatus(info.projectId, info.threadId, 'awaiting_approval', {
+          read: false
+        })
+      }
       if (this.pendingPermissions.get(request.id) !== pending) return
       this.broadcast({ ...event, permission: enrichedRequest })
     }

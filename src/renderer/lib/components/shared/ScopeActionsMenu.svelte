@@ -6,6 +6,7 @@
     FolderInput,
     GitBranch,
     GitMerge,
+    PanelsLeftBottom,
     Pencil,
     Pin,
     PinOff,
@@ -16,6 +17,7 @@
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
 
   export type ScopeMenuAction =
+    | 'dock'
     | 'edit'
     | 'pin'
     | 'unpin'
@@ -32,6 +34,9 @@
   interface Props {
     bucket: ScopeBucket
     onEdit: () => void
+    /** Dock this scope: switch to the scoped-threads view with it current.
+     *  Provided only on surfaces that can dock (the scope board). */
+    onDock?: () => void
     onDelete: () => void
     /** Provided only on surfaces where pinning is allowed (the scope view). */
     onTogglePinned?: () => void
@@ -50,6 +55,7 @@
   let {
     bucket,
     onEdit,
+    onDock,
     onDelete,
     onTogglePinned,
     onArchive,
@@ -85,6 +91,15 @@
   const items: Item[] = $derived(
     (() => {
       const list: Item[] = []
+      if (onDock) {
+        list.push({
+          label: 'Dock',
+          run: () => {
+            closeMenu()
+            onDock()
+          }
+        })
+      }
       list.push({
         label: 'Edit',
         run: () => {
@@ -227,6 +242,8 @@
             <ArchiveRestore size={13} class="text-muted" />
           {:else if item.label === 'Delete scope'}
             <Trash2 size={13} class="text-muted" />
+          {:else if item.label === 'Dock'}
+            <PanelsLeftBottom size={13} class="text-muted" />
           {:else if item.label === 'Edit'}
             <Pencil size={13} class="text-muted" />
           {:else if item.label === 'Merge into project…'}

@@ -248,7 +248,9 @@ import { toast } from 'svelte-sonner'
    *  description) would otherwise swallow the composer's bottom bar. */
   let selectedLabelDisplay = $derived(truncateLabel(selectedLabel))
   /** Peak/off-peak state of the currently selected model, for the trigger badge. */
-  let selectedPeak = $derived(selectedModel ? peakHoursBadgeFor(selectedModel.id) : null)
+  let selectedPeak = $derived(
+    selectedModel ? peakHoursBadgeFor(selectedModel.id, selectedProvider?.id) : null
+  )
   let availableModelKeys = $derived(
     new Set(
       [...displayProviders, ...cachedProviders].flatMap((provider) =>
@@ -1493,7 +1495,7 @@ import { toast } from 'svelte-sonner'
 
 {#snippet modelRow(entry: ModelEntry, rowKey: string, recentKey?: string)}
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
-  {@const peak = peakHoursBadgeFor(entry.model.id)}
+  {@const peak = peakHoursBadgeFor(entry.model.id, entry.provider.id)}
   <button
     class={`model-row-btn group/row ml-4 flex w-[calc(100%-1rem)] flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
     title={`Use ${entry.model.name}`}

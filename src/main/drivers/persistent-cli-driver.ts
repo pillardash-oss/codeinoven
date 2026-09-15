@@ -24,6 +24,7 @@ import { estimateTokenCostUsd } from '../providers/pricing'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment, OWNED_SESSION_MARKER } from './cli-environment'
 import { prepareHarnessInvocation } from './harness-runtime'
+import { spawnInUtilityHost } from './harness-utility-host'
 import type {
   AgentEventCallback,
   AgentProcessObserver,
@@ -574,12 +575,17 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         cwd: projectPath,
         env: invocationEnv
       })
-      child = spawn(prepared.command, prepared.args, {
-        ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
-        env: prepared.env,
-        shell: prepared.shell,
-        stdio: ['pipe', 'pipe', 'pipe']
-      })
+      // Bundled harnesses (electron run-as-node) run in-process inside Electron's
+      // utilityProcess helper so macOS never shows a bouncing Dock app per session.
+      child =
+        prepared.runtime?.target?.kind === 'bundled'
+          ? spawnInUtilityHost(prepared)
+          : spawn(prepared.command, prepared.args, {
+              ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
+              env: prepared.env,
+              shell: prepared.shell,
+              stdio: ['pipe', 'pipe', 'pipe']
+            })
     } catch (error) {
       invocation.onProcessExit?.()
       throw error
@@ -1258,10 +1264,19 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   }
 
   protected applyEventToSession(session: PersistentCliSession, event: AgentEvent): void {
+    this.applyEventToMessages(session.messages, event)
+  }
+
+  /**
+   * Apply one stream event to a transcript. Sessions keep their transcript on
+   * the session record, but a harness-native child session has no app session
+   * record of its own   the pi driver tracks delegated sub-agent transcripts
+   * as a plain message list, and both paths must fold events identically so a
+   * child transcript renders exactly like a root one.
+   */
+  protected applyEventToMessages(messages: AgentMessage[], event: AgentEvent): void {
     if (event.type === 'message.part.updated') {
-      const message = session.messages.findLast(
-        (candidate) => candidate.id === event.part.messageID
-      )
+      const message = messages.findLast((candidate) => candidate.id === event.part.messageID)
       if (!message) return
       const index = message.parts.findLastIndex((part) => part.id === event.part.id)
       if (index === -1) message.parts.push(event.part)
@@ -1269,7 +1284,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       return
     }
     if (event.type === 'message.part.delta') {
-      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
+      const message = messages.findLast((candidate) => candidate.id === event.messageId)
       const part = message?.parts.findLast((candidate) => candidate.id === event.partId)
       if (part && (part.type === 'text' || part.type === 'reasoning') && event.field === 'text') {
         part.text += event.delta
@@ -1277,7 +1292,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       return
     }
     if (event.type === 'message.completed') {
-      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
+      const message = messages.findLast((candidate) => candidate.id === event.messageId)
       if (message) {
         message.completedAt = Date.now()
         message.error = event.error
@@ -1293,7 +1308,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       }
     }
     if (event.type === 'usage.updated') {
-      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
+      const message = messages.findLast((candidate) => candidate.id === event.messageId)
       if (message) {
         if (event.tokens) message.tokens = event.tokens
         if (event.normalizedUsage) message.normalizedUsage = event.normalizedUsage

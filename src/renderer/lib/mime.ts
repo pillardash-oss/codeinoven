@@ -217,10 +217,19 @@ export function isDocumentPreviewPath(path: string): boolean {
 }
 
 const MARKDOWN_PREVIEW_EXTENSION_PATTERN = /\.(?:md|mdown|markdown)$/iu
+const HTML_PREVIEW_EXTENSION_PATTERN = /\.(?:html|htm)$/iu
+
+/** True when the files panel can render this path as a sanitized HTML document.
+ *  HTML files are never loaded as real documents (they are project-controlled
+ *  active content); the panel mounts `htmlPreviewFrame()` output in a frame
+ *  with `sandbox=""`. */
+export function isHtmlPreviewPath(path: string): boolean {
+  return HTML_PREVIEW_EXTENSION_PATTERN.test(path)
+}
 
 /** True when the files panel can render this path in preview mode (image or
- *  SVG, PDF, video, audio, converted Office/CSV document, or Markdown). Used
- *  to keep the viewer's preview mode sticky while navigating file lists. */
+ *  SVG, PDF, video, audio, converted Office/CSV document, Markdown, or HTML).
+ *  Used to keep the viewer's preview mode sticky while navigating file lists. */
 export function supportsFilePreview(path: string): boolean {
   const mime = mimeFromPath(path)
   return (
@@ -229,6 +238,7 @@ export function supportsFilePreview(path: string): boolean {
     isVideoMime(mime) ||
     isAudioMime(mime) ||
     isDocumentPreviewPath(path) ||
-    MARKDOWN_PREVIEW_EXTENSION_PATTERN.test(path)
+    MARKDOWN_PREVIEW_EXTENSION_PATTERN.test(path) ||
+    isHtmlPreviewPath(path)
   )
 }

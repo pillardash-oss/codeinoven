@@ -727,6 +727,7 @@ export class Database {
       this.migrateUsageEventColumns(connection)
       this.migrateThreadIndependentAuditColumns(connection)
       this.migrateThreadAccountColumn(connection)
+      this.migrateThreadDraftColumns(connection)
       this.migrateAgentMessageGenerationColumn(connection)
       this.migrateAgentMessageAccountColumns(connection)
       this.migrateAgentMessageContextEstimatedColumn(connection)
@@ -899,6 +900,23 @@ export class Database {
     )
     if (!columns.has('session_account_id')) {
       connection.exec('ALTER TABLE threads ADD COLUMN session_account_id TEXT')
+    }
+  }
+
+  /** Existing databases predate persisted draft state: a drafting flag that
+   *  keeps threads being composed or dictated inside bounded listing slices,
+   *  plus a dedicated column holding the committed draft content. */
+  private migrateThreadDraftColumns(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('drafting')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN drafting INTEGER NOT NULL DEFAULT 0')
+    }
+    if (!columns.has('draft_json')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN draft_json TEXT')
     }
   }
 

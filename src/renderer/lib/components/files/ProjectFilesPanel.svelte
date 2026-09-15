@@ -17,10 +17,9 @@
     Save,
     TriangleAlert
   } from '@lucide/svelte'
-  import { documentPreviewFrame } from '$lib/document-preview-frame'
+  import { documentPreviewFrame, htmlPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { supportsFilePreview } from '$lib/mime'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
   import type {
     ConflictResolutionController,
@@ -29,11 +28,13 @@
   import { motionDuration } from '$lib/motion'
   import {
     isAudioMime,
+    isDocumentPreviewPath,
+    isHtmlPreviewPath,
     isImageMime,
     isSvgMime,
     isVideoMime,
     mimeFromPath,
-    isDocumentPreviewPath
+    supportsFilePreview
   } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -56,6 +57,7 @@
   import ProjectTextEditor from './ProjectTextEditor.svelte'
   import ProjectFileViewerMenu from './ProjectFileViewerMenu.svelte'
   import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
+  import { posixDirname } from '$shared/paths'
   import type { ProjectTextFile } from '$shared/types'
   import type { ProjectFileInfo } from '$shared/types'
   import { INBOX_PROJECT_ID } from '$shared/types'
@@ -155,6 +157,7 @@
       (activePathIsConflicted || (activeSession !== null && dirty))
   )
   let markdown = $derived(activeTab ? /\.(?:md|mdown|markdown)$/iu.test(activeTab.path) : false)
+  let htmlPreview = $derived(activeTab ? isHtmlPreviewPath(activeTab.path) : false)
   let pdf = $derived(activeTab ? /\.pdf$/iu.test(activeTab.path) : false)
   let image = $derived(activeTab ? isImageMime(mimeFromPath(activeTab.path)) : false)
   let svg = $derived(activeTab ? isSvgMime(mimeFromPath(activeTab.path)) : false)
@@ -224,6 +227,23 @@
   let imagePreviewFailed = $derived(svg ? svgPreviewFailed : false)
   /** Office/CSV documents render as sanitized converted HTML (no PDF path). */
   let documentPreview = $derived(activeTab ? isDocumentPreviewPath(activeTab.path) : false)
+  /** Name of the preview renderer for the active file; keeps the Eye toggle's
+   *  labels identical in the inline and fullscreen toolbars. */
+  let previewKindLabel = $derived(
+    pdf
+      ? 'PDF'
+      : video
+        ? 'Video'
+        : audio
+          ? 'Audio'
+          : documentPreview
+            ? 'Document'
+            : htmlPreview
+              ? 'HTML'
+              : image
+                ? 'Image'
+                : 'Markdown'
+  )
   let documentHtml = $state<string | null>(null)
   let documentLoading = $state(false)
   let documentFailed = $state(false)
@@ -329,6 +349,23 @@
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')
   let visibleContent = $derived(
     deletedAtCheckpoint ? historicalContent : (activeSession?.draft ?? historicalContent)
+  )
+  /** Directory the active HTML file sits in, as an `appfile://` base URL, so
+   *  the document's relative images and media resolve beside it. The scheme
+   *  serves media only, so project stylesheets and scripts still never load. */
+  let htmlPreviewBaseHref = $derived.by(() => {
+    if (!activeTab || !htmlPreview) return undefined
+    const directory = posixDirname(activeTab.path)
+    return projectFilePreviewUrl(
+      projectId,
+      directory ? `${directory}/` : '',
+      chatThreadId ?? undefined
+    )
+  })
+  /** Sanitized page for the active HTML file, built from the live session draft
+   *  so the preview follows unsaved edits. Mounted with `sandbox=""` below. */
+  let htmlPreviewSrcdoc = $derived(
+    htmlPreview ? htmlPreviewFrame(visibleContent, htmlPreviewBaseHref) : null
   )
   let breadcrumbParts = $derived(activeTab?.path.split('/') ?? [])
   let visibleLineCount = $derived(visibleContent.split('\n').length)
@@ -784,7 +821,7 @@
           >
             <FileDiff size={12} />
           </button>
-          {#if markdown || pdf || image || video || audio || documentPreview}
+          {#if markdown || htmlPreview || pdf || image || video || audio || documentPreview}
             <button
               type="button"
               class={[
@@ -793,29 +830,9 @@
                   ? 'bg-overlay text-foreground'
                   : 'text-dimmed hover:bg-elevated hover:text-foreground'
               ]}
-              aria-label={pdf
-                ? 'Preview PDF'
-                : video
-                  ? 'Preview video'
-                  : audio
-                    ? 'Preview audio'
-                    : documentPreview
-                      ? 'Preview document'
-                      : image
-                        ? 'Preview image'
-                        : 'Preview Markdown'}
+              aria-label={`Preview ${previewKindLabel}`}
               aria-pressed={activeTab.view === 'preview'}
-              title={pdf
-                ? 'PDF preview'
-                : video
-                  ? 'Video preview'
-                  : audio
-                    ? 'Audio preview'
-                    : documentPreview
-                      ? 'Document preview'
-                      : image
-                        ? 'Image preview'
-                        : 'Markdown preview'}
+              title={`${previewKindLabel} preview`}
               onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'preview')}
             >
               <Eye size={12} />
@@ -985,6 +1002,17 @@
       {:else if activeTab.view === 'preview' && markdown}
         <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
           <MarkdownView text={visibleContent} class="text-sm text-foreground" />
+        </div>
+      {:else if activeTab.view === 'preview' && htmlPreview}
+        <div class="min-h-0 flex-1 bg-surface">
+          {#if htmlPreviewSrcdoc}
+            <iframe
+              srcdoc={htmlPreviewSrcdoc}
+              sandbox=""
+              class="h-full w-full border-0"
+              title={`Preview ${activeTab.path}`}
+            ></iframe>
+          {/if}
         </div>
       {:else if activeTab.view === 'preview' && pdf}
         <div class="min-h-0 flex-1 overflow-auto">
@@ -1199,7 +1227,7 @@
           >
             <FileDiff size={12} />
           </button>
-          {#if markdown || pdf || image || video || audio || documentPreview}
+          {#if markdown || htmlPreview || pdf || image || video || audio || documentPreview}
             <button
               type="button"
               class={[
@@ -1208,29 +1236,9 @@
                   ? 'bg-overlay text-foreground'
                   : 'text-dimmed hover:bg-elevated hover:text-foreground'
               ]}
-              aria-label={pdf
-                ? 'Preview PDF'
-                : video
-                  ? 'Preview video'
-                  : audio
-                    ? 'Preview audio'
-                    : documentPreview
-                      ? 'Preview document'
-                      : image
-                        ? 'Preview image'
-                        : 'Preview Markdown'}
+              aria-label={`Preview ${previewKindLabel}`}
               aria-pressed={activeTab.view === 'preview'}
-              title={pdf
-                ? 'PDF preview'
-                : video
-                  ? 'Video preview'
-                  : audio
-                    ? 'Audio preview'
-                    : documentPreview
-                      ? 'Document preview'
-                      : image
-                        ? 'Image preview'
-                        : 'Markdown preview'}
+              title={`${previewKindLabel} preview`}
               onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'preview')}
             >
               <Eye size={12} />
@@ -1329,6 +1337,17 @@
           {:else if activeTab?.view === 'preview' && markdown}
             <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
               <MarkdownView text={visibleContent} class="text-sm text-foreground" />
+            </div>
+          {:else if activeTab?.view === 'preview' && htmlPreview}
+            <div class="min-h-0 flex-1 bg-surface">
+              {#if htmlPreviewSrcdoc}
+                <iframe
+                  srcdoc={htmlPreviewSrcdoc}
+                  sandbox=""
+                  class="h-full w-full border-0"
+                  title={`Preview ${activeTab.path}`}
+                ></iframe>
+              {/if}
             </div>
           {:else if activeTab?.view === 'preview' && pdf}
             <div class="min-h-0 flex-1 overflow-auto">
