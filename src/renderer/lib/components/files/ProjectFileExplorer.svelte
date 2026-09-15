@@ -17,6 +17,7 @@
     X
   } from '@lucide/svelte'
   import type { ProjectFileEntry, ProjectFileInfo, ProjectFileTransferMode } from '$shared/types'
+  import { posixDirname } from '$shared/paths'
   import { invoke } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { copyText } from '$lib/copy-text'
@@ -429,9 +430,7 @@
   }
 
   function parentDirectory(path: string): string {
-    const segments = path.split('/')
-    segments.pop()
-    return segments.join('/')
+    return posixDirname(path)
   }
 
   function pasteDirectory(entry: ProjectFileEntry | null): string {
