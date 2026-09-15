@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { toPosixPath } from '../src/lib/paths'
@@ -67,6 +67,186 @@ function readPackageVersion(source: string): string {
  *  `src/main/drivers/harness-runtime.ts`). A harness without it is unused. */
 export const PI_HARNESS_RPC_ENTRY = 'dist/bundle/rpc-entry.js'
 
+/**
+ * `dist/` files the packaged runtime reads by path instead of through an
+ * import, so pruning must keep them:
+ *
+ *  - `theme/{dark,light}.json` are what `getBuiltinThemes()` loads on the first
+ *    theme lookup of a session (pi resolves them through `getThemesDir()`, which
+ *    lands on `<package>/dist/modes/interactive/theme`).
+ *  - `core/export-html/template.{html,css,js}` are what pi's `generateHtml()`
+ *    reads when a session is exported to HTML. They are template assets, not
+ *    compiled modules: the `*.js` next to them is pi's own compiled copy of the
+ *    same helpers, which the bundle already inlines.
+ */
+export const PI_HARNESS_KEPT_DIST_FILES: readonly string[] = [
+  'dist/modes/interactive/theme/dark.json',
+  'dist/modes/interactive/theme/light.json',
+  'dist/core/export-html/template.html',
+  'dist/core/export-html/template.css',
+  'dist/core/export-html/template.js'
+]
+
+/**
+ * Directories the prune walk descends into because a kept file lives under
+ * them. `dist/bundle` is matched by prefix: its whole chunk graph ships.
+ */
+const KEPT_DIST_DIRECTORIES: ReadonlySet<string> = new Set([
+  'dist',
+  'dist/bundle',
+  'dist/modes',
+  'dist/modes/interactive',
+  'dist/modes/interactive/theme',
+  'dist/core',
+  'dist/core/export-html'
+])
+
+/**
+ * Files the packaged runtime loads, checked after pruning. Every entry is backed
+ * by an observation of the shipped code, so a pruning rule can never silently
+ * remove something a Pi session needs:
+ *
+ *  - `dist/bundle/cli.js` and `dist/bundle/coordinator.js` are the internal
+ *    process entrypoints pi spawns; in the bundled runtime `defaultEntryUrl()`
+ *    maps every role to a file in `dist/bundle`.
+ *  - `vendor/jiti/dist/{jiti.cjs,babel.cjs}` are required by
+ *    `vendor/jiti/lib/jiti.cjs`, which is what the bundle requires to compile
+ *    the app-owned `.ts` extensions.
+ *  - `chord/dist/node/bundle.js` is statically imported by `chord/bundler.js`,
+ *    which the bundle imports, and it in turn imports the `esbuild` package, so
+ *    that package's JS entry must stay resolvable from
+ *    `vendor/@earendil-works/chord/node_modules`.
+ *  - `pi-ai` is imported in-process by the main process
+ *    (see `src/main/providers/pi-ai-registry.ts`).
+ */
+export const PI_HARNESS_REQUIRED_RUNTIME_FILES: readonly string[] = [
+  'package.json',
+  PI_HARNESS_RPC_ENTRY,
+  'dist/bundle/cli.js',
+  'dist/bundle/coordinator.js',
+  'dist/bundle/index.js',
+  ...PI_HARNESS_KEPT_DIST_FILES,
+  'vendor/jiti/dist/jiti.cjs',
+  'vendor/jiti/dist/babel.cjs',
+  'vendor/@earendil-works/chord/dist/node/bundle.js',
+  'vendor/@earendil-works/chord/node_modules/esbuild/lib/main.js',
+  'vendor/pi-ai/dist/index.js',
+  'vendor/pi-ai/dist/providers/all.js'
+]
+
+const DECLARATION_FILE_PATTERN = /\.d\.(?:ts|mts|cts)$/u
+
+/**
+ * Why a build artifact is dropped, or `undefined` to keep it (and descend into
+ * it when it is a directory). Rules are stated as what pi publishes, each backed
+ * by what the runtime does:
+ *
+ *  - pi's compiled modules outside `dist/bundle/` are its package-internal
+ *    entrypoints (`dist/index.js`, `dist/core/*`, `dist/modes/*`,
+ *    `dist/experimental/*`, `dist/bun/*`). The bundle never imports them, and
+ *    pi's extension loader resolves `@earendil-works/pi-coding-agent` from its
+ *    in-memory virtual modules (`isBundledNode` is hardcoded true in the
+ *    bundle), not from disk.
+ *  - source maps and type declarations are read by editors and debuggers, never
+ *    by Node at run time.
+ *  - chord's `src/` is TypeScript source for chord's own build.
+ *  - `esbuild/node_modules/` holds the 10MB platform binary (`@esbuild/<os>-<arch>`)
+ *    that only chord's facet bundler spawns. That bundler is reachable solely
+ *    from pi's server-mode plugin packages, and "facet" appears nowhere in this
+ *    app: the driver always launches `--mode rpc`. esbuild's JS entry still
+ *    ships, so the module graph loads exactly as before.
+ */
+export function piHarnessPruneReason(relativePath: string): string | undefined {
+  if (KEPT_DIST_DIRECTORIES.has(relativePath)) return undefined
+  if (relativePath.startsWith('dist/bundle/')) return undefined
+  if (PI_HARNESS_KEPT_DIST_FILES.includes(relativePath)) return undefined
+  if (relativePath === 'dist' || relativePath.startsWith('dist/')) {
+    return "compiled output only pi's own package entrypoints import"
+  }
+  if (relativePath === 'vendor/@earendil-works/chord/src') return 'TypeScript sources'
+  if (relativePath === 'vendor/@earendil-works/chord/node_modules/esbuild/node_modules') {
+    return 'esbuild platform binary for facet bundling'
+  }
+  if (relativePath === 'vendor/@earendil-works/chord/node_modules/esbuild/install.js') {
+    return 'npm install script'
+  }
+  if (relativePath === 'vendor/@earendil-works/chord/node_modules/esbuild/README.md') {
+    return 'package docs'
+  }
+  if (relativePath.endsWith('.map')) return 'source map'
+  if (DECLARATION_FILE_PATTERN.test(relativePath)) return 'type declaration'
+  // TypeBox ships a `.mjs` runtime build next to parallel `.mts` declarations.
+  if (relativePath.endsWith('.mts') || relativePath.endsWith('.cts')) return 'type declaration'
+  return undefined
+}
+
+/**
+ * Drops every copied artifact `piHarnessPruneReason` rejects. pi publishes its
+ * whole compiled tree plus source maps, declarations and a platform-specific
+ * esbuild binary for its own CLI/plugin tooling, none of which a headless
+ * `--mode rpc` session touches: pruning takes the shipped harness from pi's
+ * complete 3319 files (36MB) down to the 1007 files (12MB) a session loads.
+ */
+async function pruneBuildOnlyFiles(directory: string): Promise<{ files: number; bytes: number }> {
+  let files = 0
+  let bytes = 0
+  const walk = async (current: string): Promise<void> => {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const path = join(current, entry.name)
+      const relativePath = toPosixPath(relative(directory, path))
+      if (piHarnessPruneReason(relativePath) === undefined) {
+        if (entry.isDirectory()) await walk(path)
+        continue
+      }
+      // Counted recursively: a dropped directory takes its whole subtree with
+      // it, and that subtree is usually most of what a rule removes.
+      const dropped = await fileTotals(path)
+      files += dropped.files
+      bytes += dropped.bytes
+      await rm(path, { recursive: true, force: true })
+    }
+  }
+  await walk(directory)
+  return { files, bytes }
+}
+
+/** Files and bytes under `start`, counted for the build log. */
+async function fileTotals(start: string): Promise<{ files: number; bytes: number }> {
+  const info = await stat(start)
+  if (!info.isDirectory()) return { files: 1, bytes: info.size }
+  let files = 0
+  let bytes = 0
+  for (const entry of await readdir(start, { withFileTypes: true })) {
+    const inner = await fileTotals(join(start, entry.name))
+    files += inner.files
+    bytes += inner.bytes
+  }
+  return { files, bytes }
+}
+
+/** Total bytes shipped in the harness directory, for the build log. */
+export async function bundledPiHarnessSizeBytes(directory: string): Promise<number> {
+  return (await fileTotals(directory)).bytes
+}
+
+/**
+ * Fails the build when a file the packaged runtime loads is missing. Pruning is
+ * the only step that can remove something pi needs, so it is verified against an
+ * explicit list instead of trusting the rules to stay correct.
+ */
+function assertRuntimeFilesPresent(directory: string): void {
+  const missing = PI_HARNESS_REQUIRED_RUNTIME_FILES.filter(
+    (relativePath) => !existsSync(join(directory, relativePath))
+  )
+  if (missing.length > 0) {
+    throw new Error(
+      'The pruned pi harness is missing files the packaged app loads. Either a pruning rule in ' +
+        'piHarnessPruneReason is too aggressive or pi moved a file:\n' +
+        missing.join('\n')
+    )
+  }
+}
+
 /** Default harness output directory, relative to the repository root. */
 export function defaultBundledPiHarnessDirectory(): string {
   return join(projectRoot, 'resources/harnesses/pi')
@@ -130,6 +310,11 @@ export interface BundledPiHarnessBuild {
    *  directory. Empty means pi stopped needing every vendored library, which
    *  means this build's assumptions are stale and someone must look. */
   rewrittenFiles: string[]
+  /** Build-only files pruned after copying, and the bytes they occupied. */
+  prunedFiles: number
+  prunedBytes: number
+  /** Total bytes the harness ships, after pruning. */
+  shippedBytes: number
 }
 
 /** Matches one vendored specifier as a complete quoted string literal. */
@@ -309,18 +494,6 @@ export async function buildBundledPiHarness(directory: string): Promise<BundledP
     recursive: true,
     filter: excludeBuildTimeBin
   })
-
-  const vendorRoot = join(directory, 'vendor')
-  const rewrittenFiles = await rewriteVendorImports(join(directory, 'dist'), vendorRoot)
-  assertVendoredTargetsExist(vendorRoot)
-  await assertVendoredImportsRewritten(join(directory, 'dist'))
-
-  if (!existsSync(join(directory, PI_HARNESS_RPC_ENTRY))) {
-    throw new Error(
-      `Bundled pi ${version} has no ${PI_HARNESS_RPC_ENTRY}: the harness installs nothing`
-    )
-  }
-
   // pi-ai's dist is self-contained relative imports; vendored so main-process
   // features (in-app OAuth sign-in) can load its flow implementations in the
   // packaged app, where pi-ai is not part of CodeInOven's own node_modules.
@@ -331,7 +504,31 @@ export async function buildBundledPiHarness(directory: string): Promise<BundledP
   await cp(join(piAiPackageDirectory, 'dist'), join(directory, 'vendor/pi-ai/dist'), {
     recursive: true
   })
+  // Pruned after every copy so the rules see the whole tree, and before the
+  // rewrite pass so the vendoring checks below cover exactly the files that
+  // ship: a bare specifier in a dropped module cannot break a packaged app, and
+  // auditing it would only cost build time.
+  const vendorRoot = join(directory, 'vendor')
+  const pruned = await pruneBuildOnlyFiles(directory)
+  const rewrittenFiles = await rewriteVendorImports(join(directory, 'dist'), vendorRoot)
+  assertVendoredTargetsExist(vendorRoot)
+  await assertVendoredImportsRewritten(join(directory, 'dist'))
+
+  if (!existsSync(join(directory, PI_HARNESS_RPC_ENTRY))) {
+    throw new Error(
+      `Bundled pi ${version} has no ${PI_HARNESS_RPC_ENTRY}: the harness installs nothing`
+    )
+  }
+
+  assertRuntimeFilesPresent(directory)
   await writeFile(join(directory, '.version'), `${version}\n`)
 
-  return { version, directory, rewrittenFiles }
+  return {
+    version,
+    directory,
+    rewrittenFiles,
+    prunedFiles: pruned.files,
+    prunedBytes: pruned.bytes,
+    shippedBytes: await bundledPiHarnessSizeBytes(directory)
+  }
 }
