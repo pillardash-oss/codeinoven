@@ -38,6 +38,7 @@
       position: 'before' | 'after'
     ) => void
     /** Lifecycle callbacks surfaced through the scope actions menu. */
+    onDock?: () => void
     onTogglePinned?: () => void
     onArchive?: () => void
     onRestore?: () => void
@@ -66,6 +67,7 @@
     onFork,
     onMoveThread,
     onReorderThread,
+    onDock,
     onTogglePinned,
     onArchive,
     onRestore,
@@ -253,6 +255,7 @@
     <ScopeActionsMenu
       {bucket}
       onEdit={onEditBucket}
+      {onDock}
       onDelete={onDeleteBucket}
       {onTogglePinned}
       {onArchive}

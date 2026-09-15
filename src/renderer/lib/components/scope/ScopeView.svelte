@@ -275,6 +275,15 @@
     }
   }
 
+  /** Dock a scope: land on the scoped-threads view with it current and no
+   *  thread open, so the conversation screen shows its empty state. */
+  function dockBucket(bucket: ScopeBucket): void {
+    if (!scopeState.activeProjectId) return
+    scopeState.dockScope(bucket.id)
+    if (workspaceState.selectedThread) workspaceState.clearThread()
+    navigateToScopedThreads?.()
+  }
+
   function askEditBucket(bucket: ScopeBucket): void {
     editBucketTarget = bucket
     editBucketName = bucket.name
@@ -506,6 +515,7 @@
               onToggle={() => toggleBucket(bucket.id)}
               onToggleSlice={(stage) => toggleSlice(bucket.id, stage)}
               onEditBucket={() => askEditBucket(bucket)}
+              onDock={() => dockBucket(bucket)}
               onDeleteBucket={() => (deleteBucketTarget = bucket)}
               onTogglePinned={() => void togglePinned(bucket)}
               onArchive={() => void toggleArchive(bucket, true)}

@@ -667,6 +667,26 @@ class ScopeState {
     })
   }
 
+  /** Dock to a scope from the scope board: open the scoped-threads sidebar for
+   *  the active project with that bucket current and no thread focused, so the
+   *  conversation screen shows its empty state until the user opens a thread. */
+  dockScope(bucketId: string): void {
+    const projectId = this.activeProjectId
+    if (!projectId) return
+    void this.ensureProjectThreadsLoaded(projectId)
+    this.sidebarContext = {
+      projectId,
+      bucketId,
+      stage: 'todo',
+      threadId: ''
+    }
+    this.lastBucketByProject.set(projectId, bucketId)
+    persistScopeSnapshot({
+      activeProjectId: this.activeProjectId,
+      sidebarContext: this.sidebarContext
+    })
+  }
+
   selectSidebarStage(stage: ThreadStage): void {
     if (!this.sidebarContext) return
     this.sidebarContext = { ...this.sidebarContext, stage }
