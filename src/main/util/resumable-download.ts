@@ -78,7 +78,7 @@ export async function downloadFileResumable(request: ResumableDownloadRequest): 
     if (signal.aborted) throw new Error('Download cancelled.')
     // Streamed hash of the bytes already on disk so a resumed download can
     // still be checksum-verified as a whole at the end.
-    const hash = createHash(checksum.algorithm)
+    let hash = createHash(checksum.algorithm)
     if (state.received > 0) {
       try {
         await hashPrefix(destination, state.received, hash)
@@ -92,6 +92,9 @@ export async function downloadFileResumable(request: ResumableDownloadRequest): 
         )
         state.received = 0
         await rm(destination, { force: true }).catch(() => undefined)
+        // hashPrefix may have fed part of the prefix into the hash before
+        // failing; rebuild it so the fresh download hashes a clean stream.
+        hash = createHash(checksum.algorithm)
       }
     }
     try {
