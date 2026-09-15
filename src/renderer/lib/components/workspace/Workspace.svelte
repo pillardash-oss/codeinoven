@@ -68,11 +68,6 @@
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
   import FullscreenPanelDialog from '../workspace/FullscreenPanelDialog.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
-  import SubagentSessionView from '../threads/SubagentSessionView.svelte'
-  import SourcesPanel from '../threads/SourcesPanel.svelte'
-  import TemporaryChatView from '../chats/TemporaryChatView.svelte'
-  import NotificationPanel from '../notifications/NotificationPanel.svelte'
-  import MemoryPanel from '../memory/MemoryPanel.svelte'
   import Modal from '../ui/Modal.svelte'
   import StatusPill from '../ui/StatusPill.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -4649,11 +4644,13 @@
               {:else if activeContextTab.kind === 'debugger'}
                 <AgentDebugPanel />
               {:else if activeContextTab.kind === 'sources'}
-                <SourcesPanel
-                  sources={workspaceState.sources}
-                  projectId={activeContextTab.projectId}
-                  threadId={activeContextTab.threadId}
-                />
+                {#await import('../threads/SourcesPanel.svelte') then { default: SourcesPanel }}
+                  <SourcesPanel
+                    sources={workspaceState.sources}
+                    projectId={activeContextTab.projectId}
+                    threadId={activeContextTab.threadId}
+                  />
+                {/await}
               {:else if activeContextTab.kind === 'git'}
                 <!-- Rendered by the persistent, keep-mounted block above. -->
               {:else if activeContextTab.kind === 'cloud-deployment'}
@@ -4664,27 +4661,35 @@
                   />
                 {/await}
               {:else if activeContextTab.kind === 'temporary-chat'}
-                <TemporaryChatView
-                  tabId={activeContextTab.id}
-                  onContinueInThread={handleContinueInThread}
-                />
+                {#await import('../chats/TemporaryChatView.svelte') then { default: TemporaryChatView }}
+                  <TemporaryChatView
+                    tabId={activeContextTab.id}
+                    onContinueInThread={handleContinueInThread}
+                  />
+                {/await}
               {:else if activeContextTab.kind === 'notifications'}
-                <NotificationPanel />
+                {#await import('../notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
+                  <NotificationPanel />
+                {/await}
               {:else if activeContextTab.kind === 'coordinator'}
                 {#if coordinator}
                   {@render coordinator.panel()}
                 {/if}
               {:else if activeContextTab.kind === 'memory'}
-                <MemoryPanel
-                  variant="sidebar"
-                  projectId={activeContextTab.projectId}
-                  threadId={activeContextTab.threadId}
-                  bind:activeSection={activeContextTab.memorySection}
-                />
+                {#await import('../memory/MemoryPanel.svelte') then { default: MemoryPanel }}
+                  <MemoryPanel
+                    variant="sidebar"
+                    projectId={activeContextTab.projectId}
+                    threadId={activeContextTab.threadId}
+                    bind:activeSection={activeContextTab.memorySection}
+                  />
+                {/await}
               {:else if activeContextTab.kind === 'thread-note'}
                 <ThreadNotePanel tab={activeContextTab} />
               {:else}
-                <SubagentSessionView tab={activeContextTab} onOpenSubagent={openNestedSubagent} />
+                {#await import('../threads/SubagentSessionView.svelte') then { default: SubagentSessionView }}
+                  <SubagentSessionView tab={activeContextTab} onOpenSubagent={openNestedSubagent} />
+                {/await}
               {/if}
             {/key}
           {/if}
