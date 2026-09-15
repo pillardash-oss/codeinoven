@@ -16181,6 +16181,75 @@ export class ChatEngine {
           observedDirectories: commandDirectories(rawCommand)
         }
       })
+    /** Tool calls the harness exposes directly instead of through a shell
+     *  (`cio_util_use`, `read`, `grep`, `lsp`). A non-shell analysis such as the
+     *  Svelte autofixer can only ever be evidenced by one of these, never by a
+     *  shell command, so a command-only matcher rejects work the auditor did. */
+    const isShellTool = (tool: string): boolean => /bash|command|shell|exec/iu.test(tool)
+    const observedToolCalls = observedInvocations.map((observed) => ({
+      ...observed,
+      toolName: observed.part.tool.toLowerCase(),
+      normalizedTokens: new Set(observed.normalizedInvocation.split(' ').filter(Boolean))
+    }))
+    /** Names an auditor can use to reference a tool call, including the short
+     *  MCP-qualified suffix (`cio_util_use` for `mcp__gateway__cio_util_use`). */
+    const observableToolNames = new Set<string>()
+    for (const call of observedToolCalls) {
+      if (isShellTool(call.toolName)) continue
+      observableToolNames.add(call.toolName)
+      const suffix = call.toolName.split('__').pop()
+      if (suffix) observableToolNames.add(suffix)
+    }
+    const callMatchesToolName = (call: (typeof observedToolCalls)[number], named: string): boolean =>
+      call.toolName === named || call.toolName.endsWith(`__${named}`)
+    /** Auditors annotate the tool line with prose (`(non-writing)`) that is not
+     *  part of the call; drop it, but keep identifier-shaped parentheticals so a
+     *  gateway id still has to match. */
+    const stripIncidentalParentheticals = (value: string): string =>
+      value.replace(/\((?![0-9a-f]{6,}\))[^()]*\)/gu, ' ')
+    /** Identifier-shaped tokens carry evidence (`svelte-autofixer`, a gateway
+     *  id, a version); plain prose such as a utility's display name carries none
+     *  and must not be treated as an unverifiable claim. */
+    const isIdentifierToken = (token: string): boolean =>
+      /\d/u.test(token) ||
+      (token.length > 1 && /[^a-z0-9]/iu.test(token) && /[a-z0-9]/iu.test(token))
+    /** Match a check whose command names a tool call rather than a shell line.
+     *  Returns the closest observed call with the identifier tokens it is
+     *  missing, so a fabrication still fails with actionable detail. */
+    const matchToolInvocation = (
+      rawCommand: string,
+      files: readonly string[]
+    ): { call: (typeof observedToolCalls)[number]; missing: string[] } | null => {
+      const reportTokens = commandBody(stripIncidentalParentheticals(rawCommand))
+        .split(' ')
+        .filter(Boolean)
+      const namedTool = reportTokens.find((token) => observableToolNames.has(token.toLowerCase()))
+      if (!namedTool) return null
+      const calls = observedToolCalls.filter(
+        (call) => callMatchesToolName(call, namedTool.toLowerCase()) && call.part.state.status === 'completed'
+      )
+      if (calls.length === 0) return null
+      const requiredTokens = [
+        ...new Set(
+          reportTokens
+            .filter((token) => !isPathToken(token) && !token.startsWith('-') && isIdentifierToken(token))
+            .flatMap((token) => normalizeInvocationEvidence(token).split(' '))
+            .filter(Boolean)
+        )
+      ]
+      const requiredPaths = [...new Set([...files, ...reportTokens.filter(isPathToken)])]
+      const missingFor = (call: (typeof observedToolCalls)[number]): string[] => [
+        ...requiredTokens.filter((token) => !call.normalizedTokens.has(token)),
+        ...requiredPaths.filter(
+          (path) => !call.normalizedInvocation.includes(normalizeInvocationEvidence(path))
+        )
+      ]
+      return (
+        calls
+          .map((call) => ({ call, missing: missingFor(call) }))
+          .sort((left, right) => left.missing.length - right.missing.length)[0] ?? null
+      )
+    }
     const verification = input.content.verification
     for (const check of verification?.checks ?? []) {
       if (check.status === 'not_applicable') continue
@@ -16206,31 +16275,39 @@ export class ChatEngine {
             observed.observedDirectories.some((candidate) => pathTokensMatch(candidate, directory))
           )
       )
-      if (!observedCommand) {
-        const closest = observedCommands
-          .map((observed) => missingTokens(observed))
-          .filter((missing) => missing.length > 0 && missing.length < declaredTokenCount)
-          .sort((left, right) => left.length - right.length)[0]
-        issues.push(
-          `verification.checks ${check.id} has no matching completed command in the auditor transcript${
-            closest ? ` (never observed: ${closest.slice(0, 6).join(', ')})` : ''
-          }`
-        )
-        continue
-      }
-      checkInvocations.set(check.id, observedCommand.part)
-      if (check.kind === 'format' || check.kind === 'lint') {
-        for (const file of check.files) {
-          if (
-            !observedCommand.invocation.includes(file) &&
-            !observedCommand.observedTokens.some((token) => pathTokensMatch(token, file))
-          ) {
-            issues.push(
-              `verification.checks ${check.id} did not explicitly target audited file ${file}`
-            )
+      if (observedCommand) {
+        checkInvocations.set(check.id, observedCommand.part)
+        if (check.kind === 'format' || check.kind === 'lint') {
+          for (const file of check.files) {
+            if (
+              !observedCommand.invocation.includes(file) &&
+              !observedCommand.observedTokens.some((token) => pathTokensMatch(token, file))
+            ) {
+              issues.push(
+                `verification.checks ${check.id} did not explicitly target audited file ${file}`
+              )
+            }
           }
         }
+        continue
       }
+      const toolMatch = matchToolInvocation(rawCommand, check.files)
+      if (toolMatch && toolMatch.missing.length === 0) {
+        checkInvocations.set(check.id, toolMatch.call.part)
+        continue
+      }
+      const closest = toolMatch
+        ? toolMatch.missing
+        : observedCommands
+            .map((observed) => missingTokens(observed))
+            .filter((missing) => missing.length > 0 && missing.length < declaredTokenCount)
+            .sort((left, right) => left.length - right.length)[0]
+      issues.push(
+        `verification.checks ${check.id} has no matching completed command in the auditor transcript${
+          closest ? ` (never observed: ${closest.slice(0, 6).join(', ')})` : ''
+        }`
+      )
+      continue
     }
 
     const observedToolNames = observedTools.map((part) => part.tool.toLowerCase())
