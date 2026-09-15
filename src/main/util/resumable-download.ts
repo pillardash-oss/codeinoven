@@ -79,7 +79,21 @@ export async function downloadFileResumable(request: ResumableDownloadRequest): 
     // Streamed hash of the bytes already on disk so a resumed download can
     // still be checksum-verified as a whole at the end.
     const hash = createHash(checksum.algorithm)
-    if (state.received > 0) await hashPrefix(destination, state.received, hash)
+    if (state.received > 0) {
+      try {
+        await hashPrefix(destination, state.received, hash)
+      } catch (cause) {
+        // The partial file vanished or shrank between attempts (cache
+        // cleared, disk cleanup): a resume offset is no longer meaningful,
+        // so discard it and restart the download from byte zero.
+        Logger.dev(
+          `Partial download at ${state.received} bytes is no longer usable; restarting from zero:`,
+          cause
+        )
+        state.received = 0
+        await rm(destination, { force: true }).catch(() => undefined)
+      }
+    }
     try {
       const received = await downloadRange(
         url,
@@ -193,7 +207,8 @@ async function downloadRange(
     // that boundary so the next attempt resumes from a consistent prefix.
     const flushed = Math.max(0, stream.bytesWritten)
     state.received = start + flushed
-    if (flushed < received - start) await truncate(destination, state.received)
+    if (flushed < received - start)
+      await truncate(destination, state.received).catch(() => undefined)
     stream.destroy()
     throw cause
   }
