@@ -16,6 +16,7 @@
   } from '@lucide/svelte'
   import type { Component, Snippet } from 'svelte'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { hasRepairableScopeIssue, scopeState } from '$lib/stores/scope.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import type { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
@@ -63,6 +64,25 @@
     scopeState.sidebarContext?.bucketId === bucket.id &&
       (rendererRecovery.activeView === 'projects' ||
         rendererRecovery.activeView === 'projects-scope')
+  )
+
+  /**
+   * A live harness session in this scope keeps its process in the directory the
+   * scope points at right now. Creating or adopting a worktree moves that root,
+   * which would leave the running session stranded in the old directory while
+   * every later turn resolves to the new one, so both options are withheld
+   * until the scope's threads settle. `isConversationBusy` covers interactive
+   * sessions only, so background work (Brainstorm report generation) never
+   * hides them.
+   */
+  const scopeHasLiveSession = $derived(
+    scopeState.allScopeThreads.some(
+      (thread) =>
+        thread.projectId === actions.projectId &&
+        !thread.archived &&
+        scopeState.bucketForThread(thread) === bucket.id &&
+        agentRuns.isConversationBusy(thread.projectId, thread.id)
+    )
   )
 
   function closeMenu(): void {
@@ -125,7 +145,7 @@
           })
         }
       }
-      if (!isManaged && bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
+      if (!isManaged && bucket.id !== DEFAULT_SCOPE_BUCKET_ID && !scopeHasLiveSession) {
         list.push({
           label: 'Create Git worktree',
           icon: GitBranch,
