@@ -9382,7 +9382,7 @@
       })
     } catch (error) {
       toast.dismiss(progressToast)
-      toast.error(error instanceof Error ? error.message : 'The transcript could not be exported.')
+      reportError(error, 'The transcript could not be exported.')
     }
   }
 

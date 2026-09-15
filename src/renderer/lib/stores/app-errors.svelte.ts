@@ -107,16 +107,50 @@ class AppErrorState {
 
 export const appErrorState = new AppErrorState()
 
-type ToastFn = (message: string, data?: Parameters<typeof toast.error>[1]) => string | number
+type ToastData = Parameters<typeof toast.error>[1]
+type ToastFn = (message: string, data?: ToastData) => string | number
+
+type ToastMessage = Parameters<typeof toast.error>[0]
+
+/** Full clipboard text for an error: message plus any details/stack. */
+function errorText(message: string, details?: string): string {
+  return details ? `${message}\n\n${details}` : message
+}
+
+/** The Copy button every error toast carries. */
+function copyAction(text: string): { label: string; onClick: () => void } {
+  return {
+    label: 'Copy',
+    onClick: () => {
+      void copyText(text).catch(() => {})
+    }
+  }
+}
+
+/**
+ * Guarantee a Copy button on every error toast. Sonner renders one primary
+ * `action` and one secondary `cancel` button, so when the caller already owns
+ * the action (a thread-navigating "Open thread", a retry, ...) the copy takes
+ * the secondary slot instead of being dropped.
+ */
+function withCopyButton(message: string, data: ToastData, details?: string): ToastData {
+  const copy = copyAction(errorText(message, details))
+  if (!data?.action) return { ...data, action: copy }
+  if (data.cancel) return data
+  return { ...data, cancel: copy }
+}
+
+/** Record a toast in the app errors panel. Toasts that carry an action (e.g.
+ *  agent notifications) are thread-navigable through their own UI, so we don't
+ *  guess a thread link for them here. */
+function captureToast(kind: AppErrorKind, message: string, data: ToastData): void {
+  const thread = data?.action ? undefined : currentThreadRef()
+  appErrorState.capture(kind, message, { thread })
+}
 
 function captureWith(kind: AppErrorKind, original: ToastFn): ToastFn {
   return (message, data) => {
-    if (typeof message === 'string') {
-      // Toasts that carry an action (e.g. agent notifications) are thread-navigable
-      // through their own UI, so we don't guess a thread link for them here.
-      const thread = data?.action ? undefined : currentThreadRef()
-      appErrorState.capture(kind, message, { thread })
-    }
+    if (typeof message === 'string') captureToast(kind, message, data)
     return original(message, data)
   }
 }
@@ -124,18 +158,20 @@ function captureWith(kind: AppErrorKind, original: ToastFn): ToastFn {
 const originalError = toast.error
 const originalWarning = toast.warning
 
-toast.error = captureWith('error', originalError) as typeof toast.error
+/** Capture an error toast, then show it with its Copy button guaranteed. */
+function errorToastWithCapture(message: ToastMessage, data?: ToastData): string | number {
+  if (typeof message !== 'string') return originalError(message, data)
+  captureToast('error', message, data)
+  return originalError(message, withCopyButton(message, data))
+}
+
+toast.error = errorToastWithCapture as typeof toast.error
 toast.warning = captureWith('warning', originalWarning) as typeof toast.warning
 
 function messageFrom(error: unknown, fallback: string): string {
   if (typeof error === 'string' && error.trim()) return error
   if (error instanceof Error && error.message.trim()) return error.message
   return fallback
-}
-
-/** Full clipboard text for an error: message plus any details/stack. */
-function errorText(message: string, details?: string): string {
-  return details ? `${message}\n\n${details}` : message
 }
 
 /** First user-facing line of a multi-line diagnostic text. */
@@ -155,21 +191,15 @@ export function captureError(message: string, options?: CaptureOptions): void {
 
 /** Show an error toast without re-capturing it. Pair with `captureError` when
  *  the caller records the error itself (with details) before toasting. */
-export function showToastError(
-  message: string,
-  data?: Parameters<typeof toast.error>[1]
-): string | number {
-  return originalError(message, data)
+export function showToastError(message: string, data?: ToastData): string | number {
+  return originalError(message, withCopyButton(message, data))
 }
 
-/** Copy action shown alongside the primary action on error toasts. */
-function copyErrorAction(text: string): { label: string; onClick: () => void } {
-  return {
-    label: 'Copy',
-    onClick: () => {
-      void copyText(text).catch(() => {})
-    }
-  }
+/** Show a warning toast without recording it. Thread status notices ("needs
+ *  attention") belong to the notification panel's Attention tab, so they must
+ *  never duplicate into the app errors panel. */
+export function showToastWarning(message: string, data?: ToastData): string | number {
+  return originalWarning(message, data)
 }
 
 /** Surface an error toast carrying the full error payload (stack, cause chain). */
@@ -180,10 +210,7 @@ export function reportError(error: unknown, fallback: string, thread?: AppErrorT
     details,
     thread: thread ?? currentThreadRef()
   })
-  originalError(message, {
-    closeButton: true,
-    action: copyErrorAction(errorText(message, details))
-  })
+  originalError(message, withCopyButton(message, undefined, details))
 }
 
 /** Surface a preformatted error message (e.g. from the main process) with optional details. */
@@ -192,8 +219,30 @@ export function reportErrorWithDetails(
   options?: { details?: string; thread?: AppErrorThreadRef }
 ): void {
   appErrorState.capture('error', message, options)
-  originalError(message, {
-    closeButton: true,
-    action: copyErrorAction(errorText(message, options?.details))
+  originalError(message, withCopyButton(message, undefined, options?.details))
+}
+
+/**
+ * Mirror uncaught renderer failures into the panel with their stack trace.
+ * These never pass through a toast call, so without this they would only exist
+ * in the durable log while the panel stayed silent about a real app error.
+ */
+function installUncaughtErrorCapture(): void {
+  if (typeof window === 'undefined') return
+  window.addEventListener('error', (event) => {
+    const error: unknown = event.error
+    appErrorState.capture('error', messageFrom(error, event.message || 'Uncaught app error'), {
+      details: error instanceof Error ? serializeError(error) : undefined,
+      thread: currentThreadRef()
+    })
+  })
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason: unknown = event.reason
+    appErrorState.capture('error', messageFrom(reason, 'Unhandled promise rejection'), {
+      details: reason instanceof Error ? serializeError(reason) : undefined,
+      thread: currentThreadRef()
+    })
   })
 }
+
+installUncaughtErrorCapture()

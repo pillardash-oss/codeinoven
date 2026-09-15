@@ -31,7 +31,12 @@
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
   import { toast } from 'svelte-sonner'
-  import { captureError, errorHeadline, showToastError } from '$lib/stores/app-errors.svelte'
+  import {
+    captureError,
+    errorHeadline,
+    showToastError,
+    showToastWarning
+  } from '$lib/stores/app-errors.svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
@@ -1414,7 +1419,9 @@
     } else if (payload.kind === 'chat-completed') {
       toast.success(payload.title, { ...options, style: chatResponseToastStyle })
     } else if (payload.kind === 'attention') {
-      toast.warning(payload.title, options)
+      // A thread waiting for input is a status notice owned by the panel's
+      // Attention tab, never an app error/warning entry.
+      showToastWarning(payload.title, options)
     } else if (payload.kind === 'spec') {
       toast.info(payload.title, options)
     } else {

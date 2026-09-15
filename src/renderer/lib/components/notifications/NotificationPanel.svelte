@@ -1,24 +1,34 @@
 <script lang="ts">
-  import { Bell, Bug, Check, Copy, MessageCircleDashed, MessageSquare, X } from '@lucide/svelte'
+  import {
+    Bell,
+    Bug,
+    Check,
+    ChevronDown,
+    Copy,
+    MessageCircleDashed,
+    MessageSquare,
+    X
+  } from '@lucide/svelte'
   import {
     notificationPanelState,
     type NotificationFilter,
     type InAppNotification
   } from '$lib/stores/notification-panel.svelte'
-  import {
-    appErrorState,
-    errorHeadline,
-    type AppErrorEntry
-  } from '$lib/stores/app-errors.svelte'
+  import { appErrorState, errorHeadline, type AppErrorEntry } from '$lib/stores/app-errors.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import { INBOX_PROJECT_ID } from '$shared/types'
 
   interface Props {
-    onOpenThread?: (projectId: string, threadId: string, temporaryChatId?: string) => void | Promise<void>
+    onOpenThread?: (
+      projectId: string,
+      threadId: string,
+      temporaryChatId?: string
+    ) => void | Promise<void>
   }
 
   let { onOpenThread }: Props = $props()
@@ -35,6 +45,26 @@
 
   let busyId = $state<string | null>(null)
   let copiedId = $state<string | null>(null)
+
+  // Diagnostic detail (stack trace) blocks start expanded   the stack is the
+  // reason the entry exists   and collapse per entry when the user wants density.
+  const collapsedDetails = new SvelteSet<string>()
+
+  function toggleDetails(key: string): void {
+    if (collapsedDetails.has(key)) collapsedDetails.delete(key)
+    else collapsedDetails.add(key)
+  }
+
+  /** True when the diagnostic text carries real stack frames. */
+  function hasStackFrames(details: string): boolean {
+    return /^\s+at\s/m.test(details)
+  }
+
+  /** Detail worth showing: it adds something beyond the entry's headline. */
+  function hasUsefulDetails(headline: string, details: string | undefined): boolean {
+    const trimmed = details?.trim()
+    return trimmed !== undefined && trimmed.length > 0 && trimmed !== headline.trim()
+  }
 
   let showingAppErrors = $derived(notificationPanelState.filter === 'app-errors')
   let hasVisibleItems = $derived(
@@ -162,6 +192,34 @@
   }
 </script>
 
+{#snippet detailsBlock(key: string, details: string)}
+  {@const expanded = !collapsedDetails.has(key)}
+  {@const stackFrames = hasStackFrames(details)}
+  {@const label = expanded
+    ? `Hide ${stackFrames ? 'stack trace' : 'details'}`
+    : `Show ${stackFrames ? 'stack trace' : 'details'}`}
+  <button
+    class="mt-1.5 flex items-center gap-1 rounded px-1 py-0.5 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-raised hover:text-foreground"
+    aria-expanded={expanded}
+    aria-label={label}
+    title={label}
+    onclick={(event: MouseEvent) => {
+      event.stopPropagation()
+      toggleDetails(key)
+    }}
+  >
+    <ChevronDown
+      size={10}
+      class={expanded ? 'rotate-180 transition-transform' : 'transition-transform'}
+    />
+    {stackFrames ? 'Stack trace' : 'Details'}
+  </button>
+  {#if expanded}
+    <pre
+      class="mt-1 max-h-40 select-text overflow-auto rounded border border-border bg-overlay p-2 font-mono text-[0.6875rem] leading-relaxed break-all whitespace-pre-wrap text-muted">{details}</pre>
+  {/if}
+{/snippet}
+
 <div class="flex h-full flex-col">
   <!-- Filter bar -->
   <div class="flex shrink-0 items-center gap-0.5 border-b border-border px-2 py-1.5">
@@ -256,11 +314,16 @@
                 >
                   {e.message}
                 </p>
+                {#if hasUsefulDetails(e.message, e.details) && e.details}
+                  {@render detailsBlock(`app:${e.id}`, e.details)}
+                {/if}
               </div>
               <div class="flex shrink-0 items-center gap-0.5">
                 <button
                   class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                  aria-label={`Copy app error: ${e.message}`}
+                  aria-label={hasUsefulDetails(e.message, e.details)
+                    ? `Copy app error and stack trace: ${e.message}`
+                    : `Copy app error: ${e.message}`}
                   title="Copy"
                   onclick={(ev: MouseEvent) => {
                     ev.stopPropagation()
@@ -308,6 +371,9 @@
             title={`${n.title}${n.body ? `   ${n.body}` : ''}`}
             onclick={() => void navigateToNotification(n)}
             onkeydown={(e: KeyboardEvent) => {
+              // Ignore keys that belong to a nested control (the stack-trace
+              // toggle), which would otherwise navigate away on Enter.
+              if (e.target !== e.currentTarget) return
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault()
                 void navigateToNotification(n)
@@ -350,6 +416,9 @@
                 <p class="mt-0.5 line-clamp-2 text-[0.6875rem] leading-relaxed text-muted">
                   {n.body}
                 </p>
+              {/if}
+              {#if n.kind === 'error' && n.errorDetail && hasUsefulDetails(errorHeadline(n.body), n.errorDetail)}
+                {@render detailsBlock(`notification:${n.id}`, n.errorDetail)}
               {/if}
             </div>
             {#if n.kind === 'error'}

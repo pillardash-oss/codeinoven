@@ -24,7 +24,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { toast } from 'svelte-sonner'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
@@ -103,7 +103,7 @@
       menuOpen = false
       query = ''
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The scope could not be changed.')
+      reportError(error, 'The scope could not be changed.')
     }
   }
 

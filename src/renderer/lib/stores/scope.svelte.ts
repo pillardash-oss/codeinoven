@@ -885,9 +885,9 @@ class ScopeState {
 
   /**
    * Kick the full new-scope creation off in the background so the app stays
-   * usable while git + setup commands run. Progress is shown as a persistent
-   * docked toast; it flips to a success check on completion (auto-dismisses)
-   * or an error toast that stays until dismissed.
+   * usable while git + setup commands run. A persistent loading toast tracks the
+   * run and is replaced by its outcome: a success check that auto-dismisses, or
+   * an error toast carrying the failure and its Copy button.
    */
   beginWorktreeCreation(
     projectId: string,
@@ -921,17 +921,24 @@ class ScopeState {
       }
       options.onCreated?.(bucketId)
       return input.title
-    })().catch((cause: unknown) => {
-      const message = cause instanceof Error ? cause.message : 'The scope could not be created.'
-      // Never let an unhandled rejection surface: the toast already reports it.
-      return Promise.reject(new Error(message))
+    })()
+    // A plain loading toast is not promise-bound, so it is pinned open for as
+    // long as git and the setup commands run, then replaced by the outcome.
+    const progressToast = toast.loading(`Creating “${input.title}”…`, {
+      duration: Number.POSITIVE_INFINITY
     })
-    void toast.promise(creation, {
-      loading: `Creating “${input.title}”…`,
-      success: `“${input.title}” is ready`,
-      error: (cause: unknown) =>
-        cause instanceof Error ? cause.message : 'The scope could not be created.'
-    })
+    void creation.then(
+      () => {
+        toast.dismiss(progressToast)
+        toast.success(`“${input.title}” is ready`)
+      },
+      (cause: unknown) => {
+        // The rejection is handled here, so it never surfaces as an unhandled
+        // rejection, and the error toast still carries its Copy button.
+        toast.dismiss(progressToast)
+        toast.error(cause instanceof Error ? cause.message : 'The scope could not be created.')
+      }
+    )
   }
 
   /** Inspect the source checkout before creating a worktree. */

@@ -10,6 +10,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
@@ -567,8 +568,7 @@
       workspaceState.clearThread()
       scopeState.removeThread(thread.id)
     },
-    onDeleteError: (error) =>
-      toast.error(error instanceof Error ? error.message : 'Could not delete thread'),
+    onDeleteError: (error) => reportError(error, 'Could not delete thread'),
     showChangeScope: () => true,
     showNotes: () => true,
     showCopyId: () => true,

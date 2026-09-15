@@ -4,6 +4,7 @@
   import { cubicOut } from 'svelte/easing'
   import { AlertDialog, Dialog } from 'bits-ui'
   import { toast } from 'svelte-sonner'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import {
     ChevronRight,
     Code2,
@@ -610,7 +611,7 @@
       await projectFilesWorkspace.renameFile(projectId, target.path, name)
       renameTarget = null
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The file could not be renamed')
+      reportError(error, 'The file could not be renamed')
     } finally {
       mutationPending = false
     }
@@ -631,7 +632,7 @@
       fullscreenOpen = false
       toast.success('File moved to Trash')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The file could not be deleted')
+      reportError(error, 'The file could not be deleted')
     } finally {
       mutationPending = false
     }
