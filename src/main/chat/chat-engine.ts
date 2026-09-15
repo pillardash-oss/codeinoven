@@ -2884,6 +2884,16 @@ export class ChatEngine {
         this.generateIndependentAudit(projectId, threadId, request)
     )
     ipcMain.handle(
+      'agent:startFreshIndependentAudit',
+      (_, projectId: string, threadId: string, request: AuditGenerationRequest) =>
+        this.startFreshIndependentAudit(projectId, threadId, request)
+    )
+    ipcMain.handle(
+      'agent:deleteIndependentAuditorThread',
+      (_, projectId: string, threadId: string) =>
+        this.deleteIndependentAuditorThread(projectId, threadId)
+    )
+    ipcMain.handle(
       'agent:ensureIndependentAuditorThread',
       (_, projectId: string, threadId: string, settings: ThreadSettings) =>
         this.ensureIndependentAuditorThread(projectId, threadId, settings)
@@ -14963,6 +14973,62 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * Delete the durable auditor thread that owns this coordinator's independent
+   * audits. The next audit then creates a brand-new auditor session instead of
+   * resuming the deleted one. Reports live on the coordinator thread, so the
+   * report history is preserved.
+   */
+  async deleteIndependentAuditorThread(
+    projectId: string,
+    coordinatorThreadId: string
+  ): Promise<void> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator || coordinator.independentAudit !== true) {
+      throw new Error('Independent audit is not enabled for this thread.')
+    }
+    if (this.activeIndependentAuditRuns.has(`${projectId}:${coordinatorThreadId}`)) {
+      throw new Error('The independent audit is still running.')
+    }
+    await this.removeIndependentAuditorThread(projectId, coordinatorThreadId, coordinator)
+  }
+
+  /**
+   * Start a brand-new independent audit with a fresh auditor thread.
+   *
+   * The auditor session is deliberately durable across audits: it resumes its
+   * own context so a rework pass can verify the previous findings. That also
+   * means a thread that gets stuck, keeps failing validation, or drifts stays
+   * that way. This replaces it: the previous auditor thread is deleted and a
+   * new auditor is created for a fresh independent audit of the same work. The
+   * coordinator keeps its report lineage, so a new auditor still reads the
+   * previous report and verifies the rework against it when one exists, and
+   * audits the thread transcript alone when it does not.
+   */
+  async startFreshIndependentAudit(
+    projectId: string,
+    threadId: string,
+    request: AuditGenerationRequest
+  ): Promise<{ report: AuditReport; auditorThread: Thread }> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const settings = validateThreadSettings(request.settings)
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread || thread.independentAudit !== true) {
+      throw new Error('Independent audit is not enabled for this thread.')
+    }
+    if (isOrchestrationChildThread(thread)) {
+      throw new Error('Independent audit is not available on orchestration threads.')
+    }
+    if (this.activeIndependentAuditRuns.has(`${projectId}:${threadId}`)) {
+      throw new Error('The independent audit is still running.')
+    }
+    await this.removeIndependentAuditorThread(projectId, threadId, thread)
+    return this.generateIndependentAudit(projectId, threadId, { settings })
+  }
+
   async ensureIndependentAuditorThread(
     projectId: string,
     coordinatorThreadId: string,
@@ -14985,6 +15051,59 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * The durable auditor thread that owns independent audits for this
+   * coordinator: the recorded pointer when it still resolves to a live auditor,
+   * otherwise the matching orchestration child looked up by coordinator id.
+   * Returns null when the coordinator has no auditor yet, or any more.
+   */
+  private async findIndependentAuditorThread(
+    projectId: string,
+    coordinatorThreadId: string,
+    coordinator?: Thread
+  ): Promise<Thread | null> {
+    const owner =
+      coordinator ?? (await this.threadManager.getThread(projectId, coordinatorThreadId))
+    if (!owner) return null
+    if (owner.auditorThreadId) {
+      const auditor = await this.threadManager.getThread(projectId, owner.auditorThreadId)
+      if (
+        auditor &&
+        auditor.achievementRole === 'auditor' &&
+        auditor.coordinatorThreadId === coordinatorThreadId
+      ) {
+        return auditor
+      }
+    }
+    const candidates = await this.threadManager.listThreads(projectId)
+    return (
+      candidates.find(
+        (candidate) =>
+          candidate.achievementRole === 'auditor' &&
+          candidate.coordinatorThreadId === coordinatorThreadId
+      ) ?? null
+    )
+  }
+
+  /**
+   * Delete the durable auditor thread for an independent audit coordinator, so
+   * the next audit starts from a brand-new auditor session. Reports are stored
+   * on the coordinator thread, so the report lineage is untouched.
+   */
+  private async removeIndependentAuditorThread(
+    projectId: string,
+    coordinatorThreadId: string,
+    coordinator: Thread
+  ): Promise<void> {
+    const auditor = await this.findIndependentAuditorThread(
+      projectId,
+      coordinatorThreadId,
+      coordinator
+    )
+    if (!auditor) return
+    await this.threadManager.deleteThread(projectId, auditor.id)
+  }
+
   private async createOrUpdateIndependentAuditor(
     projectId: string,
     coordinatorThreadId: string,
@@ -15001,21 +15120,11 @@ export class ChatEngine {
       loopMode: false,
       loopAuditor: undefined
     }
-    let auditor = coordinator.auditorThreadId
-      ? await this.threadManager.getThread(projectId, coordinator.auditorThreadId)
-      : null
-    if (
-      !auditor ||
-      auditor.achievementRole !== 'auditor' ||
-      auditor.coordinatorThreadId !== coordinatorThreadId
-    ) {
-      auditor =
-        (await this.threadManager.listThreads(projectId)).find(
-          (candidate) =>
-            candidate.achievementRole === 'auditor' &&
-            candidate.coordinatorThreadId === coordinatorThreadId
-        ) ?? null
-    }
+    let auditor = await this.findIndependentAuditorThread(
+      projectId,
+      coordinatorThreadId,
+      coordinator
+    )
     if (!auditor) {
       const names = await this.storage.getWorkerNames()
       const name = names[randomInt(names.length)]
@@ -16208,8 +16317,10 @@ export class ChatEngine {
       const suffix = call.toolName.split('__').pop()
       if (suffix) observableToolNames.add(suffix)
     }
-    const callMatchesToolName = (call: (typeof observedToolCalls)[number], named: string): boolean =>
-      call.toolName === named || call.toolName.endsWith(`__${named}`)
+    const callMatchesToolName = (
+      call: (typeof observedToolCalls)[number],
+      named: string
+    ): boolean => call.toolName === named || call.toolName.endsWith(`__${named}`)
     /** Auditors annotate the tool line with prose (`(non-writing)`) that is not
      *  part of the call; drop it, but keep identifier-shaped parentheticals so a
      *  gateway id still has to match. */
@@ -16234,13 +16345,17 @@ export class ChatEngine {
       const namedTool = reportTokens.find((token) => observableToolNames.has(token.toLowerCase()))
       if (!namedTool) return null
       const calls = observedToolCalls.filter(
-        (call) => callMatchesToolName(call, namedTool.toLowerCase()) && call.part.state.status === 'completed'
+        (call) =>
+          callMatchesToolName(call, namedTool.toLowerCase()) &&
+          call.part.state.status === 'completed'
       )
       if (calls.length === 0) return null
       const requiredTokens = [
         ...new Set(
           reportTokens
-            .filter((token) => !isPathToken(token) && !token.startsWith('-') && isIdentifierToken(token))
+            .filter(
+              (token) => !isPathToken(token) && !token.startsWith('-') && isIdentifierToken(token)
+            )
             .flatMap((token) => normalizeInvocationEvidence(token).split(' '))
             .filter(Boolean)
         )
@@ -16272,8 +16387,7 @@ export class ChatEngine {
       const missingTokens = (observed: (typeof observedCommands)[number]): string[] => [
         ...requiredTokens.filter((token) => !observed.observedTokens.includes(token)),
         ...pathTokens.filter(
-          (token) =>
-            !observed.observedTokens.some((candidate) => pathTokensMatch(candidate, token))
+          (token) => !observed.observedTokens.some((candidate) => pathTokensMatch(candidate, token))
         )
       ]
       const observedCommand = observedCommands.find(

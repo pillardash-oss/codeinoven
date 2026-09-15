@@ -7824,6 +7824,57 @@
     }
   }
 
+  /** Replace the auditor thread with a brand-new one and run a fresh audit.
+   *  The main process deletes the previous auditor thread (session, transcript,
+   *  disk artifacts) before creating the new one, so a stuck or repeatedly
+   *  failing auditor is escaped rather than resumed. The report lineage on the
+   *  coordinator survives, so the fresh auditor still verifies rework against
+   *  the previous report when one exists. */
+  async function startFreshIndependentAudit(selected: ThreadSettings): Promise<void> {
+    auditBusy = true
+    auditError = ''
+    errorMessage = ''
+    auditSettings = selected
+    rendererRecovery.addRecentModel(
+      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    )
+    try {
+      const result = await invoke('agent:startFreshIndependentAudit', thread.projectId, thread.id, {
+        settings: selected
+      })
+      auditReport = result.report
+      durableAuditThread = result.auditorThread
+      auditState = 'report_ready'
+      auditVersions = await invoke(
+        'audit:listVersions',
+        thread.projectId,
+        thread.id,
+        auditReport.id
+      )
+    } catch (error) {
+      const rawError = error instanceof Error ? error.message : 'The new audit could not start.'
+      errorMessage = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+      auditError = errorMessage
+      // The previous auditor is gone and the failed run still created a fresh
+      // one, so resolve it instead of leaving a deleted thread on screen.
+      durableAuditThread = await invoke(
+        'agent:ensureIndependentAuditorThread',
+        thread.projectId,
+        thread.id,
+        selected
+      ).catch(() => undefined)
+    } finally {
+      auditBusy = false
+    }
+  }
+
+  /** Remove the auditor thread without starting an audit. The next "Run audit"
+   *  creates a brand-new auditor because the deleted one no longer resolves. */
+  async function deleteAuditorThread(auditor: Thread): Promise<void> {
+    await invoke('agent:deleteIndependentAuditorThread', thread.projectId, thread.id)
+    if (durableAuditThread?.id === auditor.id) durableAuditThread = undefined
+  }
+
   /** Toggle the independent audit. Enabling is permanent once the first run
    *  starts, and excludes engineering modes for this thread's lifetime. */
   /** Toggle the Independent Audit. Turning it on stages the choice: the
@@ -12084,6 +12135,8 @@
       onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
       onOpenAudit={() => void generateIndependentAudit(auditSettings)}
       onViewReport={openAuditStudio}
+      onNewAudit={() => startFreshIndependentAudit(auditSettings)}
+      onDeleteThread={deleteAuditorThread}
       onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
       onModelChange={changeAuditModel}
       onToggleFavorite={(providerId, modelId, harnessId) =>

@@ -835,6 +835,14 @@ export const IPC_INVOKE_CONTRACT = {
     [projectId: string, threadId: string, request: AuditGenerationRequest],
     { report: AuditReport; auditorThread: Thread }
   >,
+  'agent:startFreshIndependentAudit': {} as Contract<
+    [projectId: string, threadId: string, request: AuditGenerationRequest],
+    { report: AuditReport; auditorThread: Thread }
+  >,
+  'agent:deleteIndependentAuditorThread': {} as Contract<
+    [projectId: string, threadId: string],
+    void
+  >,
   'agent:ensureIndependentAuditorThread': {} as Contract<
     [projectId: string, threadId: string, settings: ThreadSettings],
     Thread
