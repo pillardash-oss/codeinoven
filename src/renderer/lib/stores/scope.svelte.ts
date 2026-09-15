@@ -295,6 +295,28 @@ class ScopeState {
     }
   }
 
+  /** Whether a project's board holds any scope beyond the Default bucket. */
+  private boardHasCustomScopes(board: ScopeBoard): boolean {
+    return board.buckets.some((bucket) => bucket.id !== DEFAULT_SCOPE_BUCKET_ID)
+  }
+
+  /**
+   * Hydrate a project's full thread list for its scope board. Custom scopes
+   * must show every bucket thread even when the bounded first-paint recent
+   * slice never included it (older threads never surface on their own), so
+   * the board pulls the complete non-archived list from the database and
+   * merges it per project. Projects whose board holds only the Default scope
+   * skip hydration: the regular thread list and the recent slice already
+   * cover them. Runs once per project; on failure the next board open retries.
+   */
+  async ensureScopeBoardThreadsLoaded(projectId: string): Promise<void> {
+    if (projectId === '') return
+    await this.ensureBoardLoaded(projectId)
+    const board = this.boards.get(projectId)
+    if (!board || !this.boardHasCustomScopes(board)) return
+    await this.ensureProjectThreadsLoaded(projectId)
+  }
+
   get projectBadges(): SvelteMap<string, ProjectBadge> {
     const badges = new SvelteMap<string, ProjectBadge>()
     for (const project of this.projects) {
@@ -358,7 +380,29 @@ class ScopeState {
   }
 
   setThreads(threads: Thread[]): void {
-    this.allScopeThreads = threads
+    // Projects already fully hydrated for the scope board must survive this
+    // bounded re-seed: replacing the whole array would empty their custom
+    // scopes even though `fullyHydratedProjects` still marks them complete.
+    const hydrated = this.fullyHydratedProjects
+    if (hydrated.size === 0) {
+      this.allScopeThreads = threads
+      return
+    }
+    const merged: Thread[] = []
+    const seen = new SvelteSet<string>()
+    for (const thread of this.allScopeThreads) {
+      if (hydrated.has(thread.projectId) && !seen.has(thread.id)) {
+        seen.add(thread.id)
+        merged.push(thread)
+      }
+    }
+    for (const thread of threads) {
+      if (!seen.has(thread.id)) {
+        seen.add(thread.id)
+        merged.push(thread)
+      }
+    }
+    this.allScopeThreads = merged
   }
 
   setSelectedThreadDraftState(threadId: string | null, hasDraft: boolean): void {
@@ -370,6 +414,7 @@ class ScopeState {
       const loadedBoard = this.boards.get(id)
       if (loadedBoard) {
         this.board = loadedBoard
+        void this.ensureScopeBoardThreadsLoaded(id)
         return
       }
       await this.loadBoard(id)
@@ -382,6 +427,7 @@ class ScopeState {
       sidebarContext: this.sidebarContext
     })
     await this.loadBoard(id)
+    void this.ensureScopeBoardThreadsLoaded(id)
   }
 
   activateScope(id: string): void {

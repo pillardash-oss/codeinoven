@@ -52,7 +52,13 @@
 
   $effect(() => {
     const projectId = scopeState.activeProjectId
-    if (projectId) void scopeState.loadBoard(projectId)
+    if (!projectId) return
+    // Board first, then hydrate the project's full thread list: custom scopes
+    // must show every bucket thread even when it is older than the bounded
+    // first-paint recent slice, without paging the sidebar first.
+    void scopeState.loadBoard(projectId).then(() => {
+      void scopeState.ensureScopeBoardThreadsLoaded(projectId)
+    })
   })
 
   // Keep the typed health of every managed worktree on the active board
