@@ -23,6 +23,10 @@
   const componentId = $props.id()
   const formId = `${componentId}-create-scope-form`
 
+  // Every call site mounts this modal fresh per launch, so seeding the field
+  // from the initial name is intentional   a later prop change must not
+  // overwrite what the user is typing.
+  // svelte-ignore state_referenced_locally
   let name = $state(initialName)
   let isolated = $state(true)
   let runSetup = $state(true)

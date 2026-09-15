@@ -179,6 +179,7 @@
     open
     {projectId}
     existingBucketId={actions.createWorktreeTarget.id}
+    initialName={actions.createWorktreeTarget.name}
     onClose={() => (actions.createWorktreeTarget = null)}
   />
 {/if}
