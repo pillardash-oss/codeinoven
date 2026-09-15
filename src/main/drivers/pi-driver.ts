@@ -15,6 +15,7 @@ import type {
   AgentUsageCredits,
   AgentSubagentActivity,
   AgentTokenUsage,
+  AgentToolStatus,
   PromptAttachment,
   ProviderCatalog,
   ProviderModel,
@@ -511,10 +512,37 @@ function findSubagentPartByChildSession(
 }
 
 /**
+ * Activity fields one structured sub-agent payload contributes. Partial on
+ * purpose: the immediate spawn acknowledgement carries no `purpose`, and a
+ * patch that named the task 'sub-agent' would overwrite the real task type
+ * (the spawn tool's own arguments already knew it) for the worker's whole run.
+ */
+type SubagentActivityPatch = Partial<AgentSubagentActivity>
+
+/**
+ * Time range for one sub-agent activity snapshot. Only a terminal worker
+ * freezes its end: a background spawn returns immediately from its tool call
+ * while the worker keeps running, and stamping an end there would both show a
+ * stuck duration and make the card look finished to every terminal-state
+ * check in the UI.
+ */
+function subagentTimeRange(
+  base: AgentSubagentActivity,
+  status: AgentToolStatus
+): AgentSubagentActivity['time'] {
+  const start = base.time?.start ?? Date.now()
+  // An end that is already recorded is the worker's real finish; a later
+  // snapshot of the same terminal state must not stretch the duration.
+  return status === 'completed' || status === 'error'
+    ? { start, end: base.time?.end ?? Date.now() }
+    : { start }
+}
+
+/**
  * Parse a `cio-subagent:` marker payload (structured sub-agent progress
  * streamed through tool-execution updates) into activity fields.
  */
-function parseSubagentPayload(output: string | undefined): AgentSubagentActivity | undefined {
+function parseSubagentPayload(output: string | undefined): SubagentActivityPatch | undefined {
   if (!output || !output.startsWith(CIO_SUBAGENT_MARKER)) return undefined
   return subagentActivityFromPayload(parseRecord(output.slice(CIO_SUBAGENT_MARKER.length)))
 }
@@ -522,9 +550,10 @@ function parseSubagentPayload(output: string | undefined): AgentSubagentActivity
 /** Activity fields from the extension's structured sub-agent payload. */
 function subagentActivityFromPayload(
   payload: Record<string, unknown> | undefined
-): AgentSubagentActivity | undefined {
+): SubagentActivityPatch | undefined {
   if (!payload || !stringValue(payload['agentId'])) return undefined
   const status = stringValue(payload['status'])
+  const purpose = stringValue(payload['purpose'])
   const childSessionId = stringValue(payload['childSessionId'])
   const modelId = stringValue(payload['model'])
   const output = stringValue(payload['output'])
@@ -540,11 +569,10 @@ function subagentActivityFromPayload(
         : status === 'running'
           ? 'running'
           : 'pending',
-    agent: stringValue(payload['purpose']) ?? 'sub-agent',
-    description: stringValue(payload['purpose']) ?? 'sub-agent',
+    // Only the payload that names the task may label the card.
+    ...(purpose ? { agent: purpose, description: purpose } : {}),
     ...(childSessionId ? { childSessionId } : {}),
     ...(modelId ? { modelId } : {}),
-    background: false,
     ...(files && files.length > 0 ? { files } : {}),
     ...(output ? { output } : {}),
     ...(error ? { error } : {}),
@@ -594,6 +622,7 @@ function spawnDoneCustomEvent(
   const activity = subagentActivityFromPayload(payload)
   const existing = findSubagentPartByChildSession(context, stringValue(payload?.['childSessionId']))
   if (!activity || !existing) return { events: [] }
+  const status: AgentToolStatus = activity.status ?? existing.activity.status
   return {
     events: [
       {
@@ -607,11 +636,9 @@ function spawnDoneCustomEvent(
           activity: {
             ...existing.activity,
             ...activity,
+            status,
             background: existing.activity.background,
-            time: {
-              start: existing.activity.time?.start ?? Date.now(),
-              end: Date.now()
-            }
+            time: subagentTimeRange(existing.activity, status)
           }
         }
       }
@@ -975,6 +1002,9 @@ export function mapPiRecord(
       // The final result carries the full structured sub-agent payload.
       const payloadPatch = subagentActivityFromPayload(parseRecord(output ?? ''))
       const failurePatch = payloadPatch ? undefined : spawnFailurePatch(output)
+      const status: AgentToolStatus = failed
+        ? 'error'
+        : (payloadPatch?.status ?? failurePatch?.status ?? 'completed')
       return {
         events: [
           {
@@ -988,11 +1018,9 @@ export function mapPiRecord(
               activity: {
                 ...base,
                 ...(payloadPatch ?? failurePatch ?? {}),
-                status: failed
-                  ? 'error'
-                  : (payloadPatch?.status ?? failurePatch?.status ?? 'completed'),
+                status,
                 background: base.background,
-                time: { start: base.time?.start ?? Date.now(), end: Date.now() }
+                time: subagentTimeRange(base, status)
               }
             }
           }
@@ -1050,6 +1078,9 @@ export function mapPiRecord(
           existingSubagent?.activity ?? cioSubagentPart(messageId, callId, undefined).activity
         const payloadPatch = subagentActivityFromPayload(parseRecord(output ?? ''))
         const failurePatch = payloadPatch ? undefined : spawnFailurePatch(output)
+        const status: AgentToolStatus = failed
+          ? 'error'
+          : (payloadPatch?.status ?? failurePatch?.status ?? 'completed')
         events.push({
           type: 'message.part.updated',
           sessionId: context.sessionId,
@@ -1061,11 +1092,9 @@ export function mapPiRecord(
             activity: {
               ...base,
               ...(payloadPatch ?? failurePatch ?? {}),
-              status: failed
-                ? 'error'
-                : (payloadPatch?.status ?? failurePatch?.status ?? 'completed'),
+              status,
               background: base.background,
-              time: { start: base.time?.start ?? Date.now(), end: Date.now() }
+              time: subagentTimeRange(base, status)
             }
           }
         })
@@ -3506,7 +3535,7 @@ export class PiDriver extends PersistentCliDriver {
       return
     }
     if (stringValue(record['statusKey']) === CIO_SUBAGENT_STREAM_STATUS_KEY) {
-      this.handleSubagentStreamStatus(record)
+      this.handleSubagentStreamStatus(record, sessionId)
       return
     }
     if (stringValue(record['statusKey']) !== PI_STATUS_EXTENSION_KEY) return
@@ -3526,6 +3555,60 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /**
+   * Close the parent thread's sub-agent card for one settled child session.
+   *
+   * A background spawn's tool call returns before its worker does, and the
+   * `cio-subagent-done` notification only reaches the driver once the model
+   * loop drains it (the drain can wait a whole turn). The child's own stream
+   * already reports the settle, so stamping the parent card here is what keeps
+   * the card, the dropdown and the tab on the same terminal state at the same
+   * moment. The card's earlier payload still wins for output, files and model:
+   * only the lifecycle fields are authoritative here.
+   */
+  private closeSubagentCard(
+    parentSessionId: string,
+    childSessionId: string,
+    error: string | undefined
+  ): void {
+    // A parent that is mid-turn buffers the done notification until its loop
+    // reaches the next step, which is exactly the lag this closes. An idle
+    // parent runs the notification turn immediately, so its own patch lands
+    // just as fast and this extra update would only flip the thread's live
+    // activity back on with no turn behind it.
+    if (!this.activeTurns.has(parentSessionId)) return
+    const session = this.sessionCache.get(parentSessionId)
+    if (!session) return
+    const status: AgentToolStatus = error ? 'error' : 'completed'
+    for (const message of session.messages) {
+      const part = message.parts.findLast(
+        (candidate): candidate is Extract<AgentPart, { type: 'subagent' }> =>
+          candidate.type === 'subagent' && candidate.activity.childSessionId === childSessionId
+      )
+      // A card that already reports a terminal state carries the richer
+      // payload (final output, duration); never overwrite it with a lifecycle
+      // stamp alone.
+      if (!part || part.activity.status === 'completed' || part.activity.status === 'error') {
+        continue
+      }
+      const event: SessionAgentEvent = {
+        type: 'message.part.updated',
+        sessionId: parentSessionId,
+        part: {
+          ...part,
+          activity: {
+            ...part.activity,
+            status,
+            ...(error ? { error } : {}),
+            time: subagentTimeRange(part.activity, status)
+          }
+        }
+      }
+      this.applyEventToSession(session, event)
+      this.emit(event)
+    }
+  }
+
+  /**
    * Fold one batch of streamed child-session records into that child's live
    * transcript and re-emit them as child-scoped events. Records carry pi's own
    * shapes, so they go through `mapPiRecord`   the exact mapper a root thread
@@ -3533,7 +3616,10 @@ export class PiDriver extends PersistentCliDriver {
    * thread: the engine broadcasts whatever session id the driver reports, and
    * the sub-agent view already filters on the child session id.
    */
-  private handleSubagentStreamStatus(record: Record<string, unknown>): void {
+  private handleSubagentStreamStatus(
+    record: Record<string, unknown>,
+    parentSessionId: string
+  ): void {
     const payload = parseRecord(record['statusText'])
     if (!payload) return
     const childSessionId = stringValue(payload['childSessionId'])
@@ -3561,6 +3647,10 @@ export class PiDriver extends PersistentCliDriver {
     if (payload['settled'] !== true) return
     state.settled = true
     const error = stringValue(payload['error'])
+    // The child's own settle record closes the parent thread's card, so the
+    // working-trace dropdown and the sub-agent tab flip together instead of
+    // the card waiting for the model loop to drain its done notification.
+    this.closeSubagentCard(parentSessionId, childSessionId, error)
     if (!error) {
       this.emit({ type: 'session.status', sessionId: childSessionId, status: { state: 'idle' } })
       return

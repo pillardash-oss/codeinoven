@@ -1065,6 +1065,11 @@ class ThreadMessagesStore {
         part.activity.status === 'running' &&
         !part.activity.time?.end
       ) {
+        // A background worker outlives the tool call that spawned it, so the
+        // parent message completing says nothing about it: its own settle
+        // record closes the card. A failed message is the exception, because
+        // nothing will ever settle a worker whose run just died.
+        if (part.activity.background && !error) continue
         part.activity.status = 'completed'
         part.activity.time = { start: part.activity.time?.start ?? now, end: now }
       }
