@@ -18,6 +18,14 @@ All notable changes to CodeInOven are documented here. This project follows
   "Best model by feedback" becomes "Model rankings" with one-shot/multi-shot
   columns, and the old blended grade-of-five display is gone.
 
+- Automatic memory proposals now weigh the user's wording before remembering
+  anything. The deciding model reviews the turn as an explicit two-step
+  evaluation (lasting rule versus one-off request) and receives the user's
+  earlier message as supporting context. Requests the user repeated in the
+  current task, including ones accompanied by "I have told you before" or
+  "why do you always" out of frustration, and the frustration itself, are no
+  longer proposed for memory.
+
 ### Fixed
 
 - ⌘/Ctrl+Enter in the **New pull request** panel now docks the panel while the

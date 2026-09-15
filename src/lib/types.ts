@@ -4022,6 +4022,8 @@ export interface DeferredMemoryExtraction {
   userMessage: string
   /** Capped assistant material captured at gate time. */
   assistantResponse: string
+  /** Capped user message from the preceding turn, when the thread had one. */
+  previousUserMessage?: string
   /** Why the first extraction attempt failed (for diagnostics). */
   reason: string
   createdAt: number

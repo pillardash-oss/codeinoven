@@ -49,10 +49,13 @@ export const MEMORY_DEFERRED_EXTRACTION_LIMITS = {
  * turn can never resend the full user/assistant transcript to a second model
  * session. These satisfy the A-06 acceptance: local caps, deduplication,
  * debounce, and a separately configurable cheap-model token budget.
+ * `maxPreviousUserCharacters` bounds the user's earlier message that the
+ * decision needs as supporting context.
  */
 export const MEMORY_EXTRACTION_LIMITS = {
   maxUserCandidateCharacters: 2_000,
   maxAssistantCandidateCharacters: 8_000,
+  maxPreviousUserCharacters: 800,
   maxCandidates: 3,
   debounceMs: 60_000,
   maxExtractionsPerWindow: 3,
@@ -1133,6 +1136,7 @@ export class MemoryService {
   async deferMemoryExtraction(input: {
     userMessage: string
     assistantResponse: string
+    previousUserMessage?: string
     reason: string
     projectId?: string
     threadId?: string
@@ -1141,12 +1145,16 @@ export class MemoryService {
     const now = Date.now()
     const normalized = normalizeText(input.userMessage)
     if (items.some((item) => normalizeText(item.userMessage) === normalized)) return
+    const previousUserMessage = input.previousUserMessage
+      ? capText(input.previousUserMessage, MEMORY_EXTRACTION_LIMITS.maxPreviousUserCharacters)
+      : undefined
     const entry: DeferredMemoryExtraction = {
       id: `deferred-${now}-${createHash('sha256').update(normalized).digest('hex').slice(0, 8)}`,
       ...(input.projectId ? { projectId: input.projectId } : {}),
       ...(input.threadId ? { threadId: input.threadId } : {}),
       userMessage: input.userMessage,
       assistantResponse: input.assistantResponse,
+      ...(previousUserMessage ? { previousUserMessage } : {}),
       reason: capText(input.reason, 200),
       createdAt: now,
       attempts: 0
