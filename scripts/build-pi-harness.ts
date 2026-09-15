@@ -6,12 +6,12 @@ import { toPosixPath } from '../src/lib/paths'
 
 /**
  * Copies the pinned pi CLI's compiled bundle into `resources/harnesses/pi`
- * for electron-builder to ship as extraResources. `dist/` ships with its bare
- * runtime imports (`@earendil-works/chord`, `typebox`) rewritten to vendored
- * copies under `vendor/`; `jiti` (the one remaining runtime dependency, used
- * to load `.ts` extensions, resolved via NODE_PATH) and pi-ai (loaded
- * in-process by main for OAuth sign-in) are vendored too. The rest of pi's
- * `node_modules` tree is build-time-only.
+ * for electron-builder to ship as extraResources. `dist/` ships with EVERY
+ * bare runtime import (`@earendil-works/chord`, `typebox`, `jiti`) rewritten
+ * to relative paths into vendored copies under `vendor/`, because the
+ * packaged app has no `node_modules` to walk up to; pi-ai (loaded in-process
+ * by main for OAuth sign-in) is vendored too. The rest of pi's `node_modules`
+ * tree is build-time-only.
  */
 
 const projectRoot = join(fileURLToPath(new URL('..', import.meta.url)))
@@ -24,9 +24,11 @@ const jitiPackageJsonPath = require.resolve('jiti/package.json', { paths: [piPac
 const jitiPackageDirectory = dirname(jitiPackageJsonPath)
 // esbuild does not inline these runtime imports of pi's compiled bundle:
 // `@earendil-works/chord` (RPC protocol, incl. /context, /bundler, /node
-// subpath exports) and `typebox` (schema validation, imported via /schema,
-// /format, /guard, /system subpaths). Without them the packaged app fails
-// with `ERR_MODULE_NOT_FOUND: Cannot find package '@earendil-works/chord'`.
+// subpath exports), `typebox` (schema validation, imported via /schema,
+// /format, /guard, /system subpaths) and `jiti` (loads the app-owned `.ts`
+// extensions). Without them the packaged app fails with
+// `ERR_MODULE_NOT_FOUND: Cannot find package '@earendil-works/chord'` or
+// `Cannot find module 'jiti'`.
 const chordPackageJsonPath = require.resolve('@earendil-works/chord/package.json', {
   paths: [piPackageDirectory]
 })
@@ -44,9 +46,12 @@ await mkdir(outputDirectory, { recursive: true })
 
 await cp(join(piPackageDirectory, 'dist'), join(outputDirectory, 'dist'), { recursive: true })
 await cp(piPackageJsonPath, join(outputDirectory, 'package.json'))
-// Named "vendor", not "node_modules" — electron-builder's extraResources copy
-// silently drops nested `node_modules` directories, so the runtime resolves
-// these via NODE_PATH / direct paths instead of Node's standard walk.
+// Named "vendor", not "node_modules": the runtime reaches these copies
+// through the relative specifiers rewritten below (plus, for code paths that
+// still resolve by package name, whatever `node_modules` walk exists on the
+// host). electron-builder's extraResources copy of a nested `node_modules`
+// tree has been unreliable, so the vendored tree deliberately avoids that
+// name.
 // `.bin` holds build-time-only symlink shims (e.g. esbuild's CLI link). They
 // must not enter the vendored tree: electron-builder's extraResources copy
 // recreates symlinks with a bare `fs.symlink` that throws EEXIST if the
@@ -68,31 +73,45 @@ await cp(typeboxPackageDirectory, join(outputDirectory, 'vendor/typebox'), {
 })
 
 // Rewrites bare runtime imports that esbuild left unbundled to the vendored
-// copies. Per-file relative rewriting is required because the pi bundle is
-// pure ESM: ESM resolution ignores NODE_PATH entirely, so in the packaged app
-// — where no upward `node_modules` walk exists — bare specifiers crash with
-// `ERR_MODULE_NOT_FOUND` before pi ever prints a version line. Only source
-// text containing the bare specifiers is touched, so the rewrite pass stays
-// cheap.
+// copies. Per-file relative rewriting is required because the packaged app
+// has no upward `node_modules` walk to fall back on: the pi bundle is pure ESM
+// (where bare specifiers crash with `ERR_MODULE_NOT_FOUND` before pi prints a
+// version line) and its one CJS require (`jiti`, loaded to compile `.ts`
+// extensions) runs through `createRequire`, which in an Electron
+// `utilityProcess` helper resolves only relative paths and the walk, never
+// `NODE_PATH`. Only source text containing a vendored specifier is touched, so
+// the rewrite pass stays cheap.
 const vendorRoot = join(outputDirectory, 'vendor')
 
-/** `exports` "import" targets for the two unbundled packages, relative to
- *  each package root — mirrors Node's own `"import"` condition resolution. */
-const EXPORT_TARGETS: Record<string, string> = {
-  '@earendil-works/chord': 'dist/index.js',
-  '@earendil-works/chord/context': 'dist/context/index.js',
-  '@earendil-works/chord/delta': 'dist/delta/index.js',
-  '@earendil-works/chord/bundler': 'dist/bundler.js',
-  '@earendil-works/chord/node': 'dist/node.js',
-  typebox: 'build/index.mjs',
-  'typebox/schema': 'build/schema/index.mjs',
-  'typebox/system': 'build/system/index.mjs',
-  'typebox/compile': 'build/compile/index.mjs',
-  'typebox/value': 'build/value/index.mjs',
-  'typebox/type': 'build/type/index.mjs',
-  'typebox/error': 'build/error/index.mjs',
-  'typebox/format': 'build/format/index.mjs',
-  'typebox/guard': 'build/guard/index.mjs'
+/** Bare specifiers of the packages vendored under `vendor/`, mapped to the
+ *  file Node resolves for each one, relative to the vendor root. Every target
+ *  mirrors the package's own `import` / `require` export condition so the
+ *  rewritten specifier stays valid for both `import` and `createRequire`. */
+const VENDORED_IMPORTS: Record<string, string> = {
+  '@earendil-works/chord': '@earendil-works/chord/dist/index.js',
+  '@earendil-works/chord/context': '@earendil-works/chord/dist/context/index.js',
+  '@earendil-works/chord/delta': '@earendil-works/chord/dist/delta/index.js',
+  '@earendil-works/chord/bundler': '@earendil-works/chord/dist/bundler.js',
+  '@earendil-works/chord/node': '@earendil-works/chord/dist/node.js',
+  typebox: 'typebox/build/index.mjs',
+  'typebox/schema': 'typebox/build/schema/index.mjs',
+  'typebox/system': 'typebox/build/system/index.mjs',
+  'typebox/compile': 'typebox/build/compile/index.mjs',
+  'typebox/value': 'typebox/build/value/index.mjs',
+  'typebox/type': 'typebox/build/type/index.mjs',
+  'typebox/error': 'typebox/build/error/index.mjs',
+  'typebox/format': 'typebox/build/format/index.mjs',
+  'typebox/guard': 'typebox/build/guard/index.mjs',
+  // The bundled runtime requires jiti as CJS while pi's unbundled extension
+  // loader imports the ESM `jiti/static` entry.
+  jiti: 'jiti/lib/jiti.cjs',
+  'jiti/static': 'jiti/lib/jiti-static.mjs'
+}
+const VENDORED_SPECIFIERS = Object.keys(VENDORED_IMPORTS)
+
+/** Matches one vendored specifier as a complete quoted string literal. */
+function quotedSpecifierPattern(specifier: string): RegExp {
+  return new RegExp(`(["'])${specifier.replaceAll('/', '\\/')}(\\1)`, 'gu')
 }
 
 async function rewriteVendorImports(directory: string): Promise<void> {
@@ -105,15 +124,10 @@ async function rewriteVendorImports(directory: string): Promise<void> {
     }
     if (!entry.name.endsWith('.js')) continue
     const source = await readFile(path, 'utf8')
-    if (!source.includes('@earendil-works/chord') && !source.includes('typebox')) continue
+    if (!VENDORED_SPECIFIERS.some((specifier) => source.includes(specifier))) continue
     let rewritten = source
-    for (const [specifier, target] of Object.entries(EXPORT_TARGETS)) {
-      const resolvedFile = join(
-        vendorRoot,
-        specifier === 'typebox' || specifier.startsWith('typebox/')
-          ? join('typebox', target)
-          : join('@earendil-works/chord', target)
-      )
+    for (const [specifier, target] of Object.entries(VENDORED_IMPORTS)) {
+      const resolvedFile = join(vendorRoot, target)
       // Import specifiers must use POSIX separators: `relative()` returns
       // backslash-separated paths on Windows, and inside a JS string literal
       // each `\.` collapses to `.` (legacy escape), mangling the specifier
@@ -121,7 +135,7 @@ async function rewriteVendorImports(directory: string): Promise<void> {
       // which crashes ESM resolution with ERR_INVALID_MODULE_SPECIFIER.
       const rel = toPosixPath(relative(dirname(path), resolvedFile))
       rewritten = rewritten.replaceAll(
-        new RegExp(`(["'])${specifier.replaceAll('/', '\\/')}(\\1)`, 'gu'),
+        quotedSpecifierPattern(specifier),
         (_match, quote: string) => `${quote}${rel}${quote}`
       )
     }
@@ -129,6 +143,40 @@ async function rewriteVendorImports(directory: string): Promise<void> {
   }
 }
 await rewriteVendorImports(join(outputDirectory, 'dist'))
+
+/**
+ * Fails the build when a vendored library is still reached through its bare
+ * specifier under `dist/`. Bare specifiers only resolve via an upward
+ * `node_modules` walk, which exists on a dev checkout but not in the packaged
+ * app, and Electron's `utilityProcess` helpers ignore `NODE_PATH`, so a
+ * leftover specifier surfaces only in production, as a Pi session that cannot
+ * load a single extension. Guard it at build time instead.
+ */
+async function assertVendoredImportsRewritten(directory: string): Promise<void> {
+  const { readdir } = await import('node:fs/promises')
+  const leftovers: string[] = []
+  const walk = async (current: string): Promise<void> => {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const path = join(current, entry.name)
+      if (entry.isDirectory()) {
+        await walk(path)
+        continue
+      }
+      if (!entry.name.endsWith('.js')) continue
+      const source = await readFile(path, 'utf8')
+      for (const specifier of VENDORED_SPECIFIERS) {
+        if (quotedSpecifierPattern(specifier).test(source)) {
+          leftovers.push(`${toPosixPath(relative(projectRoot, path))}: ${specifier}`)
+        }
+      }
+    }
+  }
+  await walk(directory)
+  if (leftovers.length > 0) {
+    throw new Error(`Vendored imports were not rewritten:\n${leftovers.join('\n')}`)
+  }
+}
+await assertVendoredImportsRewritten(join(outputDirectory, 'dist'))
 // pi-ai's dist is self-contained relative imports; vendored so main-process
 // features (in-app OAuth sign-in) can load its flow implementations in the
 // packaged app, where pi-ai is not part of CodeInOven's own node_modules.
