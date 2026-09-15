@@ -488,7 +488,7 @@ export class UpdaterService {
   }
 
   private activeSessionCount(): number {
-    // Mirrors AppHeader's pulse (anyProjectWorking / anyChatWorking):
+    // Mirrors AppHeader's working-activity badges (workingThreadCounts):
     // only sessions with `sessionStatuses === 'working'` count. Idle PTYs,
     // `waiting` sessions, pending permissions/questions, compactions,
     // brainstorm/loop runs and remote blockedQuit do not pulse the header
