@@ -10,6 +10,11 @@ export interface PrDockDescriptor {
   iconUrl: string | null
   status: PrDockStatus
   title: string
+  /**
+   * Live step of the work in progress, shown next to the spinner while
+   * `status === 'working'` (e.g. "Pushing commits…"). Empty when idle.
+   */
+  detail: string
 }
 
 export interface PrDraft {
@@ -63,7 +68,13 @@ class PrLifecycleStore {
       threadId,
       minimized: false,
       createdAt: Date.now(),
-      dock: { projectName: '', iconUrl: null, status: 'draft', title: 'New pull request' }
+      dock: {
+        projectName: '',
+        iconUrl: null,
+        status: 'draft',
+        title: 'New pull request',
+        detail: ''
+      }
     }
     this.drafts = [...this.drafts, draft]
     this.focusedId = draft.id
@@ -79,7 +90,13 @@ class PrLifecycleStore {
       threadId,
       minimized: false,
       createdAt: Date.now(),
-      dock: { projectName: '', iconUrl: null, status: 'draft', title: 'New pull request' }
+      dock: {
+        projectName: '',
+        iconUrl: null,
+        status: 'draft',
+        title: 'New pull request',
+        detail: ''
+      }
     }
     this.drafts = [...this.drafts, draft]
     this.focusedId = draft.id
@@ -126,7 +143,8 @@ class PrLifecycleStore {
       merged.projectName === current.projectName &&
       merged.iconUrl === current.iconUrl &&
       merged.status === current.status &&
-      merged.title === current.title
+      merged.title === current.title &&
+      merged.detail === current.detail
     ) {
       return
     }

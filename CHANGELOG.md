@@ -18,6 +18,14 @@ All notable changes to CodeInOven are documented here. This project follows
   "Best model by feedback" becomes "Model rankings" with one-shot/multi-shot
   columns, and the old blended grade-of-five display is gone.
 
+### Fixed
+
+- ⌘/Ctrl+Enter in the **New pull request** panel now docks the panel while the
+  commit → push → create sequence runs, and the docked chip names the step in
+  progress instead of only spinning. A dismiss button can no longer be
+  taken as a modal's primary action, which previously closed the panel (mid
+  creation) when the real primary action was disabled.
+
 ## [0.5.1] - 2026-08-06
 
 ### Changed
