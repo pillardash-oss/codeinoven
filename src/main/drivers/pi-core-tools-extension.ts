@@ -12,6 +12,8 @@
  *                          detection, so AgentTodoCard works unchanged.
  *  - `cio_request_files`   asks the user for file paths, validates them, and
  *                          returns a structured file list for the agent.
+ *  - `cio_agent_status`    polls or waits for the sub-agent worker threads.
+ *  - `cio_agent_output`    reads the final output of finished workers.
  *
  * The permission gate intercepts every built-in tool call via
  * `pi.on('tool_call')` and evaluates it against an OpenCode-style
@@ -39,6 +41,12 @@
  * are pure UI on the primary thread: the primary agent's context only ever
  * receives the sub-agent's final message, never its transcript.
  *
+ * Status and output are deliberately two tools. `cio_agent_status` answers
+ * "is it still running?" with metadata only (id, purpose, status, error), so
+ * polling never injects a finished worker's output into the primary agent's
+ * context; `cio_agent_output` fetches the final message of the finished ids
+ * the primary actually wants to read, as `agentId -> final output` pairs.
+ *
  * Background sub-agents announce completion to the primary agent through a
  * display:false custom message delivered with pi.sendMessage   steer while
  * the primary is streaming, a fresh turn when it is idle. The model sees
@@ -54,6 +62,7 @@
 
 import {
   CIO_ASK_USER_TOOL_NAME,
+  CIO_AGENT_OUTPUT_TOOL_NAME,
   CIO_AGENT_STATUS_TOOL_NAME,
   CIO_REQUEST_FILES_TOOL_NAME,
   CIO_SPAWN_AGENT_TOOL_NAME,
@@ -682,6 +691,34 @@ export default function codeInOvenCoreToolsExtension(pi) {
   }
 
   /**
+   * What a status poll receives: metadata only, deliberately WITHOUT the
+   * worker output. Polling is the hot path (every turn end waits on it) and
+   * a finished worker's final message can be tens of thousands of characters,
+   * so shipping it on a "is it still running?" question pollutes the primary
+   * agent's context with text it may never need. Use ${CIO_AGENT_OUTPUT_TOOL_NAME}
+   * to read a finished worker's output on demand.
+   */
+  function subAgentStatus(record) {
+    return {
+      agentId: record.agentId,
+      purpose: record.purpose,
+      status: record.status,
+      ...(record.error ? { error: record.error } : {})
+    }
+  }
+
+  /** Final output of a finished worker; the live preview is the fallback. */
+  function subAgentOutput(record) {
+    return record.finalOutput || record.output || '(the sub-agent produced no text output)'
+  }
+
+  /** Flag a failed worker in the error map returned by ${CIO_AGENT_OUTPUT_TOOL_NAME}. */
+  function recordSubAgentError(errors, record) {
+    if (record.status !== 'error') return
+    errors[record.agentId] = 'Sub-agent failed: ' + (record.error || 'unknown error')
+  }
+
+  /**
    * Steer the primary agent when a background sub-agent finishes. Uses a
    * display:false custom message: it reaches the model as a user-role
    * context message (with the final output) but never shows in the
@@ -799,7 +836,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
     if (runningCount >= CIO_SUBAGENT_MAX_CONCURRENT) {
       return {
         error:
-          'Too many sub-agents are running (' + CIO_SUBAGENT_MAX_CONCURRENT + ' max). Collect finished results with ${CIO_AGENT_STATUS_TOOL_NAME} before spawning another.'
+          'Too many sub-agents are running (' + CIO_SUBAGENT_MAX_CONCURRENT + ' max). Wait for one to finish (${CIO_AGENT_STATUS_TOOL_NAME} with wait: true), read its result with ${CIO_AGENT_OUTPUT_TOOL_NAME}, and only then spawn another.'
       }
     }
     let resolvedModel = parentCtx.model
@@ -922,7 +959,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
     promptSnippet: 'Spawn sub-agent worker threads for focused or parallelizable tasks (explore, implement, tests, cleanup, docs)',
     promptGuidelines: [
       'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
-      'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work and collect results with ${CIO_AGENT_STATUS_TOOL_NAME}. Never end your turn while sub-agents are still running   wait for every result (successful or failed) with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true) first, because the primary agent owns committing the files the workers changed.'
+      'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work. Never end your turn while sub-agents are still running: wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read every finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME}   successful or failed   because the primary agent owns committing the files the workers changed.'
     ],
     parameters: Type.Object({
       purpose: Type.String({
@@ -968,7 +1005,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
           agentId: result.record.agentId,
           childSessionId: result.record.childSessionId,
           status: result.record.status,
-          note: 'Sub-agent is running in the background. When it finishes you will receive a steer message (sub-agent done for task …) carrying its final output   keep working until then; ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true) is available for explicit polling.'
+          note: 'Sub-agent is running in the background. When it finishes you will receive a steer message (sub-agent done for task …) carrying its final output   keep working until then; ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true) polls status, and ${CIO_AGENT_OUTPUT_TOOL_NAME} (agent_ids) reads an output again at any time.'
         })
       }
       await result.record.promise
@@ -980,10 +1017,11 @@ export default function codeInOvenCoreToolsExtension(pi) {
     name: '${CIO_AGENT_STATUS_TOOL_NAME}',
     label: 'Check sub-agent status',
     description:
-      'Check the status and output of spawned sub-agent threads. Background sub-agents steer you a completion notification with their final output automatically; use this tool to poll explicitly, or wait:true to block until every running sub-agent finishes (with or without a specific agent_id)   always do this before ending your turn so no result is lost.',
-    promptSnippet: 'Check or wait for spawned sub-agent threads and collect their results',
+      'Check spawned sub-agent worker threads and wait for them. Returns metadata only per agent   agentId, purpose, status, and the error when there is one   never the worker output, so polling cannot flood your context; read output with ${CIO_AGENT_OUTPUT_TOOL_NAME}. Background sub-agents steer you a completion notification with their final output automatically; use this tool to poll explicitly, or wait:true to block until every running sub-agent finishes (with or without a specific agent_id)   always do this before ending your turn so no result is lost.',
+    promptSnippet: 'Check or wait for spawned sub-agent threads (metadata only, no output)',
     promptGuidelines: [
-      'Background sub-agents announce completion themselves with a steer message containing their final output; use ${CIO_AGENT_STATUS_TOOL_NAME} to poll explicitly, with wait:true before finishing the turn so no result is lost.'
+      'Background sub-agents announce completion themselves with a steer message; use ${CIO_AGENT_STATUS_TOOL_NAME} to poll status only, with wait:true before finishing the turn, then read the finished workers with ${CIO_AGENT_OUTPUT_TOOL_NAME}.',
+      'Never treat a ${CIO_AGENT_STATUS_TOOL_NAME} result as the sub-agent result: it carries no output, so call ${CIO_AGENT_OUTPUT_TOOL_NAME} for the ids you still need.'
     ],
     parameters: Type.Object({
       agent_id: Type.Optional(
@@ -1017,7 +1055,75 @@ export default function codeInOvenCoreToolsExtension(pi) {
           await Promise.all(running.map(function (record) { return record.promise }))
         }
       }
-      return textResult({ agents: records.map(function (record) { return subAgentResult(record) }) })
+      return textResult({
+        agents: records.map(function (record) { return subAgentStatus(record) }),
+        note:
+          'Status only, no output. Read the final output of the finished agents with ' +
+          '${CIO_AGENT_OUTPUT_TOOL_NAME} (agent_ids).'
+      })
+    }
+  })
+
+  pi.registerTool({
+    name: '${CIO_AGENT_OUTPUT_TOOL_NAME}',
+    label: 'Read sub-agent output',
+    description:
+      'Read the final output of sub-agent worker threads, keyed by agent id. Pass the ids you actually need (from ${CIO_SPAWN_AGENT_TOOL_NAME} or ${CIO_AGENT_STATUS_TOOL_NAME}); each finished worker returns its final message, and each still-running one is reported back so you can wait and ask again. This is the on-demand output channel   ${CIO_AGENT_STATUS_TOOL_NAME} deliberately returns no output   and a worker final message lists the files it changed, which you are responsible for committing.',
+    promptSnippet: 'Read the final output of finished sub-agent threads as agentId -> output pairs',
+    promptGuidelines: [
+      'After ${CIO_AGENT_STATUS_TOOL_NAME} reports a sub-agent as completed or error, read what it actually produced with ${CIO_AGENT_OUTPUT_TOOL_NAME} (agent_ids) before you continue or commit; never guess a sub-agent result.',
+      'Request only the ids you need: one call may carry several ids, and their outputs come back as a key/value map.'
+    ],
+    parameters: Type.Object({
+      agent_ids: Type.Array(Type.String(), {
+        description: 'One or more sub-agent ids to read output from.',
+        minItems: 1
+      }),
+      wait: Type.Optional(
+        Type.Boolean({
+          description:
+            'Wait for the requested agents that are still running to finish before returning their output.'
+        })
+      )
+    }),
+    async execute(_toolCallId, params) {
+      const wait = params.wait === true
+      const ids = Array.isArray(params.agent_ids) ? params.agent_ids : []
+      const agents = {}
+      const errors = {}
+      if (ids.length === 0) {
+        return textResult({ agents, errors: { agent_ids: 'Provide at least one sub-agent id.' } })
+      }
+      const pending = []
+      for (const id of ids) {
+        const record = subAgents.get(id)
+        if (!record) {
+          errors[id] = 'Unknown sub-agent id: ' + id
+          continue
+        }
+        if (record.status === 'running') {
+          pending.push(record)
+          continue
+        }
+        recordSubAgentError(errors, record)
+        agents[id] = subAgentOutput(record)
+      }
+      if (wait && pending.length > 0) {
+        await Promise.all(pending.map(function (record) { return record.promise }))
+        for (const record of pending) {
+          recordSubAgentError(errors, record)
+          agents[record.agentId] = subAgentOutput(record)
+        }
+      } else {
+        for (const record of pending) {
+          errors[record.agentId] =
+            'Still running (' + record.purpose + '). Call ${CIO_AGENT_OUTPUT_TOOL_NAME} again with wait: true, or wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read it.'
+        }
+      }
+      return textResult({
+        agents,
+        ...(Object.keys(errors).length > 0 ? { errors } : {})
+      })
     }
   })
 
@@ -1053,7 +1159,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
           content:
             'Your turn ended while sub-agents are still running: ' +
             running.join(', ') +
-            '. Do not finish your work yet. Call ${CIO_AGENT_STATUS_TOOL_NAME} with agent_id set to each running id (or omit agent_id) and wait:true to block until they finish, then incorporate every result   successful or failed   before ending your turn. Sub-agents report the files they changed; you are responsible for committing approved work.',
+            '. Do not finish your work yet. Call ${CIO_AGENT_STATUS_TOOL_NAME} with wait:true (or omit agent_id to cover them all) to let them finish, read each finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME} (agent_ids), and incorporate every result   successful or failed   before ending your turn. Sub-agents report the files they changed; you are responsible for committing approved work.',
           display: false
         },
         { triggerTurn: true }
