@@ -40,6 +40,7 @@
   import { SvelteMap } from 'svelte/reactivity'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
+  import { openProjectFileFromAbsolutePath } from '$lib/reveal-file'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import {
     rendererRecovery,
@@ -69,6 +70,7 @@
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { showOpenedFiles, standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { clearDraftLabelCookie } from '$lib/stores/draft-label'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
@@ -97,6 +99,7 @@
     isThreadWorking,
     type AppConfig,
     type AppConfigPatch,
+    type OpenedPath,
     type Project,
     type ThemePreference,
     type Thread,
@@ -1278,6 +1281,105 @@
     }
   }
 
+  /**
+   * OS "Open in CodeInOven" hand-off (Finder/Explorer "Open With", a drop on the
+   * Dock/taskbar icon, or a launch argument).
+   *
+   * Folders become projects, or focus the project that already owns that folder
+   * so the same folder is never registered twice. Single files open on their own
+   * in the standalone viewer.
+   */
+  async function handleOpenedPaths(paths: OpenedPath[]): Promise<void> {
+    if (!Array.isArray(paths) || paths.length === 0) return
+    const files = paths.filter((entry) => entry.kind === 'file')
+    if (files.length > 0) await openFilesFromOs(files)
+    for (const directory of paths) {
+      if (directory.kind === 'directory') await openDirectoryAsProject(directory)
+    }
+  }
+
+  /**
+   * Route the files from one OS hand-off. A file that already lives inside a
+   * project opens in that project's own editor (file tree, scopes, save flow),
+   * because that is where the user expects to find it; every other file opens in
+   * the standalone viewer, where it is editable against the grant the hand-off
+   * registered. A file whose project-relative path no longer resolves falls back
+   * to the viewer so the hand-off is never silently dropped.
+   */
+  async function openFilesFromOs(files: OpenedPath[]): Promise<void> {
+    const loose: OpenedPath[] = []
+    for (const file of files) {
+      const owner = await invoke('project:findFileOwner', file.path).catch(() => null)
+      if (!owner) {
+        loose.push(file)
+        continue
+      }
+      const project = await invoke('project:get', owner.projectId).catch(() => null)
+      if (!project) {
+        loose.push(file)
+        continue
+      }
+      focusProject(project)
+      const opened = await openProjectFileFromAbsolutePath(
+        owner.projectId,
+        owner.relativePath
+      ).catch(() => false)
+      if (!opened) loose.push(file)
+    }
+    if (loose.length > 0) showOpenedFiles(loose)
+  }
+
+  /**
+   * Show a project in the workspace: navigate to it and open its most recent
+   * thread, so a file opened into the project is actually on screen.
+   */
+  function focusProject(project: Project): void {
+    navigate('projects')
+    const thread = scopeState.allScopeThreads
+      .filter((candidate) => candidate.projectId === project.id && !candidate.archived)
+      .sort((left, right) => right.lastActivity - left.lastActivity)[0]
+    if (thread) {
+      workspaceState.openThread(thread, project)
+    } else {
+      workspaceState.clearThread()
+      workspaceState.activeProject = project
+    }
+  }
+
+  /** Focus the project that already covers an opened folder. */
+  function focusOpenedProject(project: Project): void {
+    focusProject(project)
+    toast.info(`${project.name} is already a project`, {
+      description: 'Opened the existing project instead of adding the folder twice.'
+    })
+  }
+
+  async function openDirectoryAsProject(directory: OpenedPath): Promise<void> {
+    try {
+      const existing = await invoke('project:findByPath', directory.path)
+      if (existing) {
+        focusOpenedProject(existing)
+        return
+      }
+      // A folder that is not a git repository is registered with manual change
+      // tracking instead of interrupting the OS hand-off with the
+      // tracking-setup dialog; the mode stays editable from Edit project.
+      const preflight = await invoke('repository:preflight', directory.path).catch(() => null)
+      const project = await invoke('project:create', {
+        name: directory.name,
+        path: directory.path,
+        source: 'local',
+        changeTrackingMode: preflight?.status === 'git' ? 'git' : 'manual'
+      })
+      navigate('projects')
+      await handleProjectCreated(project)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The folder could not be opened'
+      captureError(message)
+      showToastError(message)
+    }
+  }
+
   function updateOnboardingStep(step: number): void {
     if (step === 4) navigate('chats')
     onboardingStep = step
@@ -1473,7 +1575,11 @@
 
   /** Save every unsaved file, then close the app. Stays open if a save fails. */
   async function confirmForceCloseSaving(): Promise<void> {
-    if (await projectFilesWorkspace.saveAllUnsaved()) {
+    const savedProjectFiles = await projectFilesWorkspace.saveAllUnsaved()
+    // Standalone files are saved too: they are opened outside any project, so
+    // nothing else would ever write their drafts.
+    const savedStandaloneFiles = await standaloneFiles.saveAllUnsaved()
+    if (savedProjectFiles && savedStandaloneFiles) {
       await invoke('app:confirmClose')
     } else {
       toast.error('Some files could not be saved', {
@@ -1490,7 +1596,10 @@
     const unsubscribeConfirmClose = subscribe('window:confirmClose', (payload) => {
       // The renderer owns the unsaved-file editor state, so it computes the
       // pending files here. With nothing pending the close proceeds right away.
-      const files = projectFilesWorkspace.getUnsavedFiles()
+      const files = [
+        ...projectFilesWorkspace.getUnsavedFiles(),
+        ...standaloneFiles.getUnsavedFiles()
+      ]
       if (payload.projects.length === 0 && files.length === 0) {
         void confirmForceClose()
         return
@@ -1530,6 +1639,14 @@
     const unsubscribeHistoryForward = subscribe('window:historyForward', () => {
       void goForward()
     })
+    // OS hand-offs that arrive after mount; the queue drain below covers the
+    // paths that were already waiting when the renderer started.
+    const unsubscribeOpenedPaths = subscribe('openWith:paths', (paths: OpenedPath[]) => {
+      void handleOpenedPaths(paths)
+    })
+    void invoke('openWith:consumePending')
+      .then((paths: OpenedPath[]) => handleOpenedPaths(paths))
+      .catch(() => undefined)
     updaterState.init()
     // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
     // initialise the store here so the overlay's dynamic import can be gated on
@@ -1548,6 +1665,7 @@
       unsubscribeNewTerminalShortcut()
       unsubscribeHistoryBack()
       unsubscribeHistoryForward()
+      unsubscribeOpenedPaths()
       updaterState.destroy()
     }
   }
@@ -1716,16 +1834,18 @@
       return
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
-      // On the plain workspace (no studio, no dirty file tab) the Cmd/Ctrl+S
-      // save chord is otherwise unused, so it folds/unfolds the left sidebar.
-      // Anywhere a save binding owns the chord (a Spec/Assignment/Brainstorm
-      // studio, or a file tab with unsaved changes) it keeps priority: we return
+      // On the plain workspace (no studio, no dirty file tab, no edited file
+      // opened from the OS) the Cmd/Ctrl+S save chord is otherwise unused, so it
+      // folds/unfolds the left sidebar. Anywhere a save binding owns the chord (a
+      // Spec/Assignment/Brainstorm studio, a project file tab with unsaved
+      // changes, or an edited standalone file) it keeps priority: we return
       // without preventDefault so that handler saves instead of toggling.
       if (e.repeat) return
       const leftSidebarViews = ['projects', 'chats', 'threads']
       const studioOpen = Boolean(document.querySelector('[data-region="spec-studio"]'))
       const dirtyFiles = projectFilesWorkspace.getUnsavedFiles().length > 0
       if (!leftSidebarViews.includes(activeView) || studioOpen || dirtyFiles) return
+      if (standaloneFiles.activeHasUnsavedChanges) return
       e.preventDefault()
       sidebarState.toggle()
       return
@@ -2034,6 +2154,14 @@
   {#if pipState.active && pipState.frameDataUrl !== null}
     {#await import('$lib/components/pip/PipOverlay.svelte') then { default: PipOverlay }}
       <PipOverlay />
+    {/await}
+  {/if}
+  {#if standaloneFiles.open}
+    <!-- Files opened through the operating system: editable text (saved straight
+         back to the file) and deliberately project-less (no file tree, no tree
+         operations, nothing indexed). -->
+    {#await import('$lib/components/files/StandaloneFileViewer.svelte') then { default: StandaloneFileViewer }}
+      <StandaloneFileViewer />
     {/await}
   {/if}
 

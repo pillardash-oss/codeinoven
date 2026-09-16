@@ -201,6 +201,9 @@ function decodeSegments(pathname: string): string[] {
  *   thread's own `chats-artifacts/<threadId>` artifact directory
  * - `appfile://attachment/<projectId>/<attachmentId>?name=<label>`   an
  *   out-of-project attachment copied into CodeInOven storage
+ * - `appfile://standalone/file?path=<absolute>&name=<label>`   a single file
+ *   the user opened through the operating system, authorized by the scoped
+ *   path resolver (the same grants privileged IPC uses)
  *
  * The handler is installed via a lazy {@link ProjectFilesService} resolver so
  * it can be registered before the main window loads (the packaged renderer
@@ -208,7 +211,8 @@ function decodeSegments(pathname: string): string[] {
  * any later makes those requests fail with `ERR_UNKNOWN_URL_SCHEME`).
  */
 export function installFilePreviewProtocol(
-  getProjectFiles: () => ProjectFilesService | null
+  getProjectFiles: () => ProjectFilesService | null,
+  resolveScopedPath?: (value: unknown) => Promise<string>
 ): void {
   protocol.handle(SCHEME, async (request) => {
     try {
@@ -248,6 +252,19 @@ export function installFilePreviewProtocol(
           threadId
         )
         return serveFile(absolutePath, type, request)
+      }
+
+      if (url.host === 'standalone') {
+        const absolutePath = url.searchParams.get('path') ?? ''
+        const name = url.searchParams.get('name') ?? absolutePath
+        if (!absolutePath) return notFound()
+        const type = typeFromPath(name)
+        if (!type) return notFound()
+        // Authorization is shared with privileged IPC: only paths the user
+        // opened (or picked in a dialog) resolve to a canonical path here.
+        if (!resolveScopedPath) return notFound()
+        const safePath = await resolveScopedPath(absolutePath)
+        return serveFile(safePath, type, request)
       }
 
       if (url.host === 'attachment') {

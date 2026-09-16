@@ -62,6 +62,7 @@ import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './system/pac
 import { sendToRenderer } from './ipc/renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
+import { openWithService, parseOpenedPathArguments } from './system/open-with-service'
 import { BrowserService } from './browser/browser-service'
 import { ensureDir, getConfigRoot } from '../lib/utils'
 import { chatThreadArtifactDirectory } from '../lib/project-artifacts'
@@ -150,6 +151,67 @@ let browserService: BrowserService | null = null
 let gatewaySupervisor: GatewaySupervisorService | null = null
 let quitCleanupStarted = false
 let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * OS "Open in CodeInOven" hand-off.
+ *
+ * Folders and files the user opens from Finder/Explorer, drops on the Dock or
+ * taskbar icon, or passes on the command line are queued by the open-with
+ * service and drained by the renderer. A launch that carries paths takes the
+ * single-instance lock so a second "Open in CodeInOven" reuses the window that
+ * already answered one instead of stacking another app instance; an ordinary
+ * launch never requests the lock, so multiple windows remain available exactly
+ * as before.
+ */
+const launchedPaths = parseOpenedPathArguments(process.argv)
+const handlesOpenedPaths = launchedPaths.length > 0 && app.requestSingleInstanceLock()
+if (handlesOpenedPaths) {
+  app.on('second-instance', (_event, argv) => {
+    void relayOpenedPaths(parseOpenedPathArguments(argv))
+  })
+} else if (launchedPaths.length > 0) {
+  // Another process already owns the open-with lock; Electron forwards this
+  // argv to it as `second-instance`. Exit before any window or service starts.
+  app.exit(0)
+}
+if (handlesOpenedPaths) void openWithService.ingest(launchedPaths)
+
+/**
+ * macOS delivers "Open with" and Dock drops as an Apple Event rather than an
+ * argument. The listener must exist before `ready` so queued events are not
+ * dropped, and it must accept the event so the file is not opened by the
+ * default handler instead.
+ */
+app.on('open-file', (event, path) => {
+  event.preventDefault()
+  void relayOpenedPaths([path])
+})
+
+/** Queue OS-supplied paths; the ingest listener hands them to the window. */
+async function relayOpenedPaths(rawPaths: readonly string[]): Promise<void> {
+  if (rawPaths.length === 0) return
+  await openWithService.ingest(rawPaths)
+}
+
+/**
+ * Push queued paths to the renderer. Paths that arrive before the renderer
+ * mounted (a launch, or a macOS `open-file` during startup) stay queued: the
+ * renderer drains them itself through `openWith:consumePending`, which keeps
+ * delivery deterministic without guessing whether its listeners are installed.
+ */
+function flushOpenedPathsToRenderer(): void {
+  if (quitCleanupStarted) return
+  const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+  if (!window || window.webContents.isLoadingMainFrame()) return
+  const paths = openWithService.consumePending()
+  if (paths.length === 0) return
+  if (window.isMinimized()) window.restore()
+  if (!window.isVisible()) window.show()
+  window.focus()
+  sendToRenderer(window.webContents, 'openWith:paths', paths)
+}
+
+openWithService.onPaths(() => flushOpenedPathsToRenderer())
 
 /**
  * Close-confirmation gate. When the user closes the window (traffic-light
@@ -406,12 +468,22 @@ let speechService: SpeechService | null = null
 let unregisterSpeechIpc: (() => void) | null = null
 let prototypePreviewService:
   import('./prototypes/prototype-preview-service').PrototypePreviewService | null = null
+/** Loopback static servers behind the file tree's "Open in browser" action. */
+let directoryPreviewService:
+  import('./preview/directory-preview-service').DirectoryPreviewService | null = null
 /**
  * Resolved lazily so the `appfile://` preview protocol can be installed before
  * the main window loads (its renderer requests previews as soon as it hydrates).
  * Populated in {@link bootPostPaintServices} once the file service exists.
  */
 let appfileProjectFiles: import('./editor/project-files-service').ProjectFilesService | null = null
+/**
+ * Privileged scoped-path resolver, handed over by the IPC layer once the
+ * post-paint service graph exists. The `appfile://` protocol needs it to serve
+ * standalone (OS-opened) file previews with the same authorization privileged
+ * IPC uses; project-relative previews keep resolving through the file service.
+ */
+let appfileScopedPathResolver: ((value: unknown) => Promise<string>) | null = null
 const threadCreation = new ThreadCreationCoordinator()
 const threadDeletion = new ThreadDeletionCoordinator()
 
@@ -557,7 +629,8 @@ async function bootPostPaintServices(): Promise<void> {
     { HeartbeatSchedulerService },
     { SpeechService },
     { registerSpeechIpc },
-    { PrototypePreviewService }
+    { PrototypePreviewService },
+    { DirectoryPreviewService }
   ] = await Promise.all([
     import('./ipc/ipc-handlers'),
     import('../lib/engines/project-manager'),
@@ -574,7 +647,8 @@ async function bootPostPaintServices(): Promise<void> {
     import('./system/heartbeat-scheduler-service'),
     import('./speech/speech-service'),
     import('./ipc/speech-ipc'),
-    import('./prototypes/prototype-preview-service')
+    import('./prototypes/prototype-preview-service'),
+    import('./preview/directory-preview-service')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -667,6 +741,7 @@ async function bootPostPaintServices(): Promise<void> {
   }
   unregisterSpeechIpc = registerSpeechIpc(speechService, () => mainWindow?.webContents ?? null)
   prototypePreviewService = new PrototypePreviewService()
+  directoryPreviewService = new DirectoryPreviewService()
   chatEngine.setPrototypePreviewRegistrar(
     (previewSlug, canonicalRoot) =>
       prototypePreviewService?.register(previewSlug, canonicalRoot) ?? Promise.resolve()
@@ -729,6 +804,7 @@ async function bootPostPaintServices(): Promise<void> {
   registerIpcHandlers(storage, database, updaterService, chatEngine, {
     projectManager,
     projectFilesService,
+    directoryPreviewService,
     powerWakeService,
     retryScheduler,
     heartbeatScheduler,
@@ -737,7 +813,10 @@ async function bootPostPaintServices(): Promise<void> {
     threadCreation,
     threadDeletion,
     hydrationHandlersRegistered: true,
-    speechService
+    speechService,
+    onScopedPathResolver: (resolve) => {
+      appfileScopedPathResolver = resolve
+    }
   })
   chatEngine.register()
   harnessManifestService.register()
@@ -1377,7 +1456,14 @@ void app
     // the handler is not yet registered Chromium rejects those early requests
     // with `net::ERR_UNKNOWN_URL_SCHEME`, leaving file-tree images permanently
     // broken. The file service is resolved lazily from bootPostPaintServices.
-    installFilePreviewProtocol(() => appfileProjectFiles)
+    installFilePreviewProtocol(
+      () => appfileProjectFiles,
+      (value) => {
+        const resolveScopedPath = appfileScopedPathResolver
+        if (!resolveScopedPath) throw new Error('Scoped path resolution is not ready')
+        return resolveScopedPath(value)
+      }
+    )
 
     const window = createWindow()
     startupTelemetry.mark('window:created')
@@ -1420,6 +1506,10 @@ void app
       documentLoaded = true
       startupTelemetry.mark('renderer:documentLoaded')
       startPostVisualServices()
+      // A hand-off that landed while the renderer was still loading could not
+      // be pushed (its listeners did not exist yet) and was not drained either
+      // (its mount-time drain had already run). Deliver it now.
+      flushOpenedPathsToRenderer()
       void completeStartupIfReady()
     })
     window.once('ready-to-show', () => {
@@ -1602,6 +1692,13 @@ async function runShutdownPipeline(): Promise<void> {
     prototypePreviewService = null
   } catch (error) {
     Logger.error('Prototype preview service cleanup failed during shutdown:', error)
+  }
+
+  try {
+    await directoryPreviewService?.dispose()
+    directoryPreviewService = null
+  } catch (error) {
+    Logger.error('Directory preview service cleanup failed during shutdown:', error)
   }
 
   try {

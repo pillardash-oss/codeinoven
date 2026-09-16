@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick, onDestroy, onMount } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
   import {
     ArrowUp,
     AudioLines,
@@ -32,7 +33,8 @@
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { STANDARD_THINKING_PRESETS, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
-  import { posixBasename } from '$shared/paths'
+  import { posixBasename, toPosixPath } from '$shared/paths'
+  import { showToastWarning } from '$lib/stores/app-errors.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -192,7 +194,7 @@
     independentAuditEnabled?: boolean
     /** Called when the user toggles the independent audit switch. */
     onIndependentAuditToggle?: (enabled: boolean) => void | Promise<void>
-    /** Engineering toolbox is hidden (Independent Audit staged or enabled  
+    /** Engineering toolbox is hidden (Independent Audit staged or enabled
      *  the two controls are mutually exclusive before a send commits either). */
     engineeringToolboxHidden?: boolean
     /** Hides the permission level selector and forces auto review   chats are
@@ -260,7 +262,6 @@
      *  footer of the composer. Only set in project mode. */
     scopeShoe?: ComposerScopeShoe
   }
-
 
   let {
     onSend,
@@ -371,11 +372,65 @@
     return [initialValue.replace(/[ \t]+$/u, ''), ...missingTokens].filter(Boolean).join(' ')
   }
 
+  /**
+   * Identity of the file an attachment points at. The attachment chips and the
+   * preview cache are keyed by the attachment's `file://` URL, so one file must
+   * always produce one identity: the URL is decoded back to its path (a legacy
+   * draft can hold a differently escaped URL for the same file) and folded to
+   * lower case where the filesystem itself resolves `index.html` and
+   * `Index.html` to a single file (macOS, and Windows where the drive letter's
+   * case depends on the drag source).
+   */
+  function attachmentFileIdentity(file: PromptAttachment): string {
+    const path = toPosixPath(fileUrlToPath(file.url))
+    const platform = window.api?.windowInfo?.platform
+    return platform === 'darwin' || platform === 'win32' ? path.toLowerCase() : path
+  }
+
+  /** Drop repeats of one file from an ordered list, keeping the first entry. */
+  function uniqueAttachments(files: readonly PromptAttachment[]): PromptAttachment[] {
+    const kept: PromptAttachment[] = []
+    const identities: string[] = []
+    for (const file of files) {
+      const identity = attachmentFileIdentity(file)
+      if (identities.includes(identity)) continue
+      identities.push(identity)
+      kept.push(file)
+    }
+    return kept
+  }
+
+  /**
+   * Split incoming files into the ones worth attaching and the repeats of files
+   * the composer already holds (including repeats inside the same drop).
+   */
+  function partitionNewAttachments(
+    existing: readonly PromptAttachment[],
+    incoming: readonly PromptAttachment[]
+  ): { added: PromptAttachment[]; duplicates: PromptAttachment[] } {
+    const identities = existing.map((file) => attachmentFileIdentity(file))
+    const added: PromptAttachment[] = []
+    const duplicates: PromptAttachment[] = []
+    for (const file of incoming) {
+      const identity = attachmentFileIdentity(file)
+      if (identities.includes(identity)) {
+        duplicates.push(file)
+        continue
+      }
+      identities.push(identity)
+      added.push(file)
+    }
+    return { added, duplicates }
+  }
+
   let value = $state(restoredDraft())
   // The composer is remounted by the parent when a restore is required, so we
   // intentionally capture only the initial attachments passed at creation time.
+  // Drafts restored from a session that ran before the duplicate guard can hold
+  // the same file twice, which the keyed attachment chips cannot render, so the
+  // restored list is collapsed here before it ever reaches the markup.
   // svelte-ignore state_referenced_locally
-  let attachments = $state<PromptAttachment[]>([...initialAttachments])
+  let attachments = $state<PromptAttachment[]>(uniqueAttachments(initialAttachments))
   let remoteFileInput = $state<HTMLInputElement>()
   // svelte-ignore state_referenced_locally
   let projectReferences = $state<PromptProjectReference[]>([...initialProjectReferences])
@@ -428,6 +483,26 @@
     }))
   ])
   let isDragging = $state(false)
+  /** Root element of the composer, used to find the conversation region it sits in. */
+  let composerRoot = $state<HTMLElement | null>(null)
+  /** 0x0 out-of-flow element sitting beside the drop overlay. Its viewport
+   *  position is the origin the overlay's `position: fixed` resolves against. */
+  let dropAnchorProbe = $state<HTMLElement | null>(null)
+  const captureComposerRoot: Attachment<HTMLElement> = (element) => {
+    composerRoot = element
+    return () => {
+      if (composerRoot === element) composerRoot = null
+    }
+  }
+  const captureDropAnchorProbe: Attachment<HTMLElement> = (element) => {
+    dropAnchorProbe = element
+    return () => {
+      if (dropAnchorProbe === element) dropAnchorProbe = null
+    }
+  }
+  /** Viewport geometry of the conversation region while files are in flight, so
+   *  the overlay covers exactly that region (never the sidebars). */
+  let dropRegion = $state<{ left: number; top: number; width: number; height: number } | null>(null)
   let previewFile = $state<PromptAttachment | null>(null)
   /** Object URLs for image/PDF/media/document downloads, keyed by attachment file:// URL. */
   let previewUrls = $state<Record<string, string>>({})
@@ -871,8 +946,27 @@
         ]
       : [])
   ])
+  /** Chat (inbox) mode is opt-in for the file system. The plus menu already
+   *  carries the switch; exposing the same toggle through the slash menu keeps
+   *  the capability reachable from the keyboard-only command flow. */
+  let fileSystemAction = $derived<ActionDefinition | null>(
+    showChatModes
+      ? {
+          id: 'mode:file-system',
+          title: resolved.fileSystemMode === true ? 'Disable file system' : 'Enable file system',
+          description:
+            resolved.fileSystemMode === true
+              ? 'Turn this chat web-only: questions and research, no file operations'
+              : 'Grant this chat file operations and unlock the permission levels',
+          category: 'mode',
+          source: composerActionSource,
+          keywords: ['file system', 'filesystem', 'files', 'fs', 'workspace', 'tools', 'access']
+        }
+      : null
+  )
   let slashAvailableActions = $derived([
     ...selectorActions,
+    ...(fileSystemAction ? [fileSystemAction] : []),
     ...actions.filter((action) => action.category !== 'model' && action.category !== 'reasoning')
   ])
   let slashActions = $derived(filterActions(slashAvailableActions, slashQuery))
@@ -1012,6 +1106,13 @@
     if (action.id === 'selector:account') {
       // The account picker lives in the shared model picker's dropdown   open it directly.
       showAccountMenu()
+      return
+    }
+
+    if (action.id === 'mode:file-system') {
+      // Same commit path as the plus-menu switch, chat mode only. Selecting the
+      // action has already consumed the typed `/query` text.
+      toggleFileSystemMode()
       return
     }
 
@@ -1329,13 +1430,12 @@
       // Custom base URL providers run without an account: fall back to the
       // harness default only for real providers so a turn never gets a random
       // harness account stamped onto its attribution.
-      accountId:
-        isCodeInOvenCustomProviderId(providerId)
-          ? undefined
-          : (accountId ??
-            (nextHarness !== resolved.harnessId
-              ? `${nextHarness}.default`
-              : (resolved.accountId ?? `${nextHarness}.default`))),
+      accountId: isCodeInOvenCustomProviderId(providerId)
+        ? undefined
+        : (accountId ??
+          (nextHarness !== resolved.harnessId
+            ? `${nextHarness}.default`
+            : (resolved.accountId ?? `${nextHarness}.default`))),
       ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(fastSupported ? {} : { inferenceMode: 'normal' })
     }
@@ -1437,6 +1537,19 @@
     if (liveTarget) speechController.reattachTarget(liveTarget)
   })
 
+  /** Explain a drop or paste that only repeated files already attached, instead
+   *  of letting it look like the composer silently ignored the gesture. */
+  function noticeDuplicateAttachments(duplicates: readonly PromptAttachment[]): void {
+    const first = duplicates[0]
+    if (!first) return
+    const name = (first.filename ?? posixBasename(fileUrlToPath(first.url))) || 'That file'
+    showToastWarning(
+      duplicates.length === 1
+        ? `${name} is already attached.`
+        : `${duplicates.length} of those files are already attached.`
+    )
+  }
+
   async function addFileAttachments(
     selections: ReadonlyArray<{ path: string; file?: File }>
   ): Promise<void> {
@@ -1445,16 +1558,22 @@
       attachmentBlockedNotice = true
       return
     }
-    const addedAttachments = selections.map(({ path, file }) => {
+    const candidates = selections.map(({ path, file }) => {
       const filename = file?.name ?? (posixBasename(path.split('?')[0]) || 'file')
       const mime = file?.type || mimeFromPath(path)
       return { mime, url: pathToFileUrl(path), filename }
     })
-    if (addedAttachments.length === 0) return
+    if (candidates.length === 0) return
 
-    attachments = [...attachments, ...addedAttachments]
+    // Dropping the same file twice must leave one chip: a repeated `file://` URL
+    // is a duplicate key in the keyed attachment list and throws at render time.
+    const { added, duplicates } = partitionNewAttachments(attachments, candidates)
+    if (duplicates.length > 0) noticeDuplicateAttachments(duplicates)
+    if (added.length === 0) return
+
+    attachments = [...attachments, ...added]
     onAttachmentsChange?.([...attachments])
-    await Promise.all(addedAttachments.map((attachment) => loadAttachmentPreview(attachment)))
+    await Promise.all(added.map((attachment) => loadAttachmentPreview(attachment)))
   }
 
   async function addFileAttachment(filePath: string, file?: File): Promise<void> {
@@ -1561,9 +1680,12 @@
     focusComposerAtSavedCaret()
   }
 
-  // ─── Global file drop (full viewport) ─────────────────────────────────────
-  // Uses document-level event listeners so files dragged anywhere on the page
-  // are captured. A fixed-position overlay appears when files are in flight.
+  // ─── Conversation-scoped file drop ────────────────────────────────────────
+  // Document-level listeners keep the detection simple, but a drag is only
+  // captured while the pointer is inside the conversation region. The project
+  // sidebar (left) and the file tree (right) therefore keep their own drop
+  // targets: dragging right imports into the project, dragging left adds a
+  // project, and only the conversation attaches files to the message.
   function hasFiles(dt: DataTransfer | null): boolean {
     if (!dt) return false
     // `types` can be a DOMStringList (contains) or FrozenArray (includes).
@@ -1571,21 +1693,79 @@
     return types.includes('Files')
   }
 
-  /** True when the pointer is inside any visible project file tree region. The
-   *  file tree handles the drag/drop itself, so the composer must not capture it. */
-  function overFileTree(e: { clientX: number; clientY: number }): boolean {
-    const trees = document.querySelectorAll<HTMLElement>('[data-region="file-tree"]')
-    for (const tree of trees) {
-      if (tree.offsetParent === null) continue
-      const rect = tree.getBoundingClientRect()
-      if (
-        e.clientX >= rect.left &&
-        e.clientX <= rect.right &&
-        e.clientY >= rect.top &&
-        e.clientY <= rect.bottom
-      ) {
-        return true
-      }
+  /**
+   * Hide the drop overlay. Every path that leaves the "file drag over the
+   * conversation" state funnels through here, so the overlay cannot outlive the
+   * drag it belongs to.
+   */
+  function clearDropState(): void {
+    if (!isDragging && !dropRegion) return
+    isDragging = false
+    dropRegion = null
+  }
+
+  /** The conversation region this composer belongs to, if it has one. */
+  function conversationRegion(): HTMLElement | null {
+    return composerRoot?.closest<HTMLElement>('[data-drop-region="conversation"]') ?? null
+  }
+
+  /** Geometry of the conversation region, or null when the composer is not
+   *  mounted inside one (e.g. a host that renders it standalone). */
+  function conversationRegionRect(): DOMRect | null {
+    const region = conversationRegion()
+    if (!region) return null
+    const rect = region.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return null
+    return rect
+  }
+
+  function insideRect(rect: DOMRect, e: { clientX: number; clientY: number }): boolean {
+    return (
+      e.clientX >= rect.left &&
+      e.clientX <= rect.right &&
+      e.clientY >= rect.top &&
+      e.clientY <= rect.bottom
+    )
+  }
+
+  /**
+   * Origin the drop overlay's `position: fixed` resolves against.
+   *
+   * Measured from the anchor element instead of inferred from the ancestor CSS,
+   * because the ancestor that contains a fixed box is not the one the CSS
+   * suggests. The conversation column declares `container-type` for its composer
+   * container queries, and containment from `container-type` is supposed to
+   * bring layout containment with it, which would make that column the containing
+   * block: Chromium does not do that (only an explicit `contain: layout`/`paint`,
+   * `transform`, `filter`, `backdrop-filter` or `will-change` creates one),
+   * while other engines may follow the specification. Measuring a 0x0 fixed
+   * anchor reports whatever the running engine actually does, so the overlay
+   * lands on the region on every engine and keeps landing there if a `transform`,
+   * a `filter`, or any other containing ancestor is introduced above it later.
+   */
+  function fixedOrigin(): { x: number; y: number } {
+    const rect = dropAnchorProbe?.getBoundingClientRect()
+    // No anchor mounted (a host that renders the composer standalone): the
+    // overlay is fixed against the viewport, which is where the anchor would be.
+    return rect ? { x: rect.left, y: rect.top } : { x: 0, y: 0 }
+  }
+
+  /**
+   * Surfaces that own their own OS file drop: the project file tree (imports
+   * into the project) and the project sidebar (folders become projects, single
+   * files open standalone). Their regions are checked before the conversation
+   * because the sidebar's collapsed overlay and the file tree's dock both sit on
+   * top of the conversation column, so a point inside the conversation may still
+   * be an element the composer must not capture as an attachment.
+   */
+  const SELF_HANDLED_DROP_REGIONS = '[data-region="file-tree"], [data-drop-region="sidebar"]'
+
+  /** True when the pointer is inside a surface that handles the drop itself. */
+  function overSelfHandledDropRegion(e: { clientX: number; clientY: number }): boolean {
+    const regions = document.querySelectorAll<HTMLElement>(SELF_HANDLED_DROP_REGIONS)
+    for (const region of regions) {
+      if (region.offsetParent === null) continue
+      if (insideRect(region.getBoundingClientRect(), e)) return true
     }
     return false
   }
@@ -1620,33 +1800,64 @@
   // listener lifecycle (and the isDragging mutations) out of a reactive effect.
   onMount(() => {
     function onDragOver(e: DragEvent): void {
-      if (readOnlyMode && !allowAttachments) return
-      if (selectedHarnessLacksAttachments) return
-      if (overFileTree(e)) {
-        // The file tree owns the drop in its region; hide the composer overlay.
-        if (isDragging) isDragging = false
+      // A drag that stops being droppable part way through (the composer went
+      // read-only, or the selected harness cannot take attachments) must not
+      // leave an overlay that an earlier event of the same drag raised.
+      if (readOnlyMode && !allowAttachments) {
+        clearDropState()
+        return
+      }
+      if (selectedHarnessLacksAttachments) {
+        clearDropState()
         return
       }
       if (!hasFiles(e.dataTransfer)) return
+      const rect = conversationRegionRect()
+      if (!rect || !insideRect(rect, e) || overSelfHandledDropRegion(e)) {
+        // Outside the conversation (or over a surface that owns the drop): leave
+        // it to whichever surface owns that region and hide the overlay.
+        clearDropState()
+        return
+      }
       e.preventDefault()
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+      const origin = fixedOrigin()
+      dropRegion = {
+        left: rect.left - origin.x,
+        top: rect.top - origin.y,
+        width: rect.width,
+        height: rect.height
+      }
       isDragging = true
     }
 
     function onDragLeave(e: DragEvent): void {
-      if (readOnlyMode && !allowAttachments) return
-      if (selectedHarnessLacksAttachments) return
-      if (
+      // The overlay is shown only while a file drag is inside the conversation, so
+      // any leave that is not the drag moving onto one of the region's own
+      // children hides it. Testing the pointer rather than the event target keeps
+      // the overlay up through those child crossings.
+      //
+      // The viewport boundary is tested explicitly on top of the region: every
+      // layout puts the region flush against the window's right and bottom edges
+      // (and the left edge where the conversation is full bleed), so a leave
+      // produced by dragging out of the window lands inside the region's bounds
+      // and would otherwise be read as a child crossing. Hiding it here also
+      // covers the release that ends a drag over a surface which accepts no
+      // drop: such a surface receives no drop event at all, leaving this as the
+      // last event the composer sees.
+      const atWindowEdge =
         e.clientX <= 0 ||
         e.clientY <= 0 ||
         e.clientX >= window.innerWidth ||
         e.clientY >= window.innerHeight
-      ) {
-        isDragging = false
-      }
+      const rect = conversationRegionRect()
+      if (atWindowEdge || !rect || !insideRect(rect, e)) clearDropState()
     }
 
     function onDrop(e: DragEvent): void {
+      // Every drop ends the drag, including one that lands on the sidebar, the
+      // file tree, or outside the window.
+      clearDropState()
       if (readOnlyMode && !allowAttachments) return
       if (selectedHarnessLacksAttachments) {
         if (hasFiles(e.dataTransfer)) {
@@ -1655,9 +1866,9 @@
         }
         return
       }
-      if (overFileTree(e)) return
+      const rect = conversationRegionRect()
+      if (!rect || !insideRect(rect, e) || overSelfHandledDropRegion(e)) return
       e.preventDefault()
-      isDragging = false
       void handleDropFiles(e.dataTransfer)
     }
 
@@ -1926,29 +2137,40 @@
   />
 {/if}
 
-{#if isDragging}
-  <!-- Rendered as a sibling of .chat-composer, not a descendant: that element sets
-       container-type for its responsive toolbar, which makes it a containing block
-       for position:fixed children and would confine this overlay to its bounds
-       instead of the viewport. -->
+<!-- Measurement anchor for the overlay below: fixed, 0x0, and out of flow, so it
+     never takes part in layout. It sits beside the overlay rather than inside
+     .chat-composer (which sets container-type for its responsive toolbar) so the
+     two always resolve against the same box. -->
+<div
+  {@attach captureDropAnchorProbe}
+  aria-hidden="true"
+  class="pointer-events-none fixed top-0 left-0 m-0 h-0 w-0"
+></div>
+
+{#if isDragging && dropRegion}
+  <!-- Sits over the conversation region only: the project sidebar (left) and
+       the file tree (right) keep their own drop targets, so a drag can be aimed
+       at any of the three surfaces. Sibling of .chat-composer, never a
+       descendant: whether that element's container-type contains a fixed child
+       is engine-dependent, so staying outside it removes the question. Where it
+       lands comes from the anchor above, never from CSS inference. -->
   <div
     role="region"
     aria-label="Drop zone"
-    class="fixed inset-0 z-100 flex items-center justify-center border-2 border-dashed border-primary bg-primary/20 backdrop-blur-sm pointer-events-auto"
+    class="fixed z-100 m-0 flex items-center justify-center border-2 border-dashed border-primary bg-primary/20 backdrop-blur-sm pointer-events-auto"
+    style:left={`${dropRegion.left}px`}
+    style:top={`${dropRegion.top}px`}
+    style:width={`${dropRegion.width}px`}
+    style:height={`${dropRegion.height}px`}
     ondragover={(e: DragEvent) => {
-      if (overFileTree(e)) {
-        isDragging = false
-        return
-      }
       e.preventDefault()
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
     }}
     ondrop={(e: DragEvent) => {
-      if (overFileTree(e)) return
       e.preventDefault()
       e.stopPropagation()
-      isDragging = false
-      handleDropFiles(e.dataTransfer)
+      clearDropState()
+      void handleDropFiles(e.dataTransfer)
     }}
   >
     <div class="flex flex-col items-center gap-2 text-primary">
@@ -1962,6 +2184,7 @@
   class="chat-composer relative z-10 border bg-surface shadow-sm"
   data-onboarding="composer"
   data-voice-trigger-root
+  {@attach captureComposerRoot}
 >
   {#if imageDescriptorGateOpen}
     <div
@@ -1977,7 +2200,7 @@
           <p class="text-sm font-semibold text-foreground">This model can't see images</p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
             You're about to send an image to a model without vision capability. Image Descriptor is
-            a tool the model can call to describe the image for it   but you need to pick the vision
+            a tool the model can call to describe the image for it but you need to pick the vision
             model that does the describing.
           </p>
         </div>
@@ -2032,7 +2255,7 @@
       </div>
       {#if !gateVisionSelection}
         <p class="mt-1.5 text-[0.6875rem] text-dimmed">
-          No vision model selected   Continue is disabled until you pick one.
+          No vision model selected Continue is disabled until you pick one.
         </p>
       {/if}
       <div class="mt-3 flex justify-start">
@@ -2225,6 +2448,8 @@
       {/if}
       {#if attachments.length > 0}
         <div class="flex flex-wrap gap-1.5">
+          <!-- Keyed by the `file://` URL, which the duplicate guard above keeps
+               unique across drops, picks, pastes, and restored drafts. -->
           {#each attachments as file, i (file.url)}
             {@const previewKind = attachmentPreviewKind(file.mime, file.filename ?? '')}
             <div
@@ -2757,18 +2982,18 @@
     <div
       class="composer-shoe-card flex w-[80%] min-w-0 items-center justify-center border bg-surface px-2 pt-2.5 pb-1 shadow-md @container"
     >
-        <ComposerShoe
-          projectId={scopeShoe.projectId}
-          threadId={scopeShoe.threadId}
-          bucket={scopeShoe.bucket}
-          source={scopeShoe.source}
-          host={scopeShoe.host}
-          project={scopeShoe.project}
-          onSwitchProject={scopeShoe.onSwitchProject}
-          isNewThread={scopeShoe.isNewThread}
-          isWorking={scopeShoe.isWorking}
-          onOpenScopeView={scopeShoe.onOpenScopeView}
-        />
+      <ComposerShoe
+        projectId={scopeShoe.projectId}
+        threadId={scopeShoe.threadId}
+        bucket={scopeShoe.bucket}
+        source={scopeShoe.source}
+        host={scopeShoe.host}
+        project={scopeShoe.project}
+        onSwitchProject={scopeShoe.onSwitchProject}
+        isNewThread={scopeShoe.isNewThread}
+        isWorking={scopeShoe.isWorking}
+        onOpenScopeView={scopeShoe.onOpenScopeView}
+      />
     </div>
   </div>
 {/if}

@@ -97,6 +97,27 @@ export async function revealFileInAppTree(projectId: string, path: string): Prom
   if (entry) await revealEntry(projectId, entry)
 }
 
+/**
+ * Open a file in a project's own editor from a path main already resolved to that
+ * project (`project:findFileOwner`). Unlike {@link revealFileInAppTree} the
+ * relative path is given rather than derived from the *active* project, so an OS
+ * hand-off opens correctly whichever project happens to be on screen. Returns
+ * whether the file was opened, so the caller can fall back to the standalone
+ * viewer when the path no longer resolves inside the project.
+ */
+export async function openProjectFileFromAbsolutePath(
+  projectId: string,
+  relativePath: string
+): Promise<boolean> {
+  // Resolve on disk before preparing anything: a path that no longer exists must
+  // not switch the project's file surface on.
+  const entry = await exactEntry(projectId, relativePath)
+  if (!entry) return false
+  await ensureProjectFilesReady(projectId)
+  await revealEntry(projectId, entry)
+  return true
+}
+
 /** Route an explicit local file URL to the in-app tree or the OS file manager. */
 export async function revealLocalFile(projectId: string | undefined, url: string): Promise<void> {
   if (!projectId || !url.startsWith('file://')) return

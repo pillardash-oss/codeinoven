@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Check, Palette, X } from '@lucide/svelte'
   import { PROJECT_COLORS } from '$lib/project-colors'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import ColorPicker from './ColorPicker.svelte'
 
   interface Props {
@@ -34,10 +34,7 @@
 
   $effect(() => {
     if (!suppressKey) return
-    contextSidebarState.setFullscreenSurfaceActive(suppressKey, showPicker)
-    return () => {
-      contextSidebarState.setFullscreenSurfaceActive(suppressKey, false)
-    }
+    return browserVisibility.hideWhile(suppressKey, 'fullscreen-surface', showPicker)
   })
 
   const checkSize = $derived(size === 'sm' ? 8 : 10)

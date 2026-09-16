@@ -114,6 +114,9 @@
   }
 
   function handleDragOver(e: DragEvent): void {
+    // A folder/file dragged in from the OS belongs to the sidebar's drop target,
+    // not to a thread reorder.
+    if (e.dataTransfer?.types.includes('Files')) return
     e.preventDefault()
     if (!onMoveThread) return
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -121,6 +124,7 @@
   }
 
   function handleDrop(e: DragEvent): void {
+    if (e.dataTransfer?.types.includes('Files')) return
     e.preventDefault()
     const draggedId = e.dataTransfer!.getData('text/plain')
     if (draggedId && draggedId !== thread.id && onMoveThread) {

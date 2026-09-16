@@ -38,6 +38,7 @@
     supportsFilePreview
   } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -373,9 +374,14 @@
   let showLineNumbers = $state(true)
   const wrapLines = $derived(wrapTextState.wrapped)
   let fullscreenOpen = $state(false)
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive('files-fullscreen-editor', fullscreenOpen)
-  })
+  // The browser's native view floats above every DOM overlay, so a full-window
+  // editor must register itself as a fullscreen surface while it is up. The
+  // returned cleanup matters here: this panel is unmounted whenever the sidebar
+  // hides or its active tab changes, and a key left behind would suppress the
+  // browser view for the rest of the session.
+  $effect(() =>
+    browserVisibility.hideWhile('files-fullscreen-editor', 'fullscreen-surface', fullscreenOpen)
+  )
   let handledFullscreenRequest = $state(0)
   let conflictController = $state<ConflictResolutionController | null>(null)
   let conflictStatus = $state<ConflictResolutionStatus>({

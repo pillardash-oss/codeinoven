@@ -1145,7 +1145,7 @@
   }
 </script>
 
-<div class="flex h-full min-h-0 flex-col bg-app">
+<div class="flex h-full min-h-0 flex-col bg-app" data-drop-region="conversation">
   <div
     {@attach captureScrollElement}
     class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4"

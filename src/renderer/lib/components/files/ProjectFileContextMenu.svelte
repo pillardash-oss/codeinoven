@@ -7,6 +7,7 @@
     FilePlus2,
     FolderOpen,
     FolderPlus,
+    Globe,
     Info,
     Pencil,
     Scissors,
@@ -29,6 +30,7 @@
     onDelete: () => void
     onInfo: () => void
     onReveal: () => void
+    onOpenInBrowser: () => void
   }
 
   let {
@@ -45,7 +47,8 @@
     onRename,
     onDelete,
     onInfo,
-    onReveal
+    onReveal,
+    onOpenInBrowser
   }: Props = $props()
 
   let selectedCount = $derived(
@@ -53,6 +56,11 @@
   )
   let isSingle = $derived(selectedCount <= 1)
   let itemSuffix = $derived(selectedCount > 1 ? ` ${selectedCount} items` : '')
+  /** The project root, any directory, and standalone HTML files can be served
+   *  over a loopback origin and previewed with their scripts and assets live. */
+  let canOpenInBrowser = $derived(
+    entry === null || entry.kind === 'directory' || /\.(?:html?|xhtml)$/iu.test(entry.name)
+  )
 
   const itemClass =
     'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
@@ -78,6 +86,13 @@
         <ContextMenu.Item class={itemClass} onSelect={onCreateFolder}>
           <FolderPlus size={13} class="text-muted" />
           New folder
+        </ContextMenu.Item>
+      {/if}
+
+      {#if canOpenInBrowser}
+        <ContextMenu.Item class={itemClass} onSelect={onOpenInBrowser}>
+          <Globe size={13} class="text-muted" />
+          Open in browser
         </ContextMenu.Item>
       {/if}
 

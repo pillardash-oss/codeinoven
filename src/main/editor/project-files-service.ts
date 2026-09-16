@@ -32,6 +32,7 @@ const MAX_RELATIVE_PATH_LENGTH = 4_096
 
 export interface ProjectFilesProjectLookup {
   getProject(projectId: string): Promise<Project | null>
+  listProjects(): Promise<Project[]>
 }
 
 /** Resolves a managed scope's filesystem root; unhealthy scopes fail closed. */
@@ -183,7 +184,9 @@ export class ProjectFilesService {
     // share (or poison) the project-root index. Chat thread mounts get their
     // own index key for the same reason.
     return this.fileIndex.search(
-      threadId !== undefined ? `${projectId}::thread:${threadId}` : scopedKey(projectId, scopeBucketId),
+      threadId !== undefined
+        ? `${projectId}::thread:${threadId}`
+        : scopedKey(projectId, scopeBucketId),
       root,
       query,
       category,
@@ -361,6 +364,85 @@ export class ProjectFilesService {
     return this.readResolvedText(target, relativePath)
   }
 
+  /**
+   * Read a text file at an absolute path that main has already authorized
+   * (a file the user opened through the operating system). Scope checks stay at
+   * the IPC boundary; this only enforces the shared text rules: a regular file,
+   * within the 2 MiB editing cap, and decodable UTF-8.
+   */
+  async readAbsoluteText(absolutePath: string): Promise<ProjectTextFile> {
+    const target = await realpath(absolutePath)
+    return this.readResolvedText(target, toPosixPath(target))
+  }
+
+  /**
+   * Write text to an already-authorized absolute path (a file the operating
+   * system handed over, or one the user picked in a dialog). The privileged IPC
+   * boundary resolves the scope before calling this, so the writer itself only
+   * has to guarantee that the bytes land atomically and that a concurrent change
+   * is never overwritten: the same revision check and temp-file swap the project
+   * writer uses, minus the project-root containment (there is no project here).
+   */
+  async writeAbsoluteText(
+    absolutePath: string,
+    content: string,
+    expectedRevision: string
+  ): Promise<ProjectTextFile> {
+    const target = await realpath(absolutePath)
+    return this.runMutationExclusive(() =>
+      this.runWriteExclusive(target, () =>
+        this.writeResolvedText(target, toPosixPath(target), content, expectedRevision)
+      )
+    )
+  }
+
+  /**
+   * The project whose root contains an absolute file path, with the path made
+   * relative to that root. An OS hand-off of a file that already lives inside a
+   * project opens in that project's own editor (file tree, scopes, save flow)
+   * instead of the standalone viewer.
+   *
+   * The deepest matching root wins, so a project nested inside another project
+   * claims its own files. Files outside every project, and paths that are not
+   * regular files, resolve to `null`; the check is existence-based, so a path
+   * that no longer resolves never matches.
+   */
+  async findProjectOwner(
+    absolutePath: string
+  ): Promise<{ projectId: string; relativePath: string } | null> {
+    if (typeof absolutePath !== 'string' || absolutePath.length === 0) return null
+    if (absolutePath.includes('\0')) return null
+    let canonical: string
+    try {
+      canonical = await realpath(absolutePath)
+      // Only regular files are ever routed into a project's editor; a directory
+      // hand-off stays with the project registration path.
+      if (!(await stat(canonical)).isFile()) return null
+    } catch {
+      return null
+    }
+
+    let owner: { projectId: string; root: string } | null = null
+    for (const project of await this.projects.listProjects()) {
+      if (project.id === INBOX_PROJECT_ID) continue
+      if (project.source !== 'local' || !project.path.trim()) continue
+      let root: string
+      try {
+        root = await realpath(resolve(project.path))
+      } catch {
+        // A project whose folder is gone can never own a live file.
+        continue
+      }
+      if (root === canonical || !isWithinRoot(root, canonical)) continue
+      if (!owner || root.length > owner.root.length) owner = { projectId: project.id, root }
+    }
+    if (!owner) return null
+    return {
+      projectId: owner.projectId,
+      relativePath: toPosixPath(relative(owner.root, canonical))
+    }
+  }
+
   async createFile(
     projectId: string,
     relativeDirectory: string,
@@ -447,7 +529,11 @@ export class ProjectFilesService {
     destinationThreadId?: string
   ): Promise<ProjectFileEntry> {
     return this.runMutationExclusive(async () => {
-      const sourceRoot = await this.projectRoot(sourceProjectId, sourceScopeBucketId, sourceThreadId)
+      const sourceRoot = await this.projectRoot(
+        sourceProjectId,
+        sourceScopeBucketId,
+        sourceThreadId
+      )
       const destinationRoot = await this.projectRoot(
         destinationProjectId,
         destinationScopeBucketId,
@@ -787,6 +873,21 @@ export class ProjectFilesService {
     return this.resolveExistingPath(root, relativePath, false)
   }
 
+  /**
+   * Canonical root of a (project, scope, thread) mount.
+   *
+   * `getInfo` resolves an entry *inside* a mount and rejects an empty path, so
+   * callers that need the mount root itself (the directory preview server)
+   * resolve it here instead of re-deriving scope authority.
+   */
+  async resolveMountRoot(
+    projectId: string,
+    scopeBucketId?: string,
+    threadId?: string
+  ): Promise<string> {
+    return this.projectRoot(projectId, scopeBucketId, threadId)
+  }
+
   async writeText(
     projectId: string,
     relativePath: string,
@@ -800,54 +901,69 @@ export class ProjectFilesService {
       this.runWriteExclusive(key, async () => {
         const root = await this.projectRoot(projectId, scopeBucketId, threadId)
         const target = await this.resolveExistingPath(root, relativePath, false)
-        const current = await this.readResolvedText(target, relativePath)
-        if (current.revision !== expectedRevision) {
-          throw new Error('This file changed on disk. Reload it before saving your draft.')
-        }
-
-        const nextContent = new TextEncoder().encode(content)
-        if (nextContent.byteLength > MAX_TEXT_FILE_BYTES) {
-          throw new Error('Text files larger than 2 MiB cannot be edited here')
-        }
-        decodeText(nextContent)
-
-        const metadata = await lstat(target)
         const parent = await realpath(dirname(target))
         if (!isWithinRoot(root, parent)) {
           throw new Error('Project file path escapes the project root')
         }
-
-        const temporaryPath = join(
-          parent,
-          `.${basename(target)}.${process.pid}.${randomUUID()}.tmp`
-        )
-        try {
-          const temporaryFile = await open(
-            temporaryPath,
-            constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-            metadata.mode
-          )
-          try {
-            await temporaryFile.chmod(metadata.mode)
-            await temporaryFile.writeFile(nextContent)
-            await temporaryFile.sync()
-          } finally {
-            await temporaryFile.close()
-          }
-
-          const latest = await this.readResolvedText(target, relativePath)
-          if (latest.revision !== expectedRevision) {
-            throw new Error('This file changed on disk. Reload it before saving your draft.')
-          }
-          await rename(temporaryPath, target)
-        } catch (error) {
-          await rm(temporaryPath, { force: true }).catch(() => undefined)
-          throw error
-        }
-
-        return this.readResolvedText(target, relativePath)
+        return this.writeResolvedText(target, relativePath, content, expectedRevision, parent)
       })
     )
+  }
+
+  /**
+   * Revision-checked, UTF-8-validated, size-bounded atomic write of one text
+   * file. Shared by the project writer and the standalone (project-less) writer
+   * so a file opened straight from the operating system is saved with exactly the
+   * same guarantees as a project file. `parent` is the already-resolved
+   * directory to place the temp file in; a caller that checked containment
+   * passes it so the check and the write cannot race on a swapped directory.
+   */
+  private async writeResolvedText(
+    target: string,
+    displayPath: string,
+    content: string,
+    expectedRevision: string,
+    parent?: string
+  ): Promise<ProjectTextFile> {
+    const current = await this.readResolvedText(target, displayPath)
+    if (current.revision !== expectedRevision) {
+      throw new Error('This file changed on disk. Reload it before saving your draft.')
+    }
+
+    const nextContent = new TextEncoder().encode(content)
+    if (nextContent.byteLength > MAX_TEXT_FILE_BYTES) {
+      throw new Error('Text files larger than 2 MiB cannot be edited here')
+    }
+    decodeText(nextContent)
+
+    const metadata = await lstat(target)
+    const directory = parent ?? (await realpath(dirname(target)))
+    const temporaryPath = join(directory, `.${basename(target)}.${process.pid}.${randomUUID()}.tmp`)
+    try {
+      const temporaryFile = await open(
+        temporaryPath,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        metadata.mode
+      )
+      try {
+        await temporaryFile.chmod(metadata.mode)
+        await temporaryFile.writeFile(nextContent)
+        await temporaryFile.sync()
+      } finally {
+        await temporaryFile.close()
+      }
+
+      const latest = await this.readResolvedText(target, displayPath)
+      if (latest.revision !== expectedRevision) {
+        throw new Error('This file changed on disk. Reload it before saving your draft.')
+      }
+      await rename(temporaryPath, target)
+    } catch (error) {
+      await rm(temporaryPath, { force: true }).catch(() => undefined)
+      throw error
+    }
+
+    return this.readResolvedText(target, displayPath)
   }
 
   private async projectRoot(

@@ -89,6 +89,7 @@ import {
   validateSourcePath,
   validateWorktreeDefaults
 } from '../ipc/ipc-validation'
+import { DEFAULT_SCOPE_BUCKET_ID } from '../../lib/types'
 import type {
   AgentCapabilitySource,
   AssignmentModelSelection,
@@ -118,7 +119,7 @@ import { getConfigRoot } from '../../lib/utils'
 import { PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
 import { threadAttachmentDirectory } from '../../lib/thread-storage-paths'
 import { remoteWebPush, type RemotePushSubscription } from './web-push-service'
-import type { AttachmentStorageScope } from '../../lib/types'
+import type { AttachmentStorageScope, GitMainSyncResult } from '../../lib/types'
 
 const MAX_REMOTE_ATTACHMENT_BYTES = 32 * 1024 * 1024
 const MAX_REMOTE_ATTACHMENT_CHUNK_BYTES = 256 * 1024
@@ -1979,6 +1980,10 @@ export class RemoteRpcDispatcher {
           }
         )
       }
+      case 'git:syncFromMain':
+        return await this.syncMain('from-main', args)
+      case 'git:syncToMain':
+        return await this.syncMain('to-main', args)
       case 'git:push': {
         const projectId = this.string(args[0])
         const options = (args[1] ?? {}) as {
@@ -2279,6 +2284,42 @@ export class RemoteRpcDispatcher {
       if (branchName) await this.threadManager.setBranch(projectId, thread.id, branchName)
     }
     return result
+  }
+
+  /**
+   * Shared dispatcher for both directions of the worktree/main sync, mirroring
+   * the desktop `git:syncFromMain` / `git:syncToMain` handlers: the worktree root
+   * comes from the active scope, the main root from the Default scope, and the
+   * vaulted PAT is resolved here so it never crosses the wire.
+   */
+  private async syncMain(
+    direction: 'from-main' | 'to-main',
+    args: unknown[]
+  ): Promise<GitMainSyncResult> {
+    const projectId = this.string(args[0])
+    const options = (args[1] ?? {}) as { strategy?: string }
+    const strategy = options.strategy
+    if (strategy !== 'merge' && strategy !== 'rebase' && strategy !== 'ff-only') {
+      throw new TypeError('Invalid sync strategy')
+    }
+    if (args[2] === undefined) {
+      throw new Error(
+        `Syncing ${direction === 'from-main' ? 'from' : 'to'} the main branch requires a worktree scope`
+      )
+    }
+    const tokenRef = `git_pat_${projectId}`
+    const token = (await this.vault.exists(tokenRef))
+      ? await this.vault.resolve(tokenRef)
+      : undefined
+    return this.gitService.syncMain(
+      await this.resolveProjectPath(projectId, this.string(args[2])),
+      {
+        direction,
+        mainPath: await this.resolveProjectPath(projectId, DEFAULT_SCOPE_BUCKET_ID),
+        strategy,
+        token
+      }
+    )
   }
 
   private string(value: unknown): string {

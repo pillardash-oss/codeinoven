@@ -109,6 +109,7 @@
     type ContextSidebarTab,
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
@@ -1418,25 +1419,23 @@
   // A full-window DOM surface (fullscreen terminal, media previews, fullscreen
   // file editors) covers the workspace. The browser's native view floats above
   // every DOM surface, so it must be hidden while such a surface is open   the
-  // browser panel unmounts its native surface via its own visibility lifecycle
-  // when this flips true. The browser's own fullscreen dialog is not registered
+  // browser panel asks the browser-visibility store and detaches its native
+  // surface accordingly. The browser's own fullscreen dialog is not registered
   // here so the browser stays visible when the user fullscreens it deliberately.
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive(
+  $effect(() =>
+    browserVisibility.hideWhile(
       'workspace-terminal-fullscreen',
+      'fullscreen-surface',
       terminalFullscreenTabId !== null
     )
-  })
+  )
 
   // App.svelte keeps this Workspace mounted (but CSS-hidden) when the user
   // navigates to Settings/Scope, so its state survives the trip. The browser's
   // native view has no notion of that DOM hide and keeps floating at its last
   // screen bounds on top of whatever renders there instead   suppress it
   // whenever this Workspace isn't the active top-level view.
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive('workspace-inactive', !active)
-    return () => contextSidebarState.setFullscreenSurfaceActive('workspace-inactive', false)
-  })
+  $effect(() => browserVisibility.hideWhile('workspace-inactive', 'workspace-inactive', !active))
 
   // The grid column/row that hosts each panel collapses the instant
   // `sidebarVisible`/`terminalDockVisible` flips, but the panel itself keeps
@@ -2701,6 +2700,61 @@
 
   // ─── Project actions ─────────────────────────────────────────────────────
 
+  /** Whether an OS drag currently hovers the sidebar body, driving the drop
+   *  affordance the sidebar shell renders. Only the sidebar sets this; the
+   *  conversation overlay is a separate, region-scoped surface. */
+  let sidebarDropActive = $state(false)
+
+  function carriesDroppedFiles(event: DragEvent): boolean {
+    return Array.from(event.dataTransfer?.types ?? []).includes('Files')
+  }
+
+  function handleSidebarDragOver(event: DragEvent): void {
+    if (!carriesDroppedFiles(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+    sidebarDropActive = true
+  }
+
+  function handleSidebarDragLeave(event: DragEvent): void {
+    const related = event.relatedTarget
+    const current = event.currentTarget
+    if (related instanceof Node && current instanceof Node && current.contains(related)) return
+    sidebarDropActive = false
+  }
+
+  /**
+   * Folders and files dropped on the project sidebar go through the same opener
+   * the OS hand-off uses (main classifies each path, the app adds folders as
+   * projects with de-duplication, and opens single files in the standalone
+   * viewer). Routing both entry points through one path keeps the behavior
+   * identical whether the folder arrived from Finder, Explorer, the taskbar, or
+   * a drag into the sidebar.
+   */
+  async function handleSidebarDrop(event: DragEvent): Promise<void> {
+    sidebarDropActive = false
+    const files = event.dataTransfer?.files
+    if (!files || files.length === 0) return
+    const paths: string[] = []
+    for (const file of Array.from(files)) {
+      try {
+        const path = window.api.getPathForFile(file)
+        if (path) paths.push(path)
+      } catch {
+        // Not a local file (e.g. a web page image); ignore it.
+      }
+    }
+    if (paths.length === 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    try {
+      await invoke('openWith:openPaths', paths)
+    } catch (error) {
+      reportError(error, 'The dropped items could not be opened')
+    }
+  }
+
   async function handleProjectCreated(project: Project): Promise<void> {
     projects = [project, ...projects]
     expandedFolders.add(project.id)
@@ -3554,6 +3608,12 @@
             : 'Chats'}
       hideHeader={!workspaceState.specStudioOpen}
       bind:scroller={sidebarScroller}
+      fileDrop={{
+        active: sidebarDropActive,
+        onDragOver: handleSidebarDragOver,
+        onDragLeave: handleSidebarDragLeave,
+        onDrop: (event: DragEvent) => void handleSidebarDrop(event)
+      }}
     >
       {#snippet header()}
         {#if workspaceState.specStudioOpen}
@@ -4469,7 +4529,10 @@
           </div>
         {:else if mode === 'chats'}
           <!-- Empty state   greeting, composer, and suggested prompts centered -->
-          <div class="flex h-full flex-col items-center justify-center px-6">
+          <div
+            class="flex h-full flex-col items-center justify-center px-6"
+            data-drop-region="conversation"
+          >
             <div class="mb-6 text-center">
               <h1 class="text-[1.375rem] font-semibold tracking-tight">Start a new chat</h1>
               <p class="mt-1 text-[0.875rem] text-muted">
@@ -4636,10 +4699,7 @@
                 {:else if showClearBrowserDataConfirm && browserDataClearProjectId === activeContextTab.projectId}
                   <div class="h-full bg-app" aria-hidden="true"></div>
                 {:else}
-                  <BrowserPanel
-                    tab={activeContextTab}
-                    suppressed={browserFullscreenTabId !== null}
-                  />
+                  <BrowserPanel tab={activeContextTab} />
                 {/if}
               {:else if activeContextTab.kind === 'debugger'}
                 <AgentDebugPanel />

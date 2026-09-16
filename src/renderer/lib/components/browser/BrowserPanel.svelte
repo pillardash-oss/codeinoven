@@ -13,6 +13,7 @@
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { normalizeBrowserUrl } from '$shared/local-development-url'
+  import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
   import type {
     BrowserDevToolsState,
@@ -23,13 +24,15 @@
   interface Props {
     tab: BrowserContextTab
     fullscreen?: boolean
-    /** True while this tab's native view is shown by another instance (e.g. the
-     *  fullscreen dialog). Forces the native view hidden so two instances never
-     *  fight over the same WebContentsView. */
-    suppressed?: boolean
   }
 
-  let { tab, fullscreen = false, suppressed = false }: Props = $props()
+  let { tab, fullscreen = false }: Props = $props()
+
+  /** The surface this instance renders on. A fullscreen instance outranks every
+   *  sidebar instance, so the store resolves which one owns the single native
+   *  view and no suppression prop has to be threaded in from the parent. */
+  // svelte-ignore state_referenced_locally
+  const surface: BrowserSurface = fullscreen ? 'fullscreen' : 'sidebar'
 
   // Capture stable tab identity at construction — `tab` is a prop object that
   // Svelte may detach during keyed destroy, so every async callback and
@@ -44,6 +47,10 @@
   const tabInitialUrl = tab.url
   // svelte-ignore state_referenced_locally
   const tabInitialTitle = tab.title
+
+  // Claim the native view for this tab while this panel is mounted. The claim is
+  // released with the component, so a destroyed panel can never keep the view.
+  $effect(() => browserVisibility.claimTab(tabId, surface))
 
   function initialPageState(): BrowserPageState {
     return {
@@ -61,13 +68,15 @@
   let address = $state(initialPageState().url)
   let addressError = $state('')
   let pageState = $state<BrowserPageState>(initialPageState())
-  let panelVisible = $derived(
-    !suppressed &&
-      !contextSidebarState.fullscreenSuppression &&
-      !contextSidebarState.browserSwitcherSuspendsView &&
-      (fullscreen ||
-        (contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.id === tabId))
-  )
+  /** The panel's current on-screen content rectangle, refreshed by the same
+   *  observers that align the native view. */
+  let contentRect = $state<BrowserViewBounds | null>(null)
+  /** Whether the browser's native view may be on screen for this tab right now.
+   *  The store owns the entire decision   published blocks (a full-window DOM
+   *  surface, an inactive workspace, the thread switcher), which surface owns
+   *  the single native view, and whether a floating DOM overlay covers this
+   *  frame   so this panel never has to combine them itself. */
+  let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
   let devToolsOpen = $state(false)
   /** Show a closed padlock for https origins; open padlock for everything else. */
   let secure = $derived(pageState.url.startsWith('https:'))
@@ -133,16 +142,29 @@
   }
 
   async function showAtCurrentBounds(): Promise<void> {
-    // Read deriveds outside the async continuation so Svelte doesn't flag
-    // `derived_inert` when this is called from ResizeObserver/rAF after
-    // the owning render effect has been torn down.
-    const visible = untrack(() => panelVisible)
-    if (!visible) return
     const bounds = contentBounds()
+    // Publish the frame before the visibility check: the store needs the current
+    // rectangle even while the native view is detached, so the panel notices as
+    // soon as an overlay stops covering it.
+    contentRect = bounds
+    // Ask the store directly instead of reading the template's `panelVisible`
+    // derived: this also runs from ResizeObserver/rAF continuations, after the
+    // effect that owns a component derived may have been torn down.
+    if (!browserVisibility.isVisible(tabId, bounds)) return
     if (!bounds) return
     try {
       const currentUrl = untrack(() => (tab as BrowserContextTab | null)?.url ?? tabInitialUrl)
       pageState = await invoke('browser:show', tabId, tabProjectId, tabThreadId, currentUrl, bounds)
+      // The store's answer can change while that call is in flight: another
+      // surface may claim the view, an overlay may appear, or the sidebar may
+      // move on. Only one native view can exist at a time, so a stale attach
+      // would leave the wrong tab on screen on top of the surface that now owns
+      // it. Re-asking the store keeps the decision authoritative at the moment
+      // the attach lands. A redundant hide is a no-op in the main process when
+      // this tab is not the one attached.
+      if (!browserVisibility.isVisible(tabId, contentBounds())) {
+        void invoke('browser:hide', tabId).catch(() => {})
+      }
     } catch {
       // Tab may have been destroyed between the visibility check and the IPC.
     }

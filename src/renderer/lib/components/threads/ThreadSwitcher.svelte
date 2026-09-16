@@ -6,7 +6,7 @@
   import ThreadRow from './ThreadRow.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import type { Project, Thread } from '$shared/types'
 
   interface Props {
@@ -141,12 +141,10 @@
 
   // While this dialog is open the browser's native WebContentsView must stay
   // detached: a native view floats above every DOM surface, so if it is on
-  // screen it would cover the dialog entirely. Suspending is a no-op when no
-  // browser view is visible. Panels re-attach their view automatically when
-  // the flag clears (the same path used for full-window DOM surfaces).
-  $effect(() => {
-    contextSidebarState.setBrowserSwitcherSuspended(open)
-  })
+  // screen it would cover the dialog entirely. Blocking is a no-op when no
+  // browser view is visible. Panels re-attach their view automatically once the
+  // block is released (the same path used for full-window DOM surfaces).
+  $effect(() => browserVisibility.hideWhile('thread-switcher', 'switcher', open))
 </script>
 
 <svelte:window

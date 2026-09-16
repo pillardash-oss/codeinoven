@@ -2,6 +2,7 @@
   import { X } from '@lucide/svelte'
   import type { Snippet } from 'svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
 
   interface Props {
     open: boolean
@@ -22,6 +23,15 @@
     if (!open) return
     return registerOverlayClose(onClose)
   })
+
+  // This sheet dims the whole window behind it, and the in-app browser's native
+  // view floats above every DOM surface (see
+  // `browserVisibility.hideWhile`), so the view must be
+  // suppressed while the sheet is open   exactly like its `Modal` and
+  // `SideSheet` siblings. Keyed per instance so stacked sheets don't clear each
+  // other's suppression.
+  const suppressionKey = `bottom-sheet-${Math.random().toString(36).slice(2)}`
+  $effect(() => browserVisibility.hideWhile(suppressionKey, 'fullscreen-surface', open))
 </script>
 
 <svelte:window

@@ -3,6 +3,7 @@
   import type { Snippet } from 'svelte'
   import { APP_SLUG } from '$shared/brand'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
+  import { browserVisibility, trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import {
     registerModalPrimaryAction,
@@ -231,6 +232,24 @@
 
   let panelEl = $state<HTMLElement | null>(null)
 
+  const occlusionKey = `dockable-modal-${crypto.randomUUID()}`
+
+  // The in-app browser renders a native WebContentsView that the compositor
+  // paints above every DOM surface, so a panel floating over the browser frame
+  // would be hidden behind the page and unclickable. Publish this panel's
+  // on-screen rectangle and let the browser panel detach its native view while
+  // it is covered   a panel dragged off the browser leaves the browser usable.
+  // The minimized dock chip registers itself through `trackBrowserOcclusion`.
+  $effect(() => {
+    if (!open || minimized) return
+    const key = occlusionKey
+    // The floating panel is positioned and sized from state, so reading those
+    // values here re-publishes on drag, resize, and viewport clamping without a
+    // DOM measurement.
+    browserVisibility.publishOcclusion(key, { x: position.x, y: position.y, width, height })
+    return () => browserVisibility.clearOcclusion(key)
+  })
+
   // ⌘/Ctrl+Enter runs this panel's primary action through the shared LIFO
   // pipeline while the panel is open and expanded (a minimized panel is not in
   // focus, so its resolver yields). The owner hook runs first so a panel can
@@ -330,6 +349,6 @@
   </div>
 
   {#if minimized}
-    <div class="fixed right-4 bottom-4 z-50">{@render dock()}</div>
+    <div class="fixed right-4 bottom-4 z-50" {@attach trackBrowserOcclusion}>{@render dock()}</div>
   {/if}
 {/if}

@@ -374,7 +374,7 @@
           "id": "files-save",
           "keys": ["mod", "s"],
           "label": "Save file",
-          "description": "Saves the active file tab.",
+          "description": "Saves the active file tab, or an edited file opened from the operating system.",
           "scenario": "A file tab is open and has unsaved changes."
         },
         {

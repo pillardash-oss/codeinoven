@@ -356,6 +356,20 @@ export interface ProjectFileInfo extends ProjectFileEntry {
   mode: number
 }
 
+/**
+ * A loopback static server serving one project directory, opened in the in-app
+ * browser so a page's own scripts, stylesheets, and relative *and* absolute
+ * asset URLs all resolve. Returned by `directoryPreview:open`.
+ */
+export interface DirectoryPreviewSession {
+  /** Loopback origin URL to open (`http://127.0.0.1:<port>/...`). */
+  url: string
+  /** Project-relative directory being served; `''` is the project root. */
+  directory: string
+  /** Whether the URL points at one file inside the directory. */
+  entryFile: string | null
+}
+
 export type ProjectFileTransferMode = 'copy' | 'move'
 
 export interface ProjectFileDropResult {
@@ -370,6 +384,23 @@ export interface ProjectTextFile {
   size: number
   modifiedAt: number
   revision: string
+}
+
+// ─── OS "Open in CodeInOven" hand-off ───────────────────────────────────────
+
+/** What an OS-supplied path resolved to when CodeInOven was asked to open it. */
+export type OpenedPathKind = 'directory' | 'file'
+
+/**
+ * One folder or file the operating system handed to CodeInOven (Finder/Explorer
+ * "Open With", a drop on the Dock/taskbar icon, or a command-line path). The
+ * path is canonical (`realpath`) so it can be matched against stored project
+ * paths without registering the same folder twice.
+ */
+export interface OpenedPath {
+  path: string
+  kind: OpenedPathKind
+  name: string
 }
 
 // ─── Thread ─────────────────────────────────────────────────────────────────
@@ -4292,6 +4323,34 @@ export interface GitResetInput {
 export interface GitSyncSummary {
   ahead: number
   behind: number
+}
+
+/** Which way a worktree/main sync moves committed work. */
+export type GitMainSyncDirection = 'from-main' | 'to-main'
+
+/**
+ * Result of syncing a worktree checkout with the project's main worktree, in
+ * either direction. The integrated ref is reported so the panel can state
+ * exactly what moved instead of guessing at "main".
+ */
+export interface GitMainSyncResult {
+  /** Status of the checkout the panel is attached to (the worktree side). */
+  status: GitStatus
+  direction: GitMainSyncDirection
+  /** Branch checked out in the worktree this sync ran in. */
+  branch: string
+  /** Branch checked out in the project's main worktree. */
+  mainBranch: string
+  /** Ref whose commits were integrated (`origin/main`, `main`, or the worktree branch). */
+  ref: string
+  /** True when the main branch's remote-tracking ref was refreshed first (`from-main`). */
+  fetched: boolean
+  /** Remote used for that refresh, when the repository has one (`from-main`). */
+  remote: string | null
+  /** Commits the integrated ref had that the other end did not, before integrating. */
+  incoming: number
+  /** Commits the main worktree's branch is ahead of its upstream by after the sync. */
+  mainAhead: number
 }
 
 /** Conflict information reported by a merge/rebase failure. */

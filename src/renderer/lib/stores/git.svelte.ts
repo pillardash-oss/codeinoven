@@ -1,4 +1,5 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { ipcErrorMessage } from '$lib/ipc-errors'
 import { APP_SLUG } from '$shared/brand'
 import type {
   GitBranchInfo,
@@ -19,6 +20,8 @@ import type {
   GitHubPermissionRequired,
   GitHubWorkflowRunDetail,
   GitIdentity,
+  GitMainSyncDirection,
+  GitMainSyncResult,
   GitPullStrategy,
   GitRestoreTarget,
   GitRemoteInfo,
@@ -59,6 +62,7 @@ export type GitOperation =
   | 'checkout'
   | 'fetch'
   | 'pull'
+  | 'sync-main'
   | 'push'
   | 'merge'
   | 'rebase'
@@ -113,12 +117,8 @@ const PR_ISSUE_FRESHNESS_MS = 60_000
 /** Persisted open-PR conflict indicators, keyed by `owner/repo`. */
 const PR_CONFLICTS_STORAGE_KEY = `${APP_SLUG}.prConflicts.v2`
 
-function errorMessage(error: unknown, fallback: string): string {
-  if (!(error instanceof Error)) return fallback
-  return error.message
-    .replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
-    .replace(/^Error:\s*/u, '')
-}
+/** Local alias so the many call sites keep their concise name. */
+const errorMessage = ipcErrorMessage
 
 /**
  * Whether a `git push` failure was a non-fast-forward rejection (the remote
@@ -995,6 +995,50 @@ export class GitState {
       this.error = errorMessage(reason, fallback)
     } finally {
       this.markBusy('pull', false)
+    }
+  }
+
+  /**
+   * Sync this worktree with the project's main worktree branch, in either
+   * direction. Main resolves both ends (the project root's branch, and this
+   * checkout's branch), so the renderer only picks the direction and the
+   * reconciliation strategy. A conflicted integration is a normal outcome, not
+   * an error: the returned status carries the conflicts and the panel hands
+   * over to the conflict UI.
+   */
+  async syncMain(
+    projectId: string,
+    direction: GitMainSyncDirection,
+    strategy: GitPullStrategy
+  ): Promise<GitMainSyncResult | null> {
+    const scopeBucketId = this.scopeFor(projectId)
+    if (!scopeBucketId) {
+      this.error = `Syncing ${direction === 'from-main' ? 'from' : 'to'} main requires a worktree scope`
+      return null
+    }
+    this.markBusy('sync-main', true)
+    this.error = null
+    try {
+      const result =
+        direction === 'from-main'
+          ? await invoke('git:syncFromMain', projectId, { strategy }, scopeBucketId)
+          : await invoke('git:syncToMain', projectId, { strategy }, scopeBucketId)
+      this.status = result.status
+      if (result.status.conflicted.length === 0) this.conflictsMode = false
+      return result
+    } catch (reason) {
+      const toward = direction === 'from-main' ? 'from main' : 'to main'
+      this.error = errorMessage(
+        reason,
+        strategy === 'rebase'
+          ? `Syncing ${toward} with rebase failed`
+          : strategy === 'ff-only'
+            ? `Syncing ${toward} with a fast-forward failed`
+            : `Syncing ${toward} with a merge failed`
+      )
+      return null
+    } finally {
+      this.markBusy('sync-main', false)
     }
   }
 

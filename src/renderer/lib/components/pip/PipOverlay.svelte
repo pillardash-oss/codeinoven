@@ -3,8 +3,10 @@
   import { pipState } from '$lib/stores/pip.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
 
   const DEFAULT_POSITION = { x: 24, y: 24 }
+  const occlusionKey = `pip-overlay-${crypto.randomUUID()}`
   let position = $state({ ...DEFAULT_POSITION })
   let dragging = $state(false)
   let dragStart = $state({ x: 0, y: 0 })
@@ -48,8 +50,9 @@
   /** Anchor the overlay to the bottom-right corner on first appearance. */
   function anchorOverlay(node: HTMLDivElement): () => void {
     overlayElement = node
+    const rect = node.getBoundingClientRect()
+    windowSize = { width: rect.width, height: rect.height }
     if (!userMoved) {
-      const rect = node.getBoundingClientRect()
       position = {
         x: Math.max(0, window.innerWidth - rect.width - 24),
         y: Math.max(0, window.innerHeight - rect.height - 24)
@@ -59,6 +62,24 @@
       if (overlayElement === node) overlayElement = undefined
     }
   }
+
+  // The preview floats above every DOM surface, but the in-app browser is a
+  // native view the compositor paints above the whole renderer, so the browser
+  // has to detach its view while this overlay covers it (see
+  // `browserVisibility`). Dragging moves the preview without resizing it, so
+  // the rectangle is published from position state rather than a DOM
+  // measurement, which no observer would refresh.
+  $effect(() => {
+    if (!visible) return
+    if (windowSize.width < 1 || windowSize.height < 1) return
+    browserVisibility.publishOcclusion(occlusionKey, {
+      x: position.x,
+      y: position.y,
+      width: windowSize.width,
+      height: windowSize.height
+    })
+    return () => browserVisibility.clearOcclusion(occlusionKey)
+  })
 
   function onPointerDown(event: PointerEvent): void {
     if (event.button !== 0) return

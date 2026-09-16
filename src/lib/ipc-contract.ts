@@ -43,6 +43,7 @@ import type {
   ChecklistItem,
   CreateProjectInput,
   CreateThreadInput,
+  DirectoryPreviewSession,
   EditorId,
   EditorInfo,
   EngineeringSpec,
@@ -83,6 +84,7 @@ import type {
   GitHubWorkflowRunDetail,
   GitIdentity,
   GitIdentityInput,
+  GitMainSyncResult,
   GitRemoteInfo,
   GitStatus,
   GitStashEntry,
@@ -1586,6 +1588,24 @@ export const IPC_INVOKE_CONTRACT = {
     ],
     GitStatus
   >,
+  /** Integrate the project's main worktree branch into a worktree checkout. */
+  'git:syncFromMain': {} as Contract<
+    [
+      projectId: string,
+      options: { strategy: import('./types').GitPullStrategy },
+      scopeBucketId?: string
+    ],
+    GitMainSyncResult
+  >,
+  /** Fold a worktree checkout's branch into the project's main worktree branch. */
+  'git:syncToMain': {} as Contract<
+    [
+      projectId: string,
+      options: { strategy: import('./types').GitPullStrategy },
+      scopeBucketId?: string
+    ],
+    GitMainSyncResult
+  >,
   'git:push': {} as Contract<
     [
       projectId: string,
@@ -2072,6 +2092,33 @@ export const IPC_INVOKE_CONTRACT = {
   'plan:get': {} as Contract<[projectId: string, threadId: string], Plan | null>,
   'plan:save': {} as Contract<[projectId: string, threadId: string, content: string], Plan>,
   'project:create': {} as Contract<[input: CreateProjectInput], Project>,
+  /** Resolve an already-registered project by folder path (canonical match), so
+   *  an OS hand-off of a folder that is open as a project never adds it twice. */
+  'project:findByPath': {} as Contract<[path: string], Project | null>,
+  /** Resolve the project that owns an absolute file path (deepest root wins), so
+   *  an OS hand-off of a file that already belongs to a project opens in that
+   *  project's editor rather than the standalone viewer. */
+  'project:findFileOwner': {} as Contract<
+    [path: string],
+    { projectId: string; relativePath: string } | null
+  >,
+  /** Drain the paths the OS handed to CodeInOven before the renderer mounted. */
+  'openWith:consumePending': {} as Contract<[], import('./types').OpenedPath[]>,
+  /** Hand in-app paths (folders/files dropped on the project sidebar) to the
+   *  same opener the OS hand-off uses, so both classify and route identically. */
+  'openWith:openPaths': {} as Contract<[paths: string[]], void>,
+  /** Read a text file by absolute path. The path must be scoped (an OS-opened
+   *  file or a user-selected path); standalone viewing uses this instead of the
+   *  project-relative `projectFiles:read`. */
+  'file:readText': {} as Contract<[filePath: string], ProjectTextFile | null>,
+  /** Save text back to a file opened on its own through the operating system.
+   *  Same scoped-path authorization as `file:readText`, and the same
+   *  revision-checked atomic write as `projectFiles:save`, so an edit made in the
+   *  standalone viewer can never clobber a change made elsewhere. */
+  'file:writeText': {} as Contract<
+    [filePath: string, content: string, expectedRevision: string],
+    ProjectTextFile
+  >,
   'project:delete': {} as Contract<[projectId: string, options?: { deleteFolder?: boolean }], void>,
   'project:ensureInbox': {} as Contract<[], Project>,
   'project:get': {} as Contract<[projectId: string], Project | null>,
@@ -2135,6 +2182,12 @@ export const IPC_INVOKE_CONTRACT = {
   'projectFiles:info': {} as Contract<
     [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     ProjectFileInfo
+  >,
+  /** Serve one project directory (or the directory holding one HTML file) on a
+   *  loopback origin and return the URL to open in the in-app browser. */
+  'directoryPreview:open': {} as Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
+    DirectoryPreviewSession
   >,
   'projectFiles:openInEditor': {} as Contract<
     [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
@@ -3052,6 +3105,13 @@ export const IPC_EVENT_CONTRACT = {
   /** Emitted before the main process begins its shutdown disposal chain.
    *  The renderer should unsubscribe from IPC events and release resources. */
   'window:beforeQuit': [] as [],
+  /**
+   * Folders/files the operating system asked CodeInOven to open while the app
+   * was already running (Finder/Explorer "Open in CodeInOven", a drop on the
+   * Dock/taskbar icon, or a relayed launch argument). The renderer adds folders
+   * as projects (deduplicated) and opens single files in the standalone viewer.
+   */
+  'openWith:paths': [] as unknown as [paths: import('./types').OpenedPath[]],
   /** Emitted when the app is asked to close while threads are still working or
    *  files have unsaved edits. The renderer populates `files` from its editor
    *  state and either confirms the close or shows the confirmation modal. */

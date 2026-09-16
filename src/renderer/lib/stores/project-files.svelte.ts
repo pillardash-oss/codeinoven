@@ -1,4 +1,5 @@
 import type {
+  DirectoryPreviewSession,
   ProjectFileDropResult,
   ProjectFileEntry,
   ProjectFileInfo,
@@ -9,6 +10,7 @@ import type {
 import { DEFAULT_SCOPE_BUCKET_ID, INBOX_PROJECT_ID } from '$shared/types'
 import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { invoke } from '$lib/ipc.svelte'
+import { ipcErrorMessage } from '$lib/ipc-errors'
 import { posixDirname } from '$shared/paths'
 import { contextSidebarState, type FilesContextTab } from '$lib/stores/context-sidebar.svelte'
 import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
@@ -129,11 +131,10 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
   }
 }
 
+/** Project-file errors always fall back to one message, so the store keeps its
+ *  own arity while the IPC normalization itself lives in one shared helper. */
 function errorMessage(error: unknown): string {
-  if (!(error instanceof Error)) return 'Project files could not be loaded'
-  return error.message
-    .replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
-    .replace(/^Error:\s*/u, '')
+  return ipcErrorMessage(error, 'Project files could not be loaded')
 }
 
 /** How long a directory's background refresh may be debounced after an
@@ -484,7 +485,13 @@ class ProjectFilesWorkspace {
   async deleteFile(projectId: string, path: string): Promise<void> {
     const state = this.ensureState(projectId)
     await this.runFileOperation(() =>
-      invoke('projectFiles:delete', projectId, path, this.scopeFor(projectId), this.threadArg(projectId))
+      invoke(
+        'projectFiles:delete',
+        projectId,
+        path,
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
+      )
     )
     this.removePathsFromState(state, projectId, [path])
     await this.loadDirectory(projectId, this.parentDirectory(path), true)
@@ -498,7 +505,13 @@ class ProjectFilesWorkspace {
       .sort((a, b) => b.split('/').length - a.split('/').length)
     for (const path of ordered) {
       await this.runFileOperation(() =>
-        invoke('projectFiles:delete', projectId, path, this.scopeFor(projectId), this.threadArg(projectId))
+        invoke(
+          'projectFiles:delete',
+          projectId,
+          path,
+          this.scopeFor(projectId),
+          this.threadArg(projectId)
+        )
       )
     }
     this.removePathsFromState(state, projectId, ordered)
@@ -614,6 +627,23 @@ class ProjectFilesWorkspace {
     )
   }
 
+  /**
+   * Serve a project directory (or the directory holding one HTML file) from a
+   * loopback origin so a page's own scripts, stylesheets, and relative and
+   * absolute asset URLs all resolve. Returns the URL to open in a browser.
+   */
+  async openDirectoryPreview(projectId: string, path: string): Promise<DirectoryPreviewSession> {
+    return this.runFileOperation(() =>
+      invoke(
+        'directoryPreview:open',
+        projectId,
+        path,
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
+      )
+    )
+  }
+
   async openFile(
     projectId: string,
     path: string,
@@ -720,10 +750,7 @@ class ProjectFilesWorkspace {
         this.scopeFor(projectId),
         this.threadArg(projectId)
       )
-      if (
-        info.modifiedAt === session.source.modifiedAt &&
-        info.size === session.source.size
-      ) {
+      if (info.modifiedAt === session.source.modifiedAt && info.size === session.source.size) {
         delete state.staleFiles[path]
         return
       }
@@ -865,10 +892,7 @@ class ProjectFilesWorkspace {
     tab.focusLineRequest += 1
     tab.error = null
     const nextMime = mimeFromPath(nextPath)
-    if (
-      this.isPreviewableBinary(nextMime) ||
-      (wasPreviewView && supportsFilePreview(nextPath))
-    )
+    if (this.isPreviewableBinary(nextMime) || (wasPreviewView && supportsFilePreview(nextPath)))
       tab.view = 'preview'
     state.activeTabId = nextTabId
 
@@ -909,10 +933,7 @@ class ProjectFilesWorkspace {
     tab.focusLineRequest += 1
     tab.error = null
     const nextMime = mimeFromPath(nextPath)
-    if (
-      this.isPreviewableBinary(nextMime) ||
-      (wasPreviewView && supportsFilePreview(nextPath))
-    )
+    if (this.isPreviewableBinary(nextMime) || (wasPreviewView && supportsFilePreview(nextPath)))
       tab.view = 'preview'
     state.activeTabId = nextTabId
 
@@ -1240,10 +1261,7 @@ class ProjectFilesWorkspace {
     tab.checkpointDiff = null
     tab.loadingDiff = false
     const nextMime = mimeFromPath(nextPath)
-    if (
-      this.isPreviewableBinary(nextMime) ||
-      (wasPreviewView && supportsFilePreview(nextPath))
-    )
+    if (this.isPreviewableBinary(nextMime) || (wasPreviewView && supportsFilePreview(nextPath)))
       tab.view = 'preview'
     state.activeTabId = nextTabId
 

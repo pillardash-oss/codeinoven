@@ -118,6 +118,39 @@ its `cio/` branch, not the project root:
   head** and the chosen base (the checkout branch, a named branch, or a remote
   tracked ref). Pushing to the remote publishes the `cio/<slug>` branch as a
   new remote branch (`--set-upstream`), ready to be opened as a PR.
+- **Sync from main** (`git:syncFromMain`) is offered only while the panel is
+  attached to a managed worktree scope, because the project root is the source:
+  it resolves the branch checked out in the main worktree, refreshes that
+  branch's remote-tracking ref first (vaulted token when present, a failed
+  refresh is reported and never fatal), then integrates the remote-tracking ref
+  when it strictly contains the local branch   otherwise the local branch, so
+  commits that exist only on the project root's main are never skipped. The
+  strategy follows the configured pull preference (`merge`, `rebase`, or
+  `ff-only`; `ask` opens the chooser). It refuses before moving any ref when the
+  active root is the project root itself, when HEAD is detached, or when a
+  merge/rebase is already in progress, and a conflicted integration is left in
+  the working tree for the standard conflict UI instead of being aborted.
+- **Sync to main** (`git:syncToMain`) is the mirror direction, offered under the
+  same condition: it folds the worktree's branch into the branch checked out in
+  the project root. Nothing is ever pushed   publishing main stays an explicit
+  user action   and the chooser always confirms first, even when the pull
+  preference is not `ask`, because the write lands in a checkout the panel is
+  not showing. Both checkouts must be committed and idle (only committed work
+  can move) and the project root must be on a branch; a merge/rebase in progress
+  on either side refuses as well. Strategies:
+  - `merge` integrates in main (fast-forward when possible, merge commit
+    otherwise). A merge that would conflict is rolled back and refused with the
+    from-main workflow as the fix, so a one-click action can never strand the
+    project root mid-merge where the user cannot see it.
+  - `rebase` replays this branch's commits on top of main, then fast-forwards
+    main onto the rebased branch: conflicts stay in the worktree the panel
+    shows, main stays linear and is never rewritten.
+  - `ff-only` moves main only when main has not diverged.
+
+  `incoming` reports how many commits main did not have, and `mainAhead` how far
+  the moved branch is from its upstream afterwards, so the panel can say exactly
+  what happened and that nothing was published.
+
 - Credential and identity operations (`git:get/setCredential`,
   `git:get/setIdentity`) stay project-scoped: worktrees share the repository's
   `.git` config and credential vault anyway.

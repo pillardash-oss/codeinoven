@@ -10310,6 +10310,7 @@
   bind:this={threadViewElement}
   class="thread-view relative flex min-h-0 min-w-0 flex-1 flex-col"
   data-region={showSpecStudio ? 'spec-studio' : undefined}
+  data-drop-region={showSpecStudio ? undefined : 'conversation'}
 >
   {#if headerSnippet}
     {@render headerSnippet()}

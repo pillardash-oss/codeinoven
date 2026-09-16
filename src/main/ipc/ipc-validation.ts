@@ -829,6 +829,17 @@ export function validatePullIntegrateOptions(value: unknown): {
   return options
 }
 
+/** Options for syncing a worktree checkout with the project's main worktree. */
+export function validateMainSyncOptions(value: unknown): {
+  strategy: import('../../lib/types').GitPullStrategy
+} {
+  const input = assertRecord(value, 'Sync options')
+  rejectUnknownFields(input, new Set(['strategy']), 'sync options')
+  return {
+    strategy: assertEnum(input.strategy, PULL_STRATEGIES, 'sync strategy')
+  }
+}
+
 /** Validate options for preparing a local PR conflict resolution. */
 export function validatePrResolveOptions(value: unknown): {
   remote: string

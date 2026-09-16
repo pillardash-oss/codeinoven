@@ -36,12 +36,16 @@ import { resolveDeploymentProvider } from '../providers/registry'
 import type { DeploymentProviderContext } from '../providers/deployment-provider.interface'
 import type { GitProvider } from '../git/git-provider.interface'
 import { ProjectFilesService } from '../editor/project-files-service'
+import type { DirectoryPreviewService } from '../preview/directory-preview-service'
+import { posixDirname } from '../../lib/paths'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import { settleThreadBranch, type ThreadBranchDeps } from '../chat/thread-branch-service'
 import { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { DiagnosticsService } from '../system/diagnostics-service'
 import { resolveFavicons } from '../editor/favicon-service'
+import { openWithService } from '../system/open-with-service'
+import type { OpenedPath } from '../../lib/types'
 import { isNetworkError } from '../util/network-error'
 import {
   MemoryService,
@@ -109,6 +113,7 @@ import {
   validatePrCommentBody,
   validatePushOptions,
   validatePullIntegrateOptions,
+  validateMainSyncOptions,
   validateMergeCommitTitle,
   validateMergeCommitMessage,
   validateRemoteName,
@@ -205,6 +210,7 @@ import type {
   PrdSectionId,
   CapturableSpecContextType,
   CreateProjectInput,
+  DirectoryPreviewSession,
   EngineeringSpec,
   EngineeringSpecContent,
   GitHubMutationResult,
@@ -236,7 +242,11 @@ import type {
   ScopeWorktreeProgressEvent,
   UtilityDefinitionInput
 } from '../../lib/types'
-import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES, INBOX_PROJECT_ID } from '../../lib/types'
+import {
+  CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES,
+  DEFAULT_SCOPE_BUCKET_ID,
+  INBOX_PROJECT_ID
+} from '../../lib/types'
 import { THINKING_LEVEL_ORDER } from '../../lib/thinking-presets'
 
 type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentVersion'>
@@ -2178,6 +2188,8 @@ function mergeCloudDeploymentContainers(
 export interface RegisterIpcHandlersOptions {
   projectManager?: ProjectManager
   projectFilesService?: ProjectFilesService
+  /** Loopback static servers behind the file tree's "Open in browser" action. */
+  directoryPreviewService?: DirectoryPreviewService
   powerWakeService?: PowerWakeService
   /** Auto-resume scheduler gated by the General settings toggle. */
   retryScheduler?: RetrySchedulerService
@@ -2197,9 +2209,19 @@ export interface RegisterIpcHandlersOptions {
   worktreeService?: ScopeWorktreeService
   /** Speech service for auto-evict of idle sound models. */
   speechService?: { updateUnloadOptions: (opts: Record<string, unknown>) => void }
+  /** Receives the privileged scoped-path resolver so other main-process
+   *  boundaries (the `appfile://` preview protocol) authorize paths exactly
+   *  like privileged IPC does. */
+  onScopedPathResolver?: (resolve: (value: unknown) => Promise<string>) => void
 }
 
 const HEARTBEAT_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
+
+/** Upper bound on one in-app "open these paths" request (a drag selection). */
+const MAX_OPEN_PATHS = 64
+
+/** Document types the directory preview can open directly at their own URL. */
+const HTML_PREVIEW_PATTERN = /\.(?:html?|xhtml)$/iu
 
 function validateHeartbeatTimes(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0) {
@@ -2572,6 +2594,30 @@ export function registerIpcHandlers(
       isApprovedFile: (canonicalPath) => attachmentGrantRepo.isApproved(canonicalPath)
     }
   })
+
+  options.onScopedPathResolver?.((value) => privilegedIpc.resolveScopedPath(value))
+
+  /** Authorize a path the operating system handed to CodeInOven: the user's
+   *  own "Open in CodeInOven" gesture is exactly as explicit as a dialog pick,
+   *  so folders become user-selected roots and files user-selected files. */
+  function grantOpenedPaths(paths: readonly OpenedPath[]): void {
+    void (async () => {
+      for (const opened of paths) {
+        try {
+          if (opened.kind === 'directory') await privilegedIpc.registerUserSelectedRoot(opened.path)
+          else await privilegedIpc.registerUserSelectedFile(opened.path)
+        } catch (error) {
+          Logger.error('Opened-path scope grant failed:', error)
+        }
+      }
+    })()
+  }
+
+  // Paths can arrive before the post-paint service graph exists (a launch with
+  // paths, or a macOS `open-file` during startup), so grant what is already
+  // known and keep listening for later hand-offs.
+  grantOpenedPaths(openWithService.grantedPaths())
+  openWithService.onPaths(grantOpenedPaths)
 
   /** Register a privileged channel whose sender frame must be trusted. */
   function privileged<TArgs extends unknown[]>(
@@ -4680,6 +4726,39 @@ export function registerIpcHandlers(
     }
   })
 
+  privileged('file:readText', async (_event, filePath: unknown) => {
+    try {
+      const safePath = await privilegedIpc.resolveScopedPath(filePath)
+      return await projectFilesService.readAbsoluteText(safePath)
+    } catch (error) {
+      if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
+      Logger.error('file:readText rejected or failed:', error)
+      return null
+    }
+  })
+
+  // Save an edit made to a standalone file (one the OS handed over or the user
+  // picked in a dialog). Authorization is the same scoped-path check the read
+  // uses; the write itself is revision-checked and atomic, so a file that changed
+  // on disk since it was read is never clobbered. Errors are surfaced (unlike the
+  // read, which can only fail by showing nothing) because the editor has to tell
+  // the user why their save did not land.
+  privileged(
+    'file:writeText',
+    async (_event, filePath: unknown, content: unknown, expectedRevision: unknown) => {
+      const revision = requireString(expectedRevision, 'File revision')
+      if (!/^[a-f0-9]{64}$/u.test(revision)) {
+        throw new TypeError('File revision must be a SHA-256 digest')
+      }
+      const safePath = await privilegedIpc.resolveScopedPath(filePath)
+      return projectFilesService.writeAbsoluteText(
+        safePath,
+        requireString(content, 'File content', true),
+        revision
+      )
+    }
+  )
+
   privileged('file:read', async (_event, filePath: unknown) => {
     try {
       const safePath = await privilegedIpc.resolveScopedPath(filePath)
@@ -4767,6 +4846,35 @@ export function registerIpcHandlers(
   })
 
   // ─── Projects ───────────────────────────────────────────────────────────
+  ipcMain.handle('project:findByPath', async (_, rawPath: unknown) => {
+    const path = validateBoundedString(rawPath, 'Project path', 1, 4096)
+    return projectManager.findByCanonicalPath(path)
+  })
+
+  // A file the OS handed over may already belong to a project: resolve the owning
+  // project so the renderer opens it in that project's own editor (file tree,
+  // scopes, save flow) instead of the standalone viewer.
+  ipcMain.handle('project:findFileOwner', async (_, rawPath: unknown) => {
+    const path = validateBoundedString(rawPath, 'File path', 1, 16384)
+    return projectFilesService.findProjectOwner(path)
+  })
+
+  // The renderer drains the queue on mount; later hand-offs arrive as the
+  // `openWith:paths` push (see main/index.ts).
+  ipcMain.handle('openWith:consumePending', () => openWithService.consumePending())
+
+  // In-app drops (the project sidebar) reuse the OS opener: main classifies the
+  // paths and pushes the result back through `openWith:paths`.
+  ipcMain.handle('openWith:openPaths', async (_, rawPaths: unknown) => {
+    if (!Array.isArray(rawPaths) || rawPaths.length === 0 || rawPaths.length > MAX_OPEN_PATHS) {
+      throw new TypeError(`Opened paths must be an array of 1 to ${MAX_OPEN_PATHS} paths`)
+    }
+    const paths = rawPaths.map((entry, index) =>
+      validateBoundedString(entry, `Opened path ${index + 1}`, 1, 4096)
+    )
+    await openWithService.ingest(paths)
+  })
+
   ipcMain.handle('project:create', async (_, rawInput: unknown) => {
     const input = validateCreateProjectInput(rawInput)
     const config = await storage.getConfig()
@@ -5315,6 +5423,57 @@ export function registerIpcHandlers(
           : validateEntityId(scopeBucketId, 'Scope bucket ID'),
         threadIdArg(threadId)
       )
+  )
+  ipcMain.handle(
+    'directoryPreview:open',
+    async (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ): Promise<DirectoryPreviewSession> => {
+      const previews = options.directoryPreviewService
+      if (!previews) throw new TypeError('Directory preview is unavailable')
+      const validatedProjectId = validateEntityId(projectId, 'Project ID')
+      const validatedScopeBucketId =
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      const requested = requireString(relativePath, 'Preview path', true)
+      if (requested === '') {
+        // The mount root itself: `getInfo` rejects an empty relative path, so
+        // it is resolved through the scope authority directly.
+        const registration = await previews.open(
+          await projectFilesService.resolveMountRoot(
+            validatedProjectId,
+            validatedScopeBucketId,
+            threadIdArg(threadId)
+          )
+        )
+        return { url: registration.url, directory: '', entryFile: null }
+      }
+      const info = await projectFilesService.getInfo(
+        validatedProjectId,
+        requested,
+        validatedScopeBucketId,
+        threadIdArg(threadId)
+      )
+      const entryFile =
+        info.kind === 'file' && HTML_PREVIEW_PATTERN.test(info.name) ? info.name : null
+      if (info.kind !== 'directory' && !entryFile) {
+        throw new TypeError('Only a directory or an HTML file can be opened in the browser')
+      }
+      // A single file is served from the origin root of its own directory, so
+      // that the file's relative and root-absolute asset URLs resolve exactly
+      // as they would in a plain static host.
+      const registration = await previews.open(
+        info.kind === 'directory' ? info.absolutePath : dirname(info.absolutePath)
+      )
+      return {
+        url: entryFile ? `${registration.url}${encodeURIComponent(entryFile)}` : registration.url,
+        directory: info.kind === 'directory' ? info.path : posixDirname(info.path),
+        entryFile
+      }
+    }
   )
   privileged(
     'projectFiles:openInEditor',
@@ -6145,6 +6304,47 @@ export function registerIpcHandlers(
         }
       )
     }
+  )
+  /**
+   * Both directions of the worktree/main sync share one resolution path: the
+   * worktree root comes from the active scope, the main root from the Default
+   * scope, and the vaulted PAT is resolved in main only so it never crosses IPC.
+   */
+  const syncMain = async (
+    direction: 'from-main' | 'to-main',
+    projectId: unknown,
+    options: unknown,
+    scopeBucketId?: unknown
+  ) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeOptions = validateMainSyncOptions(options)
+    // Both directions need a worktree checkout: without a scope the active root
+    // is the project root, which is the other end of the sync.
+    if (scopeBucketId === undefined) {
+      throw new Error(
+        `Syncing ${direction === 'from-main' ? 'from' : 'to'} the main branch requires a worktree scope`
+      )
+    }
+    const safeScopeBucketId = validateEntityId(scopeBucketId, 'Scope bucket ID')
+    // Resolve the vaulted PAT in main only; the token never crosses IPC.
+    const tokenRef = gitCredentialRef(safeProjectId)
+    const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
+    return gitService.syncMain(await resolveProjectPath(safeProjectId, safeScopeBucketId), {
+      direction,
+      mainPath: await resolveProjectPath(safeProjectId, DEFAULT_SCOPE_BUCKET_ID),
+      strategy: safeOptions.strategy,
+      token
+    })
+  }
+  ipcMain.handle(
+    'git:syncFromMain',
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
+      syncMain('from-main', projectId, options, scopeBucketId)
+  )
+  ipcMain.handle(
+    'git:syncToMain',
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
+      syncMain('to-main', projectId, options, scopeBucketId)
   )
   ipcMain.handle(
     'git:push',
