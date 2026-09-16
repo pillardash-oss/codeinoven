@@ -42,11 +42,9 @@
     FolderTree,
     GitBranch,
     GitCommit,
-    GitCompareArrows,
     GitFork,
     GitMerge,
     GitPullRequest,
-    History,
     Loader2,
     MoreHorizontal,
     Plus,
@@ -105,7 +103,7 @@
   let scopeUnhealthy = $derived(scopeHealth !== undefined && scopeHealth.category !== 'healthy')
 
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
-  type TabId = 'changes' | 'history' | 'graph' | 'branches' | 'pulls' | 'deployments' | 'stashes'
+  type TabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
 
   // Hiding the sidebar destroys and recreates this component, so the tab/
   // selection state is seeded from (and mirrored back into) a persisted
@@ -194,6 +192,8 @@
   let selectedCommit = $state<GitCommitInfo | null>(savedView.selectedCommit)
   let commitDiffChanges = $state<GitFileChange[]>([])
   let deleteCommitTarget = $state<GitCommitInfo | null>(null)
+  /** Commit whose full record is open in the info dialog. */
+  let commitInfoTarget = $state<GitCommitInfo | null>(null)
   let showGitHubSignIn = $state(false)
   let selectedPullRequest = $state<PullRequestSummary | null>(savedView.selectedPullRequest)
 
@@ -1265,6 +1265,13 @@
     return branchAvatarPalette[Math.abs(hash) % branchAvatarPalette.length]
   }
 
+  /** Absolute commit timestamp, shown in the commit info dialog. */
+  function absoluteTime(timestamp: number): string {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
+      new Date(timestamp)
+    )
+  }
+
   function relativeTime(timestamp: number): string {
     const seconds = Math.floor((Date.now() - timestamp) / 1000)
     if (seconds < 60) return 'just now'
@@ -1951,9 +1958,6 @@
     const list: Array<{ id: TabId; label: string; count: number | null }> = [
       { id: 'changes', label: 'Changes', count: changes.length > 0 ? changes.length : null },
       { id: 'history', label: 'History', count: null },
-      // The graph earns its own tab: the lane walk then only ever runs for a
-      // user who deliberately opens it, never as a side effect of History.
-      { id: 'graph', label: 'Graph', count: null },
       { id: 'branches', label: 'Branches', count: null },
       { id: 'pulls', label: 'PRs', count: null }
     ]
@@ -2282,6 +2286,112 @@
             {/if}
           </button>
         {/each}
+
+        {#if repoState === 'git' && status && (remotes.length > 0 || worktreeScope)}
+          <!--
+            Only the remote action that is actually needed right now earns a
+            label; the rest stay one click away beside it. This replaces the
+            three permanent Fetch/Pull/Push buttons that used to occupy their
+            own footer row on every working-tree tab.
+          -->
+          <div class="sticky right-0 ml-auto flex shrink-0 items-center gap-0.5 bg-app pl-1">
+            {#if status.behind > 0}
+              <button
+                type="button"
+                class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+                title={`Pull ${String(status.behind)} commit(s) from the remote`}
+                disabled={remotes.length === 0 || syncBusy}
+                onclick={() => void pullAction()}
+              >
+                {#if gitState.isBusy('pull')}
+                  <Loader2 size={11} class="animate-spin" />
+                {:else}
+                  <ArrowDownToLine size={11} />
+                {/if}
+                Pull {status.behind}
+              </button>
+            {:else if status.ahead > 0}
+              <button
+                type="button"
+                class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+                title={`Push ${String(status.ahead)} commit(s) to the remote`}
+                disabled={remotes.length === 0 || syncBusy || gitState.isBusy('push')}
+                onclick={() => void pushAction()}
+              >
+                {#if gitState.isBusy('push')}
+                  <Loader2 size={11} class="animate-spin" />
+                {:else}
+                  <ArrowUpFromLine size={11} />
+                {/if}
+                Push {status.ahead}
+              </button>
+            {/if}
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger
+                class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-sm text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40 data-[state=open]:bg-elevated"
+                aria-label="Remote sync actions"
+                title="Remote sync actions"
+                disabled={remotes.length === 0 || syncBusy}
+              >
+                {#if gitState.isBusy('fetch') || syncBusy}
+                  <Loader2 size={11} class="animate-spin" />
+                {:else}
+                  <ChevronDown size={12} />
+                {/if}
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+                  side="bottom"
+                  align="end"
+                  sideOffset={4}
+                  collisionPadding={8}
+                >
+                  <DropdownMenu.Item
+                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                    onSelect={() => void gitState.fetch(projectId)}
+                  >
+                    <Download size={12} class="shrink-0 text-dimmed" />
+                    Fetch
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                    onSelect={() => void pullAction()}
+                  >
+                    <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
+                    Pull{status.behind > 0 ? ` ${String(status.behind)}` : ''}
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                    onSelect={() => void pushAction()}
+                  >
+                    <ArrowUpFromLine size={12} class="shrink-0 text-dimmed" />
+                    Push{status.ahead > 0 ? ` ${String(status.ahead)}` : ''}
+                  </DropdownMenu.Item>
+                  {#if worktreeScope}
+                    <DropdownMenu.Separator class="my-1 h-px bg-border" />
+                    <DropdownMenu.Item
+                      class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                      disabled={conflicted.length > 0}
+                      onSelect={() => void syncMainAction('from-main')}
+                    >
+                      <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
+                      Pull main into this worktree
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                      disabled={conflicted.length > 0}
+                      onSelect={() => void syncMainAction('to-main')}
+                    >
+                      <ArrowUpToLine size={12} class="shrink-0 text-dimmed" />
+                      Send this worktree to main
+                    </DropdownMenu.Item>
+                  {/if}
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          </div>
+        {/if}
       </div>
     {/if}
   </div>
@@ -2992,119 +3102,30 @@
           </div>
         {/if}
       {:else if activeTab === 'history'}
-        <div class="p-2">
-          {#if loadingHistory}
-            <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
-              <Loader2 size={14} class="animate-spin" />
-              Loading history
-            </div>
-          {:else if commitHistory.length === 0}
-            <div class="flex flex-col items-center justify-center py-12 text-center">
-              <History size={22} class="mx-auto mb-2 text-dimmed" />
-              <p class="text-xs font-medium text-muted">No commits yet</p>
-              <p class="mt-1 text-[0.625rem] text-dimmed">Make your first commit to see history.</p>
-            </div>
-          {:else}
-            <div class="space-y-0.5">
-              {#each commitHistory as commit, index (commit.hash)}
-                {@const isCurrentHead = index === 0}
-                {@const isUnpushed = index < unpushedCount}
-                {#if unpushedCount > 0 && index === unpushedCount}
-                  <div class="flex items-center gap-2 px-2 py-1">
-                    <span class="h-px flex-1 bg-border"></span>
-                    <span class="shrink-0 text-[0.5625rem] font-medium text-dimmed">
-                      Pushed to {status?.upstream}
-                    </span>
-                    <span class="h-px flex-1 bg-border"></span>
-                  </div>
-                {/if}
-                <ContextMenu.Root>
-                  <ContextMenu.Trigger
-                    class="block w-full"
-                    aria-label={`Actions for commit ${commit.shortHash}`}
-                  >
-                    <button
-                      type="button"
-                      class={[
-                        'group w-full rounded-lg px-2 py-1.5 text-left transition-colors',
-                        selectedCommit?.hash === commit.hash
-                          ? 'bg-primary/10'
-                          : 'hover:bg-elevated/50'
-                      ]}
-                      onclick={() => void selectCommit(commit)}
-                    >
-                      <div class="flex items-start gap-2">
-                        <div
-                          class={[
-                            'mt-1 h-1.5 w-1.5 shrink-0 rounded-full',
-                            isUnpushed ? 'bg-warning' : 'bg-primary/40'
-                          ]}
-                          title={isUnpushed
-                            ? `Not pushed to ${status?.upstream ?? 'the remote'} yet`
-                            : undefined}
-                        ></div>
-                        <div class="min-w-0 flex-1">
-                          <p class="truncate text-[0.6875rem] leading-snug text-foreground">
-                            {commit.message.split('\n')[0]}
-                          </p>
-                          <div class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
-                            <span class="font-mono">{commit.shortHash}</span>
-                            <span>·</span>
-                            <span>{commit.author}</span>
-                            <span>·</span>
-                            <span>{relativeTime(commit.date)}</span>
-                            {#if isUnpushed}
-                              <span
-                                class="rounded px-1 py-px text-[0.5rem] font-medium uppercase tracking-wide text-warning"
-                              >
-                                local
-                              </span>
-                            {/if}
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  </ContextMenu.Trigger>
-                  <ContextMenu.Portal>
-                    <ContextMenu.Content
-                      class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                      side="bottom"
-                      align="start"
-                      sideOffset={4}
-                      collisionPadding={8}
-                    >
-                      <CommitActionsMenu
-                        isHead={isCurrentHead}
-                        resetBusy={gitState.isBusy('reset')}
-                        deleteBusy={gitState.isBusy('delete-commit')}
-                        onReset={(mode) => requestReset(mode, commit.hash)}
-                        onDelete={() => requestDeleteCommit(commit)}
-                        onAmend={isCurrentHead ? startAmend : undefined}
-                        onCopyHash={() => void copyCommitHash(commit)}
-                        onCopyMessage={() => void copyCommitMessage(commit)}
-                      />
-                    </ContextMenu.Content>
-                  </ContextMenu.Portal>
-                </ContextMenu.Root>
-              {/each}
-              {#if loadingMoreHistory}
-                <div class="flex items-center justify-center gap-2 py-4 text-[0.625rem] text-dimmed">
-                  <Loader2 size={12} class="animate-spin" />
-                  Loading older commits
-                </div>
-              {:else if !historyHasMore}
-                <p class="py-4 text-center text-[0.5625rem] text-dimmed">Start of history</p>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {:else if activeTab === 'graph'}
         <GitGraphView
-          {projectId}
+          commits={commitHistory}
+          loading={loadingHistory}
+          loadingMore={loadingMoreHistory}
+          hasMore={historyHasMore}
           {unpushedCount}
           upstream={status?.upstream ?? null}
+          selectedHash={selectedCommit?.hash ?? null}
           onSelectCommit={(commit) => void selectCommit(commit)}
-        />
+        >
+          {#snippet menu({ commit, isHead }: { commit: GitCommitInfo; isHead: boolean })}
+            <CommitActionsMenu
+              {isHead}
+              resetBusy={gitState.isBusy('reset')}
+              deleteBusy={gitState.isBusy('delete-commit')}
+              onReset={(mode) => requestReset(mode, commit.hash)}
+              onDelete={() => requestDeleteCommit(commit)}
+              onAmend={isHead ? startAmend : undefined}
+              onCopyHash={() => void copyCommitHash(commit)}
+              onCopyMessage={() => void copyCommitMessage(commit)}
+              onShowInfo={() => (commitInfoTarget = commit)}
+            />
+          {/snippet}
+        </GitGraphView>
       {:else if activeTab === 'branches'}
         <div class="flex h-full min-h-0 flex-col">
           <!-- New branch -->
@@ -3896,104 +3917,12 @@
   {/if}
 
   <!--
-    Fetch/pull/push act on the local working tree, so they only belong to the
-    working-tree tabs. On the pull request tab they sat under a PR's own
-    comment box implying they were part of reviewing it, which they are not.
+    Fetch, pull and push used to sit here as three permanent buttons on every
+    working-tree tab. They now live in the surface-nav row, where only the
+    action that is actually needed is labelled and the rest sit in the menu
+    beside it. This bar keeps only what completing a merge genuinely needs.
   -->
-  {#if repoState === 'git' && status && (remotes.length > 0 || worktreeScope) && activeTab !== 'pulls' && !mergePending}
-    <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
-      <button
-        type="button"
-        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-        title="Fetch refs from the remote without changing the working tree"
-        disabled={remotes.length === 0 || syncBusy}
-        onclick={() => void gitState.fetch(projectId)}
-      >
-        {#if gitState.isBusy('fetch')}
-          <Loader2 size={11} class="animate-spin" />
-        {:else}
-          <Download size={11} />
-        {/if}
-        Fetch
-      </button>
-      <button
-        type="button"
-        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-        title={status.behind > 0
-          ? `Pull ${String(status.behind)} commit(s) from the remote`
-          : 'Pull from the remote'}
-        disabled={remotes.length === 0 || syncBusy}
-        onclick={() => void pullAction()}
-      >
-        {#if gitState.isBusy('pull')}
-          <Loader2 size={11} class="animate-spin" />
-        {:else}
-          <ArrowDownToLine size={11} />
-        {/if}
-        Pull{status.behind > 0 ? ` ${status.behind}` : ''}
-      </button>
-      <button
-        type="button"
-        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-        title={status.ahead > 0
-          ? `Push ${String(status.ahead)} commit(s) to the remote`
-          : 'Push to the remote'}
-        disabled={remotes.length === 0 || syncBusy || gitState.isBusy('push')}
-        onclick={() => void pushAction()}
-      >
-        {#if gitState.isBusy('push')}
-          <Loader2 size={11} class="animate-spin" />
-        {:else}
-          <ArrowUpFromLine size={11} />
-        {/if}
-        Push{status.ahead > 0 ? ` ${status.ahead}` : ''}
-      </button>
-      {#if worktreeScope}
-        <!-- Both sync directions only exist off the main worktree: the project
-             root is the other end of both. -->
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger
-            class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-primary/40 bg-primary/5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40 data-[state=open]:bg-elevated"
-            title={conflicted.length > 0
-              ? 'Resolve the conflicts in this worktree before syncing with main'
-              : 'Move commits between this worktree and the project main worktree'}
-            disabled={syncBusy || conflicted.length > 0}
-          >
-            {#if gitState.isBusy('sync-main')}
-              <Loader2 size={11} class="animate-spin" />
-            {:else}
-              <GitCompareArrows size={11} />
-            {/if}
-            Sync main
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="top"
-              align="end"
-              sideOffset={4}
-              collisionPadding={8}
-              class="z-50 w-60 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
-            >
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => void syncMainAction('from-main')}
-              >
-                <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
-                Pull main into this worktree
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => void syncMainAction('to-main')}
-              >
-                <ArrowUpToLine size={12} class="shrink-0 text-dimmed" />
-                Send this worktree to main
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
-      {/if}
-    </div>
-  {:else if repoState === 'git' && status && mergePending}
+  {#if repoState === 'git' && status && mergePending}
     <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
       <button
         type="button"
@@ -4776,6 +4705,80 @@
     </AlertDialog.Portal>
   </AlertDialog.Root>
 {/if}
+
+  {#if commitInfoTarget}
+    {@const info = commitInfoTarget}
+    <Modal open title="Commit info" size="lg" onClose={() => (commitInfoTarget = null)}>
+      <div class="space-y-3">
+        <div>
+          <p class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
+            Full hash
+          </p>
+          <div class="mt-1 flex items-center gap-1.5">
+            <span
+              class="min-w-0 flex-1 select-all break-all font-mono text-[0.6875rem] text-foreground"
+            >
+              {info.hash}
+            </span>
+            <button
+              type="button"
+              class="shrink-0 cursor-pointer rounded-sm border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              title="Copy the full commit hash"
+              aria-label="Copy the full commit hash"
+              onclick={() => void copyCommitHash(info)}
+            >
+              Copy
+            </button>
+          </div>
+        </div>
+
+        <dl class="grid grid-cols-[6.5rem_1fr] gap-x-3 gap-y-1.5 text-[0.6875rem]">
+          <dt class="text-dimmed">Author</dt>
+          <dd class="min-w-0 truncate text-foreground">{info.author}</dd>
+          <dt class="text-dimmed">Committed</dt>
+          <dd class="text-foreground">
+            {absoluteTime(info.date)}
+            <span class="text-dimmed">({relativeTime(info.date)})</span>
+          </dd>
+          <dt class="text-dimmed">Short hash</dt>
+          <dd class="font-mono text-foreground">{info.shortHash}</dd>
+          <dt class="text-dimmed">Parents</dt>
+          <dd class="font-mono text-dimmed">
+            {info.parents.length > 0
+              ? info.parents.map((parent) => parent.slice(0, 7)).join(', ')
+              : 'root commit'}
+          </dd>
+          {#if info.refs.length > 0}
+            <dt class="text-dimmed">Refs</dt>
+            <dd class="flex flex-wrap gap-1">
+              {#each info.refs as ref (ref.head ? `head:${ref.name}` : `${ref.kind}:${ref.name}`)}
+                <span
+                  class={[
+                    'rounded-sm px-1 py-px text-[0.5625rem] font-medium',
+                    ref.head
+                      ? 'bg-primary text-on-primary'
+                      : ref.kind === 'tag'
+                        ? 'bg-accent/15 text-accent'
+                        : 'bg-primary/15 text-primary'
+                  ]}
+                >
+                  {ref.name}
+                </span>
+              {/each}
+            </dd>
+          {/if}
+        </dl>
+
+        <div>
+          <p class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">Message</p>
+          <pre
+            class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-elevated/50 p-2 font-mono text-[0.625rem] leading-relaxed text-foreground">{info.message}{info.body.trim().length > 0
+              ? `\n\n${info.body.trim()}`
+              : ''}</pre>
+        </div>
+      </div>
+    </Modal>
+  {/if}
 
 <!--
   Full screen pull request reader. It is a sibling of the panel's own layout so

@@ -4347,6 +4347,8 @@ export interface GitCommitInfo {
   author: string
   date: number
   message: string
+  /** Everything after the subject line, as git recorded it. */
+  body: string
   /** Parent hashes, first parent first. Empty for a root commit. */
   parents: string[]
   /** Decorations on this commit (branch tips, HEAD, tags). */

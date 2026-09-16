@@ -928,6 +928,9 @@ export class GitState {
     this.error = null
     try {
       this.status = await invoke('git:pull', ...this.scopedGitArgs(projectId))
+      // A pull moves remote-tracking refs, so re-read branches and their
+      // ahead/behind counts instead of leaving the panel showing stale ones.
+      await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull failed')
     } finally {
@@ -985,6 +988,9 @@ export class GitState {
       this.status = scopeBucketId
         ? await invoke('git:pullIntegrate', projectId, options, scopeBucketId)
         : await invoke('git:pullIntegrate', projectId, options)
+      // Same reason as pull: a pull moves remote-tracking refs, so the branch
+      // list and its ahead/behind counts have to be re-read.
+      await this.refresh(projectId)
     } catch (reason) {
       const fallback =
         strategy === 'rebase'

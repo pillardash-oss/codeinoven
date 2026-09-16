@@ -956,6 +956,7 @@ export class GitService {
       author: entry.author_name ?? entry.author_email ?? 'unknown',
       date: entry.date ? new Date(entry.date).getTime() : Date.now(),
       message: entry.message,
+      body: entry.body,
       parents: parseCommitParents(entry.parents),
       refs: parseCommitRefs(entry.refs)
     }
@@ -965,10 +966,10 @@ export class GitService {
     try {
       const output = await git.show([
         '--no-patch',
-        '--format=%H%x00%P%x00%aI%x00%aN%x00%D%x00%s',
+        '--format=%H%x00%P%x00%aI%x00%aN%x00%D%x00%s%x00%b',
         `${query}^{commit}`
       ])
-      const [hash, parents, date, author, refs, message] = output.trim().split('\0')
+      const [hash, parents, date, author, refs, message, body] = output.trim().split('\0')
       if (!hash || !date || !message) return null
       return {
         hash,
@@ -976,6 +977,7 @@ export class GitService {
         author: author || 'unknown',
         date: new Date(date).getTime(),
         message,
+        body: body ?? '',
         parents: parseCommitParents(parents ?? ''),
         refs: parseCommitRefs(refs ?? '')
       }
@@ -1145,7 +1147,10 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
-        await this.client(directory).fetch()
+        // Prune so remote-tracking refs for branches deleted on the server
+        // disappear here too. A plain fetch only ever adds refs, which left
+        // deleted branches listed under Remote forever.
+        await this.client(directory).fetch(['--prune'])
       })
       return this.readStatus(directory)
     })

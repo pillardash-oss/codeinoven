@@ -2,7 +2,7 @@ import type { GitCommitInfo, GitStashEntry, PullRequestSummary } from '$shared/t
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
 export type GitPanelTabId =
-  'changes' | 'history' | 'graph' | 'branches' | 'pulls' | 'deployments' | 'stashes'
+  'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
 
 export interface GitPanelViewState {
   activeTab: GitPanelTabId
