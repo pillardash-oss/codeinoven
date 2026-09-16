@@ -25,11 +25,11 @@
     X
   } from '@lucide/svelte'
   import { AlertDialog, DropdownMenu } from 'bits-ui'
-  import { onMount } from 'svelte'
-  import { APP_SLUG } from '$shared/brand'
+  import { onDestroy } from 'svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { prReaderRailState } from '$lib/stores/pr-reader-rail.svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
@@ -106,64 +106,53 @@
   let composerOpen = $state(false)
 
   /**
-   * Full screen reader rail. Adjustable and persisted, because how much room the
-   * conversation needs against the write actions is a per-user judgement.
+   * Full screen reader rail. The width itself lives in the shared store, so the
+   * dock and the full screen reader cannot disagree about it and a reopen always
+   * shows the width the user chose.
    */
-  const RAIL_WIDTH_KEY = `${APP_SLUG}:prReaderRailWidth`
-  const RAIL_DEFAULT_WIDTH = 320
-  const RAIL_MIN_WIDTH = 272
-  const RAIL_MAX_WIDTH = 520
-  let railWidth = $state(RAIL_DEFAULT_WIDTH)
-  let resizingRail = $state(false)
-  let railPointerId = 0
-  let railStartX = 0
-  let railStartWidth = 0
+  let stopRailResize: (() => void) | null = null
 
-  function clampRailWidth(width: number): number {
-    // Always leave the conversation a usable column, and never exceed the window.
-    const viewportMaximum = Math.max(RAIL_MIN_WIDTH, window.innerWidth - 480)
-    return Math.min(
-      Math.max(Math.round(width), RAIL_MIN_WIDTH),
-      Math.min(RAIL_MAX_WIDTH, viewportMaximum)
-    )
-  }
-
-  function applyRailWidth(width: number, persist = false): void {
-    railWidth = clampRailWidth(width)
-    if (persist) localStorage.setItem(RAIL_WIDTH_KEY, String(railWidth))
-  }
-
-  function startRailResize(event: PointerEvent & { currentTarget: HTMLButtonElement }): void {
-    resizingRail = true
-    railPointerId = event.pointerId
-    railStartX = event.clientX
-    railStartWidth = railWidth
-    event.currentTarget.setPointerCapture(event.pointerId)
-  }
-
-  /** The rail is on the right, so dragging left widens it. */
-  function resizeRail(event: PointerEvent): void {
-    if (!resizingRail || event.pointerId !== railPointerId) return
-    applyRailWidth(railStartWidth + (railStartX - event.clientX))
-  }
-
-  function finishRailResize(event: PointerEvent): void {
-    if (!resizingRail || event.pointerId !== railPointerId) return
-    resizingRail = false
-    applyRailWidth(railWidth, true)
+  /**
+   * The drag listens on the window, the way the file explorer and both sidebars
+   * do, so it keeps following the pointer once it leaves the 6px handle and the
+   * release always lands somewhere that can finish the drag.
+   */
+  function startRailResize(event: PointerEvent): void {
+    event.preventDefault()
+    event.stopPropagation()
+    if (stopRailResize) return
+    prReaderRailState.resizing = true
+    const startX = event.clientX
+    const startWidth = prReaderRailState.width
+    // The rail is on the right, so dragging left widens it.
+    const onMove = (moveEvent: PointerEvent): void => {
+      prReaderRailState.set(startWidth + (startX - moveEvent.clientX))
+    }
+    const finish = (): void => {
+      stopRailResize = null
+      prReaderRailState.resizing = false
+      prReaderRailState.persist()
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      window.removeEventListener('blur', finish)
+    }
+    stopRailResize = finish
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    // A drag that ends because the window lost focus never gets a pointerup.
+    window.addEventListener('blur', finish)
   }
 
   function resizeRailWithKeyboard(event: KeyboardEvent): void {
     const delta = event.key === 'ArrowLeft' ? 16 : event.key === 'ArrowRight' ? -16 : 0
     if (delta === 0) return
     event.preventDefault()
-    applyRailWidth(railWidth + delta, true)
+    prReaderRailState.set(prReaderRailState.width + delta)
   }
 
-  onMount(() => {
-    const stored = Number.parseInt(localStorage.getItem(RAIL_WIDTH_KEY) ?? '', 10)
-    if (Number.isFinite(stored)) applyRailWidth(stored)
-  })
+  onDestroy(() => stopRailResize?.())
   let commentBody = $state('')
   /**
    * `@`-mention autocomplete for the comment box.
@@ -983,17 +972,20 @@
     <p class="mt-1.5 text-[0.75rem] font-medium leading-snug text-foreground">{summary.title}</p>
     <!--
       One meta line instead of two: the refs, the author, the age and the change
-      summary all describe the same thing. `flex-wrap` means a narrow rail moves
-      the numbers down rather than truncating the branch names away.
+      summary all describe the same thing. It never wraps, because a wrapped meta
+      row pushes the conversation down on a narrow rail. The head ref is the only
+      part that can outgrow the rail, so the head ref is what truncates while the
+      branch it lands in stays whole.
     -->
-    <p class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[0.5625rem] text-dimmed">
-      <span class="min-w-0 truncate font-mono">
-        {summary.headRef} → {summary.baseRef}
-      </span>
-      <span>· {summary.authorLogin}</span>
-      <span>· {relativeTime(summary.updatedAt)}</span>
+    <p
+      class="mt-1 flex min-w-0 items-center gap-x-1.5 overflow-hidden text-[0.5625rem] text-dimmed"
+    >
+      <span class="min-w-0 flex-1 truncate font-mono">{summary.headRef}</span>
+      <span class="shrink-0 font-mono">→ {summary.baseRef}</span>
+      <span class="shrink-0">· {summary.authorLogin}</span>
+      <span class="shrink-0">· {relativeTime(summary.updatedAt)}</span>
       {#if detail}
-        <span class="flex items-center gap-1.5 tabular-nums">
+        <span class="flex shrink-0 items-center gap-1.5 tabular-nums">
           <span class="text-success">+{detail.additions}</span>
           <span class="text-danger">−{detail.deletions}</span>
           <span>{detail.changedFiles} files</span>
@@ -1001,7 +993,7 @@
         </span>
       {/if}
       {#if open && gitState.hasPrIssue(identity.owner, identity.repo, number)}
-        <span class="flex items-center gap-1 text-warning">
+        <span class="flex shrink-0 items-center gap-1 text-warning">
           <TriangleAlert size={10} />
           conflicts
         </span>
@@ -1106,11 +1098,13 @@
     onclick={() => (closeConfirm = true)}
   >
     {#if closing}
-      <Loader2 size={12} class="animate-spin" />
+      <Loader2 size={12} class="shrink-0 animate-spin" />
     {:else}
-      <X size={12} />
+      <X size={12} class="shrink-0" />
     {/if}
-    {variant === 'fullscreen' ? 'Close without merging' : 'Close'}
+    <span class="min-w-0 truncate">{variant === 'fullscreen'
+        ? 'Close without merging'
+        : 'Close'}</span>
   </button>
 {/snippet}
 
@@ -1127,11 +1121,11 @@
       onclick={() => void markReadyForReview()}
     >
       {#if markingReady}
-        <Loader2 size={12} class="animate-spin" />
+        <Loader2 size={12} class="shrink-0 animate-spin" />
       {:else}
-        <Check size={12} />
+        <Check size={12} class="shrink-0" />
       {/if}
-      Ready for review
+      <span class="min-w-0 truncate">Ready for review</span>
     </button>
   {:else}
     <!--
@@ -1378,12 +1372,12 @@
                   <div class="border-t border-border/40 px-3 py-1.5">
                     <button
                       type="button"
-                      class="flex h-6 cursor-pointer items-center gap-1 text-[0.625rem] font-medium text-muted transition-colors hover:text-foreground"
+                      class="flex h-6 min-w-0 cursor-pointer items-center gap-1 text-[0.625rem] font-medium text-muted transition-colors hover:text-foreground"
                       title="Open this workflow run in the Deployments tab to inspect every job and step"
                       onclick={() => onOpenWorkflowRun(runId)}
                     >
-                      <Rocket size={11} />
-                      Open the full run in Deployments
+                      <Rocket size={11} class="shrink-0" />
+                      <span class="min-w-0 truncate">Open the full run in Deployments</span>
                     </button>
                   </div>
                 {/if}
@@ -1435,21 +1429,21 @@
           {#if agentReport?.threadId}
             <button
               type="button"
-              class="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+              class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
               title="Open the review thread already running for this pull request"
               onclick={() => onOpenThread(agentReport?.threadId ?? '')}
             >
-              <Bot size={12} />
-              Open review thread
+              <Bot size={12} class="shrink-0" />
+              <span class="min-w-0 truncate">Open review thread</span>
             </button>
           {/if}
           <button
             type="button"
-            class="flex h-7 cursor-pointer items-center gap-1 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
             onclick={() => onAgentReview(summary)}
           >
-            <Bot size={12} />
-            Start agent review
+            <Bot size={12} class="shrink-0" />
+            <span class="min-w-0 truncate">Start agent review</span>
           </button>
         </div>
       </div>
@@ -1501,49 +1495,52 @@
 
     <!--
       Comment and review both consume the box above, so they read as one
-      toolbar (shared border, no gaps) instead of three loose buttons.
+      toolbar (shared border, no gaps) instead of three loose buttons. Each one
+      grows from its own label rather than from zero, so no label is squeezed
+      under its own width until the rail really is too narrow; past that they
+      truncate instead of wrapping onto a second line inside the fixed height row.
     -->
     <div class="px-3 py-2.5">
       <div class="flex h-8 items-stretch overflow-hidden rounded-lg border border-border">
         <button
           type="button"
-          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+          class="flex min-w-0 flex-auto cursor-pointer items-center justify-center gap-1.5 bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
           title={hasBody ? 'Post this as a comment' : 'Write something first'}
           disabled={posting || !hasBody}
           onclick={() => void postComment()}
         >
           {#if posting}
-            <Loader2 size={12} class="animate-spin" />
+            <Loader2 size={12} class="shrink-0 animate-spin" />
           {:else}
-            <MessageSquare size={12} />
+            <MessageSquare size={12} class="shrink-0" />
           {/if}
-          Comment
+          <span class="min-w-0 truncate">Comment</span>
         </button>
         <button
           type="button"
-          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[0.625rem] font-medium text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
+          class="flex min-w-0 flex-auto cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[0.625rem] font-medium text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
           title={open
             ? 'Approve this pull request (a comment is optional)'
             : 'This pull request is no longer open'}
           disabled={!open || reviewing}
           onclick={() => void submitReview('APPROVE')}
         >
-          <ThumbsUp size={12} />
-          Approve
+          <ThumbsUp size={12} class="shrink-0" />
+          <span class="min-w-0 truncate">Approve</span>
         </button>
         <button
           type="button"
-          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
+          class="flex min-w-0 flex-auto cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
           title={!open
             ? 'This pull request is no longer open'
             : hasBody
               ? 'Request changes on this pull request'
-              : 'Write what needs to change first   GitHub requires a comment'}
+              : 'Write what needs to change first, GitHub requires a comment'}
           disabled={!open || reviewing || !hasBody}
           onclick={() => void submitReview('REQUEST_CHANGES')}
         >
-          <TriangleAlert size={12} />
-          Request changes
+          <TriangleAlert size={12} class="shrink-0" />
+          <span class="min-w-0 truncate">Request changes</span>
         </button>
       </div>
       {#if open && !hasBody}
@@ -1579,26 +1576,26 @@
         <div class="mt-2 flex items-center gap-1.5">
           <button
             type="button"
-            class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-warning/40 bg-warning/10 px-2.5 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/20 disabled:cursor-default disabled:opacity-40"
+            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-md border border-warning/40 bg-warning/10 px-2.5 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/20 disabled:cursor-default disabled:opacity-40"
             title="Check out this branch locally, merge the base in, and resolve the conflicts in your editor"
             disabled={resolving}
             onclick={() => (resolveConfirm = true)}
           >
             {#if resolving}
-              <Loader2 size={12} class="animate-spin" />
+              <Loader2 size={12} class="shrink-0 animate-spin" />
             {:else}
-              <Merge size={12} />
+              <Merge size={12} class="shrink-0" />
             {/if}
-            Resolve locally
+            <span class="min-w-0 truncate">Resolve locally</span>
           </button>
           <button
             type="button"
-            class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated"
+            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated"
             title="Have an agent resolve the conflicts and push the fix"
             onclick={() => onResolveWithAgent?.(summary)}
           >
-            <Bot size={12} />
-            Resolve with agent
+            <Bot size={12} class="shrink-0" />
+            <span class="min-w-0 truncate">Resolve with agent</span>
           </button>
         </div>
       </div>
@@ -1684,19 +1681,16 @@
     </div>
     <aside
       class="relative flex shrink-0 flex-col border-l border-border"
-      style="width: {railWidth}px"
+      style="width: {prReaderRailState.width}px"
     >
       <button
         type="button"
-        class="absolute inset-y-0 left-0 z-20 w-1.5 -translate-x-1/2 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-primary/30 focus:bg-primary/30 focus:outline-none {resizingRail
+        class="absolute inset-y-0 left-0 z-20 w-1.5 -translate-x-1/2 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-primary/30 focus:bg-primary/30 focus:outline-none {prReaderRailState.resizing
           ? 'bg-primary/30'
           : ''}"
         title="Resize pull request details"
         aria-label="Resize pull request details"
         onpointerdown={startRailResize}
-        onpointermove={resizeRail}
-        onpointerup={finishRailResize}
-        onpointercancel={finishRailResize}
         onkeydown={resizeRailWithKeyboard}
       ></button>
       {@render panelHead()}
