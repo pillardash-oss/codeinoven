@@ -871,8 +871,27 @@
         ]
       : [])
   ])
+  /** Chat (inbox) mode is opt-in for the file system. The plus menu already
+   *  carries the switch; exposing the same toggle through the slash menu keeps
+   *  the capability reachable from the keyboard-only command flow. */
+  let fileSystemAction = $derived<ActionDefinition | null>(
+    showChatModes
+      ? {
+          id: 'mode:file-system',
+          title: resolved.fileSystemMode === true ? 'Disable file system' : 'Enable file system',
+          description:
+            resolved.fileSystemMode === true
+              ? 'Turn this chat web-only: questions and research, no file operations'
+              : 'Grant this chat file operations and unlock the permission levels',
+          category: 'mode',
+          source: composerActionSource,
+          keywords: ['file system', 'filesystem', 'files', 'fs', 'workspace', 'tools', 'access']
+        }
+      : null
+  )
   let slashAvailableActions = $derived([
     ...selectorActions,
+    ...(fileSystemAction ? [fileSystemAction] : []),
     ...actions.filter((action) => action.category !== 'model' && action.category !== 'reasoning')
   ])
   let slashActions = $derived(filterActions(slashAvailableActions, slashQuery))
@@ -1012,6 +1031,13 @@
     if (action.id === 'selector:account') {
       // The account picker lives in the shared model picker's dropdown   open it directly.
       showAccountMenu()
+      return
+    }
+
+    if (action.id === 'mode:file-system') {
+      // Same commit path as the plus-menu switch, chat mode only. Selecting the
+      // action has already consumed the typed `/query` text.
+      toggleFileSystemMode()
       return
     }
 
