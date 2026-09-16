@@ -15,7 +15,6 @@
     MessageSquare,
     Merge,
     MessagesSquare,
-    MoreHorizontal,
     RefreshCw,
     Rocket,
     RotateCcw,
@@ -903,20 +902,136 @@
       The comment box is a button here rather than a disclosure bar of its own:
       commenting and merging are both things you do to this pull request, so they
       share one row and the conversation keeps the height. The rail pins the
-      composer open instead, so it has no use for this.
+      composer open instead, so it has no use for this. Icon only, because the
+      row also has to carry Close and Merge at the sidebar's 340px minimum; the
+      word stays on the composer's own submit button.
     -->
     <button
       type="button"
-      class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md border px-2.5 text-[0.625rem] font-medium transition-colors {composerOpen
+      class="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md border transition-colors {composerOpen
         ? 'border-primary bg-primary/10 text-foreground'
         : 'border-border text-foreground hover:bg-elevated'}"
       aria-expanded={composerOpen}
       title={composerOpen ? 'Hide the comment box' : 'Write a comment or review'}
+      aria-label={composerOpen ? 'Hide the comment box' : 'Write a comment or review'}
       onclick={() => (composerOpen = !composerOpen)}
     >
       <MessageSquare size={12} />
-      Comment
     </button>
+  {/if}
+{/snippet}
+
+{#snippet closePullRequestButton()}
+  <!--
+    Closing is a direct button, not a one-item overflow menu: an ellipsis over a
+    single action costs a click and never says what it holds. The dock's row
+    cannot spell it out, so it takes the short label; the rail names it in full.
+    The confirm dialog still guards the action.
+  -->
+  <button
+    type="button"
+    class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-danger/30 px-2.5 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40 {variant ===
+    'fullscreen'
+      ? 'w-full justify-center'
+      : 'shrink-0'}"
+    title="Close this pull request without merging it"
+    disabled={closing || markingReady}
+    onclick={() => (closeConfirm = true)}
+  >
+    {#if closing}
+      <Loader2 size={12} class="animate-spin" />
+    {:else}
+      <X size={12} />
+    {/if}
+    {variant === 'fullscreen' ? 'Close without merging' : 'Close'}
+  </button>
+{/snippet}
+
+{#snippet mergeAction()}
+  {#if draft}
+    <button
+      type="button"
+      class="flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40 {variant ===
+      'fullscreen'
+        ? 'w-full justify-center'
+        : 'shrink-0'}"
+      title="Mark this draft pull request ready for review before merging"
+      disabled={markingReady}
+      onclick={() => void markReadyForReview()}
+    >
+      {#if markingReady}
+        <Loader2 size={12} class="animate-spin" />
+      {:else}
+        <Check size={12} />
+      {/if}
+      Ready for review
+    </button>
+  {:else}
+    <!--
+      The method picker is a dropdown trigger inside the merge button's own
+      outline (the EditorOpenControl split-button pattern) rather than a bare
+      <select>.
+    -->
+    <div
+      class="flex h-7 min-w-0 items-stretch overflow-hidden rounded-md {variant === 'fullscreen'
+        ? 'w-full'
+        : 'shrink'}"
+    >
+      <button
+        type="button"
+        class="flex min-w-0 cursor-pointer items-center gap-1 bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40 {variant ===
+        'fullscreen'
+          ? 'flex-1 justify-center'
+          : ''}"
+        title={`Merge this pull request into ${summary.baseRef} using ${method}`}
+        disabled={merging}
+        onclick={openMergeConfirm}
+      >
+        {#if merging}
+          <Loader2 size={12} class="animate-spin" />
+        {:else}
+          <Merge size={12} class="shrink-0" />
+        {/if}
+        <!-- Truncates rather than pushing the row off the panel: a long base
+             ref is the one thing here that can outgrow the sidebar. -->
+        <span class="min-w-0 truncate">Merge into {summary.baseRef}</span>
+      </button>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger
+          class="flex w-6 cursor-pointer items-center justify-center border-l border-on-primary/25 bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+          title="Choose a merge method"
+          aria-label="Choose a merge method"
+          disabled={merging}
+        >
+          <ChevronDown size={12} />
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            side="top"
+            align="end"
+            sideOffset={6}
+            class="z-90 w-40 overflow-hidden rounded-lg border-border bg-surface p-1 shadow-lg"
+          >
+            <p
+              class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
+            >
+              Merge method
+            </p>
+            {#each mergeMethods as option (option.id)}
+              <DropdownMenu.Item
+                class="flex cursor-pointer items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
+                onSelect={() => (method = option.id)}
+              >
+                {option.label}
+                {#if method === option.id}
+                  <Check size={13} class="shrink-0 text-primary" />
+                {/if}
+              </DropdownMenu.Item>
+            {/each}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </div>
   {/if}
 {/snippet}
 
@@ -1300,120 +1415,38 @@
       </div>
     {/if}
     {#if open}
-      <div class="flex items-center gap-1.5">
-        {@render commentToggle()}
-        {#if draft}
-          <span class="flex min-w-0 items-center gap-1 text-[0.5625rem] text-warning">
-            <CircleDot size={10} class="shrink-0" />
-            <span class="truncate">Draft pull request</span>
-          </span>
-        {:else if mergeBlocker}
-          <span class="flex min-w-0 items-center gap-1 text-[0.5625rem] text-warning">
-            <TriangleAlert size={10} class="shrink-0" />
-            <span class="truncate">{mergeBlocker}</span>
-          </span>
-        {/if}
-        <span class="flex-1"></span>
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger
-            class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed transition-colors hover:bg-surface hover:text-foreground disabled:cursor-default disabled:opacity-40"
-            title="More pull request actions"
-            aria-label="More pull request actions"
-            disabled={closing || markingReady}
-          >
-            {#if closing}
-              <Loader2 size={13} class="animate-spin" />
-            {:else}
-              <MoreHorizontal size={13} />
-            {/if}
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="top"
-              align="end"
-              sideOffset={6}
-              class="z-90 w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
-            >
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-danger outline-none transition-colors data-[highlighted]:bg-danger/10"
-                onSelect={() => (closeConfirm = true)}
-              >
-                <X size={13} class="shrink-0" />
-                Close without merging
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
-
-        {#if draft}
-          <button
-            type="button"
-            class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-            title="Mark this draft pull request ready for review before merging"
-            disabled={markingReady}
-            onclick={() => void markReadyForReview()}
-          >
-            {#if markingReady}
-              <Loader2 size={12} class="animate-spin" />
-            {:else}
-              <Check size={12} />
-            {/if}
-            Ready for review
-          </button>
-        {:else}
-          <div class="flex h-7 shrink-0 items-stretch overflow-hidden rounded-md">
-            <button
-              type="button"
-              class="flex cursor-pointer items-center gap-1 bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-              title={`Merge this pull request into ${summary.baseRef} using ${method}`}
-              disabled={merging}
-              onclick={openMergeConfirm}
-            >
-              {#if merging}
-                <Loader2 size={12} class="animate-spin" />
-              {:else}
-                <Merge size={12} />
-              {/if}
-              Merge into {summary.baseRef}
-            </button>
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger
-                class="flex w-6 cursor-pointer items-center justify-center border-l border-on-primary/25 bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-                title="Choose a merge method"
-                aria-label="Choose a merge method"
-                disabled={merging}
-              >
-                <ChevronDown size={12} />
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content
-                  side="top"
-                  align="end"
-                  sideOffset={6}
-                  class="z-90 w-40 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
-                >
-                  <p
-                    class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
-                  >
-                    Merge method
-                  </p>
-                  {#each mergeMethods as option (option.id)}
-                    <DropdownMenu.Item
-                      class="flex cursor-pointer items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
-                      onSelect={() => (method = option.id)}
-                    >
-                      {option.label}
-                      {#if method === option.id}
-                        <Check size={13} class="shrink-0 text-primary" />
-                      {/if}
-                    </DropdownMenu.Item>
-                  {/each}
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-          </div>
-        {/if}
-      </div>
+      <!--
+        The state note takes a line of its own: sharing the row squeezed it to
+        nothing the moment the row also held Close and Merge.
+      -->
+      {#if draft}
+        <p class="mb-1.5 flex items-center gap-1 text-[0.5625rem] text-warning">
+          <CircleDot size={10} class="shrink-0" />
+          Draft pull request
+        </p>
+      {:else if mergeBlocker}
+        <p class="mb-1.5 flex items-center gap-1 text-[0.5625rem] text-warning">
+          <TriangleAlert size={10} class="shrink-0" />
+          {mergeBlocker}
+        </p>
+      {/if}
+      {#if variant === 'fullscreen'}
+        <!--
+          The rail is narrow enough that "Close without merging" beside "Merge
+          into main" would have to truncate one of them, so each takes a row.
+        -->
+        <div class="flex flex-col gap-1.5">
+          {@render closePullRequestButton()}
+          {@render mergeAction()}
+        </div>
+      {:else}
+        <div class="flex items-center gap-1.5">
+          {@render commentToggle()}
+          <span class="flex-1"></span>
+          {@render closePullRequestButton()}
+          {@render mergeAction()}
+        </div>
+      {/if}
     {:else if prState === 'closed'}
       <div class="flex items-center gap-1.5">
         {@render commentToggle()}
