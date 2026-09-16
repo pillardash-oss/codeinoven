@@ -2666,7 +2666,7 @@
               </div>
             {:else}
               <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
+                <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
                   <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
                     Changed files
                   </span>
@@ -2718,7 +2718,7 @@
             {:else if status}
               <!-- Stable header: abort control (when merging) or stage all + selection + view toggle -->
               <div
-                class="sticky top-0 z-10 flex shrink-0 items-center gap-2 border-b border-border bg-app px-3 py-1.5"
+                class="sticky top-0 z-10 flex shrink-0 items-center gap-1.5 border-b border-border bg-app px-2.5 py-1"
               >
                 {#if conflicted.length > 0}
                   <button
@@ -2873,7 +2873,7 @@
               </div>
 
               <!-- Staged / working panes   conflicts sit on top; each pane shares the height -->
-              <div class="flex flex-col gap-2 px-2 pb-2">
+              <div class="flex flex-col gap-1.5 px-1.5 pb-1.5">
                 {#if conflictSections.length > 0}
                   <div class={paneClass}>
                     {#if changesView === 'tree'}
@@ -2898,7 +2898,7 @@
                       <div class="overflow-hidden rounded-lg border border-warning/25 bg-surface">
                         {#each conflictSections as section, si (section.title)}
                           {#if si > 0}<div class="border-t border-border"></div>{/if}
-                          <div class="flex items-center gap-2 bg-warning/10 px-3 py-1.5">
+                          <div class="flex items-center gap-1.5 bg-warning/10 px-2.5 py-1">
                             <span
                               class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted"
                             >
@@ -2962,7 +2962,7 @@
                           {@const sectionAllSelected =
                             section.files.length > 0 &&
                             section.files.every((f) => selectedPaths[f.path])}
-                          <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
+                          <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
                             <span
                               class="shrink-0"
                               role="presentation"
@@ -3043,7 +3043,7 @@
                           {@const sectionAllSelected =
                             section.files.length > 0 &&
                             section.files.every((f) => selectedPaths[f.path])}
-                          <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
+                          <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
                             <span
                               class="shrink-0"
                               role="presentation"
@@ -3452,7 +3452,7 @@
                 </div>
               {:else}
                 <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                  <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
+                  <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
                     <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
                       Changed files
                     </span>

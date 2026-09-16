@@ -110,11 +110,11 @@
       aria-label={hasActions ? `Actions for ${change.path}` : undefined}
       title={hasActions ? `Actions for ${change.path}` : undefined}
     >
-      <div class="group flex min-h-9 items-center pr-1.5">
+      <div class="group flex min-h-8 items-center pr-1">
         <button
           type="button"
           class={[
-            'flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors',
+            'flex min-h-8 min-w-0 flex-1 items-center gap-1.5 px-2 text-left transition-colors',
             selected ? 'bg-primary/10' : 'hover:bg-elevated/50'
           ]}
           title={change.status === 'conflicted' && onResolveConflict
@@ -335,21 +335,21 @@
   {#if expanded}
     <div class="border-t border-border bg-app/50">
       {#if loadingDiff}
-        <div class="flex items-center gap-2 px-3 py-4 text-dimmed">
+        <div class="flex items-center gap-2 px-2 py-3 text-dimmed">
           <Loader2 size={12} class="animate-spin" />
           <span class="text-[0.625rem]">Loading diff…</span>
         </div>
       {:else if error}
-        <p class="px-3 py-4 text-[0.625rem] text-danger" role="alert">{error}</p>
+        <p class="px-2 py-3 text-[0.625rem] text-danger" role="alert">{error}</p>
       {:else if viewDiff}
         <FileDiffView diff={viewDiff} maxHeight="18rem" />
         {#if viewDiff.truncated}
-          <p class="border-t border-border px-3 py-1 text-[0.5625rem] text-dimmed">
+          <p class="border-t border-border px-2 py-1 text-[0.5625rem] text-dimmed">
             Diff truncated to a bounded preview
           </p>
         {/if}
       {:else}
-        <p class="px-3 py-4 text-[0.625rem] text-dimmed">No diff available.</p>
+        <p class="px-2 py-3 text-[0.625rem] text-dimmed">No diff available.</p>
       {/if}
     </div>
   {/if}
