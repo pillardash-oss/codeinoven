@@ -48,7 +48,7 @@
   import type { SettingsSearchEntry } from '$lib/settings-search'
   import type { ActionDefinition, ActionSelection } from '../../actions/types'
   import ProvidersView from '../providers/ProvidersView.svelte'
-  import UtilitiesView from './UtilitiesView.svelte'
+  import UtilitiesView, { type UtilitiesTab } from './UtilitiesView.svelte'
   import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
   import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
@@ -102,15 +102,24 @@
   let channelBusy = $state(false)
 
   type UtilitiesRoute =
-    { page: 'catalog' } | { page: 'marketplace' } | { page: 'skill'; entry: SkillMarketEntry }
+    | { page: 'catalog'; tab: UtilitiesTab }
+    | { page: 'marketplace' }
+    | { page: 'skill'; entry: SkillMarketEntry }
 
   interface SettingsHistoryEntry {
     section: SettingsSection
     utilitiesRoute: UtilitiesRoute
   }
 
-  let utilitiesRoute = $state<UtilitiesRoute>({ page: 'catalog' })
+  let utilitiesRoute = $state<UtilitiesRoute>({ page: 'catalog', tab: 'all' })
   let settingsHistory = $state<SettingsHistoryEntry[]>([])
+
+  /**
+   * True from the moment the marketplace is opened until the utilities section is
+   * left again. It keeps the marketplace mounted (invisibly) behind the catalog and
+   * behind a skill page, so Back restores the results instead of rebuilding them.
+   */
+  let marketplaceVisited = $state(false)
 
   function currentSettingsLocation(): SettingsHistoryEntry {
     return { section, utilitiesRoute }
@@ -124,24 +133,26 @@
       return
     }
     settingsHistory = [...settingsHistory, currentSettingsLocation()]
-    utilitiesRoute = { page: 'catalog' }
+    utilitiesRoute = { page: 'catalog', tab: 'all' }
+    marketplaceVisited = false
     onNavigateSection(nextSection)
   }
 
   function navigateUtilities(nextRoute: UtilitiesRoute): void {
     settingsHistory = [...settingsHistory, currentSettingsLocation()]
+    if (nextRoute.page === 'marketplace') marketplaceVisited = true
     utilitiesRoute = nextRoute
   }
 
-  /**
-   * The marketplace view mounts when it is opened and then stays mounted behind
-   * a skill page, so Back returns to the exact results, query, and scroll the
-   * user left. It is mounted invisibly, never hidden, so its scroll survives.
-   */
-  let marketplaceBehindSkill = $derived(
-    utilitiesRoute.page === 'marketplace' ||
-      (utilitiesRoute.page === 'skill' &&
-        settingsHistory.at(-1)?.utilitiesRoute.page === 'marketplace')
+  /** Section tabs are one page, so switching them replaces the route, never the history. */
+  function selectUtilitiesTab(tab: UtilitiesTab): void {
+    if (utilitiesRoute.page !== 'catalog') return
+    utilitiesRoute = { page: 'catalog', tab }
+  }
+
+  /** Utilities section on screen. The catalog route owns it, so Back stays truthful. */
+  let catalogTab = $derived<UtilitiesTab>(
+    utilitiesRoute.page === 'catalog' ? utilitiesRoute.tab : 'all'
   )
 
   /** Where the skill page's back control returns to, and what it is called. */
@@ -159,6 +170,7 @@
     }
     settingsHistory = settingsHistory.slice(0, -1)
     utilitiesRoute = previous.utilitiesRoute
+    if (previous.utilitiesRoute.page === 'marketplace') marketplaceVisited = true
     if (previous.section !== section) onNavigateSection(previous.section)
   }
 
@@ -957,21 +969,29 @@
       <ProvidersView />
     {:else if section === 'utilities'}
       <!--
-        The catalog and the marketplace stay mounted while a skill page is open, so
-        Back restores the exact results, query, and scroll position the user left.
-        Each page scrolls itself: the outer settings scroller never moves here.
+        Every utilities page stays mounted once visited: the active one is painted,
+        the others wait invisibly with their query, results, and scroll intact. That
+        is what lets Back restore the exact page the user left, and what makes the
+        bookmarks shortcut on the marketplace a round trip instead of a reset.
       -->
       <div class="relative h-full min-h-0 overflow-hidden">
-        <div class={utilitiesRoute.page === 'catalog' ? 'h-full overflow-y-auto' : 'hidden'}>
+        <div
+          class="absolute inset-0 overflow-y-auto {utilitiesRoute.page === 'catalog'
+            ? ''
+            : 'invisible'}"
+        >
           <UtilitiesView
+            activeTab={catalogTab}
+            onSelectTab={selectUtilitiesTab}
             onOpenMarketplace={() => navigateUtilities({ page: 'marketplace' })}
             onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
           />
         </div>
-        {#if marketplaceBehindSkill}
-          <div class={utilitiesRoute.page === 'marketplace' ? 'h-full' : 'invisible h-full'}>
+        {#if marketplaceVisited}
+          <div class="absolute inset-0 {utilitiesRoute.page === 'marketplace' ? '' : 'invisible'}">
             <SkillsMarketplaceView
               onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
+              onOpenBookmarks={() => navigateUtilities({ page: 'catalog', tab: 'bookmarks' })}
             />
           </div>
         {/if}

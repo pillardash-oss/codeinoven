@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { BookOpen, Flame, Loader2, Search, Sparkles, TrendingUp } from '@lucide/svelte'
+  import { BookOpen, Bookmark, Flame, Loader2, Search, Sparkles, TrendingUp } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     cachedSkillMarketLeaderboard,
@@ -14,9 +14,11 @@
 
   interface Props {
     onOpenSkill: (entry: SkillMarketEntry) => void
+    /** Leaves the marketplace for the bookmarked-skills list. */
+    onOpenBookmarks: () => void
   }
 
-  let { onOpenSkill }: Props = $props()
+  let { onOpenSkill, onOpenBookmarks }: Props = $props()
 
   const views: Array<{ id: SkillMarketView; label: string; icon: typeof BookOpen }> = [
     { id: 'all-time', label: 'All Time', icon: BookOpen },
@@ -133,11 +135,25 @@
             app.
           </p>
         </div>
-        <span
-          class="rounded-lg border bg-elevated px-2.5 py-1.5 text-[0.6875rem] font-medium text-muted"
-        >
-          Top 100
-        </span>
+        <div class="flex items-center gap-2">
+          <button
+            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+            type="button"
+            title="Open your bookmarked skills"
+            onclick={onOpenBookmarks}
+          >
+            <Bookmark size={13} />
+            Bookmarks
+            {#if skillBookmarkState.count > 0}
+              <span class="tabular-nums text-dimmed">{skillBookmarkState.count}</span>
+            {/if}
+          </button>
+          <span
+            class="rounded-lg border bg-elevated px-2.5 py-1.5 text-[0.6875rem] font-medium text-muted"
+          >
+            Top 100
+          </span>
+        </div>
       </div>
 
       <p class="mt-3 rounded-lg bg-raised px-3 py-2 text-[0.625rem] leading-relaxed text-muted">

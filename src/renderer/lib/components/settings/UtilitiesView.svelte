@@ -41,17 +41,21 @@
   } from '$shared/types'
   import { ALL_HARNESSES_BINDING_ID } from '$shared/types'
 
+  /** Sections of the Utilities page; the selected one lives in the settings route. */
+  export type UtilitiesTab = 'all' | 'skills' | 'bookmarks' | 'mcp' | 'plugins' | 'web' | 'tools'
+
   interface Props {
+    /** Section currently on screen. */
+    activeTab: UtilitiesTab
+    onSelectTab: (tab: UtilitiesTab) => void
     onOpenMarketplace: () => void
     /** Opens one marketplace skill from the bookmarks list. */
     onOpenSkill: (entry: SkillMarketEntry) => void
   }
 
-  let { onOpenMarketplace, onOpenSkill }: Props = $props()
+  let { activeTab, onSelectTab, onOpenMarketplace, onOpenSkill }: Props = $props()
 
   const cioIconUrl = publicAssetUrl('icon.svg')
-
-  type Tab = 'all' | 'skills' | 'bookmarks' | 'mcp' | 'plugins' | 'web' | 'tools'
 
   /** An installed utility or harness capability row. */
   type UtilityRowItem =
@@ -103,13 +107,12 @@
   let loading = $state(true)
   let error = $state('')
   let query = $state('')
-  let activeTab = $state<Tab>('all')
   let scopeFilter = $state('all')
   let editorOpen = $state(false)
   let editorTarget = $state<UtilityEditorTarget | null>(null)
   let pluginManifest = $state('')
 
-  let tabs: Array<{ id: Tab; label: string }> = [
+  let tabs: Array<{ id: UtilitiesTab; label: string }> = [
     { id: 'all', label: 'All' },
     { id: 'skills', label: 'Skills' },
     { id: 'bookmarks', label: 'Bookmarks' },
@@ -119,7 +122,7 @@
     { id: 'tools', label: 'Tools' }
   ]
 
-  const TAB_BLURB: Record<Tab, string> = {
+  const TAB_BLURB: Record<UtilitiesTab, string> = {
     all: `Every skill, MCP server, browser, and web utility installed in ${APP_NAME}.`,
     skills: 'Skills for every harness plus the shared global layer.',
     bookmarks:
@@ -130,7 +133,7 @@
     tools: 'Inspect stable tool references and the exact schemas exposed to agent models.'
   }
 
-  const isListTab = (tab: Tab): boolean =>
+  const isListTab = (tab: UtilitiesTab): boolean =>
     tab === 'all' ||
     tab === 'skills' ||
     tab === 'bookmarks' ||
@@ -138,7 +141,7 @@
     tab === 'web' ||
     tab === 'tools'
 
-  const SEARCH_PLACEHOLDER: Record<Tab, string> = {
+  const SEARCH_PLACEHOLDER: Record<UtilitiesTab, string> = {
     all: 'Search all utilities',
     skills: 'Search skills',
     bookmarks: 'Search bookmarked skills',
@@ -291,10 +294,16 @@
     return tags
   })
 
+  /**
+   * Tag filter that actually applies. A tag carried over from another section
+   * falls back to "all", so switching sections is never silently emptied.
+   */
+  let activeTagFilter = $derived(availableTags.includes(scopeFilter) ? scopeFilter : 'all')
+
   let filteredRows = $derived.by(() => {
     const needle = query.trim().toLowerCase()
     return tabRows().filter((row) => {
-      if (scopeFilter !== 'all' && !row.tags.includes(scopeFilter)) return false
+      if (activeTagFilter !== 'all' && !row.tags.includes(activeTagFilter)) return false
       if (!needle) return true
       return [row.name, row.description, ...row.tags].some((value) =>
         value.toLowerCase().includes(needle)
@@ -429,12 +438,6 @@
     } finally {
       loading = false
     }
-  }
-
-  /** Switching sections clears the tag filter, which belongs to one section only. */
-  function selectTab(tab: Tab): void {
-    activeTab = tab
-    scopeFilter = 'all'
   }
 
   function refreshActiveTab(): void {
@@ -596,7 +599,7 @@
           role="tab"
           aria-selected={activeTab === tab.id}
           title="{tab.label} utilities"
-          onclick={() => selectTab(tab.id)}
+          onclick={() => onSelectTab(tab.id)}
         >
           {#if tab.id === 'all'}
             <LayoutGrid size={13} />
@@ -696,11 +699,11 @@
       {:else if availableTags.length > 0}
         <button
           type="button"
-          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {scopeFilter ===
+          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
           'all'
             ? 'border-primary bg-primary text-on-primary'
             : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-          aria-pressed={scopeFilter === 'all'}
+          aria-pressed={activeTagFilter === 'all'}
           onclick={() => (scopeFilter = 'all')}
         >
           All
@@ -708,11 +711,11 @@
         {#each availableTags as tag (tag)}
           <button
             type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {scopeFilter ===
+            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
             tag
               ? 'border-primary bg-primary text-on-primary'
               : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-            aria-pressed={scopeFilter === tag}
+            aria-pressed={activeTagFilter === tag}
             onclick={() => (scopeFilter = tag)}
           >
             {@render tagChip(tag)}
