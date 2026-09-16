@@ -27,8 +27,6 @@
     onOpen: (pr: PullRequestSummary) => void
     onSignIn: () => void
     onCreate: () => void
-    /** Bumped by the parent after a PR is created so the open list refreshes. */
-    refreshSignal?: number
     /** Open the list in the full screen reader, like the file editor. */
     onFullscreen?: () => void
     /** Which state filter to list. Owned by the parent, which draws the filter in its own header row. */
@@ -49,7 +47,6 @@
     onOpen,
     onSignIn,
     onCreate,
-    refreshSignal = 0,
     onFullscreen,
     state,
     page,
@@ -104,12 +101,6 @@
       const repo = identity.repo
       void gitState.ensurePullRequestPage(projectId, owner, repo, state, page)
     }
-  })
-
-  // After a new PR is created the cached "open" page may not include it yet
-  // force a refetch so it appears right away.
-  $effect(() => {
-    if (refreshSignal > 0 && identity && githubConnected) void load(true)
   })
 </script>
 

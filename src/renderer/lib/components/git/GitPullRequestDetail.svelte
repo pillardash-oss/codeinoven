@@ -83,8 +83,6 @@
      * can switch this reader to the Checks view.
      */
     tab?: PrDetailTabId
-    /** Bumped by the panel's refresh button so this view refetches too. */
-    refreshSignal?: number
     /**
      * `dock` is the narrow sidebar column: read-only chrome stacked above the
      * body. `fullscreen` moves the title, tabs and write actions into a rail so
@@ -105,8 +103,7 @@
     onResolveWithAgent,
     onFullscreen,
     variant = 'dock',
-    tab = $bindable('conversation'),
-    refreshSignal = 0
+    tab = $bindable('conversation')
   }: Props = $props()
 
   const mergeMethods: Array<{ id: PrMergeMethod; label: string }> = [
@@ -775,12 +772,6 @@
       agentReport = report
     })
   })
-
-  // The Git panel's refresh button is multipurpose: it bumps this signal so the
-  // reader refetches even though the button belongs to the panel's action row.
-  $effect(() => {
-    if (refreshSignal > 0) void refresh()
-  })
 </script>
 
 {#snippet emptyState(Icon: typeof Bot, text: string)}
@@ -1097,9 +1088,14 @@
       The method picker is a dropdown trigger inside the merge button's own
       outline (the EditorOpenControl split-button pattern) rather than a bare
       <select>.
+
+      The wrapper is `rounded-xs` because every button in the app is rounded by
+      `:where(button) { border-radius: 2px !important }` in app.css. A larger
+      radius on this wrapper made the one primary action in the panel the only
+      control with pill corners: the outside has to match the halves it clips.
     -->
     <div
-      class="flex h-7 min-w-0 items-stretch overflow-hidden rounded-md {variant === 'fullscreen'
+      class="flex h-7 min-w-0 items-stretch overflow-hidden rounded-xs {variant === 'fullscreen'
         ? 'w-full'
         : 'shrink'}"
     >

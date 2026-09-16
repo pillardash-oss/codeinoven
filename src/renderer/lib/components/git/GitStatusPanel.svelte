@@ -136,12 +136,6 @@
   let expanded = $state<Record<string, boolean>>({})
   let loadingDiff = $state<Record<string, boolean>>({})
   let diffErrors = $state<Record<string, string | null>>({})
-  /**
-   * Bumped by the panel's refresh button and by anything that changes what a
-   * view is showing, so the view in focus refetches next to the git status. One
-   * counter for every view: the refresh button is deliberately multipurpose.
-   */
-  let viewRefreshSignal = $state(0)
 
   let showIdentityForm = $state(false)
   let identityName = $state('')
@@ -296,8 +290,13 @@
   let githubConnected = $state(false)
   let githubConfigured = $state(false)
   let githubUser = $state<GitHubUser | null>(null)
-  /** Whether the repo is known to have GitHub deployments   gates the Deployments tab. */
-  let hasDeployments = $state(false)
+  /**
+   * Whether the repo has GitHub deployments, which gates the Deployments view.
+   * Null means "not read yet": the cache and the project row are both read
+   * asynchronously, and treating that as "no deployments" threw a reader out of
+   * the Deployments view whenever the panel remounted on a cold cache.
+   */
+  let hasDeployments = $state<boolean | null>(null)
   /** One PR check-directed workflow run to reveal in the Deployments tab. */
   let requestedWorkflowRunId = $state<number | null>(null)
   /** Re-entrancy guard for the background deployment probe (not rendered). */
@@ -369,6 +368,50 @@
   )
   const stashOpBusy = $derived(gitState.isBusy(['stash-pop', 'stash-drop']))
 
+  /**
+   * The refresh button: git status, the History pages, and the view in focus.
+   *
+   * The view's reload goes through the store rather than through a signal the
+   * view watches. A view that watched a signal had to call a store method that
+   * reads the very record it writes, so a forced reload re-ran its own effect:
+   * the PR list and the deployments view refetched forever. The store is what
+   * every view renders from, so reloading it is enough.
+   */
+  async function refreshPanel(): Promise<void> {
+    await refreshStatus()
+    await refreshFocusedView()
+  }
+
+  /** Force a reload of whatever the active view shows, when the store has it. */
+  async function refreshFocusedView(): Promise<void> {
+    const identity = githubIdentity
+    if (!identity || !githubConnected) return
+    if (activeTab === 'pulls') {
+      if (selectedPullRequest) {
+        await gitState.ensurePullRequestBundle(
+          projectId,
+          identity.owner,
+          identity.repo,
+          selectedPullRequest.number,
+          true
+        )
+        return
+      }
+      await gitState.ensurePullRequestPage(
+        projectId,
+        identity.owner,
+        identity.repo,
+        prListState,
+        prListPage,
+        true
+      )
+      return
+    }
+    if (activeTab === 'deployments') {
+      await gitState.ensureDeploymentOverview(projectId, identity.owner, identity.repo, true)
+    }
+  }
+
   async function refreshStatus(): Promise<void> {
     gitState.ensureProjectEvents(projectId)
     await gitState.refresh(projectId)
@@ -376,10 +419,6 @@
     // History tab   its pages are cached client-side and would otherwise keep
     // showing stale commits until a mutation happens to reload them.
     if (activeTab === 'history' || commitHistory.length > 0) await reloadHistory()
-    // ...and the view in focus, whatever it is: the git status is only half of
-    // what this button refreshes. The deployments, pull request and detail views
-    // watch this counter and reload themselves.
-    viewRefreshSignal += 1
   }
 
   async function loadRepoState(): Promise<void> {
@@ -1322,7 +1361,7 @@
    *  re-running it would flash the full-panel loading state on every scoped
    *  thread switch. */
   $effect(() => {
-    hasDeployments = cachedHasDeployments(projectId) ?? false
+    hasDeployments = cachedHasDeployments(projectId) ?? null
     void loadRepoState()
   })
 
@@ -1368,16 +1407,18 @@
 
   $effect(() => {
     // When the user is signed in and the repo points at GitHub, probe for
-    // deployment activity in the background and surface the tab if found.
-    if (repoState === 'git' && githubConnected && !hasDeployments && githubIdentity) {
+    // deployment activity in the background and surface the view if found.
+    if (repoState === 'git' && githubConnected && hasDeployments !== true && githubIdentity) {
       void detectDeployments()
     }
   })
 
   $effect(() => {
-    // The Deployments tab only exists while the flag does   fall back to
-    // Changes when it goes (e.g. after switching to a project without them).
-    if (activeTab === 'deployments' && !hasDeployments) activeTab = 'changes'
+    // The Deployments view only exists while the flag does   fall back to
+    // Changes when it is *known* to be gone (e.g. after switching to a project
+    // without them). While it is still unknown the view stays put: the project
+    // row has not answered yet, and that is not the same as "none".
+    if (activeTab === 'deployments' && hasDeployments === false) activeTab = 'changes'
   })
 
   $effect(() => {
@@ -2099,9 +2140,11 @@
         count: gitState.stashes.length
       })
     }
-    // Deployments earn a tab only when the repo actually has deployment
+    // Deployments earn a view only when the repo actually has deployment
     // activity (the flag is persisted in the DB and cached in localStorage).
-    if (hasDeployments) {
+    // While the panel is *on* that view the entry stays, so a cold cache cannot
+    // leave the trigger naming a view the row is no longer showing.
+    if (hasDeployments === true || activeTab === 'deployments') {
       list.push({ id: 'deployments', label: 'Deploys', icon: Rocket, count: null })
     }
     return list
@@ -2208,9 +2251,14 @@
     aria-label="Refresh the git status and the current view"
     title="Refresh the git status and the current view"
     disabled={busy}
-    onclick={() => void refreshStatus()}
+    onclick={() => void refreshPanel()}
   >
-    <RefreshCw size={12} class={gitState.isBusy('refresh') ? 'animate-spin' : ''} />
+    <RefreshCw
+      size={12}
+      class={gitState.isBusy(['refresh', 'pr-list', 'pr-detail', 'deployments'])
+        ? 'animate-spin'
+        : ''}
+    />
   </button>
 {/snippet}
 
@@ -2305,23 +2353,29 @@
 {/snippet}
 
 <!--
-  How the changed files are laid out. It reads as one control with two states, so
-  it lives here with the view's actions rather than in the changes toolbar beside
-  Stage all: it describes the view, not the selection.
+  How the changed files are laid out: one control with two tabs, in the same
+  shape the rest of the app uses for a two-state view (`SourcesPanel`), rather
+  than two loose buttons that only happen to sit next to each other. It lives
+  with the view's actions because it describes the view, not the selection.
 -->
 {#snippet changesViewToggle()}
-  <div class="flex shrink-0 items-center gap-0.5" role="group" aria-label="Changed files view">
+  <div
+    class="flex shrink-0 items-center gap-0.5 rounded-md border border-border bg-elevated p-0.5"
+    role="tablist"
+    aria-label="Changed files layout"
+  >
     <button
       type="button"
       class={[
-        'flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors',
+        'flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors',
         changesView === 'list'
-          ? 'bg-elevated text-foreground'
-          : 'text-dimmed hover:bg-elevated hover:text-foreground'
+          ? 'bg-surface text-foreground shadow-sm'
+          : 'text-muted hover:text-foreground'
       ]}
+      role="tab"
+      aria-selected={changesView === 'list'}
       title="Show the changed files as a flat list"
       aria-label="Show the changed files as a flat list"
-      aria-pressed={changesView === 'list'}
       onclick={() => (changesView = 'list')}
     >
       <GitCommitHorizontal size={12} aria-hidden="true" />
@@ -2330,14 +2384,15 @@
     <button
       type="button"
       class={[
-        'flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors',
+        'flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors',
         changesView === 'tree'
-          ? 'bg-elevated text-foreground'
-          : 'text-dimmed hover:bg-elevated hover:text-foreground'
+          ? 'bg-surface text-foreground shadow-sm'
+          : 'text-muted hover:text-foreground'
       ]}
+      role="tab"
+      aria-selected={changesView === 'tree'}
       title="Show the changed files as a folder tree"
       aria-label="Show the changed files as a folder tree"
-      aria-pressed={changesView === 'tree'}
       onclick={() => (changesView = 'tree')}
     >
       <FolderGit2 size={12} aria-hidden="true" />
@@ -3561,7 +3616,6 @@
               identity={githubIdentity}
               summary={selectedPullRequest}
               bind:tab={prDetailTab}
-              refreshSignal={viewRefreshSignal}
               onBack={() => (selectedPullRequest = null)}
               onFullscreen={() => openPullRequestFullscreen(selectedPullRequest)}
               onAgentReview={(pr) => void startAgentReview(pr)}
@@ -3588,7 +3642,6 @@
               onFullscreen={() => openPullRequestFullscreen(null)}
               onSignIn={() => (showGitHubSignIn = true)}
               onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
-              refreshSignal={viewRefreshSignal}
             />
           {/if}
         </div>
@@ -3602,7 +3655,6 @@
           onRequestedRunOpened={() => (requestedWorkflowRunId = null)}
           onAgentDiagnoseRun={startWorkflowDiagnosis}
           onAgentDiagnoseDeployment={startDeploymentDiagnosis}
-          refreshSignal={viewRefreshSignal}
         />
       {:else if activeTab === 'stashes'}
         <div class="p-2">
@@ -5014,7 +5066,6 @@
           onOpen={(pr) => openPullRequestFullscreen(pr)}
           onSignIn={() => (showGitHubSignIn = true)}
           onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
-          refreshSignal={viewRefreshSignal}
         />
       {/if}
     </div>

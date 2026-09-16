@@ -41,11 +41,6 @@
       job: GitHubDeploymentJob,
       log: GitHubDeploymentJobLog | null
     ) => void
-    /**
-     * Bumped by the panel's multipurpose refresh button. The panel's header owns
-     * the refresh control for this view, so this is how a reload is asked for.
-     */
-    refreshSignal?: number
   }
 
   let {
@@ -56,8 +51,7 @@
     requestedRunId = null,
     onRequestedRunOpened,
     onAgentDiagnoseRun,
-    onAgentDiagnoseDeployment,
-    refreshSignal = 0
+    onAgentDiagnoseDeployment
   }: Props = $props()
 
   let error = $state('')
@@ -109,12 +103,6 @@
     // Runs on mount and whenever the repo/identity changes; the store decides
     // whether a network call is actually needed (TTL) or cached data suffices.
     if (identity && githubConnected) void load()
-  })
-
-  $effect(() => {
-    // The panel's refresh button asks for a forced reload, so it never returns
-    // cached data the user is trying to get rid of.
-    if (refreshSignal > 0) void load(true)
   })
 
   /** Open a check-linked workflow run even when it is older than the overview page. */

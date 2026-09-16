@@ -40,8 +40,12 @@ const pullRequestOpenListeners = new SvelteSet<PullRequestOpenListener>()
 
 export const gitPanelView = {
   get(projectId: string, _threadId: string): GitPanelViewState {
+    // Filled from the defaults so a state written by an older build (this map
+    // lives for the whole run) can never hand a caller an undefined field. A
+    // missing `prListState` used to reach the PR list as `state: undefined`,
+    // which the main process rejects as an invalid state filter.
     const existing = states.get(projectId)
-    return existing ? { ...existing } : defaultState()
+    return existing ? { ...defaultState(), ...existing } : defaultState()
   },
   set(projectId: string, _threadId: string, state: GitPanelViewState): void {
     states.set(projectId, { ...state })
