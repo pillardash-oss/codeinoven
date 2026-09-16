@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, nativeTheme, screen, session, shell } from 'electron'
-import { dirname, join } from 'path'
+import { dirname, isAbsolute, join } from 'path'
 import { existsSync, mkdirSync, renameSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { is } from '@electron-toolkit/utils'
@@ -1323,6 +1323,27 @@ function createWindow(): BrowserWindow {
   return window
 }
 
+/**
+ * Report an explicit `CODEINOVEN_CONFIG_ROOT` redirect once per launch, so a
+ * developer running several worktrees side by side can always tell which
+ * app-owned data root this instance actually opened   and why an ignored value
+ * (relative path, or a shipped app) was ignored instead of silently falling
+ * back to the real one.
+ */
+function logConfiguredDataRoot(): void {
+  const configuredRoot = process.env['CODEINOVEN_CONFIG_ROOT']
+  if (!configuredRoot) return
+  if (isAbsolute(configuredRoot) && getConfigRoot() === configuredRoot) {
+    Logger.info('Config root redirected by CODEINOVEN_CONFIG_ROOT', { configuredRoot })
+    return
+  }
+  Logger.info('CODEINOVEN_CONFIG_ROOT ignored', {
+    configuredRoot,
+    reason:
+      'an absolute path is required, and only an unpackaged launch or the packaged smoke harness may redirect the data root'
+  })
+}
+
 function openThreadFromNotification(payload: ThreadClickedPayload): void {
   // A quit is already in progress   never spawn a window mid-shutdown.
   if (quitCleanupStarted) return
@@ -1373,6 +1394,7 @@ void app
     // must be known before `database.init()` can abort the startup chain.
     mkdirSync(dirname(storage.resolve('logs/main.jsonl')), { recursive: true })
     Logger.initialize(storage.resolve('logs/main.jsonl'))
+    logConfiguredDataRoot()
     if (splashOutcome !== 'ready') {
       Logger.error('Splash did not reach visual readiness before startup continued', {
         outcome: splashOutcome
