@@ -294,9 +294,12 @@ ELECTRON_CLI_ARGS='["--user-data-dir=/abs/path/to/instance-profile"]' bun dev
 
 The checkout is complete, but gitignored build inputs are not. Run the project's
 setup commands (`bun install`, and `bun run harness:build-pi` when the instance
-should use the bundled Pi rather than a PATH `pi`); `resources/speech/runtime`
-is rebuilt by the `predev` hook. Untracked root `.env` files are copied by
-creation (section 5).
+should use the bundled Pi rather than a PATH `pi`). The `predev` hook reuses the
+compiled speech workers from the machine-local shared build cache, so it does
+not recompile them when the package sources are unchanged. It compiles only on a
+real miss, and on Apple Silicon that compile needs the Xcode Metal toolchain,
+installed once with `xcodebuild -downloadComponent MetalToolchain`. Untracked
+root `.env` files are copied by creation (section 5).
 
 ### 10.5 Concurrent-instance caveats
 
