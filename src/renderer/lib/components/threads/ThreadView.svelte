@@ -4527,7 +4527,9 @@
       return
     }
     if (
-      (event.type === 'spec.ready' || event.type === 'brainstorm.ready') &&
+      (event.type === 'spec.ready' ||
+        event.type === 'brainstorm.ready' ||
+        event.type === 'prd.ready') &&
       event.projectId === thread.projectId &&
       event.threadId === thread.id
     ) {
@@ -5414,9 +5416,9 @@
         ? !selectedPrd || selectedPrdWorkflow?.stage !== 'choice_pending'
         : Boolean(
             brainstorm?.status === 'finalized' ||
-              prd !== null ||
-              spec !== null ||
-              brainstormWorkflow?.entryChoice !== undefined
+            prd !== null ||
+            spec !== null ||
+            brainstormWorkflow?.entryChoice !== undefined
           )
       if (!contextReady) {
         // Park the send and hand its draft back while the card is up. Returning
@@ -5457,36 +5459,16 @@
         prdError = 'Choose Brainstorm first or Start PRD before sending the requirements.'
         return
       }
-      const userMessageId = messageId()
-      const { projectId, id } = thread
-      beginLocalTurn(userMessageId)
-      agentRuns.setBusy(projectId, id, true, userMessageId)
-      try {
-        if (engineeringLifecycle?.activeStage === undefined) {
-          const started = await invoke('engineeringLifecycle:start', projectId, id)
-          engineeringLifecycle = started.state
-        }
-        prd = await invoke(
-          'agent:generatePrd',
-          projectId,
-          id,
-          settings,
-          [msg, promptContext].filter(Boolean).join('\n\n'),
-          attachments,
-          userMessageId
-        )
-        prdVersions = prd ? [prd] : []
-        selectedPrdVersion = prd?.version ?? null
-        engineeringLifecycle = await invoke('engineeringLifecycle:get', projectId, id)
-        await threadMessages.load(projectId, id)
-        clearLocalTurn()
-        agentRuns.setIdle(projectId, id)
-      } catch (error) {
-        clearLocalTurn()
-        agentRuns.setIdle(projectId, id)
-        errorMessage = error instanceof Error ? error.message : 'The PRD could not be generated.'
+      // The PRD stage is conversational: this message becomes an ordinary turn
+      // under the PRD prompt, and the agent either writes the document or asks the
+      // product questions the document still needs. The document itself arrives
+      // through the `prd.ready` broadcast once the agent submits it.
+      prdError = ''
+      if (engineeringLifecycle?.activeStage === undefined) {
+        engineeringLifecycle = (
+          await invoke('engineeringLifecycle:start', thread.projectId, thread.id)
+        ).state
       }
-      return
     }
 
     recordModelUse()

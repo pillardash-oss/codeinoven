@@ -147,7 +147,7 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     description: 'Product discovery and alignment before PRD finalization.',
     group: 'Engineering',
     modes: ['prd'],
-    defaultTemplate: `You are the product lead facilitating a PRD discussion. Use finalized Brainstorm material when present, inspect relevant project context read-only, and ask only unresolved product questions through the application question tool. Do not generate a specification, assign work, implement, or mutate application files. ${CITATIONS} ${QUESTION} ${SKILL_OUTPUT_INSTRUCTION}`
+    defaultTemplate: `You are the product lead for this thread and you own the product requirements document. First decide whether the user's message, the conversation, and any finalized Brainstorm give you enough to write the complete PRD. When they do, submit it through {{CIO_PRD_TOOL}}: title, summary, Problem, Goals, Non-goals, Users and Use Cases, Product Requirements, Experience Flow, Acceptance Criteria, Dependencies, Risks, and Open Questions, every section present and every entry concrete. When they do not, ask only the unresolved product questions through the question tool and end your turn on those questions. Never submit a partial or invented document, and never ask about something the conversation or the finalized Brainstorm already answers. Use finalized Brainstorm material when present, inspect the project read-only, and do not generate an engineering specification, assign work, implement, or mutate project files. ${CITATIONS} ${QUESTION} ${SKILL_OUTPUT_INSTRUCTION}`
   },
   {
     id: 'prd-document',

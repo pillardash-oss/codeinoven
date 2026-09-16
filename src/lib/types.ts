@@ -3193,6 +3193,14 @@ export type AgentEvent =
       version: number
     }
   | {
+      type: 'prd.ready'
+      sessionId: string
+      projectId: string
+      threadId: string
+      prdId: string
+      version: number
+    }
+  | {
       type: 'brainstorm.trace'
       sessionId: string
       projectId: string

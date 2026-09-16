@@ -1390,6 +1390,8 @@ export function composeBrainstormSystemPrompt(input: {
   assignmentMode: boolean
   brainstormDiscussionPrompt?: string
   engineeringSpecPrompt?: string
+  /** Set only on a PRD stage turn, which owns its own generate-or-interview rule. */
+  prdDiscussionPrompt?: string
   revisionPrompt: string
   memoryInstruction: string
   imageDescriptorNote: string
@@ -1397,14 +1399,18 @@ export function composeBrainstormSystemPrompt(input: {
   utilityInstructions: string
   historyRecap: string
 }): string {
+  const prdTurnPrompt = input.prdDiscussionPrompt ?? ''
   return [
+    prdTurnPrompt,
     input.activeBrainstormTurn
       ? (input.brainstormDiscussionPrompt ?? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT)
       : '',
-    input.activeBrainstormTurn
+    input.activeBrainstormTurn || prdTurnPrompt
       ? ''
       : (input.engineeringSpecPrompt ?? SPEC_GENERATION_SYSTEM_PROMPT),
-    !input.activeBrainstormTurn && input.assignmentMode ? ASSIGNMENT_GENERATION_INSTRUCTION : '',
+    !input.activeBrainstormTurn && input.assignmentMode && !prdTurnPrompt
+      ? ASSIGNMENT_GENERATION_INSTRUCTION
+      : '',
     input.revisionPrompt,
     input.memoryInstruction,
     input.imageDescriptorNote,
@@ -1577,6 +1583,17 @@ interface PendingSpecRevision {
   harnessId: string
   providerId: string
   modelId: string
+  createdAt: number
+}
+
+interface PendingPrdTurn {
+  schemaVersion: 1
+  projectId: string
+  threadId: string
+  sessionId: string
+  harnessId: string
+  providerId?: string
+  modelId?: string
   createdAt: number
 }
 
@@ -1982,6 +1999,13 @@ export class ChatEngine {
     }
   >()
   private pendingSpecRevisions = new Map<string, PendingSpecRevision>()
+  /**
+   * A conversational PRD turn. The agent either submits the document or asks the
+   * user product questions, so the submission is captured only when the turn
+   * finally ends without waiting for the user and without an error.
+   */
+  private pendingPrdTurns = new Map<string, PendingPrdTurn>()
+  private prdTurnTasks = new Map<string, Promise<PrdDocument | null>>()
   private pendingBrainstormTurns = new Map<
     string,
     { brainstormId?: string; version?: number; note: string }
@@ -3525,9 +3549,11 @@ export class ChatEngine {
     this.userAbortedBrainstormOperations.clear()
     this.activeBrainstormEntryOperations.clear()
     this.pendingSpecRevisions.clear()
+    this.pendingPrdTurns.clear()
     this.pendingBrainstormTurns.clear()
     this.activeCompactions.clear()
     this.specRevisionTasks.clear()
+    this.prdTurnTasks.clear()
     this.preparedImplementationSessions.clear()
     this.planningSessions.clear()
     this.handledIdleSessions.clear()
@@ -4999,6 +5025,16 @@ export class ChatEngine {
         this.broadcastToast(
           `Specification update recovery failed: ${
             error instanceof Error ? error.message : 'The submitted revision was invalid.'
+          }`
+        )
+      })
+      void this.runPendingPrdTurn(sessionId, storedSessionMessages, {
+        projectId,
+        threadId
+      }).catch((error) => {
+        this.broadcastToast(
+          `PRD recovery failed: ${
+            error instanceof Error ? error.message : 'The submitted document was invalid.'
           }`
         )
       })
@@ -6481,6 +6517,7 @@ export class ChatEngine {
     for (const sessionId of this.activeBrainstormOperations) add(sessionId)
     for (const sessionId of this.activeBrainstormSessions.keys()) add(sessionId)
     for (const sessionId of this.pendingSpecRevisions.keys()) add(sessionId)
+    for (const sessionId of this.pendingPrdTurns.keys()) add(sessionId)
     for (const sessionId of this.pendingBrainstormTurns.keys()) add(sessionId)
     for (const sessionId of this.activeLoopRuns) add(sessionId)
     return active.size
@@ -7898,6 +7935,21 @@ export class ChatEngine {
         }
       }
     }
+    // The PRD stage is conversational: the agent writes the PRD when the message,
+    // the conversation, and any finalized Brainstorm are enough, and interviews
+    // the user when they are not. It covers the stage and its `prd_finalization`
+    // gate, because a draft under review is still being discussed and a review
+    // comment must never be mistaken for the specification turn that finalization
+    // unlocks. It shares the planning turn shape but never the specification
+    // contract, so it stays out of the spec scheduling below.
+    const prdDiscussionTurn =
+      planningSpecTurn &&
+      specAction === undefined &&
+      !preloadedActiveSpec &&
+      !activeBrainstormSession &&
+      (lifecycleForMode?.activeStage === 'prd' ||
+        lifecycleForMode?.humanGate === 'prd_finalization') &&
+      this.prdEngine.getWorkflowState(projectId, threadId)?.stage === 'drafting'
     // Session preparation may need to probe the CLI, create a native session,
     // install per-turn utilities, and rebuild context. Publish the working
     // state before that work so every renderer surface reflects the run as
@@ -8221,12 +8273,22 @@ export class ChatEngine {
           .join('\n\n')
       : ''
     const engineeringSpecPrompt = brainstormingTurn ? await this.cioPrompt('engineering-spec') : ''
+    // This turn is never schema-enforced, because the agent must stay free to ask
+    // product questions instead of submitting. The shape therefore travels in the
+    // prompt, exactly as it does for drivers without structured output.
+    const prdDiscussionPrompt = prdDiscussionTurn
+      ? [
+          await this.cioPrompt('prd-discussion'),
+          `The ${PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME} contract in this conversation is one JSON object matching this schema and nothing else: ${JSON.stringify(PRD_DOCUMENT_JSON_SCHEMA)}`
+        ].join('\n\n')
+      : ''
     const systemBasePrompt = brainstormingTurn
       ? composeBrainstormSystemPrompt({
           activeBrainstormTurn: activeBrainstormSession,
           assignmentMode: settings.assignmentMode === true,
           brainstormDiscussionPrompt,
           engineeringSpecPrompt,
+          prdDiscussionPrompt,
           revisionPrompt: '',
           memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
           imageDescriptorNote,
@@ -8289,7 +8351,8 @@ export class ChatEngine {
             workflow.activeSpecVersion
           )
         : null)
-    const shouldScheduleInitialSpec = planningSpecTurn && !activeSpec && !activeBrainstormSession
+    const shouldScheduleInitialSpec =
+      planningSpecTurn && !activeSpec && !activeBrainstormSession && !prdDiscussionTurn
     if (planningSpecTurn) {
       if (!activeBrainstormSession) this.planningSessions.add(sessionId)
       const requestedSpec = specAction === 'request'
@@ -8303,6 +8366,20 @@ export class ChatEngine {
           source: text,
           settings
         })
+      }
+      if (prdDiscussionTurn) {
+        const pendingPrdTurn: PendingPrdTurn = {
+          schemaVersion: 1,
+          projectId,
+          threadId,
+          sessionId,
+          harnessId: driverId,
+          ...(settings.providerId ? { providerId: settings.providerId } : {}),
+          ...(settings.modelId ? { modelId: settings.modelId } : {}),
+          createdAt: Date.now()
+        }
+        this.pendingPrdTurns.set(sessionId, pendingPrdTurn)
+        await this.writePendingPrdTurn(pendingPrdTurn)
       }
       this.registerSession(
         sessionId,
@@ -8345,7 +8422,7 @@ export class ChatEngine {
           }
           return publicUserMessage
         }
-        if (activeSpec) {
+        if (activeSpec && !prdDiscussionTurn) {
           const pendingRevision: PendingSpecRevision = {
             schemaVersion: 1,
             projectId,
@@ -8372,16 +8449,17 @@ export class ChatEngine {
             note: origin === 'user' ? text : ''
           })
         }
-        const revisionPrompt = activeSpec
-          ? buildSpecRevisionSystemPrompt(
-              await this.artifactRef(
-                projectId,
-                threadId,
-                join('versions', `${activeSpec.id}-v${activeSpec.version}.md`)
-              ),
-              activeSpec.annotations
-            )
-          : ''
+        const revisionPrompt =
+          activeSpec && !prdDiscussionTurn
+            ? buildSpecRevisionSystemPrompt(
+                await this.artifactRef(
+                  projectId,
+                  threadId,
+                  join('versions', `${activeSpec.id}-v${activeSpec.version}.md`)
+                ),
+                activeSpec.annotations
+              )
+            : ''
         // Expose the engineering_spec contract for real on interactive
         // spec-revision turns: structured-output-capable harnesses (claude-code)
         // enforce the schema on the final response, so the model cannot end the
@@ -8392,6 +8470,7 @@ export class ChatEngine {
         const revisionStructuredOutput =
           activeSpec !== null &&
           !activeBrainstormSession &&
+          !prdDiscussionTurn &&
           driver.capabilities?.structuredOutput === true &&
           !this.unsupportedStructuredOutputModels.has(structuredOutputKey)
             ? {
@@ -8409,6 +8488,7 @@ export class ChatEngine {
             assignmentMode: settings.assignmentMode === true,
             brainstormDiscussionPrompt,
             engineeringSpecPrompt,
+            prdDiscussionPrompt,
             revisionPrompt,
             memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
             imageDescriptorNote,
@@ -8443,8 +8523,10 @@ export class ChatEngine {
         await this.cleanupTurnUtilities(sessionId)
         this.clearCompletionWaiter(sessionId)
         this.pendingSpecRevisions.delete(sessionId)
+        this.pendingPrdTurns.delete(sessionId)
         this.pendingBrainstormTurns.delete(sessionId)
         await this.clearPendingSpecRevision(projectId, threadId)
+        await this.clearPendingPrdTurn(projectId, threadId)
         if (shouldScheduleInitialSpec && !promptDispatched) {
           await this.clearPendingInitialSpec(projectId, threadId)
         }
@@ -11046,6 +11128,7 @@ export class ChatEngine {
         waiter.reject(new Error('Thread was deleted'))
       }
       this.pendingSpecRevisions.delete(sessionId)
+      this.pendingPrdTurns.delete(sessionId)
       this.pendingBrainstormTurns.delete(sessionId)
       this.specRevisionTasks.delete(sessionId)
       this.retireSessionState(sessionId)
@@ -13359,6 +13442,59 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * The one place a PRD draft is created from generated content, shared by the
+   * isolated generator and the conversational PRD turn so provenance, the
+   * Brainstorm link, and the finalization gate can never drift apart. A
+   * submission while a draft is open revises it into the next version, so the
+   * review conversation has somewhere to land instead of failing on the engine's
+   * "not ready for a new draft" guard.
+   */
+  private async createPrdDraftFromContent(input: {
+    projectId: string
+    threadId: string
+    content: PrdContent
+    harnessId?: string
+    providerId?: string
+    modelId?: string
+  }): Promise<PrdDocument> {
+    const finalizedBrainstorm = await this.brainstormEngine.getActive(
+      input.projectId,
+      input.threadId
+    )
+    const provenance = {
+      source: 'agent' as const,
+      actor: 'Sr. Engineer',
+      ...(input.harnessId ? { harnessId: input.harnessId } : {}),
+      ...(input.providerId ? { providerId: input.providerId } : {}),
+      ...(input.modelId ? { modelId: input.modelId } : {}),
+      ...(finalizedBrainstorm?.status === 'finalized'
+        ? {
+            brainstormId: finalizedBrainstorm.id,
+            brainstormVersion: finalizedBrainstorm.version,
+            brainstormInputHash: finalizedBrainstorm.finalizedInputHash
+          }
+        : {})
+    }
+    const active = this.prdEngine.getActive(input.projectId, input.threadId)
+    const created = active
+      ? await this.prdEngine.createVersion(
+          input.projectId,
+          input.threadId,
+          active.id,
+          input.content,
+          provenance
+        )
+      : await this.prdEngine.createDraft(input.projectId, input.threadId, input.content, provenance)
+    const lifecycle = this.engineeringLifecycleEngine.get(input.projectId, input.threadId)
+    if (lifecycle?.activeStage === 'prd') {
+      this.engineeringLifecycleEngine.advance(input.projectId, input.threadId, {
+        gate: 'prd_finalization'
+      })
+    }
+    return created
+  }
+
   async generatePrd(
     projectId: string,
     threadId: string,
@@ -13525,26 +13661,14 @@ export class ChatEngine {
           'The PRD agent returned invalid JSON'
         )
       const content: PrdContent = parseGeneratedPrdContent(raw)
-      const created = await this.prdEngine.createDraft(projectId, threadId, content, {
-        source: 'agent',
-        actor: 'Sr. Engineer',
+      const created = await this.createPrdDraftFromContent({
+        projectId,
+        threadId,
+        content,
         harnessId: settings.harnessId,
         providerId: settings.providerId,
-        modelId: settings.modelId,
-        ...(finalizedBrainstorm?.status === 'finalized'
-          ? {
-              brainstormId: finalizedBrainstorm.id,
-              brainstormVersion: finalizedBrainstorm.version,
-              brainstormInputHash: finalizedBrainstorm.finalizedInputHash
-            }
-          : {})
+        modelId: settings.modelId
       })
-      const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
-      if (lifecycle?.activeStage === 'prd') {
-        this.engineeringLifecycleEngine.advance(projectId, threadId, {
-          gate: 'prd_finalization'
-        })
-      }
       const completedMessage: AgentMessage = {
         ...startedMessage,
         parts: [
@@ -18432,6 +18556,22 @@ export class ChatEngine {
     return this.storage.remove(this.pendingSpecRevisionPath(projectId, threadId))
   }
 
+  private pendingPrdTurnPath(projectId: string, threadId: string): string {
+    return `projects/${projectId}/threads/${threadId}/prd-turn.json`
+  }
+
+  private readPendingPrdTurn(projectId: string, threadId: string): Promise<PendingPrdTurn | null> {
+    return this.storage.read<PendingPrdTurn>(this.pendingPrdTurnPath(projectId, threadId))
+  }
+
+  private writePendingPrdTurn(pending: PendingPrdTurn): Promise<void> {
+    return this.storage.write(this.pendingPrdTurnPath(pending.projectId, pending.threadId), pending)
+  }
+
+  private clearPendingPrdTurn(projectId: string, threadId: string): Promise<void> {
+    return this.storage.remove(this.pendingPrdTurnPath(projectId, threadId))
+  }
+
   private async getActiveSpec(
     projectId: string,
     threadId: string
@@ -18772,6 +18912,84 @@ export class ChatEngine {
       }
       return null
     }
+  }
+
+  private runPendingPrdTurn(
+    sessionId: string,
+    messages?: AgentMessage[],
+    scope?: { projectId: string; threadId: string }
+  ): Promise<PrdDocument | null> {
+    const existing = this.prdTurnTasks.get(sessionId)
+    if (existing) return existing
+    const task = this.persistPendingPrdTurn(sessionId, messages, scope)
+    this.prdTurnTasks.set(sessionId, task)
+    void task.then(
+      () => {
+        if (this.prdTurnTasks.get(sessionId) === task) this.prdTurnTasks.delete(sessionId)
+      },
+      () => {
+        if (this.prdTurnTasks.get(sessionId) === task) this.prdTurnTasks.delete(sessionId)
+      }
+    )
+    return task
+  }
+
+  /**
+   * Capture a PRD the agent submitted inside its own conversational turn. A turn
+   * that ends without a submission is the interview outcome, never a failure: the
+   * agent asked the user product questions and the conversation continues.
+   */
+  private async persistPendingPrdTurn(
+    sessionId: string,
+    loadedMessages?: AgentMessage[],
+    scope?: { projectId: string; threadId: string }
+  ): Promise<PrdDocument | null> {
+    const pending =
+      this.pendingPrdTurns.get(sessionId) ??
+      (scope ? await this.readPendingPrdTurn(scope.projectId, scope.threadId) : null)
+    if (!pending || pending.sessionId !== sessionId) return null
+    this.pendingPrdTurns.delete(sessionId)
+    await this.clearPendingPrdTurn(pending.projectId, pending.threadId)
+
+    const driver = this.driverForRuntime(
+      pending.harnessId,
+      this.sessionRegistry.get(sessionId)?.accountId
+    )
+    if (!driver) throw new Error(`Unknown harness: ${pending.harnessId}`)
+    const projectPath =
+      this.sessionRegistry.get(sessionId)?.projectPath ??
+      (await this.resolveThreadPath(pending.projectId, pending.threadId))
+    const messages = loadedMessages ?? (await driver.loadMessages(projectPath, sessionId))
+    const response = [...messages].reverse().find((message) => message.role === 'assistant')
+    if (!response) return null
+    if (response.error) throw new Error(response.error)
+    const text = response.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
+    // An answer without a single `{` is the interview outcome: the agent asked its
+    // questions instead of submitting, so nothing is captured and nothing failed.
+    if (response.structuredOutput === undefined && !text.includes('{')) return null
+    const raw =
+      response.structuredOutput ?? parseGeneratedJson(text, 'The PRD agent returned invalid JSON')
+    const content = parseGeneratedPrdContent(raw)
+    const created = await this.createPrdDraftFromContent({
+      projectId: pending.projectId,
+      threadId: pending.threadId,
+      content,
+      harnessId: pending.harnessId,
+      providerId: pending.providerId,
+      modelId: pending.modelId
+    })
+    this.broadcast({
+      type: 'prd.ready',
+      sessionId,
+      projectId: pending.projectId,
+      threadId: pending.threadId,
+      prdId: created.id,
+      version: created.version
+    })
+    return created
   }
 
   private runPendingSpecRevision(
@@ -22256,8 +22474,17 @@ export class ChatEngine {
         await this.clearPendingSpecRevision(info.projectId, info.threadId)
       }
       if (failure) this.pendingBrainstormTurns.delete(sessionId)
+      // The PRD turn is captured only on a clean end without a user wait: a turn
+      // that ended on a question keeps its pending record, because the answers
+      // resume the same logical turn and the submission arrives with it.
+      const pendingPrdTurn = this.pendingPrdTurns.get(sessionId)
+      if (failure && pendingPrdTurn) {
+        this.pendingPrdTurns.delete(sessionId)
+        await this.clearPendingPrdTurn(info.projectId, info.threadId)
+      }
       let revisedSpec: EngineeringSpec | null = null
       let revisedBrainstorm: BrainstormDocument | null = null
+      let createdPrd: PrdDocument | null = null
       // Post-turn artifact updates (spec revision, brainstorm report) must
       // stay silent when they fail: the main turn's work is already done, the
       // previous artifact version remains reviewable, and each surface has its
@@ -22324,6 +22551,27 @@ export class ChatEngine {
           this.broadcastToast(`Brainstorm update failed: ${auxiliaryFailure}`)
         }
       }
+      if (!failure && !awaitingUser && pendingPrdTurn) {
+        try {
+          createdPrd = await this.runPendingPrdTurn(sessionId, messages, {
+            projectId: info.projectId,
+            threadId: info.threadId
+          })
+        } catch (error) {
+          // A rejected submission is recoverable: the document is not created, the
+          // PRD stage stays open, and the conversation carries on, so this must
+          // never mark the thread failed or trip the terminal-failure gate.
+          auxiliaryFailure =
+            error instanceof Error ? error.message : 'The PRD submission was invalid.'
+          Logger.error('PRD submission failed after a completed turn', {
+            projectId: info.projectId,
+            threadId: info.threadId,
+            sessionId,
+            error: auxiliaryFailure
+          })
+          this.broadcastToast(`The PRD was not created: ${auxiliaryFailure}`)
+        }
+      }
       // Race-safe guard: if the persisted thread is already `failed` (an
       // earlier session-error path marked it) and this finalization would
       // otherwise claim success, keep it failed so a terminal "done"
@@ -22347,19 +22595,21 @@ export class ChatEngine {
             ? 'failed'
             : revisedSpec || revisedBrainstorm
               ? 'spec'
-              : auxiliaryFailure
-                ? // An auxiliary artifact update failed: settle on the
-                  // previous artifact's reviewable state instead of `failed`,
-                  // which would fire a misleading error notification.
-                  (await this.getActiveSpec(info.projectId, info.threadId)) ||
-                  (await this.brainstormEngine.getActive(info.projectId, info.threadId))
-                  ? 'spec'
-                  : 'completed'
-                : awaitingUser
-                  ? 'awaiting_approval'
-                  : threadBeforeFinalize?.status === 'failed'
-                    ? 'failed'
+              : createdPrd
+                ? 'awaiting_approval'
+                : auxiliaryFailure
+                  ? // An auxiliary artifact update failed: settle on the
+                    // previous artifact's reviewable state instead of `failed`,
+                    // which would fire a misleading error notification.
+                    (await this.getActiveSpec(info.projectId, info.threadId)) ||
+                    (await this.brainstormEngine.getActive(info.projectId, info.threadId))
+                    ? 'spec'
                     : 'completed'
+                  : awaitingUser
+                    ? 'awaiting_approval'
+                    : threadBeforeFinalize?.status === 'failed'
+                      ? 'failed'
+                      : 'completed'
       await this.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
         read: userAborted
       })
