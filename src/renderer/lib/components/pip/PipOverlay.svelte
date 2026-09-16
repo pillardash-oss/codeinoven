@@ -3,7 +3,7 @@
   import { pipState } from '$lib/stores/pip.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-  import { nativeViewOcclusion } from '$lib/stores/native-view-occlusion.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
 
   const DEFAULT_POSITION = { x: 24, y: 24 }
   const occlusionKey = `pip-overlay-${crypto.randomUUID()}`
@@ -66,19 +66,19 @@
   // The preview floats above every DOM surface, but the in-app browser is a
   // native view the compositor paints above the whole renderer, so the browser
   // has to detach its view while this overlay covers it (see
-  // `nativeViewOcclusion`). Dragging moves the preview without resizing it, so
+  // `browserVisibility`). Dragging moves the preview without resizing it, so
   // the rectangle is published from position state rather than a DOM
   // measurement, which no observer would refresh.
   $effect(() => {
     if (!visible) return
     if (windowSize.width < 1 || windowSize.height < 1) return
-    nativeViewOcclusion.setOverlayRect(occlusionKey, {
+    browserVisibility.publishOcclusion(occlusionKey, {
       x: position.x,
       y: position.y,
       width: windowSize.width,
       height: windowSize.height
     })
-    return () => nativeViewOcclusion.clearOverlayRect(occlusionKey)
+    return () => browserVisibility.clearOcclusion(occlusionKey)
   })
 
   function onPointerDown(event: PointerEvent): void {

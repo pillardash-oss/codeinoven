@@ -1,6 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
 import { messageId } from '$shared/id'
-import { SvelteSet } from 'svelte/reactivity'
 import { agentRuns } from './agent-runs.svelte'
 import { conversationAttention } from './conversation-attention.svelte'
 import { threadMessages } from './thread-messages.svelte'
@@ -385,16 +384,6 @@ class ContextSidebarState {
   private browserTabs: BrowserContextTab[] = $state(persistedBrowserTabs.tabs)
   private browserActiveTabId: string | null = $state(persistedBrowserTabs.activeTabId)
   private browserVisible = $state(false)
-  /** Keys of full-window DOM surfaces currently covering the workspace (e.g.
-   *  fullscreen terminal/media/file editors). The browser's native view must
-   *  hide while any is active, because a native view floats above every DOM
-   *  modal. Tracked as a keyed set so nested/overlapping surfaces are safe. */
-  private fullscreenSurfaceKeys = new SvelteSet<string>()
-  /** True while the DOM Ctrl+Tab thread switcher dialog is open. The browser's
-   *  native WebContentsView floats above every DOM surface, so it must stay
-   *  detached (suspended) for the dialog's whole lifetime and be re-attached
-   *  when the dialog closes. */
-  private browserSwitcherSuspended = $state(false)
   private activeProjectId: string | null = $state(null)
   private activeThreadId: string | null = $state(null)
   private notificationsVisible = $state(false)
@@ -432,43 +421,6 @@ class ContextSidebarState {
 
   get activeTab(): ContextSidebarTab | null {
     return this.sidebarActiveTab
-  }
-
-  /** Whether any full-window DOM surface is suppressing native surfaces. */
-  get fullscreenSuppression(): boolean {
-    return this.fullscreenSurfaceKeys.size > 0
-  }
-
-  /** Register (or unregister) a full-window DOM surface that covers the
-   *  workspace. While any key is active the browser's native view is hidden —
-   *  it would otherwise float above the DOM surface. */
-  setFullscreenSurfaceActive(key: string, active: boolean): void {
-    if (active) this.fullscreenSurfaceKeys.add(key)
-    else this.fullscreenSurfaceKeys.delete(key)
-  }
-
-  /** Whether the browser's native view is suspended for the DOM Ctrl+Tab
-   *  switcher. */
-  get browserSwitcherSuspendsView(): boolean {
-    return this.browserSwitcherSuspended
-  }
-
-  /** Suspend/resume the browser's native view while the DOM Ctrl+Tab switcher
-   *  dialog is open. Panels re-attach their views automatically when this
-   *  clears (the same path used for full-window DOM surfaces). */
-  setBrowserSwitcherSuspended(suspended: boolean): void {
-    this.browserSwitcherSuspended = suspended
-  }
-
-  /**
-   * Whether the native browser view is currently on screen from the right
-   * sidebar (a visible browser tab).
-   */
-  get sidebarBrowserNativeVisible(): boolean {
-    if (this.fullscreenSuppression) return false
-    if (!this.browserVisible) return false
-    const activeId = this.browserActiveTabId
-    return this.activeBrowserTabs.some((tab) => tab.id === activeId)
   }
 
   /** The browser tab to focus when the browser workspace is revealed: the

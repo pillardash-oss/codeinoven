@@ -3,10 +3,7 @@
   import type { Snippet } from 'svelte'
   import { APP_SLUG } from '$shared/brand'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
-  import {
-    nativeViewOcclusion,
-    trackNativeViewOverlay
-  } from '$lib/stores/native-view-occlusion.svelte'
+  import { browserVisibility, trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import {
     registerModalPrimaryAction,
@@ -242,15 +239,15 @@
   // would be hidden behind the page and unclickable. Publish this panel's
   // on-screen rectangle and let the browser panel detach its native view while
   // it is covered   a panel dragged off the browser leaves the browser usable.
-  // The minimized dock chip registers itself through `trackNativeViewOverlay`.
+  // The minimized dock chip registers itself through `trackBrowserOcclusion`.
   $effect(() => {
     if (!open || minimized) return
     const key = occlusionKey
     // The floating panel is positioned and sized from state, so reading those
     // values here re-publishes on drag, resize, and viewport clamping without a
     // DOM measurement.
-    nativeViewOcclusion.setOverlayRect(key, { x: position.x, y: position.y, width, height })
-    return () => nativeViewOcclusion.clearOverlayRect(key)
+    browserVisibility.publishOcclusion(key, { x: position.x, y: position.y, width, height })
+    return () => browserVisibility.clearOcclusion(key)
   })
 
   // ⌘/Ctrl+Enter runs this panel's primary action through the shared LIFO
@@ -352,6 +349,6 @@
   </div>
 
   {#if minimized}
-    <div class="fixed right-4 bottom-4 z-50" {@attach trackNativeViewOverlay}>{@render dock()}</div>
+    <div class="fixed right-4 bottom-4 z-50" {@attach trackBrowserOcclusion}>{@render dock()}</div>
   {/if}
 {/if}

@@ -2,7 +2,7 @@
   import { X, Download } from '@lucide/svelte'
   import { isVideoMime, isAudioMime } from '$lib/mime'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
 
   interface Props {
     src: string
@@ -20,10 +20,10 @@
   // while this preview is open: the topmost overlay owns Escape.
   $effect(() => {
     const unregisterOverlay = registerOverlayClose(onClose)
-    contextSidebarState.setFullscreenSurfaceActive('media-preview', true)
+    const release = browserVisibility.hideWhile('media-preview', 'fullscreen-surface', true)
     return () => {
       unregisterOverlay()
-      contextSidebarState.setFullscreenSurfaceActive('media-preview', false)
+      release()
     }
   })
 

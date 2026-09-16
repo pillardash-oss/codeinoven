@@ -5,7 +5,7 @@
   import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { trackNativeViewOverlay } from '$lib/stores/native-view-occlusion.svelte'
+  import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import type { PullRequestSummary } from '$shared/types'
   import GitPullRequestSheet from './GitPullRequestSheet.svelte'
 
@@ -68,7 +68,7 @@
 {#if store.drafts.some((draft) => draft.minimized)}
   <div
     class="fixed right-4 bottom-4 z-50 flex max-w-[calc(100vw-2rem)] items-stretch gap-1 overflow-x-auto rounded-xl border bg-surface p-1.5 shadow-xl"
-    {@attach trackNativeViewOverlay}
+    {@attach trackBrowserOcclusion}
     role="group"
     aria-label="Docked pull request drafts"
   >

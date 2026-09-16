@@ -109,6 +109,7 @@
     type ContextSidebarTab,
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
@@ -1418,25 +1419,23 @@
   // A full-window DOM surface (fullscreen terminal, media previews, fullscreen
   // file editors) covers the workspace. The browser's native view floats above
   // every DOM surface, so it must be hidden while such a surface is open   the
-  // browser panel unmounts its native surface via its own visibility lifecycle
-  // when this flips true. The browser's own fullscreen dialog is not registered
+  // browser panel asks the browser-visibility store and detaches its native
+  // surface accordingly. The browser's own fullscreen dialog is not registered
   // here so the browser stays visible when the user fullscreens it deliberately.
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive(
+  $effect(() =>
+    browserVisibility.hideWhile(
       'workspace-terminal-fullscreen',
+      'fullscreen-surface',
       terminalFullscreenTabId !== null
     )
-  })
+  )
 
   // App.svelte keeps this Workspace mounted (but CSS-hidden) when the user
   // navigates to Settings/Scope, so its state survives the trip. The browser's
   // native view has no notion of that DOM hide and keeps floating at its last
   // screen bounds on top of whatever renders there instead   suppress it
   // whenever this Workspace isn't the active top-level view.
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive('workspace-inactive', !active)
-    return () => contextSidebarState.setFullscreenSurfaceActive('workspace-inactive', false)
-  })
+  $effect(() => browserVisibility.hideWhile('workspace-inactive', 'workspace-inactive', !active))
 
   // The grid column/row that hosts each panel collapses the instant
   // `sidebarVisible`/`terminalDockVisible` flips, but the panel itself keeps
@@ -4700,10 +4699,7 @@
                 {:else if showClearBrowserDataConfirm && browserDataClearProjectId === activeContextTab.projectId}
                   <div class="h-full bg-app" aria-hidden="true"></div>
                 {:else}
-                  <BrowserPanel
-                    tab={activeContextTab}
-                    suppressed={browserFullscreenTabId !== null}
-                  />
+                  <BrowserPanel tab={activeContextTab} />
                 {/if}
               {:else if activeContextTab.kind === 'debugger'}
                 <AgentDebugPanel />

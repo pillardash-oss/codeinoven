@@ -1,6 +1,6 @@
 <script lang="ts">
   import { GitFork, Loader2, Shredder, Trash2, X } from '@lucide/svelte'
-  import { trackNativeViewOverlay } from '$lib/stores/native-view-occlusion.svelte'
+  import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
 
   export type DeleteMode = 'down' | 'single' | 'up'
 
@@ -42,7 +42,7 @@
 -->
 <section
   class="fixed top-2 bottom-2 right-13 z-40 flex w-80 flex-col overflow-hidden border bg-surface shadow-lg"
-  {@attach trackNativeViewOverlay}
+  {@attach trackBrowserOcclusion}
   aria-label="Message history"
 >
   <header class="flex items-center justify-between border-b px-3 py-2">

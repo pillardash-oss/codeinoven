@@ -3,7 +3,7 @@
   import { Dialog } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
 
   interface Props {
     open: boolean
@@ -28,10 +28,7 @@
   // would cover the sheet and swallow its clicks. Keyed per instance so stacked
   // sheets don't clear each other's suppression.
   const suppressionKey = `sheet-${Math.random().toString(36).slice(2)}`
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive(suppressionKey, open)
-    return () => contextSidebarState.setFullscreenSurfaceActive(suppressionKey, false)
-  })
+  $effect(() => browserVisibility.hideWhile(suppressionKey, 'fullscreen-surface', open))
 </script>
 
 <Dialog.Root {open} onOpenChange={(next) => !next && onClose()}>

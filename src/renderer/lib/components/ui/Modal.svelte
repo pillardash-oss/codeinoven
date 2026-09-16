@@ -3,7 +3,7 @@
   import { Dialog } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import {
     registerModalPrimaryAction,
     findPanelPrimaryAction,
@@ -51,15 +51,12 @@
 
 
   // The browser's native view floats above every DOM surface (see
-  // ContextSidebarState.setFullscreenSurfaceActive), so this shared modal must
+  // browserVisibility.hideWhile), so this shared modal must
   // suppress it while open   otherwise a still-visible browser tab covers the
   // dialog's content and footer buttons, making them unclickable. Keyed per
   // instance so stacked modals don't clear each other's suppression.
   const suppressionKey = `modal-${Math.random().toString(36).slice(2)}`
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive(suppressionKey, open)
-    return () => contextSidebarState.setFullscreenSurfaceActive(suppressionKey, false)
-  })
+  $effect(() => browserVisibility.hideWhile(suppressionKey, 'fullscreen-surface', open))
 
   let panelEl = $state<HTMLElement | null>(null)
 

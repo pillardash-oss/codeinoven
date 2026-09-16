@@ -3,7 +3,7 @@
   import { X } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
 
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import StandaloneFilePane from './StandaloneFilePane.svelte'
@@ -31,10 +31,7 @@
   // the editor and its toolbar. Keyed distinctly from that editor so the two
   // overlapping surfaces never clear each other's registration, and cleared on
   // destroy so an unmount can never leave the view permanently suppressed.
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive('standalone-file-viewer', open)
-    return () => contextSidebarState.setFullscreenSurfaceActive('standalone-file-viewer', false)
-  })
+  $effect(() => browserVisibility.hideWhile('standalone-file-viewer', 'fullscreen-surface', open))
 
   /** Close a file, asking first when it has edits that are not on disk yet. */
   function requestClose(path: string): void {
