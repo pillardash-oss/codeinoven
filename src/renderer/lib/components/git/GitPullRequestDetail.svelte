@@ -87,8 +87,8 @@
   ]
 
   let tab = $state<DetailTab>('conversation')
-  /** In the dock the write actions fold away so a long conversation can breathe. */
-  let actionsCollapsed = $state(false)
+  /** The comment box stays out of the way until the user asks for it. */
+  let composerOpen = $state(false)
   let commentBody = $state('')
   let method = $state<PrMergeMethod>('squash')
   let mergeConfirm = $state(false)
@@ -846,14 +846,8 @@
   </div>
 {/snippet}
 
-{#snippet panelActions()}
-  <!--
-    Everything that consumes what you write lives here, under the editor.
-    Approve and Request changes used to sit in a bar at the top of the panel,
-    far from the text they submit   which is why requesting changes with an
-    empty box only failed once GitHub rejected it.
-  -->
-  <div class="shrink-0 border-t border-border">
+{#snippet panelComposer()}
+  <div class="shrink-0">
     <div class="px-3 pt-2.5">
       <div
         class="rounded-lg border border-border bg-elevated focus-within:border-primary"
@@ -921,7 +915,10 @@
         </p>
       {/if}
     </div>
+  </div>
+{/snippet}
 
+{#snippet panelMerge()}
     <!--
       Merging is a repo operation, not a review   a tinted, separate zone
       keeps it from reading as one more button in the toolbar above. The
@@ -1111,7 +1108,6 @@
         </span>
       {/if}
     </div>
-  </div>
 {/snippet}
 
 {#if variant === 'fullscreen'}
@@ -1124,7 +1120,8 @@
       {@render panelHead()}
       {@render panelTabs(true)}
       <div class="min-h-0 flex-1 overflow-y-auto">
-        {@render panelActions()}
+        {@render panelComposer()}
+        {@render panelMerge()}
       </div>
     </aside>
     <div class="flex min-w-0 flex-1 flex-col">
@@ -1137,24 +1134,24 @@
     {@render panelTabs(false)}
     {@render panelBody()}
     <!--
-      A long conversation needs the column far more than the composer does, so
-      the write actions fold away behind one row while they are not in use.
+      A long conversation needs the column far more than the composer does.
+      Merging is a repository operation, so it stays visible; the comment box
+      appears only once the user asks for it.
     -->
     <button
       type="button"
       class="flex h-6 shrink-0 cursor-pointer items-center gap-1.5 border-t border-border bg-surface px-3 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      aria-expanded={!actionsCollapsed}
-      title={actionsCollapsed
-        ? 'Show the comment and merge controls'
-        : 'Hide the comment and merge controls'}
-      onclick={() => (actionsCollapsed = !actionsCollapsed)}
+      aria-expanded={composerOpen}
+      title={composerOpen ? 'Hide the comment box' : 'Write a comment or review'}
+      onclick={() => (composerOpen = !composerOpen)}
     >
-      <ChevronDown size={11} class={actionsCollapsed ? 'rotate-180' : ''} />
-      Comment and merge
+      <ChevronDown size={11} class={composerOpen ? 'rotate-180' : ''} />
+      Comment
     </button>
-    {#if !actionsCollapsed}
-      {@render panelActions()}
+    {#if composerOpen}
+      {@render panelComposer()}
     {/if}
+    {@render panelMerge()}
   </div>
 {/if}
 
