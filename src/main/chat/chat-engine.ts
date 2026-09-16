@@ -258,7 +258,7 @@ import {
 } from '../../lib/cio-prompts'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import { ModelPricingService } from '../providers/model-pricing-service'
-import { OpenUsageClient } from '../usage/openusage-client'
+import { OpenUsageClient, openUsageProviderCandidates } from '../usage/openusage-client'
 import { CustomProviderUsageClient } from '../providers/custom-provider-usage-client'
 import {
   budgetTurnLayers,
@@ -4096,11 +4096,14 @@ export class ChatEngine {
       // custom provider can report subscription windows even without a custom
       // usage route. A driver may also return context usage for the live
       // session, which should remain visible alongside quota data.
-      // OpenUsage is keyed by PROVIDER, not harness. A custom provider ID is a
-      // CodeInOven namespace, so also probe the underlying provider ID. Keep
+      // OpenUsage is keyed by PROVIDER, and the candidate order is owned by the
+      // client so a harness-scoped plan (Antigravity, Claude Code, Codex) wins
+      // over the provider its accounts happen to report. A custom provider ID is
+      // a CodeInOven namespace, so also probe the underlying provider ID. Keep
       // the Pi fallback for Pi-backed providers when no provider integration
       // exists in OpenUsage.
       const openUsageProviderIds = [
+        ...openUsageProviderCandidates(harnessId, providerId),
         ...(isCustomProvider ? [underlyingProviderId(providerId)] : []),
         ...(harnessId === 'pi' ? ['pi'] : [])
       ].filter((candidate): candidate is string => Boolean(candidate))
@@ -4108,12 +4111,7 @@ export class ChatEngine {
         driver.readAccountUsage
           ? driver.readAccountUsage(projectPath, providerId)
           : Promise.resolve(null),
-        this.openUsage.readProviderUsage(
-          providerId,
-          openUsageProviderIds,
-          accountId,
-          accountEnvironment
-        ),
+        this.openUsage.readProviderUsage(openUsageProviderIds, accountId, accountEnvironment),
         this.readCustomProviderUsage(harnessId, providerId)
       ])
       const nativeTelemetry = nativeAttempt.status === 'fulfilled' ? nativeAttempt.value : null
