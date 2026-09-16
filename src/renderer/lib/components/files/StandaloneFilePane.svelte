@@ -1,10 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Eye, FileCode2, FolderOpen, Loader2, RotateCw } from '@lucide/svelte'
+  import {
+    AlertTriangle,
+    Eye,
+    FileCode2,
+    FolderOpen,
+    Loader2,
+    RotateCw,
+    Save
+  } from '@lucide/svelte'
 
   import { documentPreviewFrame, htmlPreviewFrame } from '$lib/document-preview-frame'
   import { standaloneFilePreviewUrl } from '$lib/file-preview'
   import { invoke } from '$lib/ipc.svelte'
+  import { ipcErrorMessage } from '$lib/ipc-errors'
   import {
     isAudioMime,
     isDocumentPreviewPath,
@@ -17,7 +26,7 @@
     supportsFilePreview
   } from '$lib/mime'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import type { ProjectTextFile } from '$shared/types'
+  import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
@@ -44,22 +53,26 @@
   const htmlPreview = $derived(isHtmlPreviewPath(path))
   const documentPreview = $derived(isDocumentPreviewPath(path))
   const previewable = $derived(supportsFilePreview(path))
-  /** Kinds rendered from bytes rather than text; their content never has to
-   *  cross IPC because the preview protocol streams it to the element. */
-  const binaryPreview = $derived(pdf || image || documentPreview)
+  /** Kinds whose content can never be read as text and whose preview streams
+   *  bytes to the element instead of crossing IPC. SVG is deliberately excluded:
+   *  it is XML, so its source stays editable while its preview renders from a blob. */
+  const binaryPreview = $derived(pdf || video || audio || documentPreview || (image && !svg))
+
+  /** The file's editable text state. Null until it is read, and null forever for
+   *  kinds that have no text form. */
+  const session = $derived(standaloneFiles.session(path))
+  const dirty = $derived(session ? session.draft !== session.source.content : false)
 
   /** Rendered kinds default to preview (like the project editor does); text and
-   *  code default to the read-only source view. `view` stays null until the
-   *  user picks explicitly, so the default keeps following the file (the pane
-   *  is re-created per file) without an effect resetting it. */
+   *  code default to the source view. `view` stays null until the user picks
+   *  explicitly, so the default keeps following the file (the pane is re-created
+   *  per file) without an effect resetting it. */
   let view = $state<View | null>(null)
   const defaultView = $derived<View>(binaryPreview ? 'preview' : 'source')
   const activeView = $derived<View>(view ?? defaultView)
   let reloadToken = $state(0)
-  let source = $state<ProjectTextFile | null>(null)
   let loading = $state(false)
   let loadError = $state<string | null>(null)
-  let svgUrl = $state<string | null>(null)
   let documentHtml = $state<string | null>(null)
   let documentLoading = $state(false)
   let documentError = $state<string | null>(null)
@@ -71,25 +84,23 @@
       ? standaloneFilePreviewUrl(path, name || path, reloadToken)
       : null
   )
-  const htmlSrcdoc = $derived(htmlPreview && source ? htmlPreviewFrame(source.content) : null)
+  // Previews follow the draft, so an unsaved edit is visible immediately (the
+  // project editor behaves the same way).
+  const htmlSrcdoc = $derived(htmlPreview && session ? htmlPreviewFrame(session.draft) : null)
 
-  /** SVG is rendered from a blob URL: the privileged `appfile://` scheme refuses
-   *  to serve SVG, so program-controlled active XML never runs in a
-   *  custom-scheme document. */
-  function applySource(file: ProjectTextFile | null): void {
-    if (svgUrl) {
-      URL.revokeObjectURL(svgUrl)
-      svgUrl = null
-    }
-    source = file
-    if (svg && file) {
-      svgUrl = URL.createObjectURL(new Blob([file.content], { type: 'image/svg+xml' }))
-    }
-  }
+  /**
+   * SVG is previewed from a data URL built from the draft. The privileged
+   * `appfile://` scheme refuses to serve SVG, and an `<img>` rendering a data URL
+   * cannot run the document's scripts, so the same active-XML protection holds.
+   * Building it from the draft rather than from the last read means an unsaved SVG
+   * edit shows in the preview immediately, with no object-URL lifecycle to manage.
+   */
+  const svgPreviewSrc = $derived(
+    svg && session ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(session.draft)}` : null
+  )
 
   async function loadSource(): Promise<void> {
     if (binaryPreview) {
-      applySource(null)
       loadError = null
       loading = false
       return
@@ -98,14 +109,12 @@
     loading = true
     loadError = null
     try {
-      const file = await invoke('file:readText', path)
+      const file = await standaloneFiles.loadText(path)
       if (sequence !== requestSequence) return
-      applySource(file)
       loadError = file === null ? 'This file cannot be displayed as text' : null
     } catch (error) {
       if (sequence !== requestSequence) return
-      applySource(null)
-      loadError = error instanceof Error ? error.message : String(error)
+      loadError = ipcErrorMessage(error, 'This file could not be read')
     } finally {
       if (sequence === requestSequence) loading = false
     }
@@ -125,25 +134,54 @@
       documentError = html ? null : 'The document could not be converted for preview'
     } catch (error) {
       if (sequence !== requestSequence) return
-      documentError = error instanceof Error ? error.message : String(error)
+      documentError = ipcErrorMessage(error, 'The document could not be previewed')
     } finally {
       if (sequence === requestSequence) documentLoading = false
     }
   }
 
+  /** Cmd/Ctrl+S saves the file the user is looking at. App.svelte owns the same
+   *  chord for folding the sidebar, and defers to this handler whenever a
+   *  standalone file has unsaved edits. */
+  function handleSaveShortcut(event: KeyboardEvent): void {
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return
+    if (!standaloneFiles.isDirty(path)) return
+    event.preventDefault()
+    void standaloneFiles.save(path)
+  }
+
   onMount(() => {
-    void loadSource()
+    // A session already in the store means this file was read before (the user
+    // switched tabs): re-reading would throw the draft away.
+    if (!standaloneFiles.session(path)) void loadSource()
     void loadDocument()
+    window.addEventListener('keydown', handleSaveShortcut)
     return () => {
       requestSequence += 1
-      applySource(null)
+      window.removeEventListener('keydown', handleSaveShortcut)
     }
   })
 
   function reload(): void {
+    if (dirty && !window.confirm(`Discard unsaved changes to ${name} and reload it from disk?`)) {
+      return
+    }
     reloadToken += 1
-    void loadSource()
+    void reloadFromDisk()
     void loadDocument()
+  }
+
+  async function reloadFromDisk(): Promise<void> {
+    if (binaryPreview) {
+      loadError = null
+      return
+    }
+    const sequence = ++requestSequence
+    loading = true
+    loadError = null
+    await standaloneFiles.reload(path)
+    if (sequence !== requestSequence) return
+    loading = false
   }
 
   async function revealInFileManager(): Promise<void> {
@@ -188,11 +226,36 @@
       <Eye size={12} />
     </button>
   {/if}
+  {#if dirty}
+    <span
+      class="ml-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+      role="status"
+      title="Unsaved changes"
+      aria-label="Unsaved changes"
+    ></span>
+  {/if}
+  {#if session}
+    <button
+      type="button"
+      class="ml-1 flex h-6 items-center gap-1 rounded px-1.5 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-dimmed"
+      aria-label={`Save ${name}`}
+      title={session.error ? `Save ${name} (last attempt failed)` : `Save ${name}`}
+      disabled={!dirty || session.saving}
+      onclick={() => void standaloneFiles.save(path)}
+    >
+      {#if session.saving}
+        <Loader2 size={12} class="animate-spin" />
+      {:else}
+        <Save size={12} />
+      {/if}
+      <span class="text-[0.625rem]">Save</span>
+    </button>
+  {/if}
   <button
     type="button"
     class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
-    aria-label="Reload the file"
-    title="Reload"
+    aria-label="Reload the file from disk"
+    title="Reload from disk"
     disabled={loading}
     onclick={reload}
   >
@@ -210,6 +273,23 @@
   <span class="ml-1 truncate text-[0.625rem] text-dimmed" title={path}>{path}</span>
 </div>
 
+{#if session?.error}
+  <div class="flex shrink-0 items-start gap-2 border-b border-border bg-danger/10 px-2 py-1.5">
+    <AlertTriangle size={12} class="mt-0.5 shrink-0 text-danger" />
+    <p class="min-w-0 flex-1 text-[0.625rem] break-words text-danger">{session.error}</p>
+    {#if !binaryPreview}
+      <button
+        type="button"
+        class="shrink-0 rounded border border-border px-1.5 py-0.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
+        title="Reload the disk version, discarding this draft"
+        onclick={reload}
+      >
+        Reload from disk
+      </button>
+    {/if}
+  </div>
+{/if}
+
 {#if loading}
   <div
     class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed"
@@ -218,9 +298,9 @@
     <Loader2 size={13} class="animate-spin" />
     Loading file
   </div>
-{:else if activeView === 'preview' && markdown && source}
+{:else if activeView === 'preview' && markdown && session}
   <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
-    <MarkdownView text={source.content} class="text-sm text-foreground" />
+    <MarkdownView text={session.draft} class="text-sm text-foreground" />
   </div>
 {:else if activeView === 'preview' && htmlPreview && htmlSrcdoc}
   <div class="min-h-0 flex-1 bg-surface">
@@ -255,16 +335,15 @@
     {/if}
   </div>
 {:else if activeView === 'preview' && image}
-  <FileImagePreview src={svg ? svgUrl : previewUrl} alt={name} />
+  <FileImagePreview src={svg ? svgPreviewSrc : previewUrl} alt={name} />
 {:else if activeView === 'preview' && (video || audio)}
   <FileMediaPreview src={previewUrl} alt={name} kind={video ? 'video' : 'audio'} />
-{:else if source}
+{:else if session}
   <ProjectTextEditor
-    value={source.content}
+    value={session.draft}
     {path}
-    readonly
-    ariaLabel={`View ${name}`}
-    onInput={() => undefined}
+    ariaLabel={`Edit ${name}`}
+    onInput={(input) => standaloneFiles.updateDraft(path, input.currentTarget.value)}
   />
 {:else}
   <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6">

@@ -1,5 +1,6 @@
 import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
+import { ipcErrorMessage } from '$lib/ipc-errors'
 import {
   CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS,
   type CloudDeploymentContainer,
@@ -36,12 +37,8 @@ const PROVIDER_DISPLAY_NAMES: Readonly<Record<CloudDeploymentProviderKind, strin
   custom: 'Custom'
 }
 
-function errorMessage(error: unknown, fallback: string): string {
-  if (!(error instanceof Error)) return fallback
-  return error.message
-    .replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
-    .replace(/^Error:\s*/u, '')
-}
+/** Local alias so the existing call sites keep their concise name. */
+const errorMessage = ipcErrorMessage
 
 interface CacheEntry<T> {
   value: T

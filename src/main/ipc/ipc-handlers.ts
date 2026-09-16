@@ -4729,6 +4729,28 @@ export function registerIpcHandlers(
     }
   })
 
+  // Save an edit made to a standalone file (one the OS handed over or the user
+  // picked in a dialog). Authorization is the same scoped-path check the read
+  // uses; the write itself is revision-checked and atomic, so a file that changed
+  // on disk since it was read is never clobbered. Errors are surfaced (unlike the
+  // read, which can only fail by showing nothing) because the editor has to tell
+  // the user why their save did not land.
+  privileged(
+    'file:writeText',
+    async (_event, filePath: unknown, content: unknown, expectedRevision: unknown) => {
+      const revision = requireString(expectedRevision, 'File revision')
+      if (!/^[a-f0-9]{64}$/u.test(revision)) {
+        throw new TypeError('File revision must be a SHA-256 digest')
+      }
+      const safePath = await privilegedIpc.resolveScopedPath(filePath)
+      return projectFilesService.writeAbsoluteText(
+        safePath,
+        requireString(content, 'File content', true),
+        revision
+      )
+    }
+  )
+
   privileged('file:read', async (_event, filePath: unknown) => {
     try {
       const safePath = await privilegedIpc.resolveScopedPath(filePath)
@@ -4819,6 +4841,14 @@ export function registerIpcHandlers(
   ipcMain.handle('project:findByPath', async (_, rawPath: unknown) => {
     const path = validateBoundedString(rawPath, 'Project path', 1, 4096)
     return projectManager.findByCanonicalPath(path)
+  })
+
+  // A file the OS handed over may already belong to a project: resolve the owning
+  // project so the renderer opens it in that project's own editor (file tree,
+  // scopes, save flow) instead of the standalone viewer.
+  ipcMain.handle('project:findFileOwner', async (_, rawPath: unknown) => {
+    const path = validateBoundedString(rawPath, 'File path', 1, 16384)
+    return projectFilesService.findProjectOwner(path)
   })
 
   // The renderer drains the queue on mount; later hand-offs arrive as the

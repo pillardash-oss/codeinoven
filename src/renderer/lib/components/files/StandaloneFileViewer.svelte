@@ -1,28 +1,70 @@
 <script lang="ts">
-  import { Dialog } from 'bits-ui'
+  import { Dialog, AlertDialog } from 'bits-ui'
   import { X } from '@lucide/svelte'
+  import { toast } from 'svelte-sonner'
 
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import StandaloneFilePane from './StandaloneFilePane.svelte'
 
   /**
-   * Read-only fullscreen viewer for files opened through the operating system
+   * Fullscreen viewer/editor for files opened through the operating system
    * ("Open in CodeInOven").
    *
    * It is intentionally project-less: with no project there is no file tree, no
    * tree operations, and no directory index to read or hold in memory   only
-   * the single file on screen. The source and preview modes mirror the project
-   * editor, so every file type the editor can preview previews here too.
+   * the single file on screen. Text and code are editable and saved straight
+   * back to the file they came from; the preview modes mirror the project editor,
+   * so every file type the editor can preview previews here too.
    */
   const active = $derived(standaloneFiles.active)
   const open = $derived(standaloneFiles.open)
+
+  /** A file whose close is waiting on the unsaved-changes decision. */
+  let pendingClose = $state<{ path: string; name: string } | null>(null)
+
+  /** Close a file, asking first when it has edits that are not on disk yet. */
+  function requestClose(path: string): void {
+    if (!standaloneFiles.isDirty(path)) {
+      standaloneFiles.close(path)
+      return
+    }
+    const file = standaloneFiles.files.find((candidate) => candidate.path === path)
+    if (file) pendingClose = { path: file.path, name: file.name }
+  }
+
+  /** Save the pending file and close it; on failure the tab stays open so the
+   *  error the pane renders can be acted on. */
+  async function saveAndClosePending(): Promise<void> {
+    const target = pendingClose
+    if (!target) return
+    const session = standaloneFiles.session(target.path)
+    // A save already in flight: let it land rather than closing over it.
+    if (session?.saving) return
+    await standaloneFiles.save(target.path)
+    if (standaloneFiles.isDirty(target.path)) {
+      pendingClose = null
+      toast.error(`${target.name} could not be saved`, {
+        description: 'The file stayed open so you can review the error and retry.'
+      })
+      return
+    }
+    standaloneFiles.close(target.path)
+    pendingClose = null
+  }
+
+  function discardPending(): void {
+    const target = pendingClose
+    if (!target) return
+    standaloneFiles.close(target.path)
+    pendingClose = null
+  }
 </script>
 
 <Dialog.Root
   {open}
   onOpenChange={(next: boolean) => {
-    if (!next) standaloneFiles.closeActive()
+    if (!next && active) requestClose(active.path)
   }}
 >
   <Dialog.Portal>
@@ -38,8 +80,8 @@
           {active?.name ?? 'File'}
         </Dialog.Title>
         <Dialog.Description class="sr-only">
-          Standalone read-only file viewer. This file is open on its own, without a project or file
-          tree.
+          File opened on its own, without a project or file tree. Text is editable and saves
+          straight back to the file.
         </Dialog.Description>
         <Dialog.Close
           class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -63,7 +105,7 @@
               type="button"
               role="tab"
               class={[
-                'flex h-5 max-w-52 shrink-0 items-center rounded px-2 text-[0.625rem] transition-colors',
+                'flex h-5 max-w-52 shrink-0 items-center gap-1.5 rounded px-2 text-[0.625rem] transition-colors',
                 file.path === standaloneFiles.activePath
                   ? 'bg-overlay text-foreground'
                   : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -72,6 +114,14 @@
               title={file.path}
               onclick={() => standaloneFiles.activate(file.path)}
             >
+              {#if standaloneFiles.isDirty(file.path)}
+                <span
+                  class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+                  role="status"
+                  aria-label="Unsaved changes"
+                  title="Unsaved changes"
+                ></span>
+              {/if}
               <span class="truncate">{file.name}</span>
             </button>
             <button
@@ -79,7 +129,7 @@
               class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               aria-label={`Close ${file.name}`}
               title={`Close ${file.name}`}
-              onclick={() => standaloneFiles.close(file.path)}
+              onclick={() => requestClose(file.path)}
             >
               <X size={11} />
             </button>
@@ -95,3 +145,39 @@
     </Dialog.Content>
   </Dialog.Portal>
 </Dialog.Root>
+
+<AlertDialog.Root bind:open={() => pendingClose !== null, (open) => !open && (pendingClose = null)}>
+  <AlertDialog.Portal>
+    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
+    <AlertDialog.Content
+      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+    >
+      <AlertDialog.Title class="text-sm font-semibold text-foreground">
+        Unsaved changes
+      </AlertDialog.Title>
+      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+        {pendingClose?.name} has edits that are not saved to disk yet.
+      </AlertDialog.Description>
+      <div class="mt-5 flex justify-end gap-2">
+        <AlertDialog.Cancel
+          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+        >
+          Cancel
+        </AlertDialog.Cancel>
+        <button
+          type="button"
+          class="h-8 rounded-lg border border-danger/40 px-3 text-xs font-medium text-danger hover:bg-danger/10"
+          onclick={discardPending}
+        >
+          Discard
+        </button>
+        <AlertDialog.Action
+          class="h-8 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
+          onclick={() => void saveAndClosePending()}
+        >
+          Save and close
+        </AlertDialog.Action>
+      </div>
+    </AlertDialog.Content>
+  </AlertDialog.Portal>
+</AlertDialog.Root>

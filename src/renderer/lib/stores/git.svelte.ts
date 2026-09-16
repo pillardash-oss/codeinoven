@@ -1,4 +1,5 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { ipcErrorMessage } from '$lib/ipc-errors'
 import { APP_SLUG } from '$shared/brand'
 import type {
   GitBranchInfo,
@@ -116,12 +117,8 @@ const PR_ISSUE_FRESHNESS_MS = 60_000
 /** Persisted open-PR conflict indicators, keyed by `owner/repo`. */
 const PR_CONFLICTS_STORAGE_KEY = `${APP_SLUG}.prConflicts.v2`
 
-function errorMessage(error: unknown, fallback: string): string {
-  if (!(error instanceof Error)) return fallback
-  return error.message
-    .replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
-    .replace(/^Error:\s*/u, '')
-}
+/** Local alias so the many call sites keep their concise name. */
+const errorMessage = ipcErrorMessage
 
 /**
  * Whether a `git push` failure was a non-fast-forward rejection (the remote

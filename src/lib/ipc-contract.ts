@@ -2094,6 +2094,13 @@ export const IPC_INVOKE_CONTRACT = {
   /** Resolve an already-registered project by folder path (canonical match), so
    *  an OS hand-off of a folder that is open as a project never adds it twice. */
   'project:findByPath': {} as Contract<[path: string], Project | null>,
+  /** Resolve the project that owns an absolute file path (deepest root wins), so
+   *  an OS hand-off of a file that already belongs to a project opens in that
+   *  project's editor rather than the standalone viewer. */
+  'project:findFileOwner': {} as Contract<
+    [path: string],
+    { projectId: string; relativePath: string } | null
+  >,
   /** Drain the paths the OS handed to CodeInOven before the renderer mounted. */
   'openWith:consumePending': {} as Contract<[], import('./types').OpenedPath[]>,
   /** Hand in-app paths (folders/files dropped on the project sidebar) to the
@@ -2103,6 +2110,14 @@ export const IPC_INVOKE_CONTRACT = {
    *  file or a user-selected path); standalone viewing uses this instead of the
    *  project-relative `projectFiles:read`. */
   'file:readText': {} as Contract<[filePath: string], ProjectTextFile | null>,
+  /** Save text back to a file opened on its own through the operating system.
+   *  Same scoped-path authorization as `file:readText`, and the same
+   *  revision-checked atomic write as `projectFiles:save`, so an edit made in the
+   *  standalone viewer can never clobber a change made elsewhere. */
+  'file:writeText': {} as Contract<
+    [filePath: string, content: string, expectedRevision: string],
+    ProjectTextFile
+  >,
   'project:delete': {} as Contract<[projectId: string, options?: { deleteFolder?: boolean }], void>,
   'project:ensureInbox': {} as Contract<[], Project>,
   'project:get': {} as Contract<[projectId: string], Project | null>,

@@ -7,6 +7,7 @@
  * even when the thread view is not mounted.
  */
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { ipcErrorMessage } from '$lib/ipc-errors'
 import { mergeStreamedPart } from '$lib/agent-part-merge'
 import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -700,7 +701,7 @@ class ThreadMessagesStore {
     error: unknown
   ): void {
     const raw = error instanceof Error ? error.message : 'Message failed to send.'
-    const message = raw.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+    const message = ipcErrorMessage(error, raw)
     const kind = classifyProviderIssue(message)
     const retryAt =
       kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
