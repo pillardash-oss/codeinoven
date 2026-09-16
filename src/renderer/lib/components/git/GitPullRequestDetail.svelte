@@ -1463,7 +1463,7 @@
       in app.css, and a wrapper with a larger radius is what made these read as
       pill-shaped.
     -->
-    <div class="flex h-8 items-stretch gap-2 px-3 py-2.5">
+    <div class="flex items-stretch gap-2 px-3 py-2.5">
       <div class="flex h-8 min-w-0 items-stretch overflow-hidden rounded-xs border border-border">
         <button
           type="button"
@@ -1508,11 +1508,6 @@
         <span class="min-w-0 truncate">Comment</span>
       </button>
     </div>
-    {#if open && !hasBody}
-      <p class="px-3 pb-2.5 text-[0.5625rem] leading-relaxed text-dimmed">
-        Requesting changes needs a comment saying what to change. Approving does not.
-      </p>
-    {/if}
   </div>
 {/snippet}
 
