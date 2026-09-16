@@ -304,7 +304,8 @@ import {
   classifyProviderIssue,
   isUsageLimitNoticeText,
   isUsageResetWaitIssue,
-  parseUsageResetAt
+  parseUsageResetAt,
+  presentProviderError
 } from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
 import {
@@ -20930,14 +20931,18 @@ export class ChatEngine {
     rawError?: string
   ): AgentProviderIssue {
     const kind = classifyProviderIssue(message)
-    const raw = rawError?.trim() || message
+    const detail = rawError?.trim() || message.trim()
+    // `message` is display copy and `rawError` is diagnostic detail: a harness
+    // that crashed inside its own runtime reports its stack trace as an
+    // ordinary error string, which must never become the card body.
+    const presentation = presentProviderError(message)
     return {
       kind,
       message:
         kind === 'authentication'
           ? `${this.drivers.get(harnessId)?.name ?? harnessId} sign-in expired. Sign in again, then retry this message.`
-          : message,
-      rawError: raw,
+          : presentation.message,
+      rawError: detail,
       harnessId,
       retryable: kind !== 'billing'
     }

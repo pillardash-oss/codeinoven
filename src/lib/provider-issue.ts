@@ -69,6 +69,54 @@ export function extractProviderErrorEnvelope(raw: string): ProviderErrorEnvelope
 }
 
 /**
+ * A crash-trace frame line, e.g.
+ * `    at resolve (/$bunfs/root/chunk-36bwgd4p.js:2:1659)` or the
+ * `at SessionPrompt.run (definition)` shape a compiled runtime emits. A
+ * harness that crashes inside its own runtime hands its exception text back
+ * as an ordinary message string, so the first frame line is where the
+ * diagnostic detail begins.
+ */
+const STACK_FRAME_LINE = /^\s*at(?:\s|$)/u
+
+export interface ProviderErrorPresentation {
+  /** Short, user-facing message the provider card body may render: the JSON
+   *  body's `message` with any stack trace reduced to its header line. */
+  message: string
+  /** Full diagnostic text (raw transport string, trace included). Present only
+   *  when it says more than `message`; the Raw Error view shows this. */
+  rawError?: string
+}
+
+/**
+ * Split a provider/harness failure string into the short message the provider
+ * error card body may render and the full diagnostic text reserved for the Raw
+ * Error view. A failure reaches the UI as a plain message string, with no
+ * envelope to unwrap, in two shapes that both used to leak a whole stack trace
+ * into the beautified card body:
+ *
+ * ```
+ * TypeError: undefined is not an object (evaluating 'a.name')
+ *     at resolve (/$bunfs/root/chunk-36bwgd4p.js:2:1659)
+ *     at map (native:1:11)
+ * ```
+ *
+ * Cutting at the first frame line keeps the header (`TypeError: ...`) as the
+ * card body and leaves the trace in Raw Error, which is the app-wide contract
+ * for every `AgentProviderIssue`: `message` is display copy, `rawError` is
+ * diagnostic detail.
+ */
+export function presentProviderError(raw: string): ProviderErrorPresentation {
+  const detail = raw.trim()
+  if (!detail) return { message: '' }
+  const body = extractProviderErrorEnvelope(detail).message.trim()
+  const lines = body.split('\n')
+  const frameIndex = lines.findIndex((line) => STACK_FRAME_LINE.test(line))
+  const header = (frameIndex === -1 ? lines : lines.slice(0, frameIndex)).join('\n').trim()
+  const message = header || (lines[0] ?? body).trim() || detail
+  return message === detail ? { message } : { message, rawError: detail }
+}
+
+/**
  * A harness-emitted usage-cap notice is a short, plain-text system message  
  * anything longer or formatted is agent prose, not a notice.
  */

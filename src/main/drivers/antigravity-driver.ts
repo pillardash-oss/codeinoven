@@ -37,6 +37,7 @@ import type { StorageEngine } from '../storage/storage-engine'
 import { runHarnessCommand } from './harness-runtime'
 import { Logger } from '../system/logger'
 import { parseBrainTraceLine } from './antigravity-brain-trace'
+import { presentProviderError } from '../../lib/provider-issue'
 
 /**
  * Antigravity CLI reads its stdin and hangs when that pipe stays open without
@@ -185,7 +186,7 @@ function antigravityIssue(error: string): AgentProviderIssue {
   const authentication = normalized.includes('auth') || normalized.includes('sign in')
   return {
     kind: quota ? 'quota' : authentication ? 'authentication' : 'unknown',
-    message: error,
+    message: presentProviderError(error).message,
     rawError: error,
     harnessId: 'antigravity',
     retryable: quota || retryAt !== undefined,

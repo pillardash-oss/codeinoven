@@ -25,8 +25,8 @@ import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-int
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
 import {
   classifyProviderIssue,
-  extractProviderErrorEnvelope,
-  parseUsageResetAt
+  parseUsageResetAt,
+  presentProviderError
 } from '../../lib/provider-issue'
 import type { StorageEngine } from '../storage/storage-engine'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -612,7 +612,7 @@ function claudeSessionLimitIssue(
     claudeSessionLimitResetAt(error)
   return {
     kind: 'quota',
-    message: error,
+    message: presentProviderError(error).message,
     rawError: error,
     harnessId: 'claude-code',
     retryable: retryAt !== undefined,
@@ -632,7 +632,7 @@ function claudeResultIssue(error: string | undefined): AgentProviderIssue | unde
   if (!error) return undefined
   const kind = classifyProviderIssue(error)
   if (kind === 'unknown') return undefined
-  const message = extractProviderErrorEnvelope(error).message
+  const message = presentProviderError(error).message
   const retryAt = kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
   return {
     kind,
