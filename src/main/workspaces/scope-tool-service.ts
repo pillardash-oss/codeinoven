@@ -21,6 +21,7 @@ import type {
   ScopeWorktreeProgressEvent
 } from '../../lib/types'
 import { SCOPE_TOOL_ACTIONS, SCOPE_TOOL_DESTRUCTIVE_ACTIONS } from '../../lib/types'
+import { APP_SCOPE_UTILITY_ID } from '../../lib/utility-ids'
 import { getScopeRootPath } from '../../lib/utils'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ProjectManager } from '../../lib/engines/project-manager'
@@ -92,7 +93,7 @@ const MERGE_MODES: readonly ScopeMergeMode[] = [
 const ENVIRONMENT_MODES: readonly ScopeEnvironmentMode[] = ['copy', 'symlink']
 const THREAD_DISPOSITIONS = ['move-to-default', 'delete'] as const
 
-/** Every field `cio_scope` accepts; anything else is rejected, never ignored. */
+/** Every field the scope capability accepts; anything else is rejected, never ignored. */
 const SCOPE_TOOL_INPUT_KEYS: ReadonlySet<string> = new Set([
   'action',
   'scope',
@@ -135,7 +136,7 @@ interface ScopeSummary {
   active: boolean
 }
 
-/** Parsed `cio_scope` input. Every field is validated before it is used. */
+/** Parsed scope capability input. Every field is validated before it is used. */
 interface ScopeToolCall {
   action: ScopeToolAction
   scope?: string
@@ -172,9 +173,9 @@ export class ScopeToolService {
   ) {}
 
   /**
-   * Run one `cio_scope` call for a turn. Reads are free; writes mutate app-owned
-   * scope state; destructive actions pass through the confirmation contract
-   * before anything is removed.
+   * Run one gateway invocation of the scope capability for a turn. Reads are
+   * free; writes mutate app-owned scope state; destructive actions pass through
+   * the confirmation contract before anything is removed.
    */
   async execute(input: Record<string, unknown>, context: ScopeToolContext): Promise<unknown> {
     const call = parseScopeToolInput(input)
@@ -275,7 +276,7 @@ export class ScopeToolService {
       case 'merge_into_project':
         return await this.runDestructive(call, context, projectPath)
       default:
-        throw new TypeError(`Unsupported cio_scope action: ${String(call.action)}`)
+        throw new TypeError(`Unsupported ${APP_SCOPE_UTILITY_ID} action: ${String(call.action)}`)
     }
   }
 
@@ -369,7 +370,7 @@ export class ScopeToolService {
       ...(healthy
         ? {}
         : {
-            guidance: `This scope’s checkout is unhealthy (${summary.health?.category}). Run cio_scope with action "repair" before working in it.`
+            guidance: `This scope’s checkout is unhealthy (${summary.health?.category}). Run ${APP_SCOPE_UTILITY_ID} with action "repair" before working in it.`
           })
     }
   }
@@ -382,7 +383,7 @@ export class ScopeToolService {
     const summary = await this.summarizeBucket(context, projectPath, bucket)
     if (summary.kind === 'worktree' && summary.health?.category !== 'healthy') {
       throw new Error(
-        `The scope “${bucket.name}” is unhealthy (${summary.health?.category}), so its conflicts cannot be read. Run cio_scope with action "repair" first.`
+        `The scope “${bucket.name}” is unhealthy (${summary.health?.category}), so its conflicts cannot be read. Run ${APP_SCOPE_UTILITY_ID} with action "repair" first.`
       )
     }
     const status = await this.git.getStatus(summary.path)
@@ -522,7 +523,7 @@ export class ScopeToolService {
     })
     if (health.category !== 'healthy') {
       throw new Error(
-        `The scope “${bucket.name}” is unhealthy (${health.category}), so it cannot be synced. Run cio_scope with action "repair" first.`
+        `The scope “${bucket.name}” is unhealthy (${health.category}), so it cannot be synced. Run ${APP_SCOPE_UTILITY_ID} with action "repair" first.`
       )
     }
     const strategy = call.strategy ?? (await this.options.defaultPullStrategy?.()) ?? 'merge'
@@ -570,7 +571,7 @@ export class ScopeToolService {
     projectPath: string
   ): Promise<unknown> {
     if (!DESTRUCTIVE_ACTIONS.has(call.action)) {
-      throw new TypeError(`Unsupported cio_scope action: ${String(call.action)}`)
+      throw new TypeError(`Unsupported ${APP_SCOPE_UTILITY_ID} action: ${String(call.action)}`)
     }
     const bucket = this.resolveScope(call.scope, context)
     const project = await this.projects.getProject(context.projectId)
@@ -631,7 +632,7 @@ export class ScopeToolService {
         challenge: `Are you sure you want to ${summary}? [YES] [NO]`,
         consequences,
         snapshot,
-        next: 'If you are not certain the user asked for exactly this, ask them in your reply instead of confirming. To proceed, call cio_scope again with confirm true.'
+        next: `If you are not certain the user asked for exactly this, ask them in your reply instead of confirming. To proceed, call ${APP_SCOPE_UTILITY_ID} again with confirm true.`
       }
     }
 
@@ -1009,7 +1010,7 @@ function destructiveConsequences(
 export function parseScopeToolInput(input: Record<string, unknown>): ScopeToolCall {
   for (const key of Object.keys(input)) {
     if (!SCOPE_TOOL_INPUT_KEYS.has(key)) {
-      throw new TypeError(`Unsupported cio_scope input field: ${key}`)
+      throw new TypeError(`Unsupported ${APP_SCOPE_UTILITY_ID} input field: ${key}`)
     }
   }
   const rawAction = input['action']

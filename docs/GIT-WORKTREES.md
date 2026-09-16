@@ -263,26 +263,46 @@ maintenance that keeps the worktree lives in the Git panel.
 Archiving and restoring a scope never mutate Git, the worktree, environment
 files, setup status, or thread assignments.
 
-## 8a. Agent-created scopes (`cio_scope`)
+## 8a. Agent-created scopes (`cio:scope`)
 
-Agents create and manage worktree scopes through one app-owned gateway tool,
-`cio_scope` (`src/lib/gateway-tools.ts`, executed by
-`src/main/workspaces/scope-tool-service.ts`). It is exposed on every agent turn
-next to the utility gate, on every harness: MCP-native harnesses discover it
-from the gateway, Codex gets it through `dynamicTools`, and Pi registers it as a
-first-class tool in the generated gateway extension.
+Agents create and manage worktree scopes through one app-owned utility,
+`cio:scope` (`src/lib/utility-ids.ts`, seeded by
+`src/main/utilities/utility-registry-service.ts`, executed by
+`src/main/workspaces/scope-tool-service.ts`). It is deliberately **not** a tool
+in any harness's tool list: a session that never involves a worktree must not
+carry the schema, and most sessions never want one. It behaves exactly like the
+other app-owned utilities (`cio:cua-driver`, `cio:browser`), so an agent reaches
+it the same way:
+
+1. `cio_util_find` (query `worktree`) returns it as an on-demand utility,
+2. `cio_util_init` activates it and hands back the full contract
+   (`SCOPE_CAPABILITY_DOCS` in `src/lib/scope-tool.ts`), which is the only place
+   that contract enters context,
+3. `cio_util_use` invokes it with `utility_id: "cio:scope"`, `operation: <action>`
+   and `input: <the action's fields>`.
+
+The activation is banked per thread, so later turns can invoke it by id without
+searching again, and `cio_util_docs_lookup` re-lists the contract after
+compaction. Because it is an ordinary registry utility, the Utilities screen
+lists it, and disabling it there removes both the capability and the one-line
+pointer the turn instructions add for it.
+
+Agents are told to use it **only** when the user explicitly asks to work in a
+separate worktree, never on their own initiative: that rule is in the turn
+instruction, in the registry description a search returns, and in the activated
+contract.
 
 Running `git worktree add` directly is **not** supported. A raw worktree is
 invisible to the app: it never appears on the scope board, gets no health check,
 no environment propagation, no setup run, and no entry in the sync or
-lifecycle tooling. A worktree made through `cio_scope` is a normal managed
+lifecycle tooling. A worktree made through `cio:scope` is a normal managed
 scope from the moment it exists. On Pi, the bash gate routes
 `git worktree add|remove|move|lock|unlock|prune` through the permission card
 (`src/main/drivers/pi-core-tools-extension.ts`) so a raw worktree can only
 happen while the user is looking at the request; `git worktree list` and
 `repair` stay ungated.
 
-Actions (one `action` per call; a target scope resolves by id or display name
+Actions (one `operation` per call; a target scope resolves by id or display name
 and defaults to the calling thread's scope):
 
 - **Reads** `list`, `status`, `conflicts`, `source_info`, `detect_adoptable`.
@@ -303,7 +323,7 @@ the board without the user having to reopen it.
 
 ### Destructive actions an agent asks for
 
-The tool never destroys anything on first ask. A destructive call without
+The capability never destroys anything on first ask. A destructive call without
 `confirm: true` changes nothing and returns the state-bound snapshot plus an
 explicit challenge (`Are you sure you want to <action>? [YES] [NO]`).
 

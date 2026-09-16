@@ -2411,8 +2411,9 @@ export class ChatEngine {
   }
 
   /**
-   * Wire the agent-facing `cio_scope` tool. The IPC layer owns the scope and
-   * worktree services, so it supplies the executor the gateway calls.
+   * Wire the app-owned scope and worktree capability that the utility gateway
+   * exposes. The IPC layer owns the scope and worktree services, so it supplies
+   * the executor the gateway calls.
    */
   setScopeToolService(executor: ScopeToolExecutor | null): void {
     this.utilityOrchestration.setScopeToolExecutor(executor)
@@ -3557,7 +3558,7 @@ export class ChatEngine {
     settings: ThreadSettings,
     budgetContext: UtilityTurnBudgetContext,
     threadTitle: string,
-    /** Scope the thread works in; `cio_scope` defaults to it when the agent omits a target. */
+    /** Scope the thread works in; `cio:scope` defaults to it when the agent omits a target. */
     scopeBucketId?: string,
     skipRuntime = false,
     allowManagement = false,

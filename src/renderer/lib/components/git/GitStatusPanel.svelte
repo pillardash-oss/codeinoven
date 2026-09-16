@@ -9,6 +9,9 @@
   import { gitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
   import { DEFAULT_SCOPE_BUCKET_ID, type PromptAttachment } from '$shared/types'
+  import { UTILITY_INVOKE_TOOL_NAME, UTILITY_SEARCH_TOOL_NAME } from '$shared/gateway-tools'
+  import { APP_SCOPE_UTILITY_ID } from '$shared/utility-ids'
+  import { SCOPE_CAPABILITY_SEARCH_QUERY } from '$shared/scope-tool'
   import type {
     GitBranchInfo,
     GitCommitInfo,
@@ -684,21 +687,25 @@
       `Review pull request #${pr.number}   "${pr.title}" (${pr.headRef} → ${pr.baseRef}) by ${pr.authorLogin}.`,
       `PR URL: ${pr.url}`,
       '',
-      'Work in isolation so my current working tree is never touched. Do not run `git worktree`',
-      'yourself: CodeInOven owns worktree lifecycle through cio_scope, and only a worktree made',
-      'through it appears on the scope board with its branch, health and threads.',
+      'Work in isolation so my current working tree is never touched. I am asking you for that, so',
+      'set up an app-managed worktree scope: it is deliberately not in your tool list, so call',
+      `\`${UTILITY_SEARCH_TOOL_NAME}\` with query "${SCOPE_CAPABILITY_SEARCH_QUERY}", activate the`,
+      `\`${APP_SCOPE_UTILITY_ID}\` result, then invoke it with \`${UTILITY_INVOKE_TOOL_NAME}\`. Never run`,
+      '`git worktree` yourself: only a checkout made that way lands on the scope board with its',
+      'branch, health and threads.',
       `1. \`git fetch origin pull/${pr.number}/head:pr-${pr.number}\``,
-      `2. \`cio_scope\` action "create", title "Review PR #${pr.number}", baseBranch "pr-${pr.number}"`,
-      '   so the scope owns the checkout and this thread moves into it.',
+      `2. \`${APP_SCOPE_UTILITY_ID}\` operation "create" with input`,
+      `   { "title": "Review PR #${pr.number}", "baseBranch": "pr-${pr.number}" } so the scope owns`,
+      '   the checkout and this thread moves into it.',
       `3. Review the diff against \`${pr.baseRef}\` inside that scope   correctness, edge cases,`,
       '   security, test coverage, and anything that would break existing behavior.',
       '4. Run the project checks/tests that are relevant to the changed files.',
       '',
       `Write your findings to \`${reportDirectory}/review.md\`: a short verdict line, then findings`,
       'ordered most severe first with file:line references and concrete failure scenarios.',
-      'When you are done, hand the scope back: `cio_scope` action "delete_scope" with threads',
-      `"move-to-default" and deleteBranch true, then drop the fetched branch with`,
-      `\`git branch -D pr-${pr.number}\`. Do not push anything and do not merge the PR.`
+      `When you are done, hand the scope back: \`${APP_SCOPE_UTILITY_ID}\` operation "delete_scope"`,
+      'with input { "threads": "move-to-default", "deleteBranch": true }, then drop the fetched',
+      `branch with \`git branch -D pr-${pr.number}\`. Do not push anything and do not merge the PR.`
     ].join('\n')
   }
 

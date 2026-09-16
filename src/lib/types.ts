@@ -373,10 +373,10 @@ export interface ScopeWorktreeProgressEvent extends ScopeWorktreeProgress {
 /** Who initiated a managed-worktree run. */
 export type ScopeWorktreeRunOrigin = 'user' | 'agent'
 
-// ─── Agent-facing scope tool (`cio_scope`) ───────────────────────────────────
+// ─── Agent-facing scope capability (`cio:scope`) ─────────────────────────────
 
 /**
- * Every operation the agent-facing `cio_scope` tool can perform. Read actions
+ * Every operation the agent-facing `cio:scope` utility can perform. Read actions
  * report state, write actions mutate app-owned scope state, and the destructive
  * actions are confirmation-gated (see `ScopeAgentConfirmationRequest`).
  */

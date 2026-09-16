@@ -12,3 +12,6 @@ export const APP_BROWSER_UTILITY_ID = 'cio:browser'
 
 /** Stable id of the Cua Driver computer-use MCP utility. */
 export const APP_CUA_DRIVER_UTILITY_ID = 'cio:cua-driver'
+
+/** Stable id of the app-owned scope and Git-worktree management utility. */
+export const APP_SCOPE_UTILITY_ID = 'cio:scope'

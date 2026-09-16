@@ -19,13 +19,13 @@ import {
   APP_BROWSER_UTILITY_ID,
   APP_IMAGE_DESCRIPTOR_UTILITY_ID,
   APP_RETRIEVE_MCP_HOST_UTILITY_ID,
+  APP_SCOPE_UTILITY_ID,
   UtilityRegistryService
 } from './utility-registry-service'
 import { CuaBridgeService } from './cua-bridge-service'
 import {
   GATEWAY_TOOLS,
   RETRIEVE_MCP_HOST_TOOL_NAME,
-  SCOPE_TOOL_NAME,
   UTILITY_SEARCH_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
@@ -33,6 +33,7 @@ import {
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME
 } from '../../lib/gateway-tools'
+import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import {
@@ -108,7 +109,7 @@ export interface UtilityTurnRequest {
   harnessId: string
   projectId: string
   threadId: string
-  /** Scope the calling thread works in; the default target of `cio_scope`. */
+  /** Scope the calling thread works in; the default target of `cio:scope`. */
   scopeBucketId?: string
   /** Human-readable thread title, used to label Cua agent cursors. */
   threadTitle?: string
@@ -185,8 +186,9 @@ export type BrowserUtilityExecutor = (
 ) => Promise<unknown>
 
 /**
- * Runs one `cio_scope` call for the turn that made it. The chat engine supplies
- * it because it owns the thread's scope, project root and permission tier.
+ * Runs one gateway invocation of the app-owned scope and worktree capability
+ * for the turn that made it. The chat engine supplies it because it owns the
+ * thread's scope, project root and permission tier.
  */
 export type ScopeToolExecutor = (
   input: Record<string, unknown>,
@@ -362,8 +364,6 @@ export class UtilityOrchestrationService {
         return (state, input) => this.manage(state, input)
       case UTILITY_DIAGNOSTICS_TOOL_NAME:
         return (state, input) => this.runDiagnostics(state, input)
-      case SCOPE_TOOL_NAME:
-        return (state, input) => this.runScopeTool(state, input)
       default:
         return null
     }
@@ -383,10 +383,12 @@ export class UtilityOrchestrationService {
   }
 
   /**
-   * Register the executor behind the agent-facing `cio_scope` tool. App-owned
-   * scope and worktree management is offered on every agent turn next to the
-   * utility gate, not discovered through it, because an agent that wants an
-   * isolated checkout must not have to search for the way to make one.
+   * Register the executor behind the app-owned `cio:scope` utility. Scope and
+   * worktree management is an ordinary app-owned utility rather than a listed
+   * tool: most turns never touch a worktree, and a turn that does not must not
+   * carry the capability's contract in its context. The chat engine supplies the
+   * executor because it owns the thread's scope, project root and permission
+   * tier.
    */
   setScopeToolExecutor(executor: ScopeToolExecutor | null): void {
     this.scopeToolExecutor = executor
@@ -459,11 +461,11 @@ export class UtilityOrchestrationService {
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )
     const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
-    // `cio_scope` is app-owned scope management rather than utility discovery:
-    // it is offered on every agent turn, including turns with nothing on demand
-    // to find, so an agent never falls back to a raw `git worktree`.
+    // The app-owned scope utility is advertised as a one-line pointer, never as
+    // a schema: whether it is offered at all is the registry's call, so
+    // disabling it in Utilities removes the pointer too.
+    const hasScopeCapability = eligible.some(({ utility }) => utility.id === APP_SCOPE_UTILITY_ID)
     const gatewayTools = GATEWAY_TOOLS.filter(({ name }) => {
-      if (name === SCOPE_TOOL_NAME) return this.scopeToolExecutor !== null
       if (name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) {
         return request.allowManagement === true
       }
@@ -509,12 +511,11 @@ export class UtilityOrchestrationService {
     this.turnIdsByToken.set(token, id)
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
-    const hasScopeTool = gatewayTools.some(({ name }) => name === SCOPE_TOOL_NAME)
     const toolInstructions = [
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
-      ...(hasScopeTool
+      ...(hasScopeCapability
         ? [
-            `${SCOPE_TOOL_NAME} manages this project's scopes and their managed Git worktrees: list, status, conflicts, create, rename, pin, archive, restore, adopt, repair, retry_setup, sync_from_main, sync_to_main, and the confirmation-gated detach_worktree, delete_scope and merge_into_project. Use it whenever work should run in an isolated checkout or the user asks about a scope or worktree. Never run raw \`git worktree add\`: the app owns worktree lifecycle, and a raw worktree stays invisible to the scope board, its health checks and its sync tooling. A managed worktree appears on the board with its branch and threads, and the thread that created it moves into it unless attachThread is false.`
+            `The app-owned scope and Git-worktree capability (utility \`${APP_SCOPE_UTILITY_ID}\`) is deliberately not in your tool list. Only when the user explicitly asks you to work in a separate worktree: search with ${UTILITY_SEARCH_TOOL_NAME} (query "${SCOPE_CAPABILITY_SEARCH_QUERY}"), activate the result, then invoke it with ${UTILITY_INVOKE_TOOL_NAME}. Never create a worktree on your own initiative, and never run raw \`git worktree add\`.`
           ]
         : []),
       ...(hasOnDemand
@@ -747,9 +748,10 @@ export class UtilityOrchestrationService {
   }
 
   /**
-   * App-owned scope and worktree management for the calling thread. The chat
-   * engine owns the thread's scope, project root and permission tier, so the
-   * executor receives them instead of re-deriving them here.
+   * App-owned scope and worktree management for the calling thread, reached
+   * through the gateway's invoke route. The chat engine owns the thread's
+   * scope, project root and permission tier, so the executor receives them
+   * instead of re-deriving them here.
    */
   private async runScopeTool(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
     const execute = this.scopeToolExecutor
@@ -1063,6 +1065,9 @@ export class UtilityOrchestrationService {
       return { tools: await client.listTools() }
     }
     if (resolved.utility.kind === 'skill') {
+      // Skills hand back their instructions: the full contract, only now, and
+      // only because this turn asked for the capability. The app-owned scope
+      // utility travels this path.
       return { instructions: resolved.utility.config.instructions }
     }
     if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
@@ -1160,7 +1165,11 @@ export class UtilityOrchestrationService {
     }
 
     let result: unknown
-    if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
+    if (resolved.utility.id === APP_SCOPE_UTILITY_ID) {
+      // The capability's `operation` is the scope action, and its `input` is
+      // exactly the field set the scope capability accepts.
+      result = await this.runScopeTool(state, { ...operationInput, action: operation })
+    } else if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
       if (operation !== 'save_notes' || !state.request.saveBrainstormNotes) {
         throw new Error('Alignment notes are only available during an active Brainstorm interview')
       }
@@ -1647,6 +1656,11 @@ function utilitySearchConfiguration(utility: UtilityDefinition): string {
 
 function utilitySearchAliases(kind: UtilityKind, nativeCapability?: string): string {
   const aliases: string[] = []
+  if (normalizeCapability(nativeCapability ?? '') === 'scope') {
+    aliases.push(
+      'scope worktree work tree checkout isolate isolated separate parallel branch sandbox copy clone git repository working directory'
+    )
+  }
   if (normalizeCapability(nativeCapability ?? '') === 'computer_use') {
     aliases.push(
       'computer desktop screen mouse keyboard click type scroll gui ui application app browser chrome safari firefox visual automation control interact open launch'

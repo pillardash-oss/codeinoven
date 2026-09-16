@@ -2413,7 +2413,7 @@ export function registerIpcHandlers(
   const vault = new SecretVault(storage)
   const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
 
-  // ─── Agent-facing scope management (`cio_scope`) ──────────────────────────
+  // ─── Agent-facing scope management (`cio:scope`) ──────────────────────────
   /**
    * Destructive scope actions an agent asked for, awaiting a user decision.
    * Only an `auto_review` turn creates one: the agent's tool call is parked on

@@ -7,7 +7,7 @@
  * the setup commands is always visible, expandable and dockable instead of
  * flashing past as a toast.
  *
- * An agent's run (`cio_scope`) is the same kind of job: it streams the same
+ * An agent's run (`cio:scope`) is the same kind of job: it streams the same
  * stages on the same channel, so the first event mints the job record here and
  * the run becomes visible exactly like one the user started in this window.
  */
