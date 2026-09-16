@@ -235,3 +235,75 @@ files, setup status, or thread assignments.
   blocked from managed-worktree creation before any mutation. Use a project-root
   scope for those repositories.
 - Environment **symlink mode** is unavailable on Windows.
+
+## 10. Running dev side by side with a worktree
+
+A managed worktree is a complete checkout of its managed branch, so `bun dev`
+runs inside it while the project root keeps its own instance open. The pieces
+that make that safe are listed here.
+
+### 10.1 Renderer port
+
+The renderer origin carries persisted state (recovery snapshot, thread visits,
+UI preferences in origin-keyed `localStorage`), so the port is pinned instead of
+drifting:
+
+- the project root keeps the stable `5173`;
+- a linked worktree derives its own stable port from its own path (pool
+  `5200` to `5999`), so each worktree keeps the same origin across restarts;
+- `CODEINOVEN_RENDERER_PORT=<port>` overrides the choice.
+
+`strictPort` stays on, so a port that is already taken fails the launch loudly
+instead of silently moving the origin and dropping that persisted state. If two
+worktrees ever derive the same port, or a second independent clone resolves the
+`5173` default, set `CODEINOVEN_RENDERER_PORT` for one of them. Resolution lives
+in `electron.vite.config.ts`.
+
+### 10.2 App data root
+
+Every instance shares CodeInOven's config root by default, which is a supported
+configuration: the instance registry, the atomic `mkdir` cross-process locks,
+and the WAL SQLite connection with `busy_timeout` are all built for several live
+instances. Sharing means shared projects, threads, settings, logs, and window
+state.
+
+To give one instance a data root of its own, pass an absolute path:
+
+```
+CODEINOVEN_CONFIG_ROOT=/abs/path/to/instance-config bun dev
+```
+
+Unpackaged launches (`bun dev`, `electron-vite preview`) and the packaged
+startup smoke harness honor it; a shipped app ignores it, so a stray environment
+variable can never repoint a user's real data root. When the variable is set,
+every launch logs whether it was honored. Managed worktrees are created
+thereunder, so a different root has its own project registry: use it for a
+throwaway instance, not for opening the worktree you want to review.
+
+### 10.3 Chromium profile
+
+Cookies, embedded-browser partitions, and the remote pairing material live in
+the platform Electron profile, which instances share. `--user-data-dir` splits
+it (electron-vite appends `ELECTRON_CLI_ARGS` to the dev Electron command):
+
+```
+ELECTRON_CLI_ARGS='["--user-data-dir=/abs/path/to/instance-profile"]' bun dev
+```
+
+### 10.4 Before the first dev run in a new worktree
+
+The checkout is complete, but gitignored build inputs are not. Run the project's
+setup commands (`bun install`, and `bun run harness:build-pi` when the instance
+should use the bundled Pi rather than a PATH `pi`); `resources/speech/runtime`
+is rebuilt by the `predev` hook. Untracked root `.env` files are copied by
+creation (section 5).
+
+### 10.5 Concurrent-instance caveats
+
+- Remote mode stays off in dev unless `CODEINOVEN_DEV_REMOTE_MODE=1`. With it on
+  in two instances, keep them apart with `LAN_PORT` and `LAN_LOCAL_PORT`.
+- `bun dev:remote-pwa` owns its own port, overridable with `REMOTE_PWA_DEV_PORT`.
+- Settings, logs, the gateway plugin data directory, and the speech process
+  journal are single files under the config root, so two instances writing them
+  concurrently is last-write-wins. Give an instance its own
+  `CODEINOVEN_CONFIG_ROOT` when that matters.

@@ -1,8 +1,9 @@
 import { defineConfig, loadEnv } from 'electron-vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'path'
+import { createHash } from 'node:crypto'
+import { readFileSync, realpathSync, statSync } from 'node:fs'
+import { join, resolve } from 'path'
 import type { Plugin, PluginOption, PreviewServer, ViteDevServer } from 'vite'
 import packageJson from './package.json'
 
@@ -49,6 +50,60 @@ function pwaManifestVersionPlugin(): Plugin {
 // build instead of the bare package.json version electron-builder would
 // otherwise fall back to.
 const resolvedAppVersion = process.env['CODEINOVEN_BUILD_VERSION'] || packageJson.version
+
+/** Renderer dev port of the primary checkout. */
+const DEFAULT_RENDERER_PORT = 5173
+/** Deterministic port pool reserved for linked Git worktrees. */
+const WORKTREE_PORT_BASE = 5200
+const WORKTREE_PORT_POOL = 800
+
+/**
+ * Is this config loaded from a linked Git worktree (`git worktree add`)?
+ * A linked worktree stores a `.git` *file* holding its `gitdir:` pointer, while
+ * a regular checkout has a `.git` *directory*.
+ */
+function isLinkedWorktree(root: string): boolean {
+  try {
+    return statSync(join(root, '.git')).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Resolve the renderer dev-server port.
+ *
+ * The port is part of the renderer origin, and the renderer persists its
+ * recovery snapshot, thread visits, and UI preferences in origin-keyed
+ * localStorage   so the primary checkout keeps the stable 5173 it has always
+ * had. A linked worktree instead gets a port of its own, derived from its own
+ * path, so any number of worktrees can run `bun dev` side by side while each
+ * one still keeps the exact same origin (and therefore the same persisted
+ * state) across every restart. `CODEINOVEN_RENDERER_PORT` overrides the choice
+ * outright; `strictPort` stays on so a taken port fails loudly instead of
+ * silently moving the origin and losing that state.
+ */
+function resolveRendererPort(root: string): number {
+  const override = process.env['CODEINOVEN_RENDERER_PORT']?.trim()
+  if (override) {
+    const parsed = Number(override)
+    if (!Number.isInteger(parsed) || parsed < 1024 || parsed > 65535) {
+      throw new Error(
+        `CODEINOVEN_RENDERER_PORT must be an integer between 1024 and 65535 (received "${override}")`
+      )
+    }
+    return parsed
+  }
+  if (!isLinkedWorktree(root)) return DEFAULT_RENDERER_PORT
+  let stableRoot = root
+  try {
+    stableRoot = realpathSync.native(root)
+  } catch {
+    // Fall back to the unresolved path; the port stays stable for this checkout.
+  }
+  const digest = createHash('sha256').update(stableRoot).digest()
+  return WORKTREE_PORT_BASE + (digest.readUInt32BE(0) % WORKTREE_PORT_POOL)
+}
 
 /** Renderer root/aliases/plugins, shared with scripts/dev-remote-pwa.ts so a
  *  standalone Vite dev server for the phone PWA stays in sync with the real
@@ -193,9 +248,12 @@ export default defineConfig(({ mode }) => {
       // Pin the dev origin. The renderer's persisted state (recovery snapshot,
       // thread visits, UI preferences) lives in localStorage keyed by origin,
       // so a port that drifts when 5173 is busy silently loses every restart
-      // restore — the app would boot with empty persisted state.
+      // restore   the app would boot with empty persisted state. Each linked
+      // worktree therefore owns a stable port of its own (see
+      // `resolveRendererPort`) instead of fighting the primary checkout for
+      // 5173.
       server: {
-        port: 5173,
+        port: resolveRendererPort(__dirname),
         strictPort: true
       },
       build: {
