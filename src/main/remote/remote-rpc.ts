@@ -706,7 +706,8 @@ export class RemoteRpcDispatcher {
           query && typeof query === 'object'
             ? {
                 beforeId: this.optionalString(query.beforeId),
-                afterId: this.optionalString(query.afterId),
+                changedSince:
+                  typeof query.changedSince === 'number' ? query.changedSince : undefined,
                 limit: typeof query.limit === 'number' ? query.limit : undefined
               }
             : undefined

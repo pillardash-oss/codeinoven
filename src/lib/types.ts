@@ -2918,21 +2918,30 @@ export const WORKING_TRACE_PAGE_SIZE = 15
  * Bounded window request over a thread's durable working-trace stream.
  *
  * The stream log folds to one ordered, first-seen list of parts for the newest
- * logical turn, so a page is expressed as a slice of that list rather than a
- * timestamp cursor: `beforeId` walks back through older entries, `afterId`
- * fetches only what landed since the renderer's last read.
+ * logical turn, so a window is expressed as a slice of that list rather than a
+ * timestamp cursor: `beforeId` walks back through older entries, and
+ * `changedSince` reports what the log touched since a previous read.
  */
 export interface TurnStreamPartsQuery {
   /** Return up to `limit` parts immediately older than this part id. */
   beforeId?: string
-  /** Return up to `limit` parts newer than this part id (live delta poll). */
-  afterId?: string
-  /** Maximum parts to return. Defaults to `WORKING_TRACE_PAGE_SIZE`. */
+  /**
+   * Return every part the log touched after this cursor: entries that appeared
+   * AND entries updated in place (a tool call completing, a sub-agent reporting
+   * progress). A growth-only cursor would leave an already mounted entry frozen
+   * at its stale snapshot, which is what a second app instance watching the same
+   * thread would see, so a live poll reads changes instead of growth.
+   */
+  changedSince?: number
+  /** Maximum parts in a window request. Defaults to `WORKING_TRACE_PAGE_SIZE`.
+   *  Ignored by a change request, whose size is whatever the log streamed
+   *  between the two reads and is never silently truncated. */
   limit?: number
 }
 
 /** One bounded page of a thread's durable working-trace parts. */
 export interface TurnStreamPartsPage {
+  kind: 'window'
   /** The page, ordered oldest to newest. Task-list tool parts are excluded:
    *  they drive the task card (`todoParts`), never the trace window. */
   parts: AgentPart[]
@@ -2942,10 +2951,30 @@ export interface TurnStreamPartsPage {
   start: number
   /** True when the fold holds trace parts older than this page. */
   hasOlder: boolean
-  /** True when the fold holds trace parts newer than this page. */
-  hasNewer: boolean
+  /** Stream events consumed so far, to pass back as `changedSince`. */
+  cursor: number
   /** Newest durable task-list tool parts for the turn, so the task card never
    *  depends on which trace page happens to be mounted. */
+  todoParts: AgentPart[]
+}
+
+/**
+ * Everything the durable working-trace log touched since a change cursor.
+ *
+ * A change is not a window: it carries no fold coordinates, because its parts
+ * are simply the ones that moved (appeared or were updated in place) since the
+ * previous read. Counts and cursors stay on it so a live reader can tell that
+ * the fold was replaced under it and remount a window.
+ */
+export interface TurnStreamPartsChange {
+  kind: 'change'
+  /** Touched parts, in fold order. */
+  parts: AgentPart[]
+  /** Total trace parts the durable log currently folds for the turn. */
+  total: number
+  /** Stream events consumed so far, to pass back as `changedSince`. */
+  cursor: number
+  /** Newest durable task-list tool parts for the turn. */
   todoParts: AgentPart[]
 }
 

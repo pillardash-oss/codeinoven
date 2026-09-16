@@ -2802,7 +2802,7 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'thread:loadStreamParts': {} as Contract<
     [projectId: string, threadId: string, query?: import('./types').TurnStreamPartsQuery],
-    import('./types').TurnStreamPartsPage
+    import('./types').TurnStreamPartsPage | import('./types').TurnStreamPartsChange
   >,
   'thread:markRead': {} as Contract<[projectId: string, threadId: string], Thread>,
   /** Renderer → main composer draft transitions feeding the turn-grading timers. */

@@ -227,6 +227,7 @@ import type {
   ThreadSettings,
   TurnCheckpointChangeSummary,
   TurnCheckpointSummary,
+  TurnStreamPartsChange,
   TurnStreamPartsPage,
   TurnStreamPartsQuery,
   ThinkingLevel,
@@ -20784,18 +20785,18 @@ export class ChatEngine {
     return `projects/${projectId}/threads/${threadId}/stream.jsonl`
   }
 
-  /** Rebuild a bounded page of the working trace from the thread's durable SSE
-   *  log. Returns only the most recent logical turn's parts, cut to a page
-   *  around the query cursor, so a reopened mid-turn thread shows its own
-   *  streamed work rather than stale parts from earlier turns. Parsed events
-   *  are cached per thread and the log is append-only, so the log is tailed
-   *  incrementally by byte offset and each call only parses bytes appended
-   *  since the last load. */
+  /** Rebuild a bounded window of the working trace from the thread's durable
+   *  SSE log, or report what the log touched since a change cursor. Returns only
+   *  the most recent logical turn's parts, so a reopened mid-turn thread shows
+   *  its own streamed work rather than stale parts from earlier turns. Parsed
+   *  events are cached per thread and the log is append-only, so the log is
+   *  tailed incrementally by byte offset and each call only parses bytes
+   *  appended since the last load. */
   async loadTurnStreamParts(
     projectId: string,
     threadId: string,
     query: TurnStreamPartsQuery = {}
-  ): Promise<TurnStreamPartsPage> {
+  ): Promise<TurnStreamPartsPage | TurnStreamPartsChange> {
     const streamPath = this.turnStreamPath(projectId, threadId)
     const entry = this.turnStreamCache.get(streamPath) ?? {
       consumedBytes: 0,
@@ -20815,7 +20816,7 @@ export class ChatEngine {
     let tail = await this.storage.readRawTail(streamPath, entry.consumedBytes)
     if (!tail) {
       this.turnStreamCache.delete(streamPath)
-      return { parts: [], total: 0, start: 0, hasOlder: false, hasNewer: false, todoParts: [] }
+      return pageTurnStreamParts([], [], query)
     }
     // The log is append-only, so a shrink means the file was rewritten
     // underneath us   drop every cached event and re-read once from byte 0.
@@ -20828,7 +20829,7 @@ export class ChatEngine {
       tail = await this.storage.readRawTail(streamPath, 0)
       if (!tail) {
         this.turnStreamCache.delete(streamPath)
-        return { parts: [], total: 0, start: 0, hasOlder: false, hasNewer: false, todoParts: [] }
+        return pageTurnStreamParts([], [], query)
       }
     }
     for (const line of tail.content.split('\n')) {
@@ -20856,7 +20857,7 @@ export class ChatEngine {
       entry.folded = folded
       entry.foldKey = foldKey
     }
-    return pageTurnStreamParts(folded, query)
+    return pageTurnStreamParts(folded, entry.events, query)
   }
 
   /** Timestamp of the newest non-activity user message in the mirror   the

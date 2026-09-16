@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
-  import { shouldMountWorkingTrace } from '$lib/working-trace-parts'
-  import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
+  import {
+    mergeSubagentParts,
+    mergeWorkingParts,
+    shouldMountWorkingTrace
+  } from '$lib/working-trace-parts'
   import { mergeStreamedPart } from '$lib/agent-part-merge'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly } from 'svelte/transition'
@@ -571,7 +574,11 @@
     if (conversationBusy && lastMessage?.role === 'user' && !isActivityOnlyUserMessage(lastMessage))
       return []
     if (latestTurnInfo.startIndex === -1) return []
-    return getTurnWorkingParts(latestTurnInfo.startIndex, conversationBusy && latestTurnInfo.active)
+    const { leading, body } = getTurnWorkingParts(
+      latestTurnInfo.startIndex,
+      conversationBusy && latestTurnInfo.active
+    )
+    return [...leading, ...body]
   })
   // A persisted in-flight status is only a recovery hint. Start every mount in
   // a settled idle state unless this thread is already receiving live activity;
@@ -891,13 +898,23 @@
    *  trace, so they ride beside the trace window and keep the task card correct
    *  no matter which page of the trace is mounted. */
   let streamTodoParts = $state<AgentPart[]>([])
+  /** Stream events the durable log has consumed for this fold: the live poll's
+   *  change cursor. `null` until a read lands, so the first poll falls back to
+   *  a window read. */
+  let streamCursor = $state<number | null>(null)
   let streamPartsLoadGeneration = 0
+  /** Bumped whenever the durable fold is dropped (a steer, a new local turn).
+   *  An older-page read started before it must not resurrect entries from the
+   *  turn the reader has left. */
+  let streamFoldVersion = 0
 
   function clearStreamParts(): void {
     streamPartsLoadGeneration += 1
+    streamFoldVersion += 1
     streamParts = []
     streamHasOlder = false
     streamTodoParts = []
+    streamCursor = null
   }
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Global "don't ask again" flag for the image-descriptor vision model picker. */
@@ -4216,9 +4233,11 @@
       })
         .then((page) => {
           if (!alive || generation !== streamPartsLoadGeneration) return
+          if (page.kind !== 'window') return
           streamParts = mergeWorkingParts(streamParts, page.parts)
           streamHasOlder = page.hasOlder
           streamTodoParts = page.todoParts
+          streamCursor = page.cursor
           if (
             providerStatus === null &&
             thread.status !== 'working-paused' &&
@@ -9806,33 +9825,6 @@
 
   type SubagentPart = Extract<AgentPart, { type: 'subagent' }>
 
-  function mergeSubagentParts(current: SubagentPart, update: SubagentPart): SubagentPart {
-    const currentTime = current.activity.time
-    const updateTime = update.activity.time
-    const start = currentTime?.start ?? updateTime?.start
-    return {
-      ...current,
-      activity: {
-        ...current.activity,
-        status: update.activity.status,
-        agent: update.activity.agent || current.activity.agent,
-        description:
-          update.activity.description === 'Delegated task'
-            ? current.activity.description
-            : update.activity.description,
-        prompt: update.activity.prompt ?? current.activity.prompt,
-        childSessionId: update.activity.childSessionId ?? current.activity.childSessionId,
-        providerTaskId: update.activity.providerTaskId ?? current.activity.providerTaskId,
-        providerId: update.activity.providerId ?? current.activity.providerId,
-        modelId: update.activity.modelId ?? current.activity.modelId,
-        background: current.activity.background || update.activity.background,
-        output: update.activity.output ?? current.activity.output,
-        error: update.activity.error ?? current.activity.error,
-        time: start !== undefined ? { start, end: updateTime?.end ?? currentTime?.end } : undefined
-      }
-    }
-  }
-
   function resolvedSubagentPart(part: SubagentPart): SubagentPart | null {
     const childSessionId = part.activity.childSessionId
     if (!childSessionId) return part
@@ -9960,22 +9952,31 @@
     return -1
   }
 
-  /** Collect every ordered intermediate part; only the final text is rendered below the trace.
+  /** Collect every ordered intermediate part as two runs: `leading` holds the
+   *  compaction/sub-agent context harvested from the activity messages that
+   *  precede the prompt, `body` holds the turn itself. They are kept apart
+   *  because the durable stream window can only supply the turn body: the leading
+   *  context must stay in front of it, while the body has to follow the log's
+   *  own order. Only the final text is rendered below the trace.
    *  Activity-only user messages (sub-agent envelopes, compaction notices) are
    *  transparent: the turn spans them and their sub-agent/compaction parts are
    *  harvested so one prompt keeps a single continuous working trace. */
-  function getTurnWorkingParts(startMsgIndex: number, includeCurrentFinal: boolean): AgentPart[] {
-    const parts: AgentPart[] = []
+  function getTurnWorkingParts(
+    startMsgIndex: number,
+    includeCurrentFinal: boolean
+  ): { leading: AgentPart[]; body: AgentPart[] } {
+    const leading: AgentPart[] = []
     for (let i = startMsgIndex - 1; i >= 0; i--) {
       const preceding = messages[i]
       if (!preceding || preceding.role !== 'user') break
       for (const part of preceding.parts) {
         if (part.type === 'compaction' || part.type === 'subagent') {
-          appendWorkingPart(parts, part)
+          appendWorkingPart(leading, part)
         }
       }
       if (!isActivityOnlyUserMessage(preceding)) break
     }
+    const body: AgentPart[] = []
     let turnEndIndex = startMsgIndex
     while (turnEndIndex + 1 < messages.length) {
       const next = messages[turnEndIndex + 1]
@@ -9994,7 +9995,7 @@
         if (!isActivityOnlyUserMessage(m)) break
         for (const part of m.parts) {
           if (part.type === 'compaction' || part.type === 'subagent') {
-            appendWorkingPart(parts, part)
+            appendWorkingPart(body, part)
           }
         }
         continue
@@ -10010,10 +10011,10 @@
         }
         if (p.type === 'question') continue
         if (isTodoToolPart(p)) continue
-        appendWorkingPart(parts, p)
+        appendWorkingPart(body, p)
       }
     }
-    return parts
+    return { leading, body }
   }
 
   /** True once the turn starting at `startMsgIndex` produced a completed
@@ -10043,8 +10044,8 @@
     const startIndex = latestTurnInfo.startIndex
     if (startIndex === -1) return false
     if (isTurnCompleted(startIndex)) return false
-    const parts = getTurnWorkingParts(startIndex, false)
-    return hasRenderableWorkingParts(parts)
+    const { leading, body } = getTurnWorkingParts(startIndex, false)
+    return hasRenderableWorkingParts([...leading, ...body])
   }
 
   function hasRenderableWorkingParts(parts: AgentPart[]): boolean {
@@ -10066,74 +10067,7 @@
   }
 
   /** Merge durable stream-log parts (freshest) with mirror parts, deduped by id
-   *  and preserving first-seen order. The stream log may hold parts the mirror
-   *  has not persisted yet, so it takes precedence for the restored trace. */
-  function mergeWorkingParts(preferred: AgentPart[], fallback: AgentPart[]): AgentPart[] {
-    const byId: Record<string, AgentPart> = {}
-    const order: string[] = []
-    for (const part of preferred) {
-      if (!byId[part.id]) order.push(part.id)
-      byId[part.id] = part
-    }
-    for (const part of fallback) {
-      if (!byId[part.id]) {
-        order.push(part.id)
-        byId[part.id] = part
-      } else {
-        byId[part.id] = moreCompleteWorkingPart(byId[part.id], part)
-      }
-    }
-    return order.flatMap((id) => {
-      const part = byId[id]
-      return part ? [part] : []
-    })
-  }
-
-  /** A part has finished its lifecycle when its terminal status or an explicit
-   *  end timestamp is present. Terminal snapshots must always win part merges:
-   *  letting a stale `running` snapshot survive keeps tool durations ticking
-   *  forever after the call actually completed. */
-  function isTerminalWorkingPart(part: AgentPart): boolean {
-    if (part.type === 'tool') {
-      return (
-        part.state.status === 'completed' ||
-        part.state.status === 'error' ||
-        part.state.time?.end !== undefined
-      )
-    }
-    if (part.type === 'subagent') {
-      return subagentStatusIsTerminal(part.activity.status) || part.activity.time?.end !== undefined
-    }
-    return false
-  }
-
-  function moreCompleteWorkingPart(current: AgentPart, incoming: AgentPart): AgentPart {
-    if (
-      current.type === incoming.type &&
-      isTerminalWorkingPart(current) !== isTerminalWorkingPart(incoming)
-    ) {
-      // Whichever side carries the terminal lifecycle state wins, regardless
-      // of which list was passed as "preferred".
-      return isTerminalWorkingPart(incoming) ? incoming : current
-    }
-    if (
-      current.type === incoming.type &&
-      (current.type === 'text' || current.type === 'reasoning') &&
-      (incoming.type === 'text' || incoming.type === 'reasoning')
-    ) {
-      if (incoming.text.startsWith(current.text) && incoming.text.length > current.text.length) {
-        return incoming
-      }
-      if (current.text.startsWith(incoming.text) && current.text.length > incoming.text.length) {
-        return current
-      }
-    }
-    if (current.type === 'subagent' && incoming.type === 'subagent') {
-      return mergeSubagentParts(current, incoming)
-    }
-    return current
-  }
-
+   *  and preserving the preferred list's order (see `mergeWorkingParts`). */
   function streamWorkingPartsForTurn(startMsgIndex: number): AgentPart[] {
     let turnEndIndex = startMsgIndex
     while (turnEndIndex + 1 < messages.length) {
@@ -10235,65 +10169,83 @@
     findNavState.closeConversationFind()
   }
 
-  /** Cap on one live delta read. Only entries that actually landed since the
-   *  last tick are ever fetched, so this is a safety bound rather than a window
-   *  size: a burst larger than it pages in on the reader's next scroll-up. */
-  const STREAM_PARTS_DELTA_LIMIT = 200
-
-  /** Delta-poll the durable stream: only what landed since the last read crosses
-   *  IPC, so a long live turn no longer re-ships (and the main process no longer
-   *  re-parses) the whole turn once a second. */
+  /** Poll the durable stream once: only what the log touched since the last
+   *  read crosses IPC, so a long live turn neither re-ships nor re-mounts the
+   *  whole turn once a second. A change read (not a growth read) because an
+   *  entry that is already mounted has to keep up with its own updates, not just
+   *  with whatever appears after it. */
   async function pollStreamParts(): Promise<void> {
     const { projectId, id } = thread
     const generation = ++streamPartsLoadGeneration
-    const lastHeldId = streamParts[streamParts.length - 1]?.id
+    const cursor = streamCursor
     try {
       const page = await invoke(
         'thread:loadStreamParts',
         projectId,
         id,
-        lastHeldId
-          ? { afterId: lastHeldId, limit: STREAM_PARTS_DELTA_LIMIT }
-          : { limit: WORKING_TRACE_PAGE_SIZE }
+        cursor === null ? { limit: WORKING_TRACE_PAGE_SIZE } : { changedSince: cursor }
       )
       if (!alive || generation !== streamPartsLoadGeneration) return
-      // A fold that shrank under us belongs to another turn (a steered
-      // continuation, or a log rewritten after the fact): start over from the
-      // newest page instead of keeping entries that no longer belong here.
-      if (page.total < streamParts.length) {
-        streamParts = page.parts
-        streamHasOlder = page.hasOlder
-      } else if (page.parts.length > 0) {
+      if (page.kind === 'window') {
+        // No cursor yet (a mount read that has not landed): adopt the window.
         streamParts = mergeWorkingParts(streamParts, page.parts)
-        if (!lastHeldId) streamHasOlder = page.hasOlder
+        streamHasOlder = page.hasOlder
+        streamTodoParts = page.todoParts
+        streamCursor = page.cursor
+        return
       }
+      streamCursor = page.cursor
       streamTodoParts = page.todoParts
+      // A fold that shrank under us belongs to another turn (a steered
+      // continuation, or a log rewritten after the fact): remount the newest
+      // page instead of keeping entries that no longer belong here.
+      if (page.total < streamParts.length) {
+        await remountNewestStreamParts(generation)
+        return
+      }
+      if (page.parts.length > 0) streamParts = mergeWorkingParts(streamParts, page.parts)
     } catch {
       // Transient read failure   keep what we have and try again next tick.
     }
   }
 
+  /** Replace the mounted window with the newest durable page. */
+  async function remountNewestStreamParts(generation: number): Promise<void> {
+    const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
+      limit: WORKING_TRACE_PAGE_SIZE
+    })
+    if (!alive || generation !== streamPartsLoadGeneration || page.kind !== 'window') return
+    streamParts = page.parts
+    streamHasOlder = page.hasOlder
+    streamTodoParts = page.todoParts
+    streamCursor = page.cursor
+  }
+
   /** Pull the next older durable page for the trace's own inner-scroll paging,
-   *  prepending it in first-seen order. */
+   *  prepending it in the log's own order. The page is authoritative for the
+   *  entries it carries: an entry the poll had already appended out of place
+   *  (a part older than the mounted window that kept updating) adopts its real
+   *  position instead of staying stuck at the tail. */
   async function loadOlderStreamParts(): Promise<void> {
     const oldest = streamParts[0]
     if (!oldest || !streamHasOlder) return
+    const foldVersion = streamFoldVersion
     const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
       beforeId: oldest.id,
       limit: WORKING_TRACE_PAGE_SIZE
     })
-    if (!alive) return
+    if (!alive || page.kind !== 'window' || foldVersion !== streamFoldVersion) return
     streamHasOlder = page.hasOlder
     if (page.parts.length === 0) return
-    const held = new SvelteSet(streamParts.map((part) => part.id))
-    streamParts = [...page.parts.filter((part) => !held.has(part.id)), ...streamParts]
+    const pagedIds = new SvelteSet(page.parts.map((part) => part.id))
+    streamParts = [...page.parts, ...streamParts.filter((part) => !pagedIds.has(part.id))]
   }
 
-  // While a run is streaming on screen, re-pull the durable SSE log every second
+  // While a run is streaming on screen, re-read the durable SSE log every second
   // so the trace stays fresh even when live 'agent:event' broadcasts are not the
   // transport (e.g. a second app instance viewing the same thread, which never
   // receives this instance's in-process window broadcasts and would otherwise
-  // show a trace frozen at whatever was on disk at mount). The poll is delta-only,
+  // show a trace frozen at whatever was on disk at mount). The poll is change-only,
   // and it stops while this thread is off screen: nobody is watching, so the
   // live turn does not need a reader's worth of IPC every second.
   $effect(() => {
@@ -10992,16 +10944,24 @@
                       threadWorking && isCurrentAssistantTurn && !brainstormReportRefreshing}
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
-                    {@const accumulatedTurnParts = getTurnWorkingParts(absIndex, traceIsLive)}
+                    {@const turnWorkingParts = getTurnWorkingParts(absIndex, traceIsLive)}
                     {@const durableTurnParts = pendingLiveTurn
                       ? []
                       : streamWorkingPartsForTurn(absIndex)}
                     {@const collectedTurnParts =
                       streamParts.length > 0 && isCurrentAssistantTurn
-                        ? traceIsRestored
-                          ? mergeWorkingParts(durableTurnParts, accumulatedTurnParts)
-                          : mergeWorkingParts(accumulatedTurnParts, durableTurnParts)
-                        : withoutPendingLiveParts(accumulatedTurnParts)}
+                        ? // The durable log is the turn's stream order, so it orders the
+                          // body; entries that streamed before this view mounted only
+                          // exist there. The leading context is not in the durable fold
+                          // (the fold scopes it out), so it keeps its place in front.
+                          mergeWorkingParts(
+                            [...turnWorkingParts.leading, ...durableTurnParts],
+                            turnWorkingParts.body
+                          )
+                        : withoutPendingLiveParts([
+                            ...turnWorkingParts.leading,
+                            ...turnWorkingParts.body
+                          ])}
                     {@const turnParts = isAssignmentAuditorThread
                       ? collectedTurnParts.filter(
                           (part) => part.type !== 'text' || part.phase === 'commentary'
@@ -11303,6 +11263,9 @@
               open
               busy
               latest
+              {active}
+              olderPartsAvailable={streamHasOlder}
+              onLoadOlderParts={loadOlderStreamParts}
               startTime={activeTurnStartTime}
               modelLabel={currentWorkingTraceAttribution.modelLabel}
               thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}

@@ -128,8 +128,9 @@
    *  watched, and the state the reader's own paging moves back from. A pinned
    *  entry never moves on its own: entries that stream in append at the tail,
    *  so nothing the reader is looking at is ever evicted while they are on the
-   *  thread. The header count always reflects the FULL entry count   the window
-   *  limits what mounts, never what is reported. */
+   *  thread. The header count reports the entries this trace holds   its newest
+   *  page plus everything appended since, growing as the reader pages older
+   *  entries in   never a number the mounted window happens to disagree with. */
   let windowStartId = $state<string | null>(null)
   const windowStartIndex = $derived(traceWindowStartIndex(visibleParts, windowStartId))
   const pagedParts = $derived(visibleParts.slice(windowStartIndex))
