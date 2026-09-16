@@ -38,6 +38,7 @@
   // quoted passages, which a second copy would have to relearn.
   import { composerMentionQuery } from '../chats/composer-mentions'
   import PrMentionMenu from './PrMentionMenu.svelte'
+  import GitJobLogView from './GitJobLogView.svelte'
   import { mentionCandidates, mentionHandle, mentionKeyAction, mentionMenuMaxHeight, participantMentionUsers } from './pr-mentions'
   import type {
     GitHubDeploymentJobLog,
@@ -717,33 +718,6 @@
     return text || 'The log could not be loaded.'
   }
 
-  /**
-   * Job logs are wrapped for a terminal: CSI colour sequences and OSC 8 hyperlink
-   * wrappers. This pane is plain text, so all of it would only render as `[0m`
-   * noise. Built from character codes because a literal escape in a regex trips
-   * `no-control-regex`, the same reason provider-account-orchestrator builds its
-   * ANSI pattern this way.
-   */
-  const ANSI_ESCAPE = String.fromCharCode(27)
-  const ANSI_BELL = String.fromCharCode(7)
-  /** String Terminator, the other way an OSC sequence can end. */
-  const ANSI_ST = ANSI_ESCAPE + String.fromCharCode(92)
-  const LOG_ANSI_PATTERNS = [
-    // OSC, which must not be allowed to run past the next escape or line break.
-    new RegExp(`${ANSI_ESCAPE}\\][^${ANSI_BELL}${ANSI_ESCAPE}]*`, 'gu'),
-    // CSI: colour, weight, cursor movement.
-    new RegExp(`${ANSI_ESCAPE}\\[[0-?]*[ -/]*[@-~]`, 'gu'),
-    new RegExp(ANSI_BELL, 'gu')
-  ]
-
-  function plainLog(text: string): string {
-    const stripped = LOG_ANSI_PATTERNS.reduce(
-      (result, pattern) => result.replace(pattern, ''),
-      text
-    )
-    return stripped.split(ANSI_ST).join('')
-  }
-
   async function toggleCheckLog(check: PullRequestCheck): Promise<void> {
     const key = checkKey(check)
     if (expandedCheck === key) {
@@ -1348,26 +1322,17 @@
             </div>
             {#if isOpen}
               <div class="border-t border-border/50 bg-elevated/20">
-                {#if loadingCheckLogs[key]}
-                  <div class="flex items-center gap-2 px-3 py-2 text-[0.6875rem] text-dimmed">
-                    <Loader2 size={12} class="animate-spin" />
-                    Loading log…
-                  </div>
-                {:else if checkLogErrors[key]}
-                  <p class="px-3 py-2 text-[0.625rem] leading-relaxed text-dimmed">
-                    {checkLogErrors[key]}
-                  </p>
-                {:else if checkLogs[key]}
-                  <pre
-                    class="max-h-72 overflow-auto px-3 py-2 font-mono text-[0.5625rem] leading-relaxed text-muted">{plainLog(
-                      checkLogs[key].log
-                    )}</pre>
-                  {#if checkLogs[key].truncated}
-                    <p class="px-3 pb-2 text-[0.5625rem] text-dimmed">
-                      GitHub truncated this log. Open it externally for the rest.
-                    </p>
-                  {/if}
-                {/if}
+                <!--
+                  No `failedSteps` here on purpose: a check is named after its job, and
+                  the log's sections are named after steps, so there is nothing to match.
+                  The view marks the step GitHub flagged with an error in the log itself.
+                -->
+                <GitJobLogView
+                  log={checkLogs[key] ?? null}
+                  loading={loadingCheckLogs[key] === true}
+                  error={checkLogErrors[key] ?? ''}
+                  class="max-h-72 overflow-auto px-3 py-2"
+                />
                 {#if runId !== null}
                   <div class="border-t border-border/40 px-3 py-1.5">
                     <button

@@ -4889,7 +4889,11 @@ export interface GitHubDeploymentDetail {
   fetchedAt: number
 }
 
-/** Capped raw log text for one workflow run job. */
+/**
+ * Raw log text for one workflow run job, capped at roughly 200 KB. An oversized log
+ * keeps its head and its tail with an omission line between them, because the step
+ * that failed is at the end.
+ */
 export interface GitHubDeploymentJobLog {
   jobId: number
   log: string

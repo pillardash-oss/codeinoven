@@ -24,6 +24,7 @@ import type {
   PullRequestSummary,
   RepositoryMentionUser
 } from '../../lib/types'
+import { capJobLogText } from '../../lib/github-job-log'
 import type {
   CreatePrCommentInput,
   CreatePrReviewInput,
@@ -44,7 +45,10 @@ export const PROVIDER_API_BASE_URL_ENV = 'CODEINOVEN_GIT_PROVIDER_API_BASE_URL'
 /** Network timeout so a slow provider never hangs the UI. */
 const PROVIDER_FETCH_TIMEOUT_MS = 15_000
 
-/** Cap on the raw job log text streamed into the app (roughly 200 KB). */
+/**
+ * Cap on the raw job log text streamed into the app (roughly 200 KB). An oversized
+ * log loses its middle, never its end: that is where the failing step is.
+ */
 const MAX_JOB_LOG_BYTES = 200_000
 
 const GITHUB_API_ACCEPT = 'application/vnd.github+json'
@@ -637,7 +641,7 @@ export class GitHubProvider implements GitProvider {
     return { run, jobs, fetchedAt: Date.now() }
   }
 
-  /** Capped raw log text for one workflow run job, rendered in-app. */
+  /** Raw log text for one workflow run job, capped and sectioned by the renderer. */
   async getDeploymentJobLog(input: {
     owner: string
     repo: string
@@ -645,11 +649,11 @@ export class GitHubProvider implements GitProvider {
   }): Promise<GitHubDeploymentJobLog> {
     const path = `${this.repoPath(input)}/actions/jobs/${input.jobId}/logs`
     const text = await this.requestText(path)
-    const truncated = text.length > MAX_JOB_LOG_BYTES
+    const capped = capJobLogText(text, MAX_JOB_LOG_BYTES)
     return {
       jobId: input.jobId,
-      log: truncated ? text.slice(0, MAX_JOB_LOG_BYTES) : text,
-      truncated
+      log: capped.log,
+      truncated: capped.truncated
     }
   }
 

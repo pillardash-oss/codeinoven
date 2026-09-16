@@ -7,6 +7,7 @@
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
+  import { failedJobLogEvidence } from '$shared/github-job-log'
   import { DEFAULT_SCOPE_BUCKET_ID, type PromptAttachment } from '$shared/types'
   import type {
     GitBranchInfo,
@@ -572,47 +573,6 @@
     return thread
   }
 
-  /** Keep one failed job's evidence useful without overfilling the composer. */
-  function failedJobEvidence(
-    job: GitHubDeploymentJob,
-    log: GitHubDeploymentJobLog | null
-  ): string[] {
-    const failedSteps = job.steps
-      .filter(
-        (step) =>
-          step.status === 'completed' &&
-          step.conclusion !== 'success' &&
-          step.conclusion !== 'neutral' &&
-          step.conclusion !== 'skipped' &&
-          step.conclusion !== 'cancelled'
-      )
-      .map((step) => step.name)
-    const lines = [
-      `Failed job: ${job.name}`,
-      `Job ID: ${job.id}`,
-      `Job status: ${job.status}${job.conclusion ? ` / ${job.conclusion}` : ''}`,
-      `Failed steps: ${failedSteps.length > 0 ? failedSteps.join(', ') : '(not reported)'}`,
-      ...(job.url ? [`Job URL: ${job.url}`] : [])
-    ]
-    if (!log) {
-      return [
-        ...lines,
-        'Job log: unavailable; diagnose from the supplied metadata and local files.'
-      ]
-    }
-    const maxChars = 4_000
-    const excerpt =
-      log.log.length > maxChars ? `[earlier output omitted]\n${log.log.slice(-maxChars)}` : log.log
-    return [
-      ...lines,
-      '',
-      'Failed job log excerpt (the full log is attached as "Pasted text.txt"):',
-      '```text',
-      excerpt,
-      '```'
-    ]
-  }
-
   /**
    * Save the full job log through the composer's existing pasted-text
    * pipeline (the same one used for long clipboard pastes), so large logs
@@ -649,7 +609,7 @@
       `Commit: ${run.headSha || '(unknown)'}`,
       ...(run.url ? [`Workflow URL: ${run.url}`] : []),
       '',
-      ...failedJobEvidence(job, log),
+      ...failedJobLogEvidence(job, log),
       '',
       'Use the supplied job metadata and log as the primary evidence. Do not assume GitHub or the remote repository is accessible.',
       'If local repository files are available, inspect only what is relevant to this failed job and reproduce the failure where practical.',
@@ -685,7 +645,7 @@
       `Deployment URL: ${deploymentUrl}`,
       ...(run ? [`Linked workflow run: ${run.name} #${run.runNumber} (ID ${run.id})`] : []),
       '',
-      ...failedJobEvidence(job, log),
+      ...failedJobLogEvidence(job, log),
       '',
       'Use the supplied job metadata and log as the primary evidence. Do not assume GitHub or the remote repository is accessible.',
       'If local repository files are available, inspect only what is relevant to this failed job and reproduce the failure where practical.',

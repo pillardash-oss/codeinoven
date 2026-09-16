@@ -16,6 +16,8 @@
   import { relativeTime } from '$lib/format/relative-time'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState, GitState } from '$lib/stores/git.svelte'
+  import { failedJobStepNames, isFailedJob } from '$shared/github-job-log'
+  import GitJobLogView from './GitJobLogView.svelte'
   import type {
     GitHubDeployment,
     GitHubDeploymentJob,
@@ -62,24 +64,15 @@
   /** GitHub returns newest-first; the current status is the first entry. */
   const statusHistory = $derived(detail?.statuses ?? [])
 
-  function isFailedJob(job: GitHubDeploymentJob): boolean {
-    return (
-      job.status === 'completed' &&
-      job.conclusion !== 'success' &&
-      job.conclusion !== 'neutral' &&
-      job.conclusion !== 'skipped' &&
-      job.conclusion !== 'cancelled'
-    )
-  }
-
-  const failedJob = $derived((detail?.jobs ?? []).find(isFailedJob) ?? null)
-
   function cachedLog(jobId: number): GitHubDeploymentJobLog | null {
     return (
       gitState.deploymentLogs[GitState.deploymentLogKey(identity.owner, identity.repo, jobId)]
         ?.log ?? null
     )
   }
+
+  /** The job whose failure the agent button acts on, when the deployment has one. */
+  const failedJob = $derived((detail?.jobs ?? []).find(isFailedJob) ?? null)
 
   /** Cached logs for the jobs currently expanded   non-null for markup safety. */
   const logs = $derived.by(() => {
@@ -507,27 +500,14 @@
                           </button>
                         {/if}
                       </div>
-                    {:else if loadingLog[job.id]}
-                      <div class="flex items-center gap-2 py-2 text-[0.625rem] text-dimmed">
-                        <Loader2 size={11} class="animate-spin" />
-                        Loading log…
-                      </div>
-                    {:else if logErrors[job.id]}
-                      <p class="rounded-md bg-danger/10 px-2 py-1.5 text-[0.625rem] text-danger">
-                        {logErrors[job.id]}
-                      </p>
-                    {:else if logs[job.id]}
-                      <div class="relative">
-                        <pre
-                          class="max-h-64 overflow-auto rounded-md bg-black/5 p-2 font-mono text-[0.5625rem] leading-relaxed text-muted dark:bg-black/30">{logs[
-                            job.id
-                          ].log}</pre>
-                        {#if logs[job.id].truncated}
-                          <p class="mt-1 text-[0.5625rem] text-dimmed">
-                            Log truncated   {job.name} may exceed the in-app limit.
-                          </p>
-                        {/if}
-                      </div>
+                    {:else if loadingLog[job.id] || logErrors[job.id] || logs[job.id]}
+                      <GitJobLogView
+                        log={logs[job.id] ?? null}
+                        loading={loadingLog[job.id] === true}
+                        error={logErrors[job.id] ?? ''}
+                        failedSteps={failedJobStepNames(job)}
+                        class="max-h-64 overflow-auto rounded-md bg-black/5 p-2 dark:bg-black/30"
+                      />
                     {/if}
                   </div>
                 {/if}
