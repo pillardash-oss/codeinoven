@@ -12,7 +12,7 @@ import type {
   UtilityKind,
   PermissionLevel
 } from '../../lib/types'
-import { UTILITY_KIND_VALUES } from '../../lib/types'
+import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
 import {
@@ -25,6 +25,7 @@ import { CuaBridgeService } from './cua-bridge-service'
 import {
   GATEWAY_TOOLS,
   RETRIEVE_MCP_HOST_TOOL_NAME,
+  SCOPE_TOOL_NAME,
   UTILITY_SEARCH_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
@@ -62,6 +63,7 @@ import {
   BRAINSTORM_ALIGNMENT_NOTE_LIMIT,
   brainstormAlignmentUtility
 } from '../../lib/brainstorm/brainstorm-alignment'
+import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 
 const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 const RETRIEVE_MCP_HOST_ROUTE = '/retrieve-mcp-host'
@@ -106,6 +108,8 @@ export interface UtilityTurnRequest {
   harnessId: string
   projectId: string
   threadId: string
+  /** Scope the calling thread works in; the default target of `cio_scope`. */
+  scopeBucketId?: string
   /** Human-readable thread title, used to label Cua agent cursors. */
   threadTitle?: string
   projectPath: string
@@ -178,6 +182,15 @@ export type BrowserUtilityExecutor = (
   operation: string,
   input: Record<string, unknown>,
   context: { projectId: string; threadId: string }
+) => Promise<unknown>
+
+/**
+ * Runs one `cio_scope` call for the turn that made it. The chat engine supplies
+ * it because it owns the thread's scope, project root and permission tier.
+ */
+export type ScopeToolExecutor = (
+  input: Record<string, unknown>,
+  context: ScopeToolContext
 ) => Promise<unknown>
 
 const BROWSER_UTILITY_TOOLS: McpTool[] = [
@@ -307,6 +320,7 @@ export class UtilityOrchestrationService {
   private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
+  private scopeToolExecutor: ScopeToolExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
   private readonly bankWrites = new Map<string, Promise<void>>()
   constructor(
@@ -348,6 +362,8 @@ export class UtilityOrchestrationService {
         return (state, input) => this.manage(state, input)
       case UTILITY_DIAGNOSTICS_TOOL_NAME:
         return (state, input) => this.runDiagnostics(state, input)
+      case SCOPE_TOOL_NAME:
+        return (state, input) => this.runScopeTool(state, input)
       default:
         return null
     }
@@ -364,6 +380,16 @@ export class UtilityOrchestrationService {
 
   setBrowserExecutor(executor: BrowserUtilityExecutor | null): void {
     this.browserExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the agent-facing `cio_scope` tool. App-owned
+   * scope and worktree management is offered on every agent turn next to the
+   * utility gate, not discovered through it, because an agent that wants an
+   * isolated checkout must not have to search for the way to make one.
+   */
+  setScopeToolExecutor(executor: ScopeToolExecutor | null): void {
+    this.scopeToolExecutor = executor
   }
 
   /**
@@ -433,14 +459,16 @@ export class UtilityOrchestrationService {
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )
     const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
-    const gatewayTools = GATEWAY_TOOLS.filter(
-      ({ name }) =>
-        (name !== UTILITY_MANAGE_TOOL_NAME &&
-          name !== UTILITY_DIAGNOSTICS_TOOL_NAME &&
-          hasOnDemand) ||
-        ((name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) &&
-          request.allowManagement === true)
-    )
+    // `cio_scope` is app-owned scope management rather than utility discovery:
+    // it is offered on every agent turn, including turns with nothing on demand
+    // to find, so an agent never falls back to a raw `git worktree`.
+    const gatewayTools = GATEWAY_TOOLS.filter(({ name }) => {
+      if (name === SCOPE_TOOL_NAME) return this.scopeToolExecutor !== null
+      if (name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) {
+        return request.allowManagement === true
+      }
+      return hasOnDemand
+    })
     if (gatewayTools.length === 0) {
       return {
         id,
@@ -481,8 +509,14 @@ export class UtilityOrchestrationService {
     this.turnIdsByToken.set(token, id)
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
+    const hasScopeTool = gatewayTools.some(({ name }) => name === SCOPE_TOOL_NAME)
     const toolInstructions = [
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
+      ...(hasScopeTool
+        ? [
+            `${SCOPE_TOOL_NAME} manages this project's scopes and their managed Git worktrees: list, status, conflicts, create, rename, pin, archive, restore, adopt, repair, retry_setup, sync_from_main, sync_to_main, and the confirmation-gated detach_worktree, delete_scope and merge_into_project. Use it whenever work should run in an isolated checkout or the user asks about a scope or worktree. Never run raw \`git worktree add\`: the app owns worktree lifecycle, and a raw worktree stays invisible to the scope board, its health checks and its sync tooling. A managed worktree appears on the board with its branch and threads, and the thread that created it moves into it unless attachThread is false.`
+          ]
+        : []),
       ...(hasOnDemand
         ? [
             "A utility you activate is registered in this thread's utilities bank for the whole thread lifecycle: in later turns you can invoke it directly with " +
@@ -710,6 +744,35 @@ export class UtilityOrchestrationService {
     } catch {
       return new Map()
     }
+  }
+
+  /**
+   * App-owned scope and worktree management for the calling thread. The chat
+   * engine owns the thread's scope, project root and permission tier, so the
+   * executor receives them instead of re-deriving them here.
+   */
+  private async runScopeTool(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const execute = this.scopeToolExecutor
+    if (!execute) {
+      throw new Error(
+        'Scope management is unavailable in this session. Ask the user to manage scopes from the project board.'
+      )
+    }
+    const request = state.request
+    const action = typeof input['action'] === 'string' ? input['action'] : 'unknown'
+    // Audited without paths or arguments: that a turn reached for scope
+    // management is the durable fact, the scope contents are user data.
+    await this.audit(state, 'scope.tool', {
+      action,
+      confirmation: input['confirm'] === true
+    })
+    return await execute(input, {
+      projectId: request.projectId,
+      scopeBucketId: request.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID,
+      threadId: request.threadId,
+      threadTitle: request.threadTitle ?? '',
+      permissionLevel: request.permissionLevel
+    })
   }
 
   /** Read-only app diagnostics, available only on explicit @cio-utility turns. */

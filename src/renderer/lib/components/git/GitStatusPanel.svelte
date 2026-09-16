@@ -353,9 +353,9 @@
     // Only paths with a worktree-side change (unstaged, untracked, or conflicted
     // work) can be staged; already-staged entries, such as staged deletions,
     // are no-ops for git add.
-    const allPaths = [...new Set(changes.filter((change) => !change.staged).map((change) => change.path))].filter(
-      (path) => !(gitState.status?.conflicted ?? []).includes(path)
-    )
+    const allPaths = [
+      ...new Set(changes.filter((change) => !change.staged).map((change) => change.path))
+    ].filter((path) => !(gitState.status?.conflicted ?? []).includes(path))
     if (allPaths.length === 0) return
     await gitState.stage(projectId, allPaths)
   }
@@ -684,17 +684,21 @@
       `Review pull request #${pr.number}   "${pr.title}" (${pr.headRef} → ${pr.baseRef}) by ${pr.authorLogin}.`,
       `PR URL: ${pr.url}`,
       '',
-      'Work in isolation so my current working tree is never modified:',
+      'Work in isolation so my current working tree is never touched. Do not run `git worktree`',
+      'yourself: CodeInOven owns worktree lifecycle through cio_scope, and only a worktree made',
+      'through it appears on the scope board with its branch, health and threads.',
       `1. \`git fetch origin pull/${pr.number}/head:pr-${pr.number}\``,
-      `2. \`git worktree add ${reportDirectory}/worktree pr-${pr.number}\``,
-      `3. Review the diff against \`${pr.baseRef}\` inside that worktree   correctness, edge cases,`,
+      `2. \`cio_scope\` action "create", title "Review PR #${pr.number}", baseBranch "pr-${pr.number}"`,
+      '   so the scope owns the checkout and this thread moves into it.',
+      `3. Review the diff against \`${pr.baseRef}\` inside that scope   correctness, edge cases,`,
       '   security, test coverage, and anything that would break existing behavior.',
       '4. Run the project checks/tests that are relevant to the changed files.',
       '',
       `Write your findings to \`${reportDirectory}/review.md\`: a short verdict line, then findings`,
       'ordered most severe first with file:line references and concrete failure scenarios.',
-      `When you are done, remove the worktree with \`git worktree remove ${reportDirectory}/worktree --force\``,
-      `and delete the local branch \`pr-${pr.number}\`. Do not push anything and do not merge the PR.`
+      'When you are done, hand the scope back: `cio_scope` action "delete_scope" with threads',
+      `"move-to-default" and deleteBranch true, then drop the fetched branch with`,
+      `\`git branch -D pr-${pr.number}\`. Do not push anything and do not merge the PR.`
     ].join('\n')
   }
 
@@ -1933,7 +1937,7 @@
   const workingSections = $derived(
     fileSections.filter((section) => section.title !== 'Staged' && section.title !== 'Conflicts')
   )
-    /**
+  /**
    * Panes: Conflicts (if any) shares the stack with Staged/Unstaged/Untracked.
    * Each pane hugs its content so adjacent panes stay attached (no dead space
    * between them). When several panes are visible at once, each is capped at
@@ -1947,9 +1951,7 @@
   )
   const singlePaneClass = 'min-h-0 flex-1 overflow-y-auto'
   const sharedPaneClass = 'min-h-0 max-h-[50%] overflow-y-auto'
-  const paneClass = $derived(
-    visiblePaneCount > 1 ? sharedPaneClass : singlePaneClass
-  )
+  const paneClass = $derived(visiblePaneCount > 1 ? sharedPaneClass : singlePaneClass)
 </script>
 
 {#snippet commitTreeNode(node: CommitTreeNode, depth: number)}
@@ -2636,7 +2638,8 @@
                           disabled={batchBusy}
                           onSelect={() => void stageSelectedAction(true)}
                         >
-                          <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span
+                          <span class="inline-block w-3 text-center text-[0.625rem] text-danger"
+                            >−</span
                           >
                           Unstage
                         </DropdownMenu.Item>
@@ -3000,7 +3003,9 @@
                           <p class="truncate text-[0.6875rem] leading-snug text-foreground">
                             {commit.message.split('\n')[0]}
                           </p>
-                          <div class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
+                          <div
+                            class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed"
+                          >
                             <span class="font-mono">{commit.shortHash}</span>
                             <span>·</span>
                             <span>{commit.author}</span>
@@ -3041,7 +3046,9 @@
                 </ContextMenu.Root>
               {/each}
               {#if loadingMoreHistory}
-                <div class="flex items-center justify-center gap-2 py-4 text-[0.625rem] text-dimmed">
+                <div
+                  class="flex items-center justify-center gap-2 py-4 text-[0.625rem] text-dimmed"
+                >
                   <Loader2 size={12} class="animate-spin" />
                   Loading older commits
                 </div>
@@ -3348,7 +3355,9 @@
                   <ArrowLeft size={12} />
                 </button>
                 <div class="min-w-0 flex-1">
-                  <p class="truncate text-[0.6875rem] font-medium text-foreground">{stash.message}</p>
+                  <p class="truncate text-[0.6875rem] font-medium text-foreground">
+                    {stash.message}
+                  </p>
                   <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
                     <span class="font-mono">{stash.id}</span>
                     {#if stash.branch}
@@ -3468,7 +3477,7 @@
         <div class="flex items-center gap-2 border-b border-border bg-warning/10 px-3 py-1.5">
           <GitCommit size={11} class="shrink-0 text-warning" />
           <p class="min-w-0 flex-1 text-[0.5625rem] leading-relaxed text-warning">
-            Amending the most recent commit   no new commit will be created.
+            Amending the most recent commit no new commit will be created.
           </p>
           <button
             type="button"
@@ -3545,7 +3554,7 @@
             ? `${primaryRemote.name}/${status.branch}`
             : 'Remote branch'}
           {#if (status?.behind ?? 0) > 0 || (status?.ahead ?? 0) > 0}
-              <span class="font-medium text-muted">{status?.ahead ?? 0} ahead</span> ·
+            <span class="font-medium text-muted">{status?.ahead ?? 0} ahead</span> ·
             <span class="font-medium text-muted">{status?.behind ?? 0} behind</span>
           {/if}
         </p>
@@ -3605,7 +3614,9 @@
         </div>
         {#if pullStrategyError}
           <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
-            <p class="text-[0.625rem] font-semibold text-danger">That pull strategy could not finish</p>
+            <p class="text-[0.625rem] font-semibold text-danger">
+              That pull strategy could not finish
+            </p>
             <p
               class="mt-0.5 whitespace-pre-wrap break-words text-[0.5625rem] leading-relaxed text-danger"
             >
@@ -3791,11 +3802,7 @@
 
   <!-- Completing a resolved merge: optional title/description, auto-generated when skipped -->
   {#if resolveMergeOpen}
-    <Modal
-      open
-      title="Resolve merge"
-      onClose={() => (resolveMergeOpen = false)}
-    >
+    <Modal open title="Resolve merge" onClose={() => (resolveMergeOpen = false)}>
       <div class="space-y-2">
         <p class="text-[0.6875rem] leading-relaxed text-muted">
           All conflicts are resolved. Give the merge commit a title and description, or leave them
@@ -3812,8 +3819,7 @@
           class="min-h-16 w-full resize-y rounded-md border border-border bg-elevated px-2.5 py-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Description (optional)"
           bind:value={mergeDescription}
-          disabled={resolveMergeBusy}
-        ></textarea>
+          disabled={resolveMergeBusy}></textarea>
       </div>
       {#snippet footer()}
         <div class="flex items-center justify-end gap-2">
@@ -3831,7 +3837,9 @@
             disabled={resolveMergeBusy}
             onclick={() => void confirmResolveMerge()}
           >
-            {#if resolveMergeBusy}<Loader2 size={11} class="animate-spin" />{:else}<GitMerge size={11} />{/if}
+            {#if resolveMergeBusy}<Loader2 size={11} class="animate-spin" />{:else}<GitMerge
+                size={11}
+              />{/if}
             Resolve
           </button>
         </div>
@@ -4115,8 +4123,10 @@
             </div>
           </div>
         {:else}
-          <p class="rounded-lg border border-border bg-surface px-3 py-1.5 text-[0.625rem] text-muted">
-            No local changes   should apply cleanly.
+          <p
+            class="rounded-lg border border-border bg-surface px-3 py-1.5 text-[0.625rem] text-muted"
+          >
+            No local changes should apply cleanly.
           </p>
         {/if}
         {#if agentTurnActive}
@@ -4450,9 +4460,9 @@
             Delete remote branch “{target.remote}/{target.name}”?
           </AlertDialog.Title>
           <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-            Branch <strong class="font-medium text-foreground">{target.name}</strong> will be deleted
-            from <strong class="font-medium text-foreground">{target.remote}</strong>. Local branches
-            are not affected, and the deletion cannot be undone from here.
+            Branch <strong class="font-medium text-foreground">{target.name}</strong> will be
+            deleted from <strong class="font-medium text-foreground">{target.remote}</strong>. Local
+            branches are not affected, and the deletion cannot be undone from here.
           </AlertDialog.Description>
           <div class="mt-5 flex justify-end gap-2">
             <AlertDialog.Cancel
@@ -4551,7 +4561,7 @@
             permanently redirects future <strong class="font-medium text-foreground">pull</strong>
             and <strong class="font-medium text-foreground">push</strong> operations to the new address.
             Your local history is preserved, but the current remote target is replaced. This cannot be
-            undone automatically   make sure this is the repository you want to use.
+            undone automatically make sure this is the repository you want to use.
           </AlertDialog.Description>
           <div class="mt-5 flex justify-end gap-2">
             <AlertDialog.Cancel

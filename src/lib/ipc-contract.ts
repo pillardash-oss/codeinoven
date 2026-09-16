@@ -1369,7 +1369,7 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'speech:readAudio': {} as Contract<
     [attemptId: string],
-    import('./speech/types').SpeechResult<Uint8Array<ArrayBuffer>>
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechPlaybackAudio>
   >,
   'speech:retryTranscription': {} as Contract<
     [
@@ -1414,7 +1414,7 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'speech:playgroundReadAudio': {} as Contract<
     [token: string],
-    import('./speech/types').SpeechResult<Uint8Array<ArrayBuffer>>
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechAudioBytes>
   >,
   'speech:playgroundTranscribe': {} as Contract<
     [
@@ -2075,6 +2075,11 @@ export const IPC_INVOKE_CONTRACT = {
     [projectId: string, defaults: ScopeWorktreeDefaults],
     ScopeBoard
   >,
+  /**
+   * Answer a destructive scope action an agent asked for. Only an `auto_review`
+   * turn sends the request; the agent's tool call is waiting on this decision.
+   */
+  'scope:agentConfirmationRespond': {} as Contract<[requestId: string, approved: boolean], void>,
   'history:load': {} as Contract<
     [projectId: string, threadId: string, limit?: number],
     HistoryEntry[]
@@ -3190,6 +3195,20 @@ export const IPC_EVENT_CONTRACT = {
    */
   'scope:worktree:progress': [] as unknown as [
     progress: import('./types').ScopeWorktreeProgressEvent
+  ],
+  /**
+   * An agent changed scope state (created, renamed, archived, deleted, synced
+   * or merged a scope). The board reloads so agent-made scopes never hide
+   * behind a stale snapshot.
+   */
+  'scope:boardChanged': [] as unknown as [event: import('./types').ScopeBoardChangedEvent],
+  /**
+   * A destructive scope action an agent asked for, awaiting the user's decision
+   * in the app. Rendered as a confirmation dialog; the agent's tool call blocks
+   * until it is answered or expires.
+   */
+  'scope:agentConfirmation': [] as unknown as [
+    request: import('./types').ScopeAgentConfirmationRequest
   ],
   /** Live progress/prompt/completion updates for an in-app Pi OAuth sign-in. */
   'providerAccounts:oauthEvent': [] as unknown as [

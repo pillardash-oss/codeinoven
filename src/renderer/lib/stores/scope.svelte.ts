@@ -1,4 +1,5 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import { APP_SLUG } from '$shared/brand'
@@ -9,6 +10,7 @@ import {
   type ManagedWorktreeDescriptor,
   type Project,
   type ScopeBoard,
+  type ScopeBoardChangedEvent,
   type ScopeBucket,
   type ScopeLifecycleAction,
   type ScopeLifecyclePreflight,
@@ -1115,6 +1117,30 @@ class ScopeState {
     const cloned = cloneBoard(board)
     this.boards.set(projectId, cloned)
     if (projectId === this.activeProjectId) this.board = cloned
+  }
+
+  /**
+   * An agent changed scope state in main. Reload the project's board so the new
+   * or removed scope appears immediately instead of waiting for a navigation,
+   * and say what happened so the user is never looking at a silent change.
+   */
+  async handleBoardChangedEvent(event: ScopeBoardChangedEvent): Promise<void> {
+    const { projectId } = event
+    if (!projectId) return
+    // A project whose board was never opened has nothing stale to fix; it will
+    // read the current board the first time the user looks.
+    if (this.boards.has(projectId)) {
+      try {
+        await this.reloadBoard(projectId)
+      } catch (cause) {
+        this.error = cause instanceof Error ? cause.message : 'The scope board could not reload.'
+      }
+    }
+    const project = this.projects.find((candidate) => candidate.id === projectId)
+    toast.info(`An agent ${event.summary}`, {
+      description: project ? `in ${project.name}` : undefined,
+      closeButton: true
+    })
   }
 
   private async reloadBoard(projectId: string): Promise<void> {

@@ -39,6 +39,7 @@
 
 import {
   GATEWAY_TOOLS,
+  SCOPE_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
   UTILITY_DOCS_TOOL_NAME,
@@ -55,7 +56,8 @@ export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
   UTILITY_INVOKE_TOOL_NAME,
   UTILITY_DOCS_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
-  UTILITY_DIAGNOSTICS_TOOL_NAME
+  UTILITY_DIAGNOSTICS_TOOL_NAME,
+  SCOPE_TOOL_NAME
 ] as const
 
 function gatewayTool(name: string): GatewayToolDefinition {
@@ -70,6 +72,7 @@ const invokeTool = gatewayTool(UTILITY_INVOKE_TOOL_NAME)
 const docsTool = gatewayTool(UTILITY_DOCS_TOOL_NAME)
 const manageTool = gatewayTool(UTILITY_MANAGE_TOOL_NAME)
 const diagnosticsTool = gatewayTool(UTILITY_DIAGNOSTICS_TOOL_NAME)
+const scopeTool = gatewayTool(SCOPE_TOOL_NAME)
 
 export function piUtilityGatewayExtension(): string {
   return `import { execFile } from 'node:child_process'
@@ -369,6 +372,81 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       if (params.sql !== undefined) body.sql = params.sql
       if (params.params !== undefined) body.params = params.params
       const result = await callGateway(${JSON.stringify(diagnosticsTool.route)}, body)
+      return textResult(result)
+    }
+  })
+
+  // App-owned scope and worktree management. Registered without a
+  // promptSnippet only because the per-turn turn instructions already describe
+  // it; it stays callable on every turn, exactly like the utility gate.
+  pi.registerTool({
+    name: ${JSON.stringify(scopeTool.name)},
+    label: 'Manage CodeInOven scopes and worktrees',
+    description: ${JSON.stringify(scopeTool.description)},
+    promptSnippet: 'Create or manage an app-owned Git worktree scope (create, status, sync, conflicts, repair, adopt, archive, delete)',
+    promptGuidelines: [
+      'Never run a raw "git worktree add" command. Use ${SCOPE_TOOL_NAME} so the checkout is app-owned: it appears on the scope board with its branch and health, and the thread that created it moves into it.',
+      '${SCOPE_TOOL_NAME} resolves its target by scope id or display name and defaults to the scope of the calling thread; use action "list" when you need the ids.',
+      'The destructive actions (detach_worktree, delete_scope, merge_into_project) return a challenge and change nothing until you call again with confirm true; on an auto-review thread the app also asks the user to approve.'
+    ],
+    parameters: Type.Object({
+      action: Type.Union([
+        Type.Literal('list'),
+        Type.Literal('status'),
+        Type.Literal('conflicts'),
+        Type.Literal('source_info'),
+        Type.Literal('detect_adoptable'),
+        Type.Literal('create'),
+        Type.Literal('rename'),
+        Type.Literal('pin'),
+        Type.Literal('unpin'),
+        Type.Literal('archive'),
+        Type.Literal('restore'),
+        Type.Literal('adopt'),
+        Type.Literal('repair'),
+        Type.Literal('retry_setup'),
+        Type.Literal('sync_from_main'),
+        Type.Literal('sync_to_main'),
+        Type.Literal('detach_worktree'),
+        Type.Literal('delete_scope'),
+        Type.Literal('merge_into_project')
+      ], { description: 'Operation to perform.' }),
+      scope: Type.Optional(Type.String({ description: 'Scope bucket id or display name; omit for the calling thread scope.' })),
+      title: Type.Optional(Type.String({ description: 'For create: the feature title.' })),
+      name: Type.Optional(Type.String({ description: 'For rename: the new display name.' })),
+      baseBranch: Type.Optional(Type.String({ description: 'For create: branch to fork from.' })),
+      runSetup: Type.Optional(Type.Boolean({ description: 'Run the project setup commands in the new checkout.' })),
+      environmentMode: Type.Optional(Type.Union([Type.Literal('copy'), Type.Literal('symlink')])),
+      setupCommands: Type.Optional(
+        Type.Array(
+          Type.Object({
+            executable: Type.String(),
+            args: Type.Optional(Type.Array(Type.String()))
+          })
+        )
+      ),
+      attachThread: Type.Optional(Type.Boolean({ description: 'For create: move this thread into the new scope (default true).' })),
+      sourcePath: Type.Optional(Type.String({ description: 'For detect_adoptable/adopt: an existing worktree checkout path.' })),
+      strategy: Type.Optional(Type.Union([Type.Literal('merge'), Type.Literal('rebase'), Type.Literal('ff-only')])),
+      mode: Type.Optional(
+        Type.Union([
+          Type.Literal('merge-keep'),
+          Type.Literal('merge-delete'),
+          Type.Literal('merge-move-to-default')
+        ])
+      ),
+      target: Type.Optional(Type.String({ description: 'For merge_into_project: the scope to merge into.' })),
+      deleteBranch: Type.Optional(Type.Boolean({ description: 'For delete_scope: also delete the managed branch.' })),
+      threads: Type.Optional(Type.Union([Type.Literal('move-to-default'), Type.Literal('delete')])),
+      confirm: Type.Optional(Type.Boolean({ description: 'Destructive actions only: true proceeds after the challenge.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const body = { action: params.action }
+      const optionalKeys = ['scope', 'title', 'name', 'baseBranch', 'runSetup', 'environmentMode', 'setupCommands', 'attachThread', 'sourcePath', 'strategy', 'mode', 'target', 'deleteBranch', 'threads', 'confirm']
+      for (const key of optionalKeys) {
+        if (params[key] !== undefined) body[key] = params[key]
+      }
+      const result = await callGateway(${JSON.stringify(scopeTool.route)}, body)
       return textResult(result)
     }
   })

@@ -131,6 +131,7 @@ import { AgentProcessService } from '../agents/agent-process-service'
 import {
   UtilityOrchestrationService,
   type BrowserUtilityExecutor,
+  type ScopeToolExecutor,
   type UtilityResultAttribution,
   type UtilityTurnBudgetContext,
   type UtilityTurnGateway
@@ -2405,6 +2406,14 @@ export class ChatEngine {
     this.utilityOrchestration.setBrowserExecutor(executor)
   }
 
+  /**
+   * Wire the agent-facing `cio_scope` tool. The IPC layer owns the scope and
+   * worktree services, so it supplies the executor the gateway calls.
+   */
+  setScopeToolService(executor: ScopeToolExecutor | null): void {
+    this.utilityOrchestration.setScopeToolExecutor(executor)
+  }
+
   setPrototypePreviewRegistrar(
     registrar: ((previewSlug: string, canonicalRoot: string) => Promise<void>) | null
   ): void {
@@ -3542,6 +3551,8 @@ export class ChatEngine {
     settings: ThreadSettings,
     budgetContext: UtilityTurnBudgetContext,
     threadTitle: string,
+    /** Scope the thread works in; `cio_scope` defaults to it when the agent omits a target. */
+    scopeBucketId?: string,
     skipRuntime = false,
     allowManagement = false,
     brainstormInterview = false,
@@ -3580,6 +3591,7 @@ export class ChatEngine {
         sessionId,
         threadTitle,
         projectPath,
+        ...(scopeBucketId === undefined ? {} : { scopeBucketId }),
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
         executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
@@ -3722,7 +3734,8 @@ export class ChatEngine {
         projectPath,
         settings,
         budgetContext,
-        auditorThread.title
+        auditorThread.title,
+        auditorThread.scopeBucketId
       )
       return { instructions, runtimeAvailable: Boolean(instructions) }
     } catch (error) {
@@ -3821,12 +3834,16 @@ export class ChatEngine {
     }
     let gateway: UtilityTurnGateway | undefined
     try {
+      const steeringThread = await this.threadManager.getThread(projectId, threadId)
       gateway = await this.utilityOrchestration.startTurn({
         harnessId: driver.id,
         projectId,
         threadId,
         sessionId,
-        threadTitle: (await this.threadManager.getThread(projectId, threadId))?.title,
+        threadTitle: steeringThread?.title,
+        ...(steeringThread?.scopeBucketId === undefined
+          ? {}
+          : { scopeBucketId: steeringThread.scopeBucketId }),
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
@@ -8105,6 +8122,7 @@ export class ChatEngine {
       settings,
       utilityBudgetContext,
       targetThread?.title ?? '',
+      targetThread?.scopeBucketId,
       isChatThread &&
         !chatFileSystemEnabled &&
         !utilitySetupAllowed &&
@@ -8862,6 +8880,8 @@ export class ChatEngine {
               parentTurnId: turnId
             },
             title,
+            // A virtual utility-setup task has no thread row, so it owns no scope.
+            undefined,
             false,
             true,
             true

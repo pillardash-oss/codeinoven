@@ -8,6 +8,7 @@ import type {
   ManagedWorktreeDescriptor,
   ScopeEnvironmentMode,
   ScopeLifecyclePreflight,
+  ScopeLifecycleSnapshot,
   ScopeMergeMode,
   ScopeMergeOutcome,
   ScopeMergePreflight,
@@ -53,6 +54,11 @@ export interface ScopeThreadLifecycle {
     projectId: string,
     fromBucketId: string
   ): Promise<{ moved: number; evicted: number }>
+  /**
+   * Move one thread into a scope bucket. Used when an agent creates a scope for
+   * the work it is already doing, so the next turn runs in the new root.
+   */
+  moveThreadIntoScope(projectId: string, threadId: string, bucketId: string): Promise<void>
 }
 
 export interface ScopeWorktreeServiceOptions {
@@ -1069,42 +1075,72 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       const project = await this.projects.getProject(target.projectId)
       const repoPath = project?.path
 
-      const dirtyFiles = await this.dirtyFiles(repoPath, worktreePath)
-      const unpushedCommits = await this.unpushedCount(repoPath, descriptor.branch, worktreePath)
-      const branchOwnedByWorktree = await this.managedBranchRegisteredAt(
-        repoPath ?? worktreePath,
+      const snapshot = await this.computeLifecycleSnapshot(
+        target,
         worktreePath,
-        descriptor.branch
+        descriptor.branch,
+        repoPath
       )
-      const hasActiveProcesses =
-        (await this.activeProcesses?.hasActiveProcessesFor(
-          target.projectId,
-          target.scopeBucketId
-        )) ?? false
-
-      const snapshot: PreflightSnapshot = {
+      const record: PreflightSnapshot = {
         action,
         target,
-        dirtyFiles,
-        unpushedCommits,
-        hasActiveProcesses,
-        branchOwnedByWorktree,
+        ...snapshot,
         token: randomBytes(16).toString('hex'),
         createdAt: Date.now()
       }
-      this.preflights.set(snapshot.token, snapshot)
+      this.preflights.set(record.token, record)
       return {
-        action: snapshot.action,
+        action: record.action,
         projectId: target.projectId,
         scopeBucketId: target.scopeBucketId,
-        dirtyFiles: [...snapshot.dirtyFiles],
-        unpushedCommits: snapshot.unpushedCommits,
-        hasActiveProcesses: snapshot.hasActiveProcesses,
-        branchOwnedByWorktree: snapshot.branchOwnedByWorktree,
-        confirmationId: snapshot.token,
-        createdAt: snapshot.createdAt
+        dirtyFiles: [...record.dirtyFiles],
+        unpushedCommits: record.unpushedCommits,
+        hasActiveProcesses: record.hasActiveProcesses,
+        branchOwnedByWorktree: record.branchOwnedByWorktree,
+        confirmationId: record.token,
+        createdAt: record.createdAt
       }
     })
+  }
+
+  /**
+   * Read what a destructive action on this scope would discard, without minting
+   * a confirmation token. The agent-facing scope tool shows this before the user
+   * decides; `preflight` mints the single-use token from the same computation,
+   * so the challenge a user sees and the state the token is bound to agree.
+   */
+  async lifecycleSnapshot(target: ScopeTarget): Promise<ScopeLifecycleSnapshot> {
+    return this.enqueue(target.projectId, async () => {
+      const descriptor = this.requireManaged(target)
+      const worktreePath = getScopeRootPath(target.projectId, descriptor.directoryName)
+      const project = await this.projects.getProject(target.projectId)
+      return await this.computeLifecycleSnapshot(
+        target,
+        worktreePath,
+        descriptor.branch,
+        project?.path
+      )
+    })
+  }
+
+  /** One snapshot computation shared by the token-minting and read-only paths. */
+  private async computeLifecycleSnapshot(
+    target: ScopeTarget,
+    worktreePath: string,
+    branch: string,
+    repoPath: string | undefined
+  ): Promise<ScopeLifecycleSnapshot> {
+    const dirtyFiles = await this.dirtyFiles(repoPath, worktreePath)
+    const unpushedCommits = await this.unpushedCount(repoPath, branch, worktreePath)
+    const branchOwnedByWorktree = await this.managedBranchRegisteredAt(
+      repoPath ?? worktreePath,
+      worktreePath,
+      branch
+    )
+    const hasActiveProcesses =
+      (await this.activeProcesses?.hasActiveProcessesFor(target.projectId, target.scopeBucketId)) ??
+      false
+    return { dirtyFiles, unpushedCommits, branchOwnedByWorktree, hasActiveProcesses }
   }
 
   /** Consume a confirmation token bound to its snapshot. Returns null when stale. */
