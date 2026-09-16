@@ -100,6 +100,7 @@ import type {
   BrainstormPrototypeFidelity,
   CreateThreadInput,
   EngineeringSpecContent,
+  GitConflictSide,
   GitResetMode,
   AgentAccountUsageOverrides,
   PromptAttachment,
@@ -1796,6 +1797,11 @@ export class RemoteRpcDispatcher {
         return this.gitService.resolveConflicted(
           await this.resolveProjectPath(this.string(args[0])),
           this.string(args[1])
+        )
+      case 'git:acceptConflictSide':
+        return this.gitService.acceptConflictSide(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1]) as GitConflictSide
         )
       case 'git:unstage':
         return this.gitService.unstage(

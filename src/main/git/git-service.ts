@@ -22,6 +22,7 @@ import type {
   GitCommitRef,
   GitConflictAnalysis,
   GitConflictHunk,
+  GitConflictSide,
   GitConflictWorkFile,
   GitConflictWorkHunkState,
   GitDiff,
@@ -452,6 +453,47 @@ export class GitService {
       if (hasConflictMarkers(file.content)) return this.readStatus(directory)
       await this.wrapError(directory, 'mutation', async () => {
         await this.client(directory).add([safePath])
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /**
+   * Take one side of every unresolved conflict wholesale and stage it.
+   *
+   * `incoming` keeps the theirs side (stage 3, the branch being integrated),
+   * `current` keeps the ours side (stage 2, what HEAD had)   the same two sides
+   * the per-hunk merge editor names. Each path is written and staged so git
+   * clears its unmerged entry, and the merge editor's scratch document for that
+   * path is removed because it now describes a file that no longer conflicts.
+   *
+   * Refused while no conflict is open, and the whole set is touched in one
+   * queued task so a partial accept can never be observed.
+   */
+  async acceptConflictSide(projectPath: string, side: GitConflictSide): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const status = await this.client(directory).status()
+      const safePaths = status.conflicted.map((path) => this.assertRelativePath(directory, path))
+      if (safePaths.length === 0) return this.readStatus(directory)
+      const scratch = await Promise.all(
+        safePaths.map((path) => this.conflictWorkPaths(directory, path))
+      )
+      await this.wrapError(directory, 'mutation', async () => {
+        const git = this.client(directory)
+        await git.raw([
+          'checkout',
+          side === 'incoming' ? '--theirs' : '--ours',
+          '--',
+          ...safePaths
+        ])
+        await git.add(safePaths)
+        await Promise.all(
+          scratch.flatMap(({ document, metadata }) => [
+            rm(document, { force: true }),
+            rm(metadata, { force: true })
+          ])
+        )
       })
       return this.readStatus(directory)
     })
@@ -1845,17 +1887,30 @@ export class GitService {
    * updates the PR), check the user's original branch back out, and delete the
    * now-useless temporary branch. The temporary branch exists only to stage
    * the conflict resolution, so nothing is left for the user to do by hand.
+   *
+   * The push resolves credentials the same way `push` does: the caller passes
+   * the vaulted PAT, so finishing works on a repository whose remote the panel
+   * authenticates for rather than depending on ambient git credentials.
    */
   async finishPrResolve(
     projectPath: string,
-    options: { remote: string; pullNumber: number; headBranch: string; returnBranch: string }
+    options: {
+      remote: string
+      pullNumber: number
+      headBranch: string
+      returnBranch: string
+      token?: string
+    }
   ): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      const git = this.client(directory)
       const localBranch = `pr-${options.pullNumber}`
       await this.wrapError(projectPath, 'mutation', async () => {
-        await git.raw(['push', options.remote, `${localBranch}:${options.headBranch}`])
+        const pushClient = options.token
+          ? this.withAuthHeader(directory, options.token)
+          : this.client(directory)
+        await pushClient.push([options.remote, `${localBranch}:${options.headBranch}`])
+        const git = this.client(directory)
         await git.checkout(options.returnBranch)
         await git.deleteLocalBranch(localBranch, true)
       })

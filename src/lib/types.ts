@@ -4452,6 +4452,13 @@ export interface GitConflictAnalysis {
   hunks: GitConflictHunk[]
 }
 
+/**
+ * Which side of an unresolved conflict to take wholesale. `incoming` is the
+ * theirs side (the branch being integrated in), `current` is the ours side
+ * (what HEAD already had). The same words the per-hunk merge editor uses.
+ */
+export type GitConflictSide = 'incoming' | 'current'
+
 /** Persisted state for one conflict range inside the scratch merge document. */
 export interface GitConflictWorkHunkState {
   /** Stable index matching the corresponding entry in `analysis.hunks`. */

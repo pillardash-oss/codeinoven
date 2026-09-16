@@ -2,7 +2,7 @@ import { fileURLToPath } from 'url'
 import { realpath } from 'fs/promises'
 import { isAbsolute, posix, relative, resolve, sep, win32 } from 'path'
 import type { WebFrameMain } from 'electron'
-import type { GitRestoreTarget } from '../../lib/types'
+import type { GitConflictSide, GitRestoreTarget } from '../../lib/types'
 import { toPosixPath } from '../../lib/paths'
 import { Logger } from '../system/logger'
 import type {
@@ -647,6 +647,14 @@ export function validateGitResetMode(value: unknown): 'soft' | 'mixed' | 'hard' 
     throw new TypeError('Reset mode must be one of: soft, mixed, hard')
   }
   return value as 'soft' | 'mixed' | 'hard'
+}
+
+/** Validate which side of a conflict to take wholesale. */
+export function validateGitConflictSide(value: unknown): GitConflictSide {
+  if (value !== 'incoming' && value !== 'current') {
+    throw new TypeError('Conflict side must be one of: incoming, current')
+  }
+  return value
 }
 
 /** Validate a restore target: the index only, or the index and working tree. */

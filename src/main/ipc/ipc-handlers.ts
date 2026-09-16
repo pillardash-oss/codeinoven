@@ -95,6 +95,7 @@ import {
   validateEngineeringLifecycleSelectionInput,
   validateEngineeringLifecycleStage,
   validateGitIdentity,
+  validateGitConflictSide,
   validateGitPathArray,
   validateGitRelativePath,
   validateGitResetMode,
@@ -5878,6 +5879,19 @@ export function registerIpcHandlers(
       )
   )
   ipcMain.handle(
+    'git:acceptConflictSide',
+    async (_, projectId: unknown, side: unknown, scopeBucketId?: unknown) =>
+      gitService.acceptConflictSide(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitConflictSide(side)
+      )
+  )
+  ipcMain.handle(
     'git:unstage',
     async (_, projectId: unknown, paths: unknown, scopeBucketId?: unknown) =>
       gitService.unstage(
@@ -6432,16 +6446,24 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'git:finishPrResolve',
-    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
-      gitService.finishPrResolve(
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeOptions = validatePrResolveOptions(options)
+      // Resolve the vaulted PAT in main only; the token never crosses IPC. The
+      // finish step pushes the resolution back to the PR, so it needs the same
+      // credential the panel's own push uses.
+      const tokenRef = gitCredentialRef(safeProjectId)
+      const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
+      return gitService.finishPrResolve(
         await resolveProjectPath(
-          validateEntityId(projectId, 'Project ID'),
+          safeProjectId,
           scopeBucketId === undefined
             ? undefined
             : validateEntityId(scopeBucketId, 'Scope bucket ID')
         ),
-        validatePrResolveOptions(options)
+        { ...safeOptions, token }
       )
+    }
   )
   ipcMain.handle(
     'git:stash',

@@ -70,6 +70,7 @@ import type {
   GitBranchInfo,
   GitCommitInfo,
   GitConflictAnalysis,
+  GitConflictSide,
   GitConflictWorkFile,
   GitCredentialStatus,
   GitDiff,
@@ -1481,6 +1482,11 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'git:resolveConflicted': {} as Contract<
     [projectId: string, path: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  /** Take one side of every unresolved conflict wholesale, then stage it. */
+  'git:acceptConflictSide': {} as Contract<
+    [projectId: string, side: GitConflictSide, scopeBucketId?: string],
     GitStatus
   >,
   'git:unstage': {} as Contract<

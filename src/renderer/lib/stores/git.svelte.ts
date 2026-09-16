@@ -5,6 +5,7 @@ import type {
   GitBranchInfo,
   GitCommitInfo,
   GitConflictAnalysis,
+  GitConflictSide,
   GitConflictWorkFile,
   GitConflictWorkHunkState,
   GitCredentialStatus,
@@ -73,6 +74,7 @@ export type GitOperation =
   | 'stash-pop'
   | 'stash-drop'
   | 'restore-files'
+  | 'accept-conflicts'
   | 'abortMerge'
   | 'abortRebase'
   | 'pr-create'
@@ -722,6 +724,19 @@ export class GitState {
       }
       this.status = status
       this.branches = branches
+      // A recorded PR-conflict session is only real while its temporary
+      // `pr-<n>` branch still exists: once the branch is gone (finished, or
+      // deleted by hand) the session must not keep offering a merge to
+      // complete.
+      const session = this.prResolveSession
+      if (
+        session &&
+        !branches.some(
+          (branch) => branch.kind === 'local' && branch.name === `pr-${session.pullNumber}`
+        )
+      ) {
+        this.prResolveSession = null
+      }
       this.identity = identity
       this.remotes = Array.isArray(remotes) ? remotes : []
       this.credentialStatus = credentialStatus
@@ -830,6 +845,23 @@ export class GitState {
       this.error = errorMessage(reason, 'Conflict could not be resolved')
     } finally {
       this.markBusy('stage', false)
+    }
+  }
+
+  /**
+   * Take one side of every unresolved conflict at once: each conflicted file is
+   * replaced with its incoming (theirs) or current (ours) version and staged,
+   * so the whole set leaves the conflicted list in one step.
+   */
+  async acceptConflictSide(projectId: string, side: GitConflictSide): Promise<void> {
+    this.markBusy('accept-conflicts', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:acceptConflictSide', ...this.scopedGitArgs(projectId, side))
+    } catch (reason) {
+      this.error = errorMessage(reason, 'The conflicts could not be resolved')
+    } finally {
+      this.markBusy('accept-conflicts', false)
     }
   }
 

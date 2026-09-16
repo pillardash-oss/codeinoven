@@ -12,6 +12,7 @@
   import type {
     GitBranchInfo,
     GitCommitInfo,
+    GitConflictSide,
     GitDiff,
     GitFileChange,
     GitMainSyncDirection,
@@ -24,6 +25,7 @@
     GitResetMode,
     GitRestoreTarget,
     GitStashEntry,
+    Project,
     ThreadStatus
   } from '$shared/types'
   import {
@@ -31,6 +33,7 @@
     ArrowDownToLine,
     ArrowLeft,
     ArrowUpFromLine,
+    Bot,
     Check,
     ChevronDown,
     ChevronLeft,
@@ -838,8 +841,9 @@
   /**
    * Resolve a PR's online conflicts with the agent's help: check out the PR head
    * and merge the base in (so conflicts land in the tree), then hand the agent a
-   * thread to resolve the conflict markers and commit. The agent never pushes  
-   * the user finishes with the app's authenticated push to update the PR.
+   * thread to resolve the conflict markers. The agent never pushes   the user
+   * finishes with Complete merge, which pushes the resolution to the PR and
+   * deletes the temporary branch.
    */
   async function startConflictResolution(pr: PullRequestSummary): Promise<void> {
     const project = await invoke('project:get', projectId).catch(() => null)
@@ -854,34 +858,100 @@
       returnBranch
     })
     if (gitState.error) return
-    const conflictedPaths = [...gitState.conflicted]
+    selectedPullRequest = null
+    activeTab = 'changes'
+    await launchConflictAgent(
+      project,
+      `Resolve conflicts in PR #${pr.number}`,
+      [...gitState.conflicted],
+      pr
+    )
+  }
 
+  /**
+   * Resolve whatever integration is in progress with the agent's help. The
+   * conflicts are already in the working tree (a pull, a merge or a rebase), so
+   * this only has to hand the agent the brief   the same brief the PR path uses.
+   */
+  async function resolveConflictsWithAgent(): Promise<void> {
+    const project = await invoke('project:get', projectId).catch(() => null)
+    if (!project) return
+    await launchConflictAgent(
+      project,
+      `Resolve conflicts in ${status?.branch ?? 'this worktree'}`,
+      [...gitState.conflicted],
+      null
+    )
+  }
+
+  /**
+   * Open a thread that resolves the given conflicted paths, with the brief
+   * pre-loaded as a draft so the user reviews it before sending. The panel's
+   * own conflict controls stay the place the merge is completed from.
+   */
+  async function launchConflictAgent(
+    project: Project,
+    title: string,
+    conflictedPaths: string[],
+    pullRequest: PullRequestSummary | null
+  ): Promise<void> {
     const thread = await invoke('thread:create', {
       projectId,
       providerId: 'pi',
-      title: `Resolve conflicts in PR #${pr.number}`,
+      title,
       workingDirectory: project.path,
       settings: { ...threadSettings.lastUsed }
     }).catch(() => null)
     if (!thread) return
-
-    selectedPullRequest = null
-    activeTab = 'changes'
     rendererRecovery.setDraft(
       projectId,
       thread.id,
-      conflictResolutionPrompt(pr, conflictedPaths),
+      conflictResolutionPrompt(
+        conflictedPaths,
+        pullRequest,
+        conflictState === 'rebase' ? 'rebase' : 'merge'
+      ),
       [],
       []
     )
     workspaceState.openThread(thread, project)
   }
 
-  /** The first message the conflict-resolution agent receives. */
-  function conflictResolutionPrompt(pr: PullRequestSummary, conflictedPaths: string[]): string {
+  /**
+   * The first message the conflict-resolution agent receives. The agent resolves
+   * and stages; on a merge it stops there, because the merge commit is the
+   * user's step (Complete merge writes it, and pushes the resolution and deletes
+   * the temporary branch when a pull request is involved). A rebase stop has no
+   * such step in this panel, so that brief still asks for the commit.
+   */
+  function conflictResolutionPrompt(
+    conflictedPaths: string[],
+    pullRequest: PullRequestSummary | null,
+    integration: 'merge' | 'rebase'
+  ): string {
+    const subject = pullRequest
+      ? [
+          `Resolve the merge conflicts in pull request #${pullRequest.number}   "${pullRequest.title}" (${pullRequest.headRef} → ${pullRequest.baseRef}).`,
+          `The head branch \`pr-${pullRequest.number}\` is already checked out and \`${pullRequest.baseRef}\` has been merged into it, so the conflicts are in the working tree.`
+        ]
+      : [
+          `Resolve the conflicts left by the in-progress ${integration} in this worktree.`,
+          'The conflicts are already in the working tree, in the files listed below.'
+        ]
+    const handOff =
+      integration === 'merge'
+        ? [
+            'Then stage exactly the files you resolved, one `git add <path>` per file   never `git add -A`.',
+            `Do NOT commit and do NOT push   the user completes the merge from the Git panel, which writes the merge commit${pullRequest ? ', pushes the resolution back to the pull request, and deletes the temporary branch' : ''}.`
+          ]
+        : [
+            'Then stage and commit the resolutions:',
+            '1. `git add -A`',
+            '2. `git commit -m "Resolve conflicts"`',
+            'Do NOT push   the user finishes from the Git panel.'
+          ]
     return [
-      `Resolve the merge conflicts in pull request #${pr.number}   "${pr.title}" (${pr.headRef} → ${pr.baseRef}).`,
-      `The head branch \`pr-${pr.number}\` is already checked out and \`${pr.baseRef}\` has been merged into it, so the conflicts are in the working tree.`,
+      ...subject,
       '',
       conflictedPaths.length > 0
         ? `Conflicted files: ${conflictedPaths.map((path) => `\`${path}\``).join(', ')}`
@@ -891,11 +961,7 @@
       '1. Read it and resolve the `<<<<<<<`, `=======`, and `>>>>>>>` conflict markers, keeping the correct merged content.',
       '2. Run the relevant project checks/tests to make sure the resolution is sound.',
       '',
-      'Then stage and commit the resolutions:',
-      '1. `git add -A`',
-      `2. \`git commit -m "Resolve merge conflicts with ${pr.baseRef}"\``,
-      '',
-      'Do NOT push   after committing, the user finishes in the Git panel with the Resolve merge button, which pushes the resolution to the pull request and cleans up the temporary branch.'
+      ...handOff
     ].join('\n')
   }
 
@@ -1604,6 +1670,21 @@
   const needsUpstreamPush = $derived(
     Boolean(status?.branch) && !status?.detached && status?.upstream === null
   )
+  /**
+   * Whether the remote already carries a branch under this name, read from the
+   * last branch refresh. A branch without an upstream is not necessarily a
+   * branch the remote has never seen, and the confirmation has to name which
+   * of the two this push does: publish a new remote branch, or start tracking
+   * the one that is already there.
+   */
+  const remoteBranchExists = $derived(
+    gitState.branches.some(
+      (branch) =>
+        branch.kind === 'remote' &&
+        branch.name === status?.branch &&
+        branch.remote === primaryRemote?.name
+    )
+  )
   const syncBusy = $derived(gitState.isBusy(['fetch', 'pull', 'push', 'sync-main']))
   /** Commits the remote does not have yet, according to the last fetch. */
   const commitsAhead = $derived(status?.ahead ?? 0)
@@ -1646,12 +1727,31 @@
    * Pull and Push are the only remote actions that earn the second row: they act
    * on the branch you are standing on, one each, and they fill the row between
    * them. Sync main is a menu, so it sits with the other header tools.
-   */
-  /**
+   *
    * The Deploys view reads runs and deployments, not the branch you are standing
    * on, so Pull and Push have nothing to say there and do not appear.
    */
-  const showsRemoteActions = $derived(activeTab !== 'deployments' && (showsPull || showsPush))
+  /**
+   * The row's remote actions apply to the branch you are standing on, which is
+   * what the Deploys view is not about.
+   */
+  const remoteActionsApply = $derived(activeTab !== 'deployments')
+  /**
+   * Unresolved conflicts hand the row to the controls that end them, so the
+   * remote buttons step out of the way and reappear in the git actions menu.
+   * Pushing or pulling a half-resolved integration is not a step forward.
+   */
+  const conflictsOpen = $derived(conflicted.length > 0)
+  /**
+   * A worktree checkout keeps Pull and Push in the git actions menu beside
+   * Fetch rather than handing them the row: the row is the panel's loudest
+   * position, and a managed scope already owns the sync-to-main and
+   * sync-from-main actions plus the pull request its branch exists for.
+   */
+  const remoteActionsInMenu = $derived(remoteActionsApply && (conflictsOpen || worktreeScope))
+  const showsRemoteActions = $derived(
+    remoteActionsApply && !conflictsOpen && !worktreeScope && (showsPull || showsPush)
+  )
 
   /**
    * The working tree's staging controls: whatever the changes view can do to the
@@ -1659,7 +1759,7 @@
    * they share this row with Pull and Push instead.
    */
   const showsStageControls = $derived(
-    conflicted.length > 0 ||
+    conflictsOpen ||
       unstaged.length + untracked.length > 0 ||
       staged.length > 0 ||
       (changes.length > 0 && selectedPathList.length > 0)
@@ -1943,23 +2043,43 @@
   const conflictState = $derived(gitState.conflictState)
 
   /**
+   * The temporary `pr-<n>` branch a PR conflict resolution is staged on, while
+   * its session is still open. `preparePrResolve` records the session and the
+   * store drops it once the branch is gone, so this names the branch the finish
+   * step still has to delete.
+   */
+  const prResolveBranch = $derived(
+    gitState.prResolveSession ? `pr-${gitState.prResolveSession.pullNumber}` : null
+  )
+
+  /**
    * A merge is in progress (MERGE_HEAD exists) and every conflicted file has
-   * been resolved and staged. Git is waiting for the merge commit, so the
-   * panel surfaces a dedicated Resolve button instead of leaving the user to
+   * been resolved and staged. Git is waiting for the merge commit, so the panel
+   * surfaces the one next step   Complete merge   instead of leaving the user to
    * figure out that a normal commit finishes the merge.
    */
   const mergePending = $derived(conflictState === 'merge' && conflicted.length === 0)
 
-  /** Resolve-merge modal state: optional title/description, defaults auto-generated. */
-  let resolveMergeOpen = $state(false)
+  /**
+   * Whether the integration still has a step left: the merge commit, or   when
+   * that commit already exists on a temporary PR branch   the push back to the
+   * pull request and the cleanup of that branch. Same next step, same control.
+   * Held back while any conflict is still open: the row owns that state, and a
+   * commit with unmerged paths would only be refused by git.
+   */
+  const prResolvePending = $derived(prResolveBranch !== null && conflicted.length === 0)
+  const mergeAwaitsCompletion = $derived(mergePending || prResolvePending)
+
+  /** Complete-merge modal state: optional title/description, defaults auto-generated. */
+  let completeMergeOpen = $state(false)
   let mergeTitle = $state('')
   let mergeDescription = $state('')
-  const resolveMergeBusy = $derived(gitState.isBusy(['commit', 'push']))
+  const completeMergeBusy = $derived(gitState.isBusy(['commit', 'push']))
 
-  function openResolveMerge(): void {
+  function openCompleteMerge(): void {
     mergeTitle = ''
     mergeDescription = ''
-    resolveMergeOpen = true
+    completeMergeOpen = true
   }
 
   /** The commit message actually used: user text when given, a generated default otherwise. */
@@ -1971,23 +2091,52 @@
     return description ? `${resolvedTitle}\n\n${description}` : resolvedTitle
   }
 
-  async function confirmResolveMerge(): Promise<void> {
-    if (resolveMergeBusy) return
-    await gitState.commit(projectId, mergeCommitMessage())
-    if (gitState.error) return
-    // A recorded PR-conflict session finishes itself: push the resolution back
-    // to the PR head branch, check out the original branch, delete pr-<n>.
-    // A plain local merge is already complete once committed.
-    const finished = await gitState.finishPrResolve(projectId)
-    if (!finished && gitState.prResolveSession) return
-    resolveMergeOpen = false
+  /**
+   * Complete the merge: write the merge commit when it is still pending, then
+   * finish a recorded PR-conflict session   push the resolution back to the PR's
+   * head branch, check out the branch the user came from, and delete the
+   * temporary `pr-<n>` branch. A plain local merge is complete once committed.
+   */
+  async function confirmCompleteMerge(): Promise<void> {
+    if (completeMergeBusy || !mergeAwaitsCompletion) return
+    const temporaryBranch = prResolveBranch
+    if (mergePending) {
+      await gitState.commit(projectId, mergeCommitMessage())
+      if (gitState.error) return
+      if (!temporaryBranch) toast.success('Merge committed')
+    }
+    if (temporaryBranch) {
+      const finished = await gitState.finishPrResolve(projectId)
+      if (!finished) return
+      toast.success(`Resolution pushed to the pull request; ${temporaryBranch} removed`)
+    }
+    completeMergeOpen = false
     mergeTitle = ''
     mergeDescription = ''
     void refreshStatus()
   }
 
+  /**
+   * Accept-all is destructive: the other side of every conflicted file is
+   * discarded, so it asks before it runs, like Abort does.
+   */
+  let acceptConflictsSide = $state<GitConflictSide | null>(null)
+
+  function requestAcceptAllConflicts(side: GitConflictSide): void {
+    acceptConflictsSide = side
+  }
+
+  async function confirmAcceptAllConflicts(): Promise<void> {
+    const side = acceptConflictsSide
+    acceptConflictsSide = null
+    if (!side) return
+    await gitState.acceptConflictSide(projectId, side)
+    if (gitState.error) return
+    void refreshStatus()
+  }
+
   const integrateBusy = $derived(
-    gitState.isBusy(['merge', 'rebase', 'stash', 'abortMerge', 'abortRebase'])
+    gitState.isBusy(['merge', 'rebase', 'stash', 'abortMerge', 'abortRebase', 'accept-conflicts'])
   )
   const atRiskFiles = $derived(changes.length > 0 ? changes.map((change) => change.path) : [])
 
@@ -2525,6 +2674,7 @@
         type="button"
         class="flex h-6 shrink-0 items-center gap-1.5 rounded-xs border border-danger/40 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
         disabled={integrateBusy || conflictState === 'none'}
+        title="Discard the whole {conflictState} and restore the working tree"
         onclick={requestAbortConflict}
       >
         {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
@@ -2534,6 +2684,63 @@
         {/if}
         Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
       </button>
+      <!--
+        The whole resolution, in the order it happens: open the per-hunk merge
+        editor, or hand the files to an agent, or take one side of every file
+        at once. They live here, beside Abort, because this row is where a
+        conflicted integration is decided   the Conflicts section header used to
+        carry Resolve all on its own, which the tree layout never showed.
+      -->
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center gap-1.5 rounded-xs border border-warning/40 px-2 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
+        disabled={integrateBusy}
+        title="Open the merge editor on the conflicted files, starting with the first"
+        onclick={() => routeConflictResolution()}
+      >
+        <GitMerge size={11} />
+        Resolve all
+      </button>
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center gap-1.5 rounded-xs border border-border px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        disabled={integrateBusy}
+        title="Hand every conflicted file to an agent to resolve"
+        onclick={() => void resolveConflictsWithAgent()}
+      >
+        <Bot size={11} />
+        Resolve with agents
+      </button>
+      <!--
+        One decision with two answers, so one control: which side of every
+        conflicted file to keep. Both sides are destructive to the other, so
+        both confirm before they run.
+      -->
+      <div
+        class="flex h-6 shrink-0 items-center gap-0.5 rounded-xs border border-border bg-elevated p-0.5"
+        role="group"
+        aria-label="Accept one side of every conflicted file"
+      >
+        <span class="px-1 text-[0.5625rem] font-medium text-dimmed">Accept</span>
+        <button
+          type="button"
+          class="h-5 shrink-0 rounded-sm px-1.5 text-[0.5625rem] font-medium text-accent transition-colors hover:bg-accent/15 disabled:cursor-default disabled:opacity-40"
+          disabled={integrateBusy}
+          title="Replace every conflicted file with its incoming version"
+          onclick={() => requestAcceptAllConflicts('incoming')}
+        >
+          incoming
+        </button>
+        <button
+          type="button"
+          class="h-5 shrink-0 rounded-sm px-1.5 text-[0.5625rem] font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-default disabled:opacity-40"
+          disabled={integrateBusy}
+          title="Replace every conflicted file with its current version"
+          onclick={() => requestAcceptAllConflicts('current')}
+        >
+          current
+        </button>
+      </div>
       <span
         class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-warning"
       >
@@ -3022,8 +3229,33 @@
                   Fetch is the one remote action with no control of its own: it
                   advertises no drift, so it stays here with the working-tree
                   actions. Pull, Push and the main-worktree sync each own a
-                  header control, so the menu does not repeat them.
+                  header control, so the menu does not repeat them. They land
+                  here instead while conflicts are open, when the row belongs to
+                  the resolution controls, and in a worktree checkout, where a
+                  managed scope keeps publishing out of the row.
                 -->
+                  {#if remoteActionsInMenu}
+                    {#if showsPull}
+                      <DropdownMenu.Item
+                        class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
+                        disabled={syncBusy}
+                        onSelect={() => void pullAction()}
+                      >
+                        <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
+                        Pull {commitsBehind}
+                      </DropdownMenu.Item>
+                    {/if}
+                    {#if showsPush}
+                      <DropdownMenu.Item
+                        class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
+                        disabled={syncBusy || gitState.isBusy('push')}
+                        onSelect={() => void pushAction()}
+                      >
+                        <ArrowUpFromLine size={12} class="shrink-0 text-dimmed" />
+                        Push{commitsAhead > 0 ? ` ${String(commitsAhead)}` : ''}
+                      </DropdownMenu.Item>
+                    {/if}
+                  {/if}
                   <DropdownMenu.Item
                     class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
                     disabled={remotes.length === 0 || syncBusy}
@@ -3072,10 +3304,12 @@
     {#if showsActionRow}
       <!--
         The row under the header belongs to the view in focus: the commit or
-        stash being read, the pull request's identity, the PR list's filter, and
-        Pull and Push. Pull and Push are independent   a diverged branch needs
-        both   so each gets a share of the row's width instead of one hiding the
-        other, and they are the only items here that stretch.
+        stash being read, the pull request's identity, the PR list's filter, the
+        conflict controls, and Pull and Push. Pull and Push are independent   a
+        diverged branch needs both   so each gets a share of the row's width
+        instead of one hiding the other, and they are the only items here that
+        stretch. While conflicts are open they stand aside entirely (see
+        `conflictsOpen`) so the row can hold the controls that end them.
       -->
       <div class="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
         {@render viewContext()}
@@ -3365,15 +3599,6 @@
                             <span class="text-[0.5rem] tabular-nums text-dimmed">
                               {section.files.length}
                             </span>
-                            <span class="flex-1"></span>
-                            <button
-                              type="button"
-                              class="rounded px-1.5 py-0.5 text-[0.5625rem] font-medium text-warning transition-colors hover:bg-warning/10"
-                              title="Open the conflict resolution panel"
-                              onclick={() => routeConflictResolution(section.files[0]?.path)}
-                            >
-                              Resolve all
-                            </button>
                           </div>
                           {#each section.files as change (change.path)}
                             <GitFileRow
@@ -3969,8 +4194,10 @@
     {/if}
   </div>
 
-  <!-- Pinned composer: only once something is staged (or an amend was started from History) -->
-  {#if repoState === 'git' && status && !selectedCommit && activeTab === 'changes' && (staged.length > 0 || amendMode)}
+  <!-- Pinned composer: only once something is staged (or an amend was started from History).
+       It stands down while a merge awaits completion, so the panel offers one next step
+       instead of two   the merge bar below carries the commit that finishes it. -->
+  {#if repoState === 'git' && status && !selectedCommit && activeTab === 'changes' && (staged.length > 0 || amendMode) && !mergeAwaitsCompletion}
     <div class="shrink-0 border-t border-border bg-surface">
       {#if amendMode}
         <div class="flex items-center gap-2 border-b border-border bg-warning/10 px-3 py-1.5">
@@ -4017,9 +4244,23 @@
   <!-- Pinned action bar -->
   {#if pushConfirm}
     <div class="shrink-0 border-t border-border bg-warning/10 px-3 py-2">
-      <p class="text-[0.625rem] font-medium text-foreground">Push with upstream?</p>
+      <p class="text-[0.625rem] font-medium text-foreground">
+        {remoteBranchExists
+          ? `Push ${status?.branch} and track it on the remote?`
+          : `Publish ${status?.branch} as a new branch on the remote?`}
+      </p>
       <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-muted">
-        Set <span class="font-mono text-foreground">{primaryRemote?.name}/{status?.branch}</span> as upstream.
+        <span class="font-mono text-foreground">{status?.branch}</span> has no upstream.
+        {#if remoteBranchExists}
+          <span class="font-mono text-foreground">{primaryRemote?.name}/{status?.branch}</span>
+          already exists there, so this push brings it up to date and makes it this branch's upstream.
+        {:else}
+          This push creates
+          <span class="font-mono text-foreground">{primaryRemote?.name}/{status?.branch}</span>
+          on <span class="font-mono text-foreground">{primaryRemote?.name}</span> and makes it this branch's
+          upstream, so later pushes and pulls go there.
+        {/if}
+        Nothing is forced: git refuses the push when it would drop remote commits.
       </p>
       <div class="mt-1.5 flex justify-end gap-1.5">
         <button
@@ -4035,7 +4276,7 @@
           disabled={syncBusy}
           onclick={() => void confirmPushUpstream()}
         >
-          Push
+          {remoteBranchExists ? 'Push' : 'Publish branch'}
         </button>
       </div>
     </div>
@@ -4299,33 +4540,45 @@
     </Modal>
   {/if}
 
-  <!-- Completing a resolved merge: optional title/description, auto-generated when skipped -->
-  {#if resolveMergeOpen}
-    <Modal open title="Resolve merge" onClose={() => (resolveMergeOpen = false)}>
+  <!-- Completing a resolved merge: optional title/description, auto-generated when skipped.
+       It closes itself if the state it describes goes away (an abort elsewhere, a
+       temporary branch deleted by hand), so it can never offer a stale completion. -->
+  {#if completeMergeOpen && mergeAwaitsCompletion}
+    <Modal open title="Complete merge" onClose={() => (completeMergeOpen = false)}>
       <div class="space-y-2">
-        <p class="text-[0.6875rem] leading-relaxed text-muted">
-          All conflicts are resolved. Give the merge commit a title and description, or leave them
-          empty to generate one automatically. Resolving also pushes the result back to the pull
-          request, restores your previous branch, and removes the temporary conflict branch.
-        </p>
-        <input
-          class="h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-          placeholder="Title (e.g. Merge branch '{status?.upstream ?? 'main'}')"
-          bind:value={mergeTitle}
-          disabled={resolveMergeBusy}
-        />
-        <textarea
-          class="min-h-16 w-full resize-y rounded-md border border-border bg-elevated px-2.5 py-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-          placeholder="Description (optional)"
-          bind:value={mergeDescription}
-          disabled={resolveMergeBusy}></textarea>
+        {#if mergePending}
+          <p class="text-[0.6875rem] leading-relaxed text-muted">
+            Every conflict is resolved and staged. Completing the merge commits it{#if prResolveBranch},
+              pushes the resolution back to the pull request, restores your previous branch, and
+              deletes the temporary <span class="font-mono text-foreground">{prResolveBranch}</span> branch{/if}.
+            Add a message below, or leave it empty to generate one.
+          </p>
+          <input
+            class="h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+            placeholder="Title (e.g. Merge branch '{status?.upstream ?? 'main'}')"
+            bind:value={mergeTitle}
+            disabled={completeMergeBusy}
+          />
+          <textarea
+            class="min-h-16 w-full resize-y rounded-md border border-border bg-elevated px-2.5 py-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+            placeholder="Description (optional)"
+            bind:value={mergeDescription}
+            disabled={completeMergeBusy}></textarea>
+        {:else}
+          <p class="text-[0.6875rem] leading-relaxed text-muted">
+            The resolution is committed on the temporary <span class="font-mono text-foreground"
+              >{prResolveBranch}</span
+            > branch. Completing the merge pushes it back to the pull request, restores your previous
+            branch, and deletes that temporary branch.
+          </p>
+        {/if}
       </div>
       {#snippet footer()}
         <div class="flex items-center justify-end gap-2">
           <button
             type="button"
             class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
-            onclick={() => (resolveMergeOpen = false)}
+            onclick={() => (completeMergeOpen = false)}
           >
             Cancel
           </button>
@@ -4333,13 +4586,13 @@
             type="button"
             class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-foreground px-3 text-[0.6875rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
             data-modal-primary
-            disabled={resolveMergeBusy}
-            onclick={() => void confirmResolveMerge()}
+            disabled={completeMergeBusy}
+            onclick={() => void confirmCompleteMerge()}
           >
-            {#if resolveMergeBusy}<Loader2 size={11} class="animate-spin" />{:else}<GitMerge
+            {#if completeMergeBusy}<Loader2 size={11} class="animate-spin" />{:else}<GitMerge
                 size={11}
               />{/if}
-            Resolve
+            Complete merge
           </button>
         </div>
       {/snippet}
@@ -4350,23 +4603,27 @@
     Fetch, pull and push used to sit here as three permanent buttons on every
     working-tree tab. They now live in the surface-nav row, where only the
     action that is actually needed is labelled and the rest sit in the menu
-    beside it. This bar keeps only what completing a merge genuinely needs.
+    beside it. This bar keeps only what completing a merge genuinely needs, and
+    it stays up until the merge is actually complete: a merge still waiting on
+    its commit, or a temporary PR branch still waiting to be pushed and deleted.
   -->
-  {#if repoState === 'git' && status && mergePending}
+  {#if repoState === 'git' && status && mergeAwaitsCompletion}
     <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
       <button
         type="button"
         class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-foreground text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
-        title="Commit the resolved files to complete the merge"
-        disabled={resolveMergeBusy}
-        onclick={openResolveMerge}
+        title={mergePending
+          ? `Commit the resolved files to complete the merge${prResolveBranch ? `, then push the resolution to the pull request and delete ${prResolveBranch}` : ''}`
+          : `Push the resolution to the pull request, restore your previous branch, and delete ${prResolveBranch}`}
+        disabled={completeMergeBusy}
+        onclick={openCompleteMerge}
       >
-        {#if resolveMergeBusy}
+        {#if completeMergeBusy}
           <Loader2 size={11} class="animate-spin" />
         {:else}
           <GitMerge size={11} />
         {/if}
-        Resolve merge
+        Complete merge
       </button>
     </div>
   {/if}
@@ -5131,6 +5388,45 @@
               <Loader2 size={12} class="animate-spin" />
             {/if}
             Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
+          </AlertDialog.Action>
+        </div>
+      </AlertDialog.Content>
+    </AlertDialog.Portal>
+  </AlertDialog.Root>
+{/if}
+
+{#if acceptConflictsSide}
+  {@const side = acceptConflictsSide}
+  <AlertDialog.Root open onOpenChange={() => (acceptConflictsSide = null)}>
+    <AlertDialog.Portal>
+      <AlertDialog.Content
+        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+      >
+        <AlertDialog.Title class="text-sm font-semibold text-foreground">
+          Accept all {side}?
+        </AlertDialog.Title>
+        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+          Every conflicted file is replaced with its
+          <strong class="font-medium text-foreground">{side}</strong> version and staged, so the
+          merge editor's work on the other side of
+          <strong class="font-medium text-foreground">{conflicted.length}</strong>
+          {conflicted.length === 1 ? 'file' : 'files'} is discarded. This cannot be undone.
+        </AlertDialog.Description>
+        <div class="mt-5 flex justify-end gap-2">
+          <AlertDialog.Cancel
+            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+          >
+            Cancel
+          </AlertDialog.Cancel>
+          <AlertDialog.Action
+            class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+            disabled={gitState.isBusy('accept-conflicts')}
+            onclick={() => void confirmAcceptAllConflicts()}
+          >
+            {#if gitState.isBusy('accept-conflicts')}
+              <Loader2 size={12} class="animate-spin" />
+            {/if}
+            Accept all {side}
           </AlertDialog.Action>
         </div>
       </AlertDialog.Content>
