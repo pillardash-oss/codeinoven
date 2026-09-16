@@ -75,6 +75,7 @@
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
   import SyncMainButton from './SyncMainButton.svelte'
+  import GitViewMenu from './GitViewMenu.svelte'
   import FindInBar from '../files/FindInBar.svelte'
   import FullscreenPanelDialog from '../workspace/FullscreenPanelDialog.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
@@ -82,7 +83,7 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
-  import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
+  import { gitPanelView, type GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import ScopeHealthNotice from '../scope/ScopeHealthNotice.svelte'
@@ -105,7 +106,6 @@
   let scopeUnhealthy = $derived(scopeHealth !== undefined && scopeHealth.category !== 'healthy')
 
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
-  type TabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
 
   // Hiding the sidebar destroys and recreates this component, so the tab/
   // selection state is seeded from (and mirrored back into) a persisted
@@ -167,7 +167,7 @@
   let originReplaceConfirm = $state(false)
   let acknowledgeActiveTurn = $state(false)
   let agentTurnActive = $state(false)
-  let activeTab = $state<TabId>(savedView.activeTab)
+  let activeTab = $state<GitPanelTabId>(savedView.activeTab)
   let changesView = $state<'list' | 'tree'>(savedView.changesView)
   let selectedPaths = $state<Record<string, boolean>>({})
   let discardConfirm = $state<string[] | null>(null)
@@ -901,6 +901,12 @@
     if (activeTab !== 'history') return
     const el = event.currentTarget as HTMLDivElement
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) void loadMoreHistory()
+  }
+
+  /** Switch the panel's view. History is the one view that pages its data in. */
+  function selectTab(id: GitPanelTabId): void {
+    activeTab = id
+    if (id === 'history') void loadHistory()
   }
 
   function openCommitSearch(): void {
@@ -2026,24 +2032,26 @@
     }
   }
 
-  const tabs: Array<{ id: TabId; label: string; count: number | null }> = $derived.by(() => {
-    const list: Array<{ id: TabId; label: string; count: number | null }> = [
-      { id: 'changes', label: 'Changes', count: changes.length > 0 ? changes.length : null },
-      { id: 'history', label: 'History', count: null },
-      { id: 'branches', label: 'Branches', count: null },
-      { id: 'pulls', label: 'PRs', count: null }
-    ]
-    // Stash is just shelved work   it earns a tab only once something is shelved.
-    if (gitState.stashes.length > 0) {
-      list.push({ id: 'stashes', label: 'Stashes', count: gitState.stashes.length })
+  const tabs: Array<{ id: GitPanelTabId; label: string; count: number | null }> = $derived.by(
+    () => {
+      const list: Array<{ id: GitPanelTabId; label: string; count: number | null }> = [
+        { id: 'changes', label: 'Changes', count: changes.length > 0 ? changes.length : null },
+        { id: 'history', label: 'History', count: null },
+        { id: 'branches', label: 'Branches', count: null },
+        { id: 'pulls', label: 'PRs', count: null }
+      ]
+      // Stash is just shelved work   it earns a tab only once something is shelved.
+      if (gitState.stashes.length > 0) {
+        list.push({ id: 'stashes', label: 'Stashes', count: gitState.stashes.length })
+      }
+      // Deployments earn a tab only when the repo actually has deployment
+      // activity (the flag is persisted in the DB and cached in localStorage).
+      if (hasDeployments) {
+        list.push({ id: 'deployments', label: 'Deploys', count: null })
+      }
+      return list
     }
-    // Deployments earn a tab only when the repo actually has deployment
-    // activity (the flag is persisted in the DB and cached in localStorage).
-    if (hasDeployments) {
-      list.push({ id: 'deployments', label: 'Deploys', count: null })
-    }
-    return list
-  })
+  )
 
   const fileSections: Array<{ title: string; files: GitFileChange[] }> = $derived.by(() => {
     const sections: Array<{ title: string; files: GitFileChange[] }> = []
@@ -2250,44 +2258,14 @@
       {/if}
 
       {#if repoState === 'git'}
-        <!--
-          The branch name is the anchor of this row, so it gives way first: the
-          tab strip keeps 8rem (two or three tabs at any width) and the branch
-          truncates into what is left, which is what its own tooltip and the
-          picker dropdown are for. The divider keeps navigation from reading as
-          part of the branch control.
-        -->
         <span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
-        <div class="flex min-w-32 flex-1 items-center gap-0.5 overflow-x-auto">
-          {#each tabs as tab (tab.id)}
-            <button
-              type="button"
-              class={[
-                'flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-[0.625rem] font-medium transition-colors',
-                activeTab === tab.id
-                  ? 'bg-elevated text-foreground'
-                  : 'text-dimmed hover:bg-elevated/60 hover:text-foreground'
-              ]}
-              aria-current={activeTab === tab.id ? 'page' : undefined}
-              onclick={() => {
-                activeTab = tab.id
-                if (tab.id === 'history') void loadHistory()
-              }}
-            >
-              {tab.label}
-              {#if tab.count !== null}
-                <span
-                  class={[
-                    'rounded-sm px-1 text-[0.5rem] font-semibold tabular-nums',
-                    activeTab === tab.id ? 'bg-primary/15 text-primary' : 'bg-app text-dimmed'
-                  ]}
-                >
-                  {tab.count}
-                </span>
-              {/if}
-            </button>
-          {/each}
-        </div>
+        <!--
+          The views are a dropdown, not a strip: six of them never fit one row at
+          every sidebar width, and a strip that scrolls sideways hides views
+          behind a gesture. The trigger is the view in use, with its count.
+        -->
+        <GitViewMenu {tabs} {activeTab} onSelect={selectTab} />
+        <span class="flex-1"></span>
         <div class="flex shrink-0 items-center gap-0.5">
           <button
             type="button"
