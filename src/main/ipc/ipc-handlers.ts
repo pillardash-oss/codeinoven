@@ -109,6 +109,7 @@ import {
   validatePrCommentBody,
   validatePushOptions,
   validatePullIntegrateOptions,
+  validateSyncFromMainOptions,
   validateMergeCommitTitle,
   validateMergeCommitMessage,
   validateRemoteName,
@@ -236,7 +237,11 @@ import type {
   ScopeWorktreeProgressEvent,
   UtilityDefinitionInput
 } from '../../lib/types'
-import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES, INBOX_PROJECT_ID } from '../../lib/types'
+import {
+  CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES,
+  DEFAULT_SCOPE_BUCKET_ID,
+  INBOX_PROJECT_ID
+} from '../../lib/types'
 import { THINKING_LEVEL_ORDER } from '../../lib/thinking-presets'
 
 type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentVersion'>
@@ -6144,6 +6149,27 @@ export function registerIpcHandlers(
           token
         }
       )
+    }
+  )
+  ipcMain.handle(
+    'git:syncFromMain',
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeOptions = validateSyncFromMainOptions(options)
+      // Sync-from-main only exists for a worktree checkout: without a scope the
+      // active root is the project root, which is the sync source itself.
+      if (scopeBucketId === undefined) {
+        throw new Error('Syncing from the main branch requires a worktree scope')
+      }
+      const safeScopeBucketId = validateEntityId(scopeBucketId, 'Scope bucket ID')
+      // Resolve the vaulted PAT in main only; the token never crosses IPC.
+      const tokenRef = gitCredentialRef(safeProjectId)
+      const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
+      return gitService.syncFromMain(await resolveProjectPath(safeProjectId, safeScopeBucketId), {
+        mainPath: await resolveProjectPath(safeProjectId, DEFAULT_SCOPE_BUCKET_ID),
+        strategy: safeOptions.strategy,
+        token
+      })
     }
   )
   ipcMain.handle(

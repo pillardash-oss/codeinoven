@@ -3,7 +3,7 @@
   import { copyText } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
   import { pathToFileUrl } from '$lib/mime'
-  import { reportError } from '$lib/stores/app-errors.svelte'
+  import { reportError, showToastWarning } from '$lib/stores/app-errors.svelte'
   import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -41,6 +41,7 @@
     FolderTree,
     GitBranch,
     GitCommit,
+    GitCompareArrows,
     GitFork,
     GitMerge,
     GitPullRequest,
@@ -58,6 +59,7 @@
   } from '@lucide/svelte'
   import { AlertDialog, ContextMenu, DropdownMenu } from 'bits-ui'
   import { onMount } from 'svelte'
+  import { toast } from 'svelte-sonner'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -81,6 +83,7 @@
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
   import type { PullRequestSummary } from '$shared/types'
 
   interface Props {
@@ -118,6 +121,9 @@
   /** Pull strategy chooser, opened by the default `ask` preference or a failed strategy. */
   let pullStrategyOpen = $state(false)
   let pullStrategyError = $state('')
+  /** Sync-from-main strategy chooser, opened by the same `ask` preference or a failure. */
+  let syncMainOpen = $state(false)
+  let syncMainError = $state('')
   /** Divergence recovery dialog: the branch is behind the remote, push was rejected. */
   let pushDiverged = $state(false)
   /** Which recovery action is running ('merge' | 'rebase'), to disable the buttons. */
@@ -1156,6 +1162,8 @@
     pushRecoverMode = null
     pullStrategyOpen = false
     pullStrategyError = ''
+    syncMainOpen = false
+    syncMainError = ''
     showIntegrateModal = false
     showStashModal = false
     stashMessage = ''
@@ -1326,7 +1334,20 @@
   const needsUpstreamPush = $derived(
     Boolean(status?.branch) && !status?.detached && status?.upstream === null
   )
-  const syncBusy = $derived(gitState.isBusy(['fetch', 'pull', 'push']))
+  const syncBusy = $derived(gitState.isBusy(['fetch', 'pull', 'push', 'sync-main']))
+
+  /**
+   * The active scope's bucket. Managed worktree scopes are the only ones that
+   * have a main worktree to sync from, so they alone get the Sync-main action.
+   */
+  const activeScopeBucket = $derived(scopeState.bucketFor(projectId, scopeBucketId))
+  const worktreeScope = $derived(activeScopeBucket?.root.kind === 'worktree')
+
+  $effect(() => {
+    // The board may not be in memory yet when the panel mounts first (remote
+    // shell, deep link). Loading it is idempotent and never blocks rendering.
+    void scopeState.ensureBoardLoaded(projectId)
+  })
 
   function closePullStrategy(): void {
     if (gitState.isBusy('pull')) return
@@ -1377,6 +1398,56 @@
       return
     }
     await performPull(appConfigState.defaultPullStrategy)
+  }
+
+  /**
+   * Sync this worktree with the project's main worktree branch. The strategy
+   * chooser follows the same `ask` preference as the Pull button; a conflicted
+   * integration is handed to the existing conflict UI instead of retrying.
+   */
+  async function performSyncFromMain(strategy: GitPullStrategy): Promise<void> {
+    const result = await gitState.syncFromMain(projectId, strategy)
+    if (gitState.error) {
+      syncMainError = gitState.error
+      gitState.error = null
+      syncMainOpen = true
+      return
+    }
+    if (!result) return
+    syncMainOpen = false
+    syncMainError = ''
+    void refreshStatus()
+
+    const summary =
+      result.incoming === 0
+        ? `Already up to date with ${result.sourceRef}`
+        : `Synced ${String(result.incoming)} commit${result.incoming === 1 ? '' : 's'} from ${result.sourceRef}`
+    if (result.status.conflicted.length > 0) {
+      showToastWarning(`${summary}, with conflicts to resolve.`)
+      return
+    }
+    if (result.remote && !result.fetched) {
+      showToastWarning(
+        `${summary}. ${result.remote}/${result.sourceBranch} could not be refreshed.`
+      )
+      return
+    }
+    toast.success(summary)
+  }
+
+  async function syncMainAction(): Promise<void> {
+    if (appConfigState.defaultPullStrategy === 'ask') {
+      syncMainError = ''
+      syncMainOpen = true
+      return
+    }
+    await performSyncFromMain(appConfigState.defaultPullStrategy)
+  }
+
+  function closeSyncMain(): void {
+    if (gitState.isBusy('sync-main')) return
+    syncMainOpen = false
+    syncMainError = ''
   }
 
   async function performPush(remote: { name: string; url: string }): Promise<void> {
@@ -2048,6 +2119,16 @@
                 <GitMerge size={12} class="shrink-0 text-dimmed" />
                 Merge or rebase…
               </DropdownMenu.Item>
+              {#if worktreeScope}
+                <DropdownMenu.Item
+                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                  disabled={syncBusy || conflicted.length > 0}
+                  onSelect={() => void syncMainAction()}
+                >
+                  <GitCompareArrows size={12} class="shrink-0 text-dimmed" />
+                  Sync from main
+                </DropdownMenu.Item>
+              {/if}
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
               <DropdownMenu.Item
                 class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
@@ -3514,6 +3595,86 @@
     </Modal>
   {/if}
 
+  <!-- Sync-from-main strategy chooser: same `ask` preference as the Pull button -->
+  {#if syncMainOpen}
+    <Modal open title="Sync from main" onClose={closeSyncMain}>
+      <div class="space-y-3">
+        <div class="rounded-lg border border-border bg-elevated px-3 py-2">
+          <p class="text-[0.625rem] font-medium text-foreground">
+            Into <span class="font-mono">{status?.branch ?? 'this worktree'}</span>
+          </p>
+          <p class="mt-0.5 text-[0.5625rem] text-dimmed">
+            From the branch checked out in the project root, refreshed from its remote first.
+          </p>
+        </div>
+        {#if syncMainError}
+          <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
+            <p class="text-[0.625rem] font-semibold text-danger">Main could not be synced</p>
+            <p
+              class="mt-0.5 whitespace-pre-wrap break-words text-[0.5625rem] leading-relaxed text-danger"
+            >
+              {syncMainError}
+            </p>
+            <p class="mt-1 text-[0.5625rem] leading-relaxed text-dimmed">
+              Choose another strategy below, or cancel without changing this worktree further.
+            </p>
+          </div>
+        {/if}
+        <div class="space-y-1 text-[0.5625rem] leading-relaxed text-dimmed">
+          <p>
+            <span class="font-medium text-foreground">Merge</span> keeps both histories and may create
+            a merge commit.
+          </p>
+          <p>
+            <span class="font-medium text-foreground">Rebase</span> replays this worktree's commits on
+            top of main.
+          </p>
+          <p>
+            <span class="font-medium text-foreground">Fast-forward only</span> integrates only when no
+            reconciliation is needed.
+          </p>
+        </div>
+      </div>
+      {#snippet footer()}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            disabled={gitState.isBusy('sync-main')}
+            onclick={closeSyncMain}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            disabled={gitState.isBusy('sync-main')}
+            onclick={() => void performSyncFromMain('ff-only')}
+          >
+            Fast-forward only
+          </button>
+          <button
+            type="button"
+            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            disabled={gitState.isBusy('sync-main')}
+            onclick={() => void performSyncFromMain('rebase')}
+          >
+            Rebase
+          </button>
+          <button
+            type="button"
+            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+            data-modal-primary
+            disabled={gitState.isBusy('sync-main')}
+            onclick={() => void performSyncFromMain('merge')}
+          >
+            Merge
+          </button>
+        </div>
+      {/snippet}
+    </Modal>
+  {/if}
+
   <!-- Completing a resolved merge: optional title/description, auto-generated when skipped -->
   {#if resolveMergeOpen}
     <Modal
@@ -3569,7 +3730,7 @@
     working-tree tabs. On the pull request tab they sat under a PR's own
     comment box implying they were part of reviewing it, which they are not.
   -->
-  {#if repoState === 'git' && status && remotes.length > 0 && activeTab !== 'pulls' && !mergePending}
+  {#if repoState === 'git' && status && (remotes.length > 0 || worktreeScope) && activeTab !== 'pulls' && !mergePending}
     <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
       <button
         type="button"
@@ -3617,6 +3778,26 @@
         {/if}
         Push{status.ahead > 0 ? ` ${status.ahead}` : ''}
       </button>
+      {#if worktreeScope}
+        <!-- Sync-from-main only exists off the main worktree: this checkout has
+             a main branch to bring in, the project root does not. -->
+        <button
+          type="button"
+          class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-primary/40 bg-primary/5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+          title={conflicted.length > 0
+            ? 'Resolve the conflicts in this worktree before syncing from main'
+            : "Bring the project main worktree's latest commits into this worktree"}
+          disabled={syncBusy || conflicted.length > 0}
+          onclick={() => void syncMainAction()}
+        >
+          {#if gitState.isBusy('sync-main')}
+            <Loader2 size={11} class="animate-spin" />
+          {:else}
+            <GitCompareArrows size={11} />
+          {/if}
+          Sync main
+        </button>
+      {/if}
     </div>
   {:else if repoState === 'git' && status && mergePending}
     <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">

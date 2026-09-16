@@ -118,6 +118,18 @@ its `cio/` branch, not the project root:
   head** and the chosen base (the checkout branch, a named branch, or a remote
   tracked ref). Pushing to the remote publishes the `cio/<slug>` branch as a
   new remote branch (`--set-upstream`), ready to be opened as a PR.
+- **Sync from main** (`git:syncFromMain`) is offered only while the panel is
+  attached to a managed worktree scope, because the project root is the source:
+  it resolves the branch checked out in the main worktree, refreshes that
+  branch's remote-tracking ref first (vaulted token when present, a failed
+  refresh is reported and never fatal), then integrates the remote-tracking ref
+  when it strictly contains the local branch   otherwise the local branch, so
+  commits that exist only on the project root's main are never skipped. The
+  strategy follows the configured pull preference (`merge`, `rebase`, or
+  `ff-only`; `ask` opens the chooser). It refuses before moving any ref when the
+  active root is the project root itself, when HEAD is detached, or when a
+  merge/rebase is already in progress, and a conflicted integration is left in
+  the working tree for the standard conflict UI instead of being aborted.
 - Credential and identity operations (`git:get/setCredential`,
   `git:get/setIdentity`) stay project-scoped: worktrees share the repository's
   `.git` config and credential vault anyway.

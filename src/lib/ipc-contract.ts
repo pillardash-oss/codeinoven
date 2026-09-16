@@ -83,6 +83,7 @@ import type {
   GitHubWorkflowRunDetail,
   GitIdentity,
   GitIdentityInput,
+  GitMainSyncResult,
   GitRemoteInfo,
   GitStatus,
   GitStashEntry,
@@ -1585,6 +1586,15 @@ export const IPC_INVOKE_CONTRACT = {
       scopeBucketId?: string
     ],
     GitStatus
+  >,
+  /** Integrate the project's main worktree branch into a worktree checkout. */
+  'git:syncFromMain': {} as Contract<
+    [
+      projectId: string,
+      options: { strategy: import('./types').GitPullStrategy },
+      scopeBucketId?: string
+    ],
+    GitMainSyncResult
   >,
   'git:push': {} as Contract<
     [

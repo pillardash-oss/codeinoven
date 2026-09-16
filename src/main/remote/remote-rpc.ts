@@ -89,6 +89,7 @@ import {
   validateSourcePath,
   validateWorktreeDefaults
 } from '../ipc/ipc-validation'
+import { DEFAULT_SCOPE_BUCKET_ID } from '../../lib/types'
 import type {
   AgentCapabilitySource,
   AssignmentModelSelection,
@@ -1974,6 +1975,29 @@ export class RemoteRpcDispatcher {
           {
             remote: typeof options.remote === 'string' ? options.remote : undefined,
             branch: typeof options.branch === 'string' ? options.branch : undefined,
+            strategy,
+            token
+          }
+        )
+      }
+      case 'git:syncFromMain': {
+        const projectId = this.string(args[0])
+        const options = (args[1] ?? {}) as { strategy?: string }
+        const strategy = options.strategy
+        if (strategy !== 'merge' && strategy !== 'rebase' && strategy !== 'ff-only') {
+          throw new TypeError('Invalid sync strategy')
+        }
+        if (args[2] === undefined) {
+          throw new Error('Syncing from the main branch requires a worktree scope')
+        }
+        const tokenRef = `git_pat_${projectId}`
+        const token = (await this.vault.exists(tokenRef))
+          ? await this.vault.resolve(tokenRef)
+          : undefined
+        return this.gitService.syncFromMain(
+          await this.resolveProjectPath(projectId, this.string(args[2])),
+          {
+            mainPath: await this.resolveProjectPath(projectId, DEFAULT_SCOPE_BUCKET_ID),
             strategy,
             token
           }

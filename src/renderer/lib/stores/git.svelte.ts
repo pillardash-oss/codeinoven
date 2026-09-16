@@ -19,6 +19,7 @@ import type {
   GitHubPermissionRequired,
   GitHubWorkflowRunDetail,
   GitIdentity,
+  GitMainSyncResult,
   GitPullStrategy,
   GitRestoreTarget,
   GitRemoteInfo,
@@ -59,6 +60,7 @@ export type GitOperation =
   | 'checkout'
   | 'fetch'
   | 'pull'
+  | 'sync-main'
   | 'push'
   | 'merge'
   | 'rebase'
@@ -995,6 +997,44 @@ export class GitState {
       this.error = errorMessage(reason, fallback)
     } finally {
       this.markBusy('pull', false)
+    }
+  }
+
+  /**
+   * Bring the project's main worktree branch into this worktree checkout.
+   * Main resolves the source (project root branch, refreshed from its remote),
+   * so the renderer only chooses the reconciliation strategy. A conflicted
+   * integration is a normal outcome, not an error: the returned status carries
+   * the conflicts and the panel hands over to the conflict UI.
+   */
+  async syncFromMain(
+    projectId: string,
+    strategy: GitPullStrategy
+  ): Promise<GitMainSyncResult | null> {
+    const scopeBucketId = this.scopeFor(projectId)
+    if (!scopeBucketId) {
+      this.error = 'Syncing from main requires a worktree scope'
+      return null
+    }
+    this.markBusy('sync-main', true)
+    this.error = null
+    try {
+      const result = await invoke('git:syncFromMain', projectId, { strategy }, scopeBucketId)
+      this.status = result.status
+      if (result.status.conflicted.length === 0) this.conflictsMode = false
+      return result
+    } catch (reason) {
+      this.error = errorMessage(
+        reason,
+        strategy === 'rebase'
+          ? 'Syncing from main with rebase failed'
+          : strategy === 'ff-only'
+            ? 'Syncing from main with a fast-forward failed'
+            : 'Syncing from main with a merge failed'
+      )
+      return null
+    } finally {
+      this.markBusy('sync-main', false)
     }
   }
 
