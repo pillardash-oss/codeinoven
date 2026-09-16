@@ -33,7 +33,8 @@
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { STANDARD_THINKING_PRESETS, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
-  import { posixBasename } from '$shared/paths'
+  import { posixBasename, toPosixPath } from '$shared/paths'
+  import { showToastWarning } from '$lib/stores/app-errors.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -371,11 +372,65 @@
     return [initialValue.replace(/[ \t]+$/u, ''), ...missingTokens].filter(Boolean).join(' ')
   }
 
+  /**
+   * Identity of the file an attachment points at. The attachment chips and the
+   * preview cache are keyed by the attachment's `file://` URL, so one file must
+   * always produce one identity: the URL is decoded back to its path (a legacy
+   * draft can hold a differently escaped URL for the same file) and folded to
+   * lower case where the filesystem itself resolves `index.html` and
+   * `Index.html` to a single file (macOS, and Windows where the drive letter's
+   * case depends on the drag source).
+   */
+  function attachmentFileIdentity(file: PromptAttachment): string {
+    const path = toPosixPath(fileUrlToPath(file.url))
+    const platform = window.api?.windowInfo?.platform
+    return platform === 'darwin' || platform === 'win32' ? path.toLowerCase() : path
+  }
+
+  /** Drop repeats of one file from an ordered list, keeping the first entry. */
+  function uniqueAttachments(files: readonly PromptAttachment[]): PromptAttachment[] {
+    const kept: PromptAttachment[] = []
+    const identities: string[] = []
+    for (const file of files) {
+      const identity = attachmentFileIdentity(file)
+      if (identities.includes(identity)) continue
+      identities.push(identity)
+      kept.push(file)
+    }
+    return kept
+  }
+
+  /**
+   * Split incoming files into the ones worth attaching and the repeats of files
+   * the composer already holds (including repeats inside the same drop).
+   */
+  function partitionNewAttachments(
+    existing: readonly PromptAttachment[],
+    incoming: readonly PromptAttachment[]
+  ): { added: PromptAttachment[]; duplicates: PromptAttachment[] } {
+    const identities = existing.map((file) => attachmentFileIdentity(file))
+    const added: PromptAttachment[] = []
+    const duplicates: PromptAttachment[] = []
+    for (const file of incoming) {
+      const identity = attachmentFileIdentity(file)
+      if (identities.includes(identity)) {
+        duplicates.push(file)
+        continue
+      }
+      identities.push(identity)
+      added.push(file)
+    }
+    return { added, duplicates }
+  }
+
   let value = $state(restoredDraft())
   // The composer is remounted by the parent when a restore is required, so we
   // intentionally capture only the initial attachments passed at creation time.
+  // Drafts restored from a session that ran before the duplicate guard can hold
+  // the same file twice, which the keyed attachment chips cannot render, so the
+  // restored list is collapsed here before it ever reaches the markup.
   // svelte-ignore state_referenced_locally
-  let attachments = $state<PromptAttachment[]>([...initialAttachments])
+  let attachments = $state<PromptAttachment[]>(uniqueAttachments(initialAttachments))
   let remoteFileInput = $state<HTMLInputElement>()
   // svelte-ignore state_referenced_locally
   let projectReferences = $state<PromptProjectReference[]>([...initialProjectReferences])
@@ -1473,6 +1528,19 @@
     if (liveTarget) speechController.reattachTarget(liveTarget)
   })
 
+  /** Explain a drop or paste that only repeated files already attached, instead
+   *  of letting it look like the composer silently ignored the gesture. */
+  function noticeDuplicateAttachments(duplicates: readonly PromptAttachment[]): void {
+    const first = duplicates[0]
+    if (!first) return
+    const name = (first.filename ?? posixBasename(fileUrlToPath(first.url))) || 'That file'
+    showToastWarning(
+      duplicates.length === 1
+        ? `${name} is already attached.`
+        : `${duplicates.length} of those files are already attached.`
+    )
+  }
+
   async function addFileAttachments(
     selections: ReadonlyArray<{ path: string; file?: File }>
   ): Promise<void> {
@@ -1481,16 +1549,22 @@
       attachmentBlockedNotice = true
       return
     }
-    const addedAttachments = selections.map(({ path, file }) => {
+    const candidates = selections.map(({ path, file }) => {
       const filename = file?.name ?? (posixBasename(path.split('?')[0]) || 'file')
       const mime = file?.type || mimeFromPath(path)
       return { mime, url: pathToFileUrl(path), filename }
     })
-    if (addedAttachments.length === 0) return
+    if (candidates.length === 0) return
 
-    attachments = [...attachments, ...addedAttachments]
+    // Dropping the same file twice must leave one chip: a repeated `file://` URL
+    // is a duplicate key in the keyed attachment list and throws at render time.
+    const { added, duplicates } = partitionNewAttachments(attachments, candidates)
+    if (duplicates.length > 0) noticeDuplicateAttachments(duplicates)
+    if (added.length === 0) return
+
+    attachments = [...attachments, ...added]
     onAttachmentsChange?.([...attachments])
-    await Promise.all(addedAttachments.map((attachment) => loadAttachmentPreview(attachment)))
+    await Promise.all(added.map((attachment) => loadAttachmentPreview(attachment)))
   }
 
   async function addFileAttachment(filePath: string, file?: File): Promise<void> {
@@ -2337,6 +2411,8 @@
       {/if}
       {#if attachments.length > 0}
         <div class="flex flex-wrap gap-1.5">
+          <!-- Keyed by the `file://` URL, which the duplicate guard above keeps
+               unique across drops, picks, pastes, and restored drafts. -->
           {#each attachments as file, i (file.url)}
             {@const previewKind = attachmentPreviewKind(file.mime, file.filename ?? '')}
             <div
