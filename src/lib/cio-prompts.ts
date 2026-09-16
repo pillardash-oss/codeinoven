@@ -86,7 +86,7 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     filename: 'work-ethics.md',
     title: 'Work ethics',
     description:
-      'Default planning, progress, commit, safety, and quality rules for implementation work.',
+      'Default skill use, planning, progress, commit, safety, and quality rules for implementation work.',
     group: 'Foundation',
     modes: ['engineer', 'assignment', 'achievement'],
     defaultTemplate: DEFAULT_AGENT_BEHAVIOR_PROMPT.replaceAll(APP_NAME, '{{APP_NAME}}')
