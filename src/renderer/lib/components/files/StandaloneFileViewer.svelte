@@ -3,6 +3,7 @@
   import { X } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
 
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import StandaloneFilePane from './StandaloneFilePane.svelte'
@@ -22,6 +23,18 @@
 
   /** A file whose close is waiting on the unsaved-changes decision. */
   let pendingClose = $state<{ path: string; name: string } | null>(null)
+
+  // The browser renders a native `WebContentsView` that the compositor paints
+  // above every DOM surface, so this full-window viewer must publish itself as a
+  // fullscreen surface while it is up, exactly like the project's own
+  // fullscreen file editor. Without this the still-attached browser view covers
+  // the editor and its toolbar. Keyed distinctly from that editor so the two
+  // overlapping surfaces never clear each other's registration, and cleared on
+  // destroy so an unmount can never leave the view permanently suppressed.
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive('standalone-file-viewer', open)
+    return () => contextSidebarState.setFullscreenSurfaceActive('standalone-file-viewer', false)
+  })
 
   /** Close a file, asking first when it has edits that are not on disk yet. */
   function requestClose(path: string): void {

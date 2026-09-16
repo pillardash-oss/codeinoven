@@ -373,8 +373,14 @@
   let showLineNumbers = $state(true)
   const wrapLines = $derived(wrapTextState.wrapped)
   let fullscreenOpen = $state(false)
+  // The browser's native view floats above every DOM overlay, so a full-window
+  // editor must register itself as a fullscreen surface while it is up. The
+  // returned cleanup matters here: this panel is unmounted whenever the sidebar
+  // hides or its active tab changes, and a key left behind would suppress the
+  // browser view for the rest of the session.
   $effect(() => {
     contextSidebarState.setFullscreenSurfaceActive('files-fullscreen-editor', fullscreenOpen)
+    return () => contextSidebarState.setFullscreenSurfaceActive('files-fullscreen-editor', false)
   })
   let handledFullscreenRequest = $state(0)
   let conflictController = $state<ConflictResolutionController | null>(null)
