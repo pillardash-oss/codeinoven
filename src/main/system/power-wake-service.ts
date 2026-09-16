@@ -1,5 +1,6 @@
 import { powerSaveBlocker } from 'electron'
 import type { Thread } from '../../lib/types'
+import { SCHEDULED_RETRY_WAKE_WINDOW_MS } from '../../lib/provider-issue'
 import { Logger } from './logger'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Database } from '../database/database'
@@ -14,18 +15,13 @@ import type { RetrySchedulerService } from './retry-scheduler-service'
 const IDLE_RELEASE_DELAY_MS = 5_000
 
 /**
- * Upper bound for an unattended scheduled auto-retry wait that justifies
- * keeping the device awake: waits under six hours are worth powering through so
- * the reset fires on time; longer waits fall back to normal sleep behavior.
- */
-const SCHEDULED_RETRY_WAKE_WINDOW_MS = 6 * 60 * 60 * 1_000
-
-/**
  * PowerWakeService   prevents the system and display from sleeping while
  * work is in progress, while a scheduled auto-retry (usage/rate-limit reset) is
- * due within six hours, or while a remote phone has opened the desktop
- * workspace. Thread/retry work and remote sessions have independent persisted
- * preferences so either source can keep the workstation available.
+ * due within the shared wake window, or while a remote phone has opened the
+ * desktop workspace. Thread/retry work and remote sessions have independent
+ * persisted preferences so either source can keep the workstation available;
+ * the window itself lives in `provider-issue.ts` so the renderer's
+ * working-activity badge classifies the same threshold.
  */
 export class PowerWakeService {
   /** Blocker that keeps the whole system (CPU) from sleeping. */

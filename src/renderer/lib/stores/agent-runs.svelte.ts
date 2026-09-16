@@ -32,6 +32,9 @@ interface AgentRunEntry {
   currentTurnUserMessageId: string | null
   /** Whether the working trace is currently open. */
   traceOpen: boolean
+  /** Provider retry deadline (epoch ms) while this thread waits on a
+   *  usage/rate-limit reset; null when the thread is not scheduled to retry. */
+  retryAt: number | null
   /** Whether the user explicitly opened the trace (vs auto-opened by busy state). */
   traceUserOpened: boolean
   /** When the last busy → idle transition happened, used by the thread row
@@ -61,6 +64,7 @@ class AgentRunsStore {
         busySince: null,
         currentTurnUserMessageId: null,
         traceOpen: false,
+        retryAt: null,
         traceUserOpened: false,
         settledAt: 0
       }
@@ -85,6 +89,27 @@ class AgentRunsStore {
   activityDetail(projectId: string, threadId: string): AgentRunActivityDetail | null {
     const entry = this.runs.get(threadKey(projectId, threadId))
     return entry?.busy ? (entry.activityDetail ?? null) : null
+  }
+
+  /** Scheduled provider retry deadline for this thread, or null when none. */
+  retryAt(projectId: string, threadId: string): number | null {
+    return this.runs.get(threadKey(projectId, threadId))?.retryAt ?? null
+  }
+
+  /** Record (or clear) the scheduled provider retry deadline for this thread. */
+  setRetryAt(projectId: string, threadId: string, retryAt: number | null): void {
+    const entry = this.entry(projectId, threadId)
+    if (entry.retryAt === retryAt) return
+    entry.retryAt = retryAt
+    this.#notify()
+  }
+
+  /** Whether any tracked thread currently carries a provider retry deadline. */
+  get hasPendingRetry(): boolean {
+    for (const entry of this.runs.values()) {
+      if (typeof entry.retryAt === 'number') return true
+    }
+    return false
   }
 
   /** True only while the interactive harness session owns the busy state. */
@@ -258,6 +283,7 @@ class AgentRunsStore {
     const previousBusySince = entry.busySince
     const previousTurnUserMessageId = entry.currentTurnUserMessageId
     const previousTraceOpen = entry.traceOpen
+    const previousRetryAt = entry.retryAt
     if (previousBusy) {
       entry.settledAt = Date.now()
     }
@@ -267,6 +293,7 @@ class AgentRunsStore {
     entry.live = false
     entry.busySince = null
     entry.currentTurnUserMessageId = null
+    entry.retryAt = null
     if (!entry.traceUserOpened) {
       entry.traceOpen = false
     }
@@ -277,6 +304,7 @@ class AgentRunsStore {
       entry.live !== previousLive ||
       entry.busySince !== previousBusySince ||
       entry.currentTurnUserMessageId !== previousTurnUserMessageId ||
+      entry.retryAt !== previousRetryAt ||
       entry.traceOpen !== previousTraceOpen
     ) {
       this.#notify()
