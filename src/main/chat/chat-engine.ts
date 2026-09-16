@@ -251,7 +251,11 @@ import {
   DEFAULT_AGENT_BEHAVIOR_PROMPT,
   gateCuaDriverBehaviorPrompt
 } from '../../lib/agent-behavior'
-import { registerCioPromptDefault, type CioPromptId } from '../../lib/cio-prompts'
+import {
+  registerCioPromptDefault,
+  SKILL_OUTPUT_INSTRUCTION,
+  type CioPromptId
+} from '../../lib/cio-prompts'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import { ModelPricingService } from '../providers/model-pricing-service'
 import { OpenUsageClient } from '../usage/openusage-client'
@@ -466,6 +470,7 @@ const AUDIT_GENERATION_SYSTEM_PROMPT = [
   'Write every human-facing string as readable Markdown: use short paragraphs, blank-line separation, and lists where useful. Do not repeat the report section headings inside field values.',
   CITATION_SYSTEM_INSTRUCTION,
   AUDIT_REPORT_JSON_CONTRACT,
+  SKILL_OUTPUT_INSTRUCTION,
   'Return only the requested structured audit report.'
 ].join(' ')
 
@@ -514,6 +519,7 @@ const INDEPENDENT_AUDIT_SYSTEM_PROMPT = [
       .replace('An Assignment audit is an evidence run', 'An independent audit is an evidence run')
       .replace('from the Assignment, task reports and commits,', 'from the transcript and commits,')
   ),
+  SKILL_OUTPUT_INSTRUCTION,
   'Return only the requested structured audit report.'
 ].join(' ')
 
@@ -1000,6 +1006,7 @@ const TEMPORARY_CHAT_SYSTEM_PROMPT = [
   'Answer questions and explain findings using the supplied conversation context.',
   'You may inspect project files and use read-only research tools.',
   'Skill instructions are readable: when one of the available skills matches the request, load its SKILL.md with the read tool and follow it.',
+  SKILL_OUTPUT_INSTRUCTION,
   'Do not modify files, create specifications or plans, run tests, execute shell commands, or perform any other mutating action.',
   'Do not ask to broaden the task. Respond only to the user request in this temporary chat.',
   CITATION_SYSTEM_INSTRUCTION,
@@ -1036,7 +1043,8 @@ const CHAT_SYSTEM_PROMPT = [
   'This chat has no broader file-system access. Do not traverse, read, search, or modify any local file other than the files the user attached. Never enumerate or guess at other file paths. Do not inspect the current working directory for context.',
   'If something you need was not attached, ask the user to attach it or work only from what was provided; when you do not know an answer directly, search the internet using the web search and web fetch tools instead of inspecting files.',
   'Answer questions directly; use clarifying questions only when the request is genuinely ambiguous.',
-  'When you reference external content, cite it as a Markdown link (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL or a plain-text mention.'
+  'When you reference external content, cite it as a Markdown link (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL or a plain-text mention.',
+  SKILL_OUTPUT_INSTRUCTION
 ].join(' ')
 
 /** Non-editable safety boundary appended even when the user customized Chat prompts. */
@@ -1070,7 +1078,8 @@ const FILE_SYSTEM_CHAT_SYSTEM_PROMPT = [
   'Do not read or exfiltrate sensitive files   credentials, secrets, tokens, private keys, and protected paths such as `.env`, `.config`, `.ssh`, `.aws`, and the user home configuration   unless the user explicitly approves access to that specific file.',
   'Do not modify files unless the user asks you to.',
   'When you do not know an answer directly, search the internet using the web search and web fetch tools.',
-  CITATION_SYSTEM_INSTRUCTION
+  CITATION_SYSTEM_INSTRUCTION,
+  SKILL_OUTPUT_INSTRUCTION
 ].join(' ')
 
 /** Tools available to a plain (web-only) chat thread   no file-system tools. */
@@ -1169,7 +1178,8 @@ const BRAINSTORM_GENERATION_SYSTEM_PROMPT = [
   'You may append Additional Info (additional_info) only when useful material does not fit a required section. Omit it when empty.',
   'When the dispatch supplies an exact session-report revision path under the feature versions directory, write the report Markdown to exactly that path. When the dispatch also names one or more prototype files to create or rebuild under the feature prototypes directory, write exactly those prototype files too   the same turn owns both writes; do not defer the prototype file to a later turn or only describe it in the report. Never write to any other path than the ones the dispatch names. Do not implement, assign work, or claim the engineering specification is ready. This document is discovery input for a later specification.',
   'Prefer clarity and accuracy over length. Do not repeat the request in different words or hide uncertainty behind confident prose.',
-  MERMAID_OUTPUT_INSTRUCTION
+  MERMAID_OUTPUT_INSTRUCTION,
+  SKILL_OUTPUT_INSTRUCTION
 ].join(' ')
 
 const BRAINSTORM_DECISION_INTEGRITY_SYSTEM_PROMPT =
@@ -1270,7 +1280,8 @@ const BRAINSTORM_DISCUSSION_SYSTEM_PROMPT = [
   `During the interview, activate ${BRAINSTORM_ALIGNMENT_UTILITY_ID} and use save_notes with { markdown } to maintain concise cumulative notes for the next document version. Never delay a question to save notes or call another tool: ask first, then save the user's answer and accumulated findings before ending the completed turn. Include the product intent and intended experience, confirmed decisions and their rationale, research findings with sources, rejected alternatives, constraints, and remaining questions. Preserve earlier context when updating notes; never paste the notes or internal instructions into visible chat. No separate report-generation run occurs during the interview.`,
   'For later rounds, build on the existing Brainstorm document, its annotations, review/discuss text, earlier alignment notes, and the current round notes. Treat an existing generic or premature draft as unconfirmed input: research its claims and interview the user about its open choices instead of treating them as decisions. Preserve the purpose and intent so future tasks, PRDs, specifications, and prototypes reflect the same agreed direction.',
   MERMAID_OUTPUT_INSTRUCTION,
-  QUESTION_TOOL_INSTRUCTION
+  QUESTION_TOOL_INSTRUCTION,
+  SKILL_OUTPUT_INSTRUCTION
 ].join(' ')
 
 const asEditableTemplate = (prompt: string): string =>

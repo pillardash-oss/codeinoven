@@ -77,6 +77,9 @@ const MERMAID =
   'Use a fenced mermaid block when a multi-step flow, lifecycle, hierarchy, or relationship is materially clearer as a diagram. Keep diagrams concise and parse-valid.'
 const QUESTION =
   'When clarification or a user choice is required, use the application question tool instead of writing a plain-text question.'
+/** Output-time skill rule for every mode that does not load the work ethics prompt. */
+export const SKILL_OUTPUT_INSTRUCTION =
+  'Some skills in your context are always applicable and their descriptions say so, for example a skill that governs how you write for a human. Treat every skill description as the condition that makes it apply, not as a hint to consider. Before you write a reply, summary, report, or document for the user, scan the skill names and descriptions in your context, load every matching SKILL.md with your file read tool, and follow it while you write. Skipping that step because the turn is nearly over is a failure, not a shortcut.'
 const SPEC_SHAPE =
   '{"problem":"string","resolutionSummary":"string","phases":[{"id":"string","title":"string","objective":"string","checkpoints":[{"id":"string","description":"string","evidence":"string"}],"fileOperations":[{"path":"project/relative/path","operation":"create|edit|delete","reason":"string"}],"commit":"string"}],"successCriteria":["string"],"testStrategy":"string","documentationRequirements":["string"],"commitPattern":"string","constraints":["string"],"risks":["string"]}'
 
@@ -144,7 +147,7 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     description: 'Product discovery and alignment before PRD finalization.',
     group: 'Engineering',
     modes: ['prd'],
-    defaultTemplate: `You are the product lead facilitating a PRD discussion. Use finalized Brainstorm material when present, inspect relevant project context read-only, and ask only unresolved product questions through the application question tool. Do not generate a specification, assign work, implement, or mutate application files. ${CITATIONS} ${QUESTION}`
+    defaultTemplate: `You are the product lead facilitating a PRD discussion. Use finalized Brainstorm material when present, inspect relevant project context read-only, and ask only unresolved product questions through the application question tool. Do not generate a specification, assign work, implement, or mutate application files. ${CITATIONS} ${QUESTION} ${SKILL_OUTPUT_INSTRUCTION}`
   },
   {
     id: 'prd-document',
@@ -153,7 +156,7 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     description: 'Generates the canonical, versioned product requirements document.',
     group: 'Engineering',
     modes: ['prd'],
-    defaultTemplate: `Create a reviewable PRD through {{CIO_PRD_TOOL}}. Include title, summary, Problem, Goals, Non-goals, Users and Use Cases, Product Requirements, Experience Flow, Acceptance Criteria, Dependencies, Risks, and Open Questions. Open Questions may be empty, but every section must be present. Use finalized Brainstorm material when available. Do not generate an engineering specification or implement. ${CITATIONS} ${MERMAID}`
+    defaultTemplate: `Create a reviewable PRD through {{CIO_PRD_TOOL}}. Include title, summary, Problem, Goals, Non-goals, Users and Use Cases, Product Requirements, Experience Flow, Acceptance Criteria, Dependencies, Risks, and Open Questions. Open Questions may be empty, but every section must be present. Use finalized Brainstorm material when available. Do not generate an engineering specification or implement. ${CITATIONS} ${MERMAID} ${SKILL_OUTPUT_INSTRUCTION}`
   },
   {
     id: 'engineering-spec',
