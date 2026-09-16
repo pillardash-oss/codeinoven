@@ -9,15 +9,12 @@
     TriangleAlert
   } from '@lucide/svelte'
   import StageContainer from './StageContainer.svelte'
+  import ScopeHealthNotice from './ScopeHealthNotice.svelte'
   import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
   import { pickColorForSeed } from '$lib/project-colors'
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
-  import {
-    scopeState,
-    STAGE_ORDER,
-    hasRepairableScopeIssue,
-    type ThreadStage
-  } from '$lib/stores/scope.svelte'
+  import { scopeState, STAGE_ORDER, type ThreadStage } from '$lib/stores/scope.svelte'
+  import { isScopeWorktreeHealthRepairable } from '$shared/scope-worktree-health'
   import type { ScopeActionsController } from './ScopeActionsController.svelte'
   import { type ScopeBucket, type Thread } from '$shared/types'
 
@@ -79,7 +76,9 @@
 
   let health = $derived(scopeState.healthFor(bucket.id))
   let unhealthy = $derived(health !== undefined && health.category !== 'healthy')
-  let repairable = $derived(unhealthy && hasRepairableScopeIssue(health))
+  let repairable = $derived(unhealthy && isScopeWorktreeHealthRepairable(health))
+  /** A restored checkout reports `stale` setup until the commands run again. */
+  let setupStale = $derived(bucket.root.kind === 'worktree' && bucket.root.setup.state === 'stale')
   let healthDetail = $derived(
     health === undefined ? '' : (health.detail ?? `Worktree is ${health.category}`)
   )
@@ -228,8 +227,18 @@
   </div>
 
   {#if !bucket.collapsed}
-    <div class="min-h-0 flex-1 px-2 pb-2">
-      <div class="flex h-full min-w-0 gap-2">
+    <div class="flex min-h-0 flex-1 flex-col px-2 pb-2">
+      {#if unhealthy || setupStale}
+        <div class="pb-2">
+          <ScopeHealthNotice
+            projectId={actions.projectId ?? undefined}
+            scopeBucketId={bucket.id}
+            name={bucket.name}
+            variant="inline"
+          />
+        </div>
+      {/if}
+      <div class="flex min-h-0 min-w-0 flex-1 gap-2">
         {#each visibleStages as stage (stage)}
           <StageContainer
             bucketId={bucket.id}

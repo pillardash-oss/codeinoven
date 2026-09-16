@@ -2,6 +2,8 @@ import { invoke } from '$lib/ipc.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+import { ipcErrorMessage } from '$lib/ipc-errors'
+import { scopeWorktreeHealthGuidance } from '$shared/scope-worktree-health'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
   type ScopeBucket,
@@ -76,7 +78,7 @@ export class ScopeActionsController {
       })
       this.editTarget = null
     } catch (error) {
-      this.error = this.message(error, 'The scope could not be edited.')
+      this.fail(this.message(error, 'The scope could not be edited.'))
     }
   }
 
@@ -86,7 +88,7 @@ export class ScopeActionsController {
     try {
       await scopeState.setPinned(projectId, bucket.id, bucket.pinned !== true)
     } catch (error) {
-      this.error = this.message(error, 'The scope could not be pinned.')
+      this.fail(this.message(error, 'The scope could not be pinned.'))
     }
   }
 
@@ -96,7 +98,7 @@ export class ScopeActionsController {
     try {
       await scopeState.setArchive(projectId, bucket.id, archived)
     } catch (error) {
-      this.error = this.message(error, 'The scope could not be archived.')
+      this.fail(this.message(error, 'The scope could not be archived.'))
     }
   }
 
@@ -164,7 +166,7 @@ export class ScopeActionsController {
       this.deletePreflight = null
       this.redockIfScoped(target)
     } catch (error) {
-      this.error = this.message(error, 'The scope could not be deleted.')
+      this.fail(this.message(error, 'The scope could not be deleted.'))
     }
   }
 
@@ -197,7 +199,7 @@ export class ScopeActionsController {
     try {
       await scopeState.retryWorktreeSetup(projectId, bucket.id, true)
     } catch (error) {
-      this.error = this.message(error, 'Setup could not be retried.')
+      this.fail(this.message(error, 'Setup could not be run.'))
     }
   }
 
@@ -210,10 +212,13 @@ export class ScopeActionsController {
         scopeBucketId: bucket.id
       })
       if (health.category !== 'healthy') {
-        this.error = health.detail ?? `The worktree is still ${health.category}.`
+        // Name what is still wrong and which action resolves it instead of
+        // leaving the user with a health category they cannot act on.
+        const guidance = scopeWorktreeHealthGuidance(health)
+        this.fail(`${guidance.cause}. ${guidance.fix}`)
       }
     } catch (error) {
-      this.error = this.message(error, 'The worktree could not be repaired.')
+      this.fail(this.message(error, 'The worktree could not be repaired.'))
     }
   }
 
@@ -239,7 +244,7 @@ export class ScopeActionsController {
         ? workspaceState.selectedThread
         : undefined)
     if (!anchor) {
-      this.error = 'The merge hit conflicts. Open the Git panel from a thread to resolve them.'
+      this.fail('The merge hit conflicts. Open the Git panel from a thread to resolve them.')
       return
     }
     scopeState.showSidebarForThread(anchor)
@@ -252,7 +257,15 @@ export class ScopeActionsController {
     this.error = null
   }
 
+  /**
+   * Record a failure for the surface that renders it (the scope board and the
+   * scoped sidebar both show `error` in a dismissible banner).
+   */
+  private fail(message: string): void {
+    this.error = message
+  }
+
   private message(error: unknown, fallback: string): string {
-    return error instanceof Error ? error.message : fallback
+    return ipcErrorMessage(error, fallback)
   }
 }

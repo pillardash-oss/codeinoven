@@ -188,7 +188,8 @@ const SCOPE_SETUP_STATES = new Set<import('../../lib/types').ScopeSetupStatusSta
   'running',
   'succeeded',
   'failed',
-  'interrupted'
+  'interrupted',
+  'stale'
 ])
 const SCOPE_SETUP_COMMAND_STATES = new Set<import('../../lib/types').ScopeSetupCommandState>([
   'pending',

@@ -20,12 +20,14 @@ import {
   type ScopeWorktreeCreateInput,
   type ScopeWorktreeDefaults,
   type ScopeWorktreeHealth,
-  type ScopeWorktreeHealthCategory,
   type ScopeWorktreeSourceInfo,
   type Thread,
   scopeSliceForStatus
 } from '$shared/types'
 import type { ThreadStatusTone } from '$shared/thread-status-policy'
+
+/** Minimum interval between two health reads of the same managed scope. */
+const HEALTH_RECHECK_INTERVAL_MS = 2_000
 
 export type ThreadStage = ScopeSlice
 
@@ -183,22 +185,6 @@ export function threadStage(thread: Thread, draftThreadId?: string | null): Thre
   return scopeSliceForStatus(thread.status)
 }
 
-/** Typed health categories a repair action can fix (mirrors main's repair guard). */
-const REPAIRABLE_HEALTH_CATEGORIES: readonly ScopeWorktreeHealthCategory[] = [
-  'missing',
-  'unregistered',
-  'locked',
-  'prunable',
-  'branch-mismatch',
-  'path-mismatch'
-]
-
-/** True while cached health reports a problem the user can repair. */
-export function hasRepairableScopeIssue(health: ScopeWorktreeHealth | undefined): boolean {
-  if (!health) return false
-  return REPAIRABLE_HEALTH_CATEGORIES.includes(health.category)
-}
-
 function orderedBuckets(board: ScopeBoard): ScopeBucket[] {
   return [...board.buckets].sort((a, b) => a.sortOrder - b.sortOrder)
 }
@@ -258,6 +244,9 @@ class ScopeState {
   /** Board signature of the last background health refresh, so views can ask
    *  for a refresh from any reactive block without hammering the IPC channel. */
   private healthSyncSignature = ''
+  /** Targets whose health was read recently, so reactive callers cannot hammer
+   *  the IPC channel. Plain (non-reactive) state: it never needs to render. */
+  private healthCheckTimes = new Map<string, number>()
   private loadSequence = 0
   private saveSequence = 0
   /** Projects whose full non-archived thread list has been merged into memory. */
@@ -934,6 +923,8 @@ class ScopeState {
    * Refresh managed-worktree health for a board in the background. Deduped by
    * board signature, so reactive callers (the scope board and the scoped-threads
    * sidebar) can call it on every update while the health they render stays fresh.
+   * Targets whose scope no longer exists are dropped, so a stale verdict can
+   * never outlive its scope.
    */
   syncBoardWorktreeHealth(
     projectId: string | null | undefined,
@@ -941,12 +932,62 @@ class ScopeState {
   ): void {
     if (!projectId || !buckets) return
     const managed = buckets.filter((bucket) => bucket.root.kind === 'worktree')
+    const live = new Set(managed.map((bucket) => `${projectId}:${bucket.id}`))
+    for (const key of [...this.healthByTarget.keys()]) {
+      if (!key.startsWith(`${projectId}:`) || live.has(key)) continue
+      this.healthByTarget.delete(key)
+      this.healthCheckTimes.delete(key)
+    }
     if (managed.length === 0) return
     const signature = `${projectId}:${managed.map((bucket) => bucket.id).join(',')}`
     if (signature === this.healthSyncSignature) return
     this.healthSyncSignature = signature
     for (const bucket of managed) {
-      void this.worktreeHealth({ projectId, scopeBucketId: bucket.id }).catch(() => undefined)
+      void this.revalidateWorktreeHealth(projectId, bucket.id).catch(() => undefined)
+    }
+  }
+
+  /**
+   * Re-read one managed scope's health when its cached verdict is older than the
+   * throttle window. Detection stays passive (nothing polls the filesystem), but
+   * every surface that has a reason to touch a scope (board switch, scoped
+   * sidebar, Git panel, scope actions menu, a failed operation) calls this, so a
+   * checkout that changed on disk is re-detected at the moment it matters.
+   */
+  async revalidateWorktreeHealth(
+    projectId: string,
+    bucketId: string,
+    options?: { force?: boolean }
+  ): Promise<ScopeWorktreeHealth | undefined> {
+    // Project-rooted scopes have no checkout to inspect, and a scope that is not
+    // loaded yet is not on screen, so neither costs an IPC round trip.
+    const bucket = this.bucketFor(projectId, bucketId)
+    if (!bucket || bucket.root.kind !== 'worktree') return undefined
+    const key = `${projectId}:${bucketId}`
+    const now = Date.now()
+    const last = this.healthCheckTimes.get(key) ?? 0
+    if (!options?.force && now - last < HEALTH_RECHECK_INTERVAL_MS) {
+      return this.healthByTarget.get(key)
+    }
+    this.healthCheckTimes.set(key, now)
+    try {
+      return await this.worktreeHealth({ projectId, scopeBucketId: bucketId })
+    } catch {
+      // Keep the previous verdict and let the next interaction retry.
+      this.healthCheckTimes.delete(key)
+      return this.healthByTarget.get(key)
+    }
+  }
+
+  /** Revalidate every managed scope of a board in the background. */
+  revalidateBoardWorktreeHealth(
+    projectId: string | null | undefined,
+    buckets: readonly ScopeBucket[] | undefined
+  ): void {
+    if (!projectId || !buckets) return
+    for (const bucket of buckets) {
+      if (bucket.root.kind !== 'worktree') continue
+      void this.revalidateWorktreeHealth(projectId, bucket.id).catch(() => undefined)
     }
   }
 
@@ -985,7 +1026,12 @@ class ScopeState {
     const target = { projectId, scopeBucketId: bucketId }
     switch (action) {
       case 'detach':
-        return invoke('scope:worktree:confirmDetach', target, confirmationId)
+        return invoke(
+          'scope:worktree:confirmDetach',
+          target,
+          confirmationId,
+          options?.force ?? false
+        )
       case 'remove-worktree':
         return invoke(
           'scope:worktree:confirmRemove',

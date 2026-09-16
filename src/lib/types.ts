@@ -122,7 +122,15 @@ export interface ScopeSetupCommandRecord {
   finishedAt?: number
 }
 
-export type ScopeSetupStatusState = 'not_run' | 'running' | 'succeeded' | 'failed' | 'interrupted'
+/**
+ * Persisted setup state of one managed worktree. `stale` means the checkout
+ * itself was re-created after its recorded setup had already run (a repair
+ * restored it from the managed branch), so the recorded results no longer
+ * describe the working tree and setup has to run again before the scope is
+ * usable.
+ */
+export type ScopeSetupStatusState =
+  'not_run' | 'running' | 'succeeded' | 'failed' | 'interrupted' | 'stale'
 
 export interface ScopeSetupStatus {
   state: ScopeSetupStatusState

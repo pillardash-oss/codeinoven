@@ -17,7 +17,8 @@
   import type { Component, Snippet } from 'svelte'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
-  import { hasRepairableScopeIssue, scopeState } from '$lib/stores/scope.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
+  import { isScopeWorktreeHealthRepairable } from '$shared/scope-worktree-health'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import type { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
 
@@ -45,6 +46,18 @@
   let showMenu = $state(false)
 
   const isManaged = $derived(bucket.root.kind === 'worktree')
+
+  /**
+   * Opening the menu is an interaction with the scope, so it re-reads the
+   * checkout's real state before the items (Repair worktree, Re-run setup) are
+   * evaluated against it.
+   */
+  function toggleMenu(): void {
+    showMenu = !showMenu
+    const projectId = actions.projectId
+    if (!showMenu || !isManaged || !projectId) return
+    void scopeState.revalidateWorktreeHealth(projectId, bucket.id).catch(() => undefined)
+  }
   const isArchived = $derived(bucket.archivedAt !== undefined)
   const setupFailed = $derived(
     isManaged &&
@@ -52,7 +65,14 @@
       (bucket.root.setup.state === 'failed' || bucket.root.setup.state === 'interrupted')
   )
   /** Cached health of this scope; drives the repair item like the board's warning button. */
-  const repairable = $derived(hasRepairableScopeIssue(scopeState.healthFor(bucket.id)))
+  const repairable = $derived(isScopeWorktreeHealthRepairable(scopeState.healthFor(bucket.id)))
+  /**
+   * A `stale` setup state means the checkout was re-created after setup had run,
+   * so its dependencies and build output have to be produced again.
+   */
+  const setupStale = $derived(
+    isManaged && bucket.root.kind === 'worktree' && bucket.root.setup.state === 'stale'
+  )
   /**
    * Dock puts a scope into the scoped-threads sidebar. While that sidebar
    * already shows this very scope, docking again only re-navigates (and drops
@@ -190,9 +210,9 @@
             actions.askMerge(bucket)
           }
         })
-        if (setupFailed) {
+        if (setupFailed || setupStale) {
           list.push({
-            label: 'Retry setup',
+            label: setupStale ? 'Re-run setup' : 'Retry setup',
             icon: RefreshCw,
             run: () => {
               closeMenu()
@@ -231,7 +251,7 @@
     aria-haspopup="menu"
     aria-expanded={showMenu}
     title={triggerTitle}
-    onclick={() => (showMenu = !showMenu)}
+    onclick={toggleMenu}
     oncontextmenu={(e: MouseEvent) => {
       e.preventDefault()
       showMenu = true

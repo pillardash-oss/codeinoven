@@ -5116,11 +5116,14 @@ export function registerIpcHandlers(
       validateScopeTarget(target)
     )
   )
-  ipcMain.handle('scope:worktree:confirmDetach', (_, target: unknown, confirmationId: unknown) =>
-    scopeWorktreeService.confirmDetach(
-      validateScopeTarget(target),
-      validateConfirmationToken(confirmationId)
-    )
+  ipcMain.handle(
+    'scope:worktree:confirmDetach',
+    (_, target: unknown, confirmationId: unknown, force: unknown) =>
+      scopeWorktreeService.confirmDetach(
+        validateScopeTarget(target),
+        validateConfirmationToken(confirmationId),
+        validateBoolean(force, 'Force detach')
+      )
   )
   ipcMain.handle(
     'scope:worktree:confirmRemove',

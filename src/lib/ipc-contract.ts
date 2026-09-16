@@ -2035,9 +2035,9 @@ export const IPC_INVOKE_CONTRACT = {
     [action: ScopeLifecycleAction, target: ScopeTarget, options?: { scopeBucketId?: string }],
     ScopeLifecyclePreflight
   >,
-  /** Consume a confirmation token to detach a managed worktree. */
+  /** Consume a confirmation token to detach a managed worktree (optionally forced). */
   'scope:worktree:confirmDetach': {} as Contract<
-    [target: ScopeTarget, confirmationId: string],
+    [target: ScopeTarget, confirmationId: string, force: boolean],
     void
   >,
   /** Consume a confirmation token to remove a managed worktree (optionally forced). */
