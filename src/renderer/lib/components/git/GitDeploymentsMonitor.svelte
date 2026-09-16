@@ -4,12 +4,10 @@
     CircleDot,
     CircleX,
     Clock3,
-    ExternalLink,
     GitBranch,
     Loader2,
     Minus,
     PackageCheck,
-    RefreshCw,
     Rocket
   } from '@lucide/svelte'
   import { onMount } from 'svelte'
@@ -43,6 +41,11 @@
       job: GitHubDeploymentJob,
       log: GitHubDeploymentJobLog | null
     ) => void
+    /**
+     * Bumped by the panel's multipurpose refresh button. The panel's header owns
+     * the refresh control for this view, so this is how a reload is asked for.
+     */
+    refreshSignal?: number
   }
 
   let {
@@ -53,7 +56,8 @@
     requestedRunId = null,
     onRequestedRunOpened,
     onAgentDiagnoseRun,
-    onAgentDiagnoseDeployment
+    onAgentDiagnoseDeployment,
+    refreshSignal = 0
   }: Props = $props()
 
   let error = $state('')
@@ -105,6 +109,12 @@
     // Runs on mount and whenever the repo/identity changes; the store decides
     // whether a network call is actually needed (TTL) or cached data suffices.
     if (identity && githubConnected) void load()
+  })
+
+  $effect(() => {
+    // The panel's refresh button asks for a forced reload, so it never returns
+    // cached data the user is trying to get rid of.
+    if (refreshSignal > 0) void load(true)
   })
 
   /** Open a check-linked workflow run even when it is older than the overview page. */
@@ -212,7 +222,9 @@
       <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
         <CircleX size={20} class="text-danger" />
         <div>
-          <p class="text-[0.6875rem] font-medium text-foreground">Deployment activity unavailable</p>
+          <p class="text-[0.6875rem] font-medium text-foreground">
+            Deployment activity unavailable
+          </p>
           <p class="mt-1 max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">
             {#if permissionMissing}
               Install CodeInOven on this repository and grant Actions, Deployments, and Environments
@@ -249,29 +261,14 @@
             <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
               Workflow runs
             </h3>
+            <!--
+              The count is the only thing this heading adds now: the external
+              link and the refresh live in the panel's header, where every view
+              keeps its actions, so this row does not repeat them.
+            -->
             <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">
               {overview.workflowRuns.length}
             </span>
-            <button
-              type="button"
-              class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              title="View workflow runs on GitHub"
-              aria-label="View workflow runs on GitHub"
-              onclick={() =>
-                void openInBrowser(`https://github.com/${identity.owner}/${identity.repo}/actions`)}
-            >
-              <ExternalLink size={11} />
-            </button>
-            <button
-              type="button"
-              class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-              title="Refresh deployments"
-              aria-label="Refresh deployments"
-              disabled={loading}
-              onclick={() => void load(true)}
-            >
-              <RefreshCw size={11} class={loading ? 'animate-spin' : ''} />
-            </button>
           </div>
           {#if overview.workflowRuns.length === 0}
             <p class="px-3 py-5 text-center text-[0.625rem] text-dimmed">

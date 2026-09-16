@@ -1,8 +1,7 @@
-import type { GitCommitInfo, GitStashEntry, PullRequestSummary } from '$shared/types'
+import type { GitCommitInfo, GitStashEntry, PrState, PullRequestSummary } from '$shared/types'
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
-export type GitPanelTabId =
-  'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
+export type GitPanelTabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
 
 export interface GitPanelViewState {
   activeTab: GitPanelTabId
@@ -10,6 +9,9 @@ export interface GitPanelViewState {
   selectedCommit: GitCommitInfo | null
   selectedPullRequest: PullRequestSummary | null
   selectedStash: GitStashEntry | null
+  /** Which pull requests the PR view lists. The panel renders the filter in its
+   *  own header row, so the choice is panel state, not list state. */
+  prListState: PrState
 }
 
 function defaultState(): GitPanelViewState {
@@ -18,7 +20,8 @@ function defaultState(): GitPanelViewState {
     changesView: 'list',
     selectedCommit: null,
     selectedPullRequest: null,
-    selectedStash: null
+    selectedStash: null,
+    prListState: 'open'
   }
 }
 

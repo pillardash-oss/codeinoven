@@ -1,6 +1,5 @@
 <script lang="ts">
   import {
-    ArrowLeft,
     Bot,
     Check,
     ChevronDown,
@@ -39,7 +38,18 @@
   import { composerMentionQuery } from '../chats/composer-mentions'
   import PrMentionMenu from './PrMentionMenu.svelte'
   import GitJobLogView from './GitJobLogView.svelte'
-  import { mentionCandidates, mentionHandle, mentionKeyAction, mentionMenuMaxHeight, participantMentionUsers } from './pr-mentions'
+  // The identity row is one component now, shared with the Git panel's own
+  // action row, so this file no longer draws the state and check pills; only
+  // the view id remains shared.
+  import PrIdentityRow from './PrIdentityRow.svelte'
+  import type { PrDetailTabId } from './pr-view'
+  import {
+    mentionCandidates,
+    mentionHandle,
+    mentionKeyAction,
+    mentionMenuMaxHeight,
+    participantMentionUsers
+  } from './pr-mentions'
   import type {
     GitHubDeploymentJobLog,
     PrAgentReport,
@@ -69,6 +79,13 @@
     /** Open this pull request in the full screen reader, like the file editor. */
     onFullscreen?: () => void
     /**
+     * The view the reader shows. The Git panel owns it so its own checks pill
+     * can switch this reader to the Checks view.
+     */
+    tab?: PrDetailTabId
+    /** Bumped by the panel's refresh button so this view refetches too. */
+    refreshSignal?: number
+    /**
      * `dock` is the narrow sidebar column: read-only chrome stacked above the
      * body. `fullscreen` moves the title, tabs and write actions into a rail so
      * the body gets the whole height.
@@ -87,10 +104,10 @@
     onResolveLocally,
     onResolveWithAgent,
     onFullscreen,
-    variant = 'dock'
+    variant = 'dock',
+    tab = $bindable('conversation'),
+    refreshSignal = 0
   }: Props = $props()
-
-  type DetailTab = 'conversation' | 'commits' | 'files' | 'checks' | 'agent'
 
   const mergeMethods: Array<{ id: PrMergeMethod; label: string }> = [
     { id: 'squash', label: 'Squash' },
@@ -98,7 +115,6 @@
     { id: 'rebase', label: 'Rebase' }
   ]
 
-  let tab = $state<DetailTab>('conversation')
   /**
    * Dock only. The sidebar is narrow enough that the write actions need a
    * disclosure, but the full screen rail pins the composer open instead, so
@@ -362,27 +378,6 @@
     if (kind === 'review' && meta === 'changes requested') return 'border-l-2 border-l-warning'
     if (kind === 'description') return 'border-l-2 border-l-primary'
     return ''
-  }
-
-  /** Badge colour for the PR state pill in the header. */
-  function stateBadgeClass(state: string): string {
-    if (state === 'merged') return 'bg-primary/10 text-primary'
-    if (state === 'closed') return 'bg-danger/10 text-danger'
-    return 'bg-success/10 text-success'
-  }
-
-  /** Badge colour for the checks-summary pill in the header. */
-  function checksBadgeClass(state: string): string {
-    if (state === 'failure') return 'bg-danger/10 text-danger hover:bg-danger/20'
-    if (state === 'pending') return 'bg-warning/10 text-warning hover:bg-warning/20'
-    return 'bg-success/10 text-success hover:bg-success/20'
-  }
-
-  /** Wording for the rolled-up check state, sentence-cased for a label or title. */
-  function checksStateLabel(state: string): string {
-    if (state === 'failure') return 'Checks failing'
-    if (state === 'pending') return 'Checks running'
-    return 'Checks passing'
   }
 
   /** Stable background colour for an author's avatar, keyed off their name. */
@@ -780,6 +775,12 @@
       agentReport = report
     })
   })
+
+  // The Git panel's refresh button is multipurpose: it bumps this signal so the
+  // reader refetches even though the button belongs to the panel's action row.
+  $effect(() => {
+    if (refreshSignal > 0) void refresh()
+  })
 </script>
 
 {#snippet emptyState(Icon: typeof Bot, text: string)}
@@ -824,138 +825,130 @@
   {/each}
 {/snippet}
 
+{#snippet viewMenu()}
+  <!--
+    One definition of the view switcher: the full screen rail draws it in its
+    header row, and the dock draws it beside the title. Its classes and
+    behaviour are unchanged.
+  -->
+  <DropdownMenu.Root>
+    <DropdownMenu.Trigger
+      class="flex h-6 min-w-0 shrink cursor-pointer items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+      title="Switch pull request view"
+      aria-label="Switch pull request view"
+    >
+      {#if activeTabEntry}
+        {@const ActiveIcon = activeTabEntry.icon}
+        <ActiveIcon size={12} class="shrink-0" />
+      {/if}
+      <span class="min-w-0 truncate">{activeTabEntry?.label ?? 'View'}</span>
+      <ChevronDown size={10} class="shrink-0 text-dimmed" />
+    </DropdownMenu.Trigger>
+    <DropdownMenu.Portal>
+      <DropdownMenu.Content
+        side="bottom"
+        align="end"
+        sideOffset={4}
+        collisionPadding={8}
+        class="z-90 w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
+      >
+        {#each tabs as entry (entry.id)}
+          {@const EntryIcon = entry.icon}
+          <DropdownMenu.Item
+            class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+            onSelect={() => (tab = entry.id)}
+          >
+            <EntryIcon size={12} class="shrink-0 text-dimmed" />
+            <span class="min-w-0 flex-1 truncate">{entry.label}</span>
+            {#if entry.count > 0}
+              <span class="shrink-0 tabular-nums text-dimmed">{entry.count}</span>
+            {/if}
+            {#if tab === entry.id}
+              <Check size={12} class="shrink-0 text-primary" />
+            {/if}
+          </DropdownMenu.Item>
+        {/each}
+      </DropdownMenu.Content>
+    </DropdownMenu.Portal>
+  </DropdownMenu.Root>
+{/snippet}
+
 {#snippet panelHead()}
   <!-- Header -->
   <div class="shrink-0 border-b border-border px-3 py-2.5">
-    <div class="flex items-center gap-1">
-      <button
-        type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Back to pull requests"
-        aria-label="Back to pull requests"
-        onclick={onBack}
-      >
-        <ArrowLeft size={13} />
-      </button>
-      <span class="font-mono text-[0.625rem] text-dimmed">#{number}</span>
-      <span
-        class="min-w-0 shrink truncate rounded px-1.5 py-0.5 text-[0.5625rem] font-medium uppercase tracking-wide {stateBadgeClass(
-          detail?.state ?? summary.state
-        )}"
-      >
-        {detail?.state ?? summary.state}{draft ? ' · draft' : ''}
-      </span>
-      {#if checks && checks.state !== 'none'}
-        <!--
-          In the dock the pill drops its words and keeps its colour: the header
-          row has to hold the view dropdown as well, and the same state is named
-          in full inside the dropdown's Checks entry.
-        -->
+    {#if variant === 'fullscreen'}
+      <!--
+        Rail only. The Git panel's action row carries the identity row for the
+        dock, so this row is the rail's own: identity, then full screen, refresh
+        and external link, then the view menu.
+      -->
+      <div class="flex items-center gap-1">
+        <PrIdentityRow
+          {summary}
+          {detail}
+          {checks}
+          {onBack}
+          onOpenChecks={() => (tab = 'checks')}
+          showChecksLabel
+        />
+        <span class="min-w-0 flex-1"></span>
+        {#if onFullscreen}
+          <button
+            type="button"
+            class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            title="Open in full screen"
+            aria-label="Open in full screen"
+            onclick={onFullscreen}
+          >
+            <Maximize2 size={13} />
+          </button>
+        {/if}
         <button
           type="button"
-          class="flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium transition-colors {checksBadgeClass(
-            checks.state
-          )}"
-          title="{checksStateLabel(checks.state)}, open check results"
-          aria-label="{checksStateLabel(checks.state)}, open check results"
-          onclick={() => (tab = 'checks')}
+          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+          title="Refresh pull request"
+          aria-label="Refresh pull request"
+          disabled={gitState.isBusy('pr-detail')}
+          onclick={() => void refresh()}
         >
-          <ShieldCheck size={10} />
-          {#if variant === 'fullscreen'}{checksStateLabel(checks.state)}{/if}
+          <RefreshCw size={12} class={gitState.isBusy('pr-detail') ? 'animate-spin' : ''} />
         </button>
-      {/if}
-      <span class="min-w-0 flex-1"></span>
-      {#if onFullscreen}
         <button
           type="button"
           class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          title="Open in full screen"
-          aria-label="Open in full screen"
-          onclick={onFullscreen}
+          title="Open pull request on GitHub"
+          aria-label="Open pull request on GitHub"
+          onclick={() => void openInBrowser(summary.url)}
         >
-          <Maximize2 size={13} />
+          <ExternalLink size={13} />
         </button>
-      {/if}
-      <button
-        type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
-        title="Refresh pull request"
-        aria-label="Refresh pull request"
-        disabled={gitState.isBusy('pr-detail')}
-        onclick={() => void refresh()}
-      >
-        <RefreshCw size={12} class={gitState.isBusy('pr-detail') ? 'animate-spin' : ''} />
-      </button>
-      <button
-        type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Open pull request on GitHub"
-        aria-label="Open pull request on GitHub"
-        onclick={() => void openInBrowser(summary.url)}
-      >
-        <ExternalLink size={13} />
-      </button>
-      {#if variant === 'dock'}
-        <!--
-          Dock only: the sidebar cannot spare a tab strip of its own, so the
-          active view sits here as one dropdown, right after the external link.
-          The rail is tall enough for a visible list, so it does not use this.
-        -->
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger
-            class="flex h-6 min-w-0 shrink cursor-pointer items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-            title="Switch pull request view"
-            aria-label="Switch pull request view"
-          >
-            {#if activeTabEntry}
-              {@const ActiveIcon = activeTabEntry.icon}
-              <ActiveIcon size={12} class="shrink-0" />
-            {/if}
-            <span class="min-w-0 truncate">{activeTabEntry?.label ?? 'View'}</span>
-            <ChevronDown size={10} class="shrink-0 text-dimmed" />
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="bottom"
-              align="end"
-              sideOffset={4}
-              collisionPadding={8}
-              class="z-90 w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
-            >
-              {#each tabs as entry (entry.id)}
-                {@const EntryIcon = entry.icon}
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                  onSelect={() => (tab = entry.id)}
-                >
-                  <EntryIcon size={12} class="shrink-0 text-dimmed" />
-                  <span class="min-w-0 flex-1 truncate">{entry.label}</span>
-                  {#if entry.count > 0}
-                    <span class="shrink-0 tabular-nums text-dimmed">{entry.count}</span>
-                  {/if}
-                  {#if tab === entry.id}
-                    <Check size={12} class="shrink-0 text-primary" />
-                  {/if}
-                </DropdownMenu.Item>
-              {/each}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
-      {/if}
-    </div>
-    <p class="mt-1.5 text-[0.75rem] font-medium leading-snug text-foreground">{summary.title}</p>
+        {@render viewMenu()}
+      </div>
+      <p class="mt-1.5 text-[0.75rem] font-medium leading-snug text-foreground">{summary.title}</p>
+    {:else}
+      <!--
+        Dock only. The Git panel's action row owns the identity row above, so
+        the title and the view menu share this line and the meta line sits
+        underneath.
+      -->
+      <div class="flex min-w-0 items-center gap-1.5">
+        <p class="min-w-0 flex-1 truncate text-[0.75rem] font-medium leading-snug text-foreground">
+          {summary.title}
+        </p>
+        {@render viewMenu()}
+      </div>
+    {/if}
     <!--
       One meta line instead of two: the refs, the author, the age and the change
-      summary all describe the same thing. It never wraps, because a wrapped meta
-      row pushes the conversation down on a narrow rail. The head ref is the only
-      part that can outgrow the rail, so the head ref is what truncates while the
-      branch it lands in stays whole.
+      summary all describe the same thing. The refs read as ordinary adjacent
+      text and wrap onto the next line when the rail is narrow, so nothing here
+      can outgrow the panel.
     -->
     <p
-      class="mt-1 flex min-w-0 items-center gap-x-1.5 overflow-hidden text-[0.5625rem] text-dimmed"
+      class="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[0.5625rem] text-dimmed"
     >
-      <span class="min-w-0 flex-1 truncate font-mono">{summary.headRef}</span>
-      <span class="shrink-0 font-mono">→ {summary.baseRef}</span>
+      <span class="font-mono">{summary.headRef}</span>
+      <span class="font-mono">→ {summary.baseRef}</span>
       <span class="shrink-0">· {summary.authorLogin}</span>
       <span class="shrink-0">· {relativeTime(summary.updatedAt)}</span>
       {#if detail}
@@ -1057,9 +1050,9 @@
 {#snippet closePullRequestButton()}
   <!--
     Closing is a direct button, not a one-item overflow menu: an ellipsis over a
-    single action costs a click and never says what it holds. The dock's row
-    cannot spell it out, so it takes the short label; the rail names it in full.
-    The confirm dialog still guards the action.
+    single action costs a click and never says what it holds. The panel footer
+    has the room to spell the action out, so the label is the full one in both
+    variants. The confirm dialog still guards the action.
   -->
   <button
     type="button"
@@ -1076,9 +1069,7 @@
     {:else}
       <X size={12} class="shrink-0" />
     {/if}
-    <span class="min-w-0 truncate">{variant === 'fullscreen'
-        ? 'Close without merging'
-        : 'Close'}</span>
+    <span class="min-w-0 truncate">Close without merging</span>
   </button>
 {/snippet}
 
@@ -1200,7 +1191,9 @@
                 >
                   {entry.author.slice(0, 1)}
                 </span>
-                <span class="truncate text-[0.6875rem] font-medium text-foreground">{entry.author}</span>
+                <span class="truncate text-[0.6875rem] font-medium text-foreground"
+                  >{entry.author}</span
+                >
                 <span
                   class="shrink-0 rounded px-1.5 py-px text-[0.5625rem] font-medium {kindClass(
                     entry.kind,
@@ -1224,7 +1217,11 @@
                   <!-- GitHub's dialect includes HTML, so PR prose needs it to
                        read correctly; the sanitizer still strips anything
                        executable. Agent-authored text elsewhere keeps it off. -->
-                  <MarkdownView text={entry.body} class="text-[0.6875rem] leading-relaxed" allowHtml />
+                  <MarkdownView
+                    text={entry.body}
+                    class="text-[0.6875rem] leading-relaxed"
+                    allowHtml
+                  />
                 </div>
               {/if}
             </article>

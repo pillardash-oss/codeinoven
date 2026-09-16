@@ -16,6 +16,7 @@
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { relativeTime } from '$lib/format/relative-time'
+  import PrStateFilter from './PrStateFilter.svelte'
   import type { PrState, PullRequestSummary } from '$shared/types'
 
   interface Props {
@@ -30,6 +31,15 @@
     refreshSignal?: number
     /** Open the list in the full screen reader, like the file editor. */
     onFullscreen?: () => void
+    /** Which state filter to list. Owned by the parent, which draws the filter in its own header row. */
+    state: PrState
+    /** Current page. Owned by the parent for the same reason. */
+    page: number
+    onPageChange: (page: number) => void
+    /** Reports a chip click upward; the parent resets the page and passes the new state back down. */
+    onStateChange: (state: PrState) => void
+    /** The Git panel draws the filter and the actions itself, so it passes false. The full screen reader has no such row and keeps its own (default true). */
+    showControls?: boolean
   }
 
   let {
@@ -40,22 +50,18 @@
     onSignIn,
     onCreate,
     refreshSignal = 0,
-    onFullscreen
+    onFullscreen,
+    state,
+    page,
+    onPageChange,
+    onStateChange,
+    showControls = true
   }: Props = $props()
-
-  const states: Array<{ id: PrState; label: string }> = [
-    { id: 'open', label: 'Open' },
-    { id: 'closed', label: 'Closed' },
-    { id: 'all', label: 'All' }
-  ]
-
-  let prState = $state<PrState>('open')
-  let page = $state(1)
 
   /** Cached page for the current filter   renders instantly on tab re-entry. */
   const cached = $derived(
     identity
-      ? gitState.prPages[GitState.pageKey(identity.owner, identity.repo, prState, page)]
+      ? gitState.prPages[GitState.pageKey(identity.owner, identity.repo, state, page)]
       : undefined
   )
   const items = $derived(cached?.page.items ?? [])
@@ -69,16 +75,10 @@
       projectId,
       identity.owner,
       identity.repo,
-      prState,
+      state,
       page,
       force
     )
-  }
-
-  function selectState(next: PrState): void {
-    if (next === prState) return
-    prState = next
-    page = 1
   }
 
   function icon(pr: PullRequestSummary): typeof GitPullRequest {
@@ -102,11 +102,11 @@
     if (identity && githubConnected) {
       const owner = identity.owner
       const repo = identity.repo
-      void gitState.ensurePullRequestPage(projectId, owner, repo, prState, page)
+      void gitState.ensurePullRequestPage(projectId, owner, repo, state, page)
     }
   })
 
-  // After a new PR is created the cached "open" page may not include it yet  
+  // After a new PR is created the cached "open" page may not include it yet
   // force a refetch so it appears right away.
   $effect(() => {
     if (refreshSignal > 0 && identity && githubConnected) void load(true)
@@ -133,51 +133,42 @@
       This project's origin remote isn't a GitHub repository, so there are no pull requests to show.
     </p>
   {:else}
-    <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
-      {#each states as option (option.id)}
-        <button
-          type="button"
-          class="h-6 cursor-pointer rounded-md px-2 text-[0.625rem] font-medium transition-colors {prState ===
-          option.id
-            ? 'bg-elevated text-foreground'
-            : 'text-muted hover:text-foreground'}"
-          onclick={() => selectState(option.id)}
-        >
-          {option.label}
-        </button>
-      {/each}
-      <span class="flex-1"></span>
-      {#if onFullscreen}
+    {#if showControls}
+      <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
+        <PrStateFilter {state} onSelect={onStateChange} />
+        <span class="flex-1"></span>
+        {#if onFullscreen}
+          <button
+            type="button"
+            class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            title="Open in full screen"
+            aria-label="Open in full screen"
+            onclick={onFullscreen}
+          >
+            <Maximize2 size={12} />
+          </button>
+        {/if}
         <button
           type="button"
           class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          title="Open in full screen"
-          aria-label="Open in full screen"
-          onclick={onFullscreen}
+          title="Create pull request"
+          aria-label="Create pull request"
+          onclick={onCreate}
         >
-          <Maximize2 size={12} />
+          <GitPullRequest size={12} />
         </button>
-      {/if}
-      <button
-        type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Create pull request"
-        aria-label="Create pull request"
-        onclick={onCreate}
-      >
-        <GitPullRequest size={12} />
-      </button>
-      <button
-        type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
-        title="Refresh pull requests"
-        aria-label="Refresh pull requests"
-        disabled={loading}
-        onclick={() => void load(true)}
-      >
-        <RefreshCw size={12} class={loading ? 'animate-spin' : ''} />
-      </button>
-    </div>
+        <button
+          type="button"
+          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+          title="Refresh pull requests"
+          aria-label="Refresh pull requests"
+          disabled={loading}
+          onclick={() => void load(true)}
+        >
+          <RefreshCw size={12} class={loading ? 'animate-spin' : ''} />
+        </button>
+      </div>
+    {/if}
 
     <div class="min-h-0 flex-1 overflow-y-auto">
       {#if loading && items.length === 0}
@@ -202,7 +193,7 @@
         <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
           <GitPullRequest size={18} class="text-dimmed" />
           <p class="text-[0.6875rem] leading-relaxed text-dimmed">
-            No {prState === 'all' ? '' : prState} pull requests.
+            No {state === 'all' ? '' : state} pull requests.
           </p>
         </div>
       {:else}
@@ -235,7 +226,9 @@
                 Conflicts
               </span>
             {:else if pr.comments > 0}
-              <span class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums text-dimmed">
+              <span
+                class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums text-dimmed"
+              >
                 <MessageSquare size={10} />
                 {pr.comments}
               </span>
@@ -251,7 +244,7 @@
           type="button"
           class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
           disabled={page === 1 || loading}
-          onclick={() => (page -= 1)}
+          onclick={() => onPageChange(page - 1)}
         >
           <ChevronLeft size={12} />
           Previous
@@ -261,7 +254,7 @@
           type="button"
           class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
           disabled={!hasMore || loading}
-          onclick={() => (page += 1)}
+          onclick={() => onPageChange(page + 1)}
         >
           Next
           <ChevronRight size={12} />

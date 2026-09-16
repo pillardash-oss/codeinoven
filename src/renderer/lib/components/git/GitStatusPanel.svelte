@@ -5,7 +5,7 @@
   import { pathToFileUrl } from '$lib/mime'
   import { reportError, showToastWarning } from '$lib/stores/app-errors.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
-  import { gitState } from '$lib/stores/git.svelte'
+  import { gitState, GitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
   import { failedJobLogEvidence } from '$shared/github-job-log'
   import { DEFAULT_SCOPE_BUCKET_ID, type PromptAttachment } from '$shared/types'
@@ -39,18 +39,27 @@
     CircleCheck,
     Download,
     ExternalLink,
+    FileDiff,
     Folder,
+    FolderGit2,
     FolderOpen,
     FolderTree,
     GitBranch,
     GitCommit,
+    GitCommitHorizontal,
     GitFork,
+    GitGraph,
     GitMerge,
     GitPullRequest,
+    Info,
     Loader2,
+    Maximize2,
     MoreHorizontal,
+    NetworkIcon,
     Plus,
     RefreshCw,
+    Rocket,
+    RotateCcwClock,
     Search,
     Trash2,
     TriangleAlert,
@@ -77,6 +86,10 @@
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
   import SyncMainButton from './SyncMainButton.svelte'
   import GitViewMenu from './GitViewMenu.svelte'
+  import PrIdentityRow from './PrIdentityRow.svelte'
+  import PrStateFilter from './PrStateFilter.svelte'
+  import { type PrDetailTabId } from './pr-view'
+
   import FindInBar from '../files/FindInBar.svelte'
   import FullscreenPanelDialog from '../workspace/FullscreenPanelDialog.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
@@ -88,7 +101,7 @@
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import ScopeHealthNotice from '../scope/ScopeHealthNotice.svelte'
-  import type { PullRequestSummary } from '$shared/types'
+  import type { PrState, PullRequestSummary } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -123,8 +136,13 @@
   let expanded = $state<Record<string, boolean>>({})
   let loadingDiff = $state<Record<string, boolean>>({})
   let diffErrors = $state<Record<string, string | null>>({})
-  /** Bumped after a PR is created so the open-PR list refetches. */
-  let prListRefresh = $state(0)
+  /**
+   * Bumped by the panel's refresh button and by anything that changes what a
+   * view is showing, so the view in focus refetches next to the git status. One
+   * counter for every view: the refresh button is deliberately multipurpose.
+   */
+  let viewRefreshSignal = $state(0)
+
   let showIdentityForm = $state(false)
   let identityName = $state('')
   let identityEmail = $state('')
@@ -199,6 +217,18 @@
   let commitInfoTarget = $state<GitCommitInfo | null>(null)
   let showGitHubSignIn = $state(false)
   let selectedPullRequest = $state<PullRequestSummary | null>(savedView.selectedPullRequest)
+  /**
+   * Which pull requests the PR view lists, and where its paging stands. Both are
+   * panel state rather than list state because the panel draws the filter in its
+   * own action row, beside Push and Pull.
+   */
+  let prListState = $state<PrState>(savedView.prListState)
+  let prListPage = $state(1)
+  /**
+   * The view the detail reader is showing, mirrored so the header's check pill
+   * can open Checks without reaching into the reader.
+   */
+  let prDetailTab = $state<PrDetailTabId>('conversation')
 
   /**
    * Full screen pull request reader. It mirrors the fullscreen terminal and
@@ -295,7 +325,8 @@
       changesView,
       selectedCommit,
       selectedPullRequest,
-      selectedStash
+      selectedStash,
+      prListState
     })
   })
 
@@ -345,6 +376,10 @@
     // History tab   its pages are cached client-side and would otherwise keep
     // showing stale commits until a mutation happens to reload them.
     if (activeTab === 'history' || commitHistory.length > 0) await reloadHistory()
+    // ...and the view in focus, whatever it is: the git status is only half of
+    // what this button refreshes. The deployments, pull request and detail views
+    // watch this counter and reload themselves.
+    viewRefreshSignal += 1
   }
 
   async function loadRepoState(): Promise<void> {
@@ -867,6 +902,17 @@
   function selectTab(id: GitPanelTabId): void {
     activeTab = id
     if (id === 'history') void loadHistory()
+  }
+
+  /**
+   * Switch which pull requests the PR view lists. The filter is the panel's, so
+   * the page it belonged to goes with it: page 4 of the closed list has nothing
+   * to do with page 4 of the open one.
+   */
+  function selectPrListState(next: PrState): void {
+    if (next === prListState) return
+    prListState = next
+    prListPage = 1
   }
 
   function openCommitSearch(): void {
@@ -1423,6 +1469,18 @@
       ? `https://github.com/${encodeURIComponent(githubIdentity.owner)}/${encodeURIComponent(githubIdentity.repo)}/commit/${commitInfoTarget.hash}`
       : null
   )
+  /**
+   * The open pull request's fetched record. The reader reads the same bundle
+   * from the store, so the panel's identity row and its pills cannot show one
+   * thing while the reader shows another.
+   */
+  const pullRequestBundle = $derived(
+    githubIdentity && selectedPullRequest
+      ? gitState.prBundles[
+          GitState.bundleKey(githubIdentity.owner, githubIdentity.repo, selectedPullRequest.number)
+        ]
+      : undefined
+  )
   const needsUpstreamPush = $derived(
     Boolean(status?.branch) && !status?.detached && status?.upstream === null
   )
@@ -1464,7 +1522,25 @@
   const showsPull = $derived(repoState === 'git' && hasRemote && commitsBehind > 0)
   const showsPush = $derived(repoState === 'git' && hasRemote && hasWorkToPush)
   const showsSync = $derived(repoState === 'git' && worktreeScope)
-  const showsRemoteActions = $derived(showsPull || showsPush || showsSync)
+  /**
+   * Pull and Push are the only remote actions that earn the second row: they act
+   * on the branch you are standing on, one each, and they fill the row between
+   * them. Sync main is a menu, so it sits with the other header tools.
+   */
+  const showsRemoteActions = $derived(showsPull || showsPush)
+
+  /**
+   * The row under the header belongs to the view in focus: the commit or stash
+   * being read, the pull request's identity, the PR list's filter, or the remote
+   * actions. It exists only while at least one of those has something to say, so
+   * the common case is still one line.
+   */
+  const showsViewContext = $derived(
+    (activeTab === 'changes' && selectedCommit !== null) ||
+      (activeTab === 'pulls' && githubConnected && githubIdentity !== null) ||
+      (activeTab === 'stashes' && selectedStash !== null)
+  )
+  const showsActionRow = $derived(showsViewContext || showsRemoteActions)
 
   /**
    * Working-tree state as the branch picker's leading glyph, in the order the
@@ -1992,26 +2068,44 @@
     }
   }
 
-  const tabs: Array<{ id: GitPanelTabId; label: string; count: number | null }> = $derived.by(
-    () => {
-      const list: Array<{ id: GitPanelTabId; label: string; count: number | null }> = [
-        { id: 'changes', label: 'Changes', count: changes.length > 0 ? changes.length : null },
-        { id: 'history', label: 'History', count: null },
-        { id: 'branches', label: 'Branches', count: null },
-        { id: 'pulls', label: 'PRs', count: null }
-      ]
-      // Stash is just shelved work   it earns a tab only once something is shelved.
-      if (gitState.stashes.length > 0) {
-        list.push({ id: 'stashes', label: 'Stashes', count: gitState.stashes.length })
-      }
-      // Deployments earn a tab only when the repo actually has deployment
-      // activity (the flag is persisted in the DB and cached in localStorage).
-      if (hasDeployments) {
-        list.push({ id: 'deployments', label: 'Deploys', count: null })
-      }
-      return list
+  const tabs: Array<{
+    id: GitPanelTabId
+    label: string
+    icon: typeof GitBranch
+    count: number | null
+  }> = $derived.by(() => {
+    const list: Array<{
+      id: GitPanelTabId
+      label: string
+      icon: typeof GitBranch
+      count: number | null
+    }> = [
+      {
+        id: 'changes',
+        label: 'Changes',
+        icon: FileDiff,
+        count: changes.length > 0 ? changes.length : null
+      },
+      { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
+      { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
+      { id: 'pulls', label: 'PRs', icon: GitPullRequest, count: null }
+    ]
+    // Stash is just shelved work   it earns a tab only once something is shelved.
+    if (gitState.stashes.length > 0) {
+      list.push({
+        id: 'stashes',
+        label: 'Stashes',
+        icon: Archive,
+        count: gitState.stashes.length
+      })
     }
-  )
+    // Deployments earn a tab only when the repo actually has deployment
+    // activity (the flag is persisted in the DB and cached in localStorage).
+    if (hasDeployments) {
+      list.push({ id: 'deployments', label: 'Deploys', icon: Rocket, count: null })
+    }
+    return list
+  })
 
   const fileSections: Array<{ title: string; files: GitFileChange[] }> = $derived.by(() => {
     const sections: Array<{ title: string; files: GitFileChange[] }> = []
@@ -2104,16 +2198,263 @@
 {/snippet}
 
 {#snippet refreshStatusButton()}
+  <!--
+    Multipurpose on purpose: it refreshes the git status *and* whatever view is
+    in focus, so one control is enough to trust the panel again.
+  -->
   <button
     type="button"
     class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-    aria-label="Refresh git status"
-    title="Refresh git status"
+    aria-label="Refresh the git status and the current view"
+    title="Refresh the git status and the current view"
     disabled={busy}
     onclick={() => void refreshStatus()}
   >
     <RefreshCw size={12} class={gitState.isBusy('refresh') ? 'animate-spin' : ''} />
   </button>
+{/snippet}
+
+<!--
+  The view in focus's own action, drawn before Search in the header row. The
+  icons carry the meaning and the labels appear only while the header is wide
+  enough for them (the container query on `.git-panel-header`), so a narrow
+  sidebar gets the same controls without the words.
+-->
+{#snippet viewActions()}
+  {#if activeTab === 'changes'}
+    {@render changesViewToggle()}
+    {#if selectedCommit && isHeadCommit}
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        title="Amend the latest commit message"
+        aria-label="Amend the latest commit message"
+        disabled={gitState.isBusy('reset') || gitState.isBusy('amend')}
+        onclick={startAmend}
+      >
+        <GitGraph size={12} aria-hidden="true" />
+        <span class="view-action-label">Amend</span>
+      </button>
+    {/if}
+  {:else if activeTab === 'branches'}
+    <button
+      type="button"
+      class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      title="Create a branch from the current one"
+      aria-label="Create a branch from the current one"
+      onclick={() => (creatingBranch = true)}
+    >
+      <Plus size={12} aria-hidden="true" />
+      <span class="view-action-label">New branch</span>
+    </button>
+  {:else if activeTab === 'pulls'}
+    {#if selectedPullRequest}
+      <button
+        type="button"
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        title="Open this pull request in the full screen reader"
+        aria-label="Open this pull request in the full screen reader"
+        onclick={() => openPullRequestFullscreen(selectedPullRequest)}
+      >
+        <Maximize2 size={12} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        title="Open this pull request on GitHub"
+        aria-label="Open this pull request on GitHub"
+        onclick={() => void openInBrowser(selectedPullRequest?.url ?? '')}
+      >
+        <ExternalLink size={12} aria-hidden="true" />
+      </button>
+    {:else}
+      <button
+        type="button"
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        title="Open the pull request list in the full screen reader"
+        aria-label="Open the pull request list in the full screen reader"
+        onclick={() => openPullRequestFullscreen(null)}
+      >
+        <Maximize2 size={12} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        title="Create a pull request"
+        aria-label="Create a pull request"
+        onclick={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
+      >
+        <GitPullRequest size={12} aria-hidden="true" />
+        <span class="view-action-label">New PR</span>
+      </button>
+    {/if}
+  {:else if activeTab === 'deployments' && githubIdentity}
+    <button
+      type="button"
+      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="View these workflow runs on GitHub"
+      aria-label="View these workflow runs on GitHub"
+      onclick={() =>
+        void openInBrowser(
+          `https://github.com/${githubIdentity?.owner ?? ''}/${githubIdentity?.repo ?? ''}/actions`
+        )}
+    >
+      <ExternalLink size={12} aria-hidden="true" />
+    </button>
+  {/if}
+{/snippet}
+
+<!--
+  How the changed files are laid out. It reads as one control with two states, so
+  it lives here with the view's actions rather than in the changes toolbar beside
+  Stage all: it describes the view, not the selection.
+-->
+{#snippet changesViewToggle()}
+  <div class="flex shrink-0 items-center gap-0.5" role="group" aria-label="Changed files view">
+    <button
+      type="button"
+      class={[
+        'flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors',
+        changesView === 'list'
+          ? 'bg-elevated text-foreground'
+          : 'text-dimmed hover:bg-elevated hover:text-foreground'
+      ]}
+      title="Show the changed files as a flat list"
+      aria-label="Show the changed files as a flat list"
+      aria-pressed={changesView === 'list'}
+      onclick={() => (changesView = 'list')}
+    >
+      <GitCommitHorizontal size={12} aria-hidden="true" />
+      <span class="view-action-label">List</span>
+    </button>
+    <button
+      type="button"
+      class={[
+        'flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors',
+        changesView === 'tree'
+          ? 'bg-elevated text-foreground'
+          : 'text-dimmed hover:bg-elevated hover:text-foreground'
+      ]}
+      title="Show the changed files as a folder tree"
+      aria-label="Show the changed files as a folder tree"
+      aria-pressed={changesView === 'tree'}
+      onclick={() => (changesView = 'tree')}
+    >
+      <FolderGit2 size={12} aria-hidden="true" />
+      <span class="view-action-label">Tree</span>
+    </button>
+  </div>
+{/snippet}
+
+<!--
+  What the action row is about, per view: the context each per-view header used
+  to carry, moved down beside Pull and Push, so the sidebar has one place to look
+  for "where am I" and one for "what can I do here".
+-->
+{#snippet viewContext()}
+  {#if activeTab === 'changes' && selectedCommit !== null}
+    {@const commit = selectedCommit}
+    <button
+      type="button"
+      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Back to history"
+      aria-label="Back to history"
+      onclick={() => {
+        clearSelectedCommit()
+        activeTab = 'history'
+      }}
+    >
+      <ArrowLeft size={12} />
+    </button>
+    <div class="flex shrink-0 items-center gap-0.5">
+      <button
+        type="button"
+        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        title="Newer commit"
+        aria-label="Newer commit"
+        disabled={!canGoNewer}
+        onclick={() => navigateCommit(-1)}
+      >
+        <ChevronLeft size={12} />
+      </button>
+      <button
+        type="button"
+        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        title="Older commit"
+        aria-label="Older commit"
+        disabled={!canGoOlder}
+        onclick={() => navigateCommit(1)}
+      >
+        <ChevronRight size={12} />
+      </button>
+    </div>
+    <div class="min-w-0 flex-1">
+      <p class="truncate text-[0.6875rem] font-medium text-foreground">
+        {commit.message.split('\n')[0]}
+      </p>
+      <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
+        <span class="font-mono">{commit.shortHash}</span>
+        <span>·</span>
+        <span class="truncate">{commit.author}</span>
+        <span>·</span>
+        <span class="shrink-0">{relativeTime(commit.date)}</span>
+      </div>
+    </div>
+  {:else if activeTab === 'stashes' && selectedStash !== null}
+    {@const stash = selectedStash}
+    <button
+      type="button"
+      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Back to stash list"
+      aria-label="Back to stash list"
+      onclick={clearSelectedStash}
+    >
+      <ArrowLeft size={12} />
+    </button>
+    <div class="min-w-0 flex-1">
+      <p class="truncate text-[0.6875rem] font-medium text-foreground">{stash.message}</p>
+      <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
+        <span class="font-mono">{stash.id}</span>
+        {#if stash.branch}
+          <span>·</span>
+          <span class="truncate">{stash.branch}</span>
+        {/if}
+        <span>·</span>
+        <span class="shrink-0">{relativeTime(stash.date)}</span>
+      </div>
+    </div>
+  {:else if activeTab === 'pulls'}
+    {#if selectedPullRequest && githubIdentity}
+      <PrIdentityRow
+        summary={selectedPullRequest}
+        detail={pullRequestBundle?.detail ?? null}
+        checks={pullRequestBundle?.checks ?? null}
+        onBack={() => (selectedPullRequest = null)}
+        onOpenChecks={() => (prDetailTab = 'checks')}
+      />
+    {:else}
+      <PrStateFilter state={prListState} onSelect={selectPrListState} />
+    {/if}
+  {/if}
+{/snippet}
+
+<!--
+  One commit menu, two doors: the History rows open it on right click, and the
+  header's info control opens it for the commit being read. It was two lists that
+  had drifted apart for no reason, so it is one snippet now.
+-->
+{#snippet commitActions(commit: GitCommitInfo, isHead: boolean)}
+  <CommitActionsMenu
+    {isHead}
+    resetBusy={gitState.isBusy('reset')}
+    deleteBusy={gitState.isBusy('delete-commit')}
+    onReset={(mode) => requestReset(mode, commit.hash)}
+    onDelete={() => requestDeleteCommit(commit)}
+    onAmend={isHead ? startAmend : undefined}
+    onCopyHash={() => void copyCommitHash(commit)}
+    onCopyMessage={() => void copyCommitMessage(commit)}
+    onShowInfo={() => (commitInfoTarget = commit)}
+  />
 {/snippet}
 
 <div class="relative flex h-full min-h-0 flex-col bg-app" data-region="git-panel">
@@ -2179,14 +2520,15 @@
     </div>
   {/if}
 
-  <!-- Header: one row of context and tools, plus the remote actions when they have work -->
-  <div class="flex shrink-0 flex-col border-b border-border">
-    <!--
-      Header: identity, branch, navigation and tools on one line, with the remote
-      actions dropping to a second line only while one of them has work to do
-      (`showsRemoteActions`).
-    -->
-    <div class="flex h-9 items-center gap-1 px-2">
+  <!--
+    Header: identity, branch, the view you are in and its tools on one line. The
+    view in focus takes a second line the moment it has something to say
+    (`showsActionRow`), and that row is where the remote actions live too.
+  -->
+  <div class="flex shrink-0 flex-col">
+    <div
+      class="git-panel-header flex h-9 items-center gap-1 overflow-x-auto border-b border-border px-2"
+    >
       {#if repoState === 'git'}
         <GitHubAccountMenu
           github={{ connected: githubConnected, configured: githubConfigured, user: githubUser }}
@@ -2225,8 +2567,22 @@
           behind a gesture. The trigger is the view in use, with its count.
         -->
         <GitViewMenu {tabs} {activeTab} onSelect={selectTab} />
-        <span class="flex-1"></span>
+        <span class="min-w-0 flex-1"></span>
+        <!--
+          The view's own action comes first, ahead of Search: it acts on what you
+          are looking at, while Search, Refresh and the overflow act on the panel.
+          Sync main belongs to the same group   it is a worktree action, not an
+          action on the branch's drift.
+        -->
         <div class="flex shrink-0 items-center gap-0.5">
+          {@render viewActions()}
+          {#if showsSync}
+            <SyncMainButton
+              busy={gitState.isBusy('sync-main')}
+              blocked={syncBusy || conflicted.length > 0}
+              onSync={(direction) => void syncMainAction(direction)}
+            />
+          {/if}
           <button
             type="button"
             class={[
@@ -2243,68 +2599,97 @@
             <Search size={12} aria-hidden="true" />
           </button>
           {@render refreshStatusButton()}
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger
-              class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-              aria-label="Git actions"
-              title="Git actions"
-            >
-              {#if gitState.isBusy('fetch')}
-                <Loader2 size={12} class="animate-spin" />
-              {:else}
-                <MoreHorizontal size={13} />
-              {/if}
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                side="bottom"
-                align="end"
-                sideOffset={4}
-                collisionPadding={8}
-                class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+          {#if activeTab === 'changes' && selectedCommit}
+            <!--
+              While a commit is open the overflow control *is* that commit's menu:
+              the same snippet the History rows open on right click, because the
+              two lists of actions were already identical in everything but the
+              order they happened to be written in.
+            -->
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+                aria-label={`Actions for commit ${selectedCommit.shortHash}`}
+                title={`Actions for commit ${selectedCommit.shortHash}`}
               >
-                <!--
-                  Fetch is the one remote action with no button of its own   it
-                  advertises no drift   so it stays here with the working-tree
+                <Info size={13} />
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                  side="bottom"
+                  align="end"
+                  sideOffset={4}
+                  collisionPadding={8}
+                >
+                  {@render commitActions(selectedCommit, isHeadCommit)}
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          {:else}
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+                aria-label="Git actions"
+                title="Git actions"
+              >
+                {#if gitState.isBusy('fetch')}
+                  <Loader2 size={12} class="animate-spin" />
+                {:else}
+                  <MoreHorizontal size={13} />
+                {/if}
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  side="bottom"
+                  align="end"
+                  sideOffset={4}
+                  collisionPadding={8}
+                  class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+                >
+                  <!--
+                  Fetch is the one remote action with no control of its own: it
+                  advertises no drift, so it stays here with the working-tree
                   actions. Pull, Push and the main-worktree sync each own a
-                  header control now, so the menu does not repeat them.
+                  header control, so the menu does not repeat them.
                 -->
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
-                  disabled={remotes.length === 0 || syncBusy}
-                  onSelect={() => void gitState.fetch(projectId)}
-                >
-                  <Download size={12} class="shrink-0 text-dimmed" />
-                  Fetch
-                </DropdownMenu.Item>
-                <DropdownMenu.Separator class="my-1 h-px bg-border" />
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                  onSelect={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
-                >
-                  <GitPullRequest size={12} class="shrink-0 text-dimmed" />
-                  Create pull request…
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
-                  disabled={localBranches.length < 2}
-                  onSelect={() => (showIntegrateModal = true)}
-                >
-                  <GitMerge size={12} class="shrink-0 text-dimmed" />
-                  Merge or rebase…
-                </DropdownMenu.Item>
-                <DropdownMenu.Separator class="my-1 h-px bg-border" />
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
-                  disabled={status?.clean ?? true}
-                  onSelect={() => (showStashModal = true)}
-                >
-                  <Archive size={12} class="shrink-0 text-dimmed" />
-                  Stash changes…
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+                  <DropdownMenu.Item
+                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
+                    disabled={remotes.length === 0 || syncBusy}
+                    onSelect={() => void gitState.fetch(projectId)}
+                  >
+                    <Download size={12} class="shrink-0 text-dimmed" />
+                    Fetch
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Separator class="my-1 h-px bg-border" />
+                  <DropdownMenu.Item
+                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                    onSelect={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
+                  >
+                    <GitPullRequest size={12} class="shrink-0 text-dimmed" />
+                    Create pull request…
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                    disabled={localBranches.length < 2}
+                    onSelect={() => (showIntegrateModal = true)}
+                  >
+                    <GitMerge size={12} class="shrink-0 text-dimmed" />
+                    Merge or rebase…
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Separator class="my-1 h-px bg-border" />
+                  <DropdownMenu.Item
+                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                    disabled={status?.clean ?? true}
+                    onSelect={() => (showStashModal = true)}
+                  >
+                    <Archive size={12} class="shrink-0 text-dimmed" />
+                    Stash changes…
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          {/if}
         </div>
       {:else}
         <span class="flex-1"></span>
@@ -2313,20 +2698,20 @@
       {/if}
     </div>
 
-    {#if showsRemoteActions}
+    {#if showsActionRow}
       <!--
-        The remote actions earn a row of their own only while one of them has
-        work, so the header is a single line in the common case. Pull and Push
-        are independent: a diverged branch needs both, and hiding one behind the
-        other left the second reachable only from the menu. Each carries its own
-        count, and Fetch advertises no drift, so it stays in the menu instead of
-        taking a slot here.
+        The row under the header belongs to the view in focus: the commit or
+        stash being read, the pull request's identity, the PR list's filter, and
+        Pull and Push. Pull and Push are independent   a diverged branch needs
+        both   so each gets a share of the row's width instead of one hiding the
+        other, and they are the only items here that stretch.
       -->
-      <div class="flex h-8 items-center justify-end gap-1 overflow-x-auto px-2">
+      <div class="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
+        {@render viewContext()}
         {#if showsPull}
           <button
             type="button"
-            class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+            class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
             title={`Pull ${String(commitsBehind)} commit(s) from the remote`}
             disabled={syncBusy}
             onclick={() => void pullAction()}
@@ -2336,13 +2721,13 @@
             {:else}
               <ArrowDownToLine size={11} />
             {/if}
-            Pull {commitsBehind}
+            <span class="truncate">Pull {commitsBehind}</span>
           </button>
         {/if}
         {#if showsPush}
           <button
             type="button"
-            class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+            class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
             title={pushTitle}
             disabled={syncBusy || gitState.isBusy('push')}
             onclick={() => void pushAction()}
@@ -2352,15 +2737,10 @@
             {:else}
               <ArrowUpFromLine size={11} />
             {/if}
-            Push{commitsAhead > 0 ? ` ${String(commitsAhead)}` : ''}
+            <span class="truncate">
+              Push{commitsAhead > 0 ? ` ${String(commitsAhead)}` : ''}
+            </span>
           </button>
-        {/if}
-        {#if showsSync}
-          <SyncMainButton
-            busy={gitState.isBusy('sync-main')}
-            blocked={syncBusy || conflicted.length > 0}
-            onSync={(direction) => void syncMainAction(direction)}
-          />
         {/if}
       </div>
     {/if}
@@ -2499,129 +2879,11 @@
 
       {#if activeTab === 'changes'}
         {#if selectedCommit}
-          {@const commit = selectedCommit}
-          <!-- Commit diff view -->
-          <div class="sticky top-0 z-10 border-b border-border bg-app px-3 py-2">
-            <div class="flex items-center gap-1.5">
-              <button
-                type="button"
-                class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                title="Back to history"
-                aria-label="Back to history"
-                onclick={() => {
-                  clearSelectedCommit()
-                  activeTab = 'history'
-                }}
-              >
-                <ArrowLeft size={12} />
-              </button>
-              <div class="flex items-center gap-0.5">
-                <button
-                  type="button"
-                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-                  title="Newer commit"
-                  aria-label="Newer commit"
-                  disabled={!canGoNewer}
-                  onclick={() => navigateCommit(-1)}
-                >
-                  <ChevronLeft size={12} />
-                </button>
-                <button
-                  type="button"
-                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-                  title="Older commit"
-                  aria-label="Older commit"
-                  disabled={!canGoOlder}
-                  onclick={() => navigateCommit(1)}
-                >
-                  <ChevronRight size={12} />
-                </button>
-              </div>
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-[0.6875rem] font-medium text-foreground">
-                  {commit.message.split('\n')[0]}
-                </p>
-                <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
-                  <span class="font-mono">{commit.shortHash}</span>
-                  <span>·</span>
-                  <span>{commit.author}</span>
-                  <span>·</span>
-                  <span>{relativeTime(commit.date)}</span>
-                </div>
-              </div>
-              {#if isHeadCommit}
-                <button
-                  type="button"
-                  class="shrink-0 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                  disabled={gitState.isBusy('reset') || gitState.isBusy('amend')}
-                  onclick={startAmend}
-                >
-                  Amend
-                </button>
-              {/if}
-              <div
-                class="flex shrink-0 items-center rounded-md bg-elevated/50 p-0.5"
-                role="group"
-                aria-label="Changed files view"
-              >
-                <button
-                  type="button"
-                  class={[
-                    'flex h-5 items-center gap-1 rounded px-2 text-[0.625rem] font-medium transition-colors',
-                    changesView === 'list'
-                      ? 'bg-surface text-foreground shadow-sm'
-                      : 'text-dimmed hover:text-foreground'
-                  ]}
-                  aria-pressed={changesView === 'list'}
-                  onclick={() => (changesView = 'list')}
-                >
-                  List
-                </button>
-                <button
-                  type="button"
-                  class={[
-                    'flex h-5 items-center gap-1 rounded px-2 text-[0.625rem] font-medium transition-colors',
-                    changesView === 'tree'
-                      ? 'bg-surface text-foreground shadow-sm'
-                      : 'text-dimmed hover:text-foreground'
-                  ]}
-                  aria-pressed={changesView === 'tree'}
-                  onclick={() => (changesView = 'tree')}
-                >
-                  Tree
-                </button>
-              </div>
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger
-                  class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                  aria-label={`More actions for commit ${commit.shortHash}`}
-                  title={`More actions for commit ${commit.shortHash}`}
-                >
-                  <MoreHorizontal size={13} />
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content
-                    class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                    side="bottom"
-                    align="end"
-                    sideOffset={4}
-                    collisionPadding={8}
-                  >
-                    <CommitActionsMenu
-                      isHead={isHeadCommit}
-                      resetBusy={gitState.isBusy('reset')}
-                      deleteBusy={gitState.isBusy('delete-commit')}
-                      onReset={(mode) => requestReset(mode, commit.hash)}
-                      onDelete={() => requestDeleteCommit(commit)}
-                      onAmend={startAmend}
-                      onCopyHash={() => void copyCommitHash(commit)}
-                      onCopyMessage={() => void copyCommitMessage(commit)}
-                    />
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-            </div>
-          </div>
+          <!--
+            The commit's identity and actions live in the panel's header and action
+            row, so the diff starts at the top of the content region instead of
+            under a second sticky copy of them.
+          -->
           <div class="p-2">
             {#if loadingCommitDiff}
               <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
@@ -2807,40 +3069,6 @@
                   </DropdownMenu.Root>
                 {/if}
                 <span class="flex-1"></span>
-                {#if changes.length > 0}
-                  <div
-                    class="flex items-center rounded-md bg-elevated/50 p-0.5"
-                    role="group"
-                    aria-label="Changes view"
-                  >
-                    <button
-                      type="button"
-                      class={[
-                        'flex h-5 items-center gap-1 rounded px-2 text-[0.625rem] font-medium transition-colors',
-                        changesView === 'list'
-                          ? 'bg-surface text-foreground shadow-sm'
-                          : 'text-dimmed hover:text-foreground'
-                      ]}
-                      aria-pressed={changesView === 'list'}
-                      onclick={() => (changesView = 'list')}
-                    >
-                      List
-                    </button>
-                    <button
-                      type="button"
-                      class={[
-                        'flex h-5 items-center gap-1 rounded px-2 text-[0.625rem] font-medium transition-colors',
-                        changesView === 'tree'
-                          ? 'bg-surface text-foreground shadow-sm'
-                          : 'text-dimmed hover:text-foreground'
-                      ]}
-                      aria-pressed={changesView === 'tree'}
-                      onclick={() => (changesView = 'tree')}
-                    >
-                      Tree
-                    </button>
-                  </div>
-                {/if}
               </div>
 
               <!-- Staged / working panes   conflicts sit on top; each pane shares the height -->
@@ -3084,24 +3312,18 @@
           onSelectCommit={(commit) => void selectCommit(commit)}
         >
           {#snippet menu({ commit, isHead }: { commit: GitCommitInfo; isHead: boolean })}
-            <CommitActionsMenu
-              {isHead}
-              resetBusy={gitState.isBusy('reset')}
-              deleteBusy={gitState.isBusy('delete-commit')}
-              onReset={(mode) => requestReset(mode, commit.hash)}
-              onDelete={() => requestDeleteCommit(commit)}
-              onAmend={isHead ? startAmend : undefined}
-              onCopyHash={() => void copyCommitHash(commit)}
-              onCopyMessage={() => void copyCommitMessage(commit)}
-              onShowInfo={() => (commitInfoTarget = commit)}
-            />
+            {@render commitActions(commit, isHead)}
           {/snippet}
         </GitGraphView>
       {:else if activeTab === 'branches'}
         <div class="flex h-full min-h-0 flex-col">
-          <!-- New branch -->
-          <div class="shrink-0 border-b border-border px-3 py-1.5">
-            {#if creatingBranch}
+          <!--
+            The New branch control lives in the header's action section, so this
+            row appears only while a name is being typed: the list keeps the whole
+            panel height the rest of the time.
+          -->
+          {#if creatingBranch}
+            <div class="shrink-0 border-b border-border px-3 py-1.5">
               <div class="flex items-center gap-1.5">
                 <input
                   bind:this={newBranchInput}
@@ -3135,17 +3357,8 @@
                   Cancel
                 </button>
               </div>
-            {:else}
-              <button
-                type="button"
-                class="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1 py-1 text-[0.6875rem] font-medium text-muted transition-colors hover:text-foreground"
-                onclick={() => (creatingBranch = true)}
-              >
-                <Plus size={12} class="shrink-0" />
-                New branch
-              </button>
-            {/if}
-          </div>
+            </div>
+          {/if}
 
           <div class="min-h-0 flex-1 overflow-y-auto p-2">
             {#if gitState.branches.length === 0}
@@ -3347,6 +3560,8 @@
               {projectId}
               identity={githubIdentity}
               summary={selectedPullRequest}
+              bind:tab={prDetailTab}
+              refreshSignal={viewRefreshSignal}
               onBack={() => (selectedPullRequest = null)}
               onFullscreen={() => openPullRequestFullscreen(selectedPullRequest)}
               onAgentReview={(pr) => void startAgentReview(pr)}
@@ -3356,15 +3571,24 @@
               onResolveWithAgent={(pr) => void startConflictResolution(pr)}
             />
           {:else}
+            <!--
+              The panel draws the filter and the actions for this list in its own
+              rows, so the list renders rows and paging only (`showControls`).
+            -->
             <GitPullRequestList
               {projectId}
               identity={githubIdentity}
               {githubConnected}
+              state={prListState}
+              page={prListPage}
+              showControls={false}
+              onStateChange={selectPrListState}
+              onPageChange={(next) => (prListPage = next)}
               onOpen={(pr) => (selectedPullRequest = pr)}
               onFullscreen={() => openPullRequestFullscreen(null)}
               onSignIn={() => (showGitHubSignIn = true)}
               onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
-              refreshSignal={prListRefresh}
+              refreshSignal={viewRefreshSignal}
             />
           {/if}
         </div>
@@ -3378,40 +3602,16 @@
           onRequestedRunOpened={() => (requestedWorkflowRunId = null)}
           onAgentDiagnoseRun={startWorkflowDiagnosis}
           onAgentDiagnoseDeployment={startDeploymentDiagnosis}
+          refreshSignal={viewRefreshSignal}
         />
       {:else if activeTab === 'stashes'}
         <div class="p-2">
           {#if selectedStash}
-            {@const stash = selectedStash}
-            <!-- Stash diff view -->
-            <div class="sticky top-0 z-10 border-b border-border bg-app px-3 py-2">
-              <div class="flex items-center gap-2">
-                <button
-                  type="button"
-                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                  title="Back to stash list"
-                  aria-label="Back to stash list"
-                  onclick={clearSelectedStash}
-                >
-                  <ArrowLeft size={12} />
-                </button>
-                <div class="min-w-0 flex-1">
-                  <p class="truncate text-[0.6875rem] font-medium text-foreground">
-                    {stash.message}
-                  </p>
-                  <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
-                    <span class="font-mono">{stash.id}</span>
-                    {#if stash.branch}
-                      <span>·</span>
-                      <span class="truncate">{stash.branch}</span>
-                    {/if}
-                    <span>·</span>
-                    <span>{relativeTime(stash.date)}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="p-2">
+            <!--
+              The stash's identity and its back control live in the panel's action
+              row, so the changed files start at the top of the content region.
+            -->
+            <div>
               {#if loadingStashDiff}
                 <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
                   <Loader2 size={14} class="animate-spin" />
@@ -4807,12 +5007,33 @@
           {projectId}
           identity={githubIdentity}
           {githubConnected}
+          state={prListState}
+          page={prListPage}
+          onStateChange={selectPrListState}
+          onPageChange={(next) => (prListPage = next)}
           onOpen={(pr) => openPullRequestFullscreen(pr)}
           onSignIn={() => (showGitHubSignIn = true)}
           onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
-          refreshSignal={prListRefresh}
+          refreshSignal={viewRefreshSignal}
         />
       {/if}
     </div>
   </FullscreenPanelDialog>
 {/if}
+
+<style>
+  /*
+    The header row is a query container so the action labels can retreat before
+    the row runs out of room. The glyphs always say what the control does, and the
+    tooltip names it in full, so dropping the word is a compress, not a loss.
+  */
+  .git-panel-header {
+    container: git-header / inline-size;
+  }
+
+  @container git-header (max-width: 520px) {
+    .view-action-label {
+      display: none;
+    }
+  }
+</style>

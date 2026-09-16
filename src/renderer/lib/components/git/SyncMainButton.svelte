@@ -35,7 +35,7 @@
     {:else}
       <GitCompareArrows size={11} aria-hidden="true" />
     {/if}
-    Sync main
+    <span class="sync-label">Sync main</span>
     <ChevronDown size={10} class="shrink-0 text-dimmed" aria-hidden="true" />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
@@ -57,3 +57,18 @@
     </DropdownMenu.Content>
   </DropdownMenu.Portal>
 </DropdownMenu.Root>
+
+<style>
+  /*
+    The Git panel's header row is the query container
+    (`container: git-header / inline-size` in GitStatusPanel.svelte), and it
+    declares the breakpoint its own view actions compress at. The word goes first
+    here too: the glyph, the tooltip and the menu items all still say what this
+    is, and the panel is at its narrowest exactly when the row has no room.
+  */
+  @container git-header (max-width: 520px) {
+    .sync-label {
+      display: none;
+    }
+  }
+</style>
