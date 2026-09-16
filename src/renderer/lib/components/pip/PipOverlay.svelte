@@ -5,14 +5,21 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
 
-  /** The preview's natural footprint, and the size the overlay is parked at. */
-  const BASE_PREVIEW_WIDTH = 224
-  const BASE_PREVIEW_HEIGHT = 144
+  /** The preview's allowance at 1x. The preview itself is the largest rectangle
+   *  of the captured window's aspect that fits inside this box, so the image
+   *  always fills its border instead of leaving letterbox bands. */
+  const PREVIEW_ALLOWANCE_WIDTH = 224
+  const PREVIEW_ALLOWANCE_HEIGHT = 144
   /** The overlay may be shrunk back to its default footprint and grown to twice
    *  it. The cap is deliberate: the preview floats above the workspace, so an
    *  unbounded frame would bury the surface the user is reading. */
   const MIN_SCALE = 1
   const MAX_SCALE = 2
+  /** The capture demand is quantized to this step before it is reported. The
+   *  rendered width of a frame depends on its aspect ratio rather than its pixel
+   *  size, so rounding away sub-step jitter keeps the demand stable across
+   *  captures instead of making main resize its encode every frame. */
+  const FRAME_DEMAND_STEP = 64
   /** Keyboard nudges for the resize affordances. */
   const KEYBOARD_SCALE_STEP = 0.1
   /** Distance the overlay keeps from the viewport edges when it first appears. */
@@ -54,6 +61,9 @@
   ]
 
   const occlusionKey = `pip-overlay-${crypto.randomUUID()}`
+  /** Device pixels per CSS pixel, kept in state so the capture demand follows a
+   *  window that moved between displays instead of holding a stale ratio. */
+  let pixelRatio = $state(window.devicePixelRatio || 1)
   let position = $state({ x: VIEWPORT_MARGIN, y: VIEWPORT_MARGIN })
   let dragging = $state(false)
   let dragStart = $state({ x: 0, y: 0 })
@@ -93,9 +103,75 @@
       pipState.threadId === workspaceState.selectedThread?.id
   )
 
-  const previewWidth = $derived(Math.round(BASE_PREVIEW_WIDTH * scale))
-  const previewHeight = $derived(Math.round(BASE_PREVIEW_HEIGHT * scale))
+  /** Aspect of the window being previewed, falling back to the allowance's own
+   *  shape before the first frame reports its size. */
+  const previewAspect = $derived.by(() => {
+    if (pipState.frameWidth <= 0 || pipState.frameHeight <= 0) {
+      return PREVIEW_ALLOWANCE_WIDTH / PREVIEW_ALLOWANCE_HEIGHT
+    }
+    return pipState.frameWidth / pipState.frameHeight
+  })
+
+  /** The preview's footprint at 1x. A window is almost always wider than the
+   *  allowance, so this keeps the full width and takes the height the window's
+   *  aspect implies, which leaves `object-contain` nothing to pad. A tall window
+   *  instead keeps the full height and narrows, so the overlay never grows past
+   *  its allowance in either direction.
+   *
+   *  Deliberately unrounded: rounding here would compound at the 2x cap, where a
+   *  half pixel of allowance becomes a whole one in the drawn box. */
+  const basePreview = $derived.by(() => {
+    const allowanceAspect = PREVIEW_ALLOWANCE_WIDTH / PREVIEW_ALLOWANCE_HEIGHT
+    if (previewAspect >= allowanceAspect) {
+      return {
+        width: PREVIEW_ALLOWANCE_WIDTH,
+        height: Math.max(1, PREVIEW_ALLOWANCE_WIDTH / previewAspect)
+      }
+    }
+    return {
+      width: Math.max(1, PREVIEW_ALLOWANCE_HEIGHT * previewAspect),
+      height: PREVIEW_ALLOWANCE_HEIGHT
+    }
+  })
+
+  const previewWidth = $derived(Math.round(basePreview.width * scale))
+  const previewHeight = $derived(Math.round(basePreview.height * scale))
   const cursorSize = $derived(Math.max(12, Math.round(18 * scale)))
+
+  /** Device pixels of preview the overlay is really painting. The frame is
+   *  letterboxed into the preview box by `object-contain`, so this follows the
+   *  rendered rect (the shorter of the two constraints) rather than the box. The
+   *  capture is scaled to cover it, which is what keeps a scaled-up preview
+   *  sharp instead of magnifying the default frame. */
+  const paintedDeviceWidth = $derived.by(() => {
+    if (pipState.frameWidth <= 0 || pipState.frameHeight <= 0) {
+      return previewWidth * pixelRatio
+    }
+    const projection = Math.min(
+      previewWidth / pipState.frameWidth,
+      previewHeight / pipState.frameHeight
+    )
+    return pipState.frameWidth * projection * pixelRatio
+  })
+
+  const frameDemand = $derived(
+    Math.ceil(paintedDeviceWidth / FRAME_DEMAND_STEP) * FRAME_DEMAND_STEP
+  )
+
+  /** Where the overlay is really shown. `position` stays the user's intent, kept
+   *  in bounds by every gesture; this applies the same clamp at render time, so a
+   *  previewed window whose aspect changes the box cannot leave the overlay half
+   *  off screen. Nothing has to write state from a measurement to make that hold,
+   *  which an attachment doing it from its own ResizeObserver could not do without
+   *  re-triggering itself.
+   */
+  const displayPosition = $derived.by(() => {
+    if (overlaySize.width > 0 && overlaySize.height > 0) {
+      return clampPosition(position.x, position.y, overlaySize.width, overlaySize.height)
+    }
+    const { width, height } = footprint(scale)
+    return clampPosition(position.x, position.y, width, height)
+  })
 
   const cursorPosition = $derived.by(() => {
     if (!pipState.cursorVisible || pipState.frameWidth <= 0 || pipState.frameHeight <= 0) {
@@ -120,8 +196,8 @@
     const chromeWidth = Math.max(0, overlaySize.width - previewWidth)
     const chromeHeight = Math.max(0, overlaySize.height - previewHeight)
     return {
-      width: Math.round(BASE_PREVIEW_WIDTH * scaleValue) + chromeWidth,
-      height: Math.round(BASE_PREVIEW_HEIGHT * scaleValue) + chromeHeight
+      width: Math.round(basePreview.width * scaleValue) + chromeWidth,
+      height: Math.round(basePreview.height * scaleValue) + chromeHeight
     }
   }
 
@@ -130,9 +206,9 @@
   function maxScaleForViewport(): number {
     const chromeWidth = Math.max(0, overlaySize.width - previewWidth)
     const chromeHeight = Math.max(0, overlaySize.height - previewHeight)
-    const fitsWidth = (window.innerWidth - VIEWPORT_MARGIN * 2 - chromeWidth) / BASE_PREVIEW_WIDTH
+    const fitsWidth = (window.innerWidth - VIEWPORT_MARGIN * 2 - chromeWidth) / basePreview.width
     const fitsHeight =
-      (window.innerHeight - VIEWPORT_MARGIN * 2 - chromeHeight) / BASE_PREVIEW_HEIGHT
+      (window.innerHeight - VIEWPORT_MARGIN * 2 - chromeHeight) / basePreview.height
     return Math.min(MAX_SCALE, Math.min(fitsWidth, fitsHeight))
   }
 
@@ -185,18 +261,18 @@
   function scaleFromDrag(origin: ResizeOrigin, dx: number, dy: number): number {
     const candidates: number[] = []
     if (origin.edge.includes('e')) {
-      candidates.push((origin.previewWidth + dx) / BASE_PREVIEW_WIDTH)
+      candidates.push((origin.previewWidth + dx) / basePreview.width)
     }
     if (origin.edge.includes('w')) {
-      candidates.push((origin.previewWidth - dx) / BASE_PREVIEW_WIDTH)
+      candidates.push((origin.previewWidth - dx) / basePreview.width)
     }
     if (origin.edge.includes('s')) {
-      candidates.push((origin.previewHeight + dy) / BASE_PREVIEW_HEIGHT)
+      candidates.push((origin.previewHeight + dy) / basePreview.height)
     }
     if (origin.edge.includes('n')) {
-      candidates.push((origin.previewHeight - dy) / BASE_PREVIEW_HEIGHT)
+      candidates.push((origin.previewHeight - dy) / basePreview.height)
     }
-    const current = origin.previewWidth / BASE_PREVIEW_WIDTH
+    const current = origin.previewWidth / basePreview.width
     return candidates.reduce((best, candidate) =>
       Math.abs(candidate - current) > Math.abs(best - current) ? candidate : best
     )
@@ -230,6 +306,13 @@
     }
   }
 
+  // Report the demand the preview implies so main captures at the resolution
+  // this footprint actually paints. Suppressed while hidden: an overlay the user
+  // cannot see must not make main encode larger frames.
+  $effect(() => {
+    pipState.setFrameDemand(visible ? frameDemand : PREVIEW_ALLOWANCE_WIDTH * pixelRatio)
+  })
+
   // The preview floats above every DOM surface, but the in-app browser is a
   // native view the compositor paints above the whole renderer, so the browser
   // has to detach its view while this overlay covers it (see
@@ -240,8 +323,8 @@
     if (!visible) return
     if (overlaySize.width < 1 || overlaySize.height < 1) return
     browserVisibility.publishOcclusion(occlusionKey, {
-      x: position.x,
-      y: position.y,
+      x: displayPosition.x,
+      y: displayPosition.y,
       width: overlaySize.width,
       height: overlaySize.height
     })
@@ -252,6 +335,10 @@
    *  off screen, or keep it at a scale the viewport can no longer fit. Bound
    *  through `<svelte:window>`, so no effect listens for the event. */
   function onViewportResize(): void {
+    // Refresh first: this handler runs whether or not the overlay is on screen,
+    // and a scaled-up preview must re-report its device width after the window
+    // moved to a display with a different ratio.
+    pixelRatio = window.devicePixelRatio || 1
     if (!visible) return
     const nextScale = clampScale(scale)
     scale = nextScale
@@ -344,7 +431,7 @@
   <div
     {@attach anchorOverlay}
     class="fixed z-50 touch-none select-none rounded-xl border bg-surface shadow-2xl"
-    style="left: {position.x}px; top: {position.y}px;"
+    style="left: {displayPosition.x}px; top: {displayPosition.y}px;"
     role="group"
     aria-label="Computer-use preview for {pipState.appName}"
   >

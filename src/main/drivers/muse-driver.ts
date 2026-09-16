@@ -16,8 +16,8 @@ import type {
 } from '../../lib/types'
 import {
   classifyProviderIssue,
-  extractProviderErrorEnvelope,
-  parseUsageResetAt
+  parseUsageResetAt,
+  presentProviderError
 } from '../../lib/provider-issue'
 import { THINKING_LEVEL_ORDER } from '../../lib/thinking-presets'
 import {
@@ -418,13 +418,15 @@ function museToolNeedsPermission(toolName: string): boolean {
 }
 
 function museIssue(error: string): AgentProviderIssue {
-  const envelope = extractProviderErrorEnvelope(error)
+  // Muse reports an in-runtime crash as the exception text itself; keep the
+  // card body to the header line and the trace in Raw Error.
+  const presentation = presentProviderError(error)
   const kind = classifyProviderIssue(error)
   const retryAt =
-    kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(envelope.message) : undefined
+    kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(presentation.message) : undefined
   return {
     kind,
-    message: envelope.message,
+    message: presentation.message,
     rawError: error,
     harnessId: 'muse',
     retryable: retryAt !== undefined || kind === 'quota' || kind === 'rate_limit',

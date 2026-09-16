@@ -48,7 +48,7 @@
   import type { SettingsSearchEntry } from '$lib/settings-search'
   import type { ActionDefinition, ActionSelection } from '../../actions/types'
   import ProvidersView from '../providers/ProvidersView.svelte'
-  import UtilitiesView from './UtilitiesView.svelte'
+  import UtilitiesView, { type UtilitiesTab } from './UtilitiesView.svelte'
   import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
   import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
@@ -102,15 +102,24 @@
   let channelBusy = $state(false)
 
   type UtilitiesRoute =
-    { page: 'catalog' } | { page: 'marketplace' } | { page: 'skill'; entry: SkillMarketEntry }
+    | { page: 'catalog'; tab: UtilitiesTab }
+    | { page: 'marketplace' }
+    | { page: 'skill'; entry: SkillMarketEntry }
 
   interface SettingsHistoryEntry {
     section: SettingsSection
     utilitiesRoute: UtilitiesRoute
   }
 
-  let utilitiesRoute = $state<UtilitiesRoute>({ page: 'catalog' })
+  let utilitiesRoute = $state<UtilitiesRoute>({ page: 'catalog', tab: 'all' })
   let settingsHistory = $state<SettingsHistoryEntry[]>([])
+
+  /**
+   * True from the moment the marketplace is opened until the utilities section is
+   * left again. It keeps the marketplace mounted (invisibly) behind the catalog and
+   * behind a skill page, so Back restores the results instead of rebuilding them.
+   */
+  let marketplaceVisited = $state(false)
 
   function currentSettingsLocation(): SettingsHistoryEntry {
     return { section, utilitiesRoute }
@@ -124,13 +133,33 @@
       return
     }
     settingsHistory = [...settingsHistory, currentSettingsLocation()]
-    utilitiesRoute = { page: 'catalog' }
+    utilitiesRoute = { page: 'catalog', tab: 'all' }
+    marketplaceVisited = false
     onNavigateSection(nextSection)
   }
 
   function navigateUtilities(nextRoute: UtilitiesRoute): void {
     settingsHistory = [...settingsHistory, currentSettingsLocation()]
+    if (nextRoute.page === 'marketplace') marketplaceVisited = true
     utilitiesRoute = nextRoute
+  }
+
+  /** Section tabs are one page, so switching them replaces the route, never the history. */
+  function selectUtilitiesTab(tab: UtilitiesTab): void {
+    if (utilitiesRoute.page !== 'catalog') return
+    utilitiesRoute = { page: 'catalog', tab }
+  }
+
+  /** Utilities section on screen. The catalog route owns it, so Back stays truthful. */
+  let catalogTab = $derived<UtilitiesTab>(
+    utilitiesRoute.page === 'catalog' ? utilitiesRoute.tab : 'all'
+  )
+
+  /** Where the skill page's back control returns to, and what it is called. */
+  function skillDetailBackLabel(): string {
+    return settingsHistory.at(-1)?.utilitiesRoute.page === 'marketplace'
+      ? 'Back to results'
+      : 'Back to utilities'
   }
 
   function goBack(): void {
@@ -141,6 +170,7 @@
     }
     settingsHistory = settingsHistory.slice(0, -1)
     utilitiesRoute = previous.utilitiesRoute
+    if (previous.utilitiesRoute.page === 'marketplace') marketplaceVisited = true
     if (previous.section !== section) onNavigateSection(previous.section)
   }
 
@@ -370,7 +400,7 @@
     const unsubscribePermissionStatus = subscribe('notification:permissionStatus', (status) => {
       notificationPermission = status
     })
-    // The user may have just toggled notifications in System Settings  
+    // The user may have just toggled notifications in System Settings
     // returning to the app must re-derive the state instead of showing a
     // stale warning.
     const onWindowFocus = (): void => {
@@ -938,17 +968,47 @@
     {:else if section === 'harnesses'}
       <ProvidersView />
     {:else if section === 'utilities'}
-      {#if utilitiesRoute.page === 'catalog'}
-        <UtilitiesView onOpenMarketplace={() => navigateUtilities({ page: 'marketplace' })} />
-      {:else if utilitiesRoute.page === 'marketplace'}
-        <SkillsMarketplaceView
-          onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
-        />
-      {:else}
-        {#key utilitiesRoute.entry.id}
-          <SkillMarketplaceDetail entry={utilitiesRoute.entry} />
-        {/key}
-      {/if}
+      <!--
+        Every utilities page stays mounted once visited: the active one is painted,
+        the others wait invisibly with their query, results, and scroll intact. That
+        is what lets Back restore the exact page the user left, and what makes the
+        bookmarks shortcut on the marketplace a round trip instead of a reset.
+      -->
+      <div class="relative h-full min-h-0 overflow-hidden">
+        <div
+          class="absolute inset-0 overflow-y-auto {utilitiesRoute.page === 'catalog'
+            ? ''
+            : 'invisible'}"
+        >
+          <UtilitiesView
+            activeTab={catalogTab}
+            onSelectTab={selectUtilitiesTab}
+            onOpenMarketplace={() => navigateUtilities({ page: 'marketplace' })}
+            onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
+          />
+        </div>
+        {#if marketplaceVisited}
+          <div class="absolute inset-0 {utilitiesRoute.page === 'marketplace' ? '' : 'invisible'}">
+            <SkillsMarketplaceView
+              onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
+              onOpenBookmarks={() => navigateUtilities({ page: 'catalog', tab: 'bookmarks' })}
+            />
+          </div>
+        {/if}
+        {#if utilitiesRoute.page === 'skill'}
+          <!-- The skill page owns its scrolling: a pinned identity header and a body
+               pane that scrolls under it. -->
+          <div class="absolute inset-0 overflow-hidden bg-app">
+            {#key utilitiesRoute.entry.id}
+              <SkillMarketplaceDetail
+                entry={utilitiesRoute.entry}
+                backLabel={skillDetailBackLabel()}
+                onBack={goBack}
+              />
+            {/key}
+          </div>
+        {/if}
+      </div>
     {:else if section === 'computer-use'}
       <CuaBridgeSettings />
     {:else if section === 'sound'}

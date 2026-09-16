@@ -1,4 +1,5 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { scheduleDeferredWork } from '$lib/deferred-work'
 import { ipcErrorMessage } from '$lib/ipc-errors'
 import { APP_SLUG } from '$shared/brand'
 import type {
@@ -309,7 +310,7 @@ export class GitState {
     this.activeProjectId = projectId
     this.activeScopeBucketId = scopeBucketId
     this.clearProjectState()
-    queueMicrotask(() => void this.refresh(projectId).catch(() => {}))
+    this.scheduleRefresh(projectId)
   }
 
   /** The scope-qualified Git target used by status reads. */
@@ -363,11 +364,31 @@ export class GitState {
     if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
     if (!project.path.trim()) return
     const scopeBucketId = thread?.scopeBucketId ?? null
+    // A scope target is what Git cares about, not a thread. Switching between
+    // two threads of the same project and scope changes nothing here, so this
+    // returns before touching status: no read, no blank panel, no worktree
+    // discovery.
     const targetChanged =
       this.activeProjectId !== project.id || this.activeScopeBucketId !== scopeBucketId
+    // Claim the target synchronously so the panel can never show another
+    // scope's state, then read the new one *after* the switch has painted.
     this.activate(project.id, thread?.scopeBucketId ?? undefined)
     if (!targetChanged) return
-    queueMicrotask(() => void this.refresh(project.id).catch(() => {}))
+    this.scheduleRefresh(project.id)
+  }
+
+  /**
+   * Queue a status/branches/PR read for after the current view switch has
+   * painted. This only runs when the scope target actually moves   a thread
+   * switch inside one scope never reaches it, because `activate` and
+   * `targetChanged` both short-circuit above. When it does run it fans out to
+   * six repository reads plus worktree discovery, and running all of that in
+   * the same instant as the conversation mount made a scope switch feel slow.
+   * Deferring it keeps the panel's data honestly late rather than the
+   * conversation's paint honestly slow.
+   */
+  private scheduleRefresh(projectId: string): void {
+    scheduleDeferredWork('git:refresh', () => void this.refresh(projectId).catch(() => {}))
   }
 
   /**

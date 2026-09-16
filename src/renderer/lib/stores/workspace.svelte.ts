@@ -13,6 +13,8 @@ import { rendererRecovery } from './renderer-recovery.svelte'
 import { notificationPanelState } from './notification-panel.svelte'
 import { gitState } from './git.svelte'
 import { openComposerFocusWindow } from '$lib/focus/composer-focus'
+import { scheduleDeferredWork } from '$lib/deferred-work'
+import { threadMessages } from './thread-messages.svelte'
 import { scopeState } from './scope.svelte'
 import { APP_SLUG } from '$shared/brand'
 import { invoke } from '$lib/ipc.svelte'
@@ -162,6 +164,13 @@ class WorkspaceState {
     // guard window so sidebar tools re-attaching around the switch (terminal
     // panels, action terminals) never steal focus back from the composer.
     openComposerFocusWindow()
+    // Start the message read in the same tick as the selection, before the
+    // conversation view mounts. Every switch path (sidebar click, Ctrl+Tab,
+    // notification, restore) then opens against an in-flight load instead of
+    // starting one only after mount, which is what made cold switches show
+    // "Loading conversation…". In-flight loads are shared, so the view's own
+    // load never duplicates this read.
+    void threadMessages.preload(thread.projectId, thread.id)
     const visitKey = threadVisitKey(thread)
     this.recentThreadVisits = [
       visitKey,
@@ -172,7 +181,6 @@ class WorkspaceState {
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null
     this.sourceProcessCount = 0
-    void this.refreshSourceProcessCount(thread.projectId, thread.id)
     contextSidebarState.activateThread(thread.projectId, thread.id, thread.title)
     rendererRecovery.setSelectedThread(thread.projectId, thread.id)
     // Opening a thread re-anchors the project's active scope (file manager,
@@ -185,6 +193,12 @@ class WorkspaceState {
     // The moment a thread is opened its notifications are stale — drop them so
     // an error/completion that was already seen never lingers in the panel.
     notificationPanelState.dismissForThread(thread.projectId, thread.id)
+    // The live process count is a badge, and reading it walks a session's
+    // process table. It must never share the switch instant with the
+    // conversation mount.
+    scheduleDeferredWork('workspace:sourceProcessCount', () => {
+      void this.refreshSourceProcessCount(thread.projectId, thread.id)
+    })
   }
 
   /** The project's active scope bucket: the open thread's bucket when it belongs

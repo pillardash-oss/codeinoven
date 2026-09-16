@@ -6,6 +6,10 @@
  * so a run that spends minutes on `git worktree add`, the environment copy and
  * the setup commands is always visible, expandable and dockable instead of
  * flashing past as a toast.
+ *
+ * An agent's run (`cio:scope`) is the same kind of job: it streams the same
+ * stages on the same channel, so the first event mints the job record here and
+ * the run becomes visible exactly like one the user started in this window.
  */
 
 import { subscribe } from '$lib/ipc.svelte'
@@ -17,8 +21,10 @@ import type {
   ScopeWorktreeProgressEvent
 } from '$shared/types'
 
-export type ScopeJobKind = 'create' | 'adopt'
+export type ScopeJobKind = 'create' | 'adopt' | 'agent'
 export type ScopeJobStatus = 'running' | 'succeeded' | 'failed'
+/** Who started a worktree run: the user in this window, or an agent turn. */
+export type ScopeJobOrigin = 'user' | 'agent'
 
 /** Ordered steps of a managed-worktree job, as shown in the panel checklist. */
 export const SCOPE_JOB_STAGES = [
@@ -66,6 +72,8 @@ export interface ScopeJob {
   /** Bucket the job belongs to; null until a brand new scope's bucket exists. */
   scopeBucketId: string | null
   kind: ScopeJobKind
+  /** Who started the run, so the panel can say an agent did it. */
+  origin: ScopeJobOrigin
   /** Scope display name, used by the panel header and the dock chip. */
   title: string
   /** Whether the run creates or adopts an isolated Git worktree. */
@@ -112,7 +120,21 @@ function worktreeSteps(runSetup: boolean): readonly ScopeWorktreeStage[] {
 
 class ScopeJobStore {
   jobs = $state<ScopeJob[]>([])
-  #unsubscribe: (() => void) | null = null
+  /** True once the app-lifetime progress listener is attached. */
+  #listening = false
+
+  /**
+   * Listen for worktree progress from app start, not from the first local job:
+   * an agent's run has no renderer-owned record until its first progress event,
+   * and that event is what mints one here so the run is visible while it works.
+   * The store is a module singleton living as long as the window, so nothing
+   * ever needs to detach it; the flag only keeps the call idempotent.
+   */
+  listen(): void {
+    if (this.#listening) return
+    this.#listening = true
+    subscribe('scope:worktree:progress', (event) => this.#applyProgress(event))
+  }
 
   /**
    * Create a scope and, when requested, its managed worktree. An existing
@@ -171,7 +193,6 @@ class ScopeJobStore {
     const job = this.jobs.find((candidate) => candidate.id === id)
     if (!job || job.status === 'running') return
     this.jobs = this.jobs.filter((candidate) => candidate.id !== id)
-    this.#releaseWhenIdle()
   }
 
   storageKeyFor(id: string): string {
@@ -252,16 +273,19 @@ class ScopeJobStore {
     projectId: string
     scopeBucketId: string | null
     kind: ScopeJobKind
+    origin?: ScopeJobOrigin
     title: string
     isolated: boolean
     steps: readonly ScopeWorktreeStage[]
     setupCommandCount: number
+    minimized?: boolean
   }): ScopeJob {
     const job: ScopeJob = {
       id: crypto.randomUUID(),
       projectId: input.projectId,
       scopeBucketId: input.scopeBucketId,
       kind: input.kind,
+      origin: input.origin ?? 'user',
       title: input.title,
       isolated: input.isolated,
       steps: input.steps,
@@ -271,12 +295,11 @@ class ScopeJobStore {
       error: null,
       setupCommandCount: input.setupCommandCount,
       result: null,
-      minimized: false,
+      minimized: input.minimized ?? false,
       startedAt: Date.now(),
       finishedAt: null
     }
     this.jobs = [...this.jobs, job]
-    this.#ensureSubscribed()
     return job
   }
 
@@ -298,20 +321,6 @@ class ScopeJobStore {
     this.jobs = this.jobs.map((job) => (job.id === id ? { ...job, ...patch } : job))
   }
 
-  /** Subscribe once, lazily: only a running job can receive progress. */
-  #ensureSubscribed(): void {
-    this.#unsubscribe ??= subscribe('scope:worktree:progress', (progress) =>
-      this.#applyProgress(progress)
-    )
-  }
-
-  /** Drop the progress listener once no job is left to receive stages. */
-  #releaseWhenIdle(): void {
-    if (this.jobs.length > 0) return
-    this.#unsubscribe?.()
-    this.#unsubscribe = null
-  }
-
   #applyProgress(event: ScopeWorktreeProgressEvent): void {
     const running = this.jobs.filter(
       (job) => job.status === 'running' && job.projectId === event.projectId
@@ -320,7 +329,8 @@ class ScopeJobStore {
     // project, so a queued sibling job must never steal the live stages.
     const job =
       running.find((candidate) => candidate.scopeBucketId === event.scopeBucketId) ??
-      running.find((candidate) => candidate.scopeBucketId === null)
+      running.find((candidate) => candidate.scopeBucketId === null) ??
+      this.#mintAgentJob(event)
     if (!job) return
     const stage: ScopeWorktreeProgress = {
       stage: event.stage,
@@ -338,6 +348,28 @@ class ScopeJobStore {
       return
     }
     this.#patch(job.id, { stage, failedStage: null })
+  }
+
+  /**
+   * A worktree run an agent started has no job record in this window, so its
+   * first progress event mints one: the run is app-owned work and must be
+   * visible (and pinnable from the dock) while it runs, exactly like a run the
+   * user started here. It lands minimized because an agent run is news, not a
+   * panel the user just opened.
+   */
+  #mintAgentJob(event: ScopeWorktreeProgressEvent): ScopeJob | null {
+    if (event.origin !== 'agent') return null
+    return this.#push({
+      projectId: event.projectId,
+      scopeBucketId: event.scopeBucketId,
+      kind: 'agent',
+      origin: 'agent',
+      title: event.title?.trim() || 'Worktree run',
+      isolated: true,
+      steps: worktreeSteps(true),
+      setupCommandCount: 0,
+      minimized: true
+    })
   }
 }
 

@@ -18,14 +18,23 @@ import { UTILITY_KIND_VALUES } from '../../lib/types'
 import { ALL_HARNESSES_BINDING_ID } from '../../lib/types'
 import { generateId } from '../../lib/utils'
 import { RETRIEVE_MCP_HOST_TOOL_NAME } from '../../lib/gateway-tools'
+import {
+  SCOPE_CAPABILITY_DOCS,
+  SCOPE_CAPABILITY_NAME,
+  SCOPE_CAPABILITY_SUMMARY
+} from '../../lib/scope-tool'
 import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 // Sourced from the shared `lib/utility-ids` module (and re-exported here for
 // existing consumers) so browser-bound renderer code   which imports these ids
 // from `lib/agent-behavior`   never pulls this main-process service (and its
 // `fs`-importing `utils` dependency) into client bundles.
-import { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID } from '../../lib/utility-ids'
-export { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID }
+import {
+  APP_BROWSER_UTILITY_ID,
+  APP_CUA_DRIVER_UTILITY_ID,
+  APP_SCOPE_UTILITY_ID
+} from '../../lib/utility-ids'
+export { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID, APP_SCOPE_UTILITY_ID }
 
 const REGISTRY_PATH = 'utilities/registry.json'
 const REGISTRY_VERSION = 1
@@ -78,7 +87,7 @@ export class UtilityRegistryService {
   /** In-flight seeding guard so concurrent callers share one seed write. */
   private seeding: Promise<void> | null = null
 
-  constructor(private readonly storage: StorageEngine) { }
+  constructor(private readonly storage: StorageEngine) {}
 
   /** Every public entry point first guarantees the app-owned default utility. */
   private async ensureAppDefaultsSeeded(): Promise<void> {
@@ -130,8 +139,7 @@ export class UtilityRegistryService {
         activation: 'always',
         scope: { level: 'global' },
         config: {
-          instructions:
-            `This app-owned utility is always active. If the app-managed gateway is unreachable, use the exact ${RETRIEVE_MCP_HOST_TOOL_NAME} shell command supplied in the current turn instructions. Do not search for or activate this utility first; its shell transport is intentionally independent of MCP.`
+          instructions: `This app-owned utility is always active. If the app-managed gateway is unreachable, use the exact ${RETRIEVE_MCP_HOST_TOOL_NAME} shell command supplied in the current turn instructions. Do not search for or activate this utility first; its shell transport is intentionally independent of MCP.`
         },
         credentials: [],
         harnessBindings: harnesses.map((harness) => ({
@@ -183,6 +191,25 @@ export class UtilityRegistryService {
           strategy: 'mcp' as const,
           nativeCapability: 'computer_use',
           transportName: 'cua-driver'
+        })),
+        appOwned: true,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        id: APP_SCOPE_UTILITY_ID,
+        kind: 'skill',
+        name: SCOPE_CAPABILITY_NAME,
+        description: SCOPE_CAPABILITY_SUMMARY,
+        enabled: true,
+        activation: 'on_demand',
+        scope: { level: 'global' },
+        config: { instructions: SCOPE_CAPABILITY_DOCS },
+        credentials: [],
+        harnessBindings: harnesses.map((harness) => ({
+          harnessId: harness.id,
+          strategy: 'native' as const,
+          nativeCapability: 'scope'
         })),
         appOwned: true,
         createdAt: now,
@@ -405,8 +432,8 @@ export class UtilityRegistryService {
 
       const implicitCapability =
         utility.kind === 'web_search' ||
-          utility.kind === 'web_fetch' ||
-          utility.kind === 'computer_use'
+        utility.kind === 'web_fetch' ||
+        utility.kind === 'computer_use'
           ? utility.kind
           : undefined
       const capability = binding.nativeCapability
@@ -623,12 +650,12 @@ function parseCredentials(value: unknown): UtilityCredentialMetadata[] {
       required: entry['required'] === true,
       ...(optionalString(entry['environmentVariable'], 'Credential environment variable', 160)
         ? {
-          environmentVariable: optionalString(
-            entry['environmentVariable'],
-            'Credential environment variable',
-            160
-          )
-        }
+            environmentVariable: optionalString(
+              entry['environmentVariable'],
+              'Credential environment variable',
+              160
+            )
+          }
         : {})
     }
     if (entry['required'] !== true && entry['required'] !== false) {
@@ -669,8 +696,8 @@ function parseBindings(value: unknown): HarnessUtilityBinding[] {
       ...(entry['options'] === undefined
         ? {}
         : {
-          options: checkedNonSecretRecord(entry['options'], 'Harness binding options')
-        })
+            options: checkedNonSecretRecord(entry['options'], 'Harness binding options')
+          })
     }
     if (harnesses.has(binding.harnessId)) {
       throw new TypeError(`Duplicate harness binding: ${binding.harnessId}`)

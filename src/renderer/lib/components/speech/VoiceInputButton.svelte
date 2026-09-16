@@ -1,17 +1,27 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { Mic, TriangleAlert } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import RecordingIndicator from './RecordingIndicator.svelte'
+  import VoiceSendIndicator from './VoiceSendIndicator.svelte'
   import WaveBars from './WaveBars.svelte'
   import { speechSettingsStore } from '$lib/stores/speech.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { isMacPlatform } from '$lib/keymap/keymap'
   import { logRendererError } from '$lib/system/renderer-logger'
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type { SpeechEditorSnapshot, SpeechEditorTarget } from '../../speech/editor-target'
   import { speechController } from '../../speech/speech-controller.svelte'
   import { registerVoiceTriggerHost } from '../../speech/voice-trigger-registry'
+
+  /**
+   * How long a click on the processing icon is held back before it starts a new
+   * recording. It exists only to tell a single click from the double-click that
+   * arms the automatic send of the transcript being produced, so it is sized to
+   * the slower end of a comfortable double-click rather than to a snappy restart.
+   */
+  const VOICE_SEND_DOUBLE_CLICK_MS = 320
 
   interface Props {
     targetId: string
@@ -126,6 +136,10 @@
 
   const belongsHere = $derived(speechController.isActiveTarget(targetId))
   const transcribingHere = $derived(speechController.isTranscribingTarget(targetId))
+  /** Armed delivery stage of the transcription in flight, if the user armed it. */
+  const voiceSendStage = $derived(speechController.voiceSendStageForTarget(targetId))
+  const canAutoSendVoice = $derived(speechController.canAutoSendVoice(targetId))
+  const sendChord = isMacPlatform() ? '⌘⇧Enter' : 'Ctrl+⇧Enter'
   const activeRecordingScope = $derived(speechController.recordingScope)
   const recordingHere = $derived(
     activeRecordingScope !== null &&
@@ -158,6 +172,13 @@
       return 'wait' as const
     return 'start' as const
   })
+  /** What an armed transcription will do once its transcript lands. */
+  const voiceSendLabel = $derived.by((): string | null => {
+    if (!voiceSendStage) return null
+    return voiceSendStage === 'steer'
+      ? `Voice message will steer the running turn when the transcription finishes (${sendChord})`
+      : `Voice message will be sent when the transcription finishes (${sendChord} to steer it instead)`
+  })
   const label = $derived.by(() => {
     if (action === 'stop') return 'Stop voice recording'
     if (action === 'blocked')
@@ -174,10 +195,61 @@
           ? 'Stopping voice recording'
           : 'Transcribing voice recording'
     }
-    if (transcribingHere)
-      return 'Transcribing your last recording   click to start a new one'
+    if (transcribingHere) {
+      const armed = voiceSendLabel
+      if (armed) return `Transcribing your last recording   ${armed}`
+      return canAutoSendVoice
+        ? `Transcribing your last recording   double-click to send it automatically, or click to start a new one`
+        : 'Transcribing your last recording   click to start a new one'
+    }
     return 'Start voice recording'
   })
+
+  /**
+   * A click on the processing icon normally starts the next recording, but a
+   * double-click arms the automatic send of the transcript on its way. The
+   * single-click meaning is held back by one double-click window so the arming
+   * gesture never also starts a recording underneath it.
+   */
+  let pendingRestart: ReturnType<typeof setTimeout> | null = null
+  let lastProcessingClickAt = 0
+
+  function clearPendingRestart(): void {
+    if (pendingRestart) clearTimeout(pendingRestart)
+    pendingRestart = null
+  }
+
+  function armVoiceSend(): void {
+    lastProcessingClickAt = 0
+    clearPendingRestart()
+    speechController.armVoiceSend({ targetId })
+  }
+
+  function activateFromClick(): void {
+    if (!transcribingHere || !canAutoSendVoice) {
+      void activate()
+      return
+    }
+    const now = performance.now()
+    if (now - lastProcessingClickAt <= VOICE_SEND_DOUBLE_CLICK_MS) {
+      armVoiceSend()
+      return
+    }
+    lastProcessingClickAt = now
+    clearPendingRestart()
+    pendingRestart = setTimeout(() => {
+      pendingRestart = null
+      // The hold-back exists to separate the gesture from a double-click. The
+      // transcript may land inside that window, which rewrites the editor this
+      // recording was prepared against, so re-capture the target and its
+      // snapshot now instead of starting against a value that no longer exists.
+      preparedTarget = null
+      preparedSnapshot = null
+      void activate()
+    }, VOICE_SEND_DOUBLE_CLICK_MS)
+  }
+
+  onDestroy(clearPendingRestart)
 
   function prepareTarget(): void {
     if (disabled || action !== 'start') return
@@ -291,7 +363,7 @@
     onkeydown={(event) => {
       if (event.key === 'Enter' || event.key === ' ') prepareTarget()
     }}
-    onclick={() => void activate()}
+    onclick={activateFromClick}
   >
     {#if action === 'stop'}
       <RecordingIndicator decorative />
@@ -300,7 +372,11 @@
     {:else if action === 'wait'}
       <WaveBars decorative label="Transcribing voice recording" />
     {:else if transcribingHere}
-      <WaveBars decorative label="Transcribing your last recording   click to start a new one" />
+      {#if voiceSendStage}
+        <VoiceSendIndicator stage={voiceSendStage} decorative />
+      {:else}
+        <WaveBars decorative label="Transcribing your last recording" />
+      {/if}
     {:else}
       <Mic size={14} aria-hidden="true" />
     {/if}

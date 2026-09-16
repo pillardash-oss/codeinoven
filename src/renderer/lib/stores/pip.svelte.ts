@@ -28,6 +28,9 @@ class PipState {
   activity = $state<Record<string, ComputerUseActivity>>({})
 
   private cleanups: Array<() => void> = []
+  /** Last device width reported to main, so an unchanged demand never costs an
+   *  IPC round trip. Not reactive: nothing in the UI renders from it. */
+  private reportedFrameWidth = 0
 
   init(): void {
     const unsubFrame = subscribe('computerUse:pipFrame', (frame: ComputerUsePipFrame) => {
@@ -84,6 +87,22 @@ class PipState {
     } catch {
       // The target app may have quit — the next state event hides the overlay.
     }
+  }
+
+  /**
+   * Tell main how many device pixels wide the preview is about to be painted, so
+   * the captured frame is never upscaled. Called by the overlay whenever its
+   * footprint changes; repeated values are dropped here.
+   */
+  setFrameDemand(deviceWidth: number): void {
+    const next = Math.round(deviceWidth)
+    if (next <= 0 || next === this.reportedFrameWidth) return
+    this.reportedFrameWidth = next
+    void invoke('computerUse:pipSetFrameWidth', next).catch(() => {
+      // Main may no longer own the PiP service; the next change reports again,
+      // so a dropped demand is never permanent.
+      this.reportedFrameWidth = 0
+    })
   }
 
   async dismiss(): Promise<void> {

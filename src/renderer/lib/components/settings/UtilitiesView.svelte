@@ -3,6 +3,7 @@
   import {
     AlertTriangle,
     BookOpen,
+    Bookmark,
     Boxes,
     Globe2,
     KeyRound,
@@ -26,28 +27,38 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import { publicAssetUrl } from '$lib/static-assets'
   import Switch from '../ui/Switch.svelte'
+  import SkillBookmarkButton from './SkillBookmarkButton.svelte'
   import UtilityEditorModal, { type UtilityEditorTarget } from './UtilityEditorModal.svelte'
+  import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
   import { APP_NAME } from '$shared/brand'
   import type {
     AgentCapabilityEntry,
     AgentToolDefinition,
+    SkillMarketEntry,
     UtilityBundleInstallRequest,
     UtilityDefinition,
     UtilityKind
   } from '$shared/types'
   import { ALL_HARNESSES_BINDING_ID } from '$shared/types'
 
+  /** Sections of the Utilities page; the selected one lives in the settings route. */
+  export type UtilitiesTab = 'all' | 'skills' | 'bookmarks' | 'mcp' | 'plugins' | 'web' | 'tools'
+
   interface Props {
+    /** Section currently on screen. */
+    activeTab: UtilitiesTab
+    onSelectTab: (tab: UtilitiesTab) => void
     onOpenMarketplace: () => void
+    /** Opens one marketplace skill from the bookmarks list. */
+    onOpenSkill: (entry: SkillMarketEntry) => void
   }
 
-  let { onOpenMarketplace }: Props = $props()
+  let { activeTab, onSelectTab, onOpenMarketplace, onOpenSkill }: Props = $props()
 
   const cioIconUrl = publicAssetUrl('icon.svg')
 
-  type Tab = 'all' | 'skills' | 'mcp' | 'plugins' | 'web' | 'tools'
-
-  type RowItem =
+  /** An installed utility or harness capability row. */
+  type UtilityRowItem =
     | {
         id: string
         src: 'registry'
@@ -69,6 +80,18 @@
         tags: string[]
       }
 
+  /** A marketplace skill the user bookmarked without installing it. */
+  type BookmarkRowItem = {
+    id: string
+    src: 'bookmark'
+    entry: SkillMarketEntry
+    name: string
+    description: string
+    tags: string[]
+  }
+
+  type RowItem = UtilityRowItem | BookmarkRowItem
+
   interface ToolGroup {
     key: string
     definition: AgentToolDefinition
@@ -84,32 +107,49 @@
   let loading = $state(true)
   let error = $state('')
   let query = $state('')
-  let activeTab = $state<Tab>('all')
   let scopeFilter = $state('all')
   let editorOpen = $state(false)
   let editorTarget = $state<UtilityEditorTarget | null>(null)
   let pluginManifest = $state('')
 
-  let tabs: Array<{ id: Tab; label: string }> = [
+  let tabs: Array<{ id: UtilitiesTab; label: string }> = [
     { id: 'all', label: 'All' },
     { id: 'skills', label: 'Skills' },
+    { id: 'bookmarks', label: 'Bookmarks' },
     { id: 'mcp', label: 'MCP' },
     { id: 'plugins', label: 'Plugins' },
     { id: 'web', label: 'Web & browser' },
     { id: 'tools', label: 'Tools' }
   ]
 
-  const TAB_BLURB: Record<Tab, string> = {
+  const TAB_BLURB: Record<UtilitiesTab, string> = {
     all: `Every skill, MCP server, browser, and web utility installed in ${APP_NAME}.`,
     skills: 'Skills for every harness plus the shared global layer.',
+    bookmarks:
+      'Marketplace skills you bookmarked, without installing them, so they stay one click away.',
     mcp: 'MCP servers for every harness plus the shared global layer.',
     plugins: 'Install a plugin bundle that adds capabilities together.',
     web: 'Browser control, web search, web fetch, provider, and image-description utilities.',
     tools: 'Inspect stable tool references and the exact schemas exposed to agent models.'
   }
 
-  const isListTab = (tab: Tab): boolean =>
-    tab === 'all' || tab === 'skills' || tab === 'mcp' || tab === 'web' || tab === 'tools'
+  const isListTab = (tab: UtilitiesTab): boolean =>
+    tab === 'all' ||
+    tab === 'skills' ||
+    tab === 'bookmarks' ||
+    tab === 'mcp' ||
+    tab === 'web' ||
+    tab === 'tools'
+
+  const SEARCH_PLACEHOLDER: Record<UtilitiesTab, string> = {
+    all: 'Search all utilities',
+    skills: 'Search skills',
+    bookmarks: 'Search bookmarked skills',
+    mcp: 'Search MCP servers',
+    plugins: 'Search plugins',
+    web: 'Search web & browser utilities',
+    tools: 'Search names, sources, and descriptions'
+  }
 
   function harnessName(harnessId: string): string {
     return (
@@ -148,7 +188,7 @@
     ]
   }
 
-  function nativeRows(entries: AgentCapabilityEntry[]): RowItem[] {
+  function nativeRows(entries: AgentCapabilityEntry[]): UtilityRowItem[] {
     return entries.map((entry) => ({
       id: entry.id,
       src: 'native' as const,
@@ -161,7 +201,7 @@
     }))
   }
 
-  function registryRows(utilities: UtilityDefinition[]): RowItem[] {
+  function registryRows(utilities: UtilityDefinition[]): UtilityRowItem[] {
     return utilities.map((utility) => ({
       id: `registry:${utility.id}`,
       src: 'registry' as const,
@@ -211,10 +251,23 @@
     if (activeTab === 'web') {
       return registryRows(utilities.filter((utility) => WEB_KINDS.includes(utility.kind)))
     }
+    if (activeTab === 'bookmarks') return bookmarkRows()
     return []
   }
 
-  function rowIcon(row: RowItem): typeof BookOpen {
+  /** Bookmarked marketplace skills, newest bookmark first. */
+  function bookmarkRows(): BookmarkRowItem[] {
+    return skillBookmarkState.bookmarks.map((bookmark) => ({
+      id: `bookmark:${bookmark.id}`,
+      src: 'bookmark' as const,
+      entry: bookmark,
+      name: bookmark.name,
+      description: bookmark.source,
+      tags: []
+    }))
+  }
+
+  function rowIcon(row: UtilityRowItem): typeof BookOpen {
     const kind = row.src === 'registry' ? row.utility.kind : row.entry.kind
     if (kind === 'skill') return BookOpen
     if (kind === 'mcp') return Server
@@ -222,7 +275,7 @@
     return Globe2
   }
 
-  function rowKindBadge(row: RowItem): string {
+  function rowKindBadge(row: UtilityRowItem): string {
     if (row.src === 'registry') {
       if (row.utility.kind === 'skill') return 'Skill'
       if (row.utility.kind === 'mcp') return 'MCP'
@@ -241,10 +294,16 @@
     return tags
   })
 
+  /**
+   * Tag filter that actually applies. A tag carried over from another section
+   * falls back to "all", so switching sections is never silently emptied.
+   */
+  let activeTagFilter = $derived(availableTags.includes(scopeFilter) ? scopeFilter : 'all')
+
   let filteredRows = $derived.by(() => {
     const needle = query.trim().toLowerCase()
     return tabRows().filter((row) => {
-      if (scopeFilter !== 'all' && !row.tags.includes(scopeFilter)) return false
+      if (activeTagFilter !== 'all' && !row.tags.includes(activeTagFilter)) return false
       if (!needle) return true
       return [row.name, row.description, ...row.tags].some((value) =>
         value.toLowerCase().includes(needle)
@@ -353,7 +412,7 @@
     editorOpen = true
   }
 
-  function openEdit(row: RowItem): void {
+  function openEdit(row: UtilityRowItem): void {
     if (row.src === 'registry') {
       editorTarget = { kind: 'registry', utility: row.utility }
     } else {
@@ -386,7 +445,7 @@
     else void load()
   }
 
-  async function toggleEnabled(row: RowItem): Promise<void> {
+  async function toggleEnabled(row: UtilityRowItem): Promise<void> {
     if (row.src !== 'registry') return
     error = ''
     try {
@@ -400,7 +459,7 @@
     }
   }
 
-  let deleteTarget = $state<RowItem | null>(null)
+  let deleteTarget = $state<UtilityRowItem | null>(null)
   let deleting = $state(false)
 
   async function confirmDelete(): Promise<void> {
@@ -515,7 +574,7 @@
             : ''}
         /> Refresh
       </button>
-      {#if activeTab === 'all' || activeTab === 'skills'}
+      {#if activeTab === 'all' || activeTab === 'skills' || activeTab === 'bookmarks'}
         <button
           class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
           title="Open the skills marketplace"
@@ -540,12 +599,14 @@
           role="tab"
           aria-selected={activeTab === tab.id}
           title="{tab.label} utilities"
-          onclick={() => (activeTab = tab.id)}
+          onclick={() => onSelectTab(tab.id)}
         >
           {#if tab.id === 'all'}
             <LayoutGrid size={13} />
           {:else if tab.id === 'skills'}
             <BookOpen size={13} />
+          {:else if tab.id === 'bookmarks'}
+            <Bookmark size={13} />
           {:else if tab.id === 'mcp'}
             <Server size={13} />
           {:else if tab.id === 'plugins'}
@@ -569,19 +630,13 @@
           size={14}
           class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
         />
-        <span class="sr-only">Search utilities</span>
+        <span class="sr-only">
+          Search {activeTab === 'bookmarks' ? 'bookmarked skills' : 'utilities'}
+        </span>
         <input
           class="h-9 w-full rounded-lg border bg-surface pl-9 pr-3 text-sm outline-none focus:border-primary"
           type="search"
-          placeholder="Search {activeTab === 'skills'
-            ? 'skills'
-            : activeTab === 'mcp'
-              ? 'MCP servers'
-              : activeTab === 'web'
-                ? 'web & browser utilities'
-                : activeTab === 'tools'
-                  ? 'names, sources, and descriptions'
-                  : 'all utilities'}"
+          placeholder={SEARCH_PLACEHOLDER[activeTab]}
           bind:value={query}
         />
       </label>
@@ -641,14 +696,14 @@
             </button>
           {/each}
         {/if}
-      {:else}
+      {:else if availableTags.length > 0}
         <button
           type="button"
-          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {scopeFilter ===
+          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
           'all'
             ? 'border-primary bg-primary text-on-primary'
             : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-          aria-pressed={scopeFilter === 'all'}
+          aria-pressed={activeTagFilter === 'all'}
           onclick={() => (scopeFilter = 'all')}
         >
           All
@@ -656,11 +711,11 @@
         {#each availableTags as tag (tag)}
           <button
             type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {scopeFilter ===
+            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
             tag
               ? 'border-primary bg-primary text-on-primary'
               : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-            aria-pressed={scopeFilter === tag}
+            aria-pressed={activeTagFilter === tag}
             onclick={() => (scopeFilter = tag)}
           >
             {@render tagChip(tag)}
@@ -672,7 +727,7 @@
 
   <!-- Row 6 — tab content. -->
   <div class="mt-4">
-    {#if activeTab === 'all' || activeTab === 'skills' || activeTab === 'mcp' || activeTab === 'web'}
+    {#if activeTab === 'all' || activeTab === 'skills' || activeTab === 'bookmarks' || activeTab === 'mcp' || activeTab === 'web'}
       {#if (activeTab === 'all' || activeTab === 'skills' || activeTab === 'mcp') && !secureStorageAvailable}
         <div
           class="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
@@ -694,96 +749,156 @@
         </div>
       {:else if filteredRows.length === 0}
         <div class="rounded-xl border border-dashed p-8 text-center">
-          <Puzzle size={18} class="mx-auto mb-2 text-dimmed" />
-          <p class="text-sm font-medium">No matching entries</p>
-          <p class="mt-1 text-xs text-dimmed">Add a utility or change the filters.</p>
+          {#if activeTab === 'bookmarks'}
+            <Bookmark size={18} class="mx-auto mb-2 text-dimmed" />
+            <p class="text-sm font-medium">No bookmarked skills</p>
+            <p class="mt-1 text-xs text-dimmed">
+              Bookmark a skill in the marketplace to keep it one click away, without installing it.
+            </p>
+            <button
+              class="mt-4 inline-flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+              type="button"
+              title="Open the skills marketplace"
+              onclick={onOpenMarketplace}
+            >
+              <Search size={13} /> Skills marketplace
+            </button>
+          {:else}
+            <Puzzle size={18} class="mx-auto mb-2 text-dimmed" />
+            <p class="text-sm font-medium">No matching entries</p>
+            <p class="mt-1 text-xs text-dimmed">Add a utility or change the filters.</p>
+          {/if}
         </div>
       {:else}
         <div class="divide-y rounded-xl border bg-surface">
           {#each filteredRows as row (row.id)}
-            {@const Icon = rowIcon(row)}
-            <div class="flex items-start gap-3 p-4">
-              <div
-                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated text-muted"
-              >
-                <Icon size={15} />
-              </div>
-              <div class="min-w-0 flex-1">
-                <div class="flex flex-wrap items-center gap-2">
-                  <p class="text-sm font-semibold">{row.name}</p>
-                  <span
-                    class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
-                  >
-                    {rowKindBadge(row)}
+            {#if row.src === 'bookmark'}
+              <div class="flex items-start gap-3 p-4">
+                <div
+                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated text-accent"
+                >
+                  <Bookmark size={15} fill="currentColor" />
+                </div>
+                <button
+                  class="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  type="button"
+                  title="Open {row.name} in the marketplace"
+                  onclick={() => onOpenSkill(row.entry)}
+                >
+                  <span class="flex flex-wrap items-center gap-2">
+                    <span class="truncate font-mono text-sm font-semibold">{row.name}</span>
+                    <span
+                      class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
+                    >
+                      Marketplace
+                    </span>
+                    {#if row.entry.isOfficial}
+                      <span
+                        class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
+                      >
+                        Official
+                      </span>
+                    {/if}
                   </span>
-                  {#if row.appOwned}
-                    <span
-                      class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
-                      title="Built into the app and always available; it cannot be deleted"
-                    >
-                      Built-in
-                    </span>
-                  {/if}
-                  {#if row.src === 'registry'}
-                    <span class="text-[0.6875rem] text-dimmed">
-                      {row.utility.activation === 'always' ? 'Always available' : 'On demand'}
-                    </span>
-                  {/if}
-                </div>
-                {#if row.description}
-                  <p class="mt-1 text-xs leading-relaxed text-muted">{row.description}</p>
-                {/if}
-                {#if row.src === 'native' && row.entry.detail}
-                  <p class="mt-1 truncate font-mono text-[0.625rem] text-dimmed">
-                    {row.entry.detail}
-                  </p>
-                {/if}
-                <div class="mt-2 flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-dimmed">
-                  {#each row.tags as tag (tag)}
-                    <span
-                      class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
-                    >
-                      {@render tagChip(tag)}
-                    </span>
-                  {/each}
-                  {#if row.src === 'registry' && row.utility.credentials.length}
-                    <span class="flex items-center gap-1">
-                      <KeyRound size={11} />
-                      {row.utility.credentials.length}
-                      {row.utility.credentials.length === 1 ? 'credential' : 'credentials'}
-                    </span>
-                  {/if}
-                </div>
-              </div>
-              <div class="flex shrink-0 items-center gap-1">
-                {#if row.src === 'registry' && !row.appOwned}
-                  <Switch
-                    checked={row.enabled}
-                    onchange={() => void toggleEnabled(row)}
-                    aria-label="{row.enabled ? 'Disable' : 'Enable'} {row.name}"
-                    title="{row.enabled ? 'Disable' : 'Enable'} {row.name}"
+                  <span class="mt-1 block truncate text-xs text-muted">{row.entry.source}</span>
+                  <span class="mt-1 block text-[0.6875rem] tabular-nums text-dimmed">
+                    {row.entry.installs.toLocaleString()} installs at bookmark time
+                  </span>
+                </button>
+                <div class="flex shrink-0 items-center gap-1">
+                  <SkillBookmarkButton
+                    entry={row.entry}
+                    title={skillBookmarkTitle(row.name, true)}
                   />
-                {/if}
-                {#if !row.appOwned}
-                  <button
-                    class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground"
-                    aria-label="Edit {row.name}"
-                    title="Edit {row.name}"
-                    onclick={() => openEdit(row)}
-                  >
-                    <Pencil size={14} />
-                  </button>
-                  <button
-                    class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
-                    aria-label="Delete {row.name}"
-                    title="Delete {row.name}"
-                    onclick={() => (deleteTarget = row)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                {/if}
+                </div>
               </div>
-            </div>
+            {:else}
+              {@const Icon = rowIcon(row)}
+              <div class="flex items-start gap-3 p-4">
+                <div
+                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated text-muted"
+                >
+                  <Icon size={15} />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <p class="text-sm font-semibold">{row.name}</p>
+                    <span
+                      class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
+                    >
+                      {rowKindBadge(row)}
+                    </span>
+                    {#if row.appOwned}
+                      <span
+                        class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
+                        title="Built into the app and always available; it cannot be deleted"
+                      >
+                        Built-in
+                      </span>
+                    {/if}
+                    {#if row.src === 'registry'}
+                      <span class="text-[0.6875rem] text-dimmed">
+                        {row.utility.activation === 'always' ? 'Always available' : 'On demand'}
+                      </span>
+                    {/if}
+                  </div>
+                  {#if row.description}
+                    <p class="mt-1 text-xs leading-relaxed text-muted">{row.description}</p>
+                  {/if}
+                  {#if row.src === 'native' && row.entry.detail}
+                    <p class="mt-1 truncate font-mono text-[0.625rem] text-dimmed">
+                      {row.entry.detail}
+                    </p>
+                  {/if}
+                  <div
+                    class="mt-2 flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-dimmed"
+                  >
+                    {#each row.tags as tag (tag)}
+                      <span
+                        class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
+                      >
+                        {@render tagChip(tag)}
+                      </span>
+                    {/each}
+                    {#if row.src === 'registry' && row.utility.credentials.length}
+                      <span class="flex items-center gap-1">
+                        <KeyRound size={11} />
+                        {row.utility.credentials.length}
+                        {row.utility.credentials.length === 1 ? 'credential' : 'credentials'}
+                      </span>
+                    {/if}
+                  </div>
+                </div>
+                <div class="flex shrink-0 items-center gap-1">
+                  {#if row.src === 'registry' && !row.appOwned}
+                    <Switch
+                      checked={row.enabled}
+                      onchange={() => void toggleEnabled(row)}
+                      aria-label="{row.enabled ? 'Disable' : 'Enable'} {row.name}"
+                      title="{row.enabled ? 'Disable' : 'Enable'} {row.name}"
+                    />
+                  {/if}
+                  {#if !row.appOwned}
+                    <button
+                      class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground"
+                      aria-label="Edit {row.name}"
+                      title="Edit {row.name}"
+                      onclick={() => openEdit(row)}
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+                      aria-label="Delete {row.name}"
+                      title="Delete {row.name}"
+                      onclick={() => (deleteTarget = row)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  {/if}
+                </div>
+              </div>
+            {/if}
           {/each}
         </div>
       {/if}

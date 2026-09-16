@@ -2,9 +2,10 @@
   import { FolderInput, Loader2, GitBranch } from '@lucide/svelte'
   import Modal from '../ui/Modal.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
+  import DockRow from '../ui/DockRow.svelte'
   import ProviderLoginTerminal from '../providers/ProviderLoginTerminal.svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { APP_NAME } from '$shared/brand'
+  import { APP_NAME, APP_SLUG } from '$shared/brand'
   import { toPosixPath, posixBasename } from '$shared/paths'
   import type { Project } from '$shared/types'
   import { folderBaseName } from '$lib/project-location'
@@ -24,9 +25,17 @@
   let error = $state('')
   let showTerminal = $state(false)
   let terminalId = $state('')
-  let handoff = $state<{ command: string; args: string[]; destination: string; repoName: string } | null>(null)
+  let handoff = $state<{
+    command: string
+    args: string[]
+    destination: string
+    repoName: string
+  } | null>(null)
   let exitCode = $state<number | undefined>(undefined)
   let minimized = $state(false)
+
+  /** The clone dock outlives its panel here, so it keeps its own placement. */
+  const DOCK_STORAGE_KEY = `${APP_SLUG}.gitCloneDock.v1`
 
   // Derive default destination when url changes and user hasn't manually edited destination
   let userEditedDestination = $state(false)
@@ -108,7 +117,10 @@
     const sepIndex = Math.max(lastSlash, lastColon)
     const segment = sepIndex >= 0 ? withoutQuery.slice(sepIndex + 1) : withoutQuery
     const withoutGit = segment.endsWith('.git') ? segment.slice(0, -4) : segment
-    const sanitized = withoutGit.replace(/[^A-Za-z0-9._-]/gu, '-').replace(/^-+/u, '').replace(/-+$/u, '')
+    const sanitized = withoutGit
+      .replace(/[^A-Za-z0-9._-]/gu, '-')
+      .replace(/^-+/u, '')
+      .replace(/-+$/u, '')
     return sanitized || ''
   }
 
@@ -177,40 +189,46 @@
 
 {#if showTerminal && handoff}
   <DockableModal
-    open={open}
-    title={exitCode === undefined ? `Cloning ${handoff.repoName}` : exitCode === 0 ? `${handoff.repoName} cloned` : `Clone failed`}
-    minimized={minimized}
+    {open}
+    title={exitCode === undefined
+      ? `Cloning ${handoff.repoName}`
+      : exitCode === 0
+        ? `${handoff.repoName} cloned`
+        : `Clone failed`}
+    {minimized}
     closable={exitCode !== undefined}
     onMinimize={handleMinimize}
     onClose={handleDockClose}
     onExpand={handleExpand}
   >
     {#snippet dock()}
-      <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
-        <button
-          class="rounded-lg px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="Show clone task"
-          title="Show clone task"
-          onclick={handleExpand}
-        >
-          Clone
-        </button>
-        <span class="h-5 w-px bg-border"></span>
-        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-elevated">
-          <GitBranch size={14} class="text-muted" />
-        </span>
-        {#if exitCode !== undefined}
-          <span class="h-5 w-px bg-border"></span>
+      <DockRow storageKey={DOCK_STORAGE_KEY} label="Move docked clone task">
+        <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
           <button
-            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label="Close clone task"
-            title="Close clone task"
-            onclick={handleDockClose}
+            class="rounded-lg px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            aria-label="Show clone task"
+            title="Show clone task"
+            onclick={handleExpand}
           >
-            ✕
+            Clone
           </button>
-        {/if}
-      </div>
+          <span class="h-5 w-px bg-border"></span>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-elevated">
+            <GitBranch size={14} class="text-muted" />
+          </span>
+          {#if exitCode !== undefined}
+            <span class="h-5 w-px bg-border"></span>
+            <button
+              class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="Close clone task"
+              title="Close clone task"
+              onclick={handleDockClose}
+            >
+              ✕
+            </button>
+          {/if}
+        </div>
+      </DockRow>
     {/snippet}
 
     <div class="space-y-3">
@@ -220,7 +238,8 @@
             <GitBranch size={14} class="shrink-0 text-muted" />
             <span class="truncate text-xs font-medium">{handoff.repoName}</span>
             <code class="truncate font-mono text-[0.625rem] text-dimmed">
-              $ {handoff.command} {handoff.args.join(' ')}
+              $ {handoff.command}
+              {handoff.args.join(' ')}
             </code>
           </div>
           {#if exitCode === undefined}
@@ -228,14 +247,18 @@
               <Loader2 size={11} class="animate-spin" /> Cloning
             </span>
           {:else if exitCode === 0}
-            <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-success">Done</span>
+            <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-success"
+              >Done</span
+            >
           {:else}
-            <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-danger">Exited {exitCode}</span>
+            <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-danger"
+              >Exited {exitCode}</span
+            >
           {/if}
         </div>
         <div class="h-64 overflow-hidden">
           <ProviderLoginTerminal
-            terminalId={terminalId}
+            {terminalId}
             command={handoff.command}
             args={handoff.args}
             onExit={(code) => void handleExit(code)}
@@ -255,7 +278,7 @@
     </div>
   </DockableModal>
 {:else}
-  <Modal open={open} title="Clone Git Repository" onClose={handleClose}>
+  <Modal {open} title="Clone Git Repository" onClose={handleClose}>
     <form
       class="space-y-4"
       onsubmit={(e: SubmitEvent) => {
@@ -277,7 +300,9 @@
         <p class="mt-1 text-xs text-dimmed">Supports https and ssh (git@host:owner/repo).</p>
       </div>
       <div>
-        <label class="mb-1 block text-xs font-medium text-muted" for="git-clone-dest">Clone to</label>
+        <label class="mb-1 block text-xs font-medium text-muted" for="git-clone-dest"
+          >Clone to</label
+        >
         <div class="flex gap-2">
           <input
             id="git-clone-dest"
@@ -302,7 +327,9 @@
         {#if destination}
           <p class="mt-1 truncate text-xs text-dimmed" title={destination}>{destination}</p>
         {:else}
-          <p class="mt-1 text-xs text-dimmed">Default: {APP_NAME} config dir projects-gh/&lt;repo&gt;.</p>
+          <p class="mt-1 text-xs text-dimmed">
+            Default: {APP_NAME} config dir projects-gh/&lt;repo&gt;.
+          </p>
         {/if}
       </div>
       {#if error}
@@ -327,7 +354,9 @@
         onclick={() => void startClone()}
       >
         {#if busy}
-          <span class="flex items-center gap-1.5"><Loader2 size={14} class="animate-spin" /> Starting…</span>
+          <span class="flex items-center gap-1.5"
+            ><Loader2 size={14} class="animate-spin" /> Starting…</span
+          >
         {:else}
           Clone
         {/if}

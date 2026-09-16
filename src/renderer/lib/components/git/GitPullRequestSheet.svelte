@@ -4,6 +4,7 @@
   import { GitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
+  import DockRow from '../ui/DockRow.svelte'
   import Switch from '../ui/Switch.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { APP_SLUG } from '$shared/brand'
@@ -178,7 +179,7 @@
   /** True while a prepared divergence-resolution thread is being opened. */
   let openingResolveThread = $state(false)
   let resolveThreadError = $state('')
-  /** True while the panel is collapsed into the bottom-right dock (local fallback). */
+  /** True while the panel is collapsed into its dock row (local fallback). */
   let localMinimized = $state(false)
   const minimized = $derived(minimizedProp ?? localMinimized)
 
@@ -896,44 +897,48 @@
   {#snippet dock()}
     {#if !draftId}
       <!-- When the host drives the dock, PrDockHost renders the unified chip row. -->
-      <button
-        class="flex cursor-pointer items-center gap-1.5 rounded-xl border bg-surface px-3 py-2 shadow-xl transition-colors hover:bg-elevated"
-        title="Show pull request creation"
-        aria-label="Show pull request creation"
-        onclick={handleExpand}
-      >
-        {#if result}
-          <span
-            class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-success"
-          >
-            <CheckCircle2 size={10} aria-hidden="true" />
-            Created
-          </span>
-          <span class="text-[0.6875rem] font-medium">PR #{result.number}</span>
-        {:else if dockDetail || creating || submitting}
-          <Loader2 size={14} class="shrink-0 animate-spin text-info" />
-          <span class="text-[0.6875rem] font-medium">{dockDetail || 'Creating pull request…'}</span>
-        {:else if dockHasIssue}
-          <span
-            class="flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-warning"
-          >
-            <TriangleAlert size={10} aria-hidden="true" />
-            Needs attention
-          </span>
-          <span class="text-[0.6875rem] font-medium">New pull request</span>
-        {:else if composeSucceeded}
-          <span
-            class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-success"
-          >
-            <CircleCheck size={10} aria-hidden="true" />
-            Composed
-          </span>
-          <span class="text-[0.6875rem] font-medium">New pull request</span>
-        {:else}
-          <GitPullRequest size={14} class="shrink-0 text-dimmed" />
-          <span class="text-[0.6875rem] font-medium">New pull request</span>
-        {/if}
-      </button>
+      <DockRow storageKey={effectiveStorageKey} label="Move docked pull request draft">
+        <button
+          class="flex cursor-pointer items-center gap-1.5 rounded-xl border bg-surface px-3 py-2 shadow-xl transition-colors hover:bg-elevated"
+          title="Show pull request creation"
+          aria-label="Show pull request creation"
+          onclick={handleExpand}
+        >
+          {#if result}
+            <span
+              class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-success"
+            >
+              <CheckCircle2 size={10} aria-hidden="true" />
+              Created
+            </span>
+            <span class="text-[0.6875rem] font-medium">PR #{result.number}</span>
+          {:else if dockDetail || creating || submitting}
+            <Loader2 size={14} class="shrink-0 animate-spin text-info" />
+            <span class="text-[0.6875rem] font-medium"
+              >{dockDetail || 'Creating pull request…'}</span
+            >
+          {:else if dockHasIssue}
+            <span
+              class="flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-warning"
+            >
+              <TriangleAlert size={10} aria-hidden="true" />
+              Needs attention
+            </span>
+            <span class="text-[0.6875rem] font-medium">New pull request</span>
+          {:else if composeSucceeded}
+            <span
+              class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-success"
+            >
+              <CircleCheck size={10} aria-hidden="true" />
+              Composed
+            </span>
+            <span class="text-[0.6875rem] font-medium">New pull request</span>
+          {:else}
+            <GitPullRequest size={14} class="shrink-0 text-dimmed" />
+            <span class="text-[0.6875rem] font-medium">New pull request</span>
+          {/if}
+        </button>
+      </DockRow>
     {/if}
   {/snippet}
 

@@ -277,11 +277,10 @@
       transcript = ''
       audioToken = imported.value.token
       audioLabel = imported.value.fileName
-      const blob = new Blob([audio.value as unknown as ArrayBuffer], {
-        type: imported.value.fileName.toLowerCase().endsWith('.mp3') ? 'audio/mpeg' : 'audio/webm'
-      })
-      audioMime = blob.type
-      audioUrl = URL.createObjectURL(blob)
+      // The staged media type describes the copied bytes exactly; guessing it
+      // from the file name made every non-mp3 import unplayable.
+      audioMime = audio.value.mimeType
+      audioUrl = URL.createObjectURL(new Blob([audio.value.bytes], { type: audio.value.mimeType }))
     } catch (cause) {
       setError(cause)
     }

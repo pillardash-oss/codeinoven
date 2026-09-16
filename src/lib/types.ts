@@ -268,6 +268,21 @@ export interface AdoptableWorktreeInfo {
   reason?: string
 }
 
+/**
+ * What one destructive lifecycle action would discard, read without minting a
+ * confirmation token. Agent-facing flows show this before the user (or the
+ * model) decides; the single-use token is only minted when they do.
+ */
+export interface ScopeLifecycleSnapshot {
+  /** Tracked files with uncommitted modifications (bounded list). */
+  dirtyFiles: string[]
+  /** Commits not reachable from any known remote-tracking ref. */
+  unpushedCommits: number
+  hasActiveProcesses: boolean
+  /** Whether the scope's branch is checked out by this worktree. */
+  branchOwnedByWorktree: boolean
+}
+
 /** Actions that require a state-bound, single-use confirmation ID. */
 export type ScopeLifecycleAction =
   'detach' | 'remove-worktree' | 'delete-scope' | 'delete-branch' | 'delete-project-worktrees'
@@ -345,6 +360,92 @@ export interface ScopeWorktreeProgress {
 export interface ScopeWorktreeProgressEvent extends ScopeWorktreeProgress {
   projectId: string
   scopeBucketId: string
+  /**
+   * Who started the run. An `agent` run has no renderer-owned job record, so
+   * the docked job panel creates one from the first progress event instead of
+   * silently dropping stages the user never asked for in this window.
+   */
+  origin: ScopeWorktreeRunOrigin
+  /** Scope display name of an agent run, so its docked panel can be labelled. */
+  title?: string
+}
+
+/** Who initiated a managed-worktree run. */
+export type ScopeWorktreeRunOrigin = 'user' | 'agent'
+
+// ─── Agent-facing scope capability (`cio:scope`) ─────────────────────────────
+
+/**
+ * Every operation the agent-facing `cio:scope` utility can perform. Read actions
+ * report state, write actions mutate app-owned scope state, and the destructive
+ * actions are confirmation-gated (see `ScopeAgentConfirmationRequest`).
+ */
+export const SCOPE_TOOL_ACTIONS = [
+  'list',
+  'status',
+  'conflicts',
+  'source_info',
+  'detect_adoptable',
+  'create',
+  'rename',
+  'pin',
+  'unpin',
+  'archive',
+  'restore',
+  'adopt',
+  'repair',
+  'retry_setup',
+  'sync_from_main',
+  'sync_to_main',
+  'detach_worktree',
+  'delete_scope',
+  'merge_into_project'
+] as const
+
+export type ScopeToolAction = (typeof SCOPE_TOOL_ACTIONS)[number]
+
+/** The destructive actions: they always require an explicit confirmation. */
+export const SCOPE_TOOL_DESTRUCTIVE_ACTIONS = [
+  'detach_worktree',
+  'delete_scope',
+  'merge_into_project'
+] as const satisfies readonly ScopeToolAction[]
+
+/**
+ * One confirmation an agent-initiated destructive scope action is waiting for.
+ * `auto_review` turns surface this as an app dialog and the tool call blocks
+ * until the user decides; `full_access` turns only get the in-tool challenge.
+ */
+export interface ScopeAgentConfirmationRequest {
+  requestId: string
+  action: ScopeToolAction
+  /** Verb phrase for the challenge copy, e.g. `delete the scope git-panel-redesign`. */
+  summary: string
+  /** What the confirmed action will destroy, as discrete consequence lines. */
+  consequences: string[]
+  projectId: string
+  projectName: string
+  scopeBucketId: string
+  scopeName: string
+  /** Thread whose agent asked for the action. */
+  threadId: string
+  threadTitle: string
+  /** Dirty files in the affected checkout (bounded list). */
+  dirtyFiles: string[]
+  /** Commits not reachable from any remote-tracking ref. */
+  unpushedCommits: number
+  hasActiveProcesses: boolean
+  /** Epoch ms after which the request denies itself. */
+  expiresAt: number
+}
+
+/** Live board invalidation pushed whenever an agent changes scope state. */
+export interface ScopeBoardChangedEvent {
+  projectId: string
+  /** Bucket the agent acted on, when the action named one. */
+  scopeBucketId?: string
+  /** Short verb phrase of what happened, shown as a toast/inline note. */
+  summary: string
 }
 
 export interface ProjectFileEntry {
@@ -2804,6 +2905,79 @@ export interface ThreadMessagePage {
   hasNewer?: boolean
 }
 
+/**
+ * Trace entries the working trace mounts when it opens, and the size of each
+ * older page it pulls in on inner scroll. A live trace streams unbounded into
+ * the durable log, but the renderer only ever mounts one bounded window: a long
+ * running thread must open instantly, and while the reader stays on the thread
+ * nothing already mounted is ever evicted.
+ */
+export const WORKING_TRACE_PAGE_SIZE = 15
+
+/**
+ * Bounded window request over a thread's durable working-trace stream.
+ *
+ * The stream log folds to one ordered, first-seen list of parts for the newest
+ * logical turn, so a window is expressed as a slice of that list rather than a
+ * timestamp cursor: `beforeId` walks back through older entries, and
+ * `changedSince` reports what the log touched since a previous read.
+ */
+export interface TurnStreamPartsQuery {
+  /** Return up to `limit` parts immediately older than this part id. */
+  beforeId?: string
+  /**
+   * Return every part the log touched after this cursor: entries that appeared
+   * AND entries updated in place (a tool call completing, a sub-agent reporting
+   * progress). A growth-only cursor would leave an already mounted entry frozen
+   * at its stale snapshot, which is what a second app instance watching the same
+   * thread would see, so a live poll reads changes instead of growth.
+   */
+  changedSince?: number
+  /** Maximum parts in a window request. Defaults to `WORKING_TRACE_PAGE_SIZE`.
+   *  Ignored by a change request, whose size is whatever the log streamed
+   *  between the two reads and is never silently truncated. */
+  limit?: number
+}
+
+/** One bounded page of a thread's durable working-trace parts. */
+export interface TurnStreamPartsPage {
+  kind: 'window'
+  /** The page, ordered oldest to newest. Task-list tool parts are excluded:
+   *  they drive the task card (`todoParts`), never the trace window. */
+  parts: AgentPart[]
+  /** Total trace parts the durable log currently folds for the turn. */
+  total: number
+  /** Index of `parts[0]` inside that full folded list. */
+  start: number
+  /** True when the fold holds trace parts older than this page. */
+  hasOlder: boolean
+  /** Stream events consumed so far, to pass back as `changedSince`. */
+  cursor: number
+  /** Newest durable task-list tool parts for the turn, so the task card never
+   *  depends on which trace page happens to be mounted. */
+  todoParts: AgentPart[]
+}
+
+/**
+ * Everything the durable working-trace log touched since a change cursor.
+ *
+ * A change is not a window: it carries no fold coordinates, because its parts
+ * are simply the ones that moved (appeared or were updated in place) since the
+ * previous read. Counts and cursors stay on it so a live reader can tell that
+ * the fold was replaced under it and remount a window.
+ */
+export interface TurnStreamPartsChange {
+  kind: 'change'
+  /** Touched parts, in fold order. */
+  parts: AgentPart[]
+  /** Total trace parts the durable log currently folds for the turn. */
+  total: number
+  /** Stream events consumed so far, to pass back as `changedSince`. */
+  cursor: number
+  /** Newest durable task-list tool parts for the turn. */
+  todoParts: AgentPart[]
+}
+
 /** Lightweight user-authored message summary for the header history jump list. */
 export interface UserMessageSummary {
   id: string
@@ -3016,6 +3190,14 @@ export type AgentEvent =
       projectId: string
       threadId: string
       brainstormId: string
+      version: number
+    }
+  | {
+      type: 'prd.ready'
+      sessionId: string
+      projectId: string
+      threadId: string
+      prdId: string
       version: number
     }
   | {

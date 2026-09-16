@@ -123,18 +123,6 @@ class SpeechSettingsStore {
     await this.load()
   }
 
-  async playRecording(attemptId: string): Promise<void> {
-    const result = await invoke('speech:readAudio', attemptId)
-    if (!result.ok) {
-      this.error = result.error.message
-      return
-    }
-    const url = URL.createObjectURL(new Blob([result.value], { type: 'audio/*' }))
-    const audio = new Audio(url)
-    audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true })
-    await audio.play()
-  }
-
   dispose(): void {
     this.unsubscribe?.()
     this.unsubscribe = null

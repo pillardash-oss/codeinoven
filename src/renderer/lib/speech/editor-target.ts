@@ -19,10 +19,29 @@ export type SpeechEditorApplyResult =
     }
   | { ok: false; reason: 'destroyed' | 'changed' | 'invalid-selection' }
 
+/**
+ * Optional dispatch capability for editors whose content is itself a message
+ * (the chat composer). Armed voice dictation delivers its transcript through
+ * the host's own send path so queueing, steering, and every send gate behave
+ * exactly like the user pressing send — instead of a second, drifting copy of
+ * those rules living in the speech layer.
+ */
+export interface SpeechEditorAutoSend {
+  /** True while the editor that owns this target is mounted and usable. */
+  isLive: () => boolean
+  /**
+   * Dispatch the editor's current content. `direct` forces an immediate send
+   * into a live turn (a steer) instead of queueing behind the running turn.
+   */
+  submit: (direct: boolean) => void
+}
+
 export interface SpeechEditorTarget {
   id: string
   capture: () => SpeechEditorSnapshot | null
   apply: (snapshot: SpeechEditorSnapshot, transcript: string) => SpeechEditorApplyResult
+  /** Present only on targets that can send themselves (see `SpeechEditorAutoSend`). */
+  autoSend?: SpeechEditorAutoSend
   /**
    * Optional store-level fallback used when `apply` cannot insert because the
    * editor element was destroyed (e.g. the view was navigated away while

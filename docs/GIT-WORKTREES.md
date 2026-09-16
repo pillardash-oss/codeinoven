@@ -111,9 +111,9 @@ state.
 
 ## 6a. Git panel is worktree-aware
 
-Every Git-panel operation   status, diff, stage, unst-age, commit, branch
+Every Git-panel operation status, diff, stage, unst-age, commit, branch
 list/checkout/create/delete, fetch, pull, push, merge, rebase, stash,
-discard/ignore, reset, amend, log, and PR create/compare   resolves its
+discard/ignore, reset, amend, log, and PR create/compare resolves its
 repository root through the **active scope**. When the panel is attached to a
 managed worktree scope, these operations run against the worktree checkout and
 its `cio/` branch, not the project root:
@@ -131,7 +131,7 @@ its `cio/` branch, not the project root:
   it resolves the branch checked out in the main worktree, refreshes that
   branch's remote-tracking ref first (vaulted token when present, a failed
   refresh is reported and never fatal), then integrates the remote-tracking ref
-  when it strictly contains the local branch   otherwise the local branch, so
+  when it strictly contains the local branch otherwise the local branch, so
   commits that exist only on the project root's main are never skipped. The
   strategy follows the configured pull preference (`merge`, `rebase`, or
   `ff-only`; `ask` opens the chooser). It refuses before moving any ref when the
@@ -140,8 +140,8 @@ its `cio/` branch, not the project root:
   the working tree for the standard conflict UI instead of being aborted.
 - **Sync to main** (`git:syncToMain`) is the mirror direction, offered under the
   same condition: it folds the worktree's branch into the branch checked out in
-  the project root. Nothing is ever pushed   publishing main stays an explicit
-  user action   and the chooser always confirms first, even when the pull
+  the project root. Nothing is ever pushed publishing main stays an explicit
+  user action and the chooser always confirms first, even when the pull
   preference is not `ask`, because the write lands in a checkout the panel is
   not showing. Both checkouts must be committed and idle (only committed work
   can move) and the project root must be on a branch; a merge/rebase in progress
@@ -237,12 +237,12 @@ stale or mismatched IDs are rejected.
 
 - **Remove worktree (keep scope):** removes the worktree checkout and
   re-points the scope to the project directory. The scope, its threads and the
-  branch are all kept   only the isolated checkout is gone. Refused when the
+  branch are all kept only the isolated checkout is gone. Refused when the
   worktree is dirty or unpushed unless the dialog's forced second confirmation
   is enabled, and the confirmed force is passed to Git so a forced detach can
   never leave the directory behind while the scope claims it is gone. A
   checkout whose directory was already deleted externally detaches cleanly.
-- **Delete scope:** full cleanup for a managed scope   removes the worktree
+- **Delete scope:** full cleanup for a managed scope removes the worktree
   checkout, deletes the scope bucket and the `cio/` branch in one confirmed
   action. The dialog also offers to permanently delete the scope's threads
   (otherwise they return to the Default scope). Deleting a project-rooted
@@ -256,12 +256,90 @@ stale or mismatched IDs are rejected.
 The scope actions menu intentionally exposes only the non-overlapping
 operations (merge, remove-worktree-keep-scope, archive, delete). A leftover
 `Delete branch`-style entry is not needed: removing a worktree while keeping
-its scope is *Remove worktree (keep scope)*, and permanently removing a scope
-is *Delete scope* (which also removes the worktree and branch). Branch-level
+its scope is _Remove worktree (keep scope)_, and permanently removing a scope
+is _Delete scope_ (which also removes the worktree and branch). Branch-level
 maintenance that keeps the worktree lives in the Git panel.
 
 Archiving and restoring a scope never mutate Git, the worktree, environment
 files, setup status, or thread assignments.
+
+## 8a. Agent-created scopes (`cio:scope`)
+
+Agents create and manage worktree scopes through one app-owned utility,
+`cio:scope` (`src/lib/utility-ids.ts`, seeded by
+`src/main/utilities/utility-registry-service.ts`, executed by
+`src/main/workspaces/scope-tool-service.ts`). It is deliberately **not** a tool
+in any harness's tool list: a session that never involves a worktree must not
+carry the schema, and most sessions never want one. It behaves exactly like the
+other app-owned utilities (`cio:cua-driver`, `cio:browser`), so an agent reaches
+it the same way:
+
+1. `cio_util_find` (query `worktree`) returns it as an on-demand utility,
+2. `cio_util_init` activates it and hands back the full contract
+   (`SCOPE_CAPABILITY_DOCS` in `src/lib/scope-tool.ts`), which is the only place
+   that contract enters context,
+3. `cio_util_use` invokes it with `utility_id: "cio:scope"`, `operation: <action>`
+   and `input: <the action's fields>`.
+
+The activation is banked per thread, so later turns can invoke it by id without
+searching again, and `cio_util_docs_lookup` re-lists the contract after
+compaction. Because it is an ordinary registry utility, the Utilities screen
+lists it, and disabling it there removes both the capability and the one-line
+pointer the turn instructions add for it.
+
+Agents are told to use it **only** when the user explicitly asks to work in a
+separate worktree, never on their own initiative: that rule is in the turn
+instruction, in the registry description a search returns, and in the activated
+contract.
+
+Running `git worktree add` directly is **not** supported. A raw worktree is
+invisible to the app: it never appears on the scope board, gets no health check,
+no environment propagation, no setup run, and no entry in the sync or
+lifecycle tooling. A worktree made through `cio:scope` is a normal managed
+scope from the moment it exists. On Pi, the bash gate routes
+`git worktree add|remove|move|lock|unlock|prune` through the permission card
+(`src/main/drivers/pi-core-tools-extension.ts`) so a raw worktree can only
+happen while the user is looking at the request; `git worktree list` and
+`repair` stay ungated.
+
+Actions (one `operation` per call; a target scope resolves by id or display name
+and defaults to the calling thread's scope):
+
+- **Reads** `list`, `status`, `conflicts`, `source_info`, `detect_adoptable`.
+- **Writes** `create`, `rename`, `pin`/`unpin`, `archive`/`restore`, `adopt`,
+  `repair`, `retry_setup`, `sync_from_main`, `sync_to_main`.
+- **Destructive** `detach_worktree`, `delete_scope`, `merge_into_project`.
+
+`create` forks from the project checkout's current branch unless `baseBranch`
+names another one; naming, environment propagation and setup commands all follow
+the scope board's worktree defaults, and the calling thread moves into the new
+scope by default (`attachThread: false` keeps it where it is). An agent-run
+create, adopt or retry streams the same `scope:worktree:progress` stages a
+user-run one does and lands as a docked job chip labelled as an agent run.
+
+Confirmed board changes are pushed to the renderer (`scope:boardChanged`), so a
+scope an agent creates, renames, archives, deletes, syncs or merges appears on
+the board without the user having to reopen it.
+
+### Destructive actions an agent asks for
+
+The capability never destroys anything on first ask. A destructive call without
+`confirm: true` changes nothing and returns the state-bound snapshot plus an
+explicit challenge (`Are you sure you want to <action>? [YES] [NO]`).
+
+With `confirm: true` the behaviour depends on the thread's permission level:
+
+- **Full Access** no app dialog. The in-tool challenge above is the only gate,
+  so the model itself must confront the consequences before confirming.
+- **Auto Review** the app shows a confirmation dialog
+  (`scope:agentConfirmation`) listing the scope, the summary, the discrete
+  consequences, the dirty files, and the unpushed commits. The agent's tool call
+  is parked until the user answers, and an unanswered request expires into a
+  denial. Live processes in the scope block the action outright.
+
+`delete_scope` on a scope that still owns threads refuses to run until the call
+names the disposition: `threads: "move-to-default"` keeps the conversations,
+`threads: "delete"` deletes them with the scope.
 
 ## 9. First-release limitations
 

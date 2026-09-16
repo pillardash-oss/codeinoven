@@ -149,6 +149,8 @@ import { ProjectManager } from '../../lib/engines/project-manager'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ScopeWorktreeService } from '../git/scope-worktree-service'
+import type { ScopeThreadLifecycle } from '../git/scope-worktree-service'
+import { ScopeToolService } from '../workspaces/scope-tool-service'
 import {
   ScopeRootResolver,
   scopeRootProvider,
@@ -242,6 +244,7 @@ import type {
   CloudDeploymentProviderKind,
   CloudDeploymentStatus,
   ScopeTarget,
+  ScopeAgentConfirmationRequest,
   ScopeWorktreeProgress,
   ScopeWorktreeProgressEvent,
   UtilityDefinitionInput
@@ -2314,7 +2317,7 @@ export function registerIpcHandlers(
     | 'abort'
     | 'recordUserFileSave'
   > &
-    Partial<Pick<ChatEngine, 'runVirtualTask'>>,
+    Partial<Pick<ChatEngine, 'runVirtualTask' | 'setScopeToolService'>>,
   options: RegisterIpcHandlersOptions = {}
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
@@ -2349,6 +2352,7 @@ export function registerIpcHandlers(
       const payload: ScopeWorktreeProgressEvent = {
         projectId: target.projectId,
         scopeBucketId: target.scopeBucketId,
+        origin: 'user',
         ...progress
       }
       sendToRenderer(event.sender, 'scope:worktree:progress', payload)
@@ -2377,15 +2381,20 @@ export function registerIpcHandlers(
   )
   // The merge lifecycle deletes/moves threads in the source scope after the
   // git merge lands; the thread manager is created after the worktree service,
-  // so the service receives it here.
-  scopeWorktreeService.attachThreadLifecycle({
+  // so the service receives it here. The agent-facing scope tool shares this
+  // same lifecycle object, so both routes dispose of scope threads identically.
+  const scopeThreadLifecycle: ScopeThreadLifecycle = {
     countThreadsInScope: (projectId, bucketId) =>
       threadManager.countThreadsInScope(projectId, bucketId),
     deleteThreadsInScope: (projectId, bucketId) =>
       threadManager.deleteThreadsInScope(projectId, bucketId),
     moveThreadsOutOfScope: (projectId, fromBucketId) =>
-      threadManager.moveThreadsOutOfScope(projectId, fromBucketId)
-  })
+      threadManager.moveThreadsOutOfScope(projectId, fromBucketId),
+    moveThreadIntoScope: async (projectId, threadId, bucketId) => {
+      await threadManager.updateThread(projectId, threadId, { scopeBucketId: bucketId })
+    }
+  }
+  scopeWorktreeService.attachThreadLifecycle(scopeThreadLifecycle)
   const historyEngine = new HistoryEngine(database)
   const engineeringLifecycleEngine = new EngineeringLifecycleEngine(database)
   const planEngine = new PlanEngine(storage, database)
@@ -2406,6 +2415,86 @@ export function registerIpcHandlers(
     onSettled: broadcastThreadBranchUpdated
   }
   const vault = new SecretVault(storage)
+  const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
+
+  // ─── Agent-facing scope management (`cio:scope`) ──────────────────────────
+  /**
+   * Destructive scope actions an agent asked for, awaiting a user decision.
+   * Only an `auto_review` turn creates one: the agent's tool call is parked on
+   * this promise until the dialog is answered or the request expires, and an
+   * unanswered request denies rather than destroys.
+   */
+  const pendingScopeConfirmations = new Map<string, (approved: boolean) => void>()
+
+  const requestScopeConfirmation = async (
+    request: ScopeAgentConfirmationRequest
+  ): Promise<boolean> => {
+    const windows = BrowserWindow.getAllWindows().filter(
+      (window) => !window.isDestroyed() && !window.webContents.isDestroyed()
+    )
+    if (windows.length === 0) return false
+    // Held in a local because the executor's `resolve` is not in scope where the
+    // expiry timer fires; this file already has a path `resolve` helper.
+    let settle: ((approved: boolean) => void) | null = null
+    const answer = new Promise<boolean>((resolve) => {
+      settle = resolve
+      pendingScopeConfirmations.set(request.requestId, resolve)
+    })
+    for (const window of windows) {
+      sendToRenderer(window.webContents, 'scope:agentConfirmation', request)
+    }
+    // The dialog removes its own entry when answered; the timeout is what keeps
+    // a closed or reloaded renderer from parking the agent's turn forever.
+    const timeout = setTimeout(
+      () => {
+        if (pendingScopeConfirmations.delete(request.requestId)) settle?.(false)
+      },
+      Math.max(0, request.expiresAt - Date.now())
+    )
+    try {
+      return await answer
+    } finally {
+      clearTimeout(timeout)
+      pendingScopeConfirmations.delete(request.requestId)
+    }
+  }
+
+  const scopeToolService = new ScopeToolService(
+    scopeWorktreeService,
+    scopeManager,
+    projectManager,
+    {
+      getStatus: (projectPath) => gitService.getStatus(projectPath),
+      syncMain: (projectPath, options) => gitService.syncMain(projectPath, options)
+    },
+    {
+      scopeThreads: scopeThreadLifecycle,
+      requestConfirmation: requestScopeConfirmation,
+      /** Agent-made scopes appear on the board without a manual reload. */
+      onBoardChanged: (event) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          sendToRenderer(window.webContents, 'scope:boardChanged', event)
+        }
+      },
+      /** An agent's worktree run streams into the same docked job panel. */
+      onProgress: (event) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          sendToRenderer(window.webContents, 'scope:worktree:progress', event)
+        }
+      },
+      resolveGitToken: async (projectId) => {
+        const ref = gitCredentialRef(projectId)
+        return (await vault.exists(ref)) ? await vault.resolve(ref) : undefined
+      },
+      // An agent has no strategy chooser, so the configured `ask` resolves to
+      // the safe, non-history-rewriting default.
+      defaultPullStrategy: async () => {
+        const preference = (await storage.getConfig()).defaultPullStrategy
+        return preference === 'ask' ? 'merge' : preference
+      }
+    }
+  )
+  chatEngine?.setScopeToolService?.((input, context) => scopeToolService.execute(input, context))
   const githubAuthService = new GitHubAuthService(vault)
   const diagnosticsService = new DiagnosticsService(database, () =>
     memoryService.auxiliaryUsageByFeature()
@@ -5089,6 +5178,20 @@ export function registerIpcHandlers(
       validateWorktreeDefaults(defaults)
     )
   )
+  // The user's answer to a destructive scope action an agent asked for. The
+  // agent's tool call is parked until this lands, so an unknown or already
+  // expired request is a no-op rather than an error the renderer has to handle.
+  ipcMain.handle('scope:agentConfirmationRespond', (_, requestId: unknown, approved: unknown) => {
+    // Both inputs are validated before the map is touched: a rejected payload
+    // must leave the entry in place so the request's own expiry can still deny
+    // it, instead of orphaning the resolver and parking the agent's call.
+    const id = validateEntityId(requestId, 'Confirmation ID')
+    const decision = validateBoolean(approved, 'Approval')
+    const settle = pendingScopeConfirmations.get(id)
+    if (!settle) return
+    pendingScopeConfirmations.delete(id)
+    settle(decision)
+  })
   ipcMain.handle('scope:worktree:create', (event, target: unknown, input: unknown) => {
     const validatedTarget = validateScopeTarget(target)
     const validatedInput = validateScopeWorktreeCreateInput(input)
@@ -6227,7 +6330,6 @@ export function registerIpcHandlers(
     }
   )
   // ─── Git remotes, sync & credentials ────────────────────────────────────
-  const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
   const gitCredentialStatus = async (projectId: string) => ({
     configured: await vault.exists(gitCredentialRef(projectId)),
     secureStorageAvailable: vault.isAvailable()

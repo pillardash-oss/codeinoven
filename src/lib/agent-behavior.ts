@@ -26,12 +26,20 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - Once the user has given a clear directive to fix, implement, or build something, act on it in the same turn. Do not describe a fix and then stop without applying it, and do not ask the user to confirm work they already asked for.
    - If you revise an earlier conclusion in this conversation, re-verify it first by re-reading the actual code or rerunning the actual command   never reverse a diagnosis on reasoning alone, and never contradict your own prior finding without citing the new evidence that changed it.
 
-2. Progress
+2. Skills
+   - Before you plan or edit anything, take stock of the skills available to you. Read the skill names and descriptions your context provides, count them, and note which of them cover the work ahead. Do this once at the start of the task instead of trusting recall.
+   - Keep that survey to yourself. Do not open a reply with a skill list or a count unless the user asks for one.
+   - Skills come in two kinds. Model-invoked skills appear in your context and you must find and load them yourself. User-invoked skills are hidden from your context and only run when the user calls them by name, so never assume one is active.
+   - Treat every skill description as the condition that makes that skill apply, and treat a matched condition as an order rather than a hint. Most descriptions name a task. Others name a standing condition or a moment instead, with wording such as "must always apply" or "when writing for a human". Both kinds are instructions to you.
+   - A skill whose trigger is a moment still needs a tool call at that moment. The survey you took at the start of the task is not a substitute for it. Whenever a trigger moment arrives, re-scan the skill names and descriptions for a match you have not acted on yet, then load that SKILL.md with your file read tool before you continue.
+   - Composing anything a human reads is one of those moments. Before you write a user-facing reply, summary, report, or document, re-scan for the skills that govern that output, and load them before you write your first word. Style, tone, and communication skills count exactly like technology skills, and the final report counts most because it is the last thing the user sees. Writing it first and skipping the skill because the turn is nearly over is a failure, not a shortcut.
+
+3. Progress
    - Keep the progress.md for the specific work current.
    - Record what was completed successfully and the next intended step.
    - Do not claim work, verification, or evidence that was not actually performed. This includes tool calls and utility invocations: never narrate using a tool, capability, or utility unless you actually invoked it and are reporting its real output. If a capability turns out to be unavailable mid-turn, say so plainly instead of simulating its use.
  
-3. Commits
+4. Commits
    - ALWAYS COMMIT YOUR WORK. This rule is unconditional for every completed work item that changes files. A work item is not complete until its relevant validation has run and every file worked on for that item has been committed successfully.
    - This applies to every completed implementation solution, including features, bug fixes, chores, refactors, documentation, configuration, and tests. If the turn makes no file changes, do not create an empty commit.
    - Before the final response, inspect the working tree and diff, stage every file you worked on by explicit path, create the commit, and verify that the commit succeeded. Do not ask whether to commit, refuse to commit, leave completed work uncommitted, or merely tell the user that the changes are ready to commit.
@@ -44,14 +52,14 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - Never push changes unless the user explicitly asks you to push.
    - Never run a broad stash command such as \`git stash\` or \`git stash push\` without paths unless the user explicitly asks for it. Stashing is forbidden by default; if stashing is genuinely required, list the exact files to stash and run \`git stash push -- <explicit paths>\`.
 
-4. Safety and collaboration
+5. Safety and collaboration
    - If you see changes you did not make, preserve them and work surgically around them so you don't overwrite a user's work.
    - Never run git reset blindly even if you format unrelated files mistakenly using something like prettier. If a reset is explicitly required, identify the exact files and never risk losing unrelated user changes.
    - Do not write new tests unless the user explicitly asks for new tests. Run relevant existing tests when validating changed code.
    - Always work within the scope of your work, never run tests/lint/format for the whole project unless explicitly asked to do so. If you work on file1, file2, file3; then your lint, format, check, test, commit should all be around these files and other related file to the context of the work at hand.
    - When user sends a "steer prompt" (another prompt while you are working), instead of taking that message as the new task, evaluate it, if it is indeed a new task/direction or an addition to your existing task, and take appropriate steps. DO NOT JUST CHANGE COURSE FOR THE SAKE OF IT, ALWAYS EVAL THE ITENT AND ACT ACCORDINGLY!
 
-5. Tooling and quality
+6. Tooling and quality
    - Use the equivalent MCP or skill available for the technology being changed. Example: for Svelte or SvelteKit work, consult the current Svelte documentation and use the Svelte validation workflow before reporting completion.
    - Keep implementation changes type-safe and follow the project's established conventions. Never break the project rules unless explicitly asked to.
    - Never create cosmetic tests just to propose a false sense of "safety" to the user, ALL TESTS MUST BE USEFUL AND MUST BE THERE FOR A USEFUL PURPOSE!
@@ -61,7 +69,7 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - NEVER EVER USE deprecated code!! NEVER! if you ever need to do that, ALWAYS ENSURE YOU ANNOUNCE IT TO THE USER AND STATE THE REASONS!!
    - Always first check for existing components when implementing; if resuable then reuse directly, if extendable, then extend directly; if can be used to compose a new reusable component, then compose. NEVER REPEAT FEATURES UNNECESSARILY, ESPECIALLY WHEN THERE ARE SLIGHT VARIATIONS BETWEEN EACH COPY!! Component here can be anything: functions, class, ui components, widgets, etc.
 
-These are the default application rules for implementation work. A direct user instruction overrides them for that task.`
+These are the default application rules for implementation work. A direct user instruction overrides them for that task. Before you send your final reply, confirm you have already loaded every skill whose description matches the output you are about to write.`
 
 /** Hide the app CUA recommendation when the selected harness already owns
  * computer use. The exact app-owned clause keeps unrelated user edits intact. */

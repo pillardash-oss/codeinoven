@@ -546,6 +546,13 @@
       id: editorTarget.id,
       capture: () => editorTarget.capture(),
       apply: (snapshot, transcript) => editorTarget.apply(snapshot, transcript),
+      // Armed voice dictation dispatches through the composer itself (see
+      // `SpeechEditorAutoSend`), so a voice send obeys the same queue/steer
+      // rules as the send button.
+      autoSend: {
+        isLive: () => richEditor?.speechEditorTarget(composerEditorId)?.capture() != null,
+        submit: (direct) => submit(direct)
+      },
       fallbackApply: (snapshot, transcript): SpeechEditorApplyResult => {
         if (!projectId || !threadId || typeof onValueChange !== 'function') {
           return { ok: false, reason: 'destroyed' }

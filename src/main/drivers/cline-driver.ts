@@ -17,7 +17,7 @@ import {
   normalizeAgentQuestions,
   permissionPatterns
 } from '../../lib/agent-interactions'
-import { classifyProviderIssue, parseUsageResetAt } from '../../lib/provider-issue'
+import { classifyProviderIssue, parseUsageResetAt, presentProviderError } from '../../lib/provider-issue'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -677,7 +677,7 @@ function mapCurrentClineRecord(
           error,
           issue: {
             kind,
-            message: error,
+            message: presentProviderError(error).message,
             rawError: error,
             harnessId: 'cline',
             retryable: kind !== 'billing',

@@ -14,7 +14,7 @@
   interface Props {
     open: boolean
     title: string
-    /** Whether the panel is collapsed into the bottom-right dock. */
+    /** Whether the panel is collapsed into its dock row. */
     minimized: boolean
     /**
      * Whether the close (X) affordance is available. When false the header shows
@@ -26,7 +26,12 @@
     onClose: () => void
     /** Restore the panel from the dock. */
     onExpand: () => void
-    /** Content rendered inside the bottom-right dock while minimized. */
+    /**
+     * Content rendered in the dock while minimized. Each dock wraps its chips in
+     * `DockRow`, which owns the row's edge placement and its drag head, so a
+     * docked panel can be dragged to any screen edge; a dock whose host renders
+     * the shared chip row (e.g. the PR or worktree dock) renders nothing here.
+     */
     dock: Snippet
     children: Snippet
     footer?: Snippet
@@ -251,7 +256,7 @@
   // would be hidden behind the page and unclickable. Publish this panel's
   // on-screen rectangle and let the browser panel detach its native view while
   // it is covered   a panel dragged off the browser leaves the browser usable.
-  // The minimized dock chip registers itself through `trackBrowserOcclusion`.
+  // The minimized dock row publishes its own rectangle through `DockRow`.
   $effect(() => {
     if (!open || minimized) return
     const key = occlusionKey
@@ -297,7 +302,8 @@
   <!--
     The panel stays mounted in the SAME tree position whether minimized or not so
     its embedded terminal PTYs are never torn down   minimize only hides it while
-    the bottom-right dock keeps the run badges live. The dock renders as a sibling.
+    the dock row keeps the run badges live. The dock renders as a sibling, outside
+    this panel, so the panel's `invisible` state cannot hide it.
   -->
   <!--
     `pointer-events-auto` is load-bearing, not decoration: a modal bits-ui Dialog

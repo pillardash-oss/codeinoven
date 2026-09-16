@@ -15,6 +15,12 @@
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { latestWorkingTraceParts } from '$lib/working-trace-parts'
+  import {
+    newestTraceStartId,
+    olderTraceStartId,
+    traceWindowAnchorExpired,
+    traceWindowStartIndex
+  } from '$lib/working-trace-window'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationSeconds } from '$lib/format/duration'
   import {
@@ -45,6 +51,16 @@
     startTime?: number
     /** Attribution for the model currently working on this trace. */
     modelLabel?: string | null
+    /** True while this trace is on screen. A hidden trace   the workspace keeps
+     *  a thread mounted behind Settings/Scope and other views   re-bounds its
+     *  mounted window, so coming back never mounts whatever streamed while the
+     *  reader was away. */
+    active?: boolean
+    /** True when the durable stream holds entries older than the oldest this
+     *  trace holds, so paging past the window needs another read. */
+    olderPartsAvailable?: boolean
+    /** Pull the next older durable page into this trace's parts. */
+    onLoadOlderParts?: () => void | Promise<void>
     /** Thinking level used for this trace's turn, when the model reasons. */
     thinkingLevel?: ThinkingLevel | null
     providerName?: string | null
@@ -72,6 +88,9 @@
     initialOpen = false,
     initialUserOpened = false,
     startTime,
+    active = true,
+    olderPartsAvailable = false,
+    onLoadOlderParts,
     modelLabel = null,
     thinkingLevel = null,
     providerName,
@@ -102,34 +121,58 @@
   const TRACE_SCROLL_THRESHOLD = 32
   let traceScrollEl = $state<HTMLDivElement>()
   let traceAtBottom = $state(true)
-  /** The trace renders its own pagination: the newest 15 entries first, and
-   *  one older page (15 more) whenever the reader scrolls the trace's inner
-   *  scroller until the ante-penultimate rendered item is in view. The header
-   *  count always reflects the FULL entry count   the window limits what
-   *  mounts, never what is reported. Entries come from the already-loaded
-   *  message cache, so paging here costs no IPC. */
-  const TRACE_PAGE_SIZE = 15
-  let traceWindow = $state(TRACE_PAGE_SIZE)
-  /** A live turn streams UNBOUNDED: every entry renders the instant it lands
-   *  so wrong direction can be caught and steered early. The 15-entry page
-   *  applies to finished traces (history), which load older pages lazily on
-   *  inner scroll. When the turn folds on completion, pagination restarts. */
-  const pagedParts = $derived(
-    busy ? visibleParts : visibleParts.slice(Math.max(0, visibleParts.length - traceWindow))
-  )
+  /** How close to the trace scroller's top counts as "paging older entries". */
+  const TRACE_TOP_THRESHOLD = 32
+  /** Pinned start of the mounted window. `null` means "the newest page"   the
+   *  state a trace opens in, the state it re-bounds to whenever it is not being
+   *  watched, and the state the reader's own paging moves back from. A pinned
+   *  entry never moves on its own: entries that stream in append at the tail,
+   *  so nothing the reader is looking at is ever evicted while they are on the
+   *  thread. The header count reports the entries this trace holds   its newest
+   *  page plus everything appended since, growing as the reader pages older
+   *  entries in   never a number the mounted window happens to disagree with. */
+  let windowStartId = $state<string | null>(null)
+  const windowStartIndex = $derived(traceWindowStartIndex(visibleParts, windowStartId))
+  const pagedParts = $derived(visibleParts.slice(windowStartIndex))
+  /** True while an older durable page is in flight, so one gesture cannot queue
+   *  the same page twice. */
+  let loadingOlderParts = $state(false)
 
+  /** Pin the window while the trace is genuinely being watched. A collapsed or
+   *  hidden trace keeps the plain newest-page window: nothing mounts while it
+   *  is away, and re-showing it must not mount whatever streamed meanwhile. A
+   *  pinned entry that left the list (turn boundary, fold reset, replaced cache
+   *  page) re-pins to the page being shown so nothing below the reader is
+   *  evicted. */
   $effect(() => {
-    if (!busy) traceWindow = TRACE_PAGE_SIZE
+    if (!isOpen || !active) return
+    if (windowStartId !== null && !traceWindowAnchorExpired(visibleParts, windowStartId)) {
+      return
+    }
+    windowStartId = newestTraceStartId(visibleParts)
   })
 
-  /** Prepend one older page of trace entries, keeping the reader's viewport
+  /** Leaving the trace   another thread, another top-level view   re-bounds it
+   *  to the newest page off the reader's critical path, so returning mounts a
+   *  bounded window instead of the whole turn. The turn keeps streaming into the
+   *  log while away; the trace simply never keeps it mounted for nobody. The
+   *  same rule applies while the trace is collapsed: nothing is mounted, so
+   *  re-showing it opens on the newest page. */
+  $effect(() => {
+    if (active && isOpen) return
+    windowStartId = null
+    loadingOlderParts = false
+  })
+
+  /** Move the pinned window start one page older, keeping the reader's viewport
    *  stable across the mount (same compensation the conversation list uses). */
-  function expandTracePage(): void {
-    if (traceWindow >= visibleParts.length) return
+  function moveWindowOlderPage(): void {
     const el = traceScrollEl
+    const nextId = olderTraceStartId(visibleParts, windowStartIndex)
+    if (nextId === null) return
     const previousHeight = el?.scrollHeight ?? 0
     const previousTop = el?.scrollTop ?? 0
-    traceWindow = Math.min(visibleParts.length, traceWindow + TRACE_PAGE_SIZE)
+    windowStartId = nextId
     void tick().then(() => {
       if (!el) return
       const grown = el.scrollHeight - previousHeight
@@ -137,17 +180,32 @@
     })
   }
 
-  /** Load the next older page once the ante-penultimate rendered entry
-   *  (third from the top of the current window) enters the scroller's view. */
-  function maybeExpandOlderEntries(element: HTMLDivElement): void {
-    if (busy || traceWindow >= visibleParts.length) return
-    const third = element.children[2] as HTMLElement | undefined
-    if (!third) return
-    const scrollerRect = element.getBoundingClientRect()
-    const thirdRect = third.getBoundingClientRect()
-    const visibleInScroller =
-      thirdRect.bottom > scrollerRect.top && thirdRect.top < scrollerRect.bottom
-    if (visibleInScroller) expandTracePage()
+  /** Page in older entries. Entries already loaded come from the message cache
+   *  at no IPC cost; once the window reaches the oldest entry the trace holds,
+   *  the durable stream is asked for the next older page   a live turn's work
+   *  lives there long before the mirror records it. */
+  function expandTracePage(): void {
+    if (windowStartIndex > 0) {
+      moveWindowOlderPage()
+      return
+    }
+    if (!olderPartsAvailable || loadingOlderParts) return
+    loadingOlderParts = true
+    void Promise.resolve(onLoadOlderParts?.())
+      .catch(() => {})
+      .finally(() => {
+        loadingOlderParts = false
+        void tick().then(() => moveWindowOlderPage())
+      })
+  }
+
+  /** Page older entries in once the reader reaches the top of a scrollable
+   *  trace. A trace whose content fits needs no paging, and a reader parked at
+   *  the bottom must never pull pages in behind a live stream. */
+  function maybePageOlderEntries(element: HTMLDivElement): void {
+    if (element.scrollHeight - element.clientHeight <= TRACE_SCROLL_THRESHOLD) return
+    if (element.scrollTop > TRACE_TOP_THRESHOLD) return
+    expandTracePage()
   }
 
   // When no explicit start is available, fall back to the earliest working
@@ -249,7 +307,7 @@
     if (!element) return
     traceAtBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight <= TRACE_SCROLL_THRESHOLD
-    maybeExpandOlderEntries(element)
+    maybePageOlderEntries(element)
   }
 
   // New live parts follow the trace only while the user remains at its bottom.
