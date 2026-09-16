@@ -3325,10 +3325,13 @@
                 Staged / working panes   conflicts sit on top; each pane shares the
                 height. Each pane carries a little padding of its own (see
                 `paneClass`) so the staged and unstaged cards read as separate
-                containers, and the wrapper's own inset is what lines their outer
-                edge up with the rows above.
+                containers, and the wrapper's inset is what lines their outer edge
+                up with the rows above: its 4px here plus the pane's own 4px is the
+                8px the first card keeps from the action row, the same as its sides.
+                The top inset used to be left to the pane alone, which put the
+                first card 4px under the header while the other three sides had 8.
               -->
-              <div class="flex flex-col gap-1 px-1 pb-1">
+              <div class="flex flex-col gap-1 p-1">
                 {#if conflictSections.length > 0}
                   <div class={paneClass}>
                     {#if changesView === 'tree'}
