@@ -131,7 +131,13 @@ async function fetchTextLimited(url: string, maxBytes: number): Promise<string |
   }
 }
 
-async function fetchImageAsDataUrl(url: string): Promise<string | null> {
+/**
+ * Fetch a remote image into a CSP-safe data URL, or null on failure. Shared: link
+ * favicons and GitHub avatars both have to be inlined before the renderer can draw
+ * them, because its `img-src` allows `data:` and nothing remote. The byte cap, the
+ * timeout and the MIME sniffing are what keep a hostile response out of the page.
+ */
+export async function fetchImageAsDataUrl(url: string): Promise<string | null> {
   try {
     const response = await fetch(url, {
       redirect: 'follow',

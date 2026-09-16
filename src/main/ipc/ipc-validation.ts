@@ -1504,6 +1504,41 @@ export function validateFaviconHostnames(value: unknown): string[] {
   return hostnames
 }
 
+/** How many logins one avatar request may carry, matching the favicon batch cap. */
+const MAX_AVATAR_LOGINS = 64
+/** A GitHub login is at most 39 characters, and the `[bot]` suffix adds five. */
+const MAX_GITHUB_LOGIN_LENGTH = 44
+/** Letters, digits and single hyphens, optionally GitHub's `[bot]` app form. */
+const GITHUB_LOGIN_PATTERN = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}(?:\[bot\])?$/iu
+
+/**
+ * Validate the logins an avatar request carries. Each entry has to be login-shaped,
+ * `[bot]` accounts included, so nothing but a GitHub account name can reach the
+ * avatar host. Entries that are not are dropped rather than failing the batch, the
+ * way favicon hostnames are, because a provider writes `unknown` for a comment whose
+ * user record is missing and that should not cost a request.
+ */
+export function validateGitHubLogins(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new TypeError('Avatar logins must be an array')
+  if (value.length === 0 || value.length > MAX_AVATAR_LOGINS) {
+    throw new TypeError(`Avatar logins must contain between 1 and ${MAX_AVATAR_LOGINS} entries`)
+  }
+  const logins: string[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const entry = value[index]
+    if (typeof entry !== 'string' || entry.length === 0 || entry.length > MAX_GITHUB_LOGIN_LENGTH) {
+      Logger.dev(`Skipping invalid avatar login at index ${index}`)
+      continue
+    }
+    if (!GITHUB_LOGIN_PATTERN.test(entry)) {
+      Logger.dev(`Skipping non-login avatar entry at index ${index}`)
+      continue
+    }
+    if (!logins.includes(entry)) logins.push(entry)
+  }
+  return logins
+}
+
 // ─── Privileged-IPC validation wrapper ──────────────────────────────────────
 
 const WEB_PROTOCOLS = new Set(['https:', 'http:'])

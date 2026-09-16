@@ -1978,6 +1978,12 @@ export const IPC_INVOKE_CONTRACT = {
   'github:startDeviceFlow': {} as Contract<[], GitHubDeviceCode>,
   'github:poll': {} as Contract<[deviceCode: string], GitHubPollResult>,
   'github:logout': {} as Contract<[], GitHubAuthStatus>,
+  /**
+   * Resolve account avatars for a list of GitHub logins, as `data:` URLs (the
+   * renderer's CSP blocks remote image hosts). A login GitHub has no picture for
+   * comes back as null, which the UI draws as its monogram.
+   */
+  'github:avatars': {} as Contract<[logins: string[]], Record<string, string | null>>,
   'history:search': {} as Contract<
     [query: string, projectId?: string, limit?: number],
     HistoryEntry[]

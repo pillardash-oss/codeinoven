@@ -30,6 +30,7 @@ import { GitService, type PullRequestComposeContext } from '../git/git-service'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { GitHubAuthService } from '../git/github-auth-service'
+import { resolveAvatars } from '../git/github-avatars'
 import { GitHubProvider, ProviderHttpError } from '../providers/github-provider'
 import { isDevelopmentEnvironment, validateBaseUrl } from '../providers/base-url'
 import { resolveDeploymentProvider } from '../providers/registry'
@@ -120,6 +121,7 @@ import {
   validateRemoteName,
   validateRemoteUrl,
   validateFaviconHostnames,
+  validateGitHubLogins,
   validateScopeAppearancePatch,
   validateScopeCollapsePatch,
   validateScopeCreateInput,
@@ -4566,6 +4568,14 @@ export function registerIpcHandlers(
   ipcMain.handle('web:favicon', async (_event, rawHostnames: unknown) => {
     const hostnames = validateFaviconHostnames(rawHostnames)
     return resolveFavicons(hostnames)
+  })
+
+  // Avatars for the logins a pull request conversation names. Same reason as the
+  // favicons above: the renderer's `img-src` allows `data:` and nothing remote, so
+  // the picture is downloaded here and handed over inlined.
+  ipcMain.handle('github:avatars', async (_event, rawLogins: unknown) => {
+    const logins = validateGitHubLogins(rawLogins)
+    return resolveAvatars(logins)
   })
 
   // Reveal a chat artifact (uploaded or agent-created file) in the system file

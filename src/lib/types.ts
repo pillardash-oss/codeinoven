@@ -4538,8 +4538,9 @@ export interface PullRequestReference {
 /**
  * Pull request as shown in the sidebar list.
  *
- * Avatars are deliberately absent: the renderer CSP blocks remote image hosts,
- * so the UI renders a monogram from `authorLogin` instead of a network image.
+ * No avatar field: the renderer CSP blocks remote image hosts, so the UI resolves a
+ * picture from `authorLogin` through main, which inlines it as a `data:` URL, and
+ * draws a monogram of the login until it arrives (see `PrAvatar.svelte`).
  */
 export interface PullRequestSummary {
   number: number

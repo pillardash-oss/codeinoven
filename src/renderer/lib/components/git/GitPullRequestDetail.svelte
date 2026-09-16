@@ -42,6 +42,7 @@
   // action row, so this file no longer draws the state and check pills; only
   // the view id remains shared.
   import PrIdentityRow from './PrIdentityRow.svelte'
+  import PrAvatar from './PrAvatar.svelte'
   import { PR_DETAIL_VIEWS, prViewCount, type PrDetailTabId } from './pr-view'
   import {
     mentionCandidates,
@@ -356,20 +357,6 @@
     if (kind === 'review' && meta === 'changes requested') return 'border-l-2 border-l-warning'
     if (kind === 'description') return 'border-l-2 border-l-primary'
     return ''
-  }
-
-  /** Stable background colour for an author's avatar, keyed off their name. */
-  const avatarPalette = [
-    'bg-primary/20 text-primary',
-    'bg-success/20 text-success',
-    'bg-warning/20 text-warning',
-    'bg-danger/20 text-danger',
-    'bg-accent/20 text-accent'
-  ]
-  function avatarClass(author: string): string {
-    let hash = 0
-    for (let i = 0; i < author.length; i += 1) hash = (hash * 31 + author.charCodeAt(i)) | 0
-    return avatarPalette[Math.abs(hash) % avatarPalette.length]
   }
 
   async function refresh(): Promise<void> {
@@ -1111,14 +1098,7 @@
               <header
                 class="flex items-center gap-1.5 border-b border-border/60 bg-elevated/50 px-2.5 py-1.5"
               >
-                <span
-                  class="flex size-5 shrink-0 items-center justify-center rounded-full text-[0.5625rem] font-semibold uppercase {avatarClass(
-                    entry.author
-                  )}"
-                  aria-hidden="true"
-                >
-                  {entry.author.slice(0, 1)}
-                </span>
+                <PrAvatar login={entry.author} />
                 <span class="truncate text-[0.6875rem] font-medium text-foreground"
                   >{entry.author}</span
                 >
