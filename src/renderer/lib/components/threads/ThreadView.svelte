@@ -669,6 +669,10 @@
    *  first | Jump directly into…" choice is shown only after the user tries to send,
    *  never when the Toolbox switch is toggled. */
   let pendingEngineeringEntry = $state<'prd' | 'spec' | null>(null)
+  /** The send that opened the entry card. The composer clears its buffer at
+   *  submit time, so the payload waits here and its draft is handed back while
+   *  the card is up; the resolved entry choice resends it. */
+  let pendingEntrySend = $state<GuardedSendPayload | null>(null)
   /** Toolbox presentation mirrors the staged selection so switches flip
    *  immediately, while every side effect stays deferred until the send. */
   const pendingLifecycleDisplay = $derived.by((): EngineeringLifecycleState | null => {
@@ -5372,6 +5376,21 @@
       return
     }
 
+    const lifecycleStarted =
+      engineeringLifecycle !== null &&
+      engineeringLifecycle !== undefined &&
+      engineeringLifecycle.startedAt !== undefined
+    const selectedPrd =
+      engineeringLifecycle?.activeStage === 'prd' ||
+      (hasSelectedStage(engineeringLifecycle, 'prd') &&
+        engineeringLifecycle?.activeStage === undefined &&
+        !lifecycleStarted)
+    // Read once: the entry card below and the PRD branch further down both need
+    // the persisted PRD workflow stage.
+    const selectedPrdWorkflow = selectedPrd
+      ? await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
+      : null
+
     // PRD/Spec need context: show the "Brainstorm first | Jump directly into…"
     // card at SEND time, never when the Toolbox switch is toggled. Jumping in
     // still lets the Sr. Engineer align   it just skips the Brainstorm document.
@@ -5386,10 +5405,46 @@
       !hasSelectedStage(engineeringLifecycle, 'achievement') &&
       (entryPrd || entrySpec)
     ) {
+      // A resolved entry choice, not a produced document, is what makes the
+      // message routable. Asking for documents reopened the card on every later
+      // send, because both choices leave them absent for a while: "Start PRD"
+      // moves the PRD workflow to `drafting` and "Brainstorm first" saves the
+      // entry on the Brainstorm workflow.
       const contextReady = entryPrd
-        ? Boolean(brainstorm?.status === 'finalized' || prd)
-        : Boolean(brainstorm?.status === 'finalized' || prd || spec)
+        ? !selectedPrd || selectedPrdWorkflow?.stage !== 'choice_pending'
+        : Boolean(
+            brainstorm?.status === 'finalized' ||
+              prd !== null ||
+              spec !== null ||
+              brainstormWorkflow?.entryChoice !== undefined
+          )
       if (!contextReady) {
+        // Park the send and hand its draft back while the card is up. Returning
+        // without this dropped both: the composer had already cleared its
+        // buffer, and nothing resent the message once the choice resolved.
+        pendingEntrySend = {
+          text,
+          attachments,
+          ...(direct ? { direct } : {}),
+          ...(promptContext ? { promptContext } : {}),
+          promptReferences,
+          projectReferences,
+          taskReferences,
+          startAfterThreads
+        }
+        rendererRecovery.setDraft(
+          thread.projectId,
+          thread.id,
+          text,
+          attachments,
+          projectReferences,
+          taskReferences
+        )
+        if (promptReferences.length > 0) {
+          responseReferencesState.setForThread(thread.projectId, thread.id, promptReferences)
+          scheduleResponseHighlightRestore(promptReferences)
+        }
+        composerRestoreKey += 1
         if (pendingEngineeringEntry === null) {
           pendingEngineeringEntry = entryPrd ? 'prd' : 'spec'
         }
@@ -5397,18 +5452,6 @@
       }
     }
 
-    const lifecycleStarted =
-      engineeringLifecycle !== null &&
-      engineeringLifecycle !== undefined &&
-      engineeringLifecycle.startedAt !== undefined
-    const selectedPrd =
-      engineeringLifecycle?.activeStage === 'prd' ||
-      (hasSelectedStage(engineeringLifecycle, 'prd') &&
-        engineeringLifecycle?.activeStage === undefined &&
-        !lifecycleStarted)
-    const selectedPrdWorkflow = selectedPrd
-      ? await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
-      : null
     if (selectedPrd && selectedPrdWorkflow?.stage !== 'brainstorming' && specAction === undefined) {
       if (selectedPrdWorkflow?.stage === 'choice_pending') {
         prdError = 'Choose Brainstorm first or Start PRD before sending the requirements.'
@@ -6715,6 +6758,37 @@
     } else {
       await chooseBrainstormEntry(choice === 'brainstorm_first' ? 'brainstorm' : 'spec')
     }
+    await resumePendingEntrySend()
+  }
+
+  /** Send the message that opened the entry card, now that the choice deciding
+   *  how it is handled is persisted. The draft went back to the composer while
+   *  the card was up, so it clears first and a failed send restores it through
+   *  the same `restorable` path every other send uses. */
+  async function resumePendingEntrySend(): Promise<void> {
+    const parked = pendingEntrySend
+    if (!parked) return
+    pendingEntrySend = null
+    const { projectId, id } = thread
+    rendererRecovery.clearDraft(projectId, id)
+    publishDraftActivity(projectId, id, false)
+    composerRestoreKey += 1
+    // The quoted excerpts the draft put back on screen now travel with the
+    // parked payload, exactly as a composer send consumes them once.
+    if (parked.promptReferences.length > 0) clearResponseReferences()
+    await sendMessage(
+      parked.text,
+      parked.attachments,
+      undefined,
+      parked.direct,
+      parked.promptContext,
+      parked.promptReferences,
+      parked.projectReferences,
+      undefined,
+      parked.taskReferences,
+      true,
+      parked.startAfterThreads
+    )
   }
 
   async function choosePrdEntry(choice: 'brainstorm_first' | 'start_prd'): Promise<void> {
