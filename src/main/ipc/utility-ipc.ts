@@ -28,6 +28,7 @@ export function registerUtilityIpc(
     return cuaBridge.setEnabled(enabled)
   })
   ipcMain.handle('computerUse:pipGetState', () => pip?.getState() ?? { active: false })
+  ipcMain.handle('computerUse:activityGet', () => pip?.getActivitySnapshot() ?? [])
   ipcMain.handle('computerUse:pipBringToFront', () => pip?.bringToFront() ?? Promise.resolve())
   ipcMain.handle('computerUse:pipDismiss', () => pip?.dismiss() ?? Promise.resolve())
   ipcMain.handle('utilities:list', async (_, options?: UtilitySearchOptions) => ({

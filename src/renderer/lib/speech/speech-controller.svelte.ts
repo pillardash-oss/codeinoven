@@ -271,6 +271,16 @@ class SpeechController {
   private pausedLingerTimer: ReturnType<typeof setTimeout> | null = null
   /** Where the spoken response lives, for row-level "Speaking" indicators. */
   private playbackScope = $state<SpeechScope | null>(null)
+  /**
+   * Wall-clock time the speech action currently occupying a thread row's single
+   * indicator slot began, and the thread it belongs to. Rows arbitrate that slot
+   * across speech and computer use by "last action wins", and this controller is
+   * the only place that knows when a speech action started. Claimed at each
+   * start point (mic opens, mic closes into transcription, playback begins).
+   * A stale claim is harmless: rows only read it while one of the
+   * `is*Thread` flags is true for that thread.
+   */
+  private slotClaim = $state<{ threadId: string; at: number } | null>(null)
   /** Whether the read-along border + seek controls are on screen right now. */
   private readAlongVisible = $state(false)
   /** Playhead position in seconds across all retained (played) segments. */
@@ -380,6 +390,27 @@ class SpeechController {
     return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
   }
 
+  /**
+   * When the speech action this thread's row slot is showing began (wall
+   * clock), or null when the thread has no speech action in that slot. Callers
+   * compare it against computer-use activity to apply the row's last-action-wins
+   * rule; a live action with no recorded claim reports 0 so it ranks as oldest.
+   */
+  threadIndicatorActionAt(threadId: string): number | null {
+    const active =
+      this.isRecordingThread(threadId) ||
+      this.isTranscribingThread(threadId) ||
+      this.isSpeakingThread(threadId)
+    if (!active) return null
+    return this.slotClaim?.threadId === threadId ? this.slotClaim.at : 0
+  }
+
+  /** Record that a speech action for this scope just started. */
+  private claimThreadSlot(scope: SpeechScope | null | undefined): void {
+    if (!scope || scope.kind === 'global' || !scope.threadId) return
+    this.slotClaim = { threadId: scope.threadId, at: Date.now() }
+  }
+
   isCapturingThread(threadId: string): boolean {
     const scope = this.capturingScope
     return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
@@ -478,6 +509,8 @@ class SpeechController {
       await this.cancelPlayback()
     }
     this.captureScope = scope
+    // The mic opening is a new speech action for the thread's row slot.
+    this.claimThreadSlot(scope)
     if (!this.soundReady) await this.loadSettings()
     const snapshot = preparedSnapshot ?? target.capture()
     if (!snapshot) {
@@ -649,6 +682,9 @@ class SpeechController {
     this.clearElapsedTimer()
     this.clearPreloadTimer()
     this.state = { state: 'stopping', targetId: active.target.id, attemptId: active.attemptId }
+    // The mic is closed and the transcript is on its way: that transition is a
+    // new speech action for the thread's row slot.
+    this.claimThreadSlot(this.capturingScope)
     // Capture the target's current value and caret when the user stops, not
     // only when recording started. This lets users type and reposition the
     // caret while the mic is active without losing the intended insertion point.
@@ -880,6 +916,8 @@ class SpeechController {
       this.activePlayback = playback
       this.currentSegments = playback.prepared.segments
       this.playbackScope = scope ?? null
+      // Playback beginning is a new speech action for the thread's row slot.
+      this.claimThreadSlot(this.playbackScope)
       await this.playSegment(playback, 0)
     } catch (cause) {
       this.clearPlaybackStallWatchdog()

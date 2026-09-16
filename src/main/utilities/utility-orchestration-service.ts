@@ -142,6 +142,22 @@ export interface UtilityResultAttribution {
   retryCause: string | null
 }
 
+/**
+ * One computer-use operation an agent just ran, reported for every such
+ * operation and not only the ones with a target process. A desktop-scoped run
+ * (`get_desktop_state`, `escalate_session`, a desktop `hotkey`) names no pid,
+ * yet it is still computer use and must still be visible to the user.
+ */
+export interface CuaOperationEvent {
+  threadId: string
+  /** Driver operation name, e.g. `drag`. */
+  operation: string
+  /** Target process, or null when the operation did not name one. */
+  pid: number | null
+  /** Turn-scoped Cua cursor session, when the driver declared one. */
+  sessionId?: string
+}
+
 export interface UtilityTurnGateway {
   id: string
   resolvedUtilities: ResolvedUtility[]
@@ -288,8 +304,7 @@ export class UtilityOrchestrationService {
   private gatewayBaseUrl: string | null = null
   private gatewayStarting: Promise<string> | null = null
   private readonly bridgeHandlers: ReadonlyMap<string, GatewayBridgeHandler>
-  private cuaActivityListener:
-    ((pid: number, threadId: string, sessionId?: string) => void) | null = null
+  private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
@@ -352,11 +367,12 @@ export class UtilityOrchestrationService {
   }
 
   /**
-   * Register a listener invoked whenever a computer-use utility is called with
-   * a target pid   used by the PiP monitor to latch onto the app a thread's
-   * agent is driving.
+   * Register a listener invoked for every computer-use operation an agent
+   * performs. The listener sees the whole picture, including desktop-scoped
+   * operations that name no pid: the PiP monitor needs a pid to track a window,
+   * while a thread row only needs to know the thread is using the computer.
    */
-  onCuaActivity(listener: (pid: number, threadId: string, sessionId?: string) => void): void {
+  onCuaActivity(listener: (event: CuaOperationEvent) => void): void {
     this.cuaActivityListener = listener
   }
 
@@ -1103,14 +1119,12 @@ export class UtilityOrchestrationService {
       const routedInput = this.routeComputerUseInput(state, utilityId, operationInput)
       result = await client.callTool(operation, routedInput)
       if (this.isComputerUseUtility(resolved)) {
-        const pid = operationPid(routedInput)
-        if (pid !== null) {
-          this.cuaActivityListener?.(
-            pid,
-            state.request.threadId,
-            state.cuaSessionIds.get(utilityId)
-          )
-        }
+        this.cuaActivityListener?.({
+          threadId: state.request.threadId,
+          operation,
+          pid: operationPid(routedInput),
+          sessionId: state.cuaSessionIds.get(utilityId)
+        })
       }
     } else if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
       result = await this.invokeWeb(state, resolved.utility, operation, operationInput)
@@ -1475,7 +1489,6 @@ function operationPid(input: Record<string, unknown>): number | null {
     ? targetPid
     : null
 }
-
 function matchesUtilityKinds(
   { utility, binding }: ResolvedUtility,
   kinds: Set<UtilityKind> | null

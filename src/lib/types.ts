@@ -1194,6 +1194,28 @@ export interface ComputerUsePipState {
   threadId?: string
 }
 
+/**
+ * One thread's computer-use activity, mirrored to the renderer so a thread row
+ * can show the cursor indicator while its agent drives an app.
+ *
+ * Deliberately independent of the PiP: the PiP needs a window to track, while
+ * an agent that escalated to desktop scope (`get_desktop_state`,
+ * `escalate_session`, a desktop `hotkey`) has no pid at all yet is still very
+ * much using the computer. A `ComputerUseActivity` is therefore emitted for
+ * every computer-use operation, pid or not.
+ */
+export interface ComputerUseActivity {
+  threadId: string
+  /** Whether the thread's agent is still driving the computer. */
+  active: boolean
+  /** Wall-clock time of this thread's most recent computer-use action. */
+  at: number
+  /** Target process, when the action named one. */
+  pid?: number
+  /** Driver operation that most recently ran, e.g. `drag`. */
+  operation?: string
+}
+
 export interface SessionConfig {
   command: string
   args: string[]
