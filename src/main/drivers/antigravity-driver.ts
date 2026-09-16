@@ -35,6 +35,7 @@ import { join } from 'node:path'
 import { existsSync, statSync } from 'node:fs'
 import type { StorageEngine } from '../storage/storage-engine'
 import { runHarnessCommand } from './harness-runtime'
+import { readAntigravityAccountUsage } from '../usage/antigravity-quota'
 import { Logger } from '../system/logger'
 import { parseBrainTraceLine } from './antigravity-brain-trace'
 import { presentProviderError } from '../../lib/provider-issue'
@@ -782,6 +783,17 @@ export class AntigravityDriver extends PersistentCliDriver {
     const parsed = parseAntigravityModels(result.stdout)
     this.modelVariants = parsed.variants
     return parsed.catalogs
+  }
+
+  /**
+   * Antigravity's plan quota is not readable from `agy` itself: the CLI has no
+   * usage command, and its streamed turn payload only carries quota when a turn
+   * happens to report one. So an on-demand read goes to Google Cloud Code with
+   * the account's own OAuth token and works with the CLI idle and with no
+   * OpenUsage companion app installed.
+   */
+  async readAccountUsage(): Promise<{ rateLimits: AgentRateLimitWindow[] } | null> {
+    return readAntigravityAccountUsage()
   }
 
   /** Cheapest available catalog model, shared by title and grading runs. */
