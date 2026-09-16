@@ -7895,7 +7895,23 @@ export class ChatEngine {
       : null
     let activeBrainstormTurn: BrainstormDocument | null = null
     let activeBrainstormSession = false
-    if (planningSpecTurn && !preloadedActiveSpec) {
+    // The PRD stage is conversational, including its `prd_finalization` gate: the
+    // agent writes the PRD when the message, the conversation, and any finalized
+    // Brainstorm are enough, and interviews the user when they are not. A draft
+    // under review is still being discussed, and a review comment must never be
+    // mistaken for the specification turn that finalization unlocks.
+    //
+    // It also owns no Brainstorm entry. "Start PRD" writes only the PRD workflow,
+    // so the Brainstorm block below would find no entry choice, swallow the
+    // message, and answer it with an unrelated Brainstorm card.
+    const prdDiscussionTurn =
+      planningSpecTurn &&
+      specAction === undefined &&
+      !preloadedActiveSpec &&
+      (lifecycleForMode?.activeStage === 'prd' ||
+        lifecycleForMode?.humanGate === 'prd_finalization') &&
+      this.prdEngine.getWorkflowState(projectId, threadId)?.stage === 'drafting'
+    if (planningSpecTurn && !preloadedActiveSpec && !prdDiscussionTurn) {
       let brainstormWorkflow = this.brainstormEngine.getWorkflowState(projectId, threadId)
       if (!brainstormWorkflow) {
         brainstormWorkflow = this.brainstormEngine.ensureWorkflow(projectId, threadId)
@@ -7935,21 +7951,6 @@ export class ChatEngine {
         }
       }
     }
-    // The PRD stage is conversational: the agent writes the PRD when the message,
-    // the conversation, and any finalized Brainstorm are enough, and interviews
-    // the user when they are not. It covers the stage and its `prd_finalization`
-    // gate, because a draft under review is still being discussed and a review
-    // comment must never be mistaken for the specification turn that finalization
-    // unlocks. It shares the planning turn shape but never the specification
-    // contract, so it stays out of the spec scheduling below.
-    const prdDiscussionTurn =
-      planningSpecTurn &&
-      specAction === undefined &&
-      !preloadedActiveSpec &&
-      !activeBrainstormSession &&
-      (lifecycleForMode?.activeStage === 'prd' ||
-        lifecycleForMode?.humanGate === 'prd_finalization') &&
-      this.prdEngine.getWorkflowState(projectId, threadId)?.stage === 'drafting'
     // Session preparation may need to probe the CLI, create a native session,
     // install per-turn utilities, and rebuild context. Publish the working
     // state before that work so every renderer surface reflects the run as
@@ -7979,9 +7980,10 @@ export class ChatEngine {
       // The planning-session mark drives terminal-answer suppression at turn
       // finalization and on transcript reloads. It must reflect THIS turn's
       // intent, never stale membership from an earlier planning turn: planning
-      // specification turns suppress their chat prose. Brainstorm interviews
-      // must retain the findings and alignment recap as visible conversation.
-      if (planningSpecTurn && !activeBrainstormSession) {
+      // specification turns suppress their chat prose. Brainstorm interviews and
+      // PRD interviews must retain the findings, the recap, and the questions as
+      // visible conversation.
+      if (planningSpecTurn && !activeBrainstormSession && !prdDiscussionTurn) {
         this.planningSessions.add(sessionId)
       } else {
         this.planningSessions.delete(sessionId)
@@ -18951,6 +18953,20 @@ export class ChatEngine {
     this.pendingPrdTurns.delete(sessionId)
     await this.clearPendingPrdTurn(pending.projectId, pending.threadId)
 
+    // Re-derive the turn intent before touching anything. A record retained across
+    // a question-tool turn is consumed by the next finalization for this session,
+    // which may belong to a later stage once the PRD was finalized or cancelled,
+    // and creating a document there would be wrong.
+    const turnLifecycle = this.engineeringLifecycleEngine.get(pending.projectId, pending.threadId)
+    if (turnLifecycle?.activeStage !== 'prd' && turnLifecycle?.humanGate !== 'prd_finalization') {
+      return null
+    }
+    if (
+      this.prdEngine.getWorkflowState(pending.projectId, pending.threadId)?.stage !== 'drafting'
+    ) {
+      return null
+    }
+
     const driver = this.driverForRuntime(
       pending.harnessId,
       this.sessionRegistry.get(sessionId)?.accountId
@@ -18967,12 +18983,22 @@ export class ChatEngine {
       .filter((part) => part.type === 'text')
       .map((part) => part.text)
       .join('\n')
-    // An answer without a single `{` is the interview outcome: the agent asked its
-    // questions instead of submitting, so nothing is captured and nothing failed.
-    if (response.structuredOutput === undefined && !text.includes('{')) return null
-    const raw =
-      response.structuredOutput ?? parseGeneratedJson(text, 'The PRD agent returned invalid JSON')
-    const content = parseGeneratedPrdContent(raw)
+    // No decodable JSON object in the answer is the interview outcome: the agent
+    // asked its questions or narrated instead of submitting, so nothing is
+    // captured and nothing failed. A decodable object that then fails PRD
+    // validation is a rejected submission and throws below.
+    let submitted: unknown
+    if (response.structuredOutput === undefined) {
+      try {
+        submitted = parseGeneratedJson(text, 'The PRD agent returned invalid JSON')
+      } catch (error) {
+        if (error instanceof GeneratedJsonParseError) return null
+        throw error
+      }
+    } else {
+      submitted = response.structuredOutput
+    }
+    const content = parseGeneratedPrdContent(submitted)
     const created = await this.createPrdDraftFromContent({
       projectId: pending.projectId,
       threadId: pending.threadId,
@@ -22595,7 +22621,7 @@ export class ChatEngine {
             ? 'failed'
             : revisedSpec || revisedBrainstorm
               ? 'spec'
-              : createdPrd
+              : createdPrd && threadBeforeFinalize?.status !== 'failed'
                 ? 'awaiting_approval'
                 : auxiliaryFailure
                   ? // An auxiliary artifact update failed: settle on the

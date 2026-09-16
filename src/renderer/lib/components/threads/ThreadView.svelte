@@ -672,7 +672,7 @@
   /** The send that opened the entry card. The composer clears its buffer at
    *  submit time, so the payload waits here and its draft is handed back while
    *  the card is up; the resolved entry choice resends it. */
-  let pendingEntrySend = $state<GuardedSendPayload | null>(null)
+  let pendingEntrySend = $state<ParkedEntrySend | null>(null)
   /** Toolbox presentation mirrors the staged selection so switches flip
    *  immediately, while every side effect stays deferred until the send. */
   const pendingLifecycleDisplay = $derived.by((): EngineeringLifecycleState | null => {
@@ -2256,6 +2256,13 @@
     projectReferences: PromptProjectReference[]
     taskReferences: PromptAssignmentTaskReference[]
     startAfterThreads: StartAfterThreadReference[]
+  }
+
+  /** The entry-card park: the guarded payload plus the action intent and the
+   *  user-message presentation, so the resend after a choice keeps both. */
+  interface ParkedEntrySend extends GuardedSendPayload {
+    specAction?: SpecActionIntent
+    presentation?: UserMessagePresentation
   }
 
   function sendComposerMessage(
@@ -5429,6 +5436,8 @@
           attachments,
           ...(direct ? { direct } : {}),
           ...(promptContext ? { promptContext } : {}),
+          ...(specAction ? { specAction } : {}),
+          ...(presentation ? { presentation } : {}),
           promptReferences,
           projectReferences,
           taskReferences,
@@ -6761,12 +6770,12 @@
     await sendMessage(
       parked.text,
       parked.attachments,
-      undefined,
+      parked.specAction,
       parked.direct,
       parked.promptContext,
       parked.promptReferences,
       parked.projectReferences,
-      undefined,
+      parked.presentation,
       parked.taskReferences,
       true,
       parked.startAfterThreads
