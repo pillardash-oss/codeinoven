@@ -117,7 +117,13 @@
     aria-label="Switch branch"
   >
     <GitBranch size={11} class="shrink-0" />
-    <span class="max-w-[10ch] truncate">{currentBranch ?? 'detached'}</span>
+    <!--
+      Wide enough for a real branch name (`feature/git-panel-redesign`) instead
+      of the ten characters this used to cap at. `truncate` keeps its automatic
+      minimum size at zero, so a narrow panel still shrinks it rather than
+      pushing the action cluster off the row.
+    -->
+    <span class="max-w-[26ch] truncate">{currentBranch ?? 'detached'}</span>
     <ChevronDown size={10} class="shrink-0 text-dimmed" />
   </DropdownMenu.Trigger>
 

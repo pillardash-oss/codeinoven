@@ -4,7 +4,6 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { pathToFileUrl } from '$lib/mime'
   import { reportError, showToastWarning } from '$lib/stores/app-errors.svelte'
-  import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
@@ -37,6 +36,7 @@
     ChevronLeft,
     ChevronRight,
     Download,
+    ExternalLink,
     Folder,
     FolderOpen,
     FolderTree,
@@ -60,7 +60,6 @@
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import BranchActionsMenu from './BranchActionsMenu.svelte'
-  import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import BranchPicker from './BranchPicker.svelte'
@@ -1427,6 +1426,34 @@
     const repo = match?.[2] ?? ''
     return owner && repo ? { owner, repo } : null
   })
+  /**
+   * Remote-tracking ref names, used to recognise a commit the remote already
+   * has without asking git: a commit wearing one of these decorations is on the
+   * remote by definition.
+   */
+  const remoteTrackingRefs = $derived(
+    new Set(
+      gitState.branches.filter((branch) => branch.kind === 'remote').map((branch) => branch.ref)
+    )
+  )
+  /**
+   * Whether GitHub can show the commit open in the info dialog. History is
+   * `HEAD`'s log, so anything at or below the unpushed boundary the graph draws
+   * is already upstream; a commit outside the loaded page has to wear a
+   * remote-tracking ref to qualify.
+   */
+  const commitInfoOnRemote = $derived.by(() => {
+    const target = commitInfoTarget
+    if (!target) return false
+    if (target.refs.some((ref) => remoteTrackingRefs.has(ref.name))) return true
+    if (!status?.upstream) return false
+    return commitHistory.findIndex((commit) => commit.hash === target.hash) >= unpushedCount
+  })
+  const commitInfoUrl = $derived(
+    githubIdentity && commitInfoTarget
+      ? `https://github.com/${encodeURIComponent(githubIdentity.owner)}/${encodeURIComponent(githubIdentity.repo)}/commit/${commitInfoTarget.hash}`
+      : null
+  )
   const needsUpstreamPush = $derived(
     Boolean(status?.branch) && !status?.detached && status?.upstream === null
   )
@@ -2131,9 +2158,20 @@
         </div>
       {/if}
 
-      <span class="flex-1"></span>
-
       {#if repoState === 'git' && status}
+        <!--
+          Working tree state belongs to the branch it describes, so the badge
+          sits against the branch name and the drift chips follow it, instead
+          of both being spread across the row against the action buttons.
+        -->
+        <span
+          class={[
+            'shrink-0 rounded-full px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide',
+            status.clean ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
+          ]}
+        >
+          {status.clean ? 'Clean' : 'Dirty'}
+        </span>
         {#if status.ahead > 0 || status.behind > 0}
           <span class="flex shrink-0 items-center gap-1">
             {#if status.ahead > 0}
@@ -2152,21 +2190,54 @@
             {/if}
           </span>
         {/if}
-        <span
-          class={[
-            'shrink-0 rounded-full px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide',
-            status.clean ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
-          ]}
-        >
-          {status.clean ? 'Clean' : 'Dirty'}
-        </span>
       {/if}
-      <DiffLayoutToggle title={diffLayoutToggleLabel('vertical')} size={12} />
+
+      <span class="flex-1"></span>
+
+      {#if repoState === 'git' && status && (remotes.length > 0 || worktreeScope)}
+        <!--
+          Only the remote action that is actually needed right now earns a
+          label; the rest stay one click away in the menu beside it. Fetch is
+          the exception with no drift to advertise, so it lives in that menu
+          only rather than taking a permanent button slot.
+        -->
+        {#if status.behind > 0}
+          <button
+            type="button"
+            class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+            title={`Pull ${String(status.behind)} commit(s) from the remote`}
+            disabled={remotes.length === 0 || syncBusy}
+            onclick={() => void pullAction()}
+          >
+            {#if gitState.isBusy('pull')}
+              <Loader2 size={11} class="animate-spin" />
+            {:else}
+              <ArrowDownToLine size={11} />
+            {/if}
+            Pull {status.behind}
+          </button>
+        {:else if status.ahead > 0}
+          <button
+            type="button"
+            class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+            title={`Push ${String(status.ahead)} commit(s) to the remote`}
+            disabled={remotes.length === 0 || syncBusy || gitState.isBusy('push')}
+            onclick={() => void pushAction()}
+          >
+            {#if gitState.isBusy('push')}
+              <Loader2 size={11} class="animate-spin" />
+            {:else}
+              <ArrowUpFromLine size={11} />
+            {/if}
+            Push {status.ahead}
+          </button>
+        {/if}
+      {/if}
       {#if repoState === 'git'}
         <button
           type="button"
           class={[
-            'flex h-6 w-6 items-center justify-center rounded transition-colors',
+            'flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors',
             findNavState.gitFindOpen
               ? 'bg-elevated text-foreground'
               : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -2181,7 +2252,7 @@
       {/if}
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
         aria-label="Refresh git status"
         title="Refresh git status"
         disabled={busy}
@@ -2193,11 +2264,15 @@
       {#if repoState === 'git'}
         <DropdownMenu.Root>
           <DropdownMenu.Trigger
-            class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-            aria-label="More git actions"
-            title="More git actions"
+            class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+            aria-label="Git actions"
+            title="Git actions"
           >
-            <MoreHorizontal size={13} />
+            {#if syncBusy}
+              <Loader2 size={12} class="animate-spin" />
+            {:else}
+              <MoreHorizontal size={13} />
+            {/if}
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content
@@ -2205,8 +2280,38 @@
               align="end"
               sideOffset={4}
               collisionPadding={8}
-              class="z-50 w-52 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+              class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
             >
+              <!--
+                Remote sync and the working-tree actions share one menu. Fetch,
+                pull and push used to live in a second dropdown beside this one,
+                which meant two menus for one job.
+              -->
+              <DropdownMenu.Item
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
+                disabled={remotes.length === 0 || syncBusy}
+                onSelect={() => void gitState.fetch(projectId)}
+              >
+                <Download size={12} class="shrink-0 text-dimmed" />
+                Fetch
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
+                disabled={remotes.length === 0 || syncBusy}
+                onSelect={() => void pullAction()}
+              >
+                <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
+                Pull{status && status.behind > 0 ? ` ${String(status.behind)}` : ''}
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
+                disabled={remotes.length === 0 || syncBusy}
+                onSelect={() => void pushAction()}
+              >
+                <ArrowUpFromLine size={12} class="shrink-0 text-dimmed" />
+                Push{status && status.ahead > 0 ? ` ${String(status.ahead)}` : ''}
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator class="my-1 h-px bg-border" />
               <DropdownMenu.Item
                 class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
@@ -2286,112 +2391,6 @@
             {/if}
           </button>
         {/each}
-
-        {#if repoState === 'git' && status && (remotes.length > 0 || worktreeScope)}
-          <!--
-            Only the remote action that is actually needed right now earns a
-            label; the rest stay one click away beside it. This replaces the
-            three permanent Fetch/Pull/Push buttons that used to occupy their
-            own footer row on every working-tree tab.
-          -->
-          <div class="sticky right-0 ml-auto flex shrink-0 items-center gap-0.5 bg-app pl-1">
-            {#if status.behind > 0}
-              <button
-                type="button"
-                class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
-                title={`Pull ${String(status.behind)} commit(s) from the remote`}
-                disabled={remotes.length === 0 || syncBusy}
-                onclick={() => void pullAction()}
-              >
-                {#if gitState.isBusy('pull')}
-                  <Loader2 size={11} class="animate-spin" />
-                {:else}
-                  <ArrowDownToLine size={11} />
-                {/if}
-                Pull {status.behind}
-              </button>
-            {:else if status.ahead > 0}
-              <button
-                type="button"
-                class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
-                title={`Push ${String(status.ahead)} commit(s) to the remote`}
-                disabled={remotes.length === 0 || syncBusy || gitState.isBusy('push')}
-                onclick={() => void pushAction()}
-              >
-                {#if gitState.isBusy('push')}
-                  <Loader2 size={11} class="animate-spin" />
-                {:else}
-                  <ArrowUpFromLine size={11} />
-                {/if}
-                Push {status.ahead}
-              </button>
-            {/if}
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger
-                class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-sm text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40 data-[state=open]:bg-elevated"
-                aria-label="Remote sync actions"
-                title="Remote sync actions"
-                disabled={remotes.length === 0 || syncBusy}
-              >
-                {#if gitState.isBusy('fetch') || syncBusy}
-                  <Loader2 size={11} class="animate-spin" />
-                {:else}
-                  <ChevronDown size={12} />
-                {/if}
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content
-                  class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
-                  side="bottom"
-                  align="end"
-                  sideOffset={4}
-                  collisionPadding={8}
-                >
-                  <DropdownMenu.Item
-                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                    onSelect={() => void gitState.fetch(projectId)}
-                  >
-                    <Download size={12} class="shrink-0 text-dimmed" />
-                    Fetch
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item
-                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                    onSelect={() => void pullAction()}
-                  >
-                    <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
-                    Pull{status.behind > 0 ? ` ${String(status.behind)}` : ''}
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item
-                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                    onSelect={() => void pushAction()}
-                  >
-                    <ArrowUpFromLine size={12} class="shrink-0 text-dimmed" />
-                    Push{status.ahead > 0 ? ` ${String(status.ahead)}` : ''}
-                  </DropdownMenu.Item>
-                  {#if worktreeScope}
-                    <DropdownMenu.Separator class="my-1 h-px bg-border" />
-                    <DropdownMenu.Item
-                      class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                      disabled={conflicted.length > 0}
-                      onSelect={() => void syncMainAction('from-main')}
-                    >
-                      <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
-                      Pull main into this worktree
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item
-                      class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                      disabled={conflicted.length > 0}
-                      onSelect={() => void syncMainAction('to-main')}
-                    >
-                      <ArrowUpToLine size={12} class="shrink-0 text-dimmed" />
-                      Send this worktree to main
-                    </DropdownMenu.Item>
-                  {/if}
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-          </div>
-        {/if}
       </div>
     {/if}
   </div>
@@ -4729,6 +4728,23 @@
             >
               Copy
             </button>
+            {#if commitInfoOnRemote && commitInfoUrl}
+              <!--
+                Only offered once the commit is actually on the remote. GitHub
+                answers 404 for a commit that was never pushed, so offering it
+                for local work would open a dead page.
+              -->
+              <button
+                type="button"
+                class="flex shrink-0 cursor-pointer items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                title={`Open commit ${info.shortHash} on GitHub`}
+                aria-label={`Open commit ${info.shortHash} on GitHub`}
+                onclick={() => void openInBrowser(commitInfoUrl)}
+              >
+                <ExternalLink size={10} />
+                Open in browser
+              </button>
+            {/if}
           </div>
         </div>
 
