@@ -246,29 +246,33 @@
   })
 </script>
 
-<div class="p-6 pb-24">
-  <div class="flex flex-wrap items-center justify-between gap-3">
-    <button
-      class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
-      type="button"
-      title={backLabel}
-      onclick={onBack}
-    >
-      <ArrowLeft size={13} />
-      {backLabel}
-    </button>
-    <SkillBookmarkButton
-      {entry}
-      labelled
-      title={skillBookmarkTitle(entry.name, skillBookmarkState.isBookmarked(entry.id))}
-      class="border bg-elevated hover:bg-overlay"
-    />
-  </div>
+<div class="flex h-full min-h-0 flex-col">
+  <!--
+    The skill identity stays pinned while the body scrolls, so the back control,
+    the bookmark toggle, and the summary never leave the screen.
+  -->
+  <header class="shrink-0 border-b bg-app px-6 pt-6 pb-4">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <button
+        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+        type="button"
+        title={backLabel}
+        onclick={onBack}
+      >
+        <ArrowLeft size={13} />
+        {backLabel}
+      </button>
+      <SkillBookmarkButton
+        {entry}
+        labelled
+        title={skillBookmarkTitle(entry.name, skillBookmarkState.isBookmarked(entry.id))}
+        class="border bg-elevated hover:bg-overlay"
+      />
+    </div>
 
-  <header class="mt-5">
-    <p class="font-mono text-xs text-muted">{entry.source}</p>
+    <p class="mt-4 font-mono text-xs text-muted">{entry.source}</p>
     <h1 class="mt-1 break-words text-xl font-bold tracking-tight">{entry.name}</h1>
-    <p class="mt-3 text-sm leading-relaxed text-muted">
+    <p class="mt-2 text-sm leading-relaxed text-muted">
       {detail?.description ||
         (loading
           ? 'Loading source details…'
@@ -276,49 +280,57 @@
     </p>
   </header>
 
-  {#if error}
-    <p class="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-      {error}
-    </p>
-  {/if}
-  {#if installedMessage}
-    <p class="mt-4 rounded-lg bg-success/10 px-3 py-2 text-xs text-success" role="status">
-      {installedMessage}
-    </p>
-  {/if}
-
-  <div class="mt-7 grid gap-8 lg:grid-cols-[minmax(0,1fr)_19rem]">
-    <section class="min-w-0" aria-labelledby="skill-content-title">
-      <div class="flex items-center gap-2">
-        <h2
-          id="skill-content-title"
-          class="text-xs font-semibold uppercase tracking-wide text-muted"
-        >
-          SKILL.md
-        </h2>
-        {#if loading}<Loader2 size={12} class="animate-spin text-dimmed" />{/if}
-      </div>
-      {#if detail?.skillMarkdown}
-        <MarkdownView text={detail.skillMarkdown} class="mt-4" />
-      {:else if loading}
-        <div class="mt-5 space-y-3" aria-label="Loading skill instructions">
-          <div class="h-4 w-3/5 animate-pulse rounded bg-raised"></div>
-          <div class="h-3 w-full animate-pulse rounded bg-raised"></div>
-          <div class="h-3 w-11/12 animate-pulse rounded bg-raised"></div>
-          <div class="h-3 w-4/5 animate-pulse rounded bg-raised"></div>
-        </div>
-      {:else}
-        <div class="mt-4 rounded-xl border border-dashed p-6">
-          <p class="text-sm font-medium">SKILL.md preview unavailable</p>
-          <p class="mt-1 text-xs leading-relaxed text-muted">
-            The marketplace metadata loaded, but the source did not expose a readable skill file.
-          </p>
-        </div>
+  <!--
+    Phones get one scroller over the whole body. On wide screens the body scrolls
+    on its own and the install card sits in a fixed pane beside it.
+  -->
+  <div
+    class="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pt-5 pb-24 lg:flex-row lg:gap-8 lg:overflow-hidden lg:p-0"
+  >
+    <div class="min-w-0 pt-4 lg:flex-1 lg:overflow-y-auto lg:px-6 lg:pt-5 lg:pb-24">
+      {#if error}
+        <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+          {error}
+        </p>
       {/if}
-    </section>
+      {#if installedMessage}
+        <p class="mb-4 rounded-lg bg-success/10 px-3 py-2 text-xs text-success" role="status">
+          {installedMessage}
+        </p>
+      {/if}
+
+      <section class="min-w-0" aria-labelledby="skill-content-title">
+        <div class="flex items-center gap-2">
+          <h2
+            id="skill-content-title"
+            class="text-xs font-semibold uppercase tracking-wide text-muted"
+          >
+            SKILL.md
+          </h2>
+          {#if loading}<Loader2 size={12} class="animate-spin text-dimmed" />{/if}
+        </div>
+        {#if detail?.skillMarkdown}
+          <MarkdownView text={detail.skillMarkdown} class="mt-4" />
+        {:else if loading}
+          <div class="mt-5 space-y-3" aria-label="Loading skill instructions">
+            <div class="h-4 w-3/5 animate-pulse rounded bg-raised"></div>
+            <div class="h-3 w-full animate-pulse rounded bg-raised"></div>
+            <div class="h-3 w-11/12 animate-pulse rounded bg-raised"></div>
+            <div class="h-3 w-4/5 animate-pulse rounded bg-raised"></div>
+          </div>
+        {:else}
+          <div class="mt-4 rounded-xl border border-dashed p-6">
+            <p class="text-sm font-medium">SKILL.md preview unavailable</p>
+            <p class="mt-1 text-xs leading-relaxed text-muted">
+              The marketplace metadata loaded, but the source did not expose a readable skill file.
+            </p>
+          </div>
+        {/if}
+      </section>
+    </div>
 
     <aside
-      class="order-first space-y-4 self-start lg:order-none"
+      class="order-first space-y-4 lg:order-none lg:w-[19rem] lg:shrink-0 lg:overflow-y-auto lg:py-5 lg:pr-6"
       aria-label="Install skill and skill facts"
     >
       <section class="rounded-xl border bg-surface p-4" aria-labelledby="install-skill-title">

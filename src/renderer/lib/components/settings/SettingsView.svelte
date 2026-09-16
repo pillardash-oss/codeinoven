@@ -976,7 +976,9 @@
           </div>
         {/if}
         {#if utilitiesRoute.page === 'skill'}
-          <div class="absolute inset-0 overflow-y-auto bg-app">
+          <!-- The skill page owns its scrolling: a pinned identity header and a body
+               pane that scrolls under it. -->
+          <div class="absolute inset-0 overflow-hidden bg-app">
             {#key utilitiesRoute.entry.id}
               <SkillMarketplaceDetail
                 entry={utilitiesRoute.entry}
