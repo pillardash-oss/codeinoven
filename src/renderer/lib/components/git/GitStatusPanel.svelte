@@ -30,7 +30,6 @@
     ArrowDownToLine,
     ArrowLeft,
     ArrowUpFromLine,
-    ArrowUpToLine,
     Check,
     ChevronDown,
     ChevronLeft,
@@ -2163,8 +2162,10 @@
       {#if repoState === 'git' && status}
         <!--
           Working tree state belongs to the branch it describes, so the badge
-          sits against the branch name and the drift chips follow it, instead
-          of both being spread across the row against the action buttons.
+          sits against the branch name instead of being spread across the row
+          against the action buttons. The ahead/behind counts live on the Pull
+          and Push buttons themselves   a second pair of drift chips beside the
+          branch name only repeated the numbers already printed there.
         -->
         <span
           class={[
@@ -2174,34 +2175,18 @@
         >
           {status.clean ? 'Clean' : 'Dirty'}
         </span>
-        {#if status.ahead > 0 || status.behind > 0}
-          <span class="flex shrink-0 items-center gap-1">
-            {#if status.ahead > 0}
-              <span
-                class="rounded bg-success/10 px-1 py-0.5 font-mono text-[0.5625rem] tabular-nums text-success"
-              >
-                ↑{status.ahead}
-              </span>
-            {/if}
-            {#if status.behind > 0}
-              <span
-                class="rounded bg-danger/10 px-1 py-0.5 font-mono text-[0.5625rem] tabular-nums text-danger"
-              >
-                ↓{status.behind}
-              </span>
-            {/if}
-          </span>
-        {/if}
       {/if}
 
       <span class="flex-1"></span>
 
       {#if repoState === 'git' && status && (remotes.length > 0 || worktreeScope)}
         <!--
-          Only the remote action that is actually needed right now earns a
-          label; the rest stay one click away in the menu beside it. Fetch is
-          the exception with no drift to advertise, so it lives in that menu
-          only rather than taking a permanent button slot.
+          Every remote action that is needed right now carries its own count,
+          so it is never worth a click into the menu to find out how much is
+          waiting. Pull and Push are independent: a diverged branch needs both,
+          and hiding one behind the other left the second reachable only from
+          that menu. Fetch advertises no drift, so it stays in the menu rather
+          than taking a permanent button slot.
         -->
         {#if status.behind > 0}
           <button
@@ -2218,7 +2203,8 @@
             {/if}
             Pull {status.behind}
           </button>
-        {:else if status.ahead > 0}
+        {/if}
+        {#if status.ahead > 0}
           <button
             type="button"
             class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
