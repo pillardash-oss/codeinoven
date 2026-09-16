@@ -698,11 +698,20 @@ export class RemoteRpcDispatcher {
           typeof args[3] === 'number' ? args[3] : 40
         )
       }
-      case 'thread:loadStreamParts':
+      case 'thread:loadStreamParts': {
+        const query = args[2] as Record<string, unknown> | undefined
         return this.services.chatEngine.loadTurnStreamParts(
           this.string(args[0]),
-          this.string(args[1])
+          this.string(args[1]),
+          query && typeof query === 'object'
+            ? {
+                beforeId: this.optionalString(query.beforeId),
+                afterId: this.optionalString(query.afterId),
+                limit: typeof query.limit === 'number' ? query.limit : undefined
+              }
+            : undefined
         )
+      }
       case 'thread:update':
         return this.threadManager.updateThread(
           this.string(args[0]),

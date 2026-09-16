@@ -2905,6 +2905,50 @@ export interface ThreadMessagePage {
   hasNewer?: boolean
 }
 
+/**
+ * Trace entries the working trace mounts when it opens, and the size of each
+ * older page it pulls in on inner scroll. A live trace streams unbounded into
+ * the durable log, but the renderer only ever mounts one bounded window: a long
+ * running thread must open instantly, and while the reader stays on the thread
+ * nothing already mounted is ever evicted.
+ */
+export const WORKING_TRACE_PAGE_SIZE = 15
+
+/**
+ * Bounded window request over a thread's durable working-trace stream.
+ *
+ * The stream log folds to one ordered, first-seen list of parts for the newest
+ * logical turn, so a page is expressed as a slice of that list rather than a
+ * timestamp cursor: `beforeId` walks back through older entries, `afterId`
+ * fetches only what landed since the renderer's last read.
+ */
+export interface TurnStreamPartsQuery {
+  /** Return up to `limit` parts immediately older than this part id. */
+  beforeId?: string
+  /** Return up to `limit` parts newer than this part id (live delta poll). */
+  afterId?: string
+  /** Maximum parts to return. Defaults to `WORKING_TRACE_PAGE_SIZE`. */
+  limit?: number
+}
+
+/** One bounded page of a thread's durable working-trace parts. */
+export interface TurnStreamPartsPage {
+  /** The page, ordered oldest to newest. Task-list tool parts are excluded:
+   *  they drive the task card (`todoParts`), never the trace window. */
+  parts: AgentPart[]
+  /** Total trace parts the durable log currently folds for the turn. */
+  total: number
+  /** Index of `parts[0]` inside that full folded list. */
+  start: number
+  /** True when the fold holds trace parts older than this page. */
+  hasOlder: boolean
+  /** True when the fold holds trace parts newer than this page. */
+  hasNewer: boolean
+  /** Newest durable task-list tool parts for the turn, so the task card never
+   *  depends on which trace page happens to be mounted. */
+  todoParts: AgentPart[]
+}
+
 /** Lightweight user-authored message summary for the header history jump list. */
 export interface UserMessageSummary {
   id: string

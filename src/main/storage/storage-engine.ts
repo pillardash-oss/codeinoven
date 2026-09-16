@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { randomInt } from 'crypto'
-import { readFile, appendFile, unlink } from 'fs/promises'
+import { readFile, appendFile, unlink, open, type FileHandle } from 'fs/promises'
 import {
   getConfigRoot,
   ensureDir,
@@ -78,6 +78,16 @@ const DEFAULT_CONFIG: AppConfig = {
  */
 const HEARTBEATS_FILE = 'heartbeat/heartbeats.json'
 const VISION_MODELS_FILE = 'vision-models.json'
+
+/** Result of an incremental, byte-offset tail read of an append-only log. */
+export interface RawFileTail {
+  /** Complete lines after `fromByte`, decoded UTF-8. Empty when none yet. */
+  content: string
+  /** Byte offset to pass to the next call. */
+  nextByte: number
+  /** Current file size in bytes. */
+  size: number
+}
 
 export class StorageEngine {
   private root: string
@@ -385,6 +395,45 @@ export class StorageEngine {
     } catch (error) {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
       throw error
+    }
+  }
+
+  /** Read only the bytes appended after `fromByte`, cut to the last complete
+   *  line. Lets append-only logs tail themselves without re-reading (and
+   *  re-decoding) the whole file on every poll. Returns null when the file is
+   *  missing; `size` is the file's current byte length so callers can detect a
+   *  rewrite (shrunk file) themselves. */
+  async readRawTail(relativePath: string, fromByte: number): Promise<RawFileTail | null> {
+    let handle: FileHandle
+    try {
+      handle = await open(this.resolve(relativePath), 'r')
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+      throw error
+    }
+    try {
+      const { size } = await handle.stat()
+      if (fromByte >= size) return { content: '', nextByte: size, size }
+      const length = size - fromByte
+      const buffer = Buffer.allocUnsafe(length)
+      let read = 0
+      while (read < length) {
+        const chunk = await handle.read(buffer, read, length - read, fromByte + read)
+        if (chunk.bytesRead === 0) break
+        read += chunk.bytesRead
+      }
+      // Decode only up to and including the last newline, so a trailing partial
+      // line (and any partial multibyte character in it) is never cut.
+      const region = buffer.subarray(0, read)
+      const lastNewline = region.lastIndexOf(0x0a)
+      if (lastNewline === -1) return { content: '', nextByte: fromByte, size }
+      return {
+        content: region.subarray(0, lastNewline + 1).toString('utf8'),
+        nextByte: fromByte + lastNewline + 1,
+        size
+      }
+    } finally {
+      await handle.close()
     }
   }
 

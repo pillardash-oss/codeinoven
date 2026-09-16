@@ -227,6 +227,8 @@ import type {
   ThreadSettings,
   TurnCheckpointChangeSummary,
   TurnCheckpointSummary,
+  TurnStreamPartsPage,
+  TurnStreamPartsQuery,
   ThinkingLevel,
   ModelRankingSnapshotRow,
   UsageEventDetails,
@@ -240,6 +242,7 @@ import {
 } from '../../lib/types'
 import { capPersistedPart } from './bounded-tool-output'
 import { foldTurnStreamEvents, type TurnStreamEvent } from './turn-stream'
+import { pageTurnStreamParts } from './turn-stream-page'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
 import { workflowActionPresentation } from '../../lib/workflow-action-presentation'
@@ -1516,8 +1519,8 @@ interface ActiveBrainstormSession {
 }
 
 interface TurnStreamCacheEntry {
-  /** Raw prefix of the stream log already consumed by this entry. */
-  consumedRaw: string
+  /** Byte offset of the stream log already consumed by this entry. */
+  consumedBytes: number
   /** Every parsed stream event, in log order. */
   events: TurnStreamEvent[]
   /** Turn id of the last event that carried one. */
@@ -2578,8 +2581,10 @@ export class ChatEngine {
       (_, projectId: string, threadId: string, sessionId: string) =>
         this.loadSessionMessages(projectId, threadId, sessionId)
     )
-    ipcMain.handle('thread:loadStreamParts', (_, projectId: string, threadId: string) =>
-      this.loadTurnStreamParts(projectId, threadId)
+    ipcMain.handle(
+      'thread:loadStreamParts',
+      (_, projectId: string, threadId: string, query?: TurnStreamPartsQuery) =>
+        this.loadTurnStreamParts(projectId, threadId, query ?? {})
     )
     ipcMain.handle('agent:loadTemporaryChatMessages', async (_, temporaryChatId: string) =>
       (await this.loadTemporaryConversation(temporaryChatId)).map(withoutTransportParts)
@@ -20779,15 +20784,21 @@ export class ChatEngine {
     return `projects/${projectId}/threads/${threadId}/stream.jsonl`
   }
 
-  /** Rebuild the working-trace parts from the thread's durable SSE log. Returns
-   *  only the most recent logical turn's parts, so a reopened mid-turn thread
-   *  shows its own streamed work rather than stale parts from earlier turns.
-   *  Parsed events are cached per thread and the log is append-only, so a
-   *  reopen only parses bytes appended since the last load. */
-  async loadTurnStreamParts(projectId: string, threadId: string): Promise<AgentPart[]> {
+  /** Rebuild a bounded page of the working trace from the thread's durable SSE
+   *  log. Returns only the most recent logical turn's parts, cut to a page
+   *  around the query cursor, so a reopened mid-turn thread shows its own
+   *  streamed work rather than stale parts from earlier turns. Parsed events
+   *  are cached per thread and the log is append-only, so the log is tailed
+   *  incrementally by byte offset and each call only parses bytes appended
+   *  since the last load. */
+  async loadTurnStreamParts(
+    projectId: string,
+    threadId: string,
+    query: TurnStreamPartsQuery = {}
+  ): Promise<TurnStreamPartsPage> {
     const streamPath = this.turnStreamPath(projectId, threadId)
     const entry = this.turnStreamCache.get(streamPath) ?? {
-      consumedRaw: '',
+      consumedBytes: 0,
       events: [],
       latestTurnId: '',
       foldKey: null,
@@ -20801,57 +20812,51 @@ export class ChatEngine {
       this.turnStreamCache.delete(oldest)
     }
 
-    const raw = await this.storage.readRaw(streamPath)
-    if (!raw) {
+    let tail = await this.storage.readRawTail(streamPath, entry.consumedBytes)
+    if (!tail) {
       this.turnStreamCache.delete(streamPath)
-      return []
+      return { parts: [], total: 0, start: 0, hasOlder: false, hasNewer: false, todoParts: [] }
     }
-    // The log is append-only, so a shrink or a diverging prefix means the file
-    // was rewritten underneath us   drop every cached event and re-parse cold.
-    if (raw.length < entry.consumedRaw.length || !raw.startsWith(entry.consumedRaw)) {
-      entry.consumedRaw = ''
+    // The log is append-only, so a shrink means the file was rewritten
+    // underneath us   drop every cached event and re-read once from byte 0.
+    if (tail.size < entry.consumedBytes) {
+      entry.consumedBytes = 0
       entry.events = []
       entry.latestTurnId = ''
       entry.foldKey = null
       entry.folded = null
-    }
-    if (raw.length !== entry.consumedRaw.length) {
-      // Consume only up to the last complete line; a trailing partial line is
-      // left unparsed until its newline lands.
-      const appended = raw.slice(entry.consumedRaw.length)
-      const lastNewline = appended.lastIndexOf('\n')
-      if (lastNewline !== -1) {
-        const consumable = appended.slice(0, lastNewline + 1)
-        for (const line of consumable.split('\n')) {
-          const trimmed = line.trim()
-          if (!trimmed) continue
-          try {
-            const parsed = JSON.parse(trimmed) as TurnStreamEvent
-            if (parsed.kind === 'part.updated' || parsed.kind === 'part.delta') {
-              entry.events.push(parsed)
-              if (parsed.turnId) entry.latestTurnId = parsed.turnId
-            }
-          } catch {
-            // A malformed line must not block rehydration of the rest of the stream.
-          }
-        }
-        entry.consumedRaw = raw.slice(0, entry.consumedRaw.length + consumable.length)
+      tail = await this.storage.readRawTail(streamPath, 0)
+      if (!tail) {
+        this.turnStreamCache.delete(streamPath)
+        return { parts: [], total: 0, start: 0, hasOlder: false, hasNewer: false, todoParts: [] }
       }
     }
+    for (const line of tail.content.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        const parsed = JSON.parse(trimmed) as TurnStreamEvent
+        if (parsed.kind === 'part.updated' || parsed.kind === 'part.delta') {
+          entry.events.push(parsed)
+          if (parsed.turnId) entry.latestTurnId = parsed.turnId
+        }
+      } catch {
+        // A malformed line must not block rehydration of the rest of the stream.
+      }
+    }
+    entry.consumedBytes = tail.nextByte
 
     // Fold the latest bound turn PLUS every unbound-turn event. Re-folding is
     // skipped entirely when neither the events nor the turn boundary changed.
     const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
     const foldKey = `${entry.events.length}:${entry.latestTurnId}:${turnStartTs ?? ''}`
-    if (entry.foldKey !== foldKey || !entry.folded) {
-      entry.folded = foldTurnStreamEvents(
-        entry.events,
-        entry.latestTurnId || undefined,
-        turnStartTs
-      )
+    let folded = entry.folded
+    if (entry.foldKey !== foldKey || !folded) {
+      folded = foldTurnStreamEvents(entry.events, entry.latestTurnId || undefined, turnStartTs)
+      entry.folded = folded
       entry.foldKey = foldKey
     }
-    return entry.folded
+    return pageTurnStreamParts(folded, query)
   }
 
   /** Timestamp of the newest non-activity user message in the mirror   the

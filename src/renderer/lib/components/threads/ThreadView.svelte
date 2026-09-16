@@ -172,7 +172,8 @@
   import {
     DEFAULT_SCOPE_BUCKET_ID,
     DEFAULT_THREAD_TITLE,
-    isOrchestrationChildThread
+    isOrchestrationChildThread,
+    WORKING_TRACE_PAGE_SIZE
   } from '$shared/types'
   import type {
     Thread,
@@ -297,6 +298,11 @@
     /** Opens the scoped projects view with the sidebar focused on this thread
      *  (composer scope shoe   existing threads). */
     onOpenScopeView?: (thread: Thread) => void
+    /** True while this thread's view is actually on screen. The workspace shell
+     *  keeps a thread mounted behind Settings/Scope and other top-level views,
+     *  so this   not unmount   is what tells the view the reader has left it:
+     *  live polling stops and the working trace re-bounds to its newest page. */
+    active?: boolean
   }
 
   let {
@@ -311,7 +317,8 @@
     controller,
     headerSnippet,
     allowCenteredComposer = true,
-    onOpenScopeView
+    onOpenScopeView,
+    active = true
   }: Props = $props()
 
   // Workspace clears its selected-thread state before this keyed view's
@@ -873,13 +880,24 @@
    *  as soon as a live session confirms the real terminal state. */
   let restoredBusy = $state(false)
   /** Durable working-trace parts loaded from the SSE log. They fill gaps in
-   *  the live mirror and restore the latest trace after an app refresh. */
+   *  the live mirror and restore the latest trace after an app refresh. Only a
+   *  bounded window is ever held here: the newest page plus whatever older pages
+   *  the reader has actually paged into, so opening a long running thread never
+   *  pulls (or parses) a whole turn's worth of streamed work. */
   let streamParts = $state<AgentPart[]>([])
+  /** True when the durable log still folds entries older than `streamParts[0]`. */
+  let streamHasOlder = $state(false)
+  /** Newest durable task-list parts for the turn. They never render in the
+   *  trace, so they ride beside the trace window and keep the task card correct
+   *  no matter which page of the trace is mounted. */
+  let streamTodoParts = $state<AgentPart[]>([])
   let streamPartsLoadGeneration = 0
 
   function clearStreamParts(): void {
     streamPartsLoadGeneration += 1
     streamParts = []
+    streamHasOlder = false
+    streamTodoParts = []
   }
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Global "don't ask again" flag for the image-descriptor vision model picker. */
@@ -961,14 +979,15 @@
    * from the live event path and can be newer than the bounded message mirror
    * that arrives with the final thread update. Feed that freshest snapshot to
    * the task card so a trailing provider snapshot cannot rewind the visible
-   * task state.
+   * task state. Task-list parts never render in the trace, so they are carried
+   * beside its window instead of inside it.
    */
   let todoMessages = $derived.by(() => {
-    if (streamParts.length === 0) return messages
+    if (streamTodoParts.length === 0) return messages
     const streamMessage: AgentMessage = {
       id: `${thread.id}:todo-stream`,
       role: 'assistant',
-      parts: streamParts,
+      parts: streamTodoParts,
       createdAt: Number.MAX_SAFE_INTEGER
     }
     return [...messages, streamMessage]
@@ -4189,17 +4208,22 @@
       // Always rebuild the latest logical turn from the durable SSE log. The
       // bounded mirror can contain only the newest snapshot of a long turn,
       // and a finished thread still needs the same complete trace after a
-      // refresh or thread switch.
+      // refresh or thread switch. Only the newest page is read here; older
+      // entries page in on the trace's own inner scroll.
       const generation = ++streamPartsLoadGeneration
-      void invoke('thread:loadStreamParts', projectId, id)
-        .then((parts) => {
+      void invoke('thread:loadStreamParts', projectId, id, {
+        limit: WORKING_TRACE_PAGE_SIZE
+      })
+        .then((page) => {
           if (!alive || generation !== streamPartsLoadGeneration) return
-          streamParts = mergeWorkingParts(streamParts, parts)
+          streamParts = mergeWorkingParts(streamParts, page.parts)
+          streamHasOlder = page.hasOlder
+          streamTodoParts = page.todoParts
           if (
             providerStatus === null &&
             thread.status !== 'working-paused' &&
             !restoredBusy &&
-            hasRenderableWorkingParts(parts)
+            hasRenderableWorkingParts(page.parts)
           ) {
             // Only a saved run that is still the newest work may claim the
             // restored-trace state. Once the user has sent a newer message
@@ -10211,26 +10235,87 @@
     findNavState.closeConversationFind()
   }
 
-  // While a run is streaming, re-pull the durable SSE log every second so the
-  // trace stays fresh even when live 'agent:event' broadcasts are not the
+  /** Cap on one live delta read. Only entries that actually landed since the
+   *  last tick are ever fetched, so this is a safety bound rather than a window
+   *  size: a burst larger than it pages in on the reader's next scroll-up. */
+  const STREAM_PARTS_DELTA_LIMIT = 200
+
+  /** Delta-poll the durable stream: only what landed since the last read crosses
+   *  IPC, so a long live turn no longer re-ships (and the main process no longer
+   *  re-parses) the whole turn once a second. */
+  async function pollStreamParts(): Promise<void> {
+    const { projectId, id } = thread
+    const generation = ++streamPartsLoadGeneration
+    const lastHeldId = streamParts[streamParts.length - 1]?.id
+    try {
+      const page = await invoke(
+        'thread:loadStreamParts',
+        projectId,
+        id,
+        lastHeldId
+          ? { afterId: lastHeldId, limit: STREAM_PARTS_DELTA_LIMIT }
+          : { limit: WORKING_TRACE_PAGE_SIZE }
+      )
+      if (!alive || generation !== streamPartsLoadGeneration) return
+      // A fold that shrank under us belongs to another turn (a steered
+      // continuation, or a log rewritten after the fact): start over from the
+      // newest page instead of keeping entries that no longer belong here.
+      if (page.total < streamParts.length) {
+        streamParts = page.parts
+        streamHasOlder = page.hasOlder
+      } else if (page.parts.length > 0) {
+        streamParts = mergeWorkingParts(streamParts, page.parts)
+        if (!lastHeldId) streamHasOlder = page.hasOlder
+      }
+      streamTodoParts = page.todoParts
+    } catch {
+      // Transient read failure   keep what we have and try again next tick.
+    }
+  }
+
+  /** Pull the next older durable page for the trace's own inner-scroll paging,
+   *  prepending it in first-seen order. */
+  async function loadOlderStreamParts(): Promise<void> {
+    const oldest = streamParts[0]
+    if (!oldest || !streamHasOlder) return
+    const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
+      beforeId: oldest.id,
+      limit: WORKING_TRACE_PAGE_SIZE
+    })
+    if (!alive) return
+    streamHasOlder = page.hasOlder
+    if (page.parts.length === 0) return
+    const held = new SvelteSet(streamParts.map((part) => part.id))
+    streamParts = [...page.parts.filter((part) => !held.has(part.id)), ...streamParts]
+  }
+
+  // While a run is streaming on screen, re-pull the durable SSE log every second
+  // so the trace stays fresh even when live 'agent:event' broadcasts are not the
   // transport (e.g. a second app instance viewing the same thread, which never
   // receives this instance's in-process window broadcasts and would otherwise
-  // show a trace frozen at whatever was on disk at mount).
+  // show a trace frozen at whatever was on disk at mount). The poll is delta-only,
+  // and it stops while this thread is off screen: nobody is watching, so the
+  // live turn does not need a reader's worth of IPC every second.
   $effect(() => {
-    if (!busy) return
-    const poll = setInterval(() => {
-      const generation = ++streamPartsLoadGeneration
-      void invoke('thread:loadStreamParts', thread.projectId, thread.id)
-        .then((parts) => {
-          if (!alive || generation !== streamPartsLoadGeneration) return
-          streamParts = mergeWorkingParts(streamParts, parts)
-        })
-        .catch(() => {})
-    }, 1000)
+    if (!busy || !active) return
+    const poll = setInterval(() => void pollStreamParts(), 1000)
     return () => {
       clearInterval(poll)
       streamPartsLoadGeneration += 1
     }
+  })
+
+  // Leaving this thread (another thread, another top-level view) paginates its
+  // working trace in the background: the poll above stops and the durable window
+  // collapses to the newest page, so coming back mounts a bounded trace instead
+  // of every entry the turn streamed while nobody was reading it. The trim keeps
+  // the newest page rather than dropping the fold, so a restored trace is still
+  // there on return.
+  $effect(() => {
+    if (active) return
+    if (streamParts.length <= WORKING_TRACE_PAGE_SIZE) return
+    streamHasOlder = true
+    streamParts = streamParts.slice(streamParts.length - WORKING_TRACE_PAGE_SIZE)
   })
 
   onDestroy(() => {
@@ -10930,6 +11015,9 @@
                         latest={isCurrentAssistantTurn}
                         done={turnDone}
                         rehydrated={traceIsRestored}
+                        {active}
+                        olderPartsAvailable={isCurrentAssistantTurn && streamHasOlder}
+                        onLoadOlderParts={isCurrentAssistantTurn ? loadOlderStreamParts : undefined}
                         startTime={isLatestTurn
                           ? (getTurnStartTime(absIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(absIndex)}

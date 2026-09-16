@@ -4498,6 +4498,7 @@
               <svelte:boundary onerror={handleConversationRenderError}>
                 <ThreadView
                   thread={selectedThread}
+                  {active}
                   chatMode={mode === 'chats'}
                   allowCenteredComposer={mode === 'chats' ||
                     (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
