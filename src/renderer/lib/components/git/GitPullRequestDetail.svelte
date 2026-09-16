@@ -871,7 +871,8 @@
       <!--
         Rail only. The Git panel's action row carries the identity row for the
         dock, so this row is the rail's own: identity, then full screen, refresh
-        and external link, then the view menu.
+        and external link. The view list below already names every view, so no
+        switcher is repeated up here.
       -->
       <div class="flex items-center gap-1">
         <PrIdentityRow
@@ -913,7 +914,6 @@
         >
           <ExternalLink size={13} />
         </button>
-        {@render viewMenu()}
       </div>
       <p class="mt-1.5 text-[0.75rem] font-medium leading-snug text-foreground">{summary.title}</p>
     {:else}
@@ -923,7 +923,10 @@
         underneath.
       -->
       <div class="flex min-w-0 items-center gap-1.5">
-        <p class="min-w-0 flex-1 truncate text-[0.75rem] font-medium leading-snug text-foreground">
+        <p
+          class="min-w-0 flex-1 truncate text-[0.75rem] font-medium leading-snug text-foreground"
+          title={summary.title}
+        >
           {summary.title}
         </p>
         {@render viewMenu()}
@@ -1452,31 +1455,19 @@
     </div>
 
     <!--
-      Comment and review both consume the box above, so they read as one
-      toolbar (shared border, no gaps) instead of three loose buttons. Each one
-      grows from its own label rather than from zero, so no label is squeezed
-      under its own width until the rail really is too narrow; past that they
-      truncate instead of wrapping onto a second line inside the fixed height row.
+      Two clusters on one row: the verdicts on the left, where a review reads
+      left to right, and the plain comment on the right, where the submit action
+      belongs. The verdicts share one outline (the join reads as one control); the
+      comment is its own button. Both are `rounded-xs` because every button in the
+      app is pinned to 2px by `:where(button) { border-radius: 2px !important }`
+      in app.css, and a wrapper with a larger radius is what made these read as
+      pill-shaped.
     -->
-    <div class="px-3 py-2.5">
-      <div class="flex h-8 items-stretch overflow-hidden rounded-lg border border-border">
+    <div class="flex h-8 items-stretch gap-2 px-3 py-2.5">
+      <div class="flex h-8 min-w-0 items-stretch overflow-hidden rounded-xs border border-border">
         <button
           type="button"
-          class="flex min-w-0 flex-auto cursor-pointer items-center justify-center gap-1.5 bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-          title={hasBody ? 'Post this as a comment' : 'Write something first'}
-          disabled={posting || !hasBody}
-          onclick={() => void postComment()}
-        >
-          {#if posting}
-            <Loader2 size={12} class="shrink-0 animate-spin" />
-          {:else}
-            <MessageSquare size={12} class="shrink-0" />
-          {/if}
-          <span class="min-w-0 truncate">Comment</span>
-        </button>
-        <button
-          type="button"
-          class="flex min-w-0 flex-auto cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[0.625rem] font-medium text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
+          class="flex min-w-0 flex-auto cursor-pointer items-center justify-center gap-1.5 px-2 text-[0.625rem] font-medium text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
           title={open
             ? 'Approve this pull request (a comment is optional)'
             : 'This pull request is no longer open'}
@@ -1488,7 +1479,7 @@
         </button>
         <button
           type="button"
-          class="flex min-w-0 flex-auto cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
+          class="flex min-w-0 flex-auto cursor-pointer items-center justify-center gap-1.5 border-l border-border px-2 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
           title={!open
             ? 'This pull request is no longer open'
             : hasBody
@@ -1501,12 +1492,27 @@
           <span class="min-w-0 truncate">Request changes</span>
         </button>
       </div>
-      {#if open && !hasBody}
-        <p class="mt-1.5 text-[0.5625rem] leading-relaxed text-dimmed">
-          Requesting changes needs a comment saying what to change. Approving does not.
-        </p>
-      {/if}
+      <span class="min-w-0 flex-1"></span>
+      <button
+        type="button"
+        class="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-xs bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+        title={hasBody ? 'Post this as a comment' : 'Write something first'}
+        disabled={posting || !hasBody}
+        onclick={() => void postComment()}
+      >
+        {#if posting}
+          <Loader2 size={12} class="shrink-0 animate-spin" />
+        {:else}
+          <MessageSquare size={12} class="shrink-0" />
+        {/if}
+        <span class="min-w-0 truncate">Comment</span>
+      </button>
     </div>
+    {#if open && !hasBody}
+      <p class="px-3 pb-2.5 text-[0.5625rem] leading-relaxed text-dimmed">
+        Requesting changes needs a comment saying what to change. Approving does not.
+      </p>
+    {/if}
   </div>
 {/snippet}
 

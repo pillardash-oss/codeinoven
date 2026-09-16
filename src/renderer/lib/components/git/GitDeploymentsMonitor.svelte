@@ -41,6 +41,13 @@
       job: GitHubDeploymentJob,
       log: GitHubDeploymentJobLog | null
     ) => void
+    /**
+     * The deployment whose page replaces the overview, and the workflow run that
+     * does the same. The panel owns both so its action row can name what is open;
+     * this view is the one that opens and closes them.
+     */
+    selectedDeployment?: GitHubDeployment | null
+    selectedRun?: GitHubWorkflowRun | null
   }
 
   let {
@@ -51,14 +58,12 @@
     requestedRunId = null,
     onRequestedRunOpened,
     onAgentDiagnoseRun,
-    onAgentDiagnoseDeployment
+    onAgentDiagnoseDeployment,
+    selectedDeployment = $bindable(null),
+    selectedRun = $bindable(null)
   }: Props = $props()
 
   let error = $state('')
-  /** When set, the in-app deployment detail view replaces the list. */
-  let selectedDeployment = $state<GitHubDeployment | null>(null)
-  /** When set, the in-app workflow-run detail view replaces the list. */
-  let selectedRun = $state<GitHubWorkflowRun | null>(null)
   /** Non-reactive dedupe guard for direct navigation from a PR check. */
   let openingRequestedRunId: number | null = null
 
@@ -190,7 +195,6 @@
         {projectId}
         {identity}
         run={selectedRun}
-        onBack={() => (selectedRun = null)}
         onAgentDiagnose={onAgentDiagnoseRun}
       />
     {:else if selectedDeployment && identity}
@@ -198,7 +202,6 @@
         {projectId}
         {identity}
         deployment={selectedDeployment}
-        onBack={() => (selectedDeployment = null)}
         onAgentDiagnose={onAgentDiagnoseDeployment}
       />
     {:else if loading && !overview}

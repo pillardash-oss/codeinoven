@@ -84,6 +84,7 @@
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
+  import { stateGlyph, stateGlyphClass, stateLabel } from './deployment-state'
   import SyncMainButton from './SyncMainButton.svelte'
   import GitViewMenu from './GitViewMenu.svelte'
   import PrIdentityRow from './PrIdentityRow.svelte'
@@ -311,6 +312,13 @@
   let amendMode = $state(false)
   let resetConfirm = $state<{ mode: GitResetMode; target: string } | null>(null)
   let selectedStash = $state<GitStashEntry | null>(savedView.selectedStash)
+  /**
+   * The deployment or workflow run open in the Deploys view. The panel owns the
+   * selection, like every other view's, so its action row can name what is open
+   * and its external link can follow it.
+   */
+  let selectedDeployment = $state<GitHubDeployment | null>(null)
+  let selectedRun = $state<GitHubWorkflowRun | null>(null)
   let loadingStashDiff = $state(false)
   let stashDiffChanges = $state<GitFileChange[]>([])
   let stashDiffs = $state<Record<string, GitDiff>>({})
@@ -1511,6 +1519,48 @@
       : null
   )
   /**
+   * The open deployment's state, read from the same store record the detail body
+   * renders, so the action row and the page below it cannot disagree.
+   */
+  const openDeploymentState = $derived.by(() => {
+    const deployment = selectedDeployment
+    const identity = githubIdentity
+    if (!deployment || !identity) return 'unknown'
+    const cached =
+      gitState.deploymentDetails[
+        GitState.deploymentDetailKey(identity.owner, identity.repo, deployment.id)
+      ]
+    return (
+      cached?.detail.deployment.latestStatus?.state ?? deployment.latestStatus?.state ?? 'unknown'
+    )
+  })
+  /** A run's state is its conclusion once it is done, its status until then. */
+  const openRunState = $derived.by(() => {
+    const run = selectedRun
+    if (!run) return 'unknown'
+    return run.status === 'completed' ? (run.conclusion ?? 'completed') : run.status
+  })
+  /**
+   * Where the Deploys view's external link points: the deployment page, the run,
+   * or the repository's Actions when neither is open. It replaces the per-view
+   * external buttons the detail pages used to carry.
+   */
+  const deploymentsExternal = $derived.by(() => {
+    const identity = githubIdentity
+    if (!identity) return null
+    const repository = `https://github.com/${identity.owner}/${identity.repo}`
+    if (selectedDeployment) {
+      return {
+        url: `${repository}/deployments/${String(selectedDeployment.id)}`,
+        title: 'Open this deployment on GitHub'
+      }
+    }
+    if (selectedRun?.url) {
+      return { url: selectedRun.url, title: 'Open this workflow run on GitHub' }
+    }
+    return { url: `${repository}/actions`, title: 'View these workflow runs on GitHub' }
+  })
+  /**
    * The open pull request's fetched record. The reader reads the same bundle
    * from the store, so the panel's identity row and its pills cannot show one
    * thing while the reader shows another.
@@ -1579,6 +1629,7 @@
   const showsViewContext = $derived(
     (activeTab === 'changes' && selectedCommit !== null) ||
       (activeTab === 'pulls' && githubConnected && githubIdentity !== null) ||
+      (activeTab === 'deployments' && (selectedDeployment !== null || selectedRun !== null)) ||
       (activeTab === 'stashes' && selectedStash !== null)
   )
   const showsActionRow = $derived(showsViewContext || showsRemoteActions)
@@ -2336,16 +2387,13 @@
         <span class="view-action-label">New PR</span>
       </button>
     {/if}
-  {:else if activeTab === 'deployments' && githubIdentity}
+  {:else if activeTab === 'deployments' && deploymentsExternal}
     <button
       type="button"
       class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      title="View these workflow runs on GitHub"
-      aria-label="View these workflow runs on GitHub"
-      onclick={() =>
-        void openInBrowser(
-          `https://github.com/${githubIdentity?.owner ?? ''}/${githubIdentity?.repo ?? ''}/actions`
-        )}
+      title={deploymentsExternal.title}
+      aria-label={deploymentsExternal.title}
+      onclick={() => void openInBrowser(deploymentsExternal.url)}
     >
       <ExternalLink size={12} aria-hidden="true" />
     </button>
@@ -2444,7 +2492,7 @@
       </button>
     </div>
     <div class="min-w-0 flex-1">
-      <p class="truncate text-[0.6875rem] font-medium text-foreground">
+      <p class="truncate text-[0.6875rem] font-medium text-foreground" title={commit.message}>
         {commit.message.split('\n')[0]}
       </p>
       <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
@@ -2467,7 +2515,9 @@
       <ArrowLeft size={12} />
     </button>
     <div class="min-w-0 flex-1">
-      <p class="truncate text-[0.6875rem] font-medium text-foreground">{stash.message}</p>
+      <p class="truncate text-[0.6875rem] font-medium text-foreground" title={stash.message}>
+        {stash.message}
+      </p>
       <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
         <span class="font-mono">{stash.id}</span>
         {#if stash.branch}
@@ -2490,6 +2540,76 @@
     {:else}
       <PrStateFilter state={prListState} onSelect={selectPrListState} />
     {/if}
+  {:else if activeTab === 'deployments' && selectedDeployment !== null}
+    {@const DeploymentGlyph = stateGlyph(openDeploymentState)}
+    <button
+      type="button"
+      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Back to deployment activity"
+      aria-label="Back to deployment activity"
+      onclick={() => (selectedDeployment = null)}
+    >
+      <ArrowLeft size={12} />
+    </button>
+    <div class="min-w-0 flex-1">
+      <p
+        class="truncate text-[0.6875rem] font-medium text-foreground"
+        title={selectedDeployment.environment}
+      >
+        {selectedDeployment.environment}
+      </p>
+      <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
+        <span class="truncate font-mono">{selectedDeployment.ref}</span>
+        <span>·</span>
+        <span class="shrink-0 font-mono">{selectedDeployment.sha.slice(0, 7)}</span>
+        <span>·</span>
+        <span class="shrink-0">{relativeTime(Date.parse(selectedDeployment.updatedAt))}</span>
+      </div>
+    </div>
+    <span
+      class="flex shrink-0 items-center {stateGlyphClass(openDeploymentState)}"
+      role="img"
+      title="Deployment {stateLabel(openDeploymentState).toLowerCase()}"
+      aria-label="Deployment {stateLabel(openDeploymentState).toLowerCase()}"
+    >
+      <DeploymentGlyph size={13} />
+    </span>
+  {:else if activeTab === 'deployments' && selectedRun !== null}
+    {@const RunGlyph = stateGlyph(openRunState)}
+    <button
+      type="button"
+      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Back to deployment activity"
+      aria-label="Back to deployment activity"
+      onclick={() => (selectedRun = null)}
+    >
+      <ArrowLeft size={12} />
+    </button>
+    <div class="min-w-0 flex-1">
+      <p
+        class="truncate text-[0.6875rem] font-medium text-foreground"
+        title={selectedRun.displayTitle}
+      >
+        {selectedRun.displayTitle}
+      </p>
+      <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
+        <span class="truncate">{selectedRun.name} #{selectedRun.runNumber}</span>
+        {#if selectedRun.branch}
+          <span>·</span>
+          <span class="truncate font-mono">{selectedRun.branch}</span>
+        {/if}
+        <span>·</span>
+        <span class="shrink-0 font-mono">{selectedRun.headSha.slice(0, 7)}</span>
+      </div>
+    </div>
+    <span
+      class="flex shrink-0 items-center {stateGlyphClass(openRunState)}"
+      role="img"
+      title="Run {stateLabel(openRunState).toLowerCase()}"
+      aria-label="Run {stateLabel(openRunState).toLowerCase()}"
+    >
+      <RunGlyph size={13} />
+    </span>
   {/if}
 {/snippet}
 
@@ -2766,7 +2886,13 @@
         {#if showsPull}
           <button
             type="button"
-            class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+            class={[
+              'flex h-6 min-w-0 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40',
+              // The view's own context outranks the remote actions it shares this
+              // row with, so beside one they hold their width and give way first,
+              // down to the icon alone. Alone on the row they fill it.
+              showsViewContext ? 'shrink' : 'flex-1'
+            ]}
             title={`Pull ${String(commitsBehind)} commit(s) from the remote`}
             disabled={syncBusy}
             onclick={() => void pullAction()}
@@ -2776,13 +2902,16 @@
             {:else}
               <ArrowDownToLine size={11} />
             {/if}
-            <span class="truncate">Pull {commitsBehind}</span>
+            <span class="min-w-0 truncate">Pull {commitsBehind}</span>
           </button>
         {/if}
         {#if showsPush}
           <button
             type="button"
-            class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+            class={[
+              'flex h-6 min-w-0 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40',
+              showsViewContext ? 'shrink' : 'flex-1'
+            ]}
             title={pushTitle}
             disabled={syncBusy || gitState.isBusy('push')}
             onclick={() => void pushAction()}
@@ -2792,7 +2921,7 @@
             {:else}
               <ArrowUpFromLine size={11} />
             {/if}
-            <span class="truncate">
+            <span class="min-w-0 truncate">
               Push{commitsAhead > 0 ? ` ${String(commitsAhead)}` : ''}
             </span>
           </button>
@@ -3650,6 +3779,8 @@
           {projectId}
           identity={githubIdentity}
           {githubConnected}
+          bind:selectedDeployment
+          bind:selectedRun
           onSignIn={() => (showGitHubSignIn = true)}
           requestedRunId={requestedWorkflowRunId}
           onRequestedRunOpened={() => (requestedWorkflowRunId = null)}
