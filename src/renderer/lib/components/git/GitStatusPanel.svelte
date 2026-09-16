@@ -14,6 +14,7 @@
     GitCommitInfo,
     GitDiff,
     GitFileChange,
+    GitMainSyncDirection,
     GitPullStrategy,
     GitHubDeployment,
     GitHubDeploymentJob,
@@ -30,6 +31,7 @@
     ArrowDownToLine,
     ArrowLeft,
     ArrowUpFromLine,
+    ArrowUpToLine,
     Check,
     ChevronDown,
     ChevronLeft,
@@ -121,9 +123,14 @@
   /** Pull strategy chooser, opened by the default `ask` preference or a failed strategy. */
   let pullStrategyOpen = $state(false)
   let pullStrategyError = $state('')
-  /** Sync-from-main strategy chooser, opened by the same `ask` preference or a failure. */
+  /**
+   * Main-sync strategy chooser, opened by the `ask` preference, a failure, or
+   * always for the to-main direction (it mutates the project root).
+   */
   let syncMainOpen = $state(false)
   let syncMainError = $state('')
+  /** Which direction the chooser and its actions apply to. */
+  let syncMainDirection = $state<GitMainSyncDirection>('from-main')
   /** Divergence recovery dialog: the branch is behind the remote, push was rejected. */
   let pushDiverged = $state(false)
   /** Which recovery action is running ('merge' | 'rebase'), to disable the buttons. */
@@ -1401,15 +1408,22 @@
   }
 
   /**
-   * Sync this worktree with the project's main worktree branch. The strategy
-   * chooser follows the same `ask` preference as the Pull button; a conflicted
-   * integration is handed to the existing conflict UI instead of retrying.
+   * Sync this worktree with the project's main worktree branch, in either
+   * direction. The strategy chooser follows the same `ask` preference as the
+   * Pull button; folding work into main always confirms first, because it
+   * mutates a branch the user is not looking at and pushes nothing. A
+   * conflicted integration is handed to the existing conflict UI instead of
+   * retrying.
    */
-  async function performSyncFromMain(strategy: GitPullStrategy): Promise<void> {
-    const result = await gitState.syncFromMain(projectId, strategy)
+  async function performSyncMain(
+    direction: GitMainSyncDirection,
+    strategy: GitPullStrategy
+  ): Promise<void> {
+    const result = await gitState.syncMain(projectId, direction, strategy)
     if (gitState.error) {
       syncMainError = gitState.error
       gitState.error = null
+      syncMainDirection = direction
       syncMainOpen = true
       return
     }
@@ -1418,30 +1432,56 @@
     syncMainError = ''
     void refreshStatus()
 
-    const summary =
-      result.incoming === 0
-        ? `Already up to date with ${result.sourceRef}`
-        : `Synced ${String(result.incoming)} commit${result.incoming === 1 ? '' : 's'} from ${result.sourceRef}`
-    if (result.status.conflicted.length > 0) {
-      showToastWarning(`${summary}, with conflicts to resolve.`)
+    if (direction === 'from-main') {
+      const summary =
+        result.incoming === 0
+          ? `Already up to date with ${result.ref}`
+          : `Synced ${String(result.incoming)} commit${result.incoming === 1 ? '' : 's'} from ${result.ref}`
+      if (result.status.conflicted.length > 0) {
+        showToastWarning(`${summary}, with conflicts to resolve.`)
+        return
+      }
+      if (result.remote && !result.fetched) {
+        showToastWarning(
+          `${summary}. ${result.remote}/${result.mainBranch} could not be refreshed.`
+        )
+        return
+      }
+      toast.success(summary)
       return
     }
-    if (result.remote && !result.fetched) {
+
+    if (result.status.conflicted.length > 0) {
       showToastWarning(
-        `${summary}. ${result.remote}/${result.sourceBranch} could not be refreshed.`
+        `Rebasing onto ${result.mainBranch} hit conflicts. Resolve them in this worktree, then sync to main again.`
+      )
+      return
+    }
+    const summary =
+      result.incoming === 0
+        ? `Nothing to send: ${result.mainBranch} already has ${result.branch}'s commits`
+        : `Sent ${String(result.incoming)} commit${result.incoming === 1 ? '' : 's'} to ${result.mainBranch}`
+    if (result.mainAhead > 0) {
+      toast.success(
+        `${summary}. ${result.mainBranch} has ${String(result.mainAhead)} unpushed commit${result.mainAhead === 1 ? '' : 's'}.`
       )
       return
     }
     toast.success(summary)
   }
 
-  async function syncMainAction(): Promise<void> {
-    if (appConfigState.defaultPullStrategy === 'ask') {
-      syncMainError = ''
-      syncMainOpen = true
+  function openSyncMain(direction: GitMainSyncDirection): void {
+    syncMainDirection = direction
+    syncMainError = ''
+    syncMainOpen = true
+  }
+
+  async function syncMainAction(direction: GitMainSyncDirection): Promise<void> {
+    if (direction === 'to-main' || appConfigState.defaultPullStrategy === 'ask') {
+      openSyncMain(direction)
       return
     }
-    await performSyncFromMain(appConfigState.defaultPullStrategy)
+    await performSyncMain(direction, appConfigState.defaultPullStrategy)
   }
 
   function closeSyncMain(): void {
@@ -2123,10 +2163,18 @@
                 <DropdownMenu.Item
                   class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
                   disabled={syncBusy || conflicted.length > 0}
-                  onSelect={() => void syncMainAction()}
+                  onSelect={() => void syncMainAction('from-main')}
                 >
-                  <GitCompareArrows size={12} class="shrink-0 text-dimmed" />
+                  <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
                   Sync from main
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                  disabled={syncBusy || conflicted.length > 0}
+                  onSelect={() => void syncMainAction('to-main')}
+                >
+                  <ArrowUpToLine size={12} class="shrink-0 text-dimmed" />
+                  Sync to main
                 </DropdownMenu.Item>
               {/if}
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
@@ -3595,44 +3643,82 @@
     </Modal>
   {/if}
 
-  <!-- Sync-from-main strategy chooser: same `ask` preference as the Pull button -->
+  <!--
+    Main-sync strategy chooser: the same `ask` preference as the Pull button for
+    `from-main`, and always shown for `to-main`, which mutates the project root.
+  -->
   {#if syncMainOpen}
-    <Modal open title="Sync from main" onClose={closeSyncMain}>
+    <Modal
+      open
+      title={syncMainDirection === 'from-main' ? 'Sync from main' : 'Sync to main'}
+      onClose={closeSyncMain}
+    >
       <div class="space-y-3">
         <div class="rounded-lg border border-border bg-elevated px-3 py-2">
-          <p class="text-[0.625rem] font-medium text-foreground">
-            Into <span class="font-mono">{status?.branch ?? 'this worktree'}</span>
-          </p>
-          <p class="mt-0.5 text-[0.5625rem] text-dimmed">
-            From the branch checked out in the project root, refreshed from its remote first.
-          </p>
+          {#if syncMainDirection === 'from-main'}
+            <p class="text-[0.625rem] font-medium text-foreground">
+              Into <span class="font-mono">{status?.branch ?? 'this worktree'}</span>
+            </p>
+            <p class="mt-0.5 text-[0.5625rem] text-dimmed">
+              From the branch checked out in the project root, refreshed from its remote first.
+            </p>
+          {:else}
+            <p class="text-[0.625rem] font-medium text-foreground">
+              From <span class="font-mono">{status?.branch ?? 'this worktree'}</span> into the project
+              root
+            </p>
+            <p class="mt-0.5 text-[0.5625rem] text-dimmed">
+              Both checkouts must be committed and idle. Nothing is pushed to a remote.
+            </p>
+          {/if}
         </div>
         {#if syncMainError}
           <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
-            <p class="text-[0.625rem] font-semibold text-danger">Main could not be synced</p>
+            <p class="text-[0.625rem] font-semibold text-danger">
+              {syncMainDirection === 'from-main'
+                ? 'Main could not be synced'
+                : 'This worktree could not be sent to main'}
+            </p>
             <p
               class="mt-0.5 whitespace-pre-wrap break-words text-[0.5625rem] leading-relaxed text-danger"
             >
               {syncMainError}
             </p>
             <p class="mt-1 text-[0.5625rem] leading-relaxed text-dimmed">
-              Choose another strategy below, or cancel without changing this worktree further.
+              {syncMainDirection === 'from-main'
+                ? 'Choose another strategy below, or cancel without changing this worktree further.'
+                : 'Choose another strategy below, or cancel without changing anything further.'}
             </p>
           </div>
         {/if}
         <div class="space-y-1 text-[0.5625rem] leading-relaxed text-dimmed">
-          <p>
-            <span class="font-medium text-foreground">Merge</span> keeps both histories and may create
-            a merge commit.
-          </p>
-          <p>
-            <span class="font-medium text-foreground">Rebase</span> replays this worktree's commits on
-            top of main.
-          </p>
-          <p>
-            <span class="font-medium text-foreground">Fast-forward only</span> integrates only when no
-            reconciliation is needed.
-          </p>
+          {#if syncMainDirection === 'from-main'}
+            <p>
+              <span class="font-medium text-foreground">Merge</span> keeps both histories and may create
+              a merge commit.
+            </p>
+            <p>
+              <span class="font-medium text-foreground">Rebase</span> replays this worktree's commits
+              on top of main.
+            </p>
+            <p>
+              <span class="font-medium text-foreground">Fast-forward only</span> integrates only when
+              no reconciliation is needed.
+            </p>
+          {:else}
+            <p>
+              <span class="font-medium text-foreground">Merge</span> merges this branch into main and
+              refuses if that would conflict. Resolve it here with Sync from main instead.
+            </p>
+            <p>
+              <span class="font-medium text-foreground">Rebase</span> replays this branch's commits on
+              top of main, then moves main onto them. Keeps main linear, rewrites this branch.
+            </p>
+            <p>
+              <span class="font-medium text-foreground">Fast-forward only</span> moves main only when
+              main has not diverged.
+            </p>
+          {/if}
         </div>
       </div>
       {#snippet footer()}
@@ -3649,7 +3735,7 @@
             type="button"
             class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
             disabled={gitState.isBusy('sync-main')}
-            onclick={() => void performSyncFromMain('ff-only')}
+            onclick={() => void performSyncMain(syncMainDirection, 'ff-only')}
           >
             Fast-forward only
           </button>
@@ -3657,7 +3743,7 @@
             type="button"
             class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
             disabled={gitState.isBusy('sync-main')}
-            onclick={() => void performSyncFromMain('rebase')}
+            onclick={() => void performSyncMain(syncMainDirection, 'rebase')}
           >
             Rebase
           </button>
@@ -3666,7 +3752,7 @@
             class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
             data-modal-primary
             disabled={gitState.isBusy('sync-main')}
-            onclick={() => void performSyncFromMain('merge')}
+            onclick={() => void performSyncMain(syncMainDirection, 'merge')}
           >
             Merge
           </button>
@@ -3779,24 +3865,48 @@
         Push{status.ahead > 0 ? ` ${status.ahead}` : ''}
       </button>
       {#if worktreeScope}
-        <!-- Sync-from-main only exists off the main worktree: this checkout has
-             a main branch to bring in, the project root does not. -->
-        <button
-          type="button"
-          class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-primary/40 bg-primary/5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
-          title={conflicted.length > 0
-            ? 'Resolve the conflicts in this worktree before syncing from main'
-            : "Bring the project main worktree's latest commits into this worktree"}
-          disabled={syncBusy || conflicted.length > 0}
-          onclick={() => void syncMainAction()}
-        >
-          {#if gitState.isBusy('sync-main')}
-            <Loader2 size={11} class="animate-spin" />
-          {:else}
-            <GitCompareArrows size={11} />
-          {/if}
-          Sync main
-        </button>
+        <!-- Both sync directions only exist off the main worktree: the project
+             root is the other end of both. -->
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-primary/40 bg-primary/5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40 data-[state=open]:bg-elevated"
+            title={conflicted.length > 0
+              ? 'Resolve the conflicts in this worktree before syncing with main'
+              : 'Move commits between this worktree and the project main worktree'}
+            disabled={syncBusy || conflicted.length > 0}
+          >
+            {#if gitState.isBusy('sync-main')}
+              <Loader2 size={11} class="animate-spin" />
+            {:else}
+              <GitCompareArrows size={11} />
+            {/if}
+            Sync main
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="top"
+              align="end"
+              sideOffset={4}
+              collisionPadding={8}
+              class="z-50 w-60 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+            >
+              <DropdownMenu.Item
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => void syncMainAction('from-main')}
+              >
+                <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
+                Pull main into this worktree
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => void syncMainAction('to-main')}
+              >
+                <ArrowUpToLine size={12} class="shrink-0 text-dimmed" />
+                Send this worktree to main
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
       {/if}
     </div>
   {:else if repoState === 'git' && status && mergePending}

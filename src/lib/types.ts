@@ -4294,23 +4294,32 @@ export interface GitSyncSummary {
   behind: number
 }
 
+/** Which way a worktree/main sync moves committed work. */
+export type GitMainSyncDirection = 'from-main' | 'to-main'
+
 /**
- * Result of integrating the project's main worktree branch into a managed
- * worktree checkout ("Sync from main"). The source ref is reported so the
- * panel can state exactly what landed instead of guessing at "main".
+ * Result of syncing a worktree checkout with the project's main worktree, in
+ * either direction. The integrated ref is reported so the panel can state
+ * exactly what moved instead of guessing at "main".
  */
 export interface GitMainSyncResult {
+  /** Status of the checkout the panel is attached to (the worktree side). */
   status: GitStatus
-  /** Branch checked out in the project's main worktree   the sync source. */
-  sourceBranch: string
-  /** Ref that was integrated (`main`, or `origin/main` when it was ahead). */
-  sourceRef: string
-  /** True when the source branch's remote-tracking ref was refreshed first. */
+  direction: GitMainSyncDirection
+  /** Branch checked out in the worktree this sync ran in. */
+  branch: string
+  /** Branch checked out in the project's main worktree. */
+  mainBranch: string
+  /** Ref whose commits were integrated (`origin/main`, `main`, or the worktree branch). */
+  ref: string
+  /** True when the main branch's remote-tracking ref was refreshed first (`from-main`). */
   fetched: boolean
-  /** Remote used for the refresh, when the repository has one. */
+  /** Remote used for that refresh, when the repository has one (`from-main`). */
   remote: string | null
-  /** Commits the source had that this branch did not, before integrating. */
+  /** Commits the integrated ref had that the other end did not, before integrating. */
   incoming: number
+  /** Commits the main worktree's branch is ahead of its upstream by after the sync. */
+  mainAhead: number
 }
 
 /** Conflict information reported by a merge/rebase failure. */

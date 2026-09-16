@@ -829,8 +829,8 @@ export function validatePullIntegrateOptions(value: unknown): {
   return options
 }
 
-/** Options for integrating the project's main branch into a worktree. */
-export function validateSyncFromMainOptions(value: unknown): {
+/** Options for syncing a worktree checkout with the project's main worktree. */
+export function validateMainSyncOptions(value: unknown): {
   strategy: import('../../lib/types').GitPullStrategy
 } {
   const input = assertRecord(value, 'Sync options')

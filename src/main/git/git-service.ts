@@ -27,6 +27,7 @@ import type {
   GitFileChange,
   GitFileStatus,
   GitIdentity,
+  GitMainSyncDirection,
   GitMainSyncResult,
   GitPullStrategy,
   GitRemoteInfo,
@@ -1181,26 +1182,34 @@ export class GitService {
   }
 
   /**
-   * Bring the project's main worktree branch into this checkout ("Sync from
-   * main"). The project root is the single source of truth for "main": its
-   * checked-out branch is refreshed from the remote first, then integrated.
+   * Sync this checkout with the project's main worktree, in either direction.
+   * The project root is the single source of truth for "main": the branch it
+   * has checked out is the other end of both directions.
    *
-   * The remote-tracking ref is preferred only when it strictly contains the
-   * local branch   i.e. the project root has not pulled yet. Otherwise the
-   * local branch wins, so commits that exist only on the project root's main
-   * are never silently skipped. A failed remote refresh is reported through
+   * `from-main` reads main and writes this checkout: the main branch's
+   * remote-tracking ref is refreshed first, then integrated. The
+   * remote-tracking ref is preferred only when it strictly contains the local
+   * branch   i.e. the project root has not pulled yet. Otherwise the local
+   * branch wins, so commits that exist only on the project root's main are
+   * never silently skipped. A failed remote refresh is reported through
    * `fetched: false`, never treated as fatal: the local branch still is the
    * repository's authoritative main state when the network is unavailable.
    *
-   * Fail closed instead of guessing: a checkout that is the project root
-   * itself, a detached HEAD, or an integration already in progress all throw
-   * before a single ref moves. A conflicted integration is not an error   the
-   * refreshed status is returned so the renderer hands over to the conflict UI.
+   * `to-main` reads this checkout and writes main: this branch's commits are
+   * folded into the branch the project root has checked out. Nothing is ever
+   * pushed   publishing main stays an explicit user action.
+   *
+   * Both directions fail closed instead of guessing: a checkout that is the
+   * project root itself, a detached HEAD, or an integration already in progress
+   * all throw before a single ref moves. A conflicted integration is not an
+   * error   the refreshed status is returned so the renderer hands over to the
+   * conflict UI.
    */
-  async syncFromMain(
+  async syncMain(
     projectPath: string,
     options: {
-      /** Root of the project's main worktree   the sync source. */
+      direction: GitMainSyncDirection
+      /** Root of the project's main worktree   the other end of the sync. */
       mainPath: string
       strategy: GitPullStrategy
       remote?: string
@@ -1210,20 +1219,28 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       const mainDirectory = await this.repo(options.mainPath)
+      const toward = options.direction === 'from-main' ? 'from' : 'to'
       if (directory === mainDirectory) {
         throw new Error(
-          'This checkout is the project root, so there is no main worktree to sync from'
+          options.direction === 'from-main'
+            ? 'This checkout is the project root, so there is no main worktree to sync from'
+            : 'This checkout is the project root, so it cannot be synced to main'
         )
       }
 
       const before = await this.readStatus(directory)
-      if (before.detached) {
-        throw new Error('Check out a branch in this worktree before syncing from main')
+      if (before.detached || !before.branch) {
+        throw new Error(`Check out a branch in this worktree before syncing ${toward} main`)
       }
+      const branch = before.branch
       if (before.conflictState !== 'none') {
         throw new Error(
-          `Finish or abort the in-progress ${before.conflictState} before syncing from main`
+          `Finish or abort the in-progress ${before.conflictState} before syncing ${toward} main`
         )
+      }
+
+      if (options.direction === 'to-main') {
+        return await this.foldIntoMain(directory, mainDirectory, before, branch, options)
       }
 
       const sourceBranch = (
@@ -1264,12 +1281,144 @@ export class GitService {
 
       return {
         status: await this.readStatus(directory),
-        sourceBranch,
-        sourceRef: ref === remoteRef && remoteName ? `${remoteName}/${sourceBranch}` : sourceBranch,
+        direction: 'from-main',
+        branch,
+        mainBranch: sourceBranch,
+        ref: ref === remoteRef && remoteName ? `${remoteName}/${sourceBranch}` : sourceBranch,
         fetched,
         remote: remoteName ?? null,
-        incoming
+        incoming,
+        mainAhead: 0
       }
+    })
+  }
+
+  /**
+   * Fold this worktree's branch into the branch the project root has checked
+   * out ("Sync to main").
+   *
+   * Both checkouts must be committed and idle first: only committed work can
+   * move, so uncommitted work would silently stay behind, and a clean target is
+   * what makes rolling a refused merge back exact.
+   *
+   * `rebase` keeps main linear without rewriting it: this branch's commits are
+   * replayed on top of main (a conflict stays here, in the checkout the panel
+   * shows, just like `from-main`), then main fast-forwards onto the rebased
+   * branch. `merge`/`ff-only` integrate directly in main, and a merge that
+   * conflicts is rolled back before the error surfaces   a one-click action run
+   * from a worktree scope must never leave the project root mid-merge where the
+   * user cannot see it.
+   */
+  private async foldIntoMain(
+    directory: string,
+    mainDirectory: string,
+    before: GitStatus,
+    branch: string,
+    options: { mainPath: string; strategy: GitPullStrategy }
+  ): Promise<GitMainSyncResult> {
+    const uncommitted = (status: GitStatus): number =>
+      status.changes.filter((change) => change.status !== 'untracked').length
+
+    const dirty = uncommitted(before)
+    if (dirty > 0) {
+      throw new Error(
+        `This worktree has ${dirty} uncommitted file${dirty === 1 ? '' : 's'}. Commit or stash ${dirty === 1 ? 'it' : 'them'} before syncing to main`
+      )
+    }
+
+    const mainStatus = await this.readStatus(mainDirectory)
+    if (mainStatus.detached || !mainStatus.branch) {
+      throw new Error('The project root is not on a branch, so there is nothing to sync to')
+    }
+    const mainBranch = mainStatus.branch
+    if (mainStatus.conflictState !== 'none') {
+      throw new Error(
+        `Finish or abort the in-progress ${mainStatus.conflictState} in the project main worktree before syncing to main`
+      )
+    }
+    const mainDirty = uncommitted(mainStatus)
+    if (mainDirty > 0) {
+      throw new Error(
+        `The project main worktree has ${mainDirty} uncommitted file${mainDirty === 1 ? '' : 's'}. Commit or stash ${mainDirty === 1 ? 'it' : 'them'} there before syncing to main`
+      )
+    }
+
+    const incoming = await this.countCommitsAhead(mainDirectory, options.mainPath, branch)
+    let conflicted = false
+    if (incoming > 0) {
+      if (options.strategy === 'rebase') {
+        const outcome = await this.integrateFromRef(
+          directory,
+          options.mainPath,
+          `refs/heads/${mainBranch}`,
+          'rebase'
+        )
+        conflicted = outcome === 'conflicted'
+        if (!conflicted) {
+          await this.foldIntoMainBranch(mainDirectory, branch, mainBranch, 'ff-only')
+        }
+      } else {
+        await this.foldIntoMainBranch(mainDirectory, branch, mainBranch, options.strategy)
+      }
+    }
+
+    return {
+      status: await this.readStatus(directory),
+      direction: 'to-main',
+      branch,
+      mainBranch,
+      ref: branch,
+      fetched: false,
+      remote: null,
+      incoming,
+      mainAhead:
+        incoming > 0 && !conflicted
+          ? (await this.readStatus(mainDirectory)).ahead
+          : mainStatus.ahead
+    }
+  }
+
+  /**
+   * Integrate `branch` into the branch checked out in the project root. The
+   * caller guarantees a clean, idle target, so a conflicted merge can be rolled
+   * back exactly instead of stranding the project root mid-merge.
+   */
+  private async foldIntoMainBranch(
+    mainDirectory: string,
+    branch: string,
+    mainBranch: string,
+    strategy: 'merge' | 'ff-only'
+  ): Promise<void> {
+    const git = this.client(mainDirectory)
+    const args = strategy === 'ff-only' ? ['--no-edit', '--ff-only', branch] : ['--no-edit', branch]
+    const failure = await git.merge(args).then(
+      () => null,
+      (error: unknown) => error
+    )
+    if (!failure) return
+
+    const conflicted = await git.status().then(
+      (status) => status.conflicted.length > 0,
+      () => false
+    )
+    if (conflicted) {
+      const rolledBack = await git.raw(['merge', '--abort']).then(
+        () => true,
+        () => false
+      )
+      throw new Error(
+        rolledBack
+          ? `Merging ${branch} into ${mainBranch} would conflict. Run "Sync from main" in this worktree, resolve the conflicts here, then sync to main again`
+          : `Merging ${branch} into ${mainBranch} conflicted and could not be rolled back. Resolve it in the project main worktree first`
+      )
+    }
+    if (strategy === 'ff-only') {
+      throw new Error(
+        `${mainBranch} has diverged from ${branch}, so it cannot fast-forward. Merge instead`
+      )
+    }
+    await this.wrapError(mainDirectory, 'mutation', async () => {
+      throw failure
     })
   }
 
@@ -1313,15 +1462,16 @@ export class GitService {
 
   /**
    * Integrate `ref` with the requested strategy. A conflicted merge/rebase is
-   * left in the working tree for the conflict UI (never aborted); a diverged
-   * fast-forward fails with an actionable message instead of raw git output.
+   * left in the working tree for the conflict UI (never aborted) and reported
+   * as `conflicted`; a diverged fast-forward fails with an actionable message
+   * instead of raw git output.
    */
   private async integrateFromRef(
     directory: string,
     projectPath: string,
     ref: string,
     strategy: GitPullStrategy
-  ): Promise<void> {
+  ): Promise<'done' | 'conflicted'> {
     const git = this.client(directory)
     const conflicted = async (): Promise<boolean> =>
       await git
@@ -1334,25 +1484,29 @@ export class GitService {
         () => null,
         (error: unknown) => error
       )
-      if (!failure || (await conflicted())) return
-      await this.wrapError(projectPath, 'mutation', async () => {
-        throw failure
-      })
-      return
+      if (!failure) return 'done'
+      if (await conflicted()) return 'conflicted'
+      return await this.failIntegration(projectPath, failure)
     }
 
-    const args = strategy === 'ff-only' ? ['--ff-only', ref] : [ref]
+    const args = strategy === 'ff-only' ? ['--no-edit', '--ff-only', ref] : ['--no-edit', ref]
     const failure = await git.merge(args).then(
       () => null,
       (error: unknown) => error
     )
-    if (!failure || (await conflicted())) return
+    if (!failure) return 'done'
+    if (await conflicted()) return 'conflicted'
     if (strategy === 'ff-only') {
       throw new Error(
-        `This branch has diverged from ${ref}, so it cannot fast-forward. Merge or rebase instead.`
+        `This branch has diverged from ${ref}, so it cannot fast-forward. Merge or rebase instead`
       )
     }
-    await this.wrapError(projectPath, 'mutation', async () => {
+    return await this.failIntegration(projectPath, failure)
+  }
+
+  /** Re-report a failed integration through the standard error path. */
+  private async failIntegration(label: string, failure: unknown): Promise<never> {
+    return this.wrapError(label, 'mutation', async (): Promise<never> => {
       throw failure
     })
   }

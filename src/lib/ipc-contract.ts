@@ -1596,6 +1596,15 @@ export const IPC_INVOKE_CONTRACT = {
     ],
     GitMainSyncResult
   >,
+  /** Fold a worktree checkout's branch into the project's main worktree branch. */
+  'git:syncToMain': {} as Contract<
+    [
+      projectId: string,
+      options: { strategy: import('./types').GitPullStrategy },
+      scopeBucketId?: string
+    ],
+    GitMainSyncResult
+  >,
   'git:push': {} as Contract<
     [
       projectId: string,

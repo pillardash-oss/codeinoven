@@ -19,6 +19,7 @@ import type {
   GitHubPermissionRequired,
   GitHubWorkflowRunDetail,
   GitIdentity,
+  GitMainSyncDirection,
   GitMainSyncResult,
   GitPullStrategy,
   GitRestoreTarget,
@@ -1001,36 +1002,42 @@ export class GitState {
   }
 
   /**
-   * Bring the project's main worktree branch into this worktree checkout.
-   * Main resolves the source (project root branch, refreshed from its remote),
-   * so the renderer only chooses the reconciliation strategy. A conflicted
-   * integration is a normal outcome, not an error: the returned status carries
-   * the conflicts and the panel hands over to the conflict UI.
+   * Sync this worktree with the project's main worktree branch, in either
+   * direction. Main resolves both ends (the project root's branch, and this
+   * checkout's branch), so the renderer only picks the direction and the
+   * reconciliation strategy. A conflicted integration is a normal outcome, not
+   * an error: the returned status carries the conflicts and the panel hands
+   * over to the conflict UI.
    */
-  async syncFromMain(
+  async syncMain(
     projectId: string,
+    direction: GitMainSyncDirection,
     strategy: GitPullStrategy
   ): Promise<GitMainSyncResult | null> {
     const scopeBucketId = this.scopeFor(projectId)
     if (!scopeBucketId) {
-      this.error = 'Syncing from main requires a worktree scope'
+      this.error = `Syncing ${direction === 'from-main' ? 'from' : 'to'} main requires a worktree scope`
       return null
     }
     this.markBusy('sync-main', true)
     this.error = null
     try {
-      const result = await invoke('git:syncFromMain', projectId, { strategy }, scopeBucketId)
+      const result =
+        direction === 'from-main'
+          ? await invoke('git:syncFromMain', projectId, { strategy }, scopeBucketId)
+          : await invoke('git:syncToMain', projectId, { strategy }, scopeBucketId)
       this.status = result.status
       if (result.status.conflicted.length === 0) this.conflictsMode = false
       return result
     } catch (reason) {
+      const toward = direction === 'from-main' ? 'from main' : 'to main'
       this.error = errorMessage(
         reason,
         strategy === 'rebase'
-          ? 'Syncing from main with rebase failed'
+          ? `Syncing ${toward} with rebase failed`
           : strategy === 'ff-only'
-            ? 'Syncing from main with a fast-forward failed'
-            : 'Syncing from main with a merge failed'
+            ? `Syncing ${toward} with a fast-forward failed`
+            : `Syncing ${toward} with a merge failed`
       )
       return null
     } finally {

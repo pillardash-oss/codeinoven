@@ -130,6 +130,27 @@ its `cio/` branch, not the project root:
   active root is the project root itself, when HEAD is detached, or when a
   merge/rebase is already in progress, and a conflicted integration is left in
   the working tree for the standard conflict UI instead of being aborted.
+- **Sync to main** (`git:syncToMain`) is the mirror direction, offered under the
+  same condition: it folds the worktree's branch into the branch checked out in
+  the project root. Nothing is ever pushed   publishing main stays an explicit
+  user action   and the chooser always confirms first, even when the pull
+  preference is not `ask`, because the write lands in a checkout the panel is
+  not showing. Both checkouts must be committed and idle (only committed work
+  can move) and the project root must be on a branch; a merge/rebase in progress
+  on either side refuses as well. Strategies:
+  - `merge` integrates in main (fast-forward when possible, merge commit
+    otherwise). A merge that would conflict is rolled back and refused with the
+    from-main workflow as the fix, so a one-click action can never strand the
+    project root mid-merge where the user cannot see it.
+  - `rebase` replays this branch's commits on top of main, then fast-forwards
+    main onto the rebased branch: conflicts stay in the worktree the panel
+    shows, main stays linear and is never rewritten.
+  - `ff-only` moves main only when main has not diverged.
+
+  `incoming` reports how many commits main did not have, and `mainAhead` how far
+  the moved branch is from its upstream afterwards, so the panel can say exactly
+  what happened and that nothing was published.
+
 - Credential and identity operations (`git:get/setCredential`,
   `git:get/setIdentity`) stay project-scoped: worktrees share the repository's
   `.git` config and credential vault anyway.
