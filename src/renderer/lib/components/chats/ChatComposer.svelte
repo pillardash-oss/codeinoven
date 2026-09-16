@@ -485,10 +485,19 @@
   let isDragging = $state(false)
   /** Root element of the composer, used to find the conversation region it sits in. */
   let composerRoot = $state<HTMLElement | null>(null)
+  /** 0x0 out-of-flow element sitting beside the drop overlay. Its viewport
+   *  position is the origin the overlay's `position: fixed` resolves against. */
+  let dropAnchorProbe = $state<HTMLElement | null>(null)
   const captureComposerRoot: Attachment<HTMLElement> = (element) => {
     composerRoot = element
     return () => {
       if (composerRoot === element) composerRoot = null
+    }
+  }
+  const captureDropAnchorProbe: Attachment<HTMLElement> = (element) => {
+    dropAnchorProbe = element
+    return () => {
+      if (dropAnchorProbe === element) dropAnchorProbe = null
     }
   }
   /** Viewport geometry of the conversation region while files are in flight, so
@@ -1684,6 +1693,17 @@
     return types.includes('Files')
   }
 
+  /**
+   * Hide the drop overlay. Every path that leaves the "file drag over the
+   * conversation" state funnels through here, so the overlay cannot outlive the
+   * drag it belongs to.
+   */
+  function clearDropState(): void {
+    if (!isDragging && !dropRegion) return
+    isDragging = false
+    dropRegion = null
+  }
+
   /** The conversation region this composer belongs to, if it has one. */
   function conversationRegion(): HTMLElement | null {
     return composerRoot?.closest<HTMLElement>('[data-drop-region="conversation"]') ?? null
@@ -1709,33 +1729,25 @@
   }
 
   /**
-   * Origin of the box a `position: fixed` child of this composer resolves
-   * against. The conversation column sets `container-type` for its composer
-   * container queries, and layout containment makes that element the containing
-   * block for fixed descendants   so the region's viewport coordinates must be
-   * rebased on it. Returns the viewport origin when nothing contains the
-   * overlay (the chat empty state, the remote conversation).
+   * Origin the drop overlay's `position: fixed` resolves against.
+   *
+   * Measured from the anchor element instead of inferred from the ancestor CSS,
+   * because the ancestor that contains a fixed box is not the one the CSS
+   * suggests. The conversation column declares `container-type` for its composer
+   * container queries, and containment from `container-type` is supposed to
+   * bring layout containment with it, which would make that column the containing
+   * block: Chromium does not do that (only an explicit `contain: layout`/`paint`,
+   * `transform`, `filter`, `backdrop-filter` or `will-change` creates one),
+   * while other engines may follow the specification. Measuring a 0x0 fixed
+   * anchor reports whatever the running engine actually does, so the overlay
+   * lands on the region on every engine and keeps landing there if a `transform`,
+   * a `filter`, or any other containing ancestor is introduced above it later.
    */
-  function fixedContainingBlockOrigin(start: HTMLElement): { x: number; y: number } {
-    let element: HTMLElement | null = start.parentElement
-    while (element) {
-      const style = getComputedStyle(element)
-      const containsLayout =
-        style.containerType !== 'normal' ||
-        style.contain.includes('layout') ||
-        style.contain.includes('paint') ||
-        style.transform !== 'none' ||
-        style.perspective !== 'none' ||
-        style.filter !== 'none' ||
-        style.backdropFilter !== 'none'
-      if (containsLayout) {
-        const rect = element.getBoundingClientRect()
-        // A fixed element is positioned against the ancestor's padding box.
-        return { x: rect.left + element.clientLeft, y: rect.top + element.clientTop }
-      }
-      element = element.parentElement
-    }
-    return { x: 0, y: 0 }
+  function fixedOrigin(): { x: number; y: number } {
+    const rect = dropAnchorProbe?.getBoundingClientRect()
+    // No anchor mounted (a host that renders the composer standalone): the
+    // overlay is fixed against the viewport, which is where the anchor would be.
+    return rect ? { x: rect.left, y: rect.top } : { x: 0, y: 0 }
   }
 
   /**
@@ -1788,22 +1800,28 @@
   // listener lifecycle (and the isDragging mutations) out of a reactive effect.
   onMount(() => {
     function onDragOver(e: DragEvent): void {
-      if (readOnlyMode && !allowAttachments) return
-      if (selectedHarnessLacksAttachments) return
+      // A drag that stops being droppable part way through (the composer went
+      // read-only, or the selected harness cannot take attachments) must not
+      // leave an overlay that an earlier event of the same drag raised.
+      if (readOnlyMode && !allowAttachments) {
+        clearDropState()
+        return
+      }
+      if (selectedHarnessLacksAttachments) {
+        clearDropState()
+        return
+      }
       if (!hasFiles(e.dataTransfer)) return
       const rect = conversationRegionRect()
       if (!rect || !insideRect(rect, e) || overSelfHandledDropRegion(e)) {
         // Outside the conversation (or over a surface that owns the drop): leave
         // it to whichever surface owns that region and hide the overlay.
-        if (isDragging) {
-          isDragging = false
-          dropRegion = null
-        }
+        clearDropState()
         return
       }
       e.preventDefault()
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
-      const origin = composerRoot ? fixedContainingBlockOrigin(composerRoot) : { x: 0, y: 0 }
+      const origin = fixedOrigin()
       dropRegion = {
         left: rect.left - origin.x,
         top: rect.top - origin.y,
@@ -1814,20 +1832,32 @@
     }
 
     function onDragLeave(e: DragEvent): void {
-      if (readOnlyMode && !allowAttachments) return
-      if (selectedHarnessLacksAttachments) return
-      if (
+      // The overlay is shown only while a file drag is inside the conversation, so
+      // any leave that is not the drag moving onto one of the region's own
+      // children hides it. Testing the pointer rather than the event target keeps
+      // the overlay up through those child crossings.
+      //
+      // The viewport boundary is tested explicitly on top of the region: every
+      // layout puts the region flush against the window's right and bottom edges
+      // (and the left edge where the conversation is full bleed), so a leave
+      // produced by dragging out of the window lands inside the region's bounds
+      // and would otherwise be read as a child crossing. Hiding it here also
+      // covers the release that ends a drag over a surface which accepts no
+      // drop: such a surface receives no drop event at all, leaving this as the
+      // last event the composer sees.
+      const atWindowEdge =
         e.clientX <= 0 ||
         e.clientY <= 0 ||
         e.clientX >= window.innerWidth ||
         e.clientY >= window.innerHeight
-      ) {
-        isDragging = false
-        dropRegion = null
-      }
+      const rect = conversationRegionRect()
+      if (atWindowEdge || !rect || !insideRect(rect, e)) clearDropState()
     }
 
     function onDrop(e: DragEvent): void {
+      // Every drop ends the drag, including one that lands on the sidebar, the
+      // file tree, or outside the window.
+      clearDropState()
       if (readOnlyMode && !allowAttachments) return
       if (selectedHarnessLacksAttachments) {
         if (hasFiles(e.dataTransfer)) {
@@ -1839,8 +1869,6 @@
       const rect = conversationRegionRect()
       if (!rect || !insideRect(rect, e) || overSelfHandledDropRegion(e)) return
       e.preventDefault()
-      isDragging = false
-      dropRegion = null
       void handleDropFiles(e.dataTransfer)
     }
 
@@ -2109,17 +2137,27 @@
   />
 {/if}
 
+<!-- Measurement anchor for the overlay below: fixed, 0x0, and out of flow, so it
+     never takes part in layout. It sits beside the overlay rather than inside
+     .chat-composer (which sets container-type for its responsive toolbar) so the
+     two always resolve against the same box. -->
+<div
+  {@attach captureDropAnchorProbe}
+  aria-hidden="true"
+  class="pointer-events-none fixed top-0 left-0 m-0 h-0 w-0"
+></div>
+
 {#if isDragging && dropRegion}
   <!-- Sits over the conversation region only: the project sidebar (left) and
        the file tree (right) keep their own drop targets, so a drag can be aimed
-       at any of the three surfaces. Rendered as a sibling of .chat-composer,
-       not a descendant: that element sets container-type for its responsive
-       toolbar, which makes it a containing block for position:fixed children
-       and would confine this overlay to its bounds. -->
+       at any of the three surfaces. Sibling of .chat-composer, never a
+       descendant: whether that element's container-type contains a fixed child
+       is engine-dependent, so staying outside it removes the question. Where it
+       lands comes from the anchor above, never from CSS inference. -->
   <div
     role="region"
     aria-label="Drop zone"
-    class="fixed z-100 flex items-center justify-center border-2 border-dashed border-primary bg-primary/20 backdrop-blur-sm pointer-events-auto"
+    class="fixed z-100 m-0 flex items-center justify-center border-2 border-dashed border-primary bg-primary/20 backdrop-blur-sm pointer-events-auto"
     style:left={`${dropRegion.left}px`}
     style:top={`${dropRegion.top}px`}
     style:width={`${dropRegion.width}px`}
@@ -2131,8 +2169,7 @@
     ondrop={(e: DragEvent) => {
       e.preventDefault()
       e.stopPropagation()
-      isDragging = false
-      dropRegion = null
+      clearDropState()
       void handleDropFiles(e.dataTransfer)
     }}
   >
