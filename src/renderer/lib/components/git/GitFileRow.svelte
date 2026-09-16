@@ -4,7 +4,7 @@
   import { ContextMenu } from 'bits-ui'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FileDiffView from '../files/FileDiffView.svelte'
-  import { ChevronDown, ChevronRight, GitMerge, Loader2 } from '@lucide/svelte'
+  import { ChevronDown, ChevronRight, GitMerge, Loader2, Minus, Plus } from '@lucide/svelte'
   import Switch from '../ui/Switch.svelte'
 
   interface Props {
@@ -196,20 +196,31 @@
               Resolve
             </button>
           {:else}
+            <!--
+              Staging is a gutter affordance, not a second text button: the row
+              already names the file and its diff stats, so the action is an
+              icon that appears on hover (and on keyboard focus) for an
+              unstaged file. A staged file keeps it visible, because unstage is
+              the action a user is looking for once something is staged.
+            -->
             <button
               type="button"
               class={[
-                'shrink-0 rounded px-2 py-1 text-[0.625rem] font-medium transition-colors disabled:opacity-40',
+                'flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors disabled:pointer-events-none disabled:opacity-40',
                 change.staged
                   ? 'text-danger hover:bg-danger/10'
-                  : 'text-muted hover:bg-elevated hover:text-foreground'
+                  : 'text-dimmed opacity-0 hover:bg-elevated hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100'
               ]}
               disabled={change.status === 'conflicted'}
               aria-label={change.staged ? `Unstage ${change.path}` : `Stage ${change.path}`}
               title={change.staged ? `Unstage ${change.path}` : `Stage ${change.path}`}
               onclick={onToggleStage}
             >
-              {change.staged ? 'Unstage' : 'Stage'}
+              {#if change.staged}
+                <Minus size={12} aria-hidden="true" />
+              {:else}
+                <Plus size={12} aria-hidden="true" />
+              {/if}
             </button>
           {/if}
         {/if}
