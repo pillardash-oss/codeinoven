@@ -367,6 +367,11 @@
   let isTranscribing = $derived(
     !isRecording && !isSpeaking && speechController.isTranscribingThread(thread.id)
   )
+  /** Armed delivery of the transcription in flight: the user has told the app to
+   *  send (or steer) the transcript the moment it lands. */
+  let voiceSendStage = $derived(
+    isTranscribing ? speechController.voiceSendStageForThread(thread.id) : null
+  )
   /**
    * The row has one indicator slot and this is what owns it. Last action wins:
    * of listening, speaking, transcribing, and the agent using the computer, the
@@ -380,7 +385,17 @@
     const speechAt = speechController.threadIndicatorActionAt(thread.id) ?? 0
     if (isRecording) candidates.push({ indicator: 'recording', at: speechAt })
     if (isSpeaking) candidates.push({ indicator: 'speaking', at: speechAt })
-    if (isTranscribing) candidates.push({ indicator: 'transcribing', at: speechAt })
+    if (isTranscribing) {
+      candidates.push({
+        indicator:
+          voiceSendStage === 'steer'
+            ? 'transcribing-steer'
+            : voiceSendStage === 'send'
+              ? 'transcribing-send'
+              : 'transcribing',
+        at: speechAt
+      })
+    }
     if (isUsingComputerUse) {
       candidates.push({ indicator: 'computer-use', at: pipState.threadActivityAt(thread.id) })
     }

@@ -64,6 +64,7 @@
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import ReadAlongOverlay from '../speech/ReadAlongOverlay.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
+  import { onVoiceComposerReset } from '../../speech/voice-send'
   import WorkingTrace from './WorkingTrace.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
@@ -3825,6 +3826,15 @@
     // This view owns dispatch of the thread's queued message while mounted;
     // the background dispatcher must defer to it to avoid a double send.
     queuedMessageDispatcher.markMounted(mountedProjectId, mountedThreadId)
+    // A voice transcript sent while this thread's composer was not mounted was
+    // dispatched headlessly (or parked in the queue). Drop the stale composer
+    // buffer and surface a freshly parked message in the queue card.
+    const unsubscribeVoiceSend = onVoiceComposerReset((resetProjectId, resetThreadId) => {
+      if (resetProjectId !== thread.projectId || resetThreadId !== thread.id) return
+      composerRestoreKey += 1
+      restoreQueuedMessage()
+      scheduleIdleAttention()
+    })
 
     // Slash menu inputs: harness commands and the skills visible to the
     // thread's harness. Previously commands only loaded after a harness
@@ -3922,6 +3932,7 @@
       unsubscribe?.()
       unsubscribeThreadUpdated?.()
       unsubscribeLifecycleInheritance?.()
+      unsubscribeVoiceSend()
       window.removeEventListener('resize', onResize)
       clearTimeout(copyResetTimer)
       cancelAnimationFrame(initialPaintRevealFrame)

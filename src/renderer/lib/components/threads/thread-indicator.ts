@@ -1,8 +1,19 @@
 /**
  * The single indicator slot a thread row can show. Speech and computer use
  * compete for it, and exactly one of them wins.
+ *
+ * `transcribing-send` and `transcribing-steer` are the armed refinements of a
+ * transcription in flight: the user has told the app how the transcript should
+ * be delivered once it lands, so the row shows that intent rather than plain
+ * processing.
  */
-export type ThreadIndicator = 'recording' | 'speaking' | 'transcribing' | 'computer-use'
+export type ThreadIndicator =
+  | 'recording'
+  | 'speaking'
+  | 'transcribing'
+  | 'transcribing-send'
+  | 'transcribing-steer'
+  | 'computer-use'
 
 export interface ThreadIndicatorCandidate {
   indicator: ThreadIndicator
