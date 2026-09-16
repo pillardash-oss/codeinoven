@@ -6,6 +6,7 @@ import type {
   GitBranchInfo,
   GitCommitInfo,
   GitConflictAnalysis,
+  GitConflictSide,
   GitConflictWorkFile,
   GitConflictWorkHunkState,
   GitCredentialStatus,
@@ -24,6 +25,7 @@ import type {
   GitMainSyncDirection,
   GitMainSyncResult,
   GitPullStrategy,
+  GitRebaseAction,
   GitRestoreTarget,
   GitRemoteInfo,
   GitResetMode,
@@ -46,7 +48,8 @@ import type {
   PullRequestFile,
   PullRequestPage,
   PullRequestReference,
-  PullRequestSummary
+  PullRequestSummary,
+  RepositoryMentionUser
 } from '$shared/types'
 import { INBOX_PROJECT_ID } from '$shared/types'
 
@@ -73,8 +76,10 @@ export type GitOperation =
   | 'stash-pop'
   | 'stash-drop'
   | 'restore-files'
+  | 'accept-conflicts'
   | 'abortMerge'
   | 'abortRebase'
+  | 'rebase-action'
   | 'pr-create'
   | 'pr-merge'
   | 'pr-ready'
@@ -92,6 +97,20 @@ export type GitOperation =
 
 /** How long a cached PR page or bundle is served without refetching. */
 const PR_CACHE_TTL_MS = 60_000
+/**
+ * How long a repository's @-mention candidate list stays fresh. Assignable
+ * accounts change far more slowly than PR state, and the list is fetched only
+ * when a user actually types `@`, so a long TTL costs nothing and keeps the
+ * popover instant on every later mention.
+ */
+const MENTION_USERS_TTL_MS = 10 * 60_000
+/**
+ * How long a failed mention-directory lookup is remembered. Short, because the
+ * failure is usually a transient network blip, but long enough that a token
+ * without the required permission does not re-request on every keystroke while
+ * the user is still typing the handle.
+ */
+const MENTION_USERS_RETRY_MS = 60_000
 
 /** How long a cached deployment overview/detail is served without refetching. */
 const DEPLOYMENT_CACHE_TTL_MS = 60_000
@@ -111,6 +130,20 @@ const PR_ERROR_COOLDOWN_MS = 120_000
 
 /** How long a positive GitHub connection probe is trusted without re-probing. */
 const GITHUB_PROBE_TTL_MS = 30_000
+
+/**
+ * How stale the remote-tracking refs may be when the git panel is opened
+ * before it fetches on its own.
+ *
+ * `ahead` and `behind` are read from local remote-tracking refs, which only
+ * move on a fetch, so without this the Pull and Push counts can sit stale for a
+ * whole session. The panel-open hook fires on every refocus of the panel's rail
+ * icon (files, then notifications, then back to git), so an unthrottled fetch
+ * would hit the network on each flip. Five minutes keeps the counts honest at
+ * the moment the user looks, without turning icon switching into network
+ * traffic.
+ */
+const PANEL_FETCH_STALE_MS = 5 * 60_000
 
 /** How fresh a successful PR conflict check is before it is refetched. */
 const PR_ISSUE_FRESHNESS_MS = 60_000
@@ -174,6 +207,20 @@ export class GitState {
   prConflictsByRepo: Record<string, PullRequestSummary[]> = $state(GitState.loadPrConflicts())
   /** When the conflict check last SUCCEEDED per repo — set only on success. */
   private prIssueFetchedAt: Record<string, number> = {}
+  /**
+   * When a fetch was last attempted, keyed by project, recorded whether it
+   * succeeded or not. A remote that is refusing or unreachable is then retried
+   * on the next window instead of on every panel open, which would otherwise
+   * stall the panel behind a network timeout each time the user came back to
+   * it.
+   *
+   * The key is the project rather than the scope bucket: managed scopes are
+   * worktrees of one repository, and worktrees share `refs/remotes`, so a
+   * fetch started from one of them already refreshes the refs every sibling
+   * scope reads. Keying by scope would refetch on each scope switch inside the
+   * same five minutes for no new information.
+   */
+  private fetchAttempts: Record<string, number> = {}
   /** In-flight conflict checks per project, so concurrent refreshes share one. */
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   private readonly prIssueChecks = new Map<string, Promise<void>>()
@@ -363,7 +410,11 @@ export class GitState {
   /**
    * Panel-open hook: opening the git panel refreshes local status and the
    * connection-gated PR indicators immediately, so what the user sees is
-   * never older than the moment they asked for it.
+   * never older than the moment they asked for it. When the remote-tracking
+   * refs have gone stale it also fetches, because `ahead` and `behind` come
+   * from those local refs: without that fetch a branch could sit behind the
+   * server, or ahead of it, with nothing in the panel saying so until the user
+   * went looking for Fetch in the menu.
    *
    * The git tool opens from its own rail icon rather than a tab strip, so
    * this fires on every refocus (files → git, notifications → git …). It
@@ -375,7 +426,35 @@ export class GitState {
    */
   notifyGitPanelOpened(projectId: string): void {
     if (this.activeProjectId !== projectId) return
-    queueMicrotask(() => void this.refresh(projectId).catch(() => {}))
+    queueMicrotask(() => {
+      // Local state first: it is what the panel paints, and it is also what
+      // says whether there is a remote worth fetching from. The fetch re-reads
+      // that state when it finishes, so the second read only happens on the
+      // opens the stale gate lets through.
+      void this.refresh(projectId)
+        .then(() => {
+          if (this.activeProjectId !== projectId) return
+          if (!this.fetchIsDue(projectId)) return
+          return this.fetch(projectId)
+        })
+        .catch(() => {})
+    })
+  }
+
+  /**
+   * Whether the age-gated panel-open fetch is due. A repository without a
+   * remote has nothing to fetch, and anything already attempted inside the
+   * window is left alone, which is what keeps repeated panel opens from
+   * becoming repeated network round trips.
+   */
+  private fetchIsDue(projectId: string): boolean {
+    if (this.remotes.length === 0) return false
+    return Date.now() - (this.fetchAttempts[projectId] ?? 0) >= PANEL_FETCH_STALE_MS
+  }
+
+  /** Record that a fetch was tried, so the panel-open gate can throttle it. */
+  private noteFetchAttempt(projectId: string): void {
+    this.fetchAttempts[projectId] = Date.now()
   }
 
   /**
@@ -668,6 +747,19 @@ export class GitState {
       }
       this.status = status
       this.branches = branches
+      // A recorded PR-conflict session is only real while its temporary
+      // `pr-<n>` branch still exists: once the branch is gone (finished, or
+      // deleted by hand) the session must not keep offering a merge to
+      // complete.
+      const session = this.prResolveSession
+      if (
+        session &&
+        !branches.some(
+          (branch) => branch.kind === 'local' && branch.name === `pr-${session.pullNumber}`
+        )
+      ) {
+        this.prResolveSession = null
+      }
       this.identity = identity
       this.remotes = Array.isArray(remotes) ? remotes : []
       this.credentialStatus = credentialStatus
@@ -776,6 +868,23 @@ export class GitState {
       this.error = errorMessage(reason, 'Conflict could not be resolved')
     } finally {
       this.markBusy('stage', false)
+    }
+  }
+
+  /**
+   * Take one side of every unresolved conflict at once: each conflicted file is
+   * replaced with its incoming (theirs) or current (ours) version and staged,
+   * so the whole set leaves the conflicted list in one step.
+   */
+  async acceptConflictSide(projectId: string, side: GitConflictSide): Promise<void> {
+    this.markBusy('accept-conflicts', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:acceptConflictSide', ...this.scopedGitArgs(projectId, side))
+    } catch (reason) {
+      this.error = errorMessage(reason, 'The conflicts could not be resolved')
+    } finally {
+      this.markBusy('accept-conflicts', false)
     }
   }
 
@@ -914,6 +1023,7 @@ export class GitState {
   async fetch(projectId: string): Promise<void> {
     this.markBusy('fetch', true)
     this.error = null
+    this.noteFetchAttempt(projectId)
     try {
       this.status = await invoke('git:fetch', ...this.scopedGitArgs(projectId))
       // Branch tracking (ahead/behind) changes with every fetch — refresh it so
@@ -931,6 +1041,7 @@ export class GitState {
   async fetchBranch(projectId: string, remote: string, branch: string): Promise<void> {
     this.markBusy('fetch', true)
     this.error = null
+    this.noteFetchAttempt(projectId)
     try {
       this.status = await invoke(
         'git:fetchBranch',
@@ -947,8 +1058,14 @@ export class GitState {
   async pull(projectId: string): Promise<void> {
     this.markBusy('pull', true)
     this.error = null
+    // A pull fetches the upstream before it integrates, so the refs it moved
+    // count towards the panel-open gate.
+    this.noteFetchAttempt(projectId)
     try {
       this.status = await invoke('git:pull', ...this.scopedGitArgs(projectId))
+      // A pull moves remote-tracking refs, so re-read branches and their
+      // ahead/behind counts instead of leaving the panel showing stale ones.
+      await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull failed')
     } finally {
@@ -1006,6 +1123,9 @@ export class GitState {
       this.status = scopeBucketId
         ? await invoke('git:pullIntegrate', projectId, options, scopeBucketId)
         : await invoke('git:pullIntegrate', projectId, options)
+      // Same reason as pull: a pull moves remote-tracking refs, so the branch
+      // list and its ahead/behind counts have to be re-read.
+      await this.refresh(projectId)
     } catch (reason) {
       const fallback =
         strategy === 'rebase'
@@ -1159,6 +1279,26 @@ export class GitState {
       this.error = errorMessage(reason, 'Rebase abort failed')
     } finally {
       this.markBusy('abortRebase', false)
+    }
+  }
+
+  /**
+   * Move a stopped rebase along: continue it, or skip the commit git stopped
+   * on. A rebase can stop again on the next commit's conflict, which is a normal
+   * state rather than an error, so the refreshed status is what the panel shows.
+   */
+  async rebaseAction(projectId: string, action: GitRebaseAction): Promise<void> {
+    this.markBusy('rebase-action', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:rebaseAction', ...this.scopedGitArgs(projectId, action))
+    } catch (reason) {
+      this.error = errorMessage(
+        reason,
+        action === 'continue' ? 'The rebase could not continue' : 'The commit could not be skipped'
+      )
+    } finally {
+      this.markBusy('rebase-action', false)
     }
   }
 
@@ -1500,6 +1640,21 @@ export class GitState {
   prAgentReports: Record<string, PrAgentReport> = $state({})
 
   /**
+   * @-mention candidates per `owner/repo`, keyed so two repositories never share
+   * a list. `mentionUsersInFlight` is deliberately not reactive: it only
+   * de-duplicates concurrent requests and nothing renders from it.
+   */
+  mentionUsers: Record<string, { users: RepositoryMentionUser[]; fetchedAt: number }> = $state({})
+  /**
+   * In-flight requests and recent failures, keyed the same way. Plain records
+   * rather than Maps because nothing renders from them: they only de-duplicate
+   * concurrent lookups and back off a failed one, so making them reactive would
+   * cost work to publish state no view reads.
+   */
+  private mentionUsersInFlight: Record<string, Promise<RepositoryMentionUser[]>> = {}
+  private mentionUsersFailedAt: Record<string, number> = {}
+
+  /**
    * Cached deployment overviews, details, and job logs — the same
    * stale-while-revalidate pattern as the PR caches. The Deployments tab is
    * mounted/unmounted on every tab switch, so cached data renders instantly
@@ -1697,6 +1852,48 @@ export class GitState {
     } finally {
       this.markBusy('pr-detail', false)
     }
+  }
+
+  /**
+   * Repository accounts that can be @-mentioned in a PR conversation.
+   *
+   * Called only when the user types `@`, and cache-first so a typed query does
+   * not re-fetch per keystroke. Concurrent callers share one in-flight request
+   * rather than racing, and a failure resolves to the stale cache (or an empty
+   * list) so autocomplete degrades to the on-screen participants instead of
+   * surfacing an error: the token may legitimately lack the permission this
+   * needs, and a mention menu is not worth an error banner.
+   */
+  async mentionUsersFor(
+    projectId: string,
+    owner: string,
+    repo: string
+  ): Promise<RepositoryMentionUser[]> {
+    if (!projectId || !owner || !repo) return []
+    const key = `${owner}/${repo}`
+    const cached = this.mentionUsers[key]
+    if (cached && Date.now() - cached.fetchedAt < MENTION_USERS_TTL_MS) return cached.users
+    const failedAt = this.mentionUsersFailedAt[key]
+    if (!cached && failedAt !== undefined && Date.now() - failedAt < MENTION_USERS_RETRY_MS) {
+      return []
+    }
+    const inFlight = this.mentionUsersInFlight[key]
+    if (inFlight) return inFlight
+    const request = invoke('pr:mentionUsers', projectId, owner, repo)
+      .then((users) => {
+        this.mentionUsers = { ...this.mentionUsers, [key]: { users, fetchedAt: Date.now() } }
+        delete this.mentionUsersFailedAt[key]
+        return users
+      })
+      .catch(() => {
+        this.mentionUsersFailedAt[key] = Date.now()
+        return cached?.users ?? []
+      })
+      .finally(() => {
+        delete this.mentionUsersInFlight[key]
+      })
+    this.mentionUsersInFlight[key] = request
+    return request
   }
 
   /** Files and patches for one commit inside a PR. */

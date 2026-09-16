@@ -19,8 +19,10 @@ import type { DefaultLogFields, LogOptions, SimpleGit, StatusResult } from 'simp
 import type {
   GitBranchInfo,
   GitCommitInfo,
+  GitCommitRef,
   GitConflictAnalysis,
   GitConflictHunk,
+  GitConflictSide,
   GitConflictWorkFile,
   GitConflictWorkHunkState,
   GitDiff,
@@ -30,6 +32,7 @@ import type {
   GitMainSyncDirection,
   GitMainSyncResult,
   GitPullStrategy,
+  GitRebaseAction,
   GitRemoteInfo,
   GitRestoreTarget,
   GitResetMode,
@@ -73,6 +76,16 @@ process.env.GIT_OPTIONAL_LOCKS = process.env.GIT_OPTIONAL_LOCKS ?? '0'
 
 /** Number of commits returned by `git log` by default. */
 const DEFAULT_LOG_LIMIT = 50
+
+/**
+ * The `git log` fields this service reads. It mirrors simple-git's
+ * `DefaultLogFields`   passing a custom `format` replaces those defaults
+ * wholesale, so every field the mapper reads has to be listed here   and adds
+ * `%P`, which carries the parent hashes the graph view draws its lanes from.
+ */
+interface HistoryLogFields extends DefaultLogFields {
+  parents: string
+}
 
 const PR_COMPOSE_UNTRACKED_BYTES = 24 * 1024
 const PR_COMPOSE_UNTRACKED_FILES = 24
@@ -121,6 +134,35 @@ interface ConflictWorkMetadata {
 }
 
 const GIT_UNAVAILABLE_MESSAGE = 'Git is not available on this machine'
+
+/** `%P` renders space-separated parent hashes; a root commit renders empty. */
+function parseCommitParents(raw: string): string[] {
+  return raw.split(' ').filter((hash) => hash.length > 0)
+}
+
+/**
+ * `%D` renders decorations as `HEAD -> main, origin/main, tag: v1.0`.
+ * Normalized to `{ name, kind, head }` so no renderer parses git's syntax.
+ */
+function parseCommitRefs(raw: string): GitCommitRef[] {
+  const refs: GitCommitRef[] = []
+  for (const decoration of raw.split(',')) {
+    const trimmed = decoration.trim()
+    if (trimmed.length === 0) continue
+    if (trimmed === 'HEAD') {
+      refs.push({ name: 'HEAD', kind: 'branch', head: true })
+      continue
+    }
+    const isHead = trimmed.startsWith('HEAD -> ')
+    const name = isHead ? trimmed.slice('HEAD -> '.length) : trimmed
+    if (name.startsWith('tag: ')) {
+      refs.push({ name: name.slice('tag: '.length), kind: 'tag', head: isHead })
+      continue
+    }
+    refs.push({ name, kind: 'branch', head: isHead })
+  }
+  return refs
+}
 
 function isUnbornBranchLogError(failure: unknown): boolean {
   if (!(failure instanceof Error)) return false
@@ -179,6 +221,36 @@ export class GitService {
     return simpleGit(directory, {
       config: extraConfig,
       maxConcurrentProcesses: 1
+    })
+  }
+
+  /**
+   * A client with git's editor replaced by a no-op, for the commands that commit
+   * on the user's behalf.
+   *
+   * `git rebase --continue` finishes a resolved conflict by committing it, and
+   * that commit runs the configured editor. Measured against real git: with
+   * nothing configured and no terminal it exits 1 with "Terminal is dumb, but
+   * EDITOR unset. Please supply the message using either -m or -F option", and
+   * with git's default `vi` it runs the editor with the message path as its
+   * argument and never returns. Either way the rebase the panel just offered to
+   * continue cannot continue, and in the blocking case the main process waits on
+   * a promise that never settles. `core.editor=true` is git's own no-op editor,
+   * and on the command line it outranks `VISUAL`, `EDITOR` and any configured
+   * `core.editor` such as `code --wait`.
+   *
+   * simple-git refuses to pass an editor through unless the caller opts in,
+   * because an editor value is arbitrary code. Every value here is ours (`true`),
+   * never anything a user typed, and the opt-in is on this client alone rather
+   * than the shared default, so no other command's argv can carry an editor.
+   * `GIT_EDITOR` still outranks a config entry, but only a process launched from
+   * a shell that exports it would carry one into the app.
+   */
+  private clientWithoutEditor(directory: string): SimpleGit {
+    return simpleGit(directory, {
+      config: ['core.editor=true'],
+      maxConcurrentProcesses: 1,
+      unsafe: { allowUnsafeEditor: true }
     })
   }
 
@@ -412,6 +484,42 @@ export class GitService {
       if (hasConflictMarkers(file.content)) return this.readStatus(directory)
       await this.wrapError(directory, 'mutation', async () => {
         await this.client(directory).add([safePath])
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /**
+   * Take one side of every unresolved conflict wholesale and stage it.
+   *
+   * `incoming` keeps the theirs side (stage 3, the branch being integrated),
+   * `current` keeps the ours side (stage 2, what HEAD had)   the same two sides
+   * the per-hunk merge editor names. Each path is written and staged so git
+   * clears its unmerged entry, and the merge editor's scratch document for that
+   * path is removed because it now describes a file that no longer conflicts.
+   *
+   * Refused while no conflict is open, and the whole set is touched in one
+   * queued task so a partial accept can never be observed.
+   */
+  async acceptConflictSide(projectPath: string, side: GitConflictSide): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const status = await this.client(directory).status()
+      const safePaths = status.conflicted.map((path) => this.assertRelativePath(directory, path))
+      if (safePaths.length === 0) return this.readStatus(directory)
+      const scratch = await Promise.all(
+        safePaths.map((path) => this.conflictWorkPaths(directory, path))
+      )
+      await this.wrapError(directory, 'mutation', async () => {
+        const git = this.client(directory)
+        await git.raw(['checkout', side === 'incoming' ? '--theirs' : '--ours', '--', ...safePaths])
+        await git.add(safePaths)
+        await Promise.all(
+          scratch.flatMap(({ document, metadata }) => [
+            rm(document, { force: true }),
+            rm(metadata, { force: true })
+          ])
+        )
       })
       return this.readStatus(directory)
     })
@@ -785,8 +893,12 @@ export class GitService {
         // that spelling fails with "branch not found".
         const resolves = await git
           .raw(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])
-          .then(() => true, () => false)
-        const branchName = resolves || !name.startsWith('heads/') ? name : name.slice('heads/'.length)
+          .then(
+            () => true,
+            () => false
+          )
+        const branchName =
+          resolves || !name.startsWith('heads/') ? name : name.slice('heads/'.length)
         await this.removeWorktreesForBranch(git, branchName)
         await git.deleteLocalBranch(branchName, force)
       })
@@ -795,11 +907,7 @@ export class GitService {
   }
 
   /** `git push <remote> --delete <name>` removes a branch from a remote. */
-  async deleteRemoteBranch(
-    projectPath: string,
-    remote: string,
-    name: string
-  ): Promise<GitStatus> {
+  async deleteRemoteBranch(projectPath: string, remote: string, name: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
@@ -858,13 +966,25 @@ export class GitService {
         if (normalizedQuery && normalizedQuery.length > 256) {
           throw new TypeError('Commit search query must be at most 256 characters')
         }
-        const options: LogOptions & {
+        const options: LogOptions<HistoryLogFields> & {
           '--fixed-strings'?: null
           '--grep'?: string
           '--regexp-ignore-case'?: null
           '--skip'?: number
         } = {
-          maxCount: Math.max(1, Math.min(limit, 200))
+          maxCount: Math.max(1, Math.min(limit, 200)),
+          // Passing a `format` replaces simple-git's default field map, so this
+          // restates exactly what the defaults fetched and adds `%P` for lanes.
+          format: {
+            hash: '%H',
+            date: '%aI',
+            message: '%s',
+            refs: '%D',
+            body: '%b',
+            author_name: '%aN',
+            author_email: '%aE',
+            parents: '%P'
+          }
         }
         if (offset > 0) options['--skip'] = Math.max(0, offset)
         if (normalizedQuery) {
@@ -874,7 +994,7 @@ export class GitService {
         }
         let history
         try {
-          history = await git.log(options)
+          history = await git.log<HistoryLogFields>(options)
         } catch (failure) {
           if (isUnbornBranchLogError(failure)) return []
           throw failure
@@ -897,13 +1017,16 @@ export class GitService {
     })
   }
 
-  private mapCommit(entry: DefaultLogFields): GitCommitInfo {
+  private mapCommit(entry: HistoryLogFields): GitCommitInfo {
     return {
       hash: entry.hash,
       shortHash: entry.hash.slice(0, 7),
       author: entry.author_name ?? entry.author_email ?? 'unknown',
       date: entry.date ? new Date(entry.date).getTime() : Date.now(),
-      message: entry.message
+      message: entry.message,
+      body: entry.body,
+      parents: parseCommitParents(entry.parents),
+      refs: parseCommitRefs(entry.refs)
     }
   }
 
@@ -911,17 +1034,20 @@ export class GitService {
     try {
       const output = await git.show([
         '--no-patch',
-        '--format=%H%x00%aI%x00%aN%x00%s',
+        '--format=%H%x00%P%x00%aI%x00%aN%x00%D%x00%s%x00%b',
         `${query}^{commit}`
       ])
-      const [hash, date, author, message] = output.trim().split('\0')
+      const [hash, parents, date, author, refs, message, body] = output.trim().split('\0')
       if (!hash || !date || !message) return null
       return {
         hash,
         shortHash: hash.slice(0, 7),
         author: author || 'unknown',
         date: new Date(date).getTime(),
-        message
+        message,
+        body: body ?? '',
+        parents: parseCommitParents(parents ?? ''),
+        refs: parseCommitRefs(refs ?? '')
       }
     } catch {
       return null
@@ -1089,7 +1215,10 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
-        await this.client(directory).fetch()
+        // Prune so remote-tracking refs for branches deleted on the server
+        // disappear here too. A plain fetch only ever adds refs, which left
+        // deleted branches listed under Remote forever.
+        await this.client(directory).fetch(['--prune'])
       })
       return this.readStatus(directory)
     })
@@ -1229,15 +1358,21 @@ export class GitService {
       }
 
       const before = await this.readStatus(directory)
-      if (before.detached || !before.branch) {
-        throw new Error(`Check out a branch in this worktree before syncing ${toward} main`)
-      }
-      const branch = before.branch
+      // The in-progress integration is reported first because a rebase leaves
+      // HEAD detached: checking the branch first answers a user who is sitting
+      // on a conflict in a branch they do have with "check out a branch", which
+      // is the dead end, and the branch name is recoverable from the rebase's
+      // own state. A merge keeps HEAD on the branch, so for it the two checks
+      // agree either way.
       if (before.conflictState !== 'none') {
         throw new Error(
           `Finish or abort the in-progress ${before.conflictState} before syncing ${toward} main`
         )
       }
+      if (before.detached || !before.branch) {
+        throw new Error(`Check out a branch in this worktree before syncing ${toward} main`)
+      }
+      const branch = before.branch
 
       if (options.direction === 'to-main') {
         return await this.foldIntoMain(directory, mainDirectory, before, branch, options)
@@ -1327,15 +1462,18 @@ export class GitService {
     }
 
     const mainStatus = await this.readStatus(mainDirectory)
-    if (mainStatus.detached || !mainStatus.branch) {
-      throw new Error('The project root is not on a branch, so there is nothing to sync to')
-    }
-    const mainBranch = mainStatus.branch
+    // Same order as the worktree's own check: a rebase in the project root also
+    // detaches its HEAD, and "the project root is not on a branch" is not what
+    // the user needs to hear while its rebase is sitting half-finished.
     if (mainStatus.conflictState !== 'none') {
       throw new Error(
         `Finish or abort the in-progress ${mainStatus.conflictState} in the project main worktree before syncing to main`
       )
     }
+    if (mainStatus.detached || !mainStatus.branch) {
+      throw new Error('The project root is not on a branch, so there is nothing to sync to')
+    }
+    const mainBranch = mainStatus.branch
     const mainDirty = uncommitted(mainStatus)
     if (mainDirty > 0) {
       throw new Error(
@@ -1742,6 +1880,43 @@ export class GitService {
   }
 
   /**
+   * Move a stopped rebase along: `continue` applies the commit git stopped on
+   * and replays the rest, `skip` drops that commit and replays the rest. Either
+   * can stop again on the next commit's conflict, which is not an error   the
+   * refreshed status carries the new conflict state for the panel to show.
+   *
+   * Unresolved conflicts are refused here rather than left to git: `rebase
+   * --continue` reports them on stdout with an empty stderr, and simple-git only
+   * raises a task error when stderr has something in it, so git's refusal would
+   * arrive as a resolved promise and the button would look like it did nothing.
+   * The refusal also names the step the user owes, which git's own three lines
+   * only imply.
+   *
+   * Both run through `clientWithoutEditor`: `--continue` finishes a conflicted
+   * commit by committing it, and committing runs the configured editor   see that
+   * helper for what git does without one.
+   */
+  async rebaseAction(projectPath: string, action: GitRebaseAction): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const before = await this.readStatus(directory)
+      const unresolved = before.conflicted.length
+      if (action === 'continue' && unresolved > 0) {
+        throw new Error(
+          `Resolve and stage ${unresolved === 1 ? 'the remaining conflicted file' : `the ${String(unresolved)} remaining conflicted files`}, then continue the rebase`
+        )
+      }
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await this.clientWithoutEditor(directory).raw([
+          'rebase',
+          action === 'continue' ? '--continue' : '--skip'
+        ])
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /**
    * Prepare to resolve a PR's online merge conflicts locally: check out the PR
    * head as a local branch (`pr-<number>`) and merge the current base into it
    * so the conflicts land in the working tree for the conflict UI to resolve.
@@ -1784,17 +1959,30 @@ export class GitService {
    * updates the PR), check the user's original branch back out, and delete the
    * now-useless temporary branch. The temporary branch exists only to stage
    * the conflict resolution, so nothing is left for the user to do by hand.
+   *
+   * The push resolves credentials the same way `push` does: the caller passes
+   * the vaulted PAT, so finishing works on a repository whose remote the panel
+   * authenticates for rather than depending on ambient git credentials.
    */
   async finishPrResolve(
     projectPath: string,
-    options: { remote: string; pullNumber: number; headBranch: string; returnBranch: string }
+    options: {
+      remote: string
+      pullNumber: number
+      headBranch: string
+      returnBranch: string
+      token?: string
+    }
   ): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      const git = this.client(directory)
       const localBranch = `pr-${options.pullNumber}`
       await this.wrapError(projectPath, 'mutation', async () => {
-        await git.raw(['push', options.remote, `${localBranch}:${options.headBranch}`])
+        const pushClient = options.token
+          ? this.withAuthHeader(directory, options.token)
+          : this.client(directory)
+        await pushClient.push([options.remote, `${localBranch}:${options.headBranch}`])
+        const git = this.client(directory)
         await git.checkout(options.returnBranch)
         await git.deleteLocalBranch(localBranch, true)
       })
@@ -2284,7 +2472,7 @@ export class GitService {
   ): GitBranchInfo[] {
     // `refname:short` disambiguates when a tag shares the branch's name (e.g. a
     // `nightly` tag and `nightly` branch render as `heads/nightly`), so the
-    // operational branch `name` must be derived from the full ref instead  
+    // operational branch `name` must be derived from the full ref instead
     // `git branch -d heads/nightly` fails with "branch not found".
     const localRefPrefix = 'refs/heads/'
     const remoteRefPrefix = 'refs/remotes/'

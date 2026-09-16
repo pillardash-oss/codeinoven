@@ -3,7 +3,7 @@
   import type { Snippet } from 'svelte'
   import { APP_SLUG } from '$shared/brand'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
-  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { browserVisibility, trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import {
     registerModalPrimaryAction,
@@ -35,8 +35,19 @@
     dock: Snippet
     children: Snippet
     footer?: Snippet
-    /** LocalStorage key used to persist the panel's position/size. */
+    /**
+     * LocalStorage key used to persist the panel's position/size.
+     */
     storageKey?: string
+    /**
+     * Stacking layer. `surface` sits with the app's other floating panels at
+     * `z-50`. `top` lifts the panel above the full screen surfaces (terminal,
+     * browser, file editor and the pull request reader are all `z-50`), which
+     * the pull request sheet needs because it can be opened from the full
+     * screen reader. Portaled menus and confirms inside a `top` panel belong at
+     * `z-90` so they still clear the panel itself.
+     */
+    layer?: 'surface' | 'top'
     /** Initial panel height before viewport clamping. */
     defaultHeight?: number
     /** Tooltip/aria label shown on the draggable header. */
@@ -68,6 +79,7 @@
     children,
     footer,
     storageKey = `${APP_SLUG}.harnessTasksPanel.v1`,
+    layer = 'surface',
     defaultHeight = 560,
     dragLabel = 'Drag to move the task panel',
     headerPrefix,
@@ -293,10 +305,19 @@
     the dock row keeps the run badges live. The dock renders as a sibling, outside
     this panel, so the panel's `invisible` state cannot hide it.
   -->
+  <!--
+    `pointer-events-auto` is load-bearing, not decoration: a modal bits-ui Dialog
+    (the full screen reader, terminal, browser, file editor) sets
+    `body { pointer-events: none }` while it is open, and pointer events inherit,
+    so a panel that does not opt back in is visible above that surface at z-80 but
+    completely dead to the mouse. That is the whole reason `layer="top"` exists.
+  -->
   <div
-    class="fixed z-50 flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {minimized
+    class="fixed {layer === 'top'
+      ? 'z-80'
+      : 'z-50'} flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {minimized
       ? 'invisible pointer-events-none'
-      : ''}"
+      : 'pointer-events-auto'}"
     style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;"
     bind:this={panelEl}
     role="dialog"
@@ -355,6 +376,11 @@
   </div>
 
   {#if minimized}
-    {@render dock()}
+    <div
+      class="pointer-events-auto fixed right-4 bottom-4 {layer === 'top' ? 'z-80' : 'z-50'}"
+      {@attach trackBrowserOcclusion}
+    >
+      {@render dock()}
+    </div>
   {/if}
 {/if}

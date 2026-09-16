@@ -45,9 +45,32 @@
 <Dialog.Root open={true} onOpenChange={(open) => !open && onMinimize()}>
   <Dialog.Portal>
     <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/80 backdrop-blur-sm" />
+    <!--
+      `trapFocus` is off on purpose. bits-ui's Dialog (bits-ui 2.19,
+      `bits/utilities/focus-scope/focus-scope.svelte.js`) traps focus with a
+      CAPTURE-phase `focusin` listener on the document that re-focuses the last
+      element inside the content whenever focus lands outside it, and it reads
+      `trapFocus` only when the scope mounts, so the trap cannot be released
+      while the surface stays open.
+
+      These surfaces deliberately carry floating panels above them: the pull
+      request reader hosts the create-pull-request sheet, whose `layer="top"`
+      contract (`src/renderer/lib/components/ui/DockableModal.svelte`) exists so
+      it paints above a full screen surface. With the trap on, that panel was
+      drawn on top but could never take focus, which means no caret, no typing
+      and no drag-select inside it.
+
+      The trade is deliberate and is the honest cost: Tab now moves past the
+      surface's own controls into whatever follows in the document instead of
+      wrapping inside it. That is accepted because the surface covers the window
+      (nothing behind it is reachable by pointer), the browser surface's native
+      view never routes its keystrokes through this DOM anyway, and a panel that
+      cannot be typed into above a full screen reader is the worse bug.
+    -->
     <Dialog.Content
       class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl"
       onEscapeKeydown={(event) => event.preventDefault()}
+      trapFocus={false}
     >
       <div
         class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"

@@ -21,8 +21,10 @@ import type {
   PullRequestReviewComment,
   PullRequestPage,
   PullRequestReference,
-  PullRequestSummary
+  PullRequestSummary,
+  RepositoryMentionUser
 } from '../../lib/types'
+import { capJobLogText } from '../../lib/github-job-log'
 import type {
   CreatePrCommentInput,
   CreatePrReviewInput,
@@ -43,7 +45,10 @@ export const PROVIDER_API_BASE_URL_ENV = 'CODEINOVEN_GIT_PROVIDER_API_BASE_URL'
 /** Network timeout so a slow provider never hangs the UI. */
 const PROVIDER_FETCH_TIMEOUT_MS = 15_000
 
-/** Cap on the raw job log text streamed into the app (roughly 200 KB). */
+/**
+ * Cap on the raw job log text streamed into the app (roughly 200 KB). An oversized
+ * log loses its middle, never its end: that is where the failing step is.
+ */
 const MAX_JOB_LOG_BYTES = 200_000
 
 const GITHUB_API_ACCEPT = 'application/vnd.github+json'
@@ -444,7 +449,8 @@ export class GitHubProvider implements GitProvider {
           status: this.toCheckStatus(this.readString(record, 'status')),
           conclusion: this.toCheckConclusion(this.readString(record, 'conclusion')),
           url: htmlUrl ?? detailsUrl,
-          workflowRunId: this.workflowRunIdFromUrls(detailsUrl, htmlUrl)
+          workflowRunId: this.workflowRunIdFromUrls(detailsUrl, htmlUrl),
+          jobId: this.jobIdFromUrls(detailsUrl, htmlUrl)
         })
       }
     }
@@ -463,7 +469,8 @@ export class GitHubProvider implements GitProvider {
           conclusion:
             state === 'success' ? 'success' : state === 'pending' ? null : ('failure' as const),
           url: targetUrl,
-          workflowRunId: this.workflowRunIdFromUrls(targetUrl)
+          workflowRunId: this.workflowRunIdFromUrls(targetUrl),
+          jobId: this.jobIdFromUrls(targetUrl)
         })
       }
     }
@@ -484,6 +491,42 @@ export class GitHubProvider implements GitProvider {
     )
     const record = Array.isArray(response) ? {} : response
     return this.toFiles(record['files'])
+  }
+
+  /**
+   * Assignable repository accounts, for @-mention autocomplete in PR conversations.
+   *
+   * `/assignees` is deliberate: `/collaborators` requires push access and 403s for
+   * a read-only contributor, while `/assignees` is readable with a read token and
+   * is the same list GitHub's own assignee picker uses.
+   */
+  async listRepositoryMentionUsers(input: {
+    owner: string
+    repo: string
+  }): Promise<RepositoryMentionUser[]> {
+    const response = await this.request(`${this.repoPath(input)}/assignees?per_page=100`, {
+      method: 'GET'
+    })
+    const items = Array.isArray(response) ? response : []
+    const seen = new Set<string>()
+    return items.flatMap((item): RepositoryMentionUser[] => {
+      if (typeof item !== 'object' || item === null) return []
+      const record = item as Record<string, unknown>
+      const login = this.readString(record, 'login')?.trim()
+      if (!login) return []
+      const key = login.toLowerCase()
+      if (seen.has(key)) return []
+      seen.add(key)
+      const name = this.readString(record, 'name')?.trim()
+      return [
+        {
+          login,
+          name: name ? name : null,
+          avatarUrl: this.readString(record, 'avatar_url'),
+          bot: this.readString(record, 'type') === 'Bot' || login.endsWith('[bot]')
+        }
+      ]
+    })
   }
 
   async getDeploymentOverview(input: {
@@ -598,7 +641,7 @@ export class GitHubProvider implements GitProvider {
     return { run, jobs, fetchedAt: Date.now() }
   }
 
-  /** Capped raw log text for one workflow run job, rendered in-app. */
+  /** Raw log text for one workflow run job, capped and sectioned by the renderer. */
   async getDeploymentJobLog(input: {
     owner: string
     repo: string
@@ -606,11 +649,11 @@ export class GitHubProvider implements GitProvider {
   }): Promise<GitHubDeploymentJobLog> {
     const path = `${this.repoPath(input)}/actions/jobs/${input.jobId}/logs`
     const text = await this.requestText(path)
-    const truncated = text.length > MAX_JOB_LOG_BYTES
+    const capped = capJobLogText(text, MAX_JOB_LOG_BYTES)
     return {
       jobId: input.jobId,
-      log: truncated ? text.slice(0, MAX_JOB_LOG_BYTES) : text,
-      truncated
+      log: capped.log,
+      truncated: capped.truncated
     }
   }
 
@@ -658,6 +701,22 @@ export class GitHubProvider implements GitProvider {
     for (const url of urls) {
       if (!url) continue
       const match = /\/actions\/runs\/(\d+)/u.exec(url)
+      if (!match) continue
+      const id = Number.parseInt(match[1] ?? '', 10)
+      if (Number.isSafeInteger(id) && id > 0) return id
+    }
+    return null
+  }
+
+  /**
+   * Extract the Actions job id a check points at. Actions puts
+   * `/actions/runs/{runId}/job/{jobId}` in `details_url`, which is the only place
+   * that identifies the individual matrix leg the check represents.
+   */
+  private jobIdFromUrls(...urls: Array<string | null>): number | null {
+    for (const url of urls) {
+      if (!url) continue
+      const match = /\/job\/(\d+)/u.exec(url)
       if (!match) continue
       const id = Number.parseInt(match[1] ?? '', 10)
       if (Number.isSafeInteger(id) && id > 0) return id

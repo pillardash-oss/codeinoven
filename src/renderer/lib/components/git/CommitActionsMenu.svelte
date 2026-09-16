@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { GitCommit, RotateCcw, Copy, MessageSquareText, Trash2 } from '@lucide/svelte'
+  import { GitCommit, RotateCcw, Copy, Info, MessageSquareText, Trash2 } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { GitResetMode } from '$shared/types'
 
@@ -12,6 +12,8 @@
     onAmend?: () => void
     onCopyHash: () => void
     onCopyMessage: () => void
+    /** Reveals the full commit record (hash, author, parents, message). */
+    onShowInfo?: () => void
   }
 
   let {
@@ -22,12 +24,21 @@
     onDelete,
     onAmend,
     onCopyHash,
-    onCopyMessage
+    onCopyMessage,
+    onShowInfo
   }: Props = $props()
 
   const itemClass =
     'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
 </script>
+
+{#if onShowInfo}
+  <DropdownMenu.Item class={itemClass} onSelect={onShowInfo} disabled={resetBusy || deleteBusy}>
+    <Info size={12} class="shrink-0 text-dimmed" />
+    Commit info
+  </DropdownMenu.Item>
+  <DropdownMenu.Separator class="my-1 h-px bg-border" />
+{/if}
 
 <DropdownMenu.Item class={itemClass} onSelect={onCopyHash} disabled={resetBusy || deleteBusy}>
   <Copy size={12} class="shrink-0 text-dimmed" />

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ChevronDown, Check, FolderTree, GitBranch, Plus, Search, Trash2 } from '@lucide/svelte'
+  import type { Snippet } from 'svelte'
   import { AlertDialog, DropdownMenu } from 'bits-ui'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { parseRemoteIdentity } from '$lib/git-remote-identity'
@@ -18,6 +19,18 @@
     onAddOrigin?: () => void
     /** Open the replace-origin flow (shown when a remote is configured). */
     onReplaceOrigin?: () => void
+    /**
+     * Leading glyph, drawn where the branch icon sits by default. The panel owns
+     * it so the working-tree state (clean, dirty, conflicted) stays with the
+     * status it comes from.
+     */
+    statusIcon?: Snippet
+    /**
+     * Badge for the branch that is checked out, drawn at the end of its row. The
+     * panel owns it for the same reason it owns `statusIcon`: the working tree's
+     * state comes from the status, not from the branch list.
+     */
+    statusBadge?: Snippet
   }
 
   let {
@@ -29,7 +42,9 @@
     onCreate,
     onDelete,
     onAddOrigin,
-    onReplaceOrigin
+    onReplaceOrigin,
+    statusIcon,
+    statusBadge
   }: Props = $props()
 
   let open = $state(false)
@@ -111,13 +126,24 @@
   }}
 >
   <DropdownMenu.Trigger
-    class="flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50 data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+    class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50 data-[state=open]:bg-elevated data-[state=open]:text-foreground"
     disabled={isBusy}
-    title="Switch branch"
-    aria-label="Switch branch"
+    title={currentBranch ? `Switch branch (${currentBranch})` : 'Switch branch'}
+    aria-label={currentBranch ? `Switch branch, currently ${currentBranch}` : 'Switch branch'}
   >
-    <GitBranch size={11} class="shrink-0" />
-    <span class="max-w-[10ch] truncate">{currentBranch ?? 'detached'}</span>
+    {#if statusIcon}
+      {@render statusIcon()}
+    {:else}
+      <GitBranch size={11} class="shrink-0" />
+    {/if}
+    <!--
+      Wide enough for a real branch name (`feature/git-panel-redesign`) instead
+      of the ten characters this used to cap at. `truncate` keeps its automatic
+      minimum size at zero, so the branch name is what gives way when the row is
+      tight instead of the tab strip and the tool buttons beside it. The name is
+      in the trigger's tooltip for when it does truncate.
+    -->
+    <span class="max-w-[26ch] truncate">{currentBranch ?? 'detached'}</span>
     <ChevronDown size={10} class="shrink-0 text-dimmed" />
   </DropdownMenu.Trigger>
 
@@ -201,6 +227,9 @@
                 </span>
               {/if}
               {#if branch.current}
+                {#if statusBadge}
+                  {@render statusBadge()}
+                {/if}
                 <Check size={12} class="shrink-0 text-primary" />
               {:else if onDelete}
                 <button

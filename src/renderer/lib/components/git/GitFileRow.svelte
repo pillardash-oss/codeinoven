@@ -4,7 +4,7 @@
   import { ContextMenu } from 'bits-ui'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FileDiffView from '../files/FileDiffView.svelte'
-  import { ChevronDown, ChevronRight, GitMerge, Loader2 } from '@lucide/svelte'
+  import { ChevronDown, ChevronRight, GitMerge, Loader2, Minus, Plus } from '@lucide/svelte'
   import Switch from '../ui/Switch.svelte'
 
   interface Props {
@@ -110,11 +110,11 @@
       aria-label={hasActions ? `Actions for ${change.path}` : undefined}
       title={hasActions ? `Actions for ${change.path}` : undefined}
     >
-      <div class="group flex min-h-9 items-center pr-1.5">
+      <div class="group flex min-h-8 items-center pr-1">
         <button
           type="button"
           class={[
-            'flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors',
+            'flex min-h-8 min-w-0 flex-1 items-center gap-1.5 px-2 text-left transition-colors',
             selected ? 'bg-primary/10' : 'hover:bg-elevated/50'
           ]}
           title={change.status === 'conflicted' && onResolveConflict
@@ -196,20 +196,31 @@
               Resolve
             </button>
           {:else}
+            <!--
+              Staging is a gutter affordance, not a second text button: the row
+              already names the file and its diff stats, so the action is an
+              icon that appears on hover (and on keyboard focus) for an
+              unstaged file. A staged file keeps it visible, because unstage is
+              the action a user is looking for once something is staged.
+            -->
             <button
               type="button"
               class={[
-                'shrink-0 rounded px-2 py-1 text-[0.625rem] font-medium transition-colors disabled:opacity-40',
+                'flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors disabled:pointer-events-none disabled:opacity-40',
                 change.staged
                   ? 'text-danger hover:bg-danger/10'
-                  : 'text-muted hover:bg-elevated hover:text-foreground'
+                  : 'text-dimmed opacity-0 hover:bg-elevated hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100'
               ]}
               disabled={change.status === 'conflicted'}
               aria-label={change.staged ? `Unstage ${change.path}` : `Stage ${change.path}`}
               title={change.staged ? `Unstage ${change.path}` : `Stage ${change.path}`}
               onclick={onToggleStage}
             >
-              {change.staged ? 'Unstage' : 'Stage'}
+              {#if change.staged}
+                <Minus size={12} aria-hidden="true" />
+              {:else}
+                <Plus size={12} aria-hidden="true" />
+              {/if}
             </button>
           {/if}
         {/if}
@@ -324,21 +335,21 @@
   {#if expanded}
     <div class="border-t border-border bg-app/50">
       {#if loadingDiff}
-        <div class="flex items-center gap-2 px-3 py-4 text-dimmed">
+        <div class="flex items-center gap-2 px-2 py-3 text-dimmed">
           <Loader2 size={12} class="animate-spin" />
           <span class="text-[0.625rem]">Loading diff…</span>
         </div>
       {:else if error}
-        <p class="px-3 py-4 text-[0.625rem] text-danger" role="alert">{error}</p>
+        <p class="px-2 py-3 text-[0.625rem] text-danger" role="alert">{error}</p>
       {:else if viewDiff}
         <FileDiffView diff={viewDiff} maxHeight="18rem" />
         {#if viewDiff.truncated}
-          <p class="border-t border-border px-3 py-1 text-[0.5625rem] text-dimmed">
+          <p class="border-t border-border px-2 py-1 text-[0.5625rem] text-dimmed">
             Diff truncated to a bounded preview
           </p>
         {/if}
       {:else}
-        <p class="px-3 py-4 text-[0.625rem] text-dimmed">No diff available.</p>
+        <p class="px-2 py-3 text-[0.625rem] text-dimmed">No diff available.</p>
       {/if}
     </div>
   {/if}

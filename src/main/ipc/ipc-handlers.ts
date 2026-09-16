@@ -30,6 +30,7 @@ import { GitService, type PullRequestComposeContext } from '../git/git-service'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { GitHubAuthService } from '../git/github-auth-service'
+import { resolveAvatars } from '../git/github-avatars'
 import { GitHubProvider, ProviderHttpError } from '../providers/github-provider'
 import { isDevelopmentEnvironment, validateBaseUrl } from '../providers/base-url'
 import { resolveDeploymentProvider } from '../providers/registry'
@@ -95,6 +96,8 @@ import {
   validateEngineeringLifecycleSelectionInput,
   validateEngineeringLifecycleStage,
   validateGitIdentity,
+  validateGitConflictSide,
+  validateGitRebaseAction,
   validateGitPathArray,
   validateGitRelativePath,
   validateGitResetMode,
@@ -119,6 +122,7 @@ import {
   validateRemoteName,
   validateRemoteUrl,
   validateFaviconHostnames,
+  validateGitHubLogins,
   validateScopeAppearancePatch,
   validateScopeCollapsePatch,
   validateScopeCreateInput,
@@ -4656,6 +4660,14 @@ export function registerIpcHandlers(
     return resolveFavicons(hostnames)
   })
 
+  // Avatars for the logins a pull request conversation names. Same reason as the
+  // favicons above: the renderer's `img-src` allows `data:` and nothing remote, so
+  // the picture is downloaded here and handed over inlined.
+  ipcMain.handle('github:avatars', async (_event, rawLogins: unknown) => {
+    const logins = validateGitHubLogins(rawLogins)
+    return resolveAvatars(logins)
+  })
+
   // Reveal a chat artifact (uploaded or agent-created file) in the system file
   // manager. The path must resolve inside a registered project, the config root,
   // or a user-selected scope.
@@ -5981,6 +5993,19 @@ export function registerIpcHandlers(
       )
   )
   ipcMain.handle(
+    'git:acceptConflictSide',
+    async (_, projectId: unknown, side: unknown, scopeBucketId?: unknown) =>
+      gitService.acceptConflictSide(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitConflictSide(side)
+      )
+  )
+  ipcMain.handle(
     'git:unstage',
     async (_, projectId: unknown, paths: unknown, scopeBucketId?: unknown) =>
       gitService.unstage(
@@ -6534,16 +6559,24 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'git:finishPrResolve',
-    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
-      gitService.finishPrResolve(
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeOptions = validatePrResolveOptions(options)
+      // Resolve the vaulted PAT in main only; the token never crosses IPC. The
+      // finish step pushes the resolution back to the PR, so it needs the same
+      // credential the panel's own push uses.
+      const tokenRef = gitCredentialRef(safeProjectId)
+      const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
+      return gitService.finishPrResolve(
         await resolveProjectPath(
-          validateEntityId(projectId, 'Project ID'),
+          safeProjectId,
           scopeBucketId === undefined
             ? undefined
             : validateEntityId(scopeBucketId, 'Scope bucket ID')
         ),
-        validatePrResolveOptions(options)
+        { ...safeOptions, token }
       )
+    }
   )
   ipcMain.handle(
     'git:stash',
@@ -6661,6 +6694,19 @@ export function registerIpcHandlers(
         scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
     )
+  )
+  ipcMain.handle(
+    'git:rebaseAction',
+    async (_, projectId: unknown, action: unknown, scopeBucketId?: unknown) =>
+      gitService.rebaseAction(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRebaseAction(action)
+      )
   )
 
   // ─── Pull requests (GitHub-first) ───────────────────────────────────────
@@ -7655,6 +7701,18 @@ export function registerIpcHandlers(
         },
         validateEntityId(sha, 'Commit sha')
       )
+    }
+  )
+
+  ipcMain.handle(
+    'pr:mentionUsers',
+    async (_, projectId: unknown, owner: unknown, repo: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+      return provider.listRepositoryMentionUsers({
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128)
+      })
     }
   )
 

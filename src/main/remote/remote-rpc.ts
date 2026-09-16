@@ -100,6 +100,8 @@ import type {
   BrainstormPrototypeFidelity,
   CreateThreadInput,
   EngineeringSpecContent,
+  GitConflictSide,
+  GitRebaseAction,
   GitResetMode,
   AgentAccountUsageOverrides,
   PromptAttachment,
@@ -1807,6 +1809,11 @@ export class RemoteRpcDispatcher {
           await this.resolveProjectPath(this.string(args[0])),
           this.string(args[1])
         )
+      case 'git:acceptConflictSide':
+        return this.gitService.acceptConflictSide(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1]) as GitConflictSide
+        )
       case 'git:unstage':
         return this.gitService.unstage(
           await this.resolveProjectPath(this.string(args[0])),
@@ -2056,6 +2063,11 @@ export class RemoteRpcDispatcher {
         return this.gitService.abortMerge(await this.resolveProjectPath(this.string(args[0])))
       case 'git:abortRebase':
         return this.gitService.abortRebase(await this.resolveProjectPath(this.string(args[0])))
+      case 'git:rebaseAction':
+        return this.gitService.rebaseAction(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1]) as GitRebaseAction
+        )
 
       // ─── GitHub read-only auth status (device flow stays desktop-only) ──
       case 'github:authStatus':

@@ -70,7 +70,9 @@ import type {
   GitBranchInfo,
   GitCommitInfo,
   GitConflictAnalysis,
+  GitConflictSide,
   GitConflictWorkFile,
+  GitRebaseAction,
   GitCredentialStatus,
   GitDiff,
   GitFileChange,
@@ -130,6 +132,7 @@ import type {
   HarnessUninstallHandoff,
   OfferedProvider,
   AdoptableWorktreeInfo,
+  RepositoryMentionUser,
   RepositoryPreflightResult,
   ScopeBoard,
   ScopeBucket,
@@ -1482,6 +1485,11 @@ export const IPC_INVOKE_CONTRACT = {
     [projectId: string, path: string, scopeBucketId?: string],
     GitStatus
   >,
+  /** Take one side of every unresolved conflict wholesale, then stage it. */
+  'git:acceptConflictSide': {} as Contract<
+    [projectId: string, side: GitConflictSide, scopeBucketId?: string],
+    GitStatus
+  >,
   'git:unstage': {} as Contract<
     [projectId: string, paths: string[], scopeBucketId?: string],
     GitStatus
@@ -1665,6 +1673,11 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'git:abortMerge': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
   'git:abortRebase': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
+  /** Continue a stopped rebase, or drop the commit it stopped on. */
+  'git:rebaseAction': {} as Contract<
+    [projectId: string, action: GitRebaseAction, scopeBucketId?: string],
+    GitStatus
+  >,
   'pr:create': {} as Contract<
     [projectId: string, input: PrCreateInput, scopeBucketId?: string],
     GitHubMutationResult<PullRequestReference>
@@ -1929,6 +1942,11 @@ export const IPC_INVOKE_CONTRACT = {
     [projectId: string, owner: string, repo: string, sha: string],
     PullRequestFile[]
   >,
+  /** Assignable repository accounts, for @-mention autocomplete in PR conversations. */
+  'pr:mentionUsers': {} as Contract<
+    [projectId: string, owner: string, repo: string],
+    RepositoryMentionUser[]
+  >,
   /** Read back the agent's `.cio/git/pr/<number>/review.md`, if it wrote one. */
   'pr:agentReport': {} as Contract<[projectId: string, pullNumber: number], PrAgentReport>,
   'pr:comment': {} as Contract<
@@ -1966,6 +1984,12 @@ export const IPC_INVOKE_CONTRACT = {
   'github:startDeviceFlow': {} as Contract<[], GitHubDeviceCode>,
   'github:poll': {} as Contract<[deviceCode: string], GitHubPollResult>,
   'github:logout': {} as Contract<[], GitHubAuthStatus>,
+  /**
+   * Resolve account avatars for a list of GitHub logins, as `data:` URLs (the
+   * renderer's CSP blocks remote image hosts). A login GitHub has no picture for
+   * comes back as null, which the UI draws as its monogram.
+   */
+  'github:avatars': {} as Contract<[logins: string[]], Record<string, string | null>>,
   'history:search': {} as Contract<
     [query: string, projectId?: string, limit?: number],
     HistoryEntry[]

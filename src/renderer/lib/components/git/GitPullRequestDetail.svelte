@@ -1,20 +1,21 @@
 <script lang="ts">
   import {
-    ArrowLeft,
     Bot,
     Check,
     ChevronDown,
+    ChevronRight,
     CircleDot,
     CircleSlash,
     ExternalLink,
     FileDiff,
     GitCommitHorizontal,
     Loader2,
+    Maximize2,
     MessageSquare,
     Merge,
     MessagesSquare,
-    MoreHorizontal,
     RefreshCw,
+    Rocket,
     RotateCcw,
     Send,
     ShieldCheck,
@@ -23,19 +24,42 @@
     X
   } from '@lucide/svelte'
   import { AlertDialog, DropdownMenu } from 'bits-ui'
+  import { onDestroy } from 'svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { prReaderRailState } from '$lib/stores/pr-reader-rail.svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  // The `@query` detection is shared with the chat composer rather than
+  // re-implemented here: it already knows to stay silent inside code spans and
+  // quoted passages, which a second copy would have to relearn.
+  import { composerMentionQuery } from '../chats/composer-mentions'
+  import PrMentionMenu from './PrMentionMenu.svelte'
+  import GitJobLogView from './GitJobLogView.svelte'
+  // The identity row is one component now, shared with the Git panel's own
+  // action row, so this file no longer draws the state and check pills; only
+  // the view id remains shared.
+  import PrIdentityRow from './PrIdentityRow.svelte'
+  import PrAvatar from './PrAvatar.svelte'
+  import { PR_DETAIL_VIEWS, prViewCount, type PrDetailTabId } from './pr-view'
+  import {
+    mentionCandidates,
+    mentionHandle,
+    mentionKeyAction,
+    mentionMenuMaxHeight,
+    participantMentionUsers
+  } from './pr-mentions'
   import type {
+    GitHubDeploymentJobLog,
     PrAgentReport,
     PrMergeMethod,
     PrReviewEvent,
     PullRequestCheck,
     PullRequestFile,
-    PullRequestSummary
+    PullRequestSummary,
+    RepositoryMentionUser
   } from '$shared/types'
 
   interface Props {
@@ -53,6 +77,19 @@
     onResolveLocally?: (pr: PullRequestSummary) => void
     /** Hand a conflicting PR to an agent to resolve and push. */
     onResolveWithAgent?: (pr: PullRequestSummary) => void
+    /** Open this pull request in the full screen reader, like the file editor. */
+    onFullscreen?: () => void
+    /**
+     * The view the reader shows. The Git panel owns it so its own checks pill
+     * can switch this reader to the Checks view.
+     */
+    tab?: PrDetailTabId
+    /**
+     * `dock` is the narrow sidebar column: read-only chrome stacked above the
+     * body. `fullscreen` moves the title, tabs and write actions into a rail so
+     * the body gets the whole height.
+     */
+    variant?: 'dock' | 'fullscreen'
   }
 
   let {
@@ -64,10 +101,11 @@
     onOpenThread,
     onOpenWorkflowRun,
     onResolveLocally,
-    onResolveWithAgent
+    onResolveWithAgent,
+    onFullscreen,
+    variant = 'dock',
+    tab = $bindable('conversation')
   }: Props = $props()
-
-  type DetailTab = 'conversation' | 'commits' | 'files' | 'checks' | 'agent'
 
   const mergeMethods: Array<{ id: PrMergeMethod; label: string }> = [
     { id: 'squash', label: 'Squash' },
@@ -75,8 +113,82 @@
     { id: 'rebase', label: 'Rebase' }
   ]
 
-  let tab = $state<DetailTab>('conversation')
+  /**
+   * Dock only. The sidebar is narrow enough that the write actions need a
+   * disclosure, but the full screen rail pins the composer open instead, so
+   * this flag is never read there.
+   */
+  let composerOpen = $state(false)
+
+  /**
+   * Full screen reader rail. The width itself lives in the shared store, so the
+   * dock and the full screen reader cannot disagree about it and a reopen always
+   * shows the width the user chose.
+   */
+  let stopRailResize: (() => void) | null = null
+
+  /**
+   * The drag listens on the window, the way the file explorer and both sidebars
+   * do, so it keeps following the pointer once it leaves the 6px handle and the
+   * release always lands somewhere that can finish the drag.
+   */
+  function startRailResize(event: PointerEvent): void {
+    event.preventDefault()
+    event.stopPropagation()
+    if (stopRailResize) return
+    prReaderRailState.resizing = true
+    const startX = event.clientX
+    const startWidth = prReaderRailState.width
+    // The rail is on the right, so dragging left widens it.
+    const onMove = (moveEvent: PointerEvent): void => {
+      prReaderRailState.set(startWidth + (startX - moveEvent.clientX))
+    }
+    const finish = (): void => {
+      stopRailResize = null
+      prReaderRailState.resizing = false
+      prReaderRailState.persist()
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      window.removeEventListener('blur', finish)
+    }
+    stopRailResize = finish
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    // A drag that ends because the window lost focus never gets a pointerup.
+    window.addEventListener('blur', finish)
+  }
+
+  function resizeRailWithKeyboard(event: KeyboardEvent): void {
+    const delta = event.key === 'ArrowLeft' ? 16 : event.key === 'ArrowRight' ? -16 : 0
+    if (delta === 0) return
+    event.preventDefault()
+    prReaderRailState.set(prReaderRailState.width + delta)
+  }
+
+  onDestroy(() => stopRailResize?.())
   let commentBody = $state('')
+  /**
+   * `@`-mention autocomplete for the comment box.
+   *
+   * People already on the pull request are derived from the bundle and shown the
+   * moment `@` is typed; the repository directory is fetched lazily on the first
+   * mention and merged in behind them, so the popover never blocks on a network
+   * call to show the likely candidates.
+   */
+  let commentEditor: RichMarkdownEditor | undefined
+  let mentionOpen = $state(false)
+  let mentionQuery = $state('')
+  let mentionIndex = $state(0)
+  let mentionDirectory = $state<RepositoryMentionUser[]>([])
+  let mentionLoading = $state(false)
+  let mentionRequestId = 0
+  let mentionTimer: ReturnType<typeof setTimeout> | undefined
+  let lastMentionCaretText = ''
+  /** Ceiling for the popover, measured when it opens. See `measureMentionRoom`. */
+  let mentionMaxHeight = $state(mentionMenuMaxHeight(Number.POSITIVE_INFINITY))
+  let mentionAnchor: HTMLDivElement | undefined
   let method = $state<PrMergeMethod>('squash')
   let mergeConfirm = $state(false)
   let closeConfirm = $state(false)
@@ -89,10 +201,35 @@
   let loadingCommit = $state<string | null>(null)
   let expandedFile = $state<string | null>(null)
   let agentReport = $state<PrAgentReport | null>(null)
+  /** Which check's log is open, keyed the way the checks list is keyed. */
+  let expandedCheck = $state<string | null>(null)
+  let checkLogs = $state<Record<string, GitHubDeploymentJobLog>>({})
+  let checkLogErrors = $state<Record<string, string>>({})
+  let loadingCheckLogs = $state<Record<string, boolean>>({})
 
   const number = $derived(summary.number)
+  /**
+   * The dock reader and the full screen reader can be mounted at the same time,
+   * so the merge dialog's field ids must not be shared: a label resolves `for`
+   * to the first match in the document, and the closed dialog of the other
+   * instance has no such element at all, leaving the label dead.
+   */
+  const mergeFieldSuffix = $derived(`${number}-${variant}`)
   const bundle = $derived(
     gitState.prBundles[GitState.bundleKey(identity.owner, identity.repo, number)]
+  )
+  /** Accounts already on this pull request, available without a fetch. */
+  const mentionParticipants = $derived(
+    participantMentionUsers([
+      summary.authorLogin,
+      identity.owner,
+      ...(bundle?.comments ?? []).map((comment) => comment.authorLogin),
+      ...(bundle?.reviews ?? []).map((review) => review.authorLogin),
+      ...(bundle?.reviewComments ?? []).map((comment) => comment.authorLogin)
+    ])
+  )
+  const mentionEntries = $derived(
+    mentionCandidates(mentionParticipants, mentionDirectory, mentionQuery)
   )
   const detail = $derived(bundle?.detail ?? null)
   const checks = $derived(bundle?.checks ?? null)
@@ -185,6 +322,17 @@
       .sort((a, b) => Date.parse(a.at || '0') - Date.parse(b.at || '0'))
   })
 
+  /**
+   * The active view is one of these. In the full screen reader they become a
+   * dropdown in the header instead of a row of tabs, because the rail is too
+   * narrow to hold both the tabs and the actions comfortably.
+   */
+  const tabs = $derived(
+    PR_DETAIL_VIEWS.map((view) => ({
+      ...view,
+      count: prViewCount(view.id, bundle, (agentReport?.content ?? '').trim().length > 0)
+    }))
+  )
   type EntryKind = 'description' | 'comment' | 'review' | 'inline'
 
   /** Human label for a conversation entry's badge. */
@@ -209,34 +357,6 @@
     if (kind === 'review' && meta === 'changes requested') return 'border-l-2 border-l-warning'
     if (kind === 'description') return 'border-l-2 border-l-primary'
     return ''
-  }
-
-  /** Badge colour for the PR state pill in the header. */
-  function stateBadgeClass(state: string): string {
-    if (state === 'merged') return 'bg-primary/10 text-primary'
-    if (state === 'closed') return 'bg-danger/10 text-danger'
-    return 'bg-success/10 text-success'
-  }
-
-  /** Badge colour for the checks-summary pill in the header. */
-  function checksBadgeClass(state: string): string {
-    if (state === 'failure') return 'bg-danger/10 text-danger hover:bg-danger/20'
-    if (state === 'pending') return 'bg-warning/10 text-warning hover:bg-warning/20'
-    return 'bg-success/10 text-success hover:bg-success/20'
-  }
-
-  /** Stable background colour for an author's avatar, keyed off their name. */
-  const avatarPalette = [
-    'bg-primary/20 text-primary',
-    'bg-success/20 text-success',
-    'bg-warning/20 text-warning',
-    'bg-danger/20 text-danger',
-    'bg-accent/20 text-accent'
-  ]
-  function avatarClass(author: string): string {
-    let hash = 0
-    for (let i = 0; i < author.length; i += 1) hash = (hash * 31 + author.charCodeAt(i)) | 0
-    return avatarPalette[Math.abs(hash) % avatarPalette.length]
   }
 
   async function refresh(): Promise<void> {
@@ -272,10 +392,129 @@
     )
     if (created) {
       commentBody = ''
+      closeMentions()
       tab = 'conversation'
       notice = 'Comment posted'
       await refresh()
     }
+  }
+
+  /**
+   * The top of the box an upward-opening popover is clipped by: the nearest
+   * ancestor with a non-visible overflow, which in the dock is the sidebar's
+   * content region and in full screen is the surface itself.
+   */
+  function clipTop(element: HTMLElement): number {
+    let node = element.parentElement
+    while (node) {
+      if (getComputedStyle(node).overflowY !== 'visible') return node.getBoundingClientRect().top
+      node = node.parentElement
+    }
+    return 0
+  }
+
+  /**
+   * Cap the popover to the room above the composer, so a long candidate list in a
+   * short sidebar scrolls inside the panel instead of having its first rows cut
+   * off by the panel's own clipping.
+   */
+  function measureMentionRoom(): void {
+    if (!mentionAnchor) {
+      mentionMaxHeight = mentionMenuMaxHeight(Number.POSITIVE_INFINITY)
+      return
+    }
+    const anchorTop = mentionAnchor.getBoundingClientRect().top
+    // 8px keeps the popover off the edge it is clipped at.
+    mentionMaxHeight = mentionMenuMaxHeight(anchorTop - clipTop(mentionAnchor) - 8)
+  }
+
+  function closeMentions(): void {
+    mentionRequestId += 1
+    if (mentionTimer) clearTimeout(mentionTimer)
+    mentionOpen = false
+  }
+
+  /**
+   * Debounced so a fast typist issues one directory lookup, not one per letter.
+   * The popover opens immediately on the participants regardless, so this delay
+   * is never visible as a wait.
+   */
+  function scheduleMentionSearch(textBeforeCaret: string): void {
+    if (mentionTimer) clearTimeout(mentionTimer)
+    const query = composerMentionQuery(textBeforeCaret)
+    if (query === null) {
+      closeMentions()
+      return
+    }
+    mentionQuery = query
+    mentionIndex = 0
+    mentionOpen = true
+    measureMentionRoom()
+    mentionTimer = setTimeout(() => void loadMentionDirectory(), 120)
+  }
+
+  /**
+   * Repository accounts, fetched once per repository per ten minutes by the
+   * store. A token without the permission this needs resolves to an empty list,
+   * which leaves the participants on screen rather than surfacing an error: an
+   * autocomplete that cannot reach the directory is still useful.
+   */
+  async function loadMentionDirectory(): Promise<void> {
+    const requestId = ++mentionRequestId
+    mentionLoading = true
+    try {
+      const users = await gitState.mentionUsersFor(projectId, identity.owner, identity.repo)
+      if (requestId !== mentionRequestId) return
+      mentionDirectory = users
+    } finally {
+      if (requestId === mentionRequestId) mentionLoading = false
+    }
+  }
+
+  function selectMention(user: RepositoryMentionUser): void {
+    const handle = `@${mentionHandle(user)} `
+    closeMentions()
+    // The editor rewrites the `@query` the caret sits in, keeping the caret's
+    // surroundings intact; the bound value is the fallback for the case where it
+    // cannot resolve a caret (the box was never focused).
+    const replaced = commentEditor?.replaceTextBeforeCaret(
+      /(^|\s)@[^\s@]*$/u,
+      (_match: string, prefix: string) => `${prefix}${handle}`
+    )
+    if (replaced) return
+    commentBody = commentBody.replace(
+      /(^|\s)@[^\s@]*$/u,
+      (_match: string, prefix: string) => `${prefix}${handle}`
+    )
+  }
+
+  /**
+   * Capture phase, so the menu claims the key before the editor acts on it:
+   * Enter would otherwise insert a line break instead of accepting a candidate.
+   * Every key the popover does not claim falls straight through to the editor.
+   */
+  function handleMentionKeydown(event: KeyboardEvent): void {
+    if (!mentionOpen) return
+    const count = mentionEntries.length
+    const action = mentionKeyAction(event.key, count)
+    if (action.kind === 'passthrough') return
+    event.preventDefault()
+    if (action.kind === 'close') {
+      closeMentions()
+      return
+    }
+    if (action.kind === 'move') {
+      mentionIndex = (mentionIndex + action.delta + count) % count
+      return
+    }
+    const entry = mentionEntries[mentionIndex]
+    if (entry) selectMention(entry)
+  }
+
+  function handleMentionCaretText(textBeforeCaret: string, supportsCommands: boolean): void {
+    if (textBeforeCaret === lastMentionCaretText) return
+    lastMentionCaretText = textBeforeCaret
+    scheduleMentionSearch(supportsCommands ? textBeforeCaret : '')
   }
 
   async function submitReview(event: PrReviewEvent): Promise<void> {
@@ -406,6 +645,72 @@
     return 'text-danger'
   }
 
+  /** Stable key for one check row, shared by the list key and the log cache. */
+  function checkKey(check: PullRequestCheck): string {
+    return check.name + (check.url ?? '')
+  }
+
+  /** Human wording for a check's progress, so `in_progress` is not shown raw. */
+  function checkStateLabel(check: PullRequestCheck): string {
+    if (check.status !== 'completed') return check.status.replace('_', ' ')
+    return check.conclusion ?? 'done'
+  }
+
+  /**
+   * The job behind a check. Actions names the job in the check's `details_url`,
+   * which is exact even for one leg of a matrix run; when the provider only gives
+   * the run, the job is matched by name so the wrong leg's log is never shown.
+   */
+  async function resolveCheckJobId(check: PullRequestCheck): Promise<number | null> {
+    if (check.jobId !== null) return check.jobId
+    if (check.workflowRunId === null) return null
+    const run = await gitState
+      .ensureWorkflowRunDetail(projectId, identity.owner, identity.repo, check.workflowRunId)
+      .catch(() => null)
+    return run?.jobs.find((job) => job.name === check.name)?.id ?? null
+  }
+
+  /** Name the two failures a reader can actually act on, then quote the rest. */
+  function checkLogMessage(reason: unknown): string {
+    const text = reason instanceof Error ? reason.message : ''
+    if (/HTTP 404/u.test(text)) return 'This job has not published a log yet.'
+    if (/HTTP (401|403)/u.test(text)) return 'Your GitHub access cannot read this job log.'
+    return text || 'The log could not be loaded.'
+  }
+
+  async function toggleCheckLog(check: PullRequestCheck): Promise<void> {
+    const key = checkKey(check)
+    if (expandedCheck === key) {
+      expandedCheck = null
+      return
+    }
+    expandedCheck = key
+    if (checkLogs[key] || loadingCheckLogs[key]) return
+    loadingCheckLogs = { ...loadingCheckLogs, [key]: true }
+    checkLogErrors = { ...checkLogErrors, [key]: '' }
+    try {
+      const jobId = await resolveCheckJobId(check)
+      if (jobId === null) {
+        checkLogErrors = {
+          ...checkLogErrors,
+          [key]: 'This check does not name a job, so its log has to be read on GitHub.'
+        }
+        return
+      }
+      const log = await gitState.ensureDeploymentJobLog(
+        projectId,
+        identity.owner,
+        identity.repo,
+        jobId
+      )
+      if (log) checkLogs = { ...checkLogs, [key]: log }
+    } catch (reason) {
+      checkLogErrors = { ...checkLogErrors, [key]: checkLogMessage(reason) }
+    } finally {
+      loadingCheckLogs = { ...loadingCheckLogs, [key]: false }
+    }
+  }
+
   /** Colorize a unified patch the way the rest of the app renders diffs. */
   function patchLineClass(line: string): string {
     if (line.startsWith('@@')) return 'text-primary'
@@ -479,85 +784,98 @@
   {/each}
 {/snippet}
 
-<div class="flex h-full min-h-0 flex-col">
+{#snippet panelHead()}
   <!-- Header -->
   <div class="shrink-0 border-b border-border px-3 py-2.5">
-    <div class="flex items-center gap-1.5">
-      <button
-        type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Back to pull requests"
-        aria-label="Back to pull requests"
-        onclick={onBack}
-      >
-        <ArrowLeft size={13} />
-      </button>
-      <span class="font-mono text-[0.625rem] text-dimmed">#{number}</span>
-      <span
-        class="rounded px-1.5 py-0.5 text-[0.5625rem] font-medium uppercase tracking-wide {stateBadgeClass(
-          detail?.state ?? summary.state
-        )}"
-      >
-        {detail?.state ?? summary.state}{draft ? ' · draft' : ''}
-      </span>
-      {#if checks && checks.state !== 'none'}
+    {#if variant === 'fullscreen'}
+      <!--
+        Rail only. The Git panel's action row carries the identity row for the
+        dock, so this row is the rail's own: identity, then full screen, refresh
+        and external link. The view list below already names every view, so no
+        switcher is repeated up here.
+      -->
+      <div class="flex items-center gap-1">
+        <PrIdentityRow
+          {summary}
+          {detail}
+          {checks}
+          {onBack}
+          onOpenChecks={() => (tab = 'checks')}
+          showChecksLabel
+        />
+        <span class="min-w-0 flex-1"></span>
+        {#if onFullscreen}
+          <button
+            type="button"
+            class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            title="Open in full screen"
+            aria-label="Open in full screen"
+            onclick={onFullscreen}
+          >
+            <Maximize2 size={13} />
+          </button>
+        {/if}
         <button
           type="button"
-          class="flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium transition-colors {checksBadgeClass(
-            checks.state
-          )}"
-          title="View check results"
-          onclick={() => (tab = 'checks')}
+          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+          title="Refresh pull request"
+          aria-label="Refresh pull request"
+          disabled={gitState.isBusy('pr-detail')}
+          onclick={() => void refresh()}
         >
-          <ShieldCheck size={10} />
-          {checks.state === 'failure'
-            ? 'checks failing'
-            : checks.state === 'pending'
-              ? 'checks running'
-              : 'checks passing'}
+          <RefreshCw size={12} class={gitState.isBusy('pr-detail') ? 'animate-spin' : ''} />
         </button>
-      {/if}
-      <span class="flex-1"></span>
-      <button
-        type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
-        title="Refresh pull request"
-        aria-label="Refresh pull request"
-        disabled={gitState.isBusy('pr-detail')}
-        onclick={() => void refresh()}
+        <button
+          type="button"
+          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          title="Open pull request on GitHub"
+          aria-label="Open pull request on GitHub"
+          onclick={() => void openInBrowser(summary.url)}
+        >
+          <ExternalLink size={13} />
+        </button>
+      </div>
+      <p class="mt-1.5 text-[0.75rem] font-medium leading-snug text-foreground">{summary.title}</p>
+    {:else}
+      <!--
+        Dock only. The panel's action row carries the identity row, the view
+        switcher and the remote actions, so this line is the title alone.
+      -->
+      <p
+        class="min-w-0 truncate text-[0.75rem] font-medium leading-snug text-foreground"
+        title={summary.title}
       >
-        <RefreshCw size={12} class={gitState.isBusy('pr-detail') ? 'animate-spin' : ''} />
-      </button>
-      <button
-        type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Open pull request on GitHub"
-        aria-label="Open pull request on GitHub"
-        onclick={() => void openInBrowser(summary.url)}
-      >
-        <ExternalLink size={13} />
-      </button>
-    </div>
-    <p class="mt-1.5 text-[0.75rem] font-medium leading-snug text-foreground">{summary.title}</p>
-    <p class="mt-1 truncate font-mono text-[0.5625rem] text-dimmed">
-      {summary.headRef} → {summary.baseRef} · {summary.authorLogin} · {relativeTime(
-        summary.updatedAt
-      )}
-    </p>
-    {#if detail}
-      <p class="mt-1.5 flex items-center gap-2 text-[0.5625rem] tabular-nums text-dimmed">
-        <span class="text-success">+{detail.additions}</span>
-        <span class="text-danger">−{detail.deletions}</span>
-        <span>{detail.changedFiles} files</span>
-        <span>{detail.commitCount} commits</span>
-        {#if open && gitState.hasPrIssue(identity.owner, identity.repo, number)}
-          <span class="flex items-center gap-1 text-warning">
-            <TriangleAlert size={10} />
-            conflicts
-          </span>
-        {/if}
+        {summary.title}
       </p>
     {/if}
+    <!--
+      One meta line instead of two: the refs, the author, the age and the change
+      summary all describe the same thing. The refs read as ordinary adjacent
+      text and wrap onto the next line when the rail is narrow, so nothing here
+      can outgrow the panel.
+    -->
+    <p
+      class="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[0.5625rem] text-dimmed"
+    >
+      <span class="font-mono">{summary.headRef}</span>
+      <span class="font-mono">→ {summary.baseRef}</span>
+      <span class="shrink-0">· {summary.authorLogin}</span>
+      <span class="shrink-0">· {relativeTime(summary.updatedAt)}</span>
+      {#if detail}
+        <span class="flex shrink-0 items-center gap-1.5 tabular-nums">
+          <span class="text-success">+{detail.additions}</span>
+          <span class="text-danger">−{detail.deletions}</span>
+          <span>{detail.changedFiles} files</span>
+          <span>{detail.commitCount} commits</span>
+        </span>
+      {/if}
+      {#if open && gitState.hasPrIssue(identity.owner, identity.repo, number)}
+        <span class="flex shrink-0 items-center gap-1 text-warning">
+          <TriangleAlert size={10} />
+          conflicts
+        </span>
+      {/if}
+    </p>
   </div>
 
   {#if notice}
@@ -579,28 +897,186 @@
       {gitState.error}
     </p>
   {/if}
+{/snippet}
 
-  <!-- Tabs -->
-  <div
-    class="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border px-2 py-1.5"
+{#snippet panelTabs()}
+  <!--
+    Rail only. A visible list beats a dropdown here: the rail is tall, and the
+    active view stays readable without spending the body's height on it. It takes
+    the rail's spare height, and scrolls instead of pushing the pinned write
+    actions off a short window.
+  -->
+  <nav
+    class="min-h-0 flex-1 overflow-y-auto border-b border-border p-1.5"
+    aria-label="Pull request views"
   >
-    {#each [{ id: 'conversation' as const, label: 'Conversation', icon: MessagesSquare, count: conversation.length }, { id: 'commits' as const, label: 'Commits', icon: GitCommitHorizontal, count: bundle?.commits.length ?? 0 }, { id: 'files' as const, label: 'Files', icon: FileDiff, count: bundle?.files.length ?? 0 }, { id: 'checks' as const, label: 'Checks', icon: ShieldCheck, count: checks?.checks.length ?? 0 }, { id: 'agent' as const, label: 'Agent', icon: Bot, count: agentReport?.content ? 1 : 0 }] as entry (entry.id)}
+    {#each tabs as entry (entry.id)}
       {@const Icon = entry.icon}
       <button
         type="button"
-        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium transition-colors {tab ===
-        entry.id
-          ? 'bg-elevated text-foreground'
-          : 'text-muted hover:text-foreground'}"
+        class={[
+          'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[0.625rem] font-medium transition-colors',
+          tab === entry.id ? 'bg-elevated text-foreground' : 'text-muted hover:text-foreground'
+        ]}
+        aria-current={tab === entry.id}
         onclick={() => (tab = entry.id)}
       >
-        <Icon size={12} />
-        {entry.label}
-        {#if entry.count > 0}<span class="tabular-nums text-dimmed">{entry.count}</span>{/if}
+        <Icon size={12} class="shrink-0" />
+        <span class="min-w-0 flex-1 truncate">{entry.label}</span>
+        {#if entry.count > 0}
+          <span class="shrink-0 tabular-nums text-dimmed">{entry.count}</span>
+        {/if}
       </button>
     {/each}
-  </div>
+  </nav>
+{/snippet}
 
+{#snippet commentToggle()}
+  {#if variant === 'dock'}
+    <!--
+      The comment box is a button here rather than a disclosure bar of its own:
+      commenting and merging are both things you do to this pull request, so they
+      share one row and the conversation keeps the height. The rail pins the
+      composer open instead, so it has no use for this. It keeps its word rather
+      than collapsing to a bare icon: the row has the space, and when the sidebar
+      is at its narrowest the merge label is the one that truncates. The text is
+      the accessible name, so no aria-label competes with it.
+    -->
+    <button
+      type="button"
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 text-[0.625rem] font-medium transition-colors {composerOpen
+        ? 'border-primary bg-primary/10 text-foreground'
+        : 'border-border text-foreground hover:bg-elevated'}"
+      aria-expanded={composerOpen}
+      title={composerOpen ? 'Hide the comment box' : 'Write a comment or review'}
+      onclick={() => (composerOpen = !composerOpen)}
+    >
+      <MessageSquare size={12} class="shrink-0" />
+      <span class="shrink-0">Comment</span>
+    </button>
+  {/if}
+{/snippet}
+
+{#snippet closePullRequestButton()}
+  <!--
+    Closing is a direct button, not a one-item overflow menu: an ellipsis over a
+    single action costs a click and never says what it holds. The panel footer
+    has the room to spell the action out, so the label is the full one in both
+    variants. The confirm dialog still guards the action.
+  -->
+  <button
+    type="button"
+    class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-danger/30 px-2.5 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40 {variant ===
+    'fullscreen'
+      ? 'w-full justify-center'
+      : 'shrink-0'}"
+    title="Close this pull request without merging it"
+    disabled={closing || markingReady}
+    onclick={() => (closeConfirm = true)}
+  >
+    {#if closing}
+      <Loader2 size={12} class="shrink-0 animate-spin" />
+    {:else}
+      <X size={12} class="shrink-0" />
+    {/if}
+    <span class="min-w-0 truncate">Close without merging</span>
+  </button>
+{/snippet}
+
+{#snippet mergeAction()}
+  {#if draft}
+    <button
+      type="button"
+      class="flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40 {variant ===
+      'fullscreen'
+        ? 'w-full justify-center'
+        : 'shrink-0'}"
+      title="Mark this draft pull request ready for review before merging"
+      disabled={markingReady}
+      onclick={() => void markReadyForReview()}
+    >
+      {#if markingReady}
+        <Loader2 size={12} class="shrink-0 animate-spin" />
+      {:else}
+        <Check size={12} class="shrink-0" />
+      {/if}
+      <span class="min-w-0 truncate">Ready for review</span>
+    </button>
+  {:else}
+    <!--
+      The method picker is a dropdown trigger inside the merge button's own
+      outline (the EditorOpenControl split-button pattern) rather than a bare
+      <select>.
+
+      The wrapper is `rounded-xs` because every button in the app is rounded by
+      `:where(button) { border-radius: 2px !important }` in app.css. A larger
+      radius on this wrapper made the one primary action in the panel the only
+      control with pill corners: the outside has to match the halves it clips.
+    -->
+    <div
+      class="flex h-7 min-w-0 items-stretch overflow-hidden rounded-xs {variant === 'fullscreen'
+        ? 'w-full'
+        : 'shrink'}"
+    >
+      <button
+        type="button"
+        class="flex min-w-0 cursor-pointer items-center gap-1 bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40 {variant ===
+        'fullscreen'
+          ? 'flex-1 justify-center'
+          : ''}"
+        title={`Merge this pull request into ${summary.baseRef} using ${method}`}
+        disabled={merging}
+        onclick={openMergeConfirm}
+      >
+        {#if merging}
+          <Loader2 size={12} class="animate-spin" />
+        {:else}
+          <Merge size={12} class="shrink-0" />
+        {/if}
+        <!-- Truncates rather than pushing the row off the panel: a long base
+             ref is the one thing here that can outgrow the sidebar. -->
+        <span class="min-w-0 truncate">Merge into {summary.baseRef}</span>
+      </button>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger
+          class="flex w-6 cursor-pointer items-center justify-center border-l border-on-primary/25 bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+          title="Choose a merge method"
+          aria-label="Choose a merge method"
+          disabled={merging}
+        >
+          <ChevronDown size={12} />
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            side="top"
+            align="end"
+            sideOffset={6}
+            class="z-90 w-40 overflow-hidden rounded-lg border-border bg-surface p-1 shadow-lg"
+          >
+            <p
+              class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
+            >
+              Merge method
+            </p>
+            {#each mergeMethods as option (option.id)}
+              <DropdownMenu.Item
+                class="flex cursor-pointer items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
+                onSelect={() => (method = option.id)}
+              >
+                {option.label}
+                {#if method === option.id}
+                  <Check size={13} class="shrink-0 text-primary" />
+                {/if}
+              </DropdownMenu.Item>
+            {/each}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </div>
+  {/if}
+{/snippet}
+
+{#snippet panelBody()}
   <div class="min-h-0 flex-1 overflow-y-auto">
     {#if loading}
       <div class="flex items-center justify-center gap-2 py-10 text-[0.6875rem] text-dimmed">
@@ -622,15 +1098,10 @@
               <header
                 class="flex items-center gap-1.5 border-b border-border/60 bg-elevated/50 px-2.5 py-1.5"
               >
-                <span
-                  class="flex size-5 shrink-0 items-center justify-center rounded-full text-[0.5625rem] font-semibold uppercase {avatarClass(
-                    entry.author
-                  )}"
-                  aria-hidden="true"
+                <PrAvatar login={entry.author} />
+                <span class="truncate text-[0.6875rem] font-medium text-foreground"
+                  >{entry.author}</span
                 >
-                  {entry.author.slice(0, 1)}
-                </span>
-                <span class="truncate text-[0.6875rem] font-medium text-foreground">{entry.author}</span>
                 <span
                   class="shrink-0 rounded px-1.5 py-px text-[0.5625rem] font-medium {kindClass(
                     entry.kind,
@@ -654,7 +1125,11 @@
                   <!-- GitHub's dialect includes HTML, so PR prose needs it to
                        read correctly; the sanitizer still strips anything
                        executable. Agent-authored text elsewhere keeps it off. -->
-                  <MarkdownView text={entry.body} class="text-[0.6875rem] leading-relaxed" allowHtml />
+                  <MarkdownView
+                    text={entry.body}
+                    class="text-[0.6875rem] leading-relaxed"
+                    allowHtml
+                  />
                 </div>
               {/if}
             </article>
@@ -708,42 +1183,75 @@
       {#if !checks || checks.checks.length === 0}
         {@render emptyState(ShieldCheck, 'No checks have reported on this branch.')}
       {:else}
-        {#each checks.checks as check (check.name + (check.url ?? ''))}
+        {#each checks.checks as check (checkKey(check))}
           {@const Icon = checkIcon(check)}
-          {@const workflowRunId = check.workflowRunId}
-          <div class="flex items-center gap-2 border-b border-border/50 px-3 py-1.5">
-            {#if workflowRunId !== null}
+          {@const key = checkKey(check)}
+          {@const runId = check.workflowRunId}
+          {@const isOpen = expandedCheck === key}
+          <div class="border-b border-border/50">
+            <!--
+              The whole row is the log toggle: a check's result is only half the
+              story, and the reason to open the tab is to read why it failed.
+            -->
+            <div class="flex items-center gap-2 px-3 py-1.5">
               <button
                 type="button"
                 class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
-                title="View {check.name} in Deployments"
-                onclick={() => onOpenWorkflowRun(workflowRunId)}
+                title={isOpen ? `Hide the ${check.name} log` : `Show the ${check.name} log`}
+                aria-expanded={isOpen}
+                onclick={() => void toggleCheckLog(check)}
               >
+                <ChevronRight
+                  size={11}
+                  class="shrink-0 text-dimmed transition-transform {isOpen ? 'rotate-90' : ''}"
+                />
                 <Icon size={12} class="shrink-0 {checkClass(check)}" />
                 <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-foreground">
                   {check.name}
                 </span>
                 <span class="shrink-0 text-[0.5625rem] text-dimmed">
-                  {check.status === 'completed' ? (check.conclusion ?? 'done') : check.status}
+                  {checkStateLabel(check)}
                 </span>
               </button>
-            {:else}
-              <Icon size={12} class="shrink-0 {checkClass(check)}" />
-              <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-foreground">{check.name}</span>
-              <span class="shrink-0 text-[0.5625rem] text-dimmed">
-                {check.status === 'completed' ? (check.conclusion ?? 'done') : check.status}
-              </span>
-            {/if}
-            {#if check.url}
-              <button
-                type="button"
-                class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                title="Open {check.name} externally"
-                aria-label="Open {check.name} externally"
-                onclick={() => void openInBrowser(check.url ?? '')}
-              >
-                <ExternalLink size={12} />
-              </button>
+              {#if check.url}
+                <button
+                  type="button"
+                  class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                  title="Open {check.name} externally"
+                  aria-label="Open {check.name} externally"
+                  onclick={() => void openInBrowser(check.url ?? '')}
+                >
+                  <ExternalLink size={12} />
+                </button>
+              {/if}
+            </div>
+            {#if isOpen}
+              <div class="border-t border-border/50 bg-elevated/20">
+                <!--
+                  No `failedSteps` here on purpose: a check is named after its job, and
+                  the log's sections are named after steps, so there is nothing to match.
+                  The view marks the step GitHub flagged with an error in the log itself.
+                -->
+                <GitJobLogView
+                  log={checkLogs[key] ?? null}
+                  loading={loadingCheckLogs[key] === true}
+                  error={checkLogErrors[key] ?? ''}
+                  class="px-3 py-2"
+                />
+                {#if runId !== null}
+                  <div class="border-t border-border/40 px-3 py-1.5">
+                    <button
+                      type="button"
+                      class="flex h-6 min-w-0 cursor-pointer items-center gap-1 text-[0.625rem] font-medium text-muted transition-colors hover:text-foreground"
+                      title="Open this workflow run in the Deployments tab to inspect every job and step"
+                      onclick={() => onOpenWorkflowRun(runId)}
+                    >
+                      <Rocket size={11} class="shrink-0" />
+                      <span class="min-w-0 truncate">Open the full run in Deployments</span>
+                    </button>
+                  </div>
+                {/if}
+              </div>
             {/if}
           </div>
         {/each}
@@ -791,299 +1299,295 @@
           {#if agentReport?.threadId}
             <button
               type="button"
-              class="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+              class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
               title="Open the review thread already running for this pull request"
               onclick={() => onOpenThread(agentReport?.threadId ?? '')}
             >
-              <Bot size={12} />
-              Open review thread
+              <Bot size={12} class="shrink-0" />
+              <span class="min-w-0 truncate">Open review thread</span>
             </button>
           {/if}
           <button
             type="button"
-            class="flex h-7 cursor-pointer items-center gap-1 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
             onclick={() => onAgentReview(summary)}
           >
-            <Bot size={12} />
-            Start agent review
+            <Bot size={12} class="shrink-0" />
+            <span class="min-w-0 truncate">Start agent review</span>
           </button>
         </div>
       </div>
     {/if}
   </div>
+{/snippet}
 
+{#snippet panelComposer()}
   <!--
-    Everything that consumes what you write lives here, under the editor.
-    Approve and Request changes used to sit in a bar at the top of the panel,
-    far from the text they submit   which is why requesting changes with an
-    empty box only failed once GitHub rejected it.
+    Square, because this sits against the edge of the panel rather than floating
+    in it, and at least five rows tall so a real review fits without scrolling.
+    The editor is the same rich markdown component the rest of the app uses.
+    Padding matches what its placeholder overlay expects (px-3.5 / pt-3), and the
+    height is sized against the 0.8125rem/1.8 the editor sets for itself in
+    `src/renderer/app.css`, which outranks a text size utility here.
   -->
-  <div class="shrink-0 border-t border-border">
-    <div class="px-3 pt-2.5">
-      <div
-        class="rounded-lg border border-border bg-elevated focus-within:border-primary"
-        role="presentation"
-      >
-        <RichMarkdownEditor
-          bind:value={commentBody}
-          placeholder="Leave a comment, or write the feedback for a review…"
-          ariaLabel="Pull request comment"
-          class="max-h-40 min-h-[52px] w-full overflow-y-auto px-2 py-1.5 text-[0.6875rem] leading-relaxed text-foreground outline-none"
+  <div class="shrink-0">
+    <!--
+      `relative` anchors the mention popover, and the capture-phase keydown
+      handler lets it claim Enter/Tab/arrows before the editor does. Both belong
+      to this wrapper rather than the panel so the menu stays scoped to the box
+      it completes: a window-level handler would also fire for the chat composer.
+    -->
+    <div
+      class="relative px-3 pt-2.5"
+      bind:this={mentionAnchor}
+      onkeydowncapture={handleMentionKeydown}
+    >
+      <RichMarkdownEditor
+        bind:this={commentEditor}
+        bind:value={commentBody}
+        placeholder="Leave a comment, or write the feedback for a review…"
+        ariaLabel="Pull request comment"
+        containerClass="border border-border bg-elevated focus-within:border-primary"
+        class="min-h-36 max-h-56 w-full resize-y overflow-y-auto px-3.5 pt-3 pb-2 text-foreground outline-none"
+        onCaretTextChange={handleMentionCaretText}
+      />
+      {#if mentionOpen}
+        <PrMentionMenu
+          entries={mentionEntries}
+          activeIndex={mentionIndex}
+          query={mentionQuery}
+          loading={mentionLoading}
+          maxHeight={mentionMaxHeight}
+          onSelect={selectMention}
         />
-      </div>
+      {/if}
     </div>
 
     <!--
-      Comment and review both consume the box above, so they read as one
-      toolbar (shared border, no gaps) instead of three loose buttons.
+      Two clusters on one row: the verdicts on the left, where a review reads
+      left to right, and the plain comment on the right, where the submit action
+      belongs. The verdicts share one outline (the join reads as one control); the
+      comment is its own button. Both are `rounded-xs` because every button in the
+      app is pinned to 2px by `:where(button) { border-radius: 2px !important }`
+      in app.css, and a wrapper with a larger radius is what made these read as
+      pill-shaped.
     -->
-    <div class="px-3 py-2.5">
-      <div class="flex h-8 items-stretch overflow-hidden rounded-lg border border-border">
+    <div class="flex items-stretch gap-2 px-3 py-2.5">
+      <div class="flex h-8 min-w-0 items-stretch overflow-hidden rounded-xs border border-border">
         <button
           type="button"
-          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-          title={hasBody ? 'Post this as a comment' : 'Write something first'}
-          disabled={posting || !hasBody}
-          onclick={() => void postComment()}
-        >
-          {#if posting}
-            <Loader2 size={12} class="animate-spin" />
-          {:else}
-            <MessageSquare size={12} />
-          {/if}
-          Comment
-        </button>
-        <button
-          type="button"
-          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[0.625rem] font-medium text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
+          class="flex min-w-0 flex-auto cursor-pointer items-center justify-center gap-1.5 px-2 text-[0.625rem] font-medium text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
           title={open
             ? 'Approve this pull request (a comment is optional)'
             : 'This pull request is no longer open'}
           disabled={!open || reviewing}
           onclick={() => void submitReview('APPROVE')}
         >
-          <ThumbsUp size={12} />
-          Approve
+          <ThumbsUp size={12} class="shrink-0" />
+          <span class="min-w-0 truncate">Approve</span>
         </button>
         <button
           type="button"
-          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
+          class="flex min-w-0 flex-auto cursor-pointer items-center justify-center gap-1.5 border-l border-border px-2 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
           title={!open
             ? 'This pull request is no longer open'
             : hasBody
               ? 'Request changes on this pull request'
-              : 'Write what needs to change first   GitHub requires a comment'}
+              : 'Write what needs to change first, GitHub requires a comment'}
           disabled={!open || reviewing || !hasBody}
           onclick={() => void submitReview('REQUEST_CHANGES')}
         >
-          <TriangleAlert size={12} />
-          Request changes
+          <TriangleAlert size={12} class="shrink-0" />
+          <span class="min-w-0 truncate">Request changes</span>
         </button>
       </div>
-      {#if open && !hasBody}
-        <p class="mt-1.5 text-[0.5625rem] leading-relaxed text-dimmed">
-          Requesting changes needs a comment saying what to change. Approving does not.
-        </p>
-      {/if}
+      <span class="min-w-0 flex-1"></span>
+      <button
+        type="button"
+        class="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-xs bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+        title={hasBody ? 'Post this as a comment' : 'Write something first'}
+        disabled={posting || !hasBody}
+        onclick={() => void postComment()}
+      >
+        {#if posting}
+          <Loader2 size={12} class="shrink-0 animate-spin" />
+        {:else}
+          <MessageSquare size={12} class="shrink-0" />
+        {/if}
+        <span class="min-w-0 truncate">Comment</span>
+      </button>
     </div>
+  </div>
+{/snippet}
 
-    <!--
+{#snippet panelMerge()}
+  <!--
       Merging is a repo operation, not a review   a tinted, separate zone
       keeps it from reading as one more button in the toolbar above. The
       method picker and close action live behind dropdowns (matching
       EditorOpenControl's split-button pattern) instead of a bare <select>
       and a third loose button.
     -->
-    <div class="border-t border-border bg-elevated/40 px-3 py-2.5">
-      {#if open && detail?.mergeable === false}
-        <div class="mb-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5">
-          <div class="flex items-center gap-1.5">
-            <TriangleAlert size={13} class="shrink-0 text-warning" />
-            <p class="text-[0.625rem] font-semibold text-warning">
-              This pull request has merge conflicts
-            </p>
-          </div>
-          <p class="mt-1 text-[0.5625rem] leading-relaxed text-dimmed">
-            {summary.baseRef} has changes that conflict with {summary.headRef}. Resolve them and
-            push, or have the agent fix them for you.
-          </p>
-          <div class="mt-2 flex items-center gap-1.5">
-            <button
-              type="button"
-              class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-warning/40 bg-warning/10 px-2.5 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/20 disabled:cursor-default disabled:opacity-40"
-              title="Check out this branch locally, merge the base in, and resolve the conflicts in your editor"
-              disabled={resolving}
-              onclick={() => (resolveConfirm = true)}
-            >
-              {#if resolving}
-                <Loader2 size={12} class="animate-spin" />
-              {:else}
-                <Merge size={12} />
-              {/if}
-              Resolve locally
-            </button>
-            <button
-              type="button"
-              class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated"
-              title="Have an agent resolve the conflicts and push the fix"
-              onclick={() => onResolveWithAgent?.(summary)}
-            >
-              <Bot size={12} />
-              Resolve with agent
-            </button>
-          </div>
-        </div>
-      {/if}
-      {#if open}
-        <div class="flex items-center justify-end gap-1.5">
-          {#if draft}
-            <span class="mr-auto flex min-w-0 items-center gap-1 text-[0.5625rem] text-warning">
-              <CircleDot size={10} class="shrink-0" />
-              <span class="truncate">Draft pull request</span>
-            </span>
-          {:else if mergeBlocker}
-            <span class="mr-auto flex min-w-0 items-center gap-1 text-[0.5625rem] text-warning">
-              <TriangleAlert size={10} class="shrink-0" />
-              <span class="truncate">{mergeBlocker}</span>
-            </span>
-          {/if}
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger
-              class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed transition-colors hover:bg-surface hover:text-foreground disabled:cursor-default disabled:opacity-40"
-              title="More pull request actions"
-              aria-label="More pull request actions"
-              disabled={closing || markingReady}
-            >
-              {#if closing}
-                <Loader2 size={13} class="animate-spin" />
-              {:else}
-                <MoreHorizontal size={13} />
-              {/if}
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                side="top"
-                align="end"
-                sideOffset={6}
-                class="z-50 w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
-              >
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-danger outline-none transition-colors data-[highlighted]:bg-danger/10"
-                  onSelect={() => (closeConfirm = true)}
-                >
-                  <X size={13} class="shrink-0" />
-                  Close without merging
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
-
-          {#if draft}
-            <button
-              type="button"
-              class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-              title="Mark this draft pull request ready for review before merging"
-              disabled={markingReady}
-              onclick={() => void markReadyForReview()}
-            >
-              {#if markingReady}
-                <Loader2 size={12} class="animate-spin" />
-              {:else}
-                <Check size={12} />
-              {/if}
-              Ready for review
-            </button>
-          {:else}
-            <div class="flex h-7 shrink-0 items-stretch overflow-hidden rounded-md">
-              <button
-                type="button"
-                class="flex cursor-pointer items-center gap-1 bg-primary px-2.5 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-                title={`Merge this pull request into ${summary.baseRef} using ${method}`}
-                disabled={merging}
-                onclick={openMergeConfirm}
-              >
-                {#if merging}
-                  <Loader2 size={12} class="animate-spin" />
-                {:else}
-                  <Merge size={12} />
-                {/if}
-                Merge into {summary.baseRef}
-              </button>
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger
-                  class="flex w-6 cursor-pointer items-center justify-center border-l border-on-primary/25 bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-                  title="Choose a merge method"
-                  aria-label="Choose a merge method"
-                  disabled={merging}
-                >
-                  <ChevronDown size={12} />
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content
-                    side="top"
-                    align="end"
-                    sideOffset={6}
-                    class="z-50 w-40 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
-                  >
-                    <p
-                      class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
-                    >
-                      Merge method
-                    </p>
-                    {#each mergeMethods as option (option.id)}
-                      <DropdownMenu.Item
-                        class="flex cursor-pointer items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
-                        onSelect={() => (method = option.id)}
-                      >
-                        {option.label}
-                        {#if method === option.id}
-                          <Check size={13} class="shrink-0 text-primary" />
-                        {/if}
-                      </DropdownMenu.Item>
-                    {/each}
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-            </div>
-          {/if}
-        </div>
-      {:else if prState === 'closed'}
+  <div class="border-t border-border bg-elevated/40 px-3 py-2.5">
+    {#if open && detail?.mergeable === false}
+      <div class="mb-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5">
         <div class="flex items-center gap-1.5">
-          <span class="flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
-            <CircleSlash size={10} class="shrink-0" />
-            <span class="truncate">Closed without merging</span>
-          </span>
-          <span class="flex-1"></span>
+          <TriangleAlert size={13} class="shrink-0 text-warning" />
+          <p class="text-[0.625rem] font-semibold text-warning">
+            This pull request has merge conflicts
+          </p>
+        </div>
+        <p class="mt-1 text-[0.5625rem] leading-relaxed text-dimmed">
+          {summary.baseRef} has changes that conflict with {summary.headRef}. Resolve them and push,
+          or have the agent fix them for you.
+        </p>
+        <div class="mt-2 flex items-center gap-1.5">
           <button
             type="button"
-            class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
-            title="Reopen this pull request"
-            disabled={reopening}
-            onclick={() => void reopen()}
+            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-md border border-warning/40 bg-warning/10 px-2.5 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/20 disabled:cursor-default disabled:opacity-40"
+            title="Check out this branch locally, merge the base in, and resolve the conflicts in your editor"
+            disabled={resolving}
+            onclick={() => (resolveConfirm = true)}
           >
-            {#if reopening}
-              <Loader2 size={12} class="animate-spin" />
+            {#if resolving}
+              <Loader2 size={12} class="shrink-0 animate-spin" />
             {:else}
-              <RotateCcw size={12} />
+              <Merge size={12} class="shrink-0" />
             {/if}
-            Reopen
+            <span class="min-w-0 truncate">Resolve locally</span>
+          </button>
+          <button
+            type="button"
+            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated"
+            title="Have an agent resolve the conflicts and push the fix"
+            onclick={() => onResolveWithAgent?.(summary)}
+          >
+            <Bot size={12} class="shrink-0" />
+            <span class="min-w-0 truncate">Resolve with agent</span>
           </button>
         </div>
-      {:else if prState === 'merged'}
+      </div>
+    {/if}
+    {#if open}
+      <!--
+        The state note takes a line of its own: sharing the row squeezed it to
+        nothing the moment the row also held Close and Merge.
+      -->
+      {#if draft}
+        <p class="mb-1.5 flex items-center gap-1 text-[0.5625rem] text-warning">
+          <CircleDot size={10} class="shrink-0" />
+          Draft pull request
+        </p>
+      {:else if mergeBlocker}
+        <p class="mb-1.5 flex items-center gap-1 text-[0.5625rem] text-warning">
+          <TriangleAlert size={10} class="shrink-0" />
+          {mergeBlocker}
+        </p>
+      {/if}
+      {#if variant === 'fullscreen'}
+        <!--
+          The rail is narrow enough that "Close without merging" beside "Merge
+          into main" would have to truncate one of them, so each takes a row.
+        -->
+        <div class="flex flex-col gap-1.5">
+          {@render closePullRequestButton()}
+          {@render mergeAction()}
+        </div>
+      {:else}
+        <div class="flex items-center gap-1.5">
+          {@render commentToggle()}
+          <span class="flex-1"></span>
+          {@render closePullRequestButton()}
+          {@render mergeAction()}
+        </div>
+      {/if}
+    {:else if prState === 'closed'}
+      <div class="flex items-center gap-1.5">
+        {@render commentToggle()}
+        <span class="flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
+          <CircleSlash size={10} class="shrink-0" />
+          <span class="truncate">Closed without merging</span>
+        </span>
+        <span class="flex-1"></span>
+        <button
+          type="button"
+          class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+          title="Reopen this pull request"
+          disabled={reopening}
+          onclick={() => void reopen()}
+        >
+          {#if reopening}
+            <Loader2 size={12} class="animate-spin" />
+          {:else}
+            <RotateCcw size={12} />
+          {/if}
+          Reopen
+        </button>
+      </div>
+    {:else if prState === 'merged'}
+      <div class="flex items-center gap-1.5">
+        {@render commentToggle()}
         <span class="flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
           <Merge size={10} class="shrink-0" />
-          <span class="truncate">Merged   nothing more to do</span>
+          <span class="truncate">Merged nothing more to do</span>
         </span>
-      {/if}
-    </div>
+      </div>
+    {/if}
   </div>
-</div>
+{/snippet}
+
+{#if variant === 'fullscreen'}
+  <!--
+    Full screen: the title, the view list and every write action move into a rail
+    on the right, so the conversation gets the whole height and the left edge of
+    the reader stays put when the rail is resized. The rail width is the user's
+    to choose.
+  -->
+  <div class="flex h-full min-h-0">
+    <div class="flex min-w-0 flex-1 flex-col">
+      {@render panelBody()}
+    </div>
+    <aside
+      class="relative flex shrink-0 flex-col border-l border-border"
+      style="width: {prReaderRailState.width}px"
+    >
+      <button
+        type="button"
+        class="absolute inset-y-0 left-0 z-20 w-1.5 -translate-x-1/2 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-primary/30 focus:bg-primary/30 focus:outline-none {prReaderRailState.resizing
+          ? 'bg-primary/30'
+          : ''}"
+        title="Resize pull request details"
+        aria-label="Resize pull request details"
+        onpointerdown={startRailResize}
+        onkeydown={resizeRailWithKeyboard}
+      ></button>
+      {@render panelHead()}
+      {@render panelTabs()}
+      <!--
+        The rail pins its write actions: the comment box and the merge row stay
+        put while the conversation beside them scrolls, so merging never needs a
+        scroll to the end of a long review.
+      -->
+      {@render panelComposer()}
+      {@render panelMerge()}
+    </aside>
+  </div>
+{:else}
+  <div class="flex h-full min-h-0 flex-col">
+    {@render panelHead()}
+    {@render panelBody()}
+    {#if composerOpen}
+      {@render panelComposer()}
+    {/if}
+    {@render panelMerge()}
+  </div>
+{/if}
 
 <AlertDialog.Root open={mergeConfirm} onOpenChange={(value) => (mergeConfirm = value)}>
   <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-black/40" />
+    <AlertDialog.Overlay class="fixed inset-0 z-90 bg-black/40" />
     <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+      class="fixed left-1/2 top-1/2 z-90 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
     >
       <AlertDialog.Title class="text-sm font-semibold text-foreground">
         Merge pull request #{number}?
@@ -1109,12 +1613,12 @@
           <div>
             <label
               class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-              for="merge-commit-title"
+              for="merge-commit-title-{mergeFieldSuffix}"
             >
               Commit title
             </label>
             <input
-              id="merge-commit-title"
+              id="merge-commit-title-{mergeFieldSuffix}"
               class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
               placeholder={method === 'merge'
                 ? `Merge pull request #${number} from ${summary.headRef}`
@@ -1125,12 +1629,12 @@
           <div>
             <label
               class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-              for="merge-commit-message"
+              for="merge-commit-message-{mergeFieldSuffix}"
             >
               Commit message
             </label>
             <textarea
-              id="merge-commit-message"
+              id="merge-commit-message-{mergeFieldSuffix}"
               class="min-h-16 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
               placeholder={method === 'merge'
                 ? 'Describe the merge (optional)'
@@ -1158,9 +1662,9 @@
 
 <AlertDialog.Root open={resolveConfirm} onOpenChange={(value) => (resolveConfirm = value)}>
   <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-black/40" />
+    <AlertDialog.Overlay class="fixed inset-0 z-90 bg-black/40" />
     <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+      class="fixed left-1/2 top-1/2 z-90 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
     >
       <AlertDialog.Title class="text-sm font-semibold text-foreground">
         Resolve conflicts for PR #{number}?
@@ -1194,9 +1698,9 @@
 
 <AlertDialog.Root open={closeConfirm} onOpenChange={(value) => (closeConfirm = value)}>
   <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-black/40" />
+    <AlertDialog.Overlay class="fixed inset-0 z-90 bg-black/40" />
     <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+      class="fixed left-1/2 top-1/2 z-90 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
     >
       <AlertDialog.Title class="text-sm font-semibold text-foreground">
         Close pull request #{number}?

@@ -4509,6 +4509,19 @@ export interface GitIdentityInput {
   email: string
 }
 
+/**
+ * A ref decoration attached to a commit, normalized from `git log`'s `%D` so the
+ * renderer never has to parse git's decoration syntax itself.
+ */
+export interface GitCommitRef {
+  /** Short display name, e.g. `main`, `origin/main`, `v1.0`. */
+  name: string
+  /** `tag` for a tag decoration, otherwise a branch (local or remote-tracking). */
+  kind: 'branch' | 'tag'
+  /** True for the ref the checked-out HEAD points at. */
+  head: boolean
+}
+
 /** One commit from `git log`, surfaced in a compact form. */
 export interface GitCommitInfo {
   hash: string
@@ -4516,6 +4529,12 @@ export interface GitCommitInfo {
   author: string
   date: number
   message: string
+  /** Everything after the subject line, as git recorded it. */
+  body: string
+  /** Parent hashes, first parent first. Empty for a root commit. */
+  parents: string[]
+  /** Decorations on this commit (branch tips, HEAD, tags). */
+  refs: GitCommitRef[]
 }
 
 /** Reset severity: soft keeps index+worktree, mixed resets index, hard discards all local changes. */
@@ -4615,6 +4634,20 @@ export interface GitConflictAnalysis {
   hunks: GitConflictHunk[]
 }
 
+/**
+ * Which side of an unresolved conflict to take wholesale. `incoming` is the
+ * theirs side (the branch being integrated in), `current` is the ours side
+ * (what HEAD already had). The same words the per-hunk merge editor uses.
+ */
+export type GitConflictSide = 'incoming' | 'current'
+
+/**
+ * How to move a stopped rebase along: `continue` applies the commit git
+ * stopped on and replays the rest, `skip` drops that commit and replays the
+ * rest. Aborting is its own operation (`git:abortRebase`).
+ */
+export type GitRebaseAction = 'continue' | 'skip'
+
 /** Persisted state for one conflict range inside the scratch merge document. */
 export interface GitConflictWorkHunkState {
   /** Stable index matching the corresponding entry in `analysis.hunks`. */
@@ -4694,8 +4727,9 @@ export interface PullRequestReference {
 /**
  * Pull request as shown in the sidebar list.
  *
- * Avatars are deliberately absent: the renderer CSP blocks remote image hosts,
- * so the UI renders a monogram from `authorLogin` instead of a network image.
+ * No avatar field: the renderer CSP blocks remote image hosts, so the UI resolves a
+ * picture from `authorLogin` through main, which inlines it as a `data:` URL, and
+ * draws a monogram of the login until it arrives (see `PrAvatar.svelte`).
  */
 export interface PullRequestSummary {
   number: number
@@ -4791,6 +4825,20 @@ export interface PullRequestComment {
   url: string
 }
 
+/**
+ * An account that can be @-mentioned in a pull request conversation. Built from
+ * the repository's assignable users, the widest list GitHub exposes to a read
+ * token; app accounts arrive as `login[bot]`.
+ */
+export interface RepositoryMentionUser {
+  login: string
+  /** Display name, when the account publishes one. */
+  name: string | null
+  avatarUrl: string | null
+  /** True for app/bot accounts, which GitHub renders as an app mention. */
+  bot: boolean
+}
+
 /** Review verdict submitted from the sidebar. */
 export type PrReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
 
@@ -4843,6 +4891,12 @@ export interface PullRequestCheck {
   url: string | null
   /** GitHub Actions workflow-run id, when this check belongs to an Actions run. */
   workflowRunId: number | null
+  /**
+   * GitHub Actions job id for this exact check, when its provider URL names one.
+   * A run has many jobs (one per matrix leg), so this is what lets the panel read
+   * the log of the check that was clicked rather than the run's first job.
+   */
+  jobId: number | null
 }
 
 /** Rolled-up CI state for a pull request head. */
@@ -5032,7 +5086,11 @@ export interface GitHubDeploymentDetail {
   fetchedAt: number
 }
 
-/** Capped raw log text for one workflow run job. */
+/**
+ * Raw log text for one workflow run job, capped at roughly 200 KB. An oversized log
+ * keeps its head and its tail with an omission line between them, because the step
+ * that failed is at the end.
+ */
 export interface GitHubDeploymentJobLog {
   jobId: number
   log: string
