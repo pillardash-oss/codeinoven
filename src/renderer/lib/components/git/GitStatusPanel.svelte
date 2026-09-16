@@ -37,7 +37,6 @@
     ChevronLeft,
     ChevronRight,
     Download,
-    FileDiff,
     Folder,
     FolderOpen,
     FolderTree,
@@ -47,14 +46,11 @@
     GitFork,
     GitMerge,
     GitPullRequest,
-    Rocket,
     History,
     Loader2,
     MoreHorizontal,
-    NetworkIcon,
     Plus,
     RefreshCw,
-    RotateCcwClock,
     Search,
     Trash2,
     Unplug
@@ -1885,40 +1881,24 @@
     }
   }
 
-  const tabs: Array<{ id: TabId; label: string; icon: typeof GitBranch; count: number | null }> =
-    $derived.by(() => {
-      const list: Array<{
-        id: TabId
-        label: string
-        icon: typeof GitBranch
-        count: number | null
-      }> = [
-        {
-          id: 'changes',
-          label: 'Changes',
-          icon: FileDiff,
-          count: changes.length > 0 ? changes.length : null
-        },
-        { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
-        // The graph earns its own tab: the lane walk then only ever runs for a
-        // user who deliberately opens it, never as a side effect of History.
-        { id: 'graph', label: 'Graph', icon: GitFork, count: null },
-        { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
-        { id: 'pulls', label: 'Pull requests', icon: GitPullRequest, count: null }
-      ]
+  const tabs: Array<{ id: TabId; label: string; count: number | null }> = $derived.by(() => {
+    const list: Array<{ id: TabId; label: string; count: number | null }> = [
+      { id: 'changes', label: 'Changes', count: changes.length > 0 ? changes.length : null },
+      { id: 'history', label: 'History', count: null },
+      // The graph earns its own tab: the lane walk then only ever runs for a
+      // user who deliberately opens it, never as a side effect of History.
+      { id: 'graph', label: 'Graph', count: null },
+      { id: 'branches', label: 'Branches', count: null },
+      { id: 'pulls', label: 'PRs', count: null }
+    ]
       // Stash is just shelved work   it earns a tab only once something is shelved.
       if (gitState.stashes.length > 0) {
-        list.push({
-          id: 'stashes',
-          label: 'Stashes',
-          icon: Archive,
-          count: gitState.stashes.length
-        })
+        list.push({ id: 'stashes', label: 'Stashes', count: gitState.stashes.length })
       }
       // Deployments earn a tab only when the repo actually has deployment
       // activity (the flag is persisted in the DB and cached in localStorage).
       if (hasDeployments) {
-        list.push({ id: 'deployments', label: 'Deployments', icon: Rocket, count: null })
+        list.push({ id: 'deployments', label: 'Deploys', count: null })
       }
       return list
     })
@@ -1938,22 +1918,12 @@
     fileSections.filter((section) => section.title !== 'Staged' && section.title !== 'Conflicts')
   )
     /**
-   * Panes: Conflicts (if any) shares the stack with Staged/Unstaged/Untracked.
-   * Each pane hugs its content so adjacent panes stay attached (no dead space
-   * between them). When several panes are visible at once, each is capped at
-   * 50% of the shared height (taller content scrolls inside the pane). When
-   * only one pane is visible, it may grow to fill the full container instead.
+   * Panes: Conflicts (if any) sits above Staged, which sits above the working
+   * tree. Each pane hugs its content and none of them scroll, so the whole tab
+   * shares the panel's single scroll region instead of nesting up to three
+   * scrollbars inside it.
    */
-  const visiblePaneCount = $derived(
-    (conflictSections.length > 0 ? 1 : 0) +
-      (stagedSections.length > 0 ? 1 : 0) +
-      (workingSections.length > 0 ? 1 : 0)
-  )
-  const singlePaneClass = 'min-h-0 flex-1 overflow-y-auto'
-  const sharedPaneClass = 'min-h-0 max-h-[50%] overflow-y-auto'
-  const paneClass = $derived(
-    visiblePaneCount > 1 ? sharedPaneClass : singlePaneClass
-  )
+  const paneClass = 'flex flex-col'
 </script>
 
 {#snippet commitTreeNode(node: CommitTreeNode, depth: number)}
@@ -2217,29 +2187,28 @@
 
     {#if repoState === 'git'}
       <!-- Tab row   never wraps; scrolls horizontally when the tabs overflow -->
-      <div class="flex items-center gap-4 overflow-x-auto px-3">
+      <div class="flex items-center gap-0.5 overflow-x-auto px-2 pb-1">
         {#each tabs as tab (tab.id)}
-          {@const TabIcon = tab.icon}
           <button
             type="button"
             class={[
-              'flex shrink-0 items-center gap-1.5 border-b-2 pb-1.5 pt-0.5 text-[0.6875rem] font-medium transition-colors',
+              'flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-[0.625rem] font-medium transition-colors',
               activeTab === tab.id
-                ? 'border-primary text-foreground'
-                : 'border-transparent text-dimmed hover:text-muted'
+                ? 'bg-elevated text-foreground'
+                : 'text-dimmed hover:bg-elevated/60 hover:text-foreground'
             ]}
+            aria-current={activeTab === tab.id ? 'page' : undefined}
             onclick={() => {
               activeTab = tab.id
               if (tab.id === 'history') void loadHistory()
             }}
           >
-            <TabIcon size={11} class="shrink-0" />
             {tab.label}
             {#if tab.count !== null}
               <span
                 class={[
-                  'rounded-full px-1.5 text-[0.5625rem] font-semibold tabular-nums leading-[1.15rem]',
-                  activeTab === tab.id ? 'bg-primary/15 text-primary' : 'bg-elevated text-dimmed'
+                  'rounded-sm px-1 text-[0.5rem] font-semibold tabular-nums',
+                  activeTab === tab.id ? 'bg-primary/15 text-primary' : 'bg-app text-dimmed'
                 ]}
               >
                 {tab.count}
@@ -2551,7 +2520,13 @@
             {/if}
           </div>
         {:else}
-          <div class="flex h-full min-h-0 flex-col">
+          <!--
+            Grow to the full region only while an empty state has to centre
+            itself. With changes present the column hugs its content, so the
+            sticky toolbar stays pinned for the whole scroll instead of being
+            cut off once its containing block leaves the scrollport.
+          -->
+          <div class={['flex flex-col', changes.length === 0 ? 'h-full min-h-0' : null]}>
             {#if status && changes.length === 0 && status.clean}
               <div class="flex flex-1 flex-col items-center justify-center py-12 text-center">
                 <div
@@ -2566,7 +2541,9 @@
               </div>
             {:else if status}
               <!-- Stable header: abort control (when merging) or stage all + selection + view toggle -->
-              <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
+              <div
+                class="sticky top-0 z-10 flex shrink-0 items-center gap-2 border-b border-border bg-app px-3 py-1.5"
+              >
                 {#if conflicted.length > 0}
                   <button
                     type="button"
@@ -2720,7 +2697,7 @@
               </div>
 
               <!-- Staged / working panes   conflicts sit on top; each pane shares the height -->
-              <div class="flex h-full min-h-0 flex-col gap-2 px-2 pb-2">
+              <div class="flex flex-col gap-2 px-2 pb-2">
                 {#if conflictSections.length > 0}
                   <div class={paneClass}>
                     {#if changesView === 'tree'}
