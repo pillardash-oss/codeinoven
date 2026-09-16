@@ -2,7 +2,7 @@ import { fileURLToPath } from 'url'
 import { realpath } from 'fs/promises'
 import { isAbsolute, posix, relative, resolve, sep, win32 } from 'path'
 import type { WebFrameMain } from 'electron'
-import type { GitConflictSide, GitRestoreTarget } from '../../lib/types'
+import type { GitConflictSide, GitRebaseAction, GitRestoreTarget } from '../../lib/types'
 import { toPosixPath } from '../../lib/paths'
 import { Logger } from '../system/logger'
 import type {
@@ -653,6 +653,14 @@ export function validateGitResetMode(value: unknown): 'soft' | 'mixed' | 'hard' 
 export function validateGitConflictSide(value: unknown): GitConflictSide {
   if (value !== 'incoming' && value !== 'current') {
     throw new TypeError('Conflict side must be one of: incoming, current')
+  }
+  return value
+}
+
+/** Validate how to move a stopped rebase along. */
+export function validateGitRebaseAction(value: unknown): GitRebaseAction {
+  if (value !== 'continue' && value !== 'skip') {
+    throw new TypeError('Rebase action must be one of: continue, skip')
   }
   return value
 }

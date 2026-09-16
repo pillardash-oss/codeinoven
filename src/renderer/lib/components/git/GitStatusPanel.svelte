@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
+  import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { pathToFileUrl } from '$lib/mime'
   import { reportError, showToastWarning } from '$lib/stores/app-errors.svelte'
@@ -17,6 +18,7 @@
     GitFileChange,
     GitMainSyncDirection,
     GitPullStrategy,
+    GitRebaseAction,
     GitHubDeployment,
     GitHubDeploymentJob,
     GitHubDeploymentJobLog,
@@ -58,11 +60,13 @@
     Maximize2,
     MoreHorizontal,
     NetworkIcon,
+    Play,
     Plus,
     RefreshCw,
     Rocket,
     RotateCcwClock,
     Search,
+    SkipForward,
     Trash2,
     TriangleAlert,
     Unplug
@@ -1867,6 +1871,11 @@
       gitState.error = null
       syncMainDirection = direction
       syncMainOpen = true
+      // A refusal usually names a state this panel has not read yet   a rebase
+      // the platform, an agent or a terminal left stopped is not in the status
+      // the modal was rendered from. Re-reading it lets the modal show the state
+      // and its strategies instead of a list of strategies that cannot run.
+      void refreshStatus()
       return
     }
     if (!result) return
@@ -2043,6 +2052,12 @@
   const conflictState = $derived(gitState.conflictState)
 
   /**
+   * Whether an integration is open in this worktree. While it is, nothing else
+   * can move the branch: no sync strategy, and no remote action worth offering.
+   */
+  const integrationOpen = $derived(conflictState !== 'none')
+
+  /**
    * The temporary `pr-<n>` branch a PR conflict resolution is staged on, while
    * its session is still open. `preparePrResolve` records the session and the
    * store drops it once the branch is gone, so this names the branch the finish
@@ -2070,6 +2085,16 @@
   const prResolvePending = $derived(prResolveBranch !== null && conflicted.length === 0)
   const mergeAwaitsCompletion = $derived(mergePending || prResolvePending)
 
+  /**
+   * The Changes view's action row already renders this integration's Abort while
+   * it is on screen, so the notice above it never offers the same destructive
+   * button twice. The row keeps it wherever it shows: that is where the
+   * resolution decisions live (Resolve all, the agent, the accept pair).
+   */
+  const conflictRowAborts = $derived(
+    activeTab === 'changes' && selectedCommit === null && conflictsOpen
+  )
+
   /** Complete-merge modal state: optional title/description, defaults auto-generated. */
   let completeMergeOpen = $state(false)
   let mergeTitle = $state('')
@@ -2077,6 +2102,10 @@
   const completeMergeBusy = $derived(gitState.isBusy(['commit', 'push']))
 
   function openCompleteMerge(): void {
+    // Acting from the sync modal closes it first, so the merge's own controls are
+    // never behind an overlay.
+    syncMainOpen = false
+    syncMainError = ''
     mergeTitle = ''
     mergeDescription = ''
     completeMergeOpen = true
@@ -2136,7 +2165,15 @@
   }
 
   const integrateBusy = $derived(
-    gitState.isBusy(['merge', 'rebase', 'stash', 'abortMerge', 'abortRebase', 'accept-conflicts'])
+    gitState.isBusy([
+      'merge',
+      'rebase',
+      'stash',
+      'abortMerge',
+      'abortRebase',
+      'rebase-action',
+      'accept-conflicts'
+    ])
   )
   const atRiskFiles = $derived(changes.length > 0 ? changes.map((change) => change.path) : [])
 
@@ -2165,6 +2202,8 @@
   let abortConfirmOpen = $state(false)
 
   function requestAbortConflict(): void {
+    syncMainOpen = false
+    syncMainError = ''
     abortConfirmOpen = true
   }
 
@@ -2175,6 +2214,42 @@
     } else if (conflictState === 'rebase') {
       await gitState.abortRebase(projectId)
     }
+  }
+
+  /**
+   * Move a stopped rebase along. A rebase can stop again on the next commit's
+   * conflict, which is a normal state rather than an error, so the refreshed
+   * status is what the panel renders next.
+   */
+  async function runRebaseAction(action: GitRebaseAction): Promise<void> {
+    syncMainOpen = false
+    syncMainError = ''
+    rebaseActionRunning = action
+    try {
+      await gitState.rebaseAction(projectId, action)
+    } finally {
+      rebaseActionRunning = null
+    }
+    if (gitState.error) return
+    void refreshStatus()
+  }
+
+  /** Which rebase strategy is in flight, so each button spins for its own click. */
+  let rebaseActionRunning = $state<GitRebaseAction | null>(null)
+
+  /**
+   * Hand focus to the integration's forward action when the sync modal swaps the
+   * strategies out for it. The buttons the modal opened with are removed at that
+   * moment   the worktree turned out to be mid-integration   and the one holding
+   * focus goes with them, which would leave focus on the body. The same buttons
+   * render in the panel's notice, so this acts inside an open modal only, and
+   * only on whichever of them the modal's own ⌘+Enter pipeline would pick.
+   */
+  function focusSyncModalAction(node: HTMLElement): void {
+    if (!syncMainOpen) return
+    const dialog = node.closest<HTMLElement>('[role="dialog"]')
+    if (!dialog || findPanelPrimaryAction(dialog) !== node) return
+    node.focus({ preventScroll: true })
   }
 
   /**
@@ -2663,6 +2738,110 @@
 {/snippet}
 
 <!--
+  Abort whatever integration is open, confirmed first: it discards the merge or
+  rebase and restores the working tree. One snippet for both homes, the notice
+  and the Changes row, which differ only in the height they have to fit and in
+  how much room the label has   the row measures its four controls against a
+  480px panel, so there it says `Abort` and the title names the integration.
+-->
+{#snippet abortIntegrationAction(compact: boolean)}
+  <button
+    type="button"
+    class={[
+      'flex shrink-0 cursor-pointer items-center gap-1.5 border border-danger/40 font-medium text-[0.625rem] text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40',
+      compact ? 'h-6 rounded-xs px-2' : 'h-7 rounded-md px-2.5'
+    ]}
+    disabled={integrateBusy || conflictState === 'none'}
+    title={`Discard the whole ${conflictState === 'merge' ? 'merge' : 'rebase'} and restore the working tree`}
+    onclick={requestAbortConflict}
+  >
+    {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
+      <Loader2 size={11} class="animate-spin" />
+    {:else}
+      <Trash2 size={11} />
+    {/if}
+    {#if compact}
+      Abort
+    {:else}
+      Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
+    {/if}
+  </button>
+{/snippet}
+
+<!--
+  The strategies for whatever integration is open, in one place. A stopped rebase
+  is continued or skipped, a resolved merge is completed, and either can be
+  aborted. The rebase notice and the sync modal both render this, so the two can
+  never offer different ways out of the same state. `withAbort` is false only
+  where something else on screen already offers it.
+-->
+{#snippet integrationActions(withAbort = true)}
+  {#if conflictState === 'rebase'}
+    <!--
+      Both forward actions carry `data-modal-primary`, so the modal's focus and
+      ⌘+Enter pipeline lands on one of them. Continue is disabled while any
+      conflict is still open, and then skip is the only way forward left; abort
+      deliberately carries nothing, because the shortcut must never discard the
+      integration.
+    -->
+    <button
+      type="button"
+      data-modal-primary
+      {@attach focusSyncModalAction}
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-foreground px-2.5 text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+      title={conflicted.length > 0
+        ? `Resolve and stage the ${String(conflicted.length)} remaining conflict${conflicted.length === 1 ? '' : 's'} before continuing`
+        : 'Replay the rest of your commits on top of the new base'}
+      disabled={integrateBusy || conflicted.length > 0}
+      onclick={() => void runRebaseAction('continue')}
+    >
+      {#if rebaseActionRunning === 'continue'}
+        <Loader2 size={11} class="animate-spin" />
+      {:else}
+        <Play size={11} />
+      {/if}
+      Continue rebase
+    </button>
+    <button
+      type="button"
+      data-modal-primary
+      {@attach focusSyncModalAction}
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+      title="Drop the commit git stopped on and replay the rest"
+      disabled={integrateBusy}
+      onclick={() => void runRebaseAction('skip')}
+    >
+      {#if rebaseActionRunning === 'skip'}
+        <Loader2 size={11} class="animate-spin" />
+      {:else}
+        <SkipForward size={11} />
+      {/if}
+      Skip this commit
+    </button>
+  {:else if mergePending}
+    <button
+      type="button"
+      data-modal-primary
+      {@attach focusSyncModalAction}
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-foreground px-2.5 text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+      title="Commit the resolved files to complete the merge"
+      disabled={completeMergeBusy}
+      onclick={openCompleteMerge}
+    >
+      {#if completeMergeBusy}
+        <Loader2 size={11} class="animate-spin" />
+      {:else}
+        <GitMerge size={11} />
+      {/if}
+      Complete merge
+    </button>
+  {/if}
+  {#if withAbort}
+    {@render abortIntegrationAction(false)}
+  {/if}
+{/snippet}
+
+<!--
   What the action row is about, per view: the context each per-view header used
   to carry, moved down beside Pull and Push, so the sidebar has one place to look
   for "where am I" and one for "what can I do here".
@@ -2670,20 +2849,7 @@
 {#snippet viewContext()}
   {#if activeTab === 'changes' && selectedCommit === null}
     {#if conflicted.length > 0}
-      <button
-        type="button"
-        class="flex h-6 shrink-0 items-center gap-1.5 rounded-xs border border-danger/40 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
-        disabled={integrateBusy || conflictState === 'none'}
-        title="Discard the whole {conflictState} and restore the working tree"
-        onclick={requestAbortConflict}
-      >
-        {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
-          <Loader2 size={11} class="animate-spin" />
-        {:else}
-          <Trash2 size={11} />
-        {/if}
-        Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
-      </button>
+      {@render abortIntegrationAction(true)}
       <!--
         The whole resolution, in the order it happens: open the per-hunk merge
         editor, or hand the files to an agent, or take one side of every file
@@ -3426,6 +3592,39 @@
           >
             {gitState.error}
           </p>
+        </div>
+      {/if}
+
+      <!--
+        A stopped rebase has no other home in the panel: the conflict row only
+        appears while files are conflicted, and the Complete merge bar belongs to
+        a merge. Without this notice the state is invisible, Sync from main
+        refuses for a reason the user cannot see, and `git rebase --continue` has
+        no control anywhere. It sits above every view because the state blocks
+        every view's next step.
+      -->
+      {#if conflictState === 'rebase'}
+        <div class="mx-2 mt-2 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2">
+          <div class="flex items-center gap-1.5">
+            <TriangleAlert size={13} class="shrink-0 text-warning" />
+            <p class="text-[0.625rem] font-semibold text-warning">Rebase in progress</p>
+          </div>
+          <p class="mt-1 text-[0.5625rem] leading-relaxed text-muted">
+            {#if conflicted.length > 0}
+              Git stopped on a commit that conflicts with the new base.
+              <span class="font-medium text-foreground">{conflicted.length}</span>
+              {conflicted.length === 1 ? 'file still needs' : 'files still need'} resolving, and the conflict
+              controls in the Changes view take one side or open the merge editor. Continuing unlocks
+              once nothing is left conflicted.
+            {:else}
+              Every conflict is resolved and staged. Continuing replays the rest of your commits on
+              top of the new base, skipping drops the commit git stopped on, and aborting puts the
+              branch back where it was.
+            {/if}
+          </p>
+          <div class="mt-2 flex flex-wrap items-center gap-1.5">
+            {@render integrationActions(!conflictRowAborts)}
+          </div>
         </div>
       {/if}
 
@@ -4446,7 +4645,34 @@
             </p>
           {/if}
         </div>
-        {#if syncMainError}
+        {#if integrationOpen}
+          <!--
+            Every sync strategy fails identically while an integration is open, so
+            the modal stops offering them and offers the way out instead. The
+            state is read from the worktree, not parsed out of the error text, so
+            it is right even before a strategy was tried.
+          -->
+          <div class="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2">
+            <p class="text-[0.625rem] font-semibold text-warning">
+              This worktree is mid-{conflictState}
+            </p>
+            <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-muted">
+              No sync strategy can run until it is idle.
+              {#if conflicted.length > 0}
+                <span class="font-medium text-foreground">{conflicted.length}</span>
+                {conflicted.length === 1 ? 'file still has' : 'files still have'} conflicts to resolve
+                in the Changes view.
+              {:else if conflictState === 'rebase'}
+                Every conflict is resolved and staged, so the rebase is ready to continue.
+              {:else}
+                Every conflict is resolved and staged, so the merge is ready to be completed.
+              {/if}
+            </p>
+            <div class="mt-2 flex flex-wrap items-center gap-1.5">
+              {@render integrationActions()}
+            </div>
+          </div>
+        {:else if syncMainError}
           <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
             <p class="text-[0.625rem] font-semibold text-danger">
               {syncMainDirection === 'from-main'
@@ -4465,35 +4691,37 @@
             </p>
           </div>
         {/if}
-        <div class="space-y-1 text-[0.5625rem] leading-relaxed text-dimmed">
-          {#if syncMainDirection === 'from-main'}
-            <p>
-              <span class="font-medium text-foreground">Merge</span> keeps both histories and may create
-              a merge commit.
-            </p>
-            <p>
-              <span class="font-medium text-foreground">Rebase</span> replays this worktree's commits
-              on top of main.
-            </p>
-            <p>
-              <span class="font-medium text-foreground">Fast-forward only</span> integrates only when
-              no reconciliation is needed.
-            </p>
-          {:else}
-            <p>
-              <span class="font-medium text-foreground">Merge</span> merges this branch into main and
-              refuses if that would conflict. Resolve it here with Sync from main instead.
-            </p>
-            <p>
-              <span class="font-medium text-foreground">Rebase</span> replays this branch's commits on
-              top of main, then moves main onto them. Keeps main linear, rewrites this branch.
-            </p>
-            <p>
-              <span class="font-medium text-foreground">Fast-forward only</span> moves main only when
-              main has not diverged.
-            </p>
-          {/if}
-        </div>
+        {#if !integrationOpen}
+          <div class="space-y-1 text-[0.5625rem] leading-relaxed text-dimmed">
+            {#if syncMainDirection === 'from-main'}
+              <p>
+                <span class="font-medium text-foreground">Merge</span> keeps both histories and may create
+                a merge commit.
+              </p>
+              <p>
+                <span class="font-medium text-foreground">Rebase</span> replays this worktree's commits
+                on top of main.
+              </p>
+              <p>
+                <span class="font-medium text-foreground">Fast-forward only</span> integrates only when
+                no reconciliation is needed.
+              </p>
+            {:else}
+              <p>
+                <span class="font-medium text-foreground">Merge</span> merges this branch into main and
+                refuses if that would conflict. Resolve it here with Sync from main instead.
+              </p>
+              <p>
+                <span class="font-medium text-foreground">Rebase</span> replays this branch's commits
+                on top of main, then moves main onto them. Keeps main linear, rewrites this branch.
+              </p>
+              <p>
+                <span class="font-medium text-foreground">Fast-forward only</span> moves main only when
+                main has not diverged.
+              </p>
+            {/if}
+          </div>
+        {/if}
       </div>
       {#snippet footer()}
         <div class="flex items-center justify-end gap-2">
@@ -4505,31 +4733,33 @@
           >
             Cancel
           </button>
-          <button
-            type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-            disabled={gitState.isBusy('sync-main')}
-            onclick={() => void performSyncMain(syncMainDirection, 'ff-only')}
-          >
-            Fast-forward only
-          </button>
-          <button
-            type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-            disabled={gitState.isBusy('sync-main')}
-            onclick={() => void performSyncMain(syncMainDirection, 'rebase')}
-          >
-            Rebase
-          </button>
-          <button
-            type="button"
-            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
-            data-modal-primary
-            disabled={gitState.isBusy('sync-main')}
-            onclick={() => void performSyncMain(syncMainDirection, 'merge')}
-          >
-            Merge
-          </button>
+          {#if !integrationOpen}
+            <button
+              type="button"
+              class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+              disabled={gitState.isBusy('sync-main')}
+              onclick={() => void performSyncMain(syncMainDirection, 'ff-only')}
+            >
+              Fast-forward only
+            </button>
+            <button
+              type="button"
+              class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+              disabled={gitState.isBusy('sync-main')}
+              onclick={() => void performSyncMain(syncMainDirection, 'rebase')}
+            >
+              Rebase
+            </button>
+            <button
+              type="button"
+              class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+              data-modal-primary
+              disabled={gitState.isBusy('sync-main')}
+              onclick={() => void performSyncMain(syncMainDirection, 'merge')}
+            >
+              Merge
+            </button>
+          {/if}
         </div>
       {/snippet}
     </Modal>
@@ -5364,8 +5594,13 @@
         </AlertDialog.Title>
         <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
           This cancels the in-progress
-          <strong class="font-medium text-foreground">{conflictState}</strong> operation and restores
-          the working tree to how it was before it started. Any partially resolved files will be lost.
+          <strong class="font-medium text-foreground">{conflictState}</strong> operation and
+          restores the working tree to how it was before it started. Any partially resolved files
+          will be lost.
+          {#if conflictState === 'rebase'}
+            Commits created since the rebase started are dropped with it, because the branch goes
+            back to the commit it was on when the rebase began.
+          {/if}
           This cannot be undone.
         </AlertDialog.Description>
         <div class="mt-5 flex justify-end gap-2">

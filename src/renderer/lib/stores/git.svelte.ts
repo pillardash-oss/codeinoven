@@ -24,6 +24,7 @@ import type {
   GitMainSyncDirection,
   GitMainSyncResult,
   GitPullStrategy,
+  GitRebaseAction,
   GitRestoreTarget,
   GitRemoteInfo,
   GitResetMode,
@@ -77,6 +78,7 @@ export type GitOperation =
   | 'accept-conflicts'
   | 'abortMerge'
   | 'abortRebase'
+  | 'rebase-action'
   | 'pr-create'
   | 'pr-merge'
   | 'pr-ready'
@@ -1256,6 +1258,26 @@ export class GitState {
       this.error = errorMessage(reason, 'Rebase abort failed')
     } finally {
       this.markBusy('abortRebase', false)
+    }
+  }
+
+  /**
+   * Move a stopped rebase along: continue it, or skip the commit git stopped
+   * on. A rebase can stop again on the next commit's conflict, which is a normal
+   * state rather than an error, so the refreshed status is what the panel shows.
+   */
+  async rebaseAction(projectId: string, action: GitRebaseAction): Promise<void> {
+    this.markBusy('rebase-action', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:rebaseAction', ...this.scopedGitArgs(projectId, action))
+    } catch (reason) {
+      this.error = errorMessage(
+        reason,
+        action === 'continue' ? 'The rebase could not continue' : 'The commit could not be skipped'
+      )
+    } finally {
+      this.markBusy('rebase-action', false)
     }
   }
 

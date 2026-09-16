@@ -32,6 +32,7 @@ import type {
   GitMainSyncDirection,
   GitMainSyncResult,
   GitPullStrategy,
+  GitRebaseAction,
   GitRemoteInfo,
   GitRestoreTarget,
   GitResetMode,
@@ -220,6 +221,36 @@ export class GitService {
     return simpleGit(directory, {
       config: extraConfig,
       maxConcurrentProcesses: 1
+    })
+  }
+
+  /**
+   * A client with git's editor replaced by a no-op, for the commands that commit
+   * on the user's behalf.
+   *
+   * `git rebase --continue` finishes a resolved conflict by committing it, and
+   * that commit runs the configured editor. Measured against real git: with
+   * nothing configured and no terminal it exits 1 with "Terminal is dumb, but
+   * EDITOR unset. Please supply the message using either -m or -F option", and
+   * with git's default `vi` it runs the editor with the message path as its
+   * argument and never returns. Either way the rebase the panel just offered to
+   * continue cannot continue, and in the blocking case the main process waits on
+   * a promise that never settles. `core.editor=true` is git's own no-op editor,
+   * and on the command line it outranks `VISUAL`, `EDITOR` and any configured
+   * `core.editor` such as `code --wait`.
+   *
+   * simple-git refuses to pass an editor through unless the caller opts in,
+   * because an editor value is arbitrary code. Every value here is ours (`true`),
+   * never anything a user typed, and the opt-in is on this client alone rather
+   * than the shared default, so no other command's argv can carry an editor.
+   * `GIT_EDITOR` still outranks a config entry, but only a process launched from
+   * a shell that exports it would carry one into the app.
+   */
+  private clientWithoutEditor(directory: string): SimpleGit {
+    return simpleGit(directory, {
+      config: ['core.editor=true'],
+      maxConcurrentProcesses: 1,
+      unsafe: { allowUnsafeEditor: true }
     })
   }
 
@@ -1327,15 +1358,21 @@ export class GitService {
       }
 
       const before = await this.readStatus(directory)
-      if (before.detached || !before.branch) {
-        throw new Error(`Check out a branch in this worktree before syncing ${toward} main`)
-      }
-      const branch = before.branch
+      // The in-progress integration is reported first because a rebase leaves
+      // HEAD detached: checking the branch first answers a user who is sitting
+      // on a conflict in a branch they do have with "check out a branch", which
+      // is the dead end, and the branch name is recoverable from the rebase's
+      // own state. A merge keeps HEAD on the branch, so for it the two checks
+      // agree either way.
       if (before.conflictState !== 'none') {
         throw new Error(
           `Finish or abort the in-progress ${before.conflictState} before syncing ${toward} main`
         )
       }
+      if (before.detached || !before.branch) {
+        throw new Error(`Check out a branch in this worktree before syncing ${toward} main`)
+      }
+      const branch = before.branch
 
       if (options.direction === 'to-main') {
         return await this.foldIntoMain(directory, mainDirectory, before, branch, options)
@@ -1425,15 +1462,18 @@ export class GitService {
     }
 
     const mainStatus = await this.readStatus(mainDirectory)
-    if (mainStatus.detached || !mainStatus.branch) {
-      throw new Error('The project root is not on a branch, so there is nothing to sync to')
-    }
-    const mainBranch = mainStatus.branch
+    // Same order as the worktree's own check: a rebase in the project root also
+    // detaches its HEAD, and "the project root is not on a branch" is not what
+    // the user needs to hear while its rebase is sitting half-finished.
     if (mainStatus.conflictState !== 'none') {
       throw new Error(
         `Finish or abort the in-progress ${mainStatus.conflictState} in the project main worktree before syncing to main`
       )
     }
+    if (mainStatus.detached || !mainStatus.branch) {
+      throw new Error('The project root is not on a branch, so there is nothing to sync to')
+    }
+    const mainBranch = mainStatus.branch
     const mainDirty = uncommitted(mainStatus)
     if (mainDirty > 0) {
       throw new Error(
@@ -1834,6 +1874,43 @@ export class GitService {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
         await this.client(directory).raw(['rebase', '--abort'])
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /**
+   * Move a stopped rebase along: `continue` applies the commit git stopped on
+   * and replays the rest, `skip` drops that commit and replays the rest. Either
+   * can stop again on the next commit's conflict, which is not an error   the
+   * refreshed status carries the new conflict state for the panel to show.
+   *
+   * Unresolved conflicts are refused here rather than left to git: `rebase
+   * --continue` reports them on stdout with an empty stderr, and simple-git only
+   * raises a task error when stderr has something in it, so git's refusal would
+   * arrive as a resolved promise and the button would look like it did nothing.
+   * The refusal also names the step the user owes, which git's own three lines
+   * only imply.
+   *
+   * Both run through `clientWithoutEditor`: `--continue` finishes a conflicted
+   * commit by committing it, and committing runs the configured editor   see that
+   * helper for what git does without one.
+   */
+  async rebaseAction(projectPath: string, action: GitRebaseAction): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const before = await this.readStatus(directory)
+      const unresolved = before.conflicted.length
+      if (action === 'continue' && unresolved > 0) {
+        throw new Error(
+          `Resolve and stage ${unresolved === 1 ? 'the remaining conflicted file' : `the ${String(unresolved)} remaining conflicted files`}, then continue the rebase`
+        )
+      }
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await this.clientWithoutEditor(directory).raw([
+          'rebase',
+          action === 'continue' ? '--continue' : '--skip'
+        ])
       })
       return this.readStatus(directory)
     })

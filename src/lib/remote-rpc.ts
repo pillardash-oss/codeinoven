@@ -298,6 +298,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'git:stashFileDiff',
   'git:abortMerge',
   'git:abortRebase',
+  'git:rebaseAction',
   'github:authStatus',
   // Electron-only helpers   allowed so the shared components never error,
   // but dispatched to no-op handlers on the phone.
@@ -737,6 +738,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'git:stashDrop': { scope: 'git.write', stepUp: 'none' },
   'git:abortMerge': { scope: 'git.write', stepUp: 'none' },
   'git:abortRebase': { scope: 'git.write', stepUp: 'none' },
+  'git:rebaseAction': { scope: 'git.write', stepUp: 'none' },
 
   // local.system   default-No, always step-up
   'dialog:pickFile': { scope: 'local.system', stepUp: 'always' },

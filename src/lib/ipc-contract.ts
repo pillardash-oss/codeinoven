@@ -72,6 +72,7 @@ import type {
   GitConflictAnalysis,
   GitConflictSide,
   GitConflictWorkFile,
+  GitRebaseAction,
   GitCredentialStatus,
   GitDiff,
   GitFileChange,
@@ -1672,6 +1673,11 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'git:abortMerge': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
   'git:abortRebase': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
+  /** Continue a stopped rebase, or drop the commit it stopped on. */
+  'git:rebaseAction': {} as Contract<
+    [projectId: string, action: GitRebaseAction, scopeBucketId?: string],
+    GitStatus
+  >,
   'pr:create': {} as Contract<
     [projectId: string, input: PrCreateInput, scopeBucketId?: string],
     GitHubMutationResult<PullRequestReference>

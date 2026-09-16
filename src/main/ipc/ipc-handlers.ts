@@ -97,6 +97,7 @@ import {
   validateEngineeringLifecycleStage,
   validateGitIdentity,
   validateGitConflictSide,
+  validateGitRebaseAction,
   validateGitPathArray,
   validateGitRelativePath,
   validateGitResetMode,
@@ -6591,6 +6592,19 @@ export function registerIpcHandlers(
         scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
     )
+  )
+  ipcMain.handle(
+    'git:rebaseAction',
+    async (_, projectId: unknown, action: unknown, scopeBucketId?: unknown) =>
+      gitService.rebaseAction(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRebaseAction(action)
+      )
   )
 
   // ─── Pull requests (GitHub-first) ───────────────────────────────────────

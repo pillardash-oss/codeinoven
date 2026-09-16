@@ -4459,6 +4459,13 @@ export interface GitConflictAnalysis {
  */
 export type GitConflictSide = 'incoming' | 'current'
 
+/**
+ * How to move a stopped rebase along: `continue` applies the commit git
+ * stopped on and replays the rest, `skip` drops that commit and replays the
+ * rest. Aborting is its own operation (`git:abortRebase`).
+ */
+export type GitRebaseAction = 'continue' | 'skip'
+
 /** Persisted state for one conflict range inside the scratch merge document. */
 export interface GitConflictWorkHunkState {
   /** Stable index matching the corresponding entry in `analysis.hunks`. */
