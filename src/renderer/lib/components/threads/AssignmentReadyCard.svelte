@@ -70,7 +70,7 @@
     class="flex w-full items-center justify-between gap-3 border-b px-4 py-3 text-left hover:bg-elevated/60"
     aria-expanded={expanded}
     aria-controls={`assignment-review-${assignment.id}`}
-    title={expanded ? 'Fold assignment details' : 'Expand assignment details'}
+    title={expanded ? 'Fold assignment' : 'Expand assignment'}
     onclick={() => (expanded = !expanded)}
   >
     <div class="flex min-w-0 items-center gap-2">
@@ -123,35 +123,37 @@
     {/if}
   </div>
 
-  <div class="flex items-center justify-between gap-2 border-t px-4 py-3">
-    <button
-      type="button"
-      class="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-muted hover:bg-elevated hover:text-foreground"
-      title="Review assignment full screen"
-      onclick={onOpenFullscreen}
-    >
-      <Maximize2 size={13} />
-      Full screen
-    </button>
-    <div class="flex items-center gap-2">
+  {#if expanded}
+    <div class="flex items-center justify-between gap-2 border-t px-4 py-3">
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-muted hover:text-foreground disabled:opacity-40"
-        disabled={busy}
-        onclick={() => onSave($state.snapshot(draft))}
+        class="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-muted hover:bg-elevated hover:text-foreground"
+        title="Review assignment full screen"
+        onclick={onOpenFullscreen}
       >
-        <Save size={13} />
-        Save draft
+        <Maximize2 size={13} />
+        Full screen
       </button>
-      <button
-        type="button"
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-40"
-        disabled={busy}
-        onclick={() => onApprove($state.snapshot(draft))}
-      >
-        {#if busy}<Loader2 size={13} class="animate-spin" />{:else}<Check size={13} />{/if}
-        Sign off & assign
-      </button>
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-muted hover:text-foreground disabled:opacity-40"
+          disabled={busy}
+          onclick={() => onSave($state.snapshot(draft))}
+        >
+          <Save size={13} />
+          Save draft
+        </button>
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-40"
+          disabled={busy}
+          onclick={() => onApprove($state.snapshot(draft))}
+        >
+          {#if busy}<Loader2 size={13} class="animate-spin" />{:else}<Check size={13} />{/if}
+          Sign off & assign
+        </button>
+      </div>
     </div>
-  </div>
+  {/if}
 </section>

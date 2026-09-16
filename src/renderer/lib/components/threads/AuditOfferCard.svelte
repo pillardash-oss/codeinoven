@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Loader2, ShieldCheck } from '@lucide/svelte'
+  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import type { ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
 
@@ -41,6 +42,7 @@
     onRemoveRecent,
     onReorderFavorite
   }: Props = $props()
+  let folded = $state(false)
   let selected = $derived.by(() => {
     const provider =
       providers.find(
@@ -73,52 +75,57 @@
       <h3 class="text-sm font-semibold">
         {reworkCycle ? `Rework ${reworkCycle} complete   audit again` : 'Implementation finished'}
       </h3>
-      <p class="mt-1 text-xs text-muted">
-        {reworkCycle ? 'Verify the completed corrections for' : 'Audit'} “{threadTitle}” with
-        <span class="font-medium text-foreground">
-          {selected.model?.name ?? settings.modelId}
-        </span>
-        before marking it complete?
-      </p>
-      <p class="mt-1 text-[0.6875rem] text-dimmed">
-        {selected.provider?.name ?? settings.providerId} / {selected.model?.name ??
-          settings.modelId}
-      </p>
+      {#if !folded}
+        <p class="mt-1 text-xs text-muted">
+          {reworkCycle ? 'Verify the completed corrections for' : 'Audit'} “{threadTitle}” with
+          <span class="font-medium text-foreground">
+            {selected.model?.name ?? settings.modelId}
+          </span>
+          before marking it complete?
+        </p>
+        <p class="mt-1 text-[0.6875rem] text-dimmed">
+          {selected.provider?.name ?? settings.providerId} / {selected.model?.name ??
+            settings.modelId}
+        </p>
+      {/if}
     </div>
+    <CardFoldToggle bind:folded label="audit offer" />
   </div>
 
-  <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
-    <button class="rounded-lg px-3 py-2 text-xs text-muted hover:bg-overlay" onclick={onCancel}>
-      Cancel
-    </button>
-    <div class="ml-auto flex items-center justify-end gap-2">
-      <ModelPicker
-        {providers}
-        {projectId}
-        harnessId={settings.harnessId}
-        providerId={settings.providerId}
-        modelId={settings.modelId}
-        accountId={settings.accountId}
-        {favoriteModels}
-        {recentModels}
-        {onRemoveRecent}
-        side="top"
-        label="Change"
-        variant="action"
-        onSelect={chooseModel}
-        thinkingLevel={settings.thinkingLevel}
-        onSelectThinking={chooseThinking}
-        {onToggleFavorite}
-        {onReorderFavorite}
-      />
-      <button
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
-        disabled={busy}
-        onclick={() => onAudit(settings)}
-      >
-        {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
-        {reworkCycle ? 'Audit again' : 'Audit'}
+  {#if !folded}
+    <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
+      <button class="rounded-lg px-3 py-2 text-xs text-muted hover:bg-overlay" onclick={onCancel}>
+        Cancel
       </button>
+      <div class="ml-auto flex items-center justify-end gap-2">
+        <ModelPicker
+          {providers}
+          {projectId}
+          harnessId={settings.harnessId}
+          providerId={settings.providerId}
+          modelId={settings.modelId}
+          accountId={settings.accountId}
+          {favoriteModels}
+          {recentModels}
+          {onRemoveRecent}
+          side="top"
+          label="Change"
+          variant="action"
+          onSelect={chooseModel}
+          thinkingLevel={settings.thinkingLevel}
+          onSelectThinking={chooseThinking}
+          {onToggleFavorite}
+          {onReorderFavorite}
+        />
+        <button
+          class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
+          disabled={busy}
+          onclick={() => onAudit(settings)}
+        >
+          {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
+          {reworkCycle ? 'Audit again' : 'Audit'}
+        </button>
+      </div>
     </div>
-  </div>
+  {/if}
 </section>

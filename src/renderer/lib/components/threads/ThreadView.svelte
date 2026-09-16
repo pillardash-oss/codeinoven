@@ -58,6 +58,7 @@
   import MediaPreview from '../chats/MediaPreview.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
+  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
@@ -5196,6 +5197,9 @@
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
   let showQueueMenu = $state(false)
+  /** Folds the queued-message card down to its header so the conversation above
+   *  the composer stays readable while a message waits in the queue. */
+  let queuedFolded = $state(false)
   /** Count of messages waiting in the thread's FIFO queue (from the store). */
   const queuedCount = $derived(rendererRecovery.queuedMessageCount(thread.projectId, thread.id))
   let composerRestoreKey = $state(0)
@@ -11558,7 +11562,12 @@
           <div class="conversation-gutter shrink-0 px-6 pt-2">
             <div class="mx-auto max-w-3xl">
               <div class="rounded-t-xl border border-border bg-surface shadow-sm">
-                <div class="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
+                <div
+                  class={[
+                    'flex items-center justify-between gap-2 px-3 pt-2.5',
+                    queuedFolded ? 'pb-2.5' : 'pb-1'
+                  ]}
+                >
                   <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
                     >{queuedCount > 1
                       ? `Queued · ${queuedCount}`
@@ -11638,92 +11647,97 @@
                         </div>
                       {/if}
                     </div>
+                    <CardFoldToggle bind:folded={queuedFolded} label="queued message" compact />
                   </div>
                 </div>
-                {#if queuedPromptReferences.length > 0}
-                  <div class="flex flex-wrap gap-1.5 px-3 pb-2">
-                    {#each queuedPromptReferences as reference (reference.id)}
-                      <span
-                        class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
-                        title={reference.comment
-                          ? `${reference.comment}\n\n${reference.text}`
-                          : reference.text}
-                      >
-                        <MessageSquare size={11} class="shrink-0 text-accent" />
-                        <span class="font-medium text-foreground">{reference.label}</span>
-                        <span class="max-w-56 truncate text-muted">{reference.text}</span>
-                        {#if reference.comment}
-                          <span class="max-w-48 truncate italic text-foreground">
-                            “{reference.comment}”
-                          </span>
-                        {/if}
-                      </span>
-                    {/each}
-                  </div>
-                {/if}
-                {#if queuedStartAfterThreads.length > 0}
-                  <div class="flex flex-col gap-1 px-3 pb-2.5">
-                    {#each queuedStartAfterThreads as dependency (dependency.id)}
-                      <div
-                        class="flex w-full items-center gap-1 rounded-lg px-1.5 py-1 transition-colors hover:bg-elevated"
-                        role="group"
-                        onmouseenter={() => preloadStartAfterThread(dependency.id)}
-                      >
-                        <Clock size={12} class="shrink-0 text-info" />
-                        <button
-                          type="button"
-                          class="min-w-0 flex-1 truncate text-left text-[0.75rem] text-info"
-                          title={`Open ${dependency.title}`}
-                          aria-label={`Open ${dependency.title}`}
-                          onclick={() => void openStartAfterThread(dependency.id)}
+                {#if !queuedFolded}
+                  {#if queuedPromptReferences.length > 0}
+                    <div class="flex flex-wrap gap-1.5 px-3 pb-2">
+                      {#each queuedPromptReferences as reference (reference.id)}
+                        <span
+                          class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
+                          title={reference.comment
+                            ? `${reference.comment}\n\n${reference.text}`
+                            : reference.text}
                         >
-                          {dependency.title}
-                        </button>
-                        <button
-                          type="button"
-                          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
-                          title={`Remove ${dependency.title} from Starts after`}
-                          aria-label={`Remove ${dependency.title} from Starts after`}
-                          onclick={() => (queuedStartAfterPendingRemoval = dependency)}
+                          <MessageSquare size={11} class="shrink-0 text-accent" />
+                          <span class="font-medium text-foreground">{reference.label}</span>
+                          <span class="max-w-56 truncate text-muted">{reference.text}</span>
+                          {#if reference.comment}
+                            <span class="max-w-48 truncate italic text-foreground">
+                              “{reference.comment}”
+                            </span>
+                          {/if}
+                        </span>
+                      {/each}
+                    </div>
+                  {/if}
+                  {#if queuedStartAfterThreads.length > 0}
+                    <div class="flex flex-col gap-1 px-3 pb-2.5">
+                      {#each queuedStartAfterThreads as dependency (dependency.id)}
+                        <div
+                          class="flex w-full items-center gap-1 rounded-lg px-1.5 py-1 transition-colors hover:bg-elevated"
+                          role="group"
+                          onmouseenter={() => preloadStartAfterThread(dependency.id)}
                         >
-                          <Trash2 size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-                          title={`Open ${dependency.title}`}
-                          aria-label={`Open ${dependency.title}`}
-                          onclick={() => void openStartAfterThread(dependency.id)}
-                        >
-                          <ArrowUpRight size={12} />
-                        </button>
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-                {#if queuedPresentation}
-                  <div class="px-3 pb-2.5">
-                    <p class="text-[0.75rem] italic text-dimmed">{queuedPresentation.action}</p>
-                    {#if queuedPresentation.body}
-                      <p class="mt-1 text-[0.75rem] text-muted line-clamp-3">
-                        {queuedPresentation.body}
-                      </p>
-                    {/if}
-                  </div>
-                {:else}
-                  <p class="px-3 pb-2.5 text-[0.75rem] text-muted line-clamp-3">{queuedMessage}</p>
-                {/if}
-                {#if queuedCount > 1}
-                  <div class="border-t px-3 pb-2.5 pt-2">
-                    <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
-                      Next up
+                          <Clock size={12} class="shrink-0 text-info" />
+                          <button
+                            type="button"
+                            class="min-w-0 flex-1 truncate text-left text-[0.75rem] text-info"
+                            title={`Open ${dependency.title}`}
+                            aria-label={`Open ${dependency.title}`}
+                            onclick={() => void openStartAfterThread(dependency.id)}
+                          >
+                            {dependency.title}
+                          </button>
+                          <button
+                            type="button"
+                            class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                            title={`Remove ${dependency.title} from Starts after`}
+                            aria-label={`Remove ${dependency.title} from Starts after`}
+                            onclick={() => (queuedStartAfterPendingRemoval = dependency)}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+                            title={`Open ${dependency.title}`}
+                            aria-label={`Open ${dependency.title}`}
+                            onclick={() => void openStartAfterThread(dependency.id)}
+                          >
+                            <ArrowUpRight size={12} />
+                          </button>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                  {#if queuedPresentation}
+                    <div class="px-3 pb-2.5">
+                      <p class="text-[0.75rem] italic text-dimmed">{queuedPresentation.action}</p>
+                      {#if queuedPresentation.body}
+                        <p class="mt-1 text-[0.75rem] text-muted line-clamp-3">
+                          {queuedPresentation.body}
+                        </p>
+                      {/if}
+                    </div>
+                  {:else}
+                    <p class="px-3 pb-2.5 text-[0.75rem] text-muted line-clamp-3">
+                      {queuedMessage}
                     </p>
-                    {#each rendererRecovery
-                      .queuedMessagesFor(thread.projectId, thread.id)
-                      .slice(1) as next (next.text)}
-                      <p class="line-clamp-2 pt-1 text-[0.75rem] text-muted">{next.text}</p>
-                    {/each}
-                  </div>
+                  {/if}
+                  {#if queuedCount > 1}
+                    <div class="border-t px-3 pb-2.5 pt-2">
+                      <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+                        Next up
+                      </p>
+                      {#each rendererRecovery
+                        .queuedMessagesFor(thread.projectId, thread.id)
+                        .slice(1) as next (next.text)}
+                        <p class="line-clamp-2 pt-1 text-[0.75rem] text-muted">{next.text}</p>
+                      {/each}
+                    </div>
+                  {/if}
                 {/if}
               </div>
             </div>
