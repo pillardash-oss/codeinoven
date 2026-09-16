@@ -11,9 +11,6 @@
   /** The overlay may be shrunk back to its default footprint and grown to twice
    *  it. The cap is deliberate: the preview floats above the workspace, so an
    *  unbounded frame would bury the surface the user is reading. */
-  /** The overlay may be shrunk back to its default footprint and grown to twice
-   *  it. The cap is deliberate: the preview floats above the workspace, so an
-   *  unbounded frame would bury the surface the user is reading. */
   const MIN_SCALE = 1
   const MAX_SCALE = 2
   /** The capture demand is quantized to this step before it is reported. The
