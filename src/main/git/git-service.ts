@@ -10,7 +10,7 @@ import {
   rm,
   unlink
 } from 'fs/promises'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
+import { dirname, isAbsolute, relative, resolve, sep } from 'path'
 import { toPosixPath } from '../../lib/paths'
 import { realpathSync } from 'fs'
 import { createHash } from 'node:crypto'
@@ -775,16 +775,8 @@ export class GitService {
   async commit(projectPath: string, message: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      // A commit made while a merge is open is that merge's commit, and git's
-      // prepared message still holds the paths it conflicted on. Recording them
-      // is what carries a resolved conflict into history, because git keeps its
-      // own block commented out and strips comments at commit time.
-      const prepared = await this.preparedIntegrationMessage(directory, 'merge')
-      const recorded = prepared
-        ? this.withRecordedConflicts(message, this.conflictsInPreparedMessage(prepared.text))
-        : message
       await this.wrapError(projectPath, 'mutation', async () => {
-        const cleanMessage = recorded.replace(/\r\n/gu, '\n')
+        const cleanMessage = message.replace(/\r\n/gu, '\n')
         await this.client(directory).commit(cleanMessage)
       })
       return this.readStatus(directory)
@@ -1914,16 +1906,6 @@ export class GitService {
           `Resolve and stage ${unresolved === 1 ? 'the remaining conflicted file' : `the ${String(unresolved)} remaining conflicted files`}, then continue the rebase`
         )
       }
-      if (action === 'continue') {
-        // The stopped pick's own message is where git recorded what it
-        // conflicted on, commented out. Uncommenting that block is how the
-        // conflict reaches the commit: the continue runs with a no-op editor, so
-        // the text that lands is whatever this file holds.
-        const prepared = await this.preparedIntegrationMessage(directory, 'rebase')
-        if (prepared && this.conflictsInPreparedMessage(prepared.text).length > 0) {
-          await this.uncommentRebaseConflicts(prepared.path, prepared.text)
-        }
-      }
       await this.wrapError(projectPath, 'mutation', async () => {
         await this.clientWithoutEditor(directory).raw([
           'rebase',
@@ -1932,80 +1914,6 @@ export class GitService {
       })
       return this.readStatus(directory)
     })
-  }
-
-  /**
-   * Git's prepared message for the integration in progress, with the path it was
-   * read from.
-   *
-   * `git merge` writes `MERGE_MSG`, a stopped rebase writes the pick's own
-   * message, and git removes either one as soon as the integration ends. The
-   * file being there is therefore the signal that one is open, which is why this
-   * needs no second status read.
-   */
-  private async preparedIntegrationMessage(
-    directory: string,
-    state: 'merge' | 'rebase'
-  ): Promise<{ path: string; text: string } | null> {
-    const gitDirectory = (
-      await this.client(directory).raw(['rev-parse', '--absolute-git-dir'])
-    ).trim()
-    const candidates =
-      state === 'merge' ? ['MERGE_MSG'] : ['rebase-merge/message', 'rebase-apply/message']
-    for (const candidate of candidates) {
-      const path = join(gitDirectory, candidate)
-      const text = await readFile(path, 'utf-8').catch(() => null)
-      if (text !== null) return { path, text }
-    }
-    return null
-  }
-
-  /**
-   * The paths a prepared integration message lists under `Conflicts:`.
-   *
-   * That block is the only trace a conflict leaves anywhere. A commit keeps the
-   * resolved tree, its parents and its message, and nothing else, so git
-   * records the conflict here, comments it out, and drops it at commit time.
-   * Reading it back is what lets the app put a resolved conflict into history
-   * instead of losing the only evidence it ever existed.
-   */
-  private conflictsInPreparedMessage(text: string): string[] {
-    const conflicts: string[] = []
-    let inside = false
-    for (const line of text.split('\n')) {
-      if (/^#?\s*Conflicts:\s*$/u.test(line)) {
-        inside = true
-        continue
-      }
-      if (!inside) continue
-      const path = /^#?\t(.+)$/u.exec(line)?.[1]?.trim()
-      if (path) {
-        conflicts.push(path)
-        continue
-      }
-      if (line.trim().length > 0) inside = false
-    }
-    return [...new Set(conflicts)]
-  }
-
-  /** `message` with the integration's conflicts appended, once, when there are any. */
-  private withRecordedConflicts(message: string, conflicts: readonly string[]): string {
-    if (conflicts.length === 0) return message
-    // A message that already names them (the app's own, or a person's) is left
-    // exactly as written rather than given a second section.
-    if (/^\s*Conflicts:/mu.test(message)) return message
-    const section = ['Conflicts:', ...conflicts.map((path) => `\t${path}`)].join('\n')
-    const trimmed = message.replace(/\s+$/u, '')
-    return trimmed.length > 0 ? `${trimmed}\n\n${section}` : section
-  }
-
-  /** Uncomment git's own conflict block in the stopped pick's message, in place. */
-  private async uncommentRebaseConflicts(messagePath: string, text: string): Promise<void> {
-    const rewritten = text
-      .split('\n')
-      .map((line) => line.replace(/^#\s*Conflicts:\s*$/u, 'Conflicts:').replace(/^#\t/u, '\t'))
-      .join('\n')
-    if (rewritten !== text) await writeFile(messagePath, rewritten, 'utf-8')
   }
 
   /**
