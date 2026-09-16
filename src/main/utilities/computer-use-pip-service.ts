@@ -159,24 +159,60 @@ export class ComputerUsePipService {
     this.ensureLoop()
   }
 
-  /** Bring the tracked app to the foreground (used by the PiP click). */
+  /**
+   * Bring the tracked app to the foreground (used by the PiP click).
+   *
+   * Activation alone does NOT raise the window. Measured against the driver:
+   * `bring_to_front` takes the foreground (the target pid does become the
+   * frontmost app, which is the focus flicker users report) while the window
+   * stays exactly where it was. The target app's own `Window > Bring All to
+   * Front` menu item is what orders its windows front, so the click runs both
+   * and then verifies the result through the driver's frontmost flag.
+   *
+   * The window id is re-resolved here instead of trusted from the capture loop:
+   * the driver fronts the OWNER of whatever window id it is given, so a stale id
+   * (a failed capture for a new target leaves the previous target's id in place)
+   * would raise a different app than the one this preview is showing.
+   */
   async bringToFront(): Promise<void> {
     const pid = this.targetPid
     if (pid === null || !this.active) return
     const client = await this.ensureClient()
-    // The driver refuses pid-only activation when the app owns multiple
-    // windows (ambiguous_window_target)   always front the exact tracked
-    // window, falling back to the latest frontmost one.
-    const windowId = this.windowId
-    try {
-      await client.callTool('bring_to_front', {
+    const windows = await this.listWindows(client, pid)
+    const target =
+      windows.find((window) => window.window_id === this.windowId) ??
+      rankWindows(windows)[0] ??
+      null
+    const windowId = target?.window_id ?? null
+    const activation = await this.callOutcome(client, 'bring_to_front', {
+      pid,
+      ...(windowId !== null ? { window_id: windowId } : {})
+    })
+    const raise =
+      windowId === null
+        ? 'skipped: no window to name'
+        : await this.callOutcome(client, 'invoke_menu', {
+            pid,
+            window_id: windowId,
+            path: ['Window', 'Bring All to Front']
+          })
+    const frontmost = await this.isFrontmost(client, pid)
+    Logger.dev('Computer-use PiP bring-to-front', {
+      pid,
+      windowId,
+      windowOnScreen: target?.is_on_screen ?? null,
+      windowOnCurrentSpace: target?.on_current_space ?? null,
+      activation,
+      raise,
+      frontmost
+    })
+    if (frontmost === false) {
+      Logger.error('Computer-use PiP could not bring the tracked app to the front:', {
         pid,
-        ...(windowId !== null ? { window_id: windowId } : {})
+        windowId,
+        activation,
+        raise
       })
-    } catch {
-      // windowId can be stale (window closed)   retry with pid-only app-level
-      // activation so the click still pulls the app forward.
-      await client.callTool('bring_to_front', { pid })
     }
   }
 
@@ -403,18 +439,44 @@ export class ComputerUsePipService {
   }
 
   private async frontmostWindow(client: McpClient, pid: number): Promise<WindowRecord | null> {
-    const result = await client.callTool('list_windows', { pid })
-    const windows = extractWindows(result)
-    if (windows.length === 0) return null
-    const visible = windows.filter((window) => window.is_on_screen !== false)
-    const candidates = visible.length > 0 ? visible : windows
-    const ranked = [...candidates].sort((left, right) => {
-      const leftIndex = typeof left.z_index === 'number' ? left.z_index : -1
-      const rightIndex = typeof right.z_index === 'number' ? right.z_index : -1
-      if (leftIndex !== rightIndex) return rightIndex - leftIndex
-      return Number(Boolean(left.is_on_screen)) - Number(Boolean(right.is_on_screen))
-    })
-    return ranked[0] ?? null
+    return rankWindows(await this.listWindows(client, pid))[0] ?? null
+  }
+
+  /** The tracked pid's current top-level windows, freshly resolved. */
+  private async listWindows(client: McpClient, pid: number): Promise<WindowRecord[]> {
+    return extractWindows(await client.callTool('list_windows', { pid }))
+  }
+
+  /**
+   * Run one driver tool call and describe its outcome for the click log. A
+   * refused call RESOLVES with `isError: true` instead of rejecting, so both
+   * shapes have to be read here.
+   */
+  private async callOutcome(
+    client: McpClient,
+    name: string,
+    input: Record<string, unknown>
+  ): Promise<string> {
+    try {
+      const refusal = refusalText(await client.callTool(name, input))
+      return refusal ?? 'ok'
+    } catch (error) {
+      return `failed: ${error instanceof Error ? error.message : String(error)}`
+    }
+  }
+
+  /**
+   * Whether the driver reports this pid as the system-frontmost app. The only
+   * trustworthy activation read the driver exposes: `bring_to_front` answers
+   * `activated: true` even for a window id that no longer exists.
+   */
+  private async isFrontmost(client: McpClient, pid: number): Promise<boolean | null> {
+    try {
+      return extractAppActive(await client.callTool('list_apps', {}), pid)
+    } catch (error) {
+      Logger.dev('Computer-use PiP frontmost check failed:', error)
+      return null
+    }
   }
 
   private broadcastState(): void {
@@ -431,6 +493,52 @@ export class ComputerUsePipService {
       }
     }
   }
+}
+
+/**
+ * The driver's own explanation when a tool call resolves with `isError: true`,
+ * or null when the call succeeded. Bounded: the text can be an AX-tree dump.
+ */
+function refusalText(result: unknown): string | null {
+  if (!isRecord(result) || result['isError'] !== true) return null
+  const content = result['content']
+  if (Array.isArray(content)) {
+    for (const item of content) {
+      if (!isRecord(item) || item['type'] !== 'text') continue
+      const text = item['text']
+      if (typeof text === 'string' && text.length > 0) {
+        return text.length > 200 ? `${text.slice(0, 200)}...` : text
+      }
+    }
+  }
+  return 'refused without a reason'
+}
+
+/** `active` for one pid from a `list_apps` result, or null when it is absent. */
+function extractAppActive(result: unknown, pid: number): boolean | null {
+  const apps = recordValue(recordValue(result)['structuredContent'])['apps']
+  if (!Array.isArray(apps)) return null
+  for (const value of apps) {
+    if (!isRecord(value) || value['pid'] !== pid) continue
+    return value['active'] === true
+  }
+  return null
+}
+
+/**
+ * A pid's windows frontmost-first. On-screen windows win over off-screen ones
+ * and the driver's z-order breaks the tie; the driver refuses pid-only
+ * activation for a multi-window app, so callers must name one of these.
+ */
+function rankWindows(windows: WindowRecord[]): WindowRecord[] {
+  const visible = windows.filter((window) => window.is_on_screen !== false)
+  const candidates = visible.length > 0 ? visible : windows
+  return [...candidates].sort((left, right) => {
+    const leftIndex = typeof left.z_index === 'number' ? left.z_index : -1
+    const rightIndex = typeof right.z_index === 'number' ? right.z_index : -1
+    if (leftIndex !== rightIndex) return rightIndex - leftIndex
+    return Number(Boolean(left.is_on_screen)) - Number(Boolean(right.is_on_screen))
+  })
 }
 
 function extractWindows(result: unknown): WindowRecord[] {
