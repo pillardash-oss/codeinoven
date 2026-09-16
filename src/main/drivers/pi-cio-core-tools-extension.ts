@@ -69,6 +69,12 @@ export interface CioCoreToolsExtensionOptions {
   /** Absolute path of the per-session oversized-request recovery arm/disarm
    *  flag file the driver rewrites during oversized-body error recovery. */
   oversizedFlagPath: string
+  /** Absolute path of the per-session stop-flag file the driver writes when the
+   *  user stops the thread (or one worker). Pi's own abort RPC only reaches the
+   *  root run, so this file is the extension's only channel for stopping the
+   *  nested worker sessions and for disarming the wake-up paths that would
+   *  otherwise start a fresh turn right after the stop. */
+  stopFlagPath: string
 }
 
 /** Split a generated extension module into its import statements and body. */
@@ -166,7 +172,8 @@ export function piCioCoreToolsExtension(options: CioCoreToolsExtensionOptions): 
   const factories = parsed
     .map((entry) => scopedExtensionFactory(entry.factory, entry.body))
     .join('\n')
-  return `${header}
+  return (
+    `${header}
 
 ${factories}
 export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void {
@@ -188,23 +195,22 @@ __CIO_STRIP_BUILTINS__  })
   __cioCompactionExtension()(pi)
 }
 `
-    .replace('__HANDOFF_PATH__', JSON.stringify(options.gatewayHandoffPath).slice(1, -1))
-    .replace('__CIO_SYSTEM_PROMPT_PATH__', JSON.stringify(options.systemPromptPath).slice(1, -1))
-    .replace('__CIO_ALLOWED_TOOLS_PATH__', JSON.stringify(options.allowedToolsPath).slice(1, -1))
-    .replace('__CIO_SESSION_ID__', JSON.stringify(options.sessionId).slice(1, -1))
-    .replace('__CIO_RETRIEVE_SCRIPT__', JSON.stringify(options.retrieveScriptPath).slice(1, -1))
-    .replace('__CIO_OVERSIZED_FLAG_PATH__', JSON.stringify(options.oversizedFlagPath).slice(1, -1))
-    // One-shot sessions strip the interactive tool factories at generation
-    // time (not runtime), so the materialized module never even imports them.
-    .replaceAll(
-      '__CIO_INTERACTIVE_TOOLS__',
-      options.oneShot === true ? '// ' : ''
-    )
-    // One-shot sessions also drop pi's own built-in tools (read, bash, ...):
-    // setActiveTools([]) is documented to cover built-in tools, so the model
-    // request carries no tool schemas at all   only the prompt.
-    .replaceAll(
-      '__CIO_STRIP_BUILTINS__',
-      options.oneShot === true ? '' : '// '
-    )
+      .replace('__HANDOFF_PATH__', JSON.stringify(options.gatewayHandoffPath).slice(1, -1))
+      .replace('__CIO_SYSTEM_PROMPT_PATH__', JSON.stringify(options.systemPromptPath).slice(1, -1))
+      .replace('__CIO_ALLOWED_TOOLS_PATH__', JSON.stringify(options.allowedToolsPath).slice(1, -1))
+      .replace('__CIO_SESSION_ID__', JSON.stringify(options.sessionId).slice(1, -1))
+      .replace('__CIO_RETRIEVE_SCRIPT__', JSON.stringify(options.retrieveScriptPath).slice(1, -1))
+      .replace(
+        '__CIO_OVERSIZED_FLAG_PATH__',
+        JSON.stringify(options.oversizedFlagPath).slice(1, -1)
+      )
+      .replace('__CIO_STOP_FLAG_PATH__', JSON.stringify(options.stopFlagPath).slice(1, -1))
+      // One-shot sessions strip the interactive tool factories at generation
+      // time (not runtime), so the materialized module never even imports them.
+      .replaceAll('__CIO_INTERACTIVE_TOOLS__', options.oneShot === true ? '// ' : '')
+      // One-shot sessions also drop pi's own built-in tools (read, bash, ...):
+      // setActiveTools([]) is documented to cover built-in tools, so the model
+      // request carries no tool schemas at all   only the prompt.
+      .replaceAll('__CIO_STRIP_BUILTINS__', options.oneShot === true ? '' : '// ')
+  )
 }

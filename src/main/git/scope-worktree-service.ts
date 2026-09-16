@@ -16,6 +16,7 @@ import type {
   ScopeTarget,
   ScopeWorktreeCreateInput,
   ScopeWorktreeHealth,
+  ScopeWorktreeProgress,
   ScopeWorktreeSourceInfo
 } from '../../lib/types'
 import { getScopeRootPath } from '../../lib/utils'
@@ -56,21 +57,6 @@ export interface ScopeThreadLifecycle {
 export interface ScopeWorktreeServiceOptions {
   activeProcesses?: ActiveProcessProbe
   scopeThreads?: ScopeThreadLifecycle
-}
-
-/** Negotiable progress events emitted to the initiating renderer. */
-export interface ScopeWorktreeProgress {
-  stage:
-    | 'discovering-repository'
-    | 'naming'
-    | 'creating-worktree'
-    | 'persisting-association'
-    | 'environment'
-    | 'setup'
-    | 'done'
-    | 'failed'
-    | 'interrupted'
-  detail?: string
 }
 
 interface PreflightSnapshot {

@@ -334,6 +334,11 @@ export interface ScopeWorktreeProgress {
   detail?: string
 }
 
+export interface ScopeWorktreeProgressEvent extends ScopeWorktreeProgress {
+  projectId: string
+  scopeBucketId: string
+}
+
 export interface ProjectFileEntry {
   name: string
   path: string
@@ -1825,7 +1830,14 @@ export interface ResolvedUtility {
 
 // ─── Agent message parts (harness wire format) ─────────────────────────────
 
-export type AgentToolStatus = 'pending' | 'running' | 'completed' | 'error'
+/**
+ * Lifecycle state of one tool invocation or delegated sub-agent task.
+ *
+ * `aborted` is distinct from `error` on purpose: a deliberate user stop is not
+ * a failure, and a surface that reported it as `completed` would claim work
+ * that never finished.
+ */
+export type AgentToolStatus = 'pending' | 'running' | 'completed' | 'error' | 'aborted'
 
 /** State of a tool invocation as reported by the harness. */
 export interface AgentToolState {
@@ -4010,6 +4022,8 @@ export interface DeferredMemoryExtraction {
   userMessage: string
   /** Capped assistant material captured at gate time. */
   assistantResponse: string
+  /** Capped user message from the preceding turn, when the thread had one. */
+  previousUserMessage?: string
   /** Why the first extraction attempt failed (for diagnostics). */
   reason: string
   createdAt: number

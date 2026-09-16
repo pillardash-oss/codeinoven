@@ -149,6 +149,17 @@
   let initialCompareStarted = false
   /** True while the commit → push → create sequence runs. */
   let submitting = $state(false)
+  /**
+   * Step of the running sequence, reported to the dock chip while the sheet is
+   * docked. Null whenever nothing is in flight.
+   */
+  let submitPhase = $state<'commit' | 'push' | 'recover' | 'create' | null>(null)
+  /**
+   * Set when ⌘/Ctrl+Enter docked this sheet for a creation attempt, so a failed
+   * attempt can bring the panel back with its error instead of leaving it
+   * silently docked.
+   */
+  let dockedForShortcut = false
   /** Set when the push was rejected: shows the pull/rebase recovery panel. */
   let pushRejected = $state(false)
   /** Git's output for the latest rejected push, available on demand in the recovery panel. */
@@ -231,6 +242,8 @@
   const existingPr = $derived(compare?.existing ?? null)
   const composeWorking = $derived(composePhase === 'working')
   const composeSucceeded = $derived(composePhase === 'complete' || composePhase === 'recompose')
+  /** True while this sheet is doing lasting work (compose, commit, push, create). */
+  const working = $derived(composeWorking || creating || submitting || recoverMode !== null)
   const dockHasIssue = $derived(
     Boolean(
       originError ||
@@ -247,13 +260,31 @@
   const dockStatus = $derived<PrDockStatus>(
     result
       ? 'created'
-      : composeWorking || creating || submitting
+      : working
         ? 'working'
         : dockHasIssue
           ? 'attention'
           : composeSucceeded
             ? 'composed'
             : 'draft'
+  )
+
+  /**
+   * The step the dock chip names while the sheet is docked   a docked draft has
+   * to say what is happening, not just that something spins.
+   */
+  const dockDetail = $derived(
+    composeWorking
+      ? 'Composing pull request…'
+      : submitPhase === 'commit'
+        ? 'Committing files…'
+        : submitPhase === 'push'
+          ? 'Pushing commits…'
+          : submitPhase === 'recover'
+            ? 'Reconciling the branch…'
+            : submitPhase === 'create'
+              ? 'Creating pull request…'
+              : ''
   )
   function prDockTitle(pr: PullRequestReference | null, currentTitle: string): string {
     if (pr) return `PR #${pr.number}`
@@ -273,7 +304,8 @@
       projectName: dockProjectName,
       iconUrl: resolvedProjectIcon,
       status: dockStatus,
-      title: dockTitle
+      title: dockTitle,
+      detail: dockDetail
     }
     const current = prLifecycleStore.dockFor(draftId)
     if (!current) return
@@ -281,7 +313,8 @@
       current.projectName === next.projectName &&
       current.iconUrl === next.iconUrl &&
       current.status === next.status &&
-      current.title === next.title
+      current.title === next.title &&
+      current.detail === next.detail
     ) {
       return
     }
@@ -422,8 +455,15 @@
     void runCompare()
   }
 
-  async function createPullRequest(): Promise<void> {
+  async function createPullRequest(options: { dock?: boolean } = {}): Promise<void> {
     if (!originIdentity || !head || !base || !canCreate || submitting) return
+    // The ⌘/Ctrl+Enter chord docks the sheet for the duration of the sequence,
+    // so the work stays visible in the dock chip while the user moves on. A
+    // click on "Create pull request" keeps the panel open with its own progress.
+    if (options.dock) {
+      dockedForShortcut = !minimized
+      handleMinimize()
+    }
     // Submission owns the status area from this point. Invalidate an in-flight
     // comparison so a slow response cannot leave its spinner over a push error.
     compareSequence++
@@ -440,6 +480,7 @@
       //    and the working tree stays exactly as it was for a manual retry.
       let commitMade = willCreateCommit
       if (commitMade) {
+        submitPhase = 'commit'
         const untrackedPaths = pendingCommitChanges
           .filter((change) => change.status === 'untracked')
           .map((change) => change.path)
@@ -460,6 +501,7 @@
       const shouldPush =
         pushLocalCommits && headInfo?.kind === 'local' && (commitMade || hasUnpushedHeadCommits)
       if (shouldPush) {
+        submitPhase = 'push'
         const hasUpstream = headInfo?.kind === 'local' && headInfo.remote === 'origin'
         const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
         if (pushed.status === 'rejected') {
@@ -476,11 +518,42 @@
       await finishCreate()
     } finally {
       submitting = false
+      submitPhase = null
+      restoreAfterDockedShortcut()
     }
+  }
+
+  /**
+   * A creation attempt the ⌘/Ctrl+Enter chord docked comes back on failure: the
+   * error is actionable, so showing it beats leaving the user with a chip. A
+   * created pull request stays docked and is one click away in the chip.
+   */
+  function restoreAfterDockedShortcut(): void {
+    if (!dockedForShortcut) return
+    dockedForShortcut = false
+    if (!result && minimized) handleExpand()
+  }
+
+  /**
+   * ⌘/Ctrl+Enter for this panel.
+   *
+   * A creation that is already running claims the chord instead of falling
+   * through to the shared selector chain   there the disabled "Create pull
+   * request" button hands the chord to the footer's dismiss button, which would
+   * close the sheet while the work continues unseen. Once the pull request
+   * exists the chain is left to resolve the success screen's "View PR".
+   */
+  function runShortcutPrimaryAction(): boolean {
+    if (result) return false
+    if (submitting || creating) return true
+    if (!canCreate) return true
+    void createPullRequest({ dock: true })
+    return true
   }
 
   async function finishCreate(): Promise<void> {
     if (!originIdentity || !head || !base) return
+    submitPhase = 'create'
     const reference = await gitState.createPullRequest(projectId, {
       title: title.trim(),
       body: body.trim() || undefined,
@@ -523,6 +596,7 @@
     createError = ''
     createErrorIsNoCommits = false
     recoverMode = mode
+    submitPhase = 'recover'
     try {
       await gitState.pullIntegrate(projectId, 'origin', head, mode)
       if (gitState.error) {
@@ -530,6 +604,7 @@
         return
       }
       if (gitState.conflicted.length > 0) return
+      submitPhase = 'push'
       const hasUpstream = headInfo?.kind === 'local' && headInfo.remote === 'origin'
       const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
       if (pushed.status === 'rejected') {
@@ -544,6 +619,7 @@
       await finishCreate()
     } finally {
       recoverMode = null
+      submitPhase = null
     }
   }
 
@@ -781,6 +857,7 @@
   onMinimize={handleMinimize}
   {onClose}
   onExpand={handleExpand}
+  onPrimaryAction={runShortcutPrimaryAction}
   dragLabel="Drag to move the pull request panel"
   storageKey={effectiveStorageKey}
   defaultHeight={680}
@@ -821,11 +898,9 @@
             Created
           </span>
           <span class="text-[0.6875rem] font-medium">PR #{result.number}</span>
-        {:else if composeWorking || creating || submitting}
+        {:else if dockDetail || creating || submitting}
           <Loader2 size={14} class="shrink-0 animate-spin text-info" />
-          <span class="text-[0.6875rem] font-medium">
-            {composeWorking ? 'Composing pull request…' : 'Creating pull request…'}
-          </span>
+          <span class="text-[0.6875rem] font-medium">{dockDetail || 'Creating pull request…'}</span>
         {:else if dockHasIssue}
           <span
             class="flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-warning"
@@ -1055,7 +1130,7 @@
           {#if sameBranch}
             <CircleSlash size={12} class="shrink-0 text-dimmed" />
             <span class="text-dimmed"
-              >The head and base are the same branch   pick a different head.</span
+              >The head and base are the same branch pick a different head.</span
             >
           {:else if comparing}
             <Loader2 size={12} class="shrink-0 animate-spin text-dimmed" />
@@ -1074,7 +1149,7 @@
           {:else if compare}
             <CircleCheck size={12} class="shrink-0 text-success" />
             <span class="text-success">
-              {compare.source === 'local' ? 'Local commits will be pushed' : 'Able to merge'}  
+              {compare.source === 'local' ? 'Local commits will be pushed' : 'Able to merge'}
               {compare.aheadBy} ahead · {compare.behindBy} behind ·
               {compare.totalCommits} commit{compare.totalCommits === 1 ? '' : 's'} ·
               {compare.filesChanged} file{compare.filesChanged === 1 ? '' : 's'} changed
@@ -1090,8 +1165,9 @@
                   A pull request already exists for {head} into {base}
                 </p>
                 <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-dimmed">
-                  #{existingPr.number}   {existingPr.title} GitHub won't allow a second open PR for the
-                  same branches, so creation is disabled.
+                  #{existingPr.number}
+                  {existingPr.title} GitHub won't allow a second open PR for the same branches, so creation
+                  is disabled.
                 </p>
                 <button
                   type="button"
@@ -1117,12 +1193,12 @@
             <TriangleAlert size={14} class="mt-0.5 shrink-0 text-warning" />
             <div class="min-w-0 flex-1">
               <p class="text-[0.625rem] font-semibold text-warning">
-                Push blocked   branch has diverged
+                Push blocked branch has diverged
               </p>
               <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-dimmed">
                 The remote branch
                 <span class="font-mono text-foreground">{head}</span> has commits you don't have locally,
-                so Git won't let you push over them. Pull the remote changes in first   the pull request
+                so Git won't let you push over them. Pull the remote changes in first the pull request
                 is created automatically afterwards.
               </p>
               {#if pushErrorDetails}
@@ -1197,8 +1273,8 @@
               <p class="text-[0.625rem] font-semibold text-foreground">Nothing to merge</p>
               <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-dimmed">
                 <span class="font-medium text-foreground">{head}</span> is already up to date with
-                <span class="font-medium text-foreground">{base}</span>   there are no commits left to
-                open a pull request for. It was likely merged elsewhere while this panel was open.
+                <span class="font-medium text-foreground">{base}</span> there are no commits left to open
+                a pull request for. It was likely merged elsewhere while this panel was open.
               </p>
             </div>
           </div>
@@ -1234,12 +1310,6 @@
           class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Summary of the change"
           bind:value={title}
-          onkeydown={(event: KeyboardEvent) => {
-            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-              event.preventDefault()
-              void createPullRequest()
-            }
-          }}
         />
       </div>
       <div>
@@ -1253,13 +1323,7 @@
           id="pr-body"
           class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="What does this change do?"
-          bind:value={body}
-          onkeydown={(event: KeyboardEvent) => {
-            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-              event.preventDefault()
-              void createPullRequest()
-            }
-          }}></textarea>
+          bind:value={body}></textarea>
       </div>
 
       <div class="space-y-3 rounded-lg border border-border bg-surface p-2.5">
@@ -1323,6 +1387,7 @@
     {#if !result}
       <button
         type="button"
+        data-modal-dismiss
         class="cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
         onclick={onClose}
       >
@@ -1330,6 +1395,7 @@
       </button>
       <button
         type="button"
+        data-modal-primary
         class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
         disabled={!canCreate}
         title={!canCreate && existingPr

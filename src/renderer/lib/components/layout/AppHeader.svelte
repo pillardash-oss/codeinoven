@@ -10,6 +10,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
@@ -19,6 +20,7 @@
     type MainView
   } from '$lib/stores/renderer-recovery.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import WorkingCountBadge from '$lib/components/shared/WorkingCountBadge.svelte'
   import { preloadScopeChunk } from '$lib/page-preload'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gatewayState } from '$lib/stores/gateway.svelte'
@@ -455,12 +457,37 @@
     }
   }
 
-  /** True while any project thread is actively being worked on   a gentle
-   *  pulse on the view switcher title. */
-  let anyProjectWorking = $derived(
-    scopeState.allScopeThreads.some(
-      (t) => !t.archived && t.projectId !== INBOX_PROJECT_ID && threadWorkingForIndicator(t)
+  /**
+   * Working threads per navigation family, feeding the two activity badges on
+   * the view switcher. Orchestration children are folded into their coordinator
+   * (same rule as the sidebar rows) so a delegated run counts once instead of
+   * inflating the total with hidden worker threads.
+   */
+  let workingThreadCounts = $derived.by(() => {
+    const threads = scopeState.allScopeThreads
+    const working = threads.filter(
+      (thread) => !thread.archived && threadWorkingForIndicator(thread)
     )
+    let projects = 0
+    let chats = 0
+    for (const thread of threads) {
+      if (thread.archived || isOrchestrationChildThread(thread)) continue
+      const isWorking =
+        threadWorkingForIndicator(thread) || coordinatorHasActiveDelegates(thread, working)
+      if (!isWorking) continue
+      if (thread.projectId === INBOX_PROJECT_ID) chats += 1
+      else projects += 1
+    }
+    return { projects, chats }
+  })
+
+  /** Badge tooltip/aria text carrying the true count (the pill may saturate). */
+  function workingThreadLabel(count: number, noun: string): string {
+    return `${count} ${noun}${count === 1 ? '' : 's'} working`
+  }
+
+  let hasWorkingThreads = $derived(
+    workingThreadCounts.projects > 0 || workingThreadCounts.chats > 0
   )
 
   $effect(() => {
@@ -567,8 +594,7 @@
       workspaceState.clearThread()
       scopeState.removeThread(thread.id)
     },
-    onDeleteError: (error) =>
-      toast.error(error instanceof Error ? error.message : 'Could not delete thread'),
+    onDeleteError: (error) => reportError(error, 'Could not delete thread'),
     showChangeScope: () => true,
     showNotes: () => true,
     showCopyId: () => true,
@@ -656,7 +682,7 @@
     <div class="flex items-center gap-0.5">
       <DropdownMenu.Root>
         <DropdownMenu.Trigger
-          class="flex h-7 items-center gap-1 rounded-md px-1.5 text-[0.625rem] font-medium text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+          class="relative flex h-7 items-center gap-1 rounded-md px-1.5 text-[0.625rem] font-medium text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
           aria-label="Switch view"
           title="Switch view"
           data-onboarding="view-switcher"
@@ -679,7 +705,6 @@
                glide when the view changes instead of jumping. -->
           <span
             class="relative overflow-hidden text-left whitespace-nowrap transition-[width] duration-200 ease-out motion-reduce:transition-none"
-            class:animate-pulse={anyProjectWorking}
             style:width={labelWidth === null ? undefined : `${labelWidth}px`}
           >
             {activeHeaderViewLabel}
@@ -692,6 +717,23 @@
             </span>
           </span>
           <ChevronDown size={12} class="shrink-0 text-muted" />
+          <!-- Working activity: one pulsing badge per navigation family, riding
+               the top edge of the trigger (left-anchored like every other
+               header badge). The label itself stays still. -->
+          {#if hasWorkingThreads}
+            <span class="absolute -top-2 left-1 flex items-center gap-1">
+              <WorkingCountBadge
+                icon={Timeline}
+                count={workingThreadCounts.projects}
+                label={workingThreadLabel(workingThreadCounts.projects, 'project thread')}
+              />
+              <WorkingCountBadge
+                icon={MessageSquare}
+                count={workingThreadCounts.chats}
+                label={workingThreadLabel(workingThreadCounts.chats, 'chat')}
+              />
+            </span>
+          {/if}
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content

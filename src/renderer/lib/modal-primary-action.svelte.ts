@@ -14,6 +14,11 @@
  *   4. the last enabled footer button
  *   5. any enabled `.bg-primary / .bg-danger` button in the panel
  *
+ * Buttons marked `data-modal-dismiss` (Cancel / Close / Discard) are never
+ * candidates: with a disabled primary action the step-4 fallback would offer
+ * the dismiss button as "the primary action", so ⌘/Ctrl+Enter would close the
+ * modal instead of doing nothing.
+ *
  * Only genuinely visible, enabled buttons activate, and the shortcut yields
  * to focused native form semantics (a focused submit button already fires on
  * Enter) and to other chord owners (chat composer send, git commit).
@@ -53,8 +58,15 @@ const INPUT_FIELD_SELECTOR = [
   '[contenteditable="true"]:not([aria-disabled="true"])'
 ].join(',')
 
-export const PRIMARY_BUTTON_SELECTOR =
-  'button.bg-primary:not([disabled]), button.bg-danger:not([disabled])'
+/**
+ * Marks a dismiss affordance (Cancel / Close / Discard) that must never be
+ * picked as a modal's primary action — see `findPanelPrimaryAction`.
+ */
+export const DISMISS_BUTTON_ATTRIBUTE = 'data-modal-dismiss'
+
+const NOT_DISMISS = `:not([${DISMISS_BUTTON_ATTRIBUTE}])`
+
+export const PRIMARY_BUTTON_SELECTOR = `button.bg-primary:not([disabled])${NOT_DISMISS}, button.bg-danger:not([disabled])${NOT_DISMISS}`
 
 export function isFocusableTarget(element: HTMLElement): boolean {
   return (
@@ -68,11 +80,16 @@ function firstFocusable(panel: HTMLElement, selector: string): HTMLElement | und
   return Array.from(panel.querySelectorAll<HTMLElement>(selector)).find(isFocusableTarget)
 }
 
+/** A button that only dismisses the modal is never a primary action. */
+function isDismissButton(element: HTMLElement): boolean {
+  return element.hasAttribute(DISMISS_BUTTON_ATTRIBUTE)
+}
+
 /** Resolve a panel's primary action button via the shared selector chain. */
 export function findPanelPrimaryAction(panel: HTMLElement): HTMLElement | undefined {
   const footerActions = Array.from(
     panel.querySelectorAll<HTMLElement>('[data-modal-footer] button:not([disabled])')
-  ).filter(isFocusableTarget)
+  ).filter((button) => isFocusableTarget(button) && !isDismissButton(button))
 
   return (
     firstFocusable(panel, '[data-modal-primary]:not([disabled])') ??

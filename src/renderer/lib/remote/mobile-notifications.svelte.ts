@@ -20,6 +20,7 @@
 
 import type { AgentNotificationPayload } from '$shared/ipc-contract'
 import { toast } from 'svelte-sonner'
+import { showToastWarning } from '$lib/stores/app-errors.svelte'
 import { remoteBridge } from './remote-bridge'
 import { remoteLog } from './logger'
 
@@ -154,7 +155,9 @@ class MobileNotifications {
     if (payload.kind === 'completed' || payload.kind === 'chat-completed') {
       toast.success(payload.title, options)
     } else if (payload.kind === 'attention') {
-      toast.warning(payload.title, options)
+      // Thread status notices belong to the notification panel, not the app
+      // errors panel.
+      showToastWarning(payload.title, options)
     } else if (payload.kind === 'spec') {
       toast.info(payload.title, options)
     } else {

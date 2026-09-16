@@ -40,6 +40,14 @@
      * icon and name), so the panel states which project it belongs to.
      */
     headerPrefix?: Snippet
+    /**
+     * Lets the panel's owner claim ⌘/Ctrl+Enter before the generic DOM lookup:
+     * return true when the chord was handled. Use it when the panel's primary
+     * action needs context the DOM cannot express (e.g. "start the work and dock
+     * the panel"), so the shortcut never depends on a footer button happening
+     * to be enabled.
+     */
+    onPrimaryAction?: () => boolean
   }
 
   let {
@@ -56,7 +64,8 @@
     storageKey = `${APP_SLUG}.harnessTasksPanel.v1`,
     defaultHeight = 560,
     dragLabel = 'Drag to move the task panel',
-    headerPrefix
+    headerPrefix,
+    onPrimaryAction
   }: Props = $props()
 
   const PANEL_MARGIN = 12
@@ -224,11 +233,14 @@
 
   // ⌘/Ctrl+Enter runs this panel's primary action through the shared LIFO
   // pipeline while the panel is open and expanded (a minimized panel is not in
-  // focus, so its resolver yields).
+  // focus, so its resolver yields). The owner hook runs first so a panel can
+  // claim the chord deterministically; otherwise the shared selector chain
+  // finds the panel's own primary action.
   $effect(() => {
     if (!open || minimized) return
     return registerModalPrimaryAction(() => {
       if (!panelEl || focusOwnsEnter(panelEl)) return false
+      if (onPrimaryAction?.()) return true
       const action = findPanelPrimaryAction(panelEl)
       if (!action) return false
       action.click()

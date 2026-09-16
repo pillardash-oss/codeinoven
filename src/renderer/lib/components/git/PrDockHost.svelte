@@ -49,7 +49,7 @@
     onView={(pullRequest) => void revealPullRequest(draft.projectId, draft.threadId, pullRequest)}
     storageKey={store.storageKeyFor(draft.id)}
     onCreated={() => {
-      // The per-panel prListRefresh signal is intentionally not wired here  
+      // The per-panel prListRefresh signal is intentionally not wired here
       // the panel refetches on next open. Global drafts still create the PR
       // via `gitState.createPullRequest`.
     }}
@@ -61,8 +61,8 @@
   Unified dock: each minimized draft's sheet suppresses its own dock
   (passes an empty snippet when `draftId` is set), so this single row is
   the only one. Chips sit side by side, one per minimized draft, showing
-  the project icon, project name, live status, and PR title reported by
-  each sheet's `updateDock`.
+  the project icon, project name, live status, live step, and PR title
+  reported by each sheet's `updateDock`.
 -->
 {#if store.drafts.some((draft) => draft.minimized)}
   <div
@@ -73,10 +73,16 @@
     {#each store.drafts as draft (draft.id)}
       {@const dock = draft.dock}
       {#if draft.minimized}
+        <!-- While the work runs, the chip names the current step (commit, push,
+             create) so a docked draft always states what is happening. -->
+        {@const detail = dock.status === 'working' ? dock.detail : ''}
+        {@const chipLabel = [dock.projectName, dock.title, detail]
+          .filter((part) => part.length > 0)
+          .join('   ')}
         <button
           class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
-          title={`${dock.projectName || 'Project'}   ${dock.title}`}
-          aria-label={`Expand ${dock.projectName ? `${dock.projectName} ` : ''}${dock.title}`}
+          title={chipLabel}
+          aria-label={`Expand ${chipLabel}`}
           onclick={() => store.expand(draft.id)}
         >
           {#if dock.iconUrl}
@@ -90,9 +96,15 @@
                 {dock.projectName}
               </span>
             {/if}
-            <span class="max-w-36 truncate text-[0.625rem] font-medium leading-tight text-foreground"
+            <span
+              class="max-w-36 truncate text-[0.625rem] font-medium leading-tight text-foreground"
               >{dock.title}</span
             >
+            {#if detail}
+              <span class="max-w-36 truncate text-[0.5625rem] leading-tight text-info"
+                >{detail}</span
+              >
+            {/if}
           </span>
           {#if dock.status === 'working'}
             <Loader2 size={12} class="shrink-0 animate-spin text-info" aria-hidden="true" />

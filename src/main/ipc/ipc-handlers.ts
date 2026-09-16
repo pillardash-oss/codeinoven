@@ -1,6 +1,7 @@
 import { app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
+import { sendToRenderer } from './renderer-delivery'
 import { existsSync, readFileSync } from 'node:fs'
 import { cp, lstat, readFile, writeFile, mkdir, rename, rm, stat } from 'fs/promises'
 import { release } from 'os'
@@ -230,6 +231,9 @@ import type {
   CloudDeploymentProviderAccount,
   CloudDeploymentProviderKind,
   CloudDeploymentStatus,
+  ScopeTarget,
+  ScopeWorktreeProgress,
+  ScopeWorktreeProgressEvent,
   UtilityDefinitionInput
 } from '../../lib/types'
 import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES, INBOX_PROJECT_ID } from '../../lib/types'
@@ -2308,6 +2312,21 @@ export function registerIpcHandlers(
     options.worktreeInspector ?? scopeWorktreeService
   )
   const scopeRoots = scopeRootProvider(scopeRootResolver)
+  /**
+   * Stream a managed-worktree job's stages back to the renderer that started it,
+   * so the docked job panel can show real progress instead of a bare spinner.
+   * Progress is advisory: a failed delivery must never affect the git work.
+   */
+  const worktreeProgressRelay =
+    (event: IpcMainInvokeEvent, target: ScopeTarget) =>
+    (progress: ScopeWorktreeProgress): void => {
+      const payload: ScopeWorktreeProgressEvent = {
+        projectId: target.projectId,
+        scopeBucketId: target.scopeBucketId,
+        ...progress
+      }
+      sendToRenderer(event.sender, 'scope:worktree:progress', payload)
+    }
   // Constructed after the scope resolver so interactive file surfaces can
   // resolve managed worktree roots instead of always reading the project root.
   const projectFilesService =
@@ -4950,10 +4969,14 @@ export function registerIpcHandlers(
       validateWorktreeDefaults(defaults)
     )
   )
-  ipcMain.handle('scope:worktree:create', (_, target: unknown, input: unknown) => {
+  ipcMain.handle('scope:worktree:create', (event, target: unknown, input: unknown) => {
     const validatedTarget = validateScopeTarget(target)
     const validatedInput = validateScopeWorktreeCreateInput(input)
-    return scopeWorktreeService.createManagedWorktree(validatedTarget, validatedInput)
+    return scopeWorktreeService.createManagedWorktree(
+      validatedTarget,
+      validatedInput,
+      worktreeProgressRelay(event, validatedTarget)
+    )
   })
   ipcMain.handle('scope:worktree:sourceInfo', (_, projectId: unknown) =>
     scopeWorktreeService.sourceInfo(validateEntityId(projectId, 'Project ID'))
@@ -4970,10 +4993,14 @@ export function registerIpcHandlers(
       validateSourcePath(sourcePath)
     )
   )
-  ipcMain.handle('scope:worktree:adopt', (_, target: unknown, input: unknown) => {
+  ipcMain.handle('scope:worktree:adopt', (event, target: unknown, input: unknown) => {
     const validatedTarget = validateScopeTarget(target)
     const validatedInput = validateScopeAdoptInput(input)
-    return scopeWorktreeService.adoptWorktree(validatedTarget, validatedInput)
+    return scopeWorktreeService.adoptWorktree(
+      validatedTarget,
+      validatedInput,
+      worktreeProgressRelay(event, validatedTarget)
+    )
   })
   ipcMain.handle('scope:worktree:preflight', (_, action: unknown, target: unknown) =>
     scopeWorktreeService.preflight(
@@ -5004,11 +5031,15 @@ export function registerIpcHandlers(
         validateConfirmationToken(confirmationId)
       )
   )
-  ipcMain.handle('scope:worktree:retrySetup', (_, target: unknown, options: unknown) => {
+  ipcMain.handle('scope:worktree:retrySetup', (event, target: unknown, options: unknown) => {
     const validatedTarget = validateScopeTarget(target)
     const input = options === undefined ? undefined : (options as Record<string, unknown>)
     const runSetup = input === undefined ? true : validateBoolean(input.runSetup, 'Run setup')
-    return scopeWorktreeService.runSetupFromFailure(validatedTarget, { runSetup })
+    return scopeWorktreeService.runSetupFromFailure(
+      validatedTarget,
+      { runSetup },
+      worktreeProgressRelay(event, validatedTarget)
+    )
   })
   ipcMain.handle(
     'scope:worktree:confirmDeleteScope',

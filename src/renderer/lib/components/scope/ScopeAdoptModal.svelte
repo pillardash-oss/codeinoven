@@ -4,6 +4,7 @@
   import Switch from '../ui/Switch.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import type { AdoptableWorktreeInfo } from '$shared/types'
 
   interface Props {
@@ -24,10 +25,9 @@
   let preview = $state.raw<AdoptableWorktreeInfo | null>(null)
   let runSetup = $state(false)
   let detecting = $state(false)
-  let busy = $state(false)
   let error = $state<string | null>(null)
 
-  let canSubmit = $derived(preview?.adoptable === true && !busy)
+  let canSubmit = $derived(preview?.adoptable === true)
 
   /** Open the OS file picker and prefill + inspect the chosen folder. */
   async function pickFolder(): Promise<void> {
@@ -56,22 +56,32 @@
     }
   }
 
-  async function submit(): Promise<void> {
+  /**
+   * Hand the adoption to the app-level worktree dock: `git worktree move`, the
+   * environment copy and the setup commands take long enough that the run must
+   * stay visible and dockable instead of blocking this dialog.
+   */
+  function submit(): void {
     if (!preview?.adoptable) return
-    busy = true
-    error = null
-    try {
-      await scopeState.adoptWorktree(projectId, bucketId, {
-        sourcePath: sourcePath.trim(),
-        runSetup
-      })
-      onAdopted?.()
-      onClose()
-    } catch (cause) {
-      error = cause instanceof Error ? cause.message : 'The worktree could not be adopted.'
-    } finally {
-      busy = false
-    }
+    // Props are live getters into the parent, which drops its target on close,
+    // so everything the run needs is read BEFORE `onClose()`.
+    const targetProjectId = projectId
+    const targetBucketId = bucketId
+    const targetName = bucketName
+    const adoptedPath = sourcePath.trim()
+    const runSetupNow = runSetup
+    const handleAdopted = onAdopted
+    onClose()
+    scopeJobs.adopt(
+      targetProjectId,
+      {
+        bucketId: targetBucketId,
+        title: targetName,
+        sourcePath: adoptedPath,
+        runSetup: runSetupNow
+      },
+      { onAdopted: handleAdopted }
+    )
   }
 
   function close(): void {
@@ -79,7 +89,6 @@
     preview = null
     runSetup = false
     detecting = false
-    busy = false
     error = null
     onClose()
   }
@@ -91,7 +100,7 @@
     class="space-y-4"
     onsubmit={(event: SubmitEvent) => {
       event.preventDefault()
-      void submit()
+      submit()
     }}
   >
     <p class="text-sm leading-relaxed text-muted">
@@ -161,7 +170,7 @@
     <button
       type="button"
       class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-sm text-muted hover:bg-overlay disabled:opacity-50"
-      disabled={!sourcePath.trim() || detecting || busy}
+      disabled={!sourcePath.trim() || detecting}
       onclick={() => void detect()}
     >
       {#if detecting}
@@ -175,7 +184,7 @@
       class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
       disabled={!canSubmit}
     >
-      {busy ? 'Adopting…' : 'Adopt'}
+      Adopt
     </button>
   {/snippet}
 </Modal>

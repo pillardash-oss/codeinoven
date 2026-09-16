@@ -96,6 +96,46 @@ const PI_CHEAP_MODEL_DISCOVERY_TIMEOUT_MS = 10_000
  */
 const PI_CHILD_STREAM_MAX = 16
 
+/**
+ * How long a stopped session may keep streaming before the driver kills its pi
+ * process. A stop must be authoritative: pi's abort RPC is the graceful path,
+ * but a run that ignores it (or a wedged process) would otherwise keep working
+ *   with its nested worker sessions   after the user pressed stop.
+ */
+const PI_ABORT_ENFORCE_MS = 3_000
+const PI_ABORT_ENFORCE_INTERVAL_MS = 500
+/** Bound on the post-abort `get_state` probe so a busy process cannot stall the
+ *  stop behind the RPC client's full request timeout. */
+const PI_ABORT_PROBE_TIMEOUT_MS = 1_500
+
+/** The seed/reset shape of the per-session stop-flag file (no request pending). */
+function emptyStopRequest(): { token: string; childSessionIds: string[] } {
+  return { token: '', childSessionIds: [] }
+}
+
+/** Sub-agent lifecycle states that mean the worker is over, whatever its
+ *  outcome. Every consumer that closes or merges a card must agree on this set. */
+const TERMINAL_SUBAGENT_STATUSES: ReadonlySet<AgentToolStatus> = new Set([
+  'completed',
+  'error',
+  'aborted'
+])
+
+/** Race one RPC probe against a deadline so a wedged process cannot block it. */
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ms)
+      })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 /** Pi thinking levels accepted by `set_thinking_level`. */
 const PI_THINKING_LEVELS: Record<string, string> = {
   minimal: 'minimal',
@@ -533,7 +573,7 @@ function subagentTimeRange(
   const start = base.time?.start ?? Date.now()
   // An end that is already recorded is the worker's real finish; a later
   // snapshot of the same terminal state must not stretch the duration.
-  return status === 'completed' || status === 'error'
+  return TERMINAL_SUBAGENT_STATUSES.has(status)
     ? { start, end: base.time?.end ?? Date.now() }
     : { start }
 }
@@ -563,12 +603,7 @@ function subagentActivityFromPayload(
     ? payload['files'].filter((file): file is string => typeof file === 'string')
     : undefined
   return {
-    status:
-      status === 'completed' || status === 'error'
-        ? status
-        : status === 'running'
-          ? 'running'
-          : 'pending',
+    status: normalizeSubagentStatus(status),
     // Only the payload that names the task may label the card.
     ...(purpose ? { agent: purpose, description: purpose } : {}),
     ...(childSessionId ? { childSessionId } : {}),
@@ -578,6 +613,13 @@ function subagentActivityFromPayload(
     ...(error ? { error } : {}),
     ...(sessionFile ? { metadata: { sessionFile } } : {})
   }
+}
+
+/** Lifecycle status reported by a sub-agent payload, defaulting to `pending`
+ *  for anything the app does not model. */
+function normalizeSubagentStatus(status: string | undefined): AgentToolStatus {
+  if (status === 'completed' || status === 'error' || status === 'aborted') return status
+  return status === 'running' ? 'running' : 'pending'
 }
 
 /**
@@ -755,6 +797,10 @@ export interface PiStreamContext {
 interface PiChildStreamState {
   context: PiStreamContext
   turnState: PiTurnState
+  /** Root session that spawned this child. Kept here so a stop (or a process
+   *  death) can close every child transcript of the stopped parent without a
+   *  second index. */
+  parentSessionId: string
   /** True once a working status was emitted for this child. */
   announcedWorking: boolean
   /** True once the child reported its terminal settle record. */
@@ -1823,6 +1869,13 @@ export class PiDriver extends PersistentCliDriver {
   private cioAllowedToolsPaths = new Map<string, string>()
   /** Storage-relative arm/disarm flag files for oversized-request recovery. */
   private cioOversizedFlagPaths = new Map<string, string>()
+  /** Storage-relative stop-flag files the user's Stop writes for the core-tools
+   *  extension. `abort()` publishes a token here before it aborts the root run,
+   *  because the extension is the only code that can stop the nested worker
+   *  sessions pi keeps inside its own process. */
+  private cioStopFlagPaths = new Map<string, string>()
+  /** Monotonic per-process counter making every stop token unique. */
+  private stopRequestSeq = 0
   /** Session-keyed absolute paths to the materialized single "cio-core-tools"
    *  extension module (status + usage + gateway + core tools composed), passed
    *  to `--extension`. */
@@ -2174,6 +2227,13 @@ export class PiDriver extends PersistentCliDriver {
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
     const client = await this.ensureRpcClient(projectPath, session.id)
+    // A real user turn is not a continuation of a stop: clear the stop request
+    // the extension applies to worker sessions, and re-arm pi's automatic retry
+    // that the stop disarmed.
+    await this.clearStopRequest(session.id)
+    void client.setAutoRetry(true).catch((error: unknown) => {
+      Logger.dev('Pi auto-retry re-arm failed:', error)
+    })
     // A live turn owns this session (silent continue, auto-retry, an idle race
     // between the harness and the chat-engine status). Throwing here surfaced a
     // second user-facing error on top of a turn that is still producing output
@@ -2343,6 +2403,10 @@ export class PiDriver extends PersistentCliDriver {
       const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
       this.appendUserMessage(session, options)
       this.silentContinues.delete(options.sessionId)
+      // Delivering a real user message supersedes a stop the user requested
+      // earlier: workers it spawns belong to this message, not to the stopped
+      // turn.
+      await this.clearStopRequest(options.sessionId)
       await client.followUp(message, images)
       return
     }
@@ -2354,6 +2418,13 @@ export class PiDriver extends PersistentCliDriver {
     const activeClient = client ?? (await this.ensureRpcClient(projectPath, options.sessionId))
     this.appendUserMessage(session, options)
     this.silentContinues.delete(options.sessionId)
+    // A steered message that has to start its own run is a new turn, not a
+    // continuation of a stop: clear the stop request and re-arm the automatic
+    // retry the stop disarmed.
+    await this.clearStopRequest(options.sessionId)
+    void activeClient.setAutoRetry(true).catch((error: unknown) => {
+      Logger.dev('Pi auto-retry re-arm failed:', error)
+    })
     this.activeTurns.add(options.sessionId)
     const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
     const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
@@ -2386,15 +2457,43 @@ export class PiDriver extends PersistentCliDriver {
     await client.steer(message, images)
   }
 
+  /**
+   * Stop the session: end its run, stop every nested worker session, and leave
+   * nothing behind that could resume the work the user just cancelled.
+   *
+   * A stop has four parts, because pi's own abort RPC only reaches the root run:
+   *  1. drop an owed silent continue, which would otherwise re-prompt
+   *     'Continue.' as soon as the aborted run settles;
+   *  2. publish a stop request into the session's stop-flag file, which the
+   *     app-owned core-tools extension applies to the worker sessions it owns
+   *     and which disarms its own wake-up paths;
+   *  3. disarm pi's automatic retry of the aborted run;
+   *  4. after the graceful abort, verify the run actually ended (bounded) and
+   *     kill the process if it did not.
+   */
   override async abort(projectPath: string, sessionId: string): Promise<void> {
     if (this.pageCompactions.has(sessionId)) {
       const turn = this.turnStates.get(sessionId)
       if (turn) this.turnStates.set(sessionId, { ...turn, compacting: false })
     }
     this.pageCompactions.delete(sessionId)
-    await this.requireSession(projectPath, sessionId)
+    // An owed silent continue belongs to the turn the user is stopping: pi
+    // settles the aborted run with `agent_settled`, and the continuation would
+    // then start a fresh run seconds after the stop.
+    this.silentContinues.delete(sessionId)
+    // Published before the abort so the extension already sees it when the
+    // run's own settle hook fires.
+    await this.publishStopRequest(sessionId)
+    const session = await this.requireSession(projectPath, sessionId).catch(() => null)
     const client = this.rpcClients.get(sessionId)
-    if (!client) return
+    if (!session || !client) {
+      // No live process to abort: nothing can still be running under it.
+      this.settleChildStreams(sessionId, 'aborted')
+      return
+    }
+    void client.setAutoRetry(false).catch((error: unknown) => {
+      Logger.dev('Pi auto-retry disarm after stop failed:', error)
+    })
     try {
       await client.abort()
     } catch {
@@ -2406,6 +2505,99 @@ export class PiDriver extends PersistentCliDriver {
     } finally {
       this.activeTurns.delete(sessionId)
     }
+    // The workers report their own settle a poll window later at worst;
+    // settling them here is what makes the cards and child statuses stop with
+    // the stop instead of spinning until the last transcript lands.
+    this.settleChildStreams(sessionId, 'aborted')
+    void this.enforceStoppedSession(projectPath, sessionId)
+  }
+
+  /**
+   * Stop one nested worker session without touching the root run. Pi keeps its
+   * sub-agent sessions inside its own process, so the child can never be
+   * addressed by `abort`; the extension owns them and acts on this request.
+   */
+  async abortSubagent(
+    projectPath: string,
+    parentSessionId: string,
+    childSessionId: string
+  ): Promise<void> {
+    // The request is keyed by the parent session, so a missing parent means
+    // there is no live harness holding this worker at all.
+    const parent = await this.requireSession(projectPath, parentSessionId).catch(() => null)
+    if (!parent) return
+    await this.publishStopRequest(parentSessionId, [childSessionId])
+    this.settleChildStreams(parentSessionId, 'aborted', childSessionId)
+  }
+
+  /** Publish the user's stop into the session's stop-flag file. */
+  private async publishStopRequest(sessionId: string, childSessionIds?: string[]): Promise<void> {
+    const path = this.cioStopFlagPaths.get(sessionId)
+    if (!path) return
+    this.stopRequestSeq += 1
+    try {
+      await this.storage.writeRaw(
+        path,
+        JSON.stringify({
+          token: `${Date.now()}-${this.stopRequestSeq}`,
+          requestedAt: Date.now(),
+          childSessionIds: childSessionIds ?? []
+        })
+      )
+    } catch (error) {
+      Logger.dev('Pi stop-request publication failed:', error)
+    }
+  }
+
+  /**
+   * Disarm the stop request. A new user turn is not a continuation of a stop,
+   * so the extension must never apply an old token to its workers.
+   */
+  private async clearStopRequest(sessionId: string): Promise<void> {
+    const path = this.cioStopFlagPaths.get(sessionId)
+    if (!path) return
+    try {
+      await this.storage.writeRaw(path, JSON.stringify(emptyStopRequest()))
+    } catch (error) {
+      Logger.dev('Pi stop-request reset failed:', error)
+    }
+  }
+
+  /**
+   * Bounded backstop for a user stop. The graceful abort plus the extension's
+   * stop sweep end the run and its workers in the normal case; when pi still
+   * reports a live run after the grace window it ignored the abort, so the
+   * process is terminated   which takes every nested worker session with it.
+   */
+  private async enforceStoppedSession(projectPath: string, sessionId: string): Promise<void> {
+    const deadline = Date.now() + PI_ABORT_ENFORCE_MS
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, PI_ABORT_ENFORCE_INTERVAL_MS))
+      const client = this.rpcClients.get(sessionId)
+      if (!client || this.sessionProjects.get(sessionId) !== projectPath) return
+      let state: Record<string, unknown> | null
+      try {
+        state = record(await withTimeout(client.getState(), PI_ABORT_PROBE_TIMEOUT_MS))
+      } catch {
+        // A session that cannot answer a state probe after its own abort is
+        // wedged: a graceful stop can never land on it.
+        this.killStoppedSession(sessionId)
+        return
+      }
+      // A probe that timed out (null) cannot confirm the run ended, so it keeps
+      // waiting and terminates at the end of the grace window instead.
+      if (state && state['isStreaming'] !== true && state['isCompacting'] !== true) return
+    }
+    this.killStoppedSession(sessionId)
+  }
+
+  /** Terminate a stopped session's pi process. The exit event finalizes the
+   *  turn and the next run resumes the persisted native transcript. */
+  private killStoppedSession(sessionId: string): void {
+    if (!this.rpcClients.has(sessionId)) return
+    Logger.info('Pi ignored the abort request   terminating the session process', { sessionId })
+    this.settleChildStreams(sessionId, 'aborted')
+    this.disposeRpcClient(sessionId)
   }
 
   override async deleteSession(projectPath: string, sessionId: string): Promise<void> {
@@ -2626,6 +2818,7 @@ export class PiDriver extends PersistentCliDriver {
     this.turnStates.clear()
     this.childStreams.clear()
     this.silentContinues.clear()
+    this.cioStopFlagPaths.clear()
     this.pendingUiRequests.clear()
     for (const sessionId of this.gatewayHandoffPaths.keys()) {
       void this.removeGatewayHandoff(sessionId)
@@ -3436,6 +3629,9 @@ export class PiDriver extends PersistentCliDriver {
     // resumes the persisted native transcript instead of failing on a dead
     // pipe (or worse, silently continuing a context-less session).
     this.disposeRpcClient(sessionId)
+    // Nested worker sessions lived inside this process: their transcripts settle
+    // as failed, or a killed session would leave their cards spinning forever.
+    this.settleChildStreams(sessionId, 'error')
     if (this.activeTurns.has(sessionId)) {
       this.activeTurns.delete(sessionId)
       // The pi process died mid-turn; persist whatever was mirrored and
@@ -3568,17 +3764,20 @@ export class PiDriver extends PersistentCliDriver {
   private closeSubagentCard(
     parentSessionId: string,
     childSessionId: string,
-    error: string | undefined
+    error: string | undefined,
+    status: AgentToolStatus = error ? 'error' : 'completed',
+    force = false
   ): void {
     // A parent that is mid-turn buffers the done notification until its loop
     // reaches the next step, which is exactly the lag this closes. An idle
     // parent runs the notification turn immediately, so its own patch lands
     // just as fast and this extra update would only flip the thread's live
-    // activity back on with no turn behind it.
-    if (!this.activeTurns.has(parentSessionId)) return
+    // activity back on with no turn behind it. A stop is the exception: the
+    // parent's turn is already gone when its workers settle, so a stopped
+    // worker's card is stamped regardless   otherwise it spins forever.
+    if (!force && !this.activeTurns.has(parentSessionId)) return
     const session = this.sessionCache.get(parentSessionId)
     if (!session) return
-    const status: AgentToolStatus = error ? 'error' : 'completed'
     for (const message of session.messages) {
       const part = message.parts.findLast(
         (candidate): candidate is Extract<AgentPart, { type: 'subagent' }> =>
@@ -3587,7 +3786,7 @@ export class PiDriver extends PersistentCliDriver {
       // A card that already reports a terminal state carries the richer
       // payload (final output, duration); never overwrite it with a lifecycle
       // stamp alone.
-      if (!part || part.activity.status === 'completed' || part.activity.status === 'error') {
+      if (!part || TERMINAL_SUBAGENT_STATUSES.has(part.activity.status)) {
         continue
       }
       const event: SessionAgentEvent = {
@@ -3609,6 +3808,47 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /**
+   * Close every still-open child transcript of one parent session. Called when
+   * the user stops the session (its workers are being aborted) and when the
+   * harness process dies (its nested sessions die with it), so no sub-agent
+   * card, tab or trace row can keep spinning for work that is already gone.
+   */
+  private settleChildStreams(
+    parentSessionId: string,
+    status: 'aborted' | 'error',
+    onlyChildSessionId?: string
+  ): void {
+    const error =
+      status === 'error' ? 'The session ended while this sub-agent was still running.' : undefined
+    for (const [childSessionId, state] of this.childStreams) {
+      if (state.parentSessionId !== parentSessionId || state.settled) continue
+      if (onlyChildSessionId && childSessionId !== onlyChildSessionId) continue
+      state.settled = true
+      this.closeSubagentCard(parentSessionId, childSessionId, error, status, true)
+      if (status === 'aborted') {
+        this.emit({ type: 'session.status', sessionId: childSessionId, status: { state: 'idle' } })
+        continue
+      }
+      const detail = error ?? 'The sub-agent run ended unexpectedly.'
+      const kind = classifyProviderIssue(detail)
+      this.emit({
+        type: 'session.status',
+        sessionId: childSessionId,
+        status: {
+          state: 'error',
+          issue: {
+            kind,
+            message: extractProviderErrorEnvelope(detail).message,
+            rawError: detail,
+            harnessId: this.id,
+            retryable: kind !== 'billing'
+          }
+        }
+      })
+    }
+  }
+
+  /**
    * Fold one batch of streamed child-session records into that child's live
    * transcript and re-emit them as child-scoped events. Records carry pi's own
    * shapes, so they go through `mapPiRecord`   the exact mapper a root thread
@@ -3624,7 +3864,7 @@ export class PiDriver extends PersistentCliDriver {
     if (!payload) return
     const childSessionId = stringValue(payload['childSessionId'])
     if (!childSessionId) return
-    const state = this.childStreamState(childSessionId)
+    const state = this.childStreamState(childSessionId, parentSessionId)
     const records = Array.isArray(payload['records']) ? payload['records'] : []
     if (records.length > 0 && !state.announcedWorking && !state.settled) {
       state.announcedWorking = true
@@ -3647,11 +3887,16 @@ export class PiDriver extends PersistentCliDriver {
     if (payload['settled'] !== true) return
     state.settled = true
     const error = stringValue(payload['error'])
+    // A worker the user stopped is neither a completion nor a failure: it gets
+    // its own terminal status so no surface can report finished work, and its
+    // card is stamped even though the stopped parent turn is already gone.
+    const aborted = stringValue(payload['status']) === 'aborted'
+    const status: AgentToolStatus = aborted ? 'aborted' : error ? 'error' : 'completed'
     // The child's own settle record closes the parent thread's card, so the
     // working-trace dropdown and the sub-agent tab flip together instead of
     // the card waiting for the model loop to drain its done notification.
-    this.closeSubagentCard(parentSessionId, childSessionId, error)
-    if (!error) {
+    this.closeSubagentCard(parentSessionId, childSessionId, error, status, aborted)
+    if (!error || aborted) {
       this.emit({ type: 'session.status', sessionId: childSessionId, status: { state: 'idle' } })
       return
     }
@@ -3700,7 +3945,7 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /** The live transcript state of one child session, capped and LRU-ordered. */
-  private childStreamState(childSessionId: string): PiChildStreamState {
+  private childStreamState(childSessionId: string, parentSessionId: string): PiChildStreamState {
     const existing = this.childStreams.get(childSessionId)
     if (existing) {
       // Re-insert so the oldest entry is always the least recently used.
@@ -3711,6 +3956,7 @@ export class PiDriver extends PersistentCliDriver {
     const created: PiChildStreamState = {
       context: { sessionId: childSessionId, session: { messages: [] } },
       turnState: { assistantMessageId: null, turnIndex: 0 },
+      parentSessionId,
       announcedWorking: false,
       settled: false
     }
@@ -4280,6 +4526,7 @@ export class PiDriver extends PersistentCliDriver {
       const systemPromptRelative = join(directory, 'system-prompt.txt')
       const allowedToolsRelative = join(directory, 'allowed-tools.json')
       const oversizedFlagRelative = join(directory, 'oversized-recovery.json')
+      const stopFlagRelative = join(directory, 'stop-request.json')
       const extensionRelative = join(directory, 'cio-core-tools.ts')
       // Empty endpoint values: the gateway tools surface a clear gateway-inactive
       // error until the first direct-gateway turn publishes the real { url, token }.
@@ -4287,6 +4534,7 @@ export class PiDriver extends PersistentCliDriver {
       await this.storage.writeRaw(systemPromptRelative, '')
       await this.storage.writeRaw(allowedToolsRelative, '[]')
       await this.storage.writeRaw(oversizedFlagRelative, JSON.stringify({ armed: false }))
+      await this.storage.writeRaw(stopFlagRelative, JSON.stringify(emptyStopRequest()))
       await this.storage.writeRaw(
         extensionRelative,
         piCioCoreToolsExtension({
@@ -4299,6 +4547,7 @@ export class PiDriver extends PersistentCliDriver {
           systemPromptPath: this.storage.resolve(systemPromptRelative),
           allowedToolsPath: this.storage.resolve(allowedToolsRelative),
           oversizedFlagPath: this.storage.resolve(oversizedFlagRelative),
+          stopFlagPath: this.storage.resolve(stopFlagRelative),
           sessionId,
           // Same durable resolver the orchestration service publishes for the
           // prose recovery path; the gateway tools use it for host-level
@@ -4312,6 +4561,7 @@ export class PiDriver extends PersistentCliDriver {
       this.cioSystemPromptPaths.set(sessionId, systemPromptRelative)
       this.cioAllowedToolsPaths.set(sessionId, allowedToolsRelative)
       this.cioOversizedFlagPaths.set(sessionId, oversizedFlagRelative)
+      this.cioStopFlagPaths.set(sessionId, stopFlagRelative)
       const extensionAbsolute = this.storage.resolve(extensionRelative)
       this.cioCoreToolsExtensionPaths.set(sessionId, extensionAbsolute)
       // Flush an endpoint that arrived before this materialization (first turn

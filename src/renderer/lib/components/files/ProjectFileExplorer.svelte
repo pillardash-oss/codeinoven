@@ -3,6 +3,7 @@
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { AlertDialog, Dialog } from 'bits-ui'
   import { toast } from 'svelte-sonner'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import {
     ChevronDown,
     ChevronRight,
@@ -836,7 +837,7 @@
       }
       inlineEdit = null
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The file operation failed')
+      reportError(error, 'The file operation failed')
       await tick()
       inlineInput?.focus()
     } finally {
@@ -859,7 +860,7 @@
       await projectFilesWorkspace.pasteFile(projectId, directory)
       toast.success('Pasted')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The item could not be pasted')
+      reportError(error, 'The item could not be pasted')
     }
   }
 
@@ -874,7 +875,7 @@
           : `Imported ${entries.length} files or folders`
       )
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The files could not be imported')
+      reportError(error, 'The files could not be imported')
     }
   }
 
@@ -888,7 +889,7 @@
           : `Dropped ${results.length} items`
       )
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The files could not be dropped')
+      reportError(error, 'The files could not be dropped')
     }
   }
 
@@ -908,7 +909,7 @@
     try {
       window.api.startFileDrag(projectId, paths)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Native dragging is unavailable')
+      reportError(error, 'Native dragging is unavailable')
     }
   }
 
@@ -1118,7 +1119,7 @@
       deleteTarget = null
       toast.success(count === 1 ? 'Item moved to Trash' : `${count} items moved to Trash`)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The items could not be deleted')
+      reportError(error, 'The items could not be deleted')
     } finally {
       operationPending = false
     }
@@ -1128,7 +1129,7 @@
     try {
       info = await projectFilesWorkspace.fileInfo(projectId, entry.path)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'File information is unavailable')
+      reportError(error, 'File information is unavailable')
     }
   }
 
@@ -1138,7 +1139,7 @@
       const revealed = await invoke('shell:revealPath', info.absolutePath)
       if (!revealed) toast.error('The item could not be revealed in the file manager')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The item could not be revealed')
+      reportError(error, 'The item could not be revealed')
     }
   }
 
@@ -1619,7 +1620,9 @@
     >
       {#if projectState.directoryErrors['']}
         <div class="px-3 py-3">
-          <p class="text-[0.6875rem] leading-relaxed text-danger">{projectState.directoryErrors['']}</p>
+          <p class="text-[0.6875rem] leading-relaxed text-danger">
+            {projectState.directoryErrors['']}
+          </p>
           <button
             type="button"
             class="mt-2 text-[0.6875rem] font-medium text-foreground hover:underline"

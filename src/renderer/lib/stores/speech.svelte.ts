@@ -1,5 +1,6 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { toast } from 'svelte-sonner'
+import { reportError } from './app-errors.svelte'
 import type {
   SpeechCapabilitySnapshot,
   SpeechDownloadState,
@@ -60,15 +61,17 @@ class SpeechSettingsStore {
         return
       }
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause)
-      this.error = message
-      toast.error(message)
+      this.error = cause instanceof Error ? cause.message : String(cause)
+      reportError(cause, 'The speech model could not be downloaded.')
       return
     }
     await this.load()
   }
 
-  async importModel(path: string, capability?: import('../../../lib/speech/types').SpeechCapability): Promise<boolean> {
+  async importModel(
+    path: string,
+    capability?: import('../../../lib/speech/types').SpeechCapability
+  ): Promise<boolean> {
     const result = await invoke('speech:importModel', path, capability)
     if (!result.ok) this.error = result.error.message
     await this.load()
@@ -114,9 +117,8 @@ class SpeechSettingsStore {
         toast.error(result.error.message)
       }
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause)
-      this.error = message
-      toast.error(message)
+      this.error = cause instanceof Error ? cause.message : String(cause)
+      reportError(cause, 'The speech runtime could not be downloaded.')
     }
     await this.load()
   }

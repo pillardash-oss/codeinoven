@@ -5,6 +5,7 @@
   import ScopeSetupCommandsEditor from './ScopeSetupCommandsEditor.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import type { GitBranchInfo, ScopeSetupCommandSpec, ScopeWorktreeSourceInfo } from '$shared/types'
 
   interface Props {
@@ -23,6 +24,10 @@
   const componentId = $props.id()
   const formId = `${componentId}-create-scope-form`
 
+  // Every call site mounts this modal fresh per launch, so seeding the field
+  // from the initial name is intentional   a later prop change must not
+  // overwrite what the user is typing.
+  // svelte-ignore state_referenced_locally
   let name = $state(initialName)
   let isolated = $state(true)
   let runSetup = $state(true)
@@ -98,25 +103,31 @@
 
   /**
    * Close immediately and hand the whole creation (bucket, defaults, worktree,
-   * environment + setup commands) to a background job tracked by a docked
-   * toast, so creating a worktree never blocks the UI.
+   * environment + setup commands) to the app-level worktree dock, so the run
+   * keeps streaming its stages while the user keeps working.
    */
   function create(): void {
     const trimmed = name.trim()
     if (!trimmed || (isolated && (branchesLoading || !baseBranch))) return
+    // The run is handed to an app-level dock panel that outlives this dialog,
+    // and props are live getters into a parent that drops its target on close:
+    // every value the run needs is read BEFORE `onClose()`.
+    const input = {
+      title: trimmed,
+      isolated,
+      runSetup,
+      environmentMode,
+      setupCommands: setupCommands.map((command) => ({ ...command })),
+      ...(isolated && baseBranch.trim() ? { baseBranch: baseBranch.trim() } : {})
+    }
+    const targetProjectId = projectId
+    const targetBucketId = existingBucketId
+    const handleCreated = onCreated
     onClose()
-    scopeState.beginWorktreeCreation(
-      projectId,
-      {
-        title: trimmed,
-        isolated,
-        runSetup,
-        environmentMode,
-        setupCommands: setupCommands.map((command) => ({ ...command })),
-        ...(isolated && baseBranch.trim() ? { baseBranch: baseBranch.trim() } : {})
-      },
-      { existingBucketId, onCreated }
-    )
+    scopeJobs.create(targetProjectId, input, {
+      existingBucketId: targetBucketId,
+      onCreated: handleCreated
+    })
   }
 </script>
 

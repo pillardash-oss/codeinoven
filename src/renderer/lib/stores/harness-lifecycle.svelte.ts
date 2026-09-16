@@ -5,7 +5,7 @@ import type {
   HarnessUpdateStatus
 } from '$shared/types'
 import { invoke } from '$lib/ipc.svelte'
-import { toast } from 'svelte-sonner'
+import { reportError } from './app-errors.svelte'
 import { providerStore } from '$lib/stores/providers.svelte'
 
 /** Reuse recent update results when Settings remounts or startup checks overlap. */
@@ -107,8 +107,7 @@ class HarnessLifecycleStore {
       const handoff = await invoke('harnessUpdates:handoff', harnessId)
       this.pushRun({ kind: 'update', harnessId, harnessName, handoff }, options?.docked ?? false)
     } catch (updateError) {
-      const message = updateError instanceof Error ? updateError.message : 'Update failed to start.'
-      toast.error(message)
+      reportError(updateError, 'Update failed to start.')
     }
   }
 
@@ -119,9 +118,7 @@ class HarnessLifecycleStore {
       const handoff = await invoke('harnessUninstall:handoff', harnessId)
       this.pushRun({ kind: 'uninstall', harnessId, harnessName, handoff })
     } catch (uninstallError) {
-      const message =
-        uninstallError instanceof Error ? uninstallError.message : 'Uninstall failed to start.'
-      toast.error(message)
+      reportError(uninstallError, 'Uninstall failed to start.')
     }
   }
 
@@ -132,9 +129,7 @@ class HarnessLifecycleStore {
       const handoff = await invoke('harnessInstall:handoff', harnessId)
       this.pushRun({ kind: 'install', harnessId, harnessName, handoff })
     } catch (installError) {
-      const message =
-        installError instanceof Error ? installError.message : 'Install failed to start.'
-      toast.error(message)
+      reportError(installError, 'Install failed to start.')
     }
   }
 

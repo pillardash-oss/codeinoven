@@ -4,6 +4,7 @@ import { isAbsolute, posix, relative, resolve, sep, win32 } from 'path'
 import type { WebFrameMain } from 'electron'
 import type { GitRestoreTarget } from '../../lib/types'
 import { toPosixPath } from '../../lib/paths'
+import { Logger } from '../system/logger'
 import type {
   ChecklistItemStatus,
   CreateProjectInput,
@@ -1415,39 +1416,67 @@ export function validateScopeBoard(value: unknown): ScopeBoard {
 const HOSTNAME_PATTERN =
   /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?::\d{1,5})?$/iu
 
+/**
+ * Bracketed IPv6 literal such as `[::1]` or `[fe80::1]:5173`. The character set
+ * excludes scheme, path, credential, and control characters, so a match can only
+ * ever be used as the authority of an internal favicon fetch URL.
+ */
+const IPV6_HOST_PATTERN = /^\[[0-9a-f:.]+:[0-9a-f:.]*\](?::\d{1,5})?$/iu
+
+/** Max entries the renderer may ask for in a single favicon resolution call. */
+const MAX_FAVICON_HOSTNAMES = 64
+
+/** Absolute upper bound of a host entry, including brackets and an optional port. */
+const MAX_FAVICON_HOSTNAME_LENGTH = 253 + 6 + 8
+
+/**
+ * Whether a host entry's trailing `:port`, when present, is a real port. Bracketed
+ * IPv6 literals are handled first because their inner colons are not separators.
+ */
 function isValidPortSuffix(value: string): boolean {
+  const bracketEnd = value.startsWith('[') ? value.indexOf(']') : -1
   const portIndex = value.lastIndexOf(':')
-  if (portIndex === -1) return true
+  // `[::1]` and `[fe80::1]` carry no port; their colons live inside the brackets.
+  if (portIndex === -1 || (bracketEnd !== -1 && portIndex < bracketEnd)) return true
   const port = Number(value.slice(portIndex + 1))
   return Number.isInteger(port) && port >= 1 && port <= 65_535
+}
+
+/** Whether an entry is a hostname-shaped string safe to embed in a fetch origin. */
+function isFaviconHostname(entry: unknown): entry is string {
+  if (typeof entry !== 'string') return false
+  if (entry.length === 0 || entry.length > MAX_FAVICON_HOSTNAME_LENGTH) return false
+  if (entry.includes('\0') || entry.includes('\n') || entry.includes('\r')) return false
+  if (!HOSTNAME_PATTERN.test(entry) && !IPV6_HOST_PATTERN.test(entry)) return false
+  return isValidPortSuffix(entry)
 }
 
 /**
  * Validate a list of hostnames used for favicon resolution. Each entry must be
  * a bounded, hostname-shaped string with no scheme, path, or control
  * characters. An optional trailing `:port` (1–65535) is allowed so localhost
- * development servers resolve against their real port. Deduplicates preserving
- * first occurrence.
+ * development servers resolve against their real port, and bracketed IPv6
+ * literals such as `[::1]:5173` are accepted for the same reason.
+ *
+ * Entries are derived from arbitrary link text and browser tab URLs, so a single
+ * host the URL parser emitted but this app cannot fetch (an underscore host, for
+ * example) must not sink the whole call: malformed entries are skipped and logged
+ * at dev level, and the caller receives the valid hostnames, deduplicated in
+ * first-occurrence order.
  */
 export function validateFaviconHostnames(value: unknown): string[] {
   if (!Array.isArray(value)) throw new TypeError('Favicon hostnames must be an array')
-  if (value.length === 0 || value.length > 64) {
-    throw new TypeError('Favicon hostnames must contain between 1 and 64 entries')
+  if (value.length === 0 || value.length > MAX_FAVICON_HOSTNAMES) {
+    throw new TypeError(
+      `Favicon hostnames must contain between 1 and ${MAX_FAVICON_HOSTNAMES} entries`
+    )
   }
   const hostnames: string[] = []
   for (let index = 0; index < value.length; index += 1) {
     const entry = value[index]
-    if (
-      typeof entry !== 'string' ||
-      entry.length === 0 ||
-      entry.length > 253 + 6 ||
-      entry.includes('\0') ||
-      entry.includes('\n') ||
-      entry.includes('\r') ||
-      !HOSTNAME_PATTERN.test(entry) ||
-      !isValidPortSuffix(entry)
-    ) {
-      throw new TypeError(`Favicon hostname at index ${index} is invalid`)
+    if (!isFaviconHostname(entry)) {
+      Logger.dev(`Skipping invalid favicon hostname at index ${index}`)
+      continue
     }
     const normalized = entry.toLowerCase()
     if (!hostnames.includes(normalized)) hostnames.push(normalized)

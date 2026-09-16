@@ -3112,6 +3112,14 @@ export const IPC_EVENT_CONTRACT = {
    */
   'remote:stepUpPending': [] as unknown as [approvals: RemotePendingStepUpApproval[]],
   'speech:progress': [] as unknown as [progress: import('./speech/types').SpeechProgressEvent],
+  /**
+   * One live stage of a managed-worktree creation/adoption job. The renderer
+   * keeps its docked job panel on these so the user sees real progress while
+   * git, the environment copy and the setup commands run.
+   */
+  'scope:worktree:progress': [] as unknown as [
+    progress: import('./types').ScopeWorktreeProgressEvent
+  ],
   /** Live progress/prompt/completion updates for an in-app Pi OAuth sign-in. */
   'providerAccounts:oauthEvent': [] as unknown as [
     payload:

@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { DropdownMenu, Popover } from 'bits-ui'
-import { toast } from 'svelte-sonner'
+import { reportError } from '$lib/stores/app-errors.svelte'
   import {
     Brain,
     Check,
@@ -902,11 +902,7 @@ import { toast } from 'svelte-sonner'
     try {
       await harnessAccountCache.setDefault(account)
     } catch (setDefaultError) {
-      toast.error(
-        setDefaultError instanceof Error
-          ? setDefaultError.message
-          : `The default account was not saved.`
-      )
+      reportError(setDefaultError, 'The default account was not saved.')
     }
   }
 

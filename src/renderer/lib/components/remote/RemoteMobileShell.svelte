@@ -44,7 +44,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
-  import { toast } from 'svelte-sonner'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import { INBOX_PROJECT_ID, type Thread, type ThreadSearchResult } from '$shared/types'
 
   const SIDEBAR_MODES = [
@@ -220,7 +220,7 @@
       await mobileState.createProjectThread(project)
       mobileState.sidebarOpen = false
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The thread could not be created.')
+      reportError(error, 'The thread could not be created.')
     }
   }
 
@@ -229,7 +229,7 @@
       await mobileState.createChat()
       mobileState.sidebarOpen = false
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The chat could not be created.')
+      reportError(error, 'The chat could not be created.')
     }
   }
 

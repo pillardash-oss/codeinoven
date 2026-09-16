@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
   import { shouldMountWorkingTrace } from '$lib/working-trace-parts'
+  import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
   import { mergeStreamedPart } from '$lib/agent-part-merge'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly } from 'svelte/transition'
@@ -9382,7 +9383,7 @@
       })
     } catch (error) {
       toast.dismiss(progressToast)
-      toast.error(error instanceof Error ? error.message : 'The transcript could not be exported.')
+      reportError(error, 'The transcript could not be exported.')
     }
   }
 
@@ -10077,11 +10078,7 @@
       )
     }
     if (part.type === 'subagent') {
-      return (
-        part.activity.status === 'completed' ||
-        part.activity.status === 'error' ||
-        part.activity.time?.end !== undefined
-      )
+      return subagentStatusIsTerminal(part.activity.status) || part.activity.time?.end !== undefined
     }
     return false
   }

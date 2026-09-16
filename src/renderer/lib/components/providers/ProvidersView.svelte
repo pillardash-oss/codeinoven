@@ -32,7 +32,7 @@
     X
   } from '@lucide/svelte'
   import { onMount } from 'svelte'
-  import { toast } from 'svelte-sonner'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import type { Attachment } from 'svelte/attachments'
   import { fade, slide } from 'svelte/transition'
   import type { MenuItem } from '../shared/ThreadDropdown.svelte'
@@ -293,11 +293,7 @@
       const entries = await invoke('harnessManifest:list')
       manifestEntries = Object.fromEntries(entries.map((entry) => [entry.harnessId, entry]))
     } catch (manifestError) {
-      toast.error(
-        manifestError instanceof Error
-          ? manifestError.message
-          : 'Harness behavior manifests could not be loaded.'
-      )
+      reportError(manifestError, 'Harness behavior manifests could not be loaded.')
     }
   }
 
@@ -311,9 +307,7 @@
       await invoke('harnessManifest:confirm', { harnessId, behavior, value })
       await loadManifests()
     } catch (manifestError) {
-      toast.error(
-        manifestError instanceof Error ? manifestError.message : 'Behavior confirmation failed.'
-      )
+      reportError(manifestError, 'Behavior confirmation failed.')
     } finally {
       manifestSaving[harnessId] = false
     }
@@ -325,7 +319,7 @@
       await invoke('harnessManifest:reset', { harnessId, behavior })
       await loadManifests()
     } catch (manifestError) {
-      toast.error(manifestError instanceof Error ? manifestError.message : 'Manifest reset failed.')
+      reportError(manifestError, 'Manifest reset failed.')
     } finally {
       manifestSaving[harnessId] = false
     }
@@ -340,11 +334,7 @@
     try {
       autoUpdatePrefs = await invoke('harnessAutoUpdate:list')
     } catch (autoUpdateError) {
-      toast.error(
-        autoUpdateError instanceof Error
-          ? autoUpdateError.message
-          : 'Harness auto-update preferences could not be loaded.'
-      )
+      reportError(autoUpdateError, 'Harness auto-update preferences could not be loaded.')
     }
   }
 
@@ -354,11 +344,7 @@
       await invoke('harnessAutoUpdate:set', { harnessId, value })
       await loadAutoUpdatePrefs()
     } catch (autoUpdateError) {
-      toast.error(
-        autoUpdateError instanceof Error
-          ? autoUpdateError.message
-          : 'Auto-update preference could not be saved.'
-      )
+      reportError(autoUpdateError, 'Auto-update preference could not be saved.')
     } finally {
       autoUpdateSaving[harnessId] = false
     }
@@ -369,9 +355,7 @@
       const info = await invoke('harnessInstall:getInfo', provider.id)
       await openInBrowser(info.pageUrl)
     } catch (installError) {
-      toast.error(
-        installError instanceof Error ? installError.message : 'Install page unavailable.'
-      )
+      reportError(installError, 'Install page unavailable.')
     }
   }
 

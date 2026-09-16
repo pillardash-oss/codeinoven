@@ -21,10 +21,11 @@
   import { ChevronDown, FolderTree, Folder, Globe, GitBranch, Monitor, Search, X } from '@lucide/svelte'
   import { pickColorForSeed } from '$lib/project-colors'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { toast } from 'svelte-sonner'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
@@ -103,7 +104,7 @@
       menuOpen = false
       query = ''
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The scope could not be changed.')
+      reportError(error, 'The scope could not be changed.')
     }
   }
 
@@ -114,7 +115,9 @@
     creatingAuto = true
     const board = scopeState.boards.get(projectId)
     const title = `Auto scope ${board ? board.buckets.length + 1 : 2}`
-    scopeState.beginWorktreeCreation(
+    // The run reports through the app-level worktree dock, so the panel survives
+    // this menu closing and the user moving on to the new thread.
+    scopeJobs.create(
       projectId,
       {
         title,
