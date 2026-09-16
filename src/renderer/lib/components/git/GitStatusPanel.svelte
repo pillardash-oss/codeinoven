@@ -42,9 +42,11 @@
     FolderTree,
     GitBranch,
     GitCommit,
+    GitCompareArrows,
     GitFork,
     GitMerge,
     GitPullRequest,
+    GitPullRequestArrow,
     Loader2,
     MoreHorizontal,
     Plus,
@@ -415,9 +417,9 @@
     // Only paths with a worktree-side change (unstaged, untracked, or conflicted
     // work) can be staged; already-staged entries, such as staged deletions,
     // are no-ops for git add.
-    const allPaths = [...new Set(changes.filter((change) => !change.staged).map((change) => change.path))].filter(
-      (path) => !(gitState.status?.conflicted ?? []).includes(path)
-    )
+    const allPaths = [
+      ...new Set(changes.filter((change) => !change.staged).map((change) => change.path))
+    ].filter((path) => !(gitState.status?.conflicted ?? []).includes(path))
     if (allPaths.length === 0) return
     await gitState.stage(projectId, allPaths)
   }
@@ -1988,17 +1990,17 @@
       { id: 'branches', label: 'Branches', count: null },
       { id: 'pulls', label: 'PRs', count: null }
     ]
-      // Stash is just shelved work   it earns a tab only once something is shelved.
-      if (gitState.stashes.length > 0) {
-        list.push({ id: 'stashes', label: 'Stashes', count: gitState.stashes.length })
-      }
-      // Deployments earn a tab only when the repo actually has deployment
-      // activity (the flag is persisted in the DB and cached in localStorage).
-      if (hasDeployments) {
-        list.push({ id: 'deployments', label: 'Deploys', count: null })
-      }
-      return list
-    })
+    // Stash is just shelved work   it earns a tab only once something is shelved.
+    if (gitState.stashes.length > 0) {
+      list.push({ id: 'stashes', label: 'Stashes', count: gitState.stashes.length })
+    }
+    // Deployments earn a tab only when the repo actually has deployment
+    // activity (the flag is persisted in the DB and cached in localStorage).
+    if (hasDeployments) {
+      list.push({ id: 'deployments', label: 'Deploys', count: null })
+    }
+    return list
+  })
 
   const fileSections: Array<{ title: string; files: GitFileChange[] }> = $derived.by(() => {
     const sections: Array<{ title: string; files: GitFileChange[] }> = []
@@ -2014,7 +2016,7 @@
   const workingSections = $derived(
     fileSections.filter((section) => section.title !== 'Staged' && section.title !== 'Conflicts')
   )
-    /**
+  /**
    * Panes: Conflicts (if any) sits above Staged, which sits above the working
    * tree. Each pane hugs its content and none of them scroll, so the whole tab
    * shares the panel's single scroll region instead of nesting up to three
@@ -2333,7 +2335,7 @@
                   disabled={syncBusy || conflicted.length > 0}
                   onSelect={() => void syncMainAction('from-main')}
                 >
-                  <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
+                  <GitCompareArrows size={12} class="shrink-0 text-dimmed" />
                   Sync from main
                 </DropdownMenu.Item>
                 <DropdownMenu.Item
@@ -2341,7 +2343,7 @@
                   disabled={syncBusy || conflicted.length > 0}
                   onSelect={() => void syncMainAction('to-main')}
                 >
-                  <ArrowUpToLine size={12} class="shrink-0 text-dimmed" />
+                  <GitPullRequestArrow size={12} class="shrink-0 text-dimmed" />
                   Sync to main
                 </DropdownMenu.Item>
               {/if}
@@ -2792,7 +2794,8 @@
                           disabled={batchBusy}
                           onSelect={() => void stageSelectedAction(true)}
                         >
-                          <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span
+                          <span class="inline-block w-3 text-center text-[0.625rem] text-danger"
+                            >−</span
                           >
                           Unstage
                         </DropdownMenu.Item>
@@ -3424,7 +3427,9 @@
                   <ArrowLeft size={12} />
                 </button>
                 <div class="min-w-0 flex-1">
-                  <p class="truncate text-[0.6875rem] font-medium text-foreground">{stash.message}</p>
+                  <p class="truncate text-[0.6875rem] font-medium text-foreground">
+                    {stash.message}
+                  </p>
                   <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
                     <span class="font-mono">{stash.id}</span>
                     {#if stash.branch}
@@ -3544,7 +3549,7 @@
         <div class="flex items-center gap-2 border-b border-border bg-warning/10 px-3 py-1.5">
           <GitCommit size={11} class="shrink-0 text-warning" />
           <p class="min-w-0 flex-1 text-[0.5625rem] leading-relaxed text-warning">
-            Amending the most recent commit   no new commit will be created.
+            Amending the most recent commit no new commit will be created.
           </p>
           <button
             type="button"
@@ -3621,7 +3626,7 @@
             ? `${primaryRemote.name}/${status.branch}`
             : 'Remote branch'}
           {#if (status?.behind ?? 0) > 0 || (status?.ahead ?? 0) > 0}
-              <span class="font-medium text-muted">{status?.ahead ?? 0} ahead</span> ·
+            <span class="font-medium text-muted">{status?.ahead ?? 0} ahead</span> ·
             <span class="font-medium text-muted">{status?.behind ?? 0} behind</span>
           {/if}
         </p>
@@ -3681,7 +3686,9 @@
         </div>
         {#if pullStrategyError}
           <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
-            <p class="text-[0.625rem] font-semibold text-danger">That pull strategy could not finish</p>
+            <p class="text-[0.625rem] font-semibold text-danger">
+              That pull strategy could not finish
+            </p>
             <p
               class="mt-0.5 whitespace-pre-wrap break-words text-[0.5625rem] leading-relaxed text-danger"
             >
@@ -3867,11 +3874,7 @@
 
   <!-- Completing a resolved merge: optional title/description, auto-generated when skipped -->
   {#if resolveMergeOpen}
-    <Modal
-      open
-      title="Resolve merge"
-      onClose={() => (resolveMergeOpen = false)}
-    >
+    <Modal open title="Resolve merge" onClose={() => (resolveMergeOpen = false)}>
       <div class="space-y-2">
         <p class="text-[0.6875rem] leading-relaxed text-muted">
           All conflicts are resolved. Give the merge commit a title and description, or leave them
@@ -3888,8 +3891,7 @@
           class="min-h-16 w-full resize-y rounded-md border border-border bg-elevated px-2.5 py-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Description (optional)"
           bind:value={mergeDescription}
-          disabled={resolveMergeBusy}
-        ></textarea>
+          disabled={resolveMergeBusy}></textarea>
       </div>
       {#snippet footer()}
         <div class="flex items-center justify-end gap-2">
@@ -3907,7 +3909,9 @@
             disabled={resolveMergeBusy}
             onclick={() => void confirmResolveMerge()}
           >
-            {#if resolveMergeBusy}<Loader2 size={11} class="animate-spin" />{:else}<GitMerge size={11} />{/if}
+            {#if resolveMergeBusy}<Loader2 size={11} class="animate-spin" />{:else}<GitMerge
+                size={11}
+              />{/if}
             Resolve
           </button>
         </div>
@@ -4099,8 +4103,10 @@
             </div>
           </div>
         {:else}
-          <p class="rounded-lg border border-border bg-surface px-3 py-1.5 text-[0.625rem] text-muted">
-            No local changes   should apply cleanly.
+          <p
+            class="rounded-lg border border-border bg-surface px-3 py-1.5 text-[0.625rem] text-muted"
+          >
+            No local changes should apply cleanly.
           </p>
         {/if}
         {#if agentTurnActive}
@@ -4434,9 +4440,9 @@
             Delete remote branch “{target.remote}/{target.name}”?
           </AlertDialog.Title>
           <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-            Branch <strong class="font-medium text-foreground">{target.name}</strong> will be deleted
-            from <strong class="font-medium text-foreground">{target.remote}</strong>. Local branches
-            are not affected, and the deletion cannot be undone from here.
+            Branch <strong class="font-medium text-foreground">{target.name}</strong> will be
+            deleted from <strong class="font-medium text-foreground">{target.remote}</strong>. Local
+            branches are not affected, and the deletion cannot be undone from here.
           </AlertDialog.Description>
           <div class="mt-5 flex justify-end gap-2">
             <AlertDialog.Cancel
@@ -4535,7 +4541,7 @@
             permanently redirects future <strong class="font-medium text-foreground">pull</strong>
             and <strong class="font-medium text-foreground">push</strong> operations to the new address.
             Your local history is preserved, but the current remote target is replaced. This cannot be
-            undone automatically   make sure this is the repository you want to use.
+            undone automatically make sure this is the repository you want to use.
           </AlertDialog.Description>
           <div class="mt-5 flex justify-end gap-2">
             <AlertDialog.Cancel
@@ -4705,96 +4711,95 @@
   </AlertDialog.Root>
 {/if}
 
-  {#if commitInfoTarget}
-    {@const info = commitInfoTarget}
-    <Modal open title="Commit info" size="lg" onClose={() => (commitInfoTarget = null)}>
-      <div class="space-y-3">
-        <div>
-          <p class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
-            Full hash
-          </p>
-          <div class="mt-1 flex items-center gap-1.5">
-            <span
-              class="min-w-0 flex-1 select-all break-all font-mono text-[0.6875rem] text-foreground"
-            >
-              {info.hash}
-            </span>
-            <button
-              type="button"
-              class="shrink-0 cursor-pointer rounded-sm border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              title="Copy the full commit hash"
-              aria-label="Copy the full commit hash"
-              onclick={() => void copyCommitHash(info)}
-            >
-              Copy
-            </button>
-            {#if commitInfoOnRemote && commitInfoUrl}
-              <!--
+{#if commitInfoTarget}
+  {@const info = commitInfoTarget}
+  <Modal open title="Commit info" size="lg" onClose={() => (commitInfoTarget = null)}>
+    <div class="space-y-3">
+      <div>
+        <p class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">Full hash</p>
+        <div class="mt-1 flex items-center gap-1.5">
+          <span
+            class="min-w-0 flex-1 select-all break-all font-mono text-[0.6875rem] text-foreground"
+          >
+            {info.hash}
+          </span>
+          <button
+            type="button"
+            class="shrink-0 cursor-pointer rounded-sm border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            title="Copy the full commit hash"
+            aria-label="Copy the full commit hash"
+            onclick={() => void copyCommitHash(info)}
+          >
+            Copy
+          </button>
+          {#if commitInfoOnRemote && commitInfoUrl}
+            <!--
                 Only offered once the commit is actually on the remote. GitHub
                 answers 404 for a commit that was never pushed, so offering it
                 for local work would open a dead page.
               -->
-              <button
-                type="button"
-                class="flex shrink-0 cursor-pointer items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                title={`Open commit ${info.shortHash} on GitHub`}
-                aria-label={`Open commit ${info.shortHash} on GitHub`}
-                onclick={() => void openInBrowser(commitInfoUrl)}
-              >
-                <ExternalLink size={10} />
-                Open in browser
-              </button>
-            {/if}
-          </div>
-        </div>
-
-        <dl class="grid grid-cols-[6.5rem_1fr] gap-x-3 gap-y-1.5 text-[0.6875rem]">
-          <dt class="text-dimmed">Author</dt>
-          <dd class="min-w-0 truncate text-foreground">{info.author}</dd>
-          <dt class="text-dimmed">Committed</dt>
-          <dd class="text-foreground">
-            {absoluteTime(info.date)}
-            <span class="text-dimmed">({relativeTime(info.date)})</span>
-          </dd>
-          <dt class="text-dimmed">Short hash</dt>
-          <dd class="font-mono text-foreground">{info.shortHash}</dd>
-          <dt class="text-dimmed">Parents</dt>
-          <dd class="font-mono text-dimmed">
-            {info.parents.length > 0
-              ? info.parents.map((parent) => parent.slice(0, 7)).join(', ')
-              : 'root commit'}
-          </dd>
-          {#if info.refs.length > 0}
-            <dt class="text-dimmed">Refs</dt>
-            <dd class="flex flex-wrap gap-1">
-              {#each info.refs as ref (ref.head ? `head:${ref.name}` : `${ref.kind}:${ref.name}`)}
-                <span
-                  class={[
-                    'rounded-sm px-1 py-px text-[0.5625rem] font-medium',
-                    ref.head
-                      ? 'bg-primary text-on-primary'
-                      : ref.kind === 'tag'
-                        ? 'bg-accent/15 text-accent'
-                        : 'bg-primary/15 text-primary'
-                  ]}
-                >
-                  {ref.name}
-                </span>
-              {/each}
-            </dd>
+            <button
+              type="button"
+              class="flex shrink-0 cursor-pointer items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              title={`Open commit ${info.shortHash} on GitHub`}
+              aria-label={`Open commit ${info.shortHash} on GitHub`}
+              onclick={() => void openInBrowser(commitInfoUrl)}
+            >
+              <ExternalLink size={10} />
+              Open in browser
+            </button>
           {/if}
-        </dl>
-
-        <div>
-          <p class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">Message</p>
-          <pre
-            class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-elevated/50 p-2 font-mono text-[0.625rem] leading-relaxed text-foreground">{info.message}{info.body.trim().length > 0
-              ? `\n\n${info.body.trim()}`
-              : ''}</pre>
         </div>
       </div>
-    </Modal>
-  {/if}
+
+      <dl class="grid grid-cols-[6.5rem_1fr] gap-x-3 gap-y-1.5 text-[0.6875rem]">
+        <dt class="text-dimmed">Author</dt>
+        <dd class="min-w-0 truncate text-foreground">{info.author}</dd>
+        <dt class="text-dimmed">Committed</dt>
+        <dd class="text-foreground">
+          {absoluteTime(info.date)}
+          <span class="text-dimmed">({relativeTime(info.date)})</span>
+        </dd>
+        <dt class="text-dimmed">Short hash</dt>
+        <dd class="font-mono text-foreground">{info.shortHash}</dd>
+        <dt class="text-dimmed">Parents</dt>
+        <dd class="font-mono text-dimmed">
+          {info.parents.length > 0
+            ? info.parents.map((parent) => parent.slice(0, 7)).join(', ')
+            : 'root commit'}
+        </dd>
+        {#if info.refs.length > 0}
+          <dt class="text-dimmed">Refs</dt>
+          <dd class="flex flex-wrap gap-1">
+            {#each info.refs as ref (ref.head ? `head:${ref.name}` : `${ref.kind}:${ref.name}`)}
+              <span
+                class={[
+                  'rounded-sm px-1 py-px text-[0.5625rem] font-medium',
+                  ref.head
+                    ? 'bg-primary text-on-primary'
+                    : ref.kind === 'tag'
+                      ? 'bg-accent/15 text-accent'
+                      : 'bg-primary/15 text-primary'
+                ]}
+              >
+                {ref.name}
+              </span>
+            {/each}
+          </dd>
+        {/if}
+      </dl>
+
+      <div>
+        <p class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">Message</p>
+        <pre
+          class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-elevated/50 p-2 font-mono text-[0.625rem] leading-relaxed text-foreground">{info.message}{info.body.trim()
+            .length > 0
+            ? `\n\n${info.body.trim()}`
+            : ''}</pre>
+      </div>
+    </div>
+  </Modal>
+{/if}
 
 <!--
   Full screen pull request reader. It is a sibling of the panel's own layout so
