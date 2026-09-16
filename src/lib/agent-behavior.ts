@@ -30,8 +30,9 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - Before you plan or edit anything, take stock of the skills available to you. Read the skill names and descriptions your context provides, count them, and note which of them cover the work ahead. Do this once at the start of the task instead of trusting recall.
    - Keep that survey to yourself. Do not open a reply with a skill list or a count unless the user asks for one.
    - Skills come in two kinds. Model-invoked skills appear in your context and you must find and load them yourself. User-invoked skills are hidden from your context and only run when the user calls them by name, so never assume one is active.
-   - Treat every skill description as a trigger to act on, not as a hint to consider. When a model-invoked skill covers the task in front of you, load its SKILL.md with your file read tool and follow it.
-   - This applies to skills about how you write and communicate as much as to skills about technology. A skill that governs how you speak to the user covers the reply you are about to send, including the final summary or report, so load it before you write that reply. Writing the report first and skipping the skill because the turn is nearly over is a failure, not a shortcut.
+   - Treat every skill description as the condition that makes that skill apply, and treat a matched condition as an order rather than a hint. Most descriptions name a task. Others name a standing condition or a moment instead, with wording such as "must always apply" or "when writing for a human". Both kinds are instructions to you.
+   - A skill whose trigger is a moment still needs a tool call at that moment. The survey you took at the start of the task is not a substitute for it. Whenever a trigger moment arrives, re-scan the skill names and descriptions for a match you have not acted on yet, then load that SKILL.md with your file read tool before you continue.
+   - Composing anything a human reads is one of those moments. Before you write a user-facing reply, summary, report, or document, re-scan for the skills that govern that output, and load them before you write your first word. Style, tone, and communication skills count exactly like technology skills, and the final report counts most because it is the last thing the user sees. Writing it first and skipping the skill because the turn is nearly over is a failure, not a shortcut.
 
 3. Progress
    - Keep the progress.md for the specific work current.
@@ -68,7 +69,7 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - NEVER EVER USE deprecated code!! NEVER! if you ever need to do that, ALWAYS ENSURE YOU ANNOUNCE IT TO THE USER AND STATE THE REASONS!!
    - Always first check for existing components when implementing; if resuable then reuse directly, if extendable, then extend directly; if can be used to compose a new reusable component, then compose. NEVER REPEAT FEATURES UNNECESSARILY, ESPECIALLY WHEN THERE ARE SLIGHT VARIATIONS BETWEEN EACH COPY!! Component here can be anything: functions, class, ui components, widgets, etc.
 
-These are the default application rules for implementation work. A direct user instruction overrides them for that task.`
+These are the default application rules for implementation work. A direct user instruction overrides them for that task. Before you send your final reply, confirm you have already loaded every skill whose description matches the output you are about to write.`
 
 /** Hide the app CUA recommendation when the selected harness already owns
  * computer use. The exact app-owned clause keeps unrelated user edits intact. */
