@@ -82,6 +82,7 @@
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { scheduleDeferredWork } from '$lib/deferred-work'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { copyText } from '$lib/copy-text'
   import { loadProjectIcons, getProjectIcon, projectIconOnError } from '$lib/project-icons'
@@ -2217,10 +2218,15 @@
 
   // Keep managed-worktree health fresh for the scoped sidebar too, so the scope
   // menu offers "Repair worktree" exactly when the board would (deduped in the store).
+  // Health discovery shells out to Git per managed scope, so it is queued for
+  // after the switch has painted instead of competing with the conversation mount.
   $effect(() => {
     const projectId = scopeState.sidebarContext?.projectId
-    const buckets = projectId ? scopeState.boards.get(projectId)?.buckets : undefined
-    scopeState.syncBoardWorktreeHealth(projectId, buckets)
+    if (!projectId) return
+    const buckets = scopeState.boards.get(projectId)?.buckets
+    scheduleDeferredWork('scope:boardHealth', () =>
+      scopeState.syncBoardWorktreeHealth(projectId, buckets)
+    )
   })
 
   // Switching the docked scope is an interaction with it: re-read that scope's
@@ -2228,9 +2234,10 @@
   $effect(() => {
     const context = scopeState.sidebarContext
     if (!context) return
-    void scopeState
-      .revalidateWorktreeHealth(context.projectId, context.bucketId)
-      .catch(() => undefined)
+    const { projectId, bucketId } = context
+    scheduleDeferredWork('scope:worktreeHealth', () => {
+      void scopeState.revalidateWorktreeHealth(projectId, bucketId).catch(() => undefined)
+    })
   })
 
   // While a thread is selected, keep its row (and project) in focus in the

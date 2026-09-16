@@ -116,6 +116,7 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { scheduleDeferredWork } from '$lib/deferred-work'
   import {
     classifyProviderIssue,
     isUsageResetWaitIssue,
@@ -3709,13 +3710,18 @@
     // project boundary through the now-null live prop.
     const mountedProjectId = thread.projectId
     const mountedThreadId = thread.id
-    void invoke('providerAccounts:list', settings.harnessId)
-      .then((accounts) => {
-        if (alive) harnessAccounts = accounts
-      })
-      .catch(() => {
-        if (alive) harnessAccounts = []
-      })
+    // The composer's account selector is an enrichment: reading the harness's
+    // account registry must not share the switch frame with the conversation
+    // mount, so it is queued for after the paint.
+    scheduleDeferredWork('threadView:providerAccounts', () => {
+      void invoke('providerAccounts:list', settings.harnessId)
+        .then((accounts) => {
+          if (alive) harnessAccounts = accounts
+        })
+        .catch(() => {
+          if (alive) harnessAccounts = []
+        })
+    })
     if (!controller) {
       workspaceState.jumpToMessage = jumpToMessage
       workspaceState.loadUserMessageHistory = refreshUserMessageHistory
@@ -3740,8 +3746,12 @@
       void Promise.resolve(controller.load()).then(() => beginInitialPaintReveal())
       localReady = Promise.resolve()
       sessionReady = Promise.resolve('')
-      void refreshCommands()
-      void refreshCapabilitySkills()
+      // Slash commands and skills only feed the composer's menus, so they are
+      // read after the switch has painted instead of during it.
+      scheduleDeferredWork('threadView:commands', () => {
+        void refreshCommands()
+        void refreshCapabilitySkills()
+      })
       // Remounting into a side chat that is already blocked on a permission
       // request rehydrates its card; the parent thread is never asked for it.
       void refreshPendingPermissions()
@@ -3779,6 +3789,9 @@
     }
 
     if (shouldHydrateEngineeringState()) {
+      // Deliberately *not* deferred: this state decides which cards render above
+      // the composer (terminal-failure retry, stage cards), so loading it after
+      // the paint would shift the conversation's layout on every switch.
       void invoke('engineeringLifecycle:get', mountedProjectId, mountedThreadId)
         .then((state) => {
           if (alive) engineeringLifecycle = state
@@ -3814,9 +3827,12 @@
 
     // Slash menu inputs: harness commands and the skills visible to the
     // thread's harness. Previously commands only loaded after a harness
-    // switch, leaving a freshly mounted thread's slash menu empty.
-    void refreshCommands()
-    void refreshCapabilitySkills()
+    // switch, leaving a freshly mounted thread's slash menu empty. Both only
+    // feed composer menus, so they are read after the switch has painted.
+    scheduleDeferredWork('threadView:commands', () => {
+      void refreshCommands()
+      void refreshCapabilitySkills()
+    })
 
     // Subscribe to agent events for streaming
     unsubscribe = subscribe('agent:event', (...args: unknown[]) => {
@@ -5185,7 +5201,12 @@
   let composerRestoreKey = $state(0)
   let pendingQuestionRequests = $state<PendingAgentQuestionRequest[]>([])
   const resolvedQuestionRequestIds = new SvelteSet<string>()
-  let prevFocusComposerCount = 0
+  /** Baseline captured at mount. A focus request that was issued *before* this
+   *  conversation mounted is already satisfied by the composer's own autofocus,
+   *  so only requests that arrive afterwards may remount the composer. Starting
+   *  from zero made every thread switch remount ChatComposer a second time the
+   *  moment the first focus request of the session had ever been issued. */
+  let prevFocusComposerCount = workspaceState.focusComposerCount
   $effect(() => {
     const current = workspaceState.focusComposerCount
     if (current !== prevFocusComposerCount) {
