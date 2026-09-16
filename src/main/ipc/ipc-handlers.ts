@@ -36,6 +36,8 @@ import { resolveDeploymentProvider } from '../providers/registry'
 import type { DeploymentProviderContext } from '../providers/deployment-provider.interface'
 import type { GitProvider } from '../git/git-provider.interface'
 import { ProjectFilesService } from '../editor/project-files-service'
+import type { DirectoryPreviewService } from '../preview/directory-preview-service'
+import { posixDirname } from '../../lib/paths'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import { settleThreadBranch, type ThreadBranchDeps } from '../chat/thread-branch-service'
@@ -208,6 +210,7 @@ import type {
   PrdSectionId,
   CapturableSpecContextType,
   CreateProjectInput,
+  DirectoryPreviewSession,
   EngineeringSpec,
   EngineeringSpecContent,
   GitHubMutationResult,
@@ -2185,6 +2188,8 @@ function mergeCloudDeploymentContainers(
 export interface RegisterIpcHandlersOptions {
   projectManager?: ProjectManager
   projectFilesService?: ProjectFilesService
+  /** Loopback static servers behind the file tree's "Open in browser" action. */
+  directoryPreviewService?: DirectoryPreviewService
   powerWakeService?: PowerWakeService
   /** Auto-resume scheduler gated by the General settings toggle. */
   retryScheduler?: RetrySchedulerService
@@ -2214,6 +2219,9 @@ const HEARTBEAT_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
 
 /** Upper bound on one in-app "open these paths" request (a drag selection). */
 const MAX_OPEN_PATHS = 64
+
+/** Document types the directory preview can open directly at their own URL. */
+const HTML_PREVIEW_PATTERN = /\.(?:html?|xhtml)$/iu
 
 function validateHeartbeatTimes(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0) {
@@ -5415,6 +5423,57 @@ export function registerIpcHandlers(
           : validateEntityId(scopeBucketId, 'Scope bucket ID'),
         threadIdArg(threadId)
       )
+  )
+  ipcMain.handle(
+    'directoryPreview:open',
+    async (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ): Promise<DirectoryPreviewSession> => {
+      const previews = options.directoryPreviewService
+      if (!previews) throw new TypeError('Directory preview is unavailable')
+      const validatedProjectId = validateEntityId(projectId, 'Project ID')
+      const validatedScopeBucketId =
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      const requested = requireString(relativePath, 'Preview path', true)
+      if (requested === '') {
+        // The mount root itself: `getInfo` rejects an empty relative path, so
+        // it is resolved through the scope authority directly.
+        const registration = await previews.open(
+          await projectFilesService.resolveMountRoot(
+            validatedProjectId,
+            validatedScopeBucketId,
+            threadIdArg(threadId)
+          )
+        )
+        return { url: registration.url, directory: '', entryFile: null }
+      }
+      const info = await projectFilesService.getInfo(
+        validatedProjectId,
+        requested,
+        validatedScopeBucketId,
+        threadIdArg(threadId)
+      )
+      const entryFile =
+        info.kind === 'file' && HTML_PREVIEW_PATTERN.test(info.name) ? info.name : null
+      if (info.kind !== 'directory' && !entryFile) {
+        throw new TypeError('Only a directory or an HTML file can be opened in the browser')
+      }
+      // A single file is served from the origin root of its own directory, so
+      // that the file's relative and root-absolute asset URLs resolve exactly
+      // as they would in a plain static host.
+      const registration = await previews.open(
+        info.kind === 'directory' ? info.absolutePath : dirname(info.absolutePath)
+      )
+      return {
+        url: entryFile ? `${registration.url}${encodeURIComponent(entryFile)}` : registration.url,
+        directory: info.kind === 'directory' ? info.path : posixDirname(info.path),
+        entryFile
+      }
+    }
   )
   privileged(
     'projectFiles:openInEditor',

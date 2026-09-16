@@ -873,6 +873,21 @@ export class ProjectFilesService {
     return this.resolveExistingPath(root, relativePath, false)
   }
 
+  /**
+   * Canonical root of a (project, scope, thread) mount.
+   *
+   * `getInfo` resolves an entry *inside* a mount and rejects an empty path, so
+   * callers that need the mount root itself (the directory preview server)
+   * resolve it here instead of re-deriving scope authority.
+   */
+  async resolveMountRoot(
+    projectId: string,
+    scopeBucketId?: string,
+    threadId?: string
+  ): Promise<string> {
+    return this.projectRoot(projectId, scopeBucketId, threadId)
+  }
+
   async writeText(
     projectId: string,
     relativePath: string,

@@ -468,6 +468,9 @@ let speechService: SpeechService | null = null
 let unregisterSpeechIpc: (() => void) | null = null
 let prototypePreviewService:
   import('./prototypes/prototype-preview-service').PrototypePreviewService | null = null
+/** Loopback static servers behind the file tree's "Open in browser" action. */
+let directoryPreviewService:
+  import('./preview/directory-preview-service').DirectoryPreviewService | null = null
 /**
  * Resolved lazily so the `appfile://` preview protocol can be installed before
  * the main window loads (its renderer requests previews as soon as it hydrates).
@@ -626,7 +629,8 @@ async function bootPostPaintServices(): Promise<void> {
     { HeartbeatSchedulerService },
     { SpeechService },
     { registerSpeechIpc },
-    { PrototypePreviewService }
+    { PrototypePreviewService },
+    { DirectoryPreviewService }
   ] = await Promise.all([
     import('./ipc/ipc-handlers'),
     import('../lib/engines/project-manager'),
@@ -643,7 +647,8 @@ async function bootPostPaintServices(): Promise<void> {
     import('./system/heartbeat-scheduler-service'),
     import('./speech/speech-service'),
     import('./ipc/speech-ipc'),
-    import('./prototypes/prototype-preview-service')
+    import('./prototypes/prototype-preview-service'),
+    import('./preview/directory-preview-service')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -736,6 +741,7 @@ async function bootPostPaintServices(): Promise<void> {
   }
   unregisterSpeechIpc = registerSpeechIpc(speechService, () => mainWindow?.webContents ?? null)
   prototypePreviewService = new PrototypePreviewService()
+  directoryPreviewService = new DirectoryPreviewService()
   chatEngine.setPrototypePreviewRegistrar(
     (previewSlug, canonicalRoot) =>
       prototypePreviewService?.register(previewSlug, canonicalRoot) ?? Promise.resolve()
@@ -798,6 +804,7 @@ async function bootPostPaintServices(): Promise<void> {
   registerIpcHandlers(storage, database, updaterService, chatEngine, {
     projectManager,
     projectFilesService,
+    directoryPreviewService,
     powerWakeService,
     retryScheduler,
     heartbeatScheduler,
@@ -1685,6 +1692,13 @@ async function runShutdownPipeline(): Promise<void> {
     prototypePreviewService = null
   } catch (error) {
     Logger.error('Prototype preview service cleanup failed during shutdown:', error)
+  }
+
+  try {
+    await directoryPreviewService?.dispose()
+    directoryPreviewService = null
+  } catch (error) {
+    Logger.error('Directory preview service cleanup failed during shutdown:', error)
   }
 
   try {

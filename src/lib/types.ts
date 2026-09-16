@@ -356,6 +356,20 @@ export interface ProjectFileInfo extends ProjectFileEntry {
   mode: number
 }
 
+/**
+ * A loopback static server serving one project directory, opened in the in-app
+ * browser so a page's own scripts, stylesheets, and relative *and* absolute
+ * asset URLs all resolve. Returned by `directoryPreview:open`.
+ */
+export interface DirectoryPreviewSession {
+  /** Loopback origin URL to open (`http://127.0.0.1:<port>/...`). */
+  url: string
+  /** Project-relative directory being served; `''` is the project root. */
+  directory: string
+  /** Whether the URL points at one file inside the directory. */
+  entryFile: string | null
+}
+
 export type ProjectFileTransferMode = 'copy' | 'move'
 
 export interface ProjectFileDropResult {

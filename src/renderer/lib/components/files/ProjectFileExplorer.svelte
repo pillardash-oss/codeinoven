@@ -22,6 +22,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { copyText } from '$lib/copy-text'
+  import { openInBrowser } from '$lib/open-in-browser'
   import { clampFileExplorerWidth } from '$lib/stores/file-explorer.svelte'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
@@ -138,6 +139,8 @@
   >(null)
   let inlineInput = $state<HTMLInputElement | null>(null)
   let operationPending = $state(false)
+  /** Guards the browser preview action while a loopback server is starting. */
+  let browserPreviewPending = $state(false)
   let deleteTarget = $state<{ paths: string[]; label: string } | null>(null)
   let info = $state<ProjectFileInfo | null>(null)
   let treeScroll = $state<HTMLDivElement | null>(null)
@@ -1143,6 +1146,22 @@
     }
   }
 
+  /** Serve a directory (or the directory holding one HTML file) over a loopback
+   *  origin and open it in a browser, so scripts, stylesheets, and relative and
+   *  absolute asset URLs all resolve the way a static host serves them. */
+  async function openEntryInBrowser(entry: ProjectFileEntry | null): Promise<void> {
+    if (browserPreviewPending) return
+    browserPreviewPending = true
+    try {
+      const session = await projectFilesWorkspace.openDirectoryPreview(projectId, entry?.path ?? '')
+      await openInBrowser(session.url)
+    } catch (error) {
+      reportError(error, 'The directory could not be served for browser preview')
+    } finally {
+      browserPreviewPending = false
+    }
+  }
+
   function directoryContainsLastTurnFile(path: string): boolean {
     const prefix = path ? `${path}/` : ''
     return lastTurnPaths.some((changedPath) => changedPath.startsWith(prefix))
@@ -1361,6 +1380,7 @@
     }}
     onInfo={() => void showInfo(entry)}
     onReveal={() => void revealInFileManager(entry)}
+    onOpenInBrowser={() => void openEntryInBrowser(entry)}
   >
     {#if inlineEdit?.kind === 'rename' && inlineEdit.entry.path === entry.path}
       <div
@@ -1608,6 +1628,7 @@
     onDelete={() => undefined}
     onInfo={() => undefined}
     onReveal={() => undefined}
+    onOpenInBrowser={() => void openEntryInBrowser(null)}
   >
     <div
       {@attach attachTreeScroll}

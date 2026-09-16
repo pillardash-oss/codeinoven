@@ -1,21 +1,10 @@
 import { createReadStream } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { open, opendir, realpath, stat } from 'node:fs/promises'
-import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { mimeTypeForPath } from '../../lib/mime-types'
 import { PROTOTYPE_ASSET_BYTE_LIMIT } from '../../lib/prototypes/prototype-artifacts'
 
-const MIME_TYPES: Readonly<Record<string, string>> = {
-  '.css': 'text/css; charset=utf-8',
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.svg': 'image/svg+xml',
-  '.webp': 'image/webp',
-  '.woff2': 'font/woff2'
-}
 const PREVIEW_CHUNK_BYTES = 192 * 1024
 
 /** 16x16 amber placeholder served when a browser asks the origin root for a favicon. */
@@ -88,7 +77,7 @@ export async function readPrototypePreviewChunk(
     base64: buffer.toString('base64'),
     nextOffset: offset + length,
     size: info.size,
-    mime: MIME_TYPES[extname(actual).toLowerCase()] ?? 'application/octet-stream'
+    mime: mimeTypeForPath(actual)
   }
 }
 
@@ -219,10 +208,7 @@ export class PrototypePreviewService {
       }
       response.statusCode = 200
       response.setHeader('Content-Length', String(targetInfo.size))
-      response.setHeader(
-        'Content-Type',
-        MIME_TYPES[extname(actual).toLowerCase()] ?? 'application/octet-stream'
-      )
+      response.setHeader('Content-Type', mimeTypeForPath(actual))
       createReadStream(actual, { highWaterMark: 256 * 1024 }).pipe(response)
     } catch {
       response.statusCode = 404

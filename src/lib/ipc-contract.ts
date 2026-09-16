@@ -43,6 +43,7 @@ import type {
   ChecklistItem,
   CreateProjectInput,
   CreateThreadInput,
+  DirectoryPreviewSession,
   EditorId,
   EditorInfo,
   EngineeringSpec,
@@ -2181,6 +2182,12 @@ export const IPC_INVOKE_CONTRACT = {
   'projectFiles:info': {} as Contract<
     [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     ProjectFileInfo
+  >,
+  /** Serve one project directory (or the directory holding one HTML file) on a
+   *  loopback origin and return the URL to open in the in-app browser. */
+  'directoryPreview:open': {} as Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
+    DirectoryPreviewSession
   >,
   'projectFiles:openInEditor': {} as Contract<
     [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],

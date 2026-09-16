@@ -1,4 +1,5 @@
 import type {
+  DirectoryPreviewSession,
   ProjectFileDropResult,
   ProjectFileEntry,
   ProjectFileInfo,
@@ -618,6 +619,23 @@ class ProjectFilesWorkspace {
     return this.runFileOperation(() =>
       invoke(
         'projectFiles:info',
+        projectId,
+        path,
+        this.scopeFor(projectId),
+        this.threadArg(projectId)
+      )
+    )
+  }
+
+  /**
+   * Serve a project directory (or the directory holding one HTML file) from a
+   * loopback origin so a page's own scripts, stylesheets, and relative and
+   * absolute asset URLs all resolve. Returns the URL to open in a browser.
+   */
+  async openDirectoryPreview(projectId: string, path: string): Promise<DirectoryPreviewSession> {
+    return this.runFileOperation(() =>
+      invoke(
+        'directoryPreview:open',
         projectId,
         path,
         this.scopeFor(projectId),
