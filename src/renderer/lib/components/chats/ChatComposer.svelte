@@ -193,7 +193,7 @@
     independentAuditEnabled?: boolean
     /** Called when the user toggles the independent audit switch. */
     onIndependentAuditToggle?: (enabled: boolean) => void | Promise<void>
-    /** Engineering toolbox is hidden (Independent Audit staged or enabled  
+    /** Engineering toolbox is hidden (Independent Audit staged or enabled
      *  the two controls are mutually exclusive before a send commits either). */
     engineeringToolboxHidden?: boolean
     /** Hides the permission level selector and forces auto review   chats are
@@ -261,7 +261,6 @@
      *  footer of the composer. Only set in project mode. */
     scopeShoe?: ComposerScopeShoe
   }
-
 
   let {
     onSend,
@@ -439,9 +438,7 @@
   }
   /** Viewport geometry of the conversation region while files are in flight, so
    *  the overlay covers exactly that region (never the sidebars). */
-  let dropRegion = $state<{ left: number; top: number; width: number; height: number } | null>(
-    null
-  )
+  let dropRegion = $state<{ left: number; top: number; width: number; height: number } | null>(null)
   let previewFile = $state<PromptAttachment | null>(null)
   /** Object URLs for image/PDF/media/document downloads, keyed by attachment file:// URL. */
   let previewUrls = $state<Record<string, string>>({})
@@ -1369,13 +1366,12 @@
       // Custom base URL providers run without an account: fall back to the
       // harness default only for real providers so a turn never gets a random
       // harness account stamped onto its attribution.
-      accountId:
-        isCodeInOvenCustomProviderId(providerId)
-          ? undefined
-          : (accountId ??
-            (nextHarness !== resolved.harnessId
-              ? `${nextHarness}.default`
-              : (resolved.accountId ?? `${nextHarness}.default`))),
+      accountId: isCodeInOvenCustomProviderId(providerId)
+        ? undefined
+        : (accountId ??
+          (nextHarness !== resolved.harnessId
+            ? `${nextHarness}.default`
+            : (resolved.accountId ?? `${nextHarness}.default`))),
       ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(fastSupported ? {} : { inferenceMode: 'normal' })
     }
@@ -1668,13 +1664,22 @@
     return { x: 0, y: 0 }
   }
 
-  /** True when the pointer is inside any visible project file tree region. The
-   *  file tree handles the drag/drop itself, so the composer must not capture it. */
-  function overFileTree(e: { clientX: number; clientY: number }): boolean {
-    const trees = document.querySelectorAll<HTMLElement>('[data-region="file-tree"]')
-    for (const tree of trees) {
-      if (tree.offsetParent === null) continue
-      if (insideRect(tree.getBoundingClientRect(), e)) return true
+  /**
+   * Surfaces that own their own OS file drop: the project file tree (imports
+   * into the project) and the project sidebar (folders become projects, single
+   * files open standalone). Their regions are checked before the conversation
+   * because the sidebar's collapsed overlay and the file tree's dock both sit on
+   * top of the conversation column, so a point inside the conversation may still
+   * be an element the composer must not capture as an attachment.
+   */
+  const SELF_HANDLED_DROP_REGIONS = '[data-region="file-tree"], [data-drop-region="sidebar"]'
+
+  /** True when the pointer is inside a surface that handles the drop itself. */
+  function overSelfHandledDropRegion(e: { clientX: number; clientY: number }): boolean {
+    const regions = document.querySelectorAll<HTMLElement>(SELF_HANDLED_DROP_REGIONS)
+    for (const region of regions) {
+      if (region.offsetParent === null) continue
+      if (insideRect(region.getBoundingClientRect(), e)) return true
     }
     return false
   }
@@ -1713,9 +1718,9 @@
       if (selectedHarnessLacksAttachments) return
       if (!hasFiles(e.dataTransfer)) return
       const rect = conversationRegionRect()
-      if (!rect || !insideRect(rect, e) || overFileTree(e)) {
-        // Outside the conversation (or over the file tree): leave the drop to
-        // whichever surface owns that region and hide the overlay.
+      if (!rect || !insideRect(rect, e) || overSelfHandledDropRegion(e)) {
+        // Outside the conversation (or over a surface that owns the drop): leave
+        // it to whichever surface owns that region and hide the overlay.
         if (isDragging) {
           isDragging = false
           dropRegion = null
@@ -1758,7 +1763,7 @@
         return
       }
       const rect = conversationRegionRect()
-      if (!rect || !insideRect(rect, e) || overFileTree(e)) return
+      if (!rect || !insideRect(rect, e) || overSelfHandledDropRegion(e)) return
       e.preventDefault()
       isDragging = false
       dropRegion = null
@@ -2084,7 +2089,7 @@
           <p class="text-sm font-semibold text-foreground">This model can't see images</p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
             You're about to send an image to a model without vision capability. Image Descriptor is
-            a tool the model can call to describe the image for it   but you need to pick the vision
+            a tool the model can call to describe the image for it but you need to pick the vision
             model that does the describing.
           </p>
         </div>
@@ -2139,7 +2144,7 @@
       </div>
       {#if !gateVisionSelection}
         <p class="mt-1.5 text-[0.6875rem] text-dimmed">
-          No vision model selected   Continue is disabled until you pick one.
+          No vision model selected Continue is disabled until you pick one.
         </p>
       {/if}
       <div class="mt-3 flex justify-start">
@@ -2864,18 +2869,18 @@
     <div
       class="composer-shoe-card flex w-[80%] min-w-0 items-center justify-center border bg-surface px-2 pt-2.5 pb-1 shadow-md @container"
     >
-        <ComposerShoe
-          projectId={scopeShoe.projectId}
-          threadId={scopeShoe.threadId}
-          bucket={scopeShoe.bucket}
-          source={scopeShoe.source}
-          host={scopeShoe.host}
-          project={scopeShoe.project}
-          onSwitchProject={scopeShoe.onSwitchProject}
-          isNewThread={scopeShoe.isNewThread}
-          isWorking={scopeShoe.isWorking}
-          onOpenScopeView={scopeShoe.onOpenScopeView}
-        />
+      <ComposerShoe
+        projectId={scopeShoe.projectId}
+        threadId={scopeShoe.threadId}
+        bucket={scopeShoe.bucket}
+        source={scopeShoe.source}
+        host={scopeShoe.host}
+        project={scopeShoe.project}
+        onSwitchProject={scopeShoe.onSwitchProject}
+        isNewThread={scopeShoe.isNewThread}
+        isWorking={scopeShoe.isWorking}
+        onOpenScopeView={scopeShoe.onOpenScopeView}
+      />
     </div>
   </div>
 {/if}

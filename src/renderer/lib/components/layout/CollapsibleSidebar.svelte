@@ -27,6 +27,19 @@
     /** Binds the sidebar's scrollable content element so the owner can keep
      *  the active thread in view and detect user-initiated scrolling. */
     scroller?: HTMLElement | null
+    /**
+     * Optional OS file-drop target on the sidebar body: `active` drives the
+     * drop affordance. The handlers attach to the scrollable content element
+     * itself rather than to a wrapper, because children size themselves from
+     * that element's definite height (e.g. the scoped-threads stage rail) and
+     * an extra wrapper would collapse them.
+     */
+    fileDrop?: {
+      active: boolean
+      onDragOver: (event: DragEvent) => void
+      onDragLeave: (event: DragEvent) => void
+      onDrop: (event: DragEvent) => void
+    }
     children: Snippet
   }
 
@@ -39,6 +52,7 @@
     hideHeader = false,
     footer,
     scroller = $bindable(null),
+    fileDrop = undefined,
     children
   }: Props = $props()
 
@@ -118,7 +132,19 @@
       </div>
     {/if}
 
-    <div class="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-2" {@attach captureScroller}>
+    <div
+      class="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-2"
+      class:ring-2={fileDrop?.active}
+      class:ring-primary={fileDrop?.active}
+      class:ring-inset={fileDrop?.active}
+      role={fileDrop ? 'region' : undefined}
+      aria-label={fileDrop ? 'Files dropped here open in CodeInOven' : undefined}
+      data-drop-region={fileDrop ? 'sidebar' : undefined}
+      ondragover={fileDrop?.onDragOver}
+      ondragleave={fileDrop?.onDragLeave}
+      ondrop={fileDrop?.onDrop}
+      {@attach captureScroller}
+    >
       {@render children()}
     </div>
 
@@ -172,7 +198,19 @@
         </div>
       {/if}
 
-      <div class="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-2" {@attach captureScroller}>
+      <div
+        class="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-2"
+        class:ring-2={fileDrop?.active}
+        class:ring-primary={fileDrop?.active}
+        class:ring-inset={fileDrop?.active}
+        role={fileDrop ? 'region' : undefined}
+        aria-label={fileDrop ? 'Files dropped here open in CodeInOven' : undefined}
+        data-drop-region={fileDrop ? 'sidebar' : undefined}
+        ondragover={fileDrop?.onDragOver}
+        ondragleave={fileDrop?.onDragLeave}
+        ondrop={fileDrop?.onDrop}
+        {@attach captureScroller}
+      >
         {@render children()}
       </div>
 

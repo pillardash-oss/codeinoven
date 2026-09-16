@@ -2701,9 +2701,9 @@
 
   // ─── Project actions ─────────────────────────────────────────────────────
 
-  /** Whether an OS drag currently hovers the project sidebar, driving its drop
-   *  affordance. Only the sidebar sets this; the conversation overlay is a
-   *  separate, region-scoped surface. */
+  /** Whether an OS drag currently hovers the sidebar body, driving the drop
+   *  affordance the sidebar shell renders. Only the sidebar sets this; the
+   *  conversation overlay is a separate, region-scoped surface. */
   let sidebarDropActive = $state(false)
 
   function carriesDroppedFiles(event: DragEvent): boolean {
@@ -3609,6 +3609,12 @@
             : 'Chats'}
       hideHeader={!workspaceState.specStudioOpen}
       bind:scroller={sidebarScroller}
+      fileDrop={{
+        active: sidebarDropActive,
+        onDragOver: handleSidebarDragOver,
+        onDragLeave: handleSidebarDragLeave,
+        onDrop: (event: DragEvent) => void handleSidebarDrop(event)
+      }}
     >
       {#snippet header()}
         {#if workspaceState.specStudioOpen}
@@ -3624,21 +3630,6 @@
         {/if}
       {/snippet}
 
-      <!-- Drop target for folders and files dragged in from the operating
-           system. Scoped to the sidebar, so a drag aimed at the conversation or
-           the file tree is never captured here; folders open as projects
-           (de-duplicated) and single files open in the standalone viewer. -->
-      <div
-        class="flex min-h-full flex-col rounded-lg transition-shadow"
-        class:ring-2={sidebarDropActive}
-        class:ring-primary={sidebarDropActive}
-        class:ring-inset={sidebarDropActive}
-        role="region"
-        aria-label="Project sidebar"
-        ondragover={handleSidebarDragOver}
-        ondragleave={handleSidebarDragLeave}
-        ondrop={(event: DragEvent) => void handleSidebarDrop(event)}
-      >
       {#if workspaceState.specStudioOpen}
         <SpecConversationSidebar />
       {:else if mode === 'projects' && scopeState.sidebarContext}
@@ -4478,7 +4469,6 @@
           {/if}
         {/if}
       {/if}
-      </div>
     </CollapsibleSidebar>
   {/if}
 
