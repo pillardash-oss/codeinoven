@@ -4788,11 +4788,11 @@
   <FullscreenPanelDialog
     tabs={fullscreenPullRequestTabs}
     activeTabId={fullscreenPullRequestId}
-    newLabel="Show all pull requests"
+    newLabel="New pull request"
     minimizeLabel="Close the full screen reader"
     onSelect={(id) => (fullscreenPullRequestId = id)}
     onCloseTab={closeFullscreenPullRequestTab}
-    onNew={() => (fullscreenPullRequestId = PR_READER_LIST_TAB)}
+    onNew={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
     onMinimize={() => (fullscreenPullRequestId = null)}
   >
     {#snippet icon()}
@@ -4804,6 +4804,7 @@
           {projectId}
           identity={githubIdentity}
           summary={fullscreenActivePullRequest}
+          variant="fullscreen"
           onBack={() => (fullscreenPullRequestId = PR_READER_LIST_TAB)}
           onAgentReview={(pr) => void startAgentReview(pr)}
           onOpenThread={(threadId) => void openReviewThread(threadId)}

@@ -56,6 +56,12 @@
     onResolveWithAgent?: (pr: PullRequestSummary) => void
     /** Open this pull request in the full screen reader, like the file editor. */
     onFullscreen?: () => void
+    /**
+     * `dock` is the narrow sidebar column: read-only chrome stacked above the
+     * body. `fullscreen` moves the title, tabs and write actions into a rail so
+     * the body gets the whole height.
+     */
+    variant?: 'dock' | 'fullscreen'
   }
 
   let {
@@ -68,7 +74,8 @@
     onOpenWorkflowRun,
     onResolveLocally,
     onResolveWithAgent,
-    onFullscreen
+    onFullscreen,
+    variant = 'dock'
   }: Props = $props()
 
   type DetailTab = 'conversation' | 'commits' | 'files' | 'checks' | 'agent'
@@ -80,6 +87,8 @@
   ]
 
   let tab = $state<DetailTab>('conversation')
+  /** In the dock the write actions fold away so a long conversation can breathe. */
+  let actionsCollapsed = $state(false)
   let commentBody = $state('')
   let method = $state<PrMergeMethod>('squash')
   let mergeConfirm = $state(false)
@@ -483,7 +492,7 @@
   {/each}
 {/snippet}
 
-<div class="flex h-full min-h-0 flex-col">
+{#snippet panelHead()}
   <!-- Header -->
   <div class="shrink-0 border-b border-border px-3 py-2.5">
     <div class="flex items-center gap-1.5">
@@ -595,18 +604,25 @@
     </p>
   {/if}
 
+{/snippet}
+
+{#snippet panelTabs(vertical = false)}
   <!-- Tabs -->
   <div
-    class="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border px-2 py-1.5"
+    class={[
+      'flex shrink-0 gap-0.5 border-b border-border px-2 py-1.5',
+      vertical ? 'flex-col items-stretch' : 'items-center overflow-x-auto'
+    ]}
   >
     {#each [{ id: 'conversation' as const, label: 'Conversation', icon: MessagesSquare, count: conversation.length }, { id: 'commits' as const, label: 'Commits', icon: GitCommitHorizontal, count: bundle?.commits.length ?? 0 }, { id: 'files' as const, label: 'Files', icon: FileDiff, count: bundle?.files.length ?? 0 }, { id: 'checks' as const, label: 'Checks', icon: ShieldCheck, count: checks?.checks.length ?? 0 }, { id: 'agent' as const, label: 'Agent', icon: Bot, count: agentReport?.content ? 1 : 0 }] as entry (entry.id)}
       {@const Icon = entry.icon}
       <button
         type="button"
-        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium transition-colors {tab ===
-        entry.id
-          ? 'bg-elevated text-foreground'
-          : 'text-muted hover:text-foreground'}"
+        class={[
+          'flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium transition-colors',
+          vertical ? 'w-full justify-start' : '',
+          tab === entry.id ? 'bg-elevated text-foreground' : 'text-muted hover:text-foreground'
+        ]}
         onclick={() => (tab = entry.id)}
       >
         <Icon size={12} />
@@ -615,7 +631,9 @@
       </button>
     {/each}
   </div>
+{/snippet}
 
+{#snippet panelBody()}
   <div class="min-h-0 flex-1 overflow-y-auto">
     {#if loading}
       <div class="flex items-center justify-center gap-2 py-10 text-[0.6875rem] text-dimmed">
@@ -826,7 +844,9 @@
       </div>
     {/if}
   </div>
+{/snippet}
 
+{#snippet panelActions()}
   <!--
     Everything that consumes what you write lives here, under the editor.
     Approve and Request changes used to sit in a bar at the top of the panel,
@@ -1092,7 +1112,51 @@
       {/if}
     </div>
   </div>
-</div>
+{/snippet}
+
+{#if variant === 'fullscreen'}
+  <!--
+    Full screen: the title, the tab strip and every write action move into a
+    rail so the active view (normally the conversation) gets the whole height.
+  -->
+  <div class="flex h-full min-h-0">
+    <aside class="flex w-72 shrink-0 flex-col border-r border-border">
+      {@render panelHead()}
+      {@render panelTabs(true)}
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        {@render panelActions()}
+      </div>
+    </aside>
+    <div class="flex min-w-0 flex-1 flex-col">
+      {@render panelBody()}
+    </div>
+  </div>
+{:else}
+  <div class="flex h-full min-h-0 flex-col">
+    {@render panelHead()}
+    {@render panelTabs(false)}
+    {@render panelBody()}
+    <!--
+      A long conversation needs the column far more than the composer does, so
+      the write actions fold away behind one row while they are not in use.
+    -->
+    <button
+      type="button"
+      class="flex h-6 shrink-0 cursor-pointer items-center gap-1.5 border-t border-border bg-surface px-3 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      aria-expanded={!actionsCollapsed}
+      title={actionsCollapsed
+        ? 'Show the comment and merge controls'
+        : 'Hide the comment and merge controls'}
+      onclick={() => (actionsCollapsed = !actionsCollapsed)}
+    >
+      <ChevronDown size={11} class={actionsCollapsed ? 'rotate-180' : ''} />
+      Comment and merge
+    </button>
+    {#if !actionsCollapsed}
+      {@render panelActions()}
+    {/if}
+  </div>
+{/if}
 
 <AlertDialog.Root open={mergeConfirm} onOpenChange={(value) => (mergeConfirm = value)}>
   <AlertDialog.Portal>
