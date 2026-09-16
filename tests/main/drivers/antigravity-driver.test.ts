@@ -319,6 +319,270 @@ describe.skipIf(process.platform === 'win32')('AntigravityDriver', () => {
       vi.useRealTimers()
     }
   })
+  it('keeps brain thinking text when the transcript entry lands before the streamed step', async () => {
+    vi.useFakeTimers()
+    try {
+      const brainRoot = await mkdtemp(join(tmpdir(), 'codeinoven-antigravity-brain-'))
+      roots.push(brainRoot)
+      setAntigravityBrainRootForTests(brainRoot)
+      const conversationId = 'conv-race'
+      let turnChild: FakeChild | undefined
+      spawnMock.mockImplementation((_command: string, args: string[]) => {
+        const child = new FakeChild()
+        if (args.includes('-p')) turnChild = child
+        if (args.includes('models')) {
+          queueMicrotask(() => {
+            child.stdout.emit('data', Buffer.from('claude-sonnet-4-6\n'))
+            child.emit('exit', 0, null)
+          })
+        }
+        return child as unknown as ChildProcess
+      })
+
+      const driver = new AntigravityDriver(await storage())
+      const sessionId = await driver.createSession('/project', 'Antigravity thread')
+      let latest: Extract<AgentPart, { type: 'reasoning' }> | undefined
+      driver.onEvent((event) => {
+        if (event.type === 'message.part.updated' && event.part.type === 'reasoning') {
+          latest = event.part
+        }
+      })
+      const sending = driver
+        .sendPrompt('/project', {
+          sessionId,
+          text: 'Read the project',
+          attachments: [],
+          settings: {
+            harnessId: 'antigravity',
+            providerId: 'google',
+            modelId: 'claude-sonnet-4-6',
+            thinkingLevel: 'high',
+            permissionLevel: 'auto_review'
+          }
+        })
+        .then(() => 'done')
+        .catch(() => 'failed')
+      await vi.waitFor(() => {
+        if (!turnChild) throw new Error('turn child not spawned')
+      })
+      const turn = turnChild as FakeChild
+      turn.stdout.emit(
+        'data',
+        Buffer.from(JSON.stringify({ event: 'init', conversation_id: conversationId }) + '\n')
+      )
+
+      // agy persists a step's thinking while the model step settles, so in
+      // practice the brain entry lands *before* the CLI streams that step's
+      // `step_update`. The streamed timed reasoning part that follows must not
+      // clobber the brain text with an empty string.
+      const logDir = join(brainRoot, conversationId, '.system_generated', 'logs')
+      const { mkdir, writeFile } = await import('fs/promises')
+      await mkdir(logDir, { recursive: true })
+      await writeFile(
+        join(logDir, 'transcript.jsonl'),
+        JSON.stringify({
+          type: 'PLANNER_RESPONSE',
+          step_index: 1,
+          thinking: 'Brain-first thinking text.'
+        }) + '\n'
+      )
+      await vi.waitFor(
+        () => {
+          expect(latest?.text).toBe('Brain-first thinking text.')
+        },
+        { timeout: 5000 }
+      )
+
+      turn.stdout.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            event: 'step_update',
+            conversation_id: conversationId,
+            step_update: {
+              step_type: 'agent_response',
+              step_index: 1,
+              state: 'DONE',
+              duration_seconds: 2,
+              usage: { thinking_tokens: 400 }
+            }
+          }) + '\n'
+        )
+      )
+      await vi.waitFor(
+        () => {
+          expect(latest?.text).toBe('Brain-first thinking text.')
+          expect(latest?.time?.end).toBeGreaterThan(latest?.time?.start ?? 0)
+        },
+        { timeout: 5000 }
+      )
+
+      turn.stdout.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            event: 'result',
+            conversation_id: conversationId,
+            result: { status: 'SUCCESS', response: 'Done.' }
+          }) + '\n'
+        )
+      )
+      turn.emit('exit', 0, null)
+      expect(await sending).toBe('done')
+    } finally {
+      setAntigravityBrainRootForTests(undefined)
+      vi.useRealTimers()
+    }
+  })
+
+  it('never replays an earlier turn brain entry into a resumed turn', async () => {
+    try {
+      const brainRoot = await mkdtemp(join(tmpdir(), 'codeinoven-antigravity-brain-'))
+      roots.push(brainRoot)
+      setAntigravityBrainRootForTests(brainRoot)
+      const conversationId = 'conv-resume'
+      let turnChild: FakeChild | undefined
+      // Reset through a call so TypeScript does not narrow `turnChild` to
+      // `undefined` for the remainder of the test.
+      const clearTurnChild = () => {
+        turnChild = undefined
+      }
+      spawnMock.mockImplementation((_command: string, args: string[]) => {
+        const child = new FakeChild()
+        if (args.includes('-p')) turnChild = child
+        if (args.includes('models')) {
+          queueMicrotask(() => {
+            child.stdout.emit('data', Buffer.from('claude-sonnet-4-6\n'))
+            child.emit('exit', 0, null)
+          })
+        }
+        return child as unknown as ChildProcess
+      })
+
+      const driver = new AntigravityDriver(await storage())
+      const sessionId = await driver.createSession('/project', 'Antigravity thread')
+      const settings: ThreadSettings = {
+        harnessId: 'antigravity',
+        providerId: 'google',
+        modelId: 'claude-sonnet-4-6',
+        thinkingLevel: 'high',
+        permissionLevel: 'auto_review'
+      }
+      const parts: Extract<AgentPart, { type: 'reasoning' }>[] = []
+      driver.onEvent((event) => {
+        if (event.type === 'message.part.updated' && event.part.type === 'reasoning') {
+          parts.push(event.part)
+        }
+      })
+
+      // Turn one latches the native conversation id so turn two resumes it.
+      const first = driver
+        .sendPrompt('/project', { sessionId, text: 'One', attachments: [], settings })
+        .then(() => 'done')
+        .catch(() => 'failed')
+      await vi.waitFor(() => {
+        if (!turnChild) throw new Error('turn child not spawned')
+      })
+      const firstTurn = turnChild as FakeChild
+      firstTurn.stdout.emit(
+        'data',
+        Buffer.from(JSON.stringify({ event: 'init', conversation_id: conversationId }) + '\n')
+      )
+      firstTurn.stdout.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            event: 'step_update',
+            conversation_id: conversationId,
+            step_update: { step_type: 'user_input', step_index: 0, state: 'DONE' }
+          }) + '\n'
+        )
+      )
+      clearTurnChild()
+      firstTurn.stdout.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            event: 'result',
+            conversation_id: conversationId,
+            result: { status: 'SUCCESS', response: 'One done.' }
+          }) + '\n'
+        )
+      )
+      firstTurn.emit('exit', 0, null)
+      expect(await first).toBe('done')
+
+      // The transcript is append-only, so it now holds turn one's thinking.
+      const logDir = join(brainRoot, conversationId, '.system_generated', 'logs')
+      const { mkdir, writeFile } = await import('fs/promises')
+      await mkdir(logDir, { recursive: true })
+      await writeFile(
+        join(logDir, 'transcript.jsonl'),
+        JSON.stringify({
+          type: 'PLANNER_RESPONSE',
+          step_index: 1,
+          thinking: 'OLD TURN THINKING'
+        }) + '\n'
+      )
+
+      // Turn two resumes the conversation; agy continues step numbering at 20.
+      parts.length = 0
+      const second = driver
+        .sendPrompt('/project', { sessionId, text: 'Two', attachments: [], settings })
+        .then(() => 'done')
+        .catch(() => 'failed')
+      await vi.waitFor(() => {
+        if (!turnChild) throw new Error('resumed turn child not spawned')
+      })
+      const secondTurn = turnChild as FakeChild
+      secondTurn.stdout.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            event: 'step_update',
+            conversation_id: conversationId,
+            step_update: { step_type: 'user_input', step_index: 20, state: 'DONE' }
+          }) + '\n'
+        )
+      )
+      secondTurn.stdout.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            event: 'step_update',
+            conversation_id: conversationId,
+            step_update: {
+              step_type: 'agent_response',
+              step_index: 21,
+              state: 'DONE',
+              duration_seconds: 2,
+              usage: { thinking_tokens: 300 }
+            }
+          }) + '\n'
+        )
+      )
+      // Let the 800ms tailer poll the transcript while the turn runs. Real
+      // time, because the poll's fs work must actually settle.
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+      secondTurn.stdout.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            event: 'result',
+            conversation_id: conversationId,
+            result: { status: 'SUCCESS', response: 'Two done.' }
+          }) + '\n'
+        )
+      )
+      secondTurn.emit('exit', 0, null)
+      expect(await second).toBe('done')
+
+      expect(parts.some((part) => part.text.includes('OLD TURN THINKING'))).toBe(false)
+      expect(parts.some((part) => part.id.endsWith(':thinking:1'))).toBe(false)
+    } finally {
+      setAntigravityBrainRootForTests(undefined)
+    }
+  })
 })
 
 describe('Antigravity brain trace parser', () => {
