@@ -15,7 +15,7 @@
 </script>
 
 <!-- Armed dictation: the same processing pulse the transcribing bars carry, on
-     the icon that says how the transcript will be delivered   a wave for
+     the icon that says how the transcript will be delivered: a wave for
      "queued behind the run", a clock for "steering into it". -->
 <span
   class="voice-send-indicator {tone}"

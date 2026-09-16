@@ -23,7 +23,7 @@ export type SpeechEditorApplyResult =
  * Optional dispatch capability for editors whose content is itself a message
  * (the chat composer). Armed voice dictation delivers its transcript through
  * the host's own send path so queueing, steering, and every send gate behave
- * exactly like the user pressing send — instead of a second, drifting copy of
+ * exactly like the user pressing send, instead of a second, drifting copy of
  * those rules living in the speech layer.
  */
 export interface SpeechEditorAutoSend {

@@ -60,9 +60,7 @@
       if (!a.available) return false
       if (a.capability) return a.capability === 'asr'
       const catalogEntry = catalog.artifacts.find((c) => c.id === a.artifactId)
-      return (
-        catalogEntry?.capability === 'asr' && catalogEntry.qualification.status !== 'retired'
-      )
+      return catalogEntry?.capability === 'asr' && catalogEntry.qualification.status !== 'retired'
     })
   })
 
@@ -159,7 +157,8 @@
     if (
       recordingHere ||
       (belongsHere &&
-        (speechController.state.state === 'recording' || speechController.state.state === 'starting'))
+        (speechController.state.state === 'recording' ||
+          speechController.state.state === 'starting'))
     )
       return 'stop' as const
     if (
@@ -172,6 +171,9 @@
       return 'wait' as const
     return 'start' as const
   })
+  /** The recorder has been told to stop and the transcript is on its way. This
+   *  mic has no recording left to stop, only an arming gesture to accept. */
+  const stoppingHere = $derived(belongsHere && speechController.state.state === 'stopping')
   /** What an armed transcription will do once its transcript lands. */
   const voiceSendLabel = $derived.by((): string | null => {
     if (!voiceSendStage) return null
@@ -189,18 +191,23 @@
         : 'Retry voice recording'
     }
     if (action === 'wait') {
-      return speechController.state.state === 'starting'
-        ? 'Starting voice recording'
-        : speechController.state.state === 'stopping'
-          ? 'Stopping voice recording'
-          : 'Transcribing voice recording'
+      const phase =
+        speechController.state.state === 'starting'
+          ? 'Starting voice recording'
+          : speechController.state.state === 'stopping'
+            ? 'Stopping voice recording'
+            : 'Transcribing voice recording'
+      if (!canAutoSendVoice) return phase
+      const armed = voiceSendLabel
+      if (armed) return `${phase}. ${armed}`
+      return `${phase}. Double-click or press ${sendChord} to send the transcript automatically when it is ready.`
     }
     if (transcribingHere) {
       const armed = voiceSendLabel
-      if (armed) return `Transcribing your last recording   ${armed}`
+      if (armed) return `Transcribing your last recording. ${armed}`
       return canAutoSendVoice
-        ? `Transcribing your last recording   double-click to send it automatically, or click to start a new one`
-        : 'Transcribing your last recording   click to start a new one'
+        ? `Transcribing your last recording. Double-click or press ${sendChord} to send it automatically when it is ready, or click to start a new one.`
+        : 'Transcribing your last recording. Click to start a new one.'
     }
     return 'Start voice recording'
   })
@@ -209,7 +216,9 @@
    * A click on the processing icon normally starts the next recording, but a
    * double-click arms the automatic send of the transcript on its way. The
    * single-click meaning is held back by one double-click window so the arming
-   * gesture never also starts a recording underneath it.
+   * gesture never also starts a recording underneath it. While the capture is
+   * still finalising there is no recording to start at all, so the click can
+   * only be the arming gesture.
    */
   let pendingRestart: ReturnType<typeof setTimeout> | null = null
   let lastProcessingClickAt = 0
@@ -226,8 +235,15 @@
   }
 
   function activateFromClick(): void {
-    if (!transcribingHere || !canAutoSendVoice) {
+    if (!canAutoSendVoice) {
       void activate()
+      return
+    }
+    if (action !== 'start') {
+      // The capture is still being finalised, so nothing can start or stop
+      // here: only the double-click that arms the transcript has a meaning.
+      if (performance.now() - lastProcessingClickAt <= VOICE_SEND_DOUBLE_CLICK_MS) armVoiceSend()
+      else lastProcessingClickAt = performance.now()
       return
     }
     const now = performance.now()
@@ -282,11 +298,7 @@
       const projectId = blockedScope.kind === 'project' ? blockedScope.projectId : undefined
       if (projectId) {
         try {
-          const thread = await invoke(
-            'thread:get',
-            projectId,
-            blockedScope.threadId
-          )
+          const thread = await invoke('thread:get', projectId, blockedScope.threadId)
           if (thread?.title) title = `Already recording on “${thread.title}”`
         } catch {
           // fall back to the generic title
@@ -347,13 +359,14 @@
   <button
     bind:this={buttonEl}
     type="button"
-    class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45 {action === 'blocked'
+    class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45 {action ===
+    'blocked'
       ? 'opacity-60'
       : ''} {className}"
     title={label}
     aria-label={label}
     aria-pressed={action === 'stop'}
-    disabled={disabled || action === 'wait'}
+    disabled={disabled || (action === 'wait' && !stoppingHere)}
     onpointerdown={(event) => {
       // Keep the editor focused while the pointer activates recording. The
       // target still captures its value and caret before the click is handled.
@@ -369,19 +382,21 @@
       <RecordingIndicator decorative />
     {:else if action === 'retry'}
       <TriangleAlert size={14} aria-hidden="true" />
+    {:else if voiceSendStage && (transcribingHere || stoppingHere)}
+      <!-- Armed while the dictation is still being produced, including the
+           window where the capture is finalising and the row already shows
+           the same armed state. -->
+      <VoiceSendIndicator stage={voiceSendStage} decorative />
     {:else if action === 'wait'}
       <WaveBars decorative label="Transcribing voice recording" />
     {:else if transcribingHere}
-      {#if voiceSendStage}
-        <VoiceSendIndicator stage={voiceSendStage} decorative />
-      {:else}
-        <WaveBars decorative label="Transcribing your last recording" />
-      {/if}
+      <WaveBars decorative label="Transcribing your last recording" />
     {:else}
       <Mic size={14} aria-hidden="true" />
     {/if}
   </button>
 
-  <span class="sr-only" aria-live="polite">{action !== 'start' || transcribingHere ? label : ''}</span>
+  <span class="sr-only" aria-live="polite"
+    >{action !== 'start' || transcribingHere ? label : ''}</span
+  >
 {/if}
-
