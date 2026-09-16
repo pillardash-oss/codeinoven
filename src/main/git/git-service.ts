@@ -481,12 +481,7 @@ export class GitService {
       )
       await this.wrapError(directory, 'mutation', async () => {
         const git = this.client(directory)
-        await git.raw([
-          'checkout',
-          side === 'incoming' ? '--theirs' : '--ours',
-          '--',
-          ...safePaths
-        ])
+        await git.raw(['checkout', side === 'incoming' ? '--theirs' : '--ours', '--', ...safePaths])
         await git.add(safePaths)
         await Promise.all(
           scratch.flatMap(({ document, metadata }) => [
@@ -867,8 +862,12 @@ export class GitService {
         // that spelling fails with "branch not found".
         const resolves = await git
           .raw(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])
-          .then(() => true, () => false)
-        const branchName = resolves || !name.startsWith('heads/') ? name : name.slice('heads/'.length)
+          .then(
+            () => true,
+            () => false
+          )
+        const branchName =
+          resolves || !name.startsWith('heads/') ? name : name.slice('heads/'.length)
         await this.removeWorktreesForBranch(git, branchName)
         await git.deleteLocalBranch(branchName, force)
       })
@@ -877,11 +876,7 @@ export class GitService {
   }
 
   /** `git push <remote> --delete <name>` removes a branch from a remote. */
-  async deleteRemoteBranch(
-    projectPath: string,
-    remote: string,
-    name: string
-  ): Promise<GitStatus> {
+  async deleteRemoteBranch(projectPath: string, remote: string, name: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
@@ -2400,7 +2395,7 @@ export class GitService {
   ): GitBranchInfo[] {
     // `refname:short` disambiguates when a tag shares the branch's name (e.g. a
     // `nightly` tag and `nightly` branch render as `heads/nightly`), so the
-    // operational branch `name` must be derived from the full ref instead  
+    // operational branch `name` must be derived from the full ref instead
     // `git branch -d heads/nightly` fails with "branch not found".
     const localRefPrefix = 'refs/heads/'
     const remoteRefPrefix = 'refs/remotes/'

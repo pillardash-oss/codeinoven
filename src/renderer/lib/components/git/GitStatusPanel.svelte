@@ -2709,44 +2709,39 @@
         onclick={() => void resolveConflictsWithAgent()}
       >
         <Bot size={11} />
-        Resolve with agents
+        Resolve with agent
       </button>
       <!--
         One decision with two answers, so one control: which side of every
-        conflicted file to keep. Both sides are destructive to the other, so
-        both confirm before they run.
+        conflicted file to keep. Its sides carry the merge editor's own names and
+        colours   accent incoming, primary current   and the group's label plus
+        each button's title spell out what they do, because the row cannot afford
+        a third word. Both sides are destructive to the other, so both confirm.
       -->
       <div
         class="flex h-6 shrink-0 items-center gap-0.5 rounded-xs border border-border bg-elevated p-0.5"
         role="group"
         aria-label="Accept one side of every conflicted file"
       >
-        <span class="px-1 text-[0.5625rem] font-medium text-dimmed">Accept</span>
         <button
           type="button"
-          class="h-5 shrink-0 rounded-sm px-1.5 text-[0.5625rem] font-medium text-accent transition-colors hover:bg-accent/15 disabled:cursor-default disabled:opacity-40"
+          class="h-5 shrink-0 rounded-sm px-1 text-[0.5625rem] font-medium text-accent transition-colors hover:bg-accent/15 disabled:cursor-default disabled:opacity-40"
           disabled={integrateBusy}
-          title="Replace every conflicted file with its incoming version"
+          title="Accept all incoming: replace every conflicted file with its incoming version"
           onclick={() => requestAcceptAllConflicts('incoming')}
         >
           incoming
         </button>
         <button
           type="button"
-          class="h-5 shrink-0 rounded-sm px-1.5 text-[0.5625rem] font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-default disabled:opacity-40"
+          class="h-5 shrink-0 rounded-sm px-1 text-[0.5625rem] font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-default disabled:opacity-40"
           disabled={integrateBusy}
-          title="Replace every conflicted file with its current version"
+          title="Accept all current: replace every conflicted file with its current version"
           onclick={() => requestAcceptAllConflicts('current')}
         >
           current
         </button>
       </div>
-      <span
-        class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-warning"
-      >
-        {conflicted.length}
-        {conflicted.length === 1 ? 'conflict' : 'conflicts'}
-      </span>
     {:else if unstaged.length + untracked.length > 0}
       <button
         type="button"
