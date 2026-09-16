@@ -20,9 +20,9 @@
 {:else if indicator === 'transcribing'}
   <WaveBars label="Transcribing" />
 {:else if indicator === 'transcribing-send'}
-  <VoiceSendIndicator stage="send" label="Transcribing   will send when ready" />
+  <VoiceSendIndicator stage="send" label="Transcribing: will send when ready" />
 {:else if indicator === 'transcribing-steer'}
-  <VoiceSendIndicator stage="steer" label="Transcribing   will steer the running turn" />
+  <VoiceSendIndicator stage="steer" label="Transcribing: will steer the running turn" />
 {:else}
   <ComputerUseIndicator label="Agent using the computer" />
 {/if}

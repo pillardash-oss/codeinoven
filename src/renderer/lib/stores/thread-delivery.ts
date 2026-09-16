@@ -3,7 +3,7 @@
  * path that any surface outside a mounted `ThreadView` needs to put a message
  * into a conversation.
  *
- * Two callers exist today — the queued-message dispatcher (a message queued
+ * Two callers exist today: the queued-message dispatcher (a message queued
  * while the agent was busy) and armed voice dictation (a transcript that must
  * be sent even though its thread is not on screen). Both must agree on the
  * thread's settings, on whether its agent is genuinely idle, and on how a

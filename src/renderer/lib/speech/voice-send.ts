@@ -2,7 +2,7 @@
  * Voice transcript delivery.
  *
  * When a dictation is sent on the user's behalf the composer it belongs to is
- * often gone — the user armed the send from another thread, or navigated away
+ * often gone: the user armed the send from another thread, or navigated away
  * while the model was still transcribing. This module is the one place that
  * knows how to put that message into the thread anyway:
  *
@@ -47,7 +47,7 @@ const composerResetListeners = new Set<ComposerResetListener>()
 
 /**
  * Register a mounted conversation view so a headless voice delivery can tell it
- * to drop the text it just took over — the composer's own buffer is stale the
+ * to drop the text it just took over, since the composer's own buffer is stale the
  * moment the message is dispatched behind its back.
  */
 export function onVoiceComposerReset(listener: ComposerResetListener): () => void {
