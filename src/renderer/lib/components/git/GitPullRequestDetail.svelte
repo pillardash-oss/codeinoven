@@ -909,21 +909,22 @@
       The comment box is a button here rather than a disclosure bar of its own:
       commenting and merging are both things you do to this pull request, so they
       share one row and the conversation keeps the height. The rail pins the
-      composer open instead, so it has no use for this. Icon only, because the
-      row also has to carry Close and Merge at the sidebar's 340px minimum; the
-      word stays on the composer's own submit button.
+      composer open instead, so it has no use for this. It keeps its word rather
+      than collapsing to a bare icon: the row has the space, and when the sidebar
+      is at its narrowest the merge label is the one that truncates. The text is
+      the accessible name, so no aria-label competes with it.
     -->
     <button
       type="button"
-      class="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md border transition-colors {composerOpen
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 text-[0.625rem] font-medium transition-colors {composerOpen
         ? 'border-primary bg-primary/10 text-foreground'
         : 'border-border text-foreground hover:bg-elevated'}"
       aria-expanded={composerOpen}
       title={composerOpen ? 'Hide the comment box' : 'Write a comment or review'}
-      aria-label={composerOpen ? 'Hide the comment box' : 'Write a comment or review'}
       onclick={() => (composerOpen = !composerOpen)}
     >
-      <MessageSquare size={12} />
+      <MessageSquare size={12} class="shrink-0" />
+      <span class="shrink-0">Comment</span>
     </button>
   {/if}
 {/snippet}
