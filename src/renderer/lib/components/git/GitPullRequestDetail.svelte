@@ -4,6 +4,7 @@
     Bot,
     Check,
     ChevronDown,
+    ChevronRight,
     CircleDot,
     CircleSlash,
     ExternalLink,
@@ -16,6 +17,7 @@
     MessagesSquare,
     MoreHorizontal,
     RefreshCw,
+    Rocket,
     RotateCcw,
     Send,
     ShieldCheck,
@@ -33,6 +35,7 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import type {
+    GitHubDeploymentJobLog,
     PrAgentReport,
     PrMergeMethod,
     PrReviewEvent,
@@ -89,7 +92,11 @@
   ]
 
   let tab = $state<DetailTab>('conversation')
-  /** The comment box stays out of the way until the user asks for it. */
+  /**
+   * Dock only. The sidebar is narrow enough that the write actions need a
+   * disclosure, but the full screen rail pins the composer open instead, so
+   * this flag is never read there.
+   */
   let composerOpen = $state(false)
 
   /**
@@ -164,6 +171,11 @@
   let loadingCommit = $state<string | null>(null)
   let expandedFile = $state<string | null>(null)
   let agentReport = $state<PrAgentReport | null>(null)
+  /** Which check's log is open, keyed the way the checks list is keyed. */
+  let expandedCheck = $state<string | null>(null)
+  let checkLogs = $state<Record<string, GitHubDeploymentJobLog>>({})
+  let checkLogErrors = $state<Record<string, string>>({})
+  let loadingCheckLogs = $state<Record<string, boolean>>({})
 
   const number = $derived(summary.number)
   const bundle = $derived(
@@ -328,6 +340,13 @@
     if (state === 'failure') return 'bg-danger/10 text-danger hover:bg-danger/20'
     if (state === 'pending') return 'bg-warning/10 text-warning hover:bg-warning/20'
     return 'bg-success/10 text-success hover:bg-success/20'
+  }
+
+  /** Wording for the rolled-up check state, sentence-cased for a label or title. */
+  function checksStateLabel(state: string): string {
+    if (state === 'failure') return 'Checks failing'
+    if (state === 'pending') return 'Checks running'
+    return 'Checks passing'
   }
 
   /** Stable background colour for an author's avatar, keyed off their name. */
@@ -511,6 +530,99 @@
     return 'text-danger'
   }
 
+  /** Stable key for one check row, shared by the list key and the log cache. */
+  function checkKey(check: PullRequestCheck): string {
+    return check.name + (check.url ?? '')
+  }
+
+  /** Human wording for a check's progress, so `in_progress` is not shown raw. */
+  function checkStateLabel(check: PullRequestCheck): string {
+    if (check.status !== 'completed') return check.status.replace('_', ' ')
+    return check.conclusion ?? 'done'
+  }
+
+  /**
+   * The job behind a check. Actions names the job in the check's `details_url`,
+   * which is exact even for one leg of a matrix run; when the provider only gives
+   * the run, the job is matched by name so the wrong leg's log is never shown.
+   */
+  async function resolveCheckJobId(check: PullRequestCheck): Promise<number | null> {
+    if (check.jobId !== null) return check.jobId
+    if (check.workflowRunId === null) return null
+    const run = await gitState
+      .ensureWorkflowRunDetail(projectId, identity.owner, identity.repo, check.workflowRunId)
+      .catch(() => null)
+    return run?.jobs.find((job) => job.name === check.name)?.id ?? null
+  }
+
+  /** Name the two failures a reader can actually act on, then quote the rest. */
+  function checkLogMessage(reason: unknown): string {
+    const text = reason instanceof Error ? reason.message : ''
+    if (/HTTP 404/u.test(text)) return 'This job has not published a log yet.'
+    if (/HTTP (401|403)/u.test(text)) return 'Your GitHub access cannot read this job log.'
+    return text || 'The log could not be loaded.'
+  }
+
+  /**
+   * Job logs are wrapped for a terminal: CSI colour sequences and OSC 8 hyperlink
+   * wrappers. This pane is plain text, so all of it would only render as `[0m`
+   * noise. Built from character codes because a literal escape in a regex trips
+   * `no-control-regex`, the same reason provider-account-orchestrator builds its
+   * ANSI pattern this way.
+   */
+  const ANSI_ESCAPE = String.fromCharCode(27)
+  const ANSI_BELL = String.fromCharCode(7)
+  /** String Terminator, the other way an OSC sequence can end. */
+  const ANSI_ST = ANSI_ESCAPE + String.fromCharCode(92)
+  const LOG_ANSI_PATTERNS = [
+    // OSC, which must not be allowed to run past the next escape or line break.
+    new RegExp(`${ANSI_ESCAPE}\\][^${ANSI_BELL}${ANSI_ESCAPE}]*`, 'gu'),
+    // CSI: colour, weight, cursor movement.
+    new RegExp(`${ANSI_ESCAPE}\\[[0-?]*[ -/]*[@-~]`, 'gu'),
+    new RegExp(ANSI_BELL, 'gu')
+  ]
+
+  function plainLog(text: string): string {
+    const stripped = LOG_ANSI_PATTERNS.reduce(
+      (result, pattern) => result.replace(pattern, ''),
+      text
+    )
+    return stripped.split(ANSI_ST).join('')
+  }
+
+  async function toggleCheckLog(check: PullRequestCheck): Promise<void> {
+    const key = checkKey(check)
+    if (expandedCheck === key) {
+      expandedCheck = null
+      return
+    }
+    expandedCheck = key
+    if (checkLogs[key] || loadingCheckLogs[key]) return
+    loadingCheckLogs = { ...loadingCheckLogs, [key]: true }
+    checkLogErrors = { ...checkLogErrors, [key]: '' }
+    try {
+      const jobId = await resolveCheckJobId(check)
+      if (jobId === null) {
+        checkLogErrors = {
+          ...checkLogErrors,
+          [key]: 'This check does not name a job, so its log has to be read on GitHub.'
+        }
+        return
+      }
+      const log = await gitState.ensureDeploymentJobLog(
+        projectId,
+        identity.owner,
+        identity.repo,
+        jobId
+      )
+      if (log) checkLogs = { ...checkLogs, [key]: log }
+    } catch (reason) {
+      checkLogErrors = { ...checkLogErrors, [key]: checkLogMessage(reason) }
+    } finally {
+      loadingCheckLogs = { ...loadingCheckLogs, [key]: false }
+    }
+  }
+
   /** Colorize a unified patch the way the rest of the app renders diffs. */
   function patchLineClass(line: string): string {
     if (line.startsWith('@@')) return 'text-primary'
@@ -587,7 +699,7 @@
 {#snippet panelHead()}
   <!-- Header -->
   <div class="shrink-0 border-b border-border px-3 py-2.5">
-    <div class="flex items-center gap-1.5">
+    <div class="flex items-center gap-1">
       <button
         type="button"
         class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -599,30 +711,32 @@
       </button>
       <span class="font-mono text-[0.625rem] text-dimmed">#{number}</span>
       <span
-        class="rounded px-1.5 py-0.5 text-[0.5625rem] font-medium uppercase tracking-wide {stateBadgeClass(
+        class="min-w-0 shrink truncate rounded px-1.5 py-0.5 text-[0.5625rem] font-medium uppercase tracking-wide {stateBadgeClass(
           detail?.state ?? summary.state
         )}"
       >
         {detail?.state ?? summary.state}{draft ? ' · draft' : ''}
       </span>
       {#if checks && checks.state !== 'none'}
+        <!--
+          In the dock the pill drops its words and keeps its colour: the header
+          row has to hold the view dropdown as well, and the same state is named
+          in full inside the dropdown's Checks entry.
+        -->
         <button
           type="button"
-          class="flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium transition-colors {checksBadgeClass(
+          class="flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium transition-colors {checksBadgeClass(
             checks.state
           )}"
-          title="View check results"
+          title="{checksStateLabel(checks.state)}, open check results"
+          aria-label="{checksStateLabel(checks.state)}, open check results"
           onclick={() => (tab = 'checks')}
         >
           <ShieldCheck size={10} />
-          {checks.state === 'failure'
-            ? 'checks failing'
-            : checks.state === 'pending'
-              ? 'checks running'
-              : 'checks passing'}
+          {#if variant === 'fullscreen'}{checksStateLabel(checks.state)}{/if}
         </button>
       {/if}
-      <span class="flex-1"></span>
+      <span class="min-w-0 flex-1"></span>
       {#if onFullscreen}
         <button
           type="button"
@@ -653,14 +767,15 @@
       >
         <ExternalLink size={13} />
       </button>
-      {#if variant === 'fullscreen'}
+      {#if variant === 'dock'}
         <!--
-          In the rail the tab strip becomes a dropdown that sits after the
-          external link, so the row stays one line however narrow the rail gets.
+          Dock only: the sidebar cannot spare a tab strip of its own, so the
+          active view sits here as one dropdown, right after the external link.
+          The rail is tall enough for a visible list, so it does not use this.
         -->
         <DropdownMenu.Root>
           <DropdownMenu.Trigger
-            class="flex h-6 min-w-0 max-w-44 shrink cursor-pointer items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+            class="flex h-6 min-w-0 shrink cursor-pointer items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
             title="Switch pull request view"
             aria-label="Switch pull request view"
           >
@@ -751,46 +866,58 @@
 {/snippet}
 
 {#snippet panelTabs()}
-  <!-- Tabs   dock only; the full screen reader uses the header dropdown instead -->
-  <div
-    class="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border px-2 py-1.5"
+  <!--
+    Rail only. A visible list beats a dropdown here: the rail is tall, and the
+    active view stays readable without spending the body's height on it. It takes
+    the rail's spare height, and scrolls instead of pushing the pinned write
+    actions off a short window.
+  -->
+  <nav
+    class="min-h-0 flex-1 overflow-y-auto border-b border-border p-1.5"
+    aria-label="Pull request views"
   >
     {#each tabs as entry (entry.id)}
       {@const Icon = entry.icon}
       <button
         type="button"
         class={[
-          'flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium transition-colors',
+          'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[0.625rem] font-medium transition-colors',
           tab === entry.id ? 'bg-elevated text-foreground' : 'text-muted hover:text-foreground'
         ]}
+        aria-current={tab === entry.id}
         onclick={() => (tab = entry.id)}
       >
-        <Icon size={12} />
-        {entry.label}
-        {#if entry.count > 0}<span class="tabular-nums text-dimmed">{entry.count}</span>{/if}
+        <Icon size={12} class="shrink-0" />
+        <span class="min-w-0 flex-1 truncate">{entry.label}</span>
+        {#if entry.count > 0}
+          <span class="shrink-0 tabular-nums text-dimmed">{entry.count}</span>
+        {/if}
       </button>
     {/each}
-  </div>
+  </nav>
 {/snippet}
 
 {#snippet commentToggle()}
-  <!--
-    The comment box is a button here rather than a disclosure bar of its own:
-    commenting and merging are both things you do to this pull request, so they
-    share one row and the conversation keeps the height.
-  -->
-  <button
-    type="button"
-    class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md border px-2.5 text-[0.625rem] font-medium transition-colors {composerOpen
-      ? 'border-primary bg-primary/10 text-foreground'
-      : 'border-border text-foreground hover:bg-elevated'}"
-    aria-expanded={composerOpen}
-    title={composerOpen ? 'Hide the comment box' : 'Write a comment or review'}
-    onclick={() => (composerOpen = !composerOpen)}
-  >
-    <MessageSquare size={12} />
-    Comment
-  </button>
+  {#if variant === 'dock'}
+    <!--
+      The comment box is a button here rather than a disclosure bar of its own:
+      commenting and merging are both things you do to this pull request, so they
+      share one row and the conversation keeps the height. The rail pins the
+      composer open instead, so it has no use for this.
+    -->
+    <button
+      type="button"
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md border px-2.5 text-[0.625rem] font-medium transition-colors {composerOpen
+        ? 'border-primary bg-primary/10 text-foreground'
+        : 'border-border text-foreground hover:bg-elevated'}"
+      aria-expanded={composerOpen}
+      title={composerOpen ? 'Hide the comment box' : 'Write a comment or review'}
+      onclick={() => (composerOpen = !composerOpen)}
+    >
+      <MessageSquare size={12} />
+      Comment
+    </button>
+  {/if}
 {/snippet}
 
 {#snippet panelBody()}
@@ -901,42 +1028,84 @@
       {#if !checks || checks.checks.length === 0}
         {@render emptyState(ShieldCheck, 'No checks have reported on this branch.')}
       {:else}
-        {#each checks.checks as check (check.name + (check.url ?? ''))}
+        {#each checks.checks as check (checkKey(check))}
           {@const Icon = checkIcon(check)}
-          {@const workflowRunId = check.workflowRunId}
-          <div class="flex items-center gap-2 border-b border-border/50 px-3 py-1.5">
-            {#if workflowRunId !== null}
+          {@const key = checkKey(check)}
+          {@const runId = check.workflowRunId}
+          {@const isOpen = expandedCheck === key}
+          <div class="border-b border-border/50">
+            <!--
+              The whole row is the log toggle: a check's result is only half the
+              story, and the reason to open the tab is to read why it failed.
+            -->
+            <div class="flex items-center gap-2 px-3 py-1.5">
               <button
                 type="button"
                 class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
-                title="View {check.name} in Deployments"
-                onclick={() => onOpenWorkflowRun(workflowRunId)}
+                title={isOpen ? `Hide the ${check.name} log` : `Show the ${check.name} log`}
+                aria-expanded={isOpen}
+                onclick={() => void toggleCheckLog(check)}
               >
+                <ChevronRight
+                  size={11}
+                  class="shrink-0 text-dimmed transition-transform {isOpen ? 'rotate-90' : ''}"
+                />
                 <Icon size={12} class="shrink-0 {checkClass(check)}" />
                 <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-foreground">
                   {check.name}
                 </span>
                 <span class="shrink-0 text-[0.5625rem] text-dimmed">
-                  {check.status === 'completed' ? (check.conclusion ?? 'done') : check.status}
+                  {checkStateLabel(check)}
                 </span>
               </button>
-            {:else}
-              <Icon size={12} class="shrink-0 {checkClass(check)}" />
-              <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-foreground">{check.name}</span>
-              <span class="shrink-0 text-[0.5625rem] text-dimmed">
-                {check.status === 'completed' ? (check.conclusion ?? 'done') : check.status}
-              </span>
-            {/if}
-            {#if check.url}
-              <button
-                type="button"
-                class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                title="Open {check.name} externally"
-                aria-label="Open {check.name} externally"
-                onclick={() => void openInBrowser(check.url ?? '')}
-              >
-                <ExternalLink size={12} />
-              </button>
+              {#if check.url}
+                <button
+                  type="button"
+                  class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                  title="Open {check.name} externally"
+                  aria-label="Open {check.name} externally"
+                  onclick={() => void openInBrowser(check.url ?? '')}
+                >
+                  <ExternalLink size={12} />
+                </button>
+              {/if}
+            </div>
+            {#if isOpen}
+              <div class="border-t border-border/50 bg-elevated/20">
+                {#if loadingCheckLogs[key]}
+                  <div class="flex items-center gap-2 px-3 py-2 text-[0.6875rem] text-dimmed">
+                    <Loader2 size={12} class="animate-spin" />
+                    Loading log…
+                  </div>
+                {:else if checkLogErrors[key]}
+                  <p class="px-3 py-2 text-[0.625rem] leading-relaxed text-dimmed">
+                    {checkLogErrors[key]}
+                  </p>
+                {:else if checkLogs[key]}
+                  <pre
+                    class="max-h-72 overflow-auto px-3 py-2 font-mono text-[0.5625rem] leading-relaxed text-muted">{plainLog(
+                      checkLogs[key].log
+                    )}</pre>
+                  {#if checkLogs[key].truncated}
+                    <p class="px-3 pb-2 text-[0.5625rem] text-dimmed">
+                      GitHub truncated this log. Open it externally for the rest.
+                    </p>
+                  {/if}
+                {/if}
+                {#if runId !== null}
+                  <div class="border-t border-border/40 px-3 py-1.5">
+                    <button
+                      type="button"
+                      class="flex h-6 cursor-pointer items-center gap-1 text-[0.625rem] font-medium text-muted transition-colors hover:text-foreground"
+                      title="Open this workflow run in the Deployments tab to inspect every job and step"
+                      onclick={() => onOpenWorkflowRun(runId)}
+                    >
+                      <Rocket size={11} />
+                      Open the full run in Deployments
+                    </button>
+                  </div>
+                {/if}
+              </div>
             {/if}
           </div>
         {/each}
@@ -1007,19 +1176,23 @@
 {/snippet}
 
 {#snippet panelComposer()}
+  <!--
+    Square, because this sits against the edge of the panel rather than floating
+    in it, and at least five rows tall so a real review fits without scrolling.
+    The editor is the same rich markdown component the rest of the app uses.
+    Padding matches what its placeholder overlay expects (px-3.5 / pt-3), and the
+    height is sized against the 0.8125rem/1.8 the editor sets for itself in
+    `src/renderer/app.css`, which outranks a text size utility here.
+  -->
   <div class="shrink-0">
     <div class="px-3 pt-2.5">
-      <div
-        class="rounded-lg border border-border bg-elevated focus-within:border-primary"
-        role="presentation"
-      >
-        <RichMarkdownEditor
-          bind:value={commentBody}
-          placeholder="Leave a comment, or write the feedback for a review…"
-          ariaLabel="Pull request comment"
-          class="max-h-40 min-h-[52px] w-full overflow-y-auto px-2 py-1.5 text-[0.6875rem] leading-relaxed text-foreground outline-none"
-        />
-      </div>
+      <RichMarkdownEditor
+        bind:value={commentBody}
+        placeholder="Leave a comment, or write the feedback for a review…"
+        ariaLabel="Pull request comment"
+        containerClass="border border-border bg-elevated focus-within:border-primary"
+        class="min-h-36 max-h-56 w-full resize-y overflow-y-auto px-3.5 pt-3 pb-2 text-foreground outline-none"
+      />
     </div>
 
     <!--
@@ -1278,10 +1451,10 @@
 
 {#if variant === 'fullscreen'}
   <!--
-    Full screen: the title, the view dropdown and every write action move into
-    a rail on the right, so the active view (normally the conversation) gets the
-    whole height and the left edge of the reader stays put when the rail is
-    resized. The rail width is the user's to choose.
+    Full screen: the title, the view list and every write action move into a rail
+    on the right, so the conversation gets the whole height and the left edge of
+    the reader stays put when the rail is resized. The rail width is the user's
+    to choose.
   -->
   <div class="flex h-full min-h-0">
     <div class="flex min-w-0 flex-1 flex-col">
@@ -1305,18 +1478,19 @@
         onkeydown={resizeRailWithKeyboard}
       ></button>
       {@render panelHead()}
-      <div class="min-h-0 flex-1 overflow-y-auto">
-        {#if composerOpen}
-          {@render panelComposer()}
-        {/if}
-        {@render panelMerge()}
-      </div>
+      {@render panelTabs()}
+      <!--
+        The rail pins its write actions: the comment box and the merge row stay
+        put while the conversation beside them scrolls, so merging never needs a
+        scroll to the end of a long review.
+      -->
+      {@render panelComposer()}
+      {@render panelMerge()}
     </aside>
   </div>
 {:else}
   <div class="flex h-full min-h-0 flex-col">
     {@render panelHead()}
-    {@render panelTabs()}
     {@render panelBody()}
     {#if composerOpen}
       {@render panelComposer()}

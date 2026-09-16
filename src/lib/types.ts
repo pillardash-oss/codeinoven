@@ -4680,6 +4680,12 @@ export interface PullRequestCheck {
   url: string | null
   /** GitHub Actions workflow-run id, when this check belongs to an Actions run. */
   workflowRunId: number | null
+  /**
+   * GitHub Actions job id for this exact check, when its provider URL names one.
+   * A run has many jobs (one per matrix leg), so this is what lets the panel read
+   * the log of the check that was clicked rather than the run's first job.
+   */
+  jobId: number | null
 }
 
 /** Rolled-up CI state for a pull request head. */

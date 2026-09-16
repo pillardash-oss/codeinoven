@@ -444,7 +444,8 @@ export class GitHubProvider implements GitProvider {
           status: this.toCheckStatus(this.readString(record, 'status')),
           conclusion: this.toCheckConclusion(this.readString(record, 'conclusion')),
           url: htmlUrl ?? detailsUrl,
-          workflowRunId: this.workflowRunIdFromUrls(detailsUrl, htmlUrl)
+          workflowRunId: this.workflowRunIdFromUrls(detailsUrl, htmlUrl),
+          jobId: this.jobIdFromUrls(detailsUrl, htmlUrl)
         })
       }
     }
@@ -463,7 +464,8 @@ export class GitHubProvider implements GitProvider {
           conclusion:
             state === 'success' ? 'success' : state === 'pending' ? null : ('failure' as const),
           url: targetUrl,
-          workflowRunId: this.workflowRunIdFromUrls(targetUrl)
+          workflowRunId: this.workflowRunIdFromUrls(targetUrl),
+          jobId: this.jobIdFromUrls(targetUrl)
         })
       }
     }
@@ -658,6 +660,22 @@ export class GitHubProvider implements GitProvider {
     for (const url of urls) {
       if (!url) continue
       const match = /\/actions\/runs\/(\d+)/u.exec(url)
+      if (!match) continue
+      const id = Number.parseInt(match[1] ?? '', 10)
+      if (Number.isSafeInteger(id) && id > 0) return id
+    }
+    return null
+  }
+
+  /**
+   * Extract the Actions job id a check points at. Actions puts
+   * `/actions/runs/{runId}/job/{jobId}` in `details_url`, which is the only place
+   * that identifies the individual matrix leg the check represents.
+   */
+  private jobIdFromUrls(...urls: Array<string | null>): number | null {
+    for (const url of urls) {
+      if (!url) continue
+      const match = /\/job\/(\d+)/u.exec(url)
       if (!match) continue
       const id = Number.parseInt(match[1] ?? '', 10)
       if (Number.isSafeInteger(id) && id > 0) return id
