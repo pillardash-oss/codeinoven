@@ -4327,6 +4327,19 @@ export interface GitIdentityInput {
   email: string
 }
 
+/**
+ * A ref decoration attached to a commit, normalized from `git log`'s `%D` so the
+ * renderer never has to parse git's decoration syntax itself.
+ */
+export interface GitCommitRef {
+  /** Short display name, e.g. `main`, `origin/main`, `v1.0`. */
+  name: string
+  /** `tag` for a tag decoration, otherwise a branch (local or remote-tracking). */
+  kind: 'branch' | 'tag'
+  /** True for the ref the checked-out HEAD points at. */
+  head: boolean
+}
+
 /** One commit from `git log`, surfaced in a compact form. */
 export interface GitCommitInfo {
   hash: string
@@ -4334,6 +4347,10 @@ export interface GitCommitInfo {
   author: string
   date: number
   message: string
+  /** Parent hashes, first parent first. Empty for a root commit. */
+  parents: string[]
+  /** Decorations on this commit (branch tips, HEAD, tags). */
+  refs: GitCommitRef[]
 }
 
 /** Reset severity: soft keeps index+worktree, mixed resets index, hard discards all local changes. */

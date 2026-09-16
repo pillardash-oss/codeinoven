@@ -19,6 +19,7 @@ import type { DefaultLogFields, LogOptions, SimpleGit, StatusResult } from 'simp
 import type {
   GitBranchInfo,
   GitCommitInfo,
+  GitCommitRef,
   GitConflictAnalysis,
   GitConflictHunk,
   GitConflictWorkFile,
@@ -74,6 +75,16 @@ process.env.GIT_OPTIONAL_LOCKS = process.env.GIT_OPTIONAL_LOCKS ?? '0'
 /** Number of commits returned by `git log` by default. */
 const DEFAULT_LOG_LIMIT = 50
 
+/**
+ * The `git log` fields this service reads. It mirrors simple-git's
+ * `DefaultLogFields`   passing a custom `format` replaces those defaults
+ * wholesale, so every field the mapper reads has to be listed here   and adds
+ * `%P`, which carries the parent hashes the graph view draws its lanes from.
+ */
+interface HistoryLogFields extends DefaultLogFields {
+  parents: string
+}
+
 const PR_COMPOSE_UNTRACKED_BYTES = 24 * 1024
 const PR_COMPOSE_UNTRACKED_FILES = 24
 const PR_COMPOSE_READ_BATCH = 4
@@ -121,6 +132,35 @@ interface ConflictWorkMetadata {
 }
 
 const GIT_UNAVAILABLE_MESSAGE = 'Git is not available on this machine'
+
+/** `%P` renders space-separated parent hashes; a root commit renders empty. */
+function parseCommitParents(raw: string): string[] {
+  return raw.split(' ').filter((hash) => hash.length > 0)
+}
+
+/**
+ * `%D` renders decorations as `HEAD -> main, origin/main, tag: v1.0`.
+ * Normalized to `{ name, kind, head }` so no renderer parses git's syntax.
+ */
+function parseCommitRefs(raw: string): GitCommitRef[] {
+  const refs: GitCommitRef[] = []
+  for (const decoration of raw.split(',')) {
+    const trimmed = decoration.trim()
+    if (trimmed.length === 0) continue
+    if (trimmed === 'HEAD') {
+      refs.push({ name: 'HEAD', kind: 'branch', head: true })
+      continue
+    }
+    const isHead = trimmed.startsWith('HEAD -> ')
+    const name = isHead ? trimmed.slice('HEAD -> '.length) : trimmed
+    if (name.startsWith('tag: ')) {
+      refs.push({ name: name.slice('tag: '.length), kind: 'tag', head: isHead })
+      continue
+    }
+    refs.push({ name, kind: 'branch', head: isHead })
+  }
+  return refs
+}
 
 function isUnbornBranchLogError(failure: unknown): boolean {
   if (!(failure instanceof Error)) return false
@@ -858,13 +898,25 @@ export class GitService {
         if (normalizedQuery && normalizedQuery.length > 256) {
           throw new TypeError('Commit search query must be at most 256 characters')
         }
-        const options: LogOptions & {
+        const options: LogOptions<HistoryLogFields> & {
           '--fixed-strings'?: null
           '--grep'?: string
           '--regexp-ignore-case'?: null
           '--skip'?: number
         } = {
-          maxCount: Math.max(1, Math.min(limit, 200))
+          maxCount: Math.max(1, Math.min(limit, 200)),
+          // Passing a `format` replaces simple-git's default field map, so this
+          // restates exactly what the defaults fetched and adds `%P` for lanes.
+          format: {
+            hash: '%H',
+            date: '%aI',
+            message: '%s',
+            refs: '%D',
+            body: '%b',
+            author_name: '%aN',
+            author_email: '%aE',
+            parents: '%P'
+          }
         }
         if (offset > 0) options['--skip'] = Math.max(0, offset)
         if (normalizedQuery) {
@@ -874,7 +926,7 @@ export class GitService {
         }
         let history
         try {
-          history = await git.log(options)
+          history = await git.log<HistoryLogFields>(options)
         } catch (failure) {
           if (isUnbornBranchLogError(failure)) return []
           throw failure
@@ -897,13 +949,15 @@ export class GitService {
     })
   }
 
-  private mapCommit(entry: DefaultLogFields): GitCommitInfo {
+  private mapCommit(entry: HistoryLogFields): GitCommitInfo {
     return {
       hash: entry.hash,
       shortHash: entry.hash.slice(0, 7),
       author: entry.author_name ?? entry.author_email ?? 'unknown',
       date: entry.date ? new Date(entry.date).getTime() : Date.now(),
-      message: entry.message
+      message: entry.message,
+      parents: parseCommitParents(entry.parents),
+      refs: parseCommitRefs(entry.refs)
     }
   }
 
@@ -911,17 +965,19 @@ export class GitService {
     try {
       const output = await git.show([
         '--no-patch',
-        '--format=%H%x00%aI%x00%aN%x00%s',
+        '--format=%H%x00%P%x00%aI%x00%aN%x00%D%x00%s',
         `${query}^{commit}`
       ])
-      const [hash, date, author, message] = output.trim().split('\0')
+      const [hash, parents, date, author, refs, message] = output.trim().split('\0')
       if (!hash || !date || !message) return null
       return {
         hash,
         shortHash: hash.slice(0, 7),
         author: author || 'unknown',
         date: new Date(date).getTime(),
-        message
+        message,
+        parents: parseCommitParents(parents ?? ''),
+        refs: parseCommitRefs(refs ?? '')
       }
     } catch {
       return null

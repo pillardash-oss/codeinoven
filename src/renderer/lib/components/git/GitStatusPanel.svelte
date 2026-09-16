@@ -74,6 +74,7 @@
   import GitHubAccountMenu from './GitHubAccountMenu.svelte'
   import GitChangesTree from './GitChangesTree.svelte'
   import GitFileRow from './GitFileRow.svelte'
+  import GitGraphView from './GitGraphView.svelte'
   import GitHubSignInModal from './GitHubSignInModal.svelte'
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
@@ -106,7 +107,7 @@
   let scopeUnhealthy = $derived(scopeHealth !== undefined && scopeHealth.category !== 'healthy')
 
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
-  type TabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
+  type TabId = 'changes' | 'history' | 'graph' | 'branches' | 'pulls' | 'deployments' | 'stashes'
 
   // Hiding the sidebar destroys and recreates this component, so the tab/
   // selection state is seeded from (and mirrored back into) a persisted
@@ -1899,6 +1900,9 @@
           count: changes.length > 0 ? changes.length : null
         },
         { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
+        // The graph earns its own tab: the lane walk then only ever runs for a
+        // user who deliberately opens it, never as a side effect of History.
+        { id: 'graph', label: 'Graph', icon: GitFork, count: null },
         { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
         { id: 'pulls', label: 'Pull requests', icon: GitPullRequest, count: null }
       ]
@@ -3051,6 +3055,13 @@
             </div>
           {/if}
         </div>
+      {:else if activeTab === 'graph'}
+        <GitGraphView
+          {projectId}
+          {unpushedCount}
+          upstream={status?.upstream ?? null}
+          onSelectCommit={(commit) => void selectCommit(commit)}
+        />
       {:else if activeTab === 'branches'}
         <div class="flex h-full min-h-0 flex-col">
           <!-- New branch -->
