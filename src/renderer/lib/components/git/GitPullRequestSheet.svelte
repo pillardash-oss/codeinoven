@@ -196,6 +196,17 @@
     storageKeyProp ? `${storageKeyProp}.tall-v2` : `${APP_SLUG}.pullRequestSheet.tall-v2`
   )
 
+  /**
+   * One sheet stays mounted per draft (PrDockHost renders one per draft id), so
+   * fixed ids would collide across drafts: a form label resolves `for` to the
+   * first match in the document, which may be a different, minimized sheet whose
+   * input is `visibility: hidden` and therefore unfocusable. Clicking the label
+   * then does nothing at all. Deriving the ids from the draft keeps every label
+   * pointing at its own fields.
+   */
+  const titleFieldId = $derived(`pr-title-${draftId ?? 'default'}`)
+  const bodyFieldId = $derived(`pr-body-${draftId ?? 'default'}`)
+
   // ─── Compose with agent ────────────────────────────────────────────────────
   /** True while the compose dropdown is open. */
   let composeOpen = $state(false)
@@ -1302,12 +1313,12 @@
       <div>
         <label
           class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-          for="pr-title"
+          for={titleFieldId}
         >
           Title
         </label>
         <input
-          id="pr-title"
+          id={titleFieldId}
           class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Summary of the change"
           bind:value={title}
@@ -1316,12 +1327,12 @@
       <div>
         <label
           class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-          for="pr-body"
+          for={bodyFieldId}
         >
           Description
         </label>
         <textarea
-          id="pr-body"
+          id={bodyFieldId}
           class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="What does this change do?"
           bind:value={body}></textarea>

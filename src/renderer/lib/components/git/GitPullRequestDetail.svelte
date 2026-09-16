@@ -177,6 +177,13 @@
   let loadingCheckLogs = $state<Record<string, boolean>>({})
 
   const number = $derived(summary.number)
+  /**
+   * The dock reader and the full screen reader can be mounted at the same time,
+   * so the merge dialog's field ids must not be shared: a label resolves `for`
+   * to the first match in the document, and the closed dialog of the other
+   * instance has no such element at all, leaving the label dead.
+   */
+  const mergeFieldSuffix = $derived(`${number}-${variant}`)
   const bundle = $derived(
     gitState.prBundles[GitState.bundleKey(identity.owner, identity.repo, number)]
   )
@@ -1562,12 +1569,12 @@
           <div>
             <label
               class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-              for="merge-commit-title"
+              for="merge-commit-title-{mergeFieldSuffix}"
             >
               Commit title
             </label>
             <input
-              id="merge-commit-title"
+              id="merge-commit-title-{mergeFieldSuffix}"
               class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
               placeholder={method === 'merge'
                 ? `Merge pull request #${number} from ${summary.headRef}`
@@ -1578,12 +1585,12 @@
           <div>
             <label
               class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-              for="merge-commit-message"
+              for="merge-commit-message-{mergeFieldSuffix}"
             >
               Commit message
             </label>
             <textarea
-              id="merge-commit-message"
+              id="merge-commit-message-{mergeFieldSuffix}"
               class="min-h-16 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
               placeholder={method === 'merge'
                 ? 'Describe the merge (optional)'
