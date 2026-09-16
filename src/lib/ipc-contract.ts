@@ -2420,6 +2420,9 @@ export const IPC_INVOKE_CONTRACT = {
   /** Every thread whose agent is currently driving the computer, so a renderer
    *  that reloads mid-run re-seeds its row indicators. */
   'computerUse:activityGet': {} as Contract<[], ComputerUseActivity[]>,
+  /** Device pixels of preview the overlay is about to paint, so the captured
+   *  frame is never upscaled. Sent whenever the preview footprint changes. */
+  'computerUse:pipSetFrameWidth': {} as Contract<[deviceWidth: number], void>,
   'computerUse:pipBringToFront': {} as Contract<[], void>,
   'computerUse:pipDismiss': {} as Contract<[], void>,
   'pty:create': {} as Contract<

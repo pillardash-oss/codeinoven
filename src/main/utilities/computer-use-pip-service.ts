@@ -16,7 +16,15 @@ const TARGET_FRAME_RATE = 15
 const FRAME_INTERVAL_MS = Math.round(1_000 / TARGET_FRAME_RATE)
 const MAX_MISSES = TARGET_FRAME_RATE
 const AUTO_DISMISS_GRACE_MS = 3_000
-const MAX_FRAME_DIMENSION = 448
+/** The default capture ceiling. The overlay's default preview is 224 CSS px
+ *  wide, which is exactly this many device pixels on a 2x display, so the
+ *  default footprint stays pixel-perfect without paying for anything larger. */
+const BASE_FRAME_DIMENSION = 448
+/** Hard ceiling for the capture. Measured against real screen frames, going
+ *  past this buys no visible fidelity (896 = 39.25 dB, 1344 = 39.44 dB against
+ *  a native-resolution reference at the same display size) while quadrupling
+ *  both the per-frame encode cost and the bytes streamed over IPC. */
+const MAX_FRAME_DIMENSION = 896
 const JPEG_QUALITY = 78
 const MAX_CURSOR_POINT_NODES = 32
 const CURSOR_POINT_CONTAINER_KEYS = [
@@ -75,6 +83,10 @@ export class ComputerUsePipService {
   private targetSessionId: string | null = null
   private cursor: ComputerUsePipCursor | null = null
   private dismissedThreadId: string | null = null
+  /** Device pixels of preview the renderer is about to paint, as reported by
+   *  the overlay. The capture is scaled to cover it so a scaled-up preview is
+   *  never a magnified small frame. Null until the overlay reports. */
+  private requestedFrameWidth: number | null = null
   private autoDismissTimer: ReturnType<typeof setTimeout> | null = null
   /** Threads whose agent is currently driving the computer, keyed by thread id.
    *  Bounded by the threads running computer use right now: an entry is dropped
@@ -322,7 +334,7 @@ export class ComputerUsePipService {
         return
       }
       this.misses = 0
-      const optimizedImage = optimizeImage(image)
+      const optimizedImage = optimizeImage(image, this.frameCap())
       if (cursorResult.status === 'fulfilled') {
         const cursorPosition = extractCursorPosition(cursorResult.value)
         if (cursorPosition) {
@@ -373,6 +385,21 @@ export class ComputerUsePipService {
       Logger.dev(`Computer-use PiP frame unavailable: ${reason}.${detail ? ` ${detail}` : ''}`)
     }
     if (this.misses >= MAX_MISSES) this.hide()
+  }
+
+  /**
+   * Renderer-reported demand: how many device pixels wide the preview is about
+   * to be painted. The capture is sized to cover it, clamped between the default
+   * footprint and the measured ceiling, so scaling the preview up adds real
+   * pixels instead of magnifying the default frame.
+   */
+  setRequestedFrameWidth(deviceWidth: number): void {
+    this.requestedFrameWidth = deviceWidth
+  }
+
+  /** The resize ceiling for the next capture. */
+  private frameCap(): number {
+    return frameCapFor(this.requestedFrameWidth)
   }
 
   private async frontmostWindow(client: McpClient, pid: number): Promise<WindowRecord | null> {
@@ -452,7 +479,25 @@ function extractImage(result: unknown): { dataUrl: string; width: number; height
   return null
 }
 
-function optimizeImage(image: { dataUrl: string; width: number; height: number }): {
+/**
+ * The capture ceiling for a renderer-requested device width. Exported because it
+ * is the whole of the sharpness policy: the overlay reports the device pixels it
+ * paints and this clamps that into the range worth encoding. Unknown demand keeps
+ * the default footprint, which is already exact on a 2x display.
+ */
+export function frameCapFor(requestedFrameWidth: number | null): number {
+  if (requestedFrameWidth === null || !Number.isFinite(requestedFrameWidth)) {
+    return BASE_FRAME_DIMENSION
+  }
+  return Math.round(
+    Math.min(MAX_FRAME_DIMENSION, Math.max(BASE_FRAME_DIMENSION, requestedFrameWidth))
+  )
+}
+
+function optimizeImage(
+  image: { dataUrl: string; width: number; height: number },
+  cap: number
+): {
   dataUrl: string
   width: number
   height: number
@@ -464,7 +509,7 @@ function optimizeImage(image: { dataUrl: string; width: number; height: number }
     const width = sourceSize.width || image.width
     const height = sourceSize.height || image.height
     if (width <= 0 || height <= 0) return image
-    const scale = Math.min(1, MAX_FRAME_DIMENSION / Math.max(width, height))
+    const scale = Math.min(1, cap / Math.max(width, height))
     const resized =
       scale < 1
         ? source.resize({
