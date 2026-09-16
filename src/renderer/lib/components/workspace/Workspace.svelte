@@ -2218,10 +2218,17 @@
 
   // Keep managed-worktree health fresh for the scoped sidebar too, so the scope
   // menu offers "Repair worktree" exactly when the board would (deduped in the store).
-  // Health discovery shells out to Git per managed scope, so it is queued for
-  // after the switch has painted instead of competing with the conversation mount.
+  //
+  // Worktree health belongs to a *scope*, not to a thread, so this is keyed on
+  // the docked project+bucket values rather than on the sidebar-context object.
+  // `showSidebarForThread` allocates a fresh context object on every thread
+  // switch, so depending on the object made each switch inside one scope look
+  // like a scope change. Depending on the two strings re-runs only when the
+  // scope actually moves or the board changes.
+  const dockedScopeProjectId = $derived(scopeState.sidebarContext?.projectId ?? '')
+  const dockedScopeBucketId = $derived(scopeState.sidebarContext?.bucketId ?? '')
   $effect(() => {
-    const projectId = scopeState.sidebarContext?.projectId
+    const projectId = dockedScopeProjectId
     if (!projectId) return
     const buckets = scopeState.boards.get(projectId)?.buckets
     scheduleDeferredWork('scope:boardHealth', () =>
@@ -2230,11 +2237,14 @@
   })
 
   // Switching the docked scope is an interaction with it: re-read that scope's
-  // health so a checkout that changed on disk is reported right away.
+  // health so a checkout that changed on disk is reported right away. Same
+  // value-keyed dependency as above, so a thread switch inside one scope asks
+  // for nothing at all. What does need reading is queued for after the switch
+  // has painted, because discovery shells out to Git.
   $effect(() => {
-    const context = scopeState.sidebarContext
-    if (!context) return
-    const { projectId, bucketId } = context
+    const projectId = dockedScopeProjectId
+    const bucketId = dockedScopeBucketId
+    if (!projectId || !bucketId) return
     scheduleDeferredWork('scope:worktreeHealth', () => {
       void scopeState.revalidateWorktreeHealth(projectId, bucketId).catch(() => undefined)
     })

@@ -317,6 +317,10 @@ export class GitState {
     if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
     if (!project.path.trim()) return
     const scopeBucketId = thread?.scopeBucketId ?? null
+    // A scope target is what Git cares about, not a thread. Switching between
+    // two threads of the same project and scope changes nothing here, so this
+    // returns before touching status: no read, no blank panel, no worktree
+    // discovery.
     const targetChanged =
       this.activeProjectId !== project.id || this.activeScopeBucketId !== scopeBucketId
     // Claim the target synchronously so the panel can never show another
@@ -328,9 +332,11 @@ export class GitState {
 
   /**
    * Queue a status/branches/PR read for after the current view switch has
-   * painted. The refresh fans out to six repository reads plus worktree
-   * discovery; running it inline with a thread switch put all of that work in
-   * the same instant as the conversation mount and made the switch feel slow.
+   * painted. This only runs when the scope target actually moves   a thread
+   * switch inside one scope never reaches it, because `activate` and
+   * `targetChanged` both short-circuit above. When it does run it fans out to
+   * six repository reads plus worktree discovery, and running all of that in
+   * the same instant as the conversation mount made a scope switch feel slow.
    * Deferring it keeps the panel's data honestly late rather than the
    * conversation's paint honestly slow.
    */
