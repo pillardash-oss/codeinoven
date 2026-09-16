@@ -130,6 +130,7 @@ import type {
   HarnessUninstallHandoff,
   OfferedProvider,
   AdoptableWorktreeInfo,
+  RepositoryMentionUser,
   RepositoryPreflightResult,
   ScopeBoard,
   ScopeBucket,
@@ -1928,6 +1929,11 @@ export const IPC_INVOKE_CONTRACT = {
   'pr:commitFiles': {} as Contract<
     [projectId: string, owner: string, repo: string, sha: string],
     PullRequestFile[]
+  >,
+  /** Assignable repository accounts, for @-mention autocomplete in PR conversations. */
+  'pr:mentionUsers': {} as Contract<
+    [projectId: string, owner: string, repo: string],
+    RepositoryMentionUser[]
   >,
   /** Read back the agent's `.cio/git/pr/<number>/review.md`, if it wrote one. */
   'pr:agentReport': {} as Contract<[projectId: string, pullNumber: number], PrAgentReport>,

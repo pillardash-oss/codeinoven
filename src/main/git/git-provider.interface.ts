@@ -17,7 +17,8 @@ import type {
   PullRequestReview,
   PullRequestReviewComment,
   PullRequestPage,
-  PullRequestReference
+  PullRequestReference,
+  RepositoryMentionUser
 } from '../../lib/types'
 
 /** Merge a pull request with the given method. */
@@ -103,6 +104,11 @@ export interface GitProvider {
   listPullRequestReviewComments(input: PullRequestTarget): Promise<PullRequestReviewComment[]>
   getPullRequestChecks(input: PullRequestTarget): Promise<PullRequestChecks>
   getCommitFiles(input: { owner: string; repo: string }, sha: string): Promise<PullRequestFile[]>
+  /** Assignable repository accounts, for @-mention autocomplete in PR conversations. */
+  listRepositoryMentionUsers(input: {
+    owner: string
+    repo: string
+  }): Promise<RepositoryMentionUser[]>
   /** Recent workflow runs and deployments for read-only repository monitoring. */
   getDeploymentOverview(input: { owner: string; repo: string }): Promise<GitHubDeploymentOverview>
   /** Rich in-app deployment detail: status history, linked run, jobs/steps. */

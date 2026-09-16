@@ -45,7 +45,8 @@ import type {
   PullRequestFile,
   PullRequestPage,
   PullRequestReference,
-  PullRequestSummary
+  PullRequestSummary,
+  RepositoryMentionUser
 } from '$shared/types'
 import { INBOX_PROJECT_ID } from '$shared/types'
 
@@ -91,6 +92,20 @@ export type GitOperation =
 
 /** How long a cached PR page or bundle is served without refetching. */
 const PR_CACHE_TTL_MS = 60_000
+/**
+ * How long a repository's @-mention candidate list stays fresh. Assignable
+ * accounts change far more slowly than PR state, and the list is fetched only
+ * when a user actually types `@`, so a long TTL costs nothing and keeps the
+ * popover instant on every later mention.
+ */
+const MENTION_USERS_TTL_MS = 10 * 60_000
+/**
+ * How long a failed mention-directory lookup is remembered. Short, because the
+ * failure is usually a transient network blip, but long enough that a token
+ * without the required permission does not re-request on every keystroke while
+ * the user is still typing the handle.
+ */
+const MENTION_USERS_RETRY_MS = 60_000
 
 /** How long a cached deployment overview/detail is served without refetching. */
 const DEPLOYMENT_CACHE_TTL_MS = 60_000
@@ -1485,6 +1500,21 @@ export class GitState {
   prAgentReports: Record<string, PrAgentReport> = $state({})
 
   /**
+   * @-mention candidates per `owner/repo`, keyed so two repositories never share
+   * a list. `mentionUsersInFlight` is deliberately not reactive: it only
+   * de-duplicates concurrent requests and nothing renders from it.
+   */
+  mentionUsers: Record<string, { users: RepositoryMentionUser[]; fetchedAt: number }> = $state({})
+  /**
+   * In-flight requests and recent failures, keyed the same way. Plain records
+   * rather than Maps because nothing renders from them: they only de-duplicate
+   * concurrent lookups and back off a failed one, so making them reactive would
+   * cost work to publish state no view reads.
+   */
+  private mentionUsersInFlight: Record<string, Promise<RepositoryMentionUser[]>> = {}
+  private mentionUsersFailedAt: Record<string, number> = {}
+
+  /**
    * Cached deployment overviews, details, and job logs — the same
    * stale-while-revalidate pattern as the PR caches. The Deployments tab is
    * mounted/unmounted on every tab switch, so cached data renders instantly
@@ -1682,6 +1712,48 @@ export class GitState {
     } finally {
       this.markBusy('pr-detail', false)
     }
+  }
+
+  /**
+   * Repository accounts that can be @-mentioned in a PR conversation.
+   *
+   * Called only when the user types `@`, and cache-first so a typed query does
+   * not re-fetch per keystroke. Concurrent callers share one in-flight request
+   * rather than racing, and a failure resolves to the stale cache (or an empty
+   * list) so autocomplete degrades to the on-screen participants instead of
+   * surfacing an error: the token may legitimately lack the permission this
+   * needs, and a mention menu is not worth an error banner.
+   */
+  async mentionUsersFor(
+    projectId: string,
+    owner: string,
+    repo: string
+  ): Promise<RepositoryMentionUser[]> {
+    if (!projectId || !owner || !repo) return []
+    const key = `${owner}/${repo}`
+    const cached = this.mentionUsers[key]
+    if (cached && Date.now() - cached.fetchedAt < MENTION_USERS_TTL_MS) return cached.users
+    const failedAt = this.mentionUsersFailedAt[key]
+    if (!cached && failedAt !== undefined && Date.now() - failedAt < MENTION_USERS_RETRY_MS) {
+      return []
+    }
+    const inFlight = this.mentionUsersInFlight[key]
+    if (inFlight) return inFlight
+    const request = invoke('pr:mentionUsers', projectId, owner, repo)
+      .then((users) => {
+        this.mentionUsers = { ...this.mentionUsers, [key]: { users, fetchedAt: Date.now() } }
+        delete this.mentionUsersFailedAt[key]
+        return users
+      })
+      .catch(() => {
+        this.mentionUsersFailedAt[key] = Date.now()
+        return cached?.users ?? []
+      })
+      .finally(() => {
+        delete this.mentionUsersInFlight[key]
+      })
+    this.mentionUsersInFlight[key] = request
+    return request
   }
 
   /** Files and patches for one commit inside a PR. */

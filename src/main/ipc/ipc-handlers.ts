@@ -7557,6 +7557,18 @@ export function registerIpcHandlers(
   )
 
   ipcMain.handle(
+    'pr:mentionUsers',
+    async (_, projectId: unknown, owner: unknown, repo: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+      return provider.listRepositoryMentionUsers({
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128)
+      })
+    }
+  )
+
+  ipcMain.handle(
     'pr:detail',
     async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
       const {

@@ -4628,6 +4628,20 @@ export interface PullRequestComment {
   url: string
 }
 
+/**
+ * An account that can be @-mentioned in a pull request conversation. Built from
+ * the repository's assignable users, the widest list GitHub exposes to a read
+ * token; app accounts arrive as `login[bot]`.
+ */
+export interface RepositoryMentionUser {
+  login: string
+  /** Display name, when the account publishes one. */
+  name: string | null
+  avatarUrl: string | null
+  /** True for app/bot accounts, which GitHub renders as an app mention. */
+  bot: boolean
+}
+
 /** Review verdict submitted from the sidebar. */
 export type PrReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
 

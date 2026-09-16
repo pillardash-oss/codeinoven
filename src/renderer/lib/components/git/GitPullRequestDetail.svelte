@@ -33,6 +33,12 @@
   import { relativeTime } from '$lib/format/relative-time'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  // The `@query` detection is shared with the chat composer rather than
+  // re-implemented here: it already knows to stay silent inside code spans and
+  // quoted passages, which a second copy would have to relearn.
+  import { composerMentionQuery } from '../chats/composer-mentions'
+  import PrMentionMenu from './PrMentionMenu.svelte'
+  import { mentionCandidates, mentionHandle, mentionKeyAction, mentionMenuMaxHeight, participantMentionUsers } from './pr-mentions'
   import type {
     GitHubDeploymentJobLog,
     PrAgentReport,
@@ -40,7 +46,8 @@
     PrReviewEvent,
     PullRequestCheck,
     PullRequestFile,
-    PullRequestSummary
+    PullRequestSummary,
+    RepositoryMentionUser
   } from '$shared/types'
 
   interface Props {
@@ -158,6 +165,26 @@
     if (Number.isFinite(stored)) applyRailWidth(stored)
   })
   let commentBody = $state('')
+  /**
+   * `@`-mention autocomplete for the comment box.
+   *
+   * People already on the pull request are derived from the bundle and shown the
+   * moment `@` is typed; the repository directory is fetched lazily on the first
+   * mention and merged in behind them, so the popover never blocks on a network
+   * call to show the likely candidates.
+   */
+  let commentEditor: RichMarkdownEditor | undefined
+  let mentionOpen = $state(false)
+  let mentionQuery = $state('')
+  let mentionIndex = $state(0)
+  let mentionDirectory = $state<RepositoryMentionUser[]>([])
+  let mentionLoading = $state(false)
+  let mentionRequestId = 0
+  let mentionTimer: ReturnType<typeof setTimeout> | undefined
+  let lastMentionCaretText = ''
+  /** Ceiling for the popover, measured when it opens. See `measureMentionRoom`. */
+  let mentionMaxHeight = $state(mentionMenuMaxHeight(Number.POSITIVE_INFINITY))
+  let mentionAnchor: HTMLDivElement | undefined
   let method = $state<PrMergeMethod>('squash')
   let mergeConfirm = $state(false)
   let closeConfirm = $state(false)
@@ -186,6 +213,19 @@
   const mergeFieldSuffix = $derived(`${number}-${variant}`)
   const bundle = $derived(
     gitState.prBundles[GitState.bundleKey(identity.owner, identity.repo, number)]
+  )
+  /** Accounts already on this pull request, available without a fetch. */
+  const mentionParticipants = $derived(
+    participantMentionUsers([
+      summary.authorLogin,
+      identity.owner,
+      ...(bundle?.comments ?? []).map((comment) => comment.authorLogin),
+      ...(bundle?.reviews ?? []).map((review) => review.authorLogin),
+      ...(bundle?.reviewComments ?? []).map((comment) => comment.authorLogin)
+    ])
+  )
+  const mentionEntries = $derived(
+    mentionCandidates(mentionParticipants, mentionDirectory, mentionQuery)
   )
   const detail = $derived(bundle?.detail ?? null)
   const checks = $derived(bundle?.checks ?? null)
@@ -402,10 +442,129 @@
     )
     if (created) {
       commentBody = ''
+      closeMentions()
       tab = 'conversation'
       notice = 'Comment posted'
       await refresh()
     }
+  }
+
+  /**
+   * The top of the box an upward-opening popover is clipped by: the nearest
+   * ancestor with a non-visible overflow, which in the dock is the sidebar's
+   * content region and in full screen is the surface itself.
+   */
+  function clipTop(element: HTMLElement): number {
+    let node = element.parentElement
+    while (node) {
+      if (getComputedStyle(node).overflowY !== 'visible') return node.getBoundingClientRect().top
+      node = node.parentElement
+    }
+    return 0
+  }
+
+  /**
+   * Cap the popover to the room above the composer, so a long candidate list in a
+   * short sidebar scrolls inside the panel instead of having its first rows cut
+   * off by the panel's own clipping.
+   */
+  function measureMentionRoom(): void {
+    if (!mentionAnchor) {
+      mentionMaxHeight = mentionMenuMaxHeight(Number.POSITIVE_INFINITY)
+      return
+    }
+    const anchorTop = mentionAnchor.getBoundingClientRect().top
+    // 8px keeps the popover off the edge it is clipped at.
+    mentionMaxHeight = mentionMenuMaxHeight(anchorTop - clipTop(mentionAnchor) - 8)
+  }
+
+  function closeMentions(): void {
+    mentionRequestId += 1
+    if (mentionTimer) clearTimeout(mentionTimer)
+    mentionOpen = false
+  }
+
+  /**
+   * Debounced so a fast typist issues one directory lookup, not one per letter.
+   * The popover opens immediately on the participants regardless, so this delay
+   * is never visible as a wait.
+   */
+  function scheduleMentionSearch(textBeforeCaret: string): void {
+    if (mentionTimer) clearTimeout(mentionTimer)
+    const query = composerMentionQuery(textBeforeCaret)
+    if (query === null) {
+      closeMentions()
+      return
+    }
+    mentionQuery = query
+    mentionIndex = 0
+    mentionOpen = true
+    measureMentionRoom()
+    mentionTimer = setTimeout(() => void loadMentionDirectory(), 120)
+  }
+
+  /**
+   * Repository accounts, fetched once per repository per ten minutes by the
+   * store. A token without the permission this needs resolves to an empty list,
+   * which leaves the participants on screen rather than surfacing an error: an
+   * autocomplete that cannot reach the directory is still useful.
+   */
+  async function loadMentionDirectory(): Promise<void> {
+    const requestId = ++mentionRequestId
+    mentionLoading = true
+    try {
+      const users = await gitState.mentionUsersFor(projectId, identity.owner, identity.repo)
+      if (requestId !== mentionRequestId) return
+      mentionDirectory = users
+    } finally {
+      if (requestId === mentionRequestId) mentionLoading = false
+    }
+  }
+
+  function selectMention(user: RepositoryMentionUser): void {
+    const handle = `@${mentionHandle(user)} `
+    closeMentions()
+    // The editor rewrites the `@query` the caret sits in, keeping the caret's
+    // surroundings intact; the bound value is the fallback for the case where it
+    // cannot resolve a caret (the box was never focused).
+    const replaced = commentEditor?.replaceTextBeforeCaret(
+      /(^|\s)@[^\s@]*$/u,
+      (_match: string, prefix: string) => `${prefix}${handle}`
+    )
+    if (replaced) return
+    commentBody = commentBody.replace(
+      /(^|\s)@[^\s@]*$/u,
+      (_match: string, prefix: string) => `${prefix}${handle}`
+    )
+  }
+
+  /**
+   * Capture phase, so the menu claims the key before the editor acts on it:
+   * Enter would otherwise insert a line break instead of accepting a candidate.
+   * Every key the popover does not claim falls straight through to the editor.
+   */
+  function handleMentionKeydown(event: KeyboardEvent): void {
+    if (!mentionOpen) return
+    const count = mentionEntries.length
+    const action = mentionKeyAction(event.key, count)
+    if (action.kind === 'passthrough') return
+    event.preventDefault()
+    if (action.kind === 'close') {
+      closeMentions()
+      return
+    }
+    if (action.kind === 'move') {
+      mentionIndex = (mentionIndex + action.delta + count) % count
+      return
+    }
+    const entry = mentionEntries[mentionIndex]
+    if (entry) selectMention(entry)
+  }
+
+  function handleMentionCaretText(textBeforeCaret: string, supportsCommands: boolean): void {
+    if (textBeforeCaret === lastMentionCaretText) return
+    lastMentionCaretText = textBeforeCaret
+    scheduleMentionSearch(supportsCommands ? textBeforeCaret : '')
   }
 
   async function submitReview(event: PrReviewEvent): Promise<void> {
@@ -1308,14 +1467,36 @@
     `src/renderer/app.css`, which outranks a text size utility here.
   -->
   <div class="shrink-0">
-    <div class="px-3 pt-2.5">
+    <!--
+      `relative` anchors the mention popover, and the capture-phase keydown
+      handler lets it claim Enter/Tab/arrows before the editor does. Both belong
+      to this wrapper rather than the panel so the menu stays scoped to the box
+      it completes: a window-level handler would also fire for the chat composer.
+    -->
+    <div
+      class="relative px-3 pt-2.5"
+      bind:this={mentionAnchor}
+      onkeydowncapture={handleMentionKeydown}
+    >
       <RichMarkdownEditor
+        bind:this={commentEditor}
         bind:value={commentBody}
         placeholder="Leave a comment, or write the feedback for a review…"
         ariaLabel="Pull request comment"
         containerClass="border border-border bg-elevated focus-within:border-primary"
         class="min-h-36 max-h-56 w-full resize-y overflow-y-auto px-3.5 pt-3 pb-2 text-foreground outline-none"
+        onCaretTextChange={handleMentionCaretText}
       />
+      {#if mentionOpen}
+        <PrMentionMenu
+          entries={mentionEntries}
+          activeIndex={mentionIndex}
+          query={mentionQuery}
+          loading={mentionLoading}
+          maxHeight={mentionMaxHeight}
+          onSelect={selectMention}
+        />
+      {/if}
     </div>
 
     <!--

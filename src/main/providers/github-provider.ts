@@ -21,7 +21,8 @@ import type {
   PullRequestReviewComment,
   PullRequestPage,
   PullRequestReference,
-  PullRequestSummary
+  PullRequestSummary,
+  RepositoryMentionUser
 } from '../../lib/types'
 import type {
   CreatePrCommentInput,
@@ -486,6 +487,42 @@ export class GitHubProvider implements GitProvider {
     )
     const record = Array.isArray(response) ? {} : response
     return this.toFiles(record['files'])
+  }
+
+  /**
+   * Assignable repository accounts, for @-mention autocomplete in PR conversations.
+   *
+   * `/assignees` is deliberate: `/collaborators` requires push access and 403s for
+   * a read-only contributor, while `/assignees` is readable with a read token and
+   * is the same list GitHub's own assignee picker uses.
+   */
+  async listRepositoryMentionUsers(input: {
+    owner: string
+    repo: string
+  }): Promise<RepositoryMentionUser[]> {
+    const response = await this.request(`${this.repoPath(input)}/assignees?per_page=100`, {
+      method: 'GET'
+    })
+    const items = Array.isArray(response) ? response : []
+    const seen = new Set<string>()
+    return items.flatMap((item): RepositoryMentionUser[] => {
+      if (typeof item !== 'object' || item === null) return []
+      const record = item as Record<string, unknown>
+      const login = this.readString(record, 'login')?.trim()
+      if (!login) return []
+      const key = login.toLowerCase()
+      if (seen.has(key)) return []
+      seen.add(key)
+      const name = this.readString(record, 'name')?.trim()
+      return [
+        {
+          login,
+          name: name ? name : null,
+          avatarUrl: this.readString(record, 'avatar_url'),
+          bot: this.readString(record, 'type') === 'Bot' || login.endsWith('[bot]')
+        }
+      ]
+    })
   }
 
   async getDeploymentOverview(input: {
