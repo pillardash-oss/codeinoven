@@ -16,6 +16,20 @@ export function isUsageResetWaitIssue(
 }
 
 /**
+ * Upper bound for an unattended scheduled auto-retry wait. A reset inside this
+ * window is imminent: the power-wake policy keeps the device awake so the retry
+ * can fire on time, and the header keeps counting the thread as working. A
+ * retry parked beyond it is a long wait   treated as not-working so the activity
+ * badge drops the thread and the user sees the state change.
+ */
+export const SCHEDULED_RETRY_WAKE_WINDOW_MS = 6 * 60 * 60 * 1_000
+
+/** True when a scheduled retry deadline falls beyond the keep-awake window. */
+export function isLongScheduledRetryWait(retryAt: number, now = Date.now()): boolean {
+  return retryAt - now > SCHEDULED_RETRY_WAKE_WINDOW_MS
+}
+
+/**
  * Provider errors frequently arrive as a driver-formatted string wrapping a raw
  * JSON error body, e.g. `429: {"message":"You've reached your weekly usage
  * limit...","type":"rate_limit_error","code":"RATE_LIMITED"}`. Surfacing that
@@ -42,7 +56,11 @@ export function extractProviderErrorEnvelope(raw: string): ProviderErrorEnvelope
       const message = typeof body['message'] === 'string' ? body['message'] : raw
       const type = typeof body['type'] === 'string' ? body['type'] : undefined
       const code = typeof body['code'] === 'string' ? body['code'] : undefined
-      return { message, ...(type === undefined ? {} : { type }), ...(code === undefined ? {} : { code }) }
+      return {
+        message,
+        ...(type === undefined ? {} : { type }),
+        ...(code === undefined ? {} : { code })
+      }
     }
   } catch {
     // Not a JSON envelope (or malformed)   treat the whole string as the message.
