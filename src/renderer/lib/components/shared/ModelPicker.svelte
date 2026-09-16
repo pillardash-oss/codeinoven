@@ -11,6 +11,7 @@ import { reportError } from '$lib/stores/app-errors.svelte'
     Cpu,
     GripVertical,
     ListFilter,
+    Plug,
     RefreshCw,
     Search,
     Star,
@@ -26,6 +27,10 @@ import { reportError } from '$lib/stores/app-errors.svelte'
   import { peakHoursBadgeFor } from '$shared/peak-hours'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import {
+    FIRST_RUN_PROVIDER_SEARCH,
+    providerConnectFlow
+  } from '$lib/stores/provider-connect-flow.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { getVendorSlug } from '$lib/vendor-icons/registry'
@@ -830,6 +835,21 @@ import { reportError } from '$lib/stores/app-errors.svelte'
     void providerCatalog.refresh(projectId, true)
   }
 
+  /**
+   * Hand the user to the harness's provider list when this picker has nothing
+   * to offer. The picker closes first so the connect modal is not opened under
+   * an open popover, and the catalog is re-probed once a provider connects.
+   */
+  function openConnectFlow(): void {
+    close()
+    providerConnectFlow.open(harnessId, {
+      search: FIRST_RUN_PROVIDER_SEARCH,
+      onConnected: () => {
+        if (projectId) void providerCatalog.refresh(projectId, true)
+      }
+    })
+  }
+
   async function choose(
     nextProviderId: string,
     nextModelId: string,
@@ -1296,7 +1316,17 @@ import { reportError } from '$lib/stores/app-errors.svelte'
           class="max-h-60 overflow-y-auto p-1"
         >
           {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}
-            <p class="px-2 py-2 text-[0.6875rem] text-dimmed">No providers connected</p>
+            <div class="px-2 py-2">
+              <p class="text-[0.6875rem] text-dimmed">No providers connected</p>
+              <button
+                type="button"
+                class="mt-1.5 inline-flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[0.6875rem] font-semibold text-on-primary transition-colors hover:bg-primary-hover"
+                onclick={openConnectFlow}
+              >
+                <Plug size={12} />
+                Connect your AI account
+              </button>
+            </div>
           {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && recentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
             <p class="px-2 py-2 text-[0.6875rem] text-dimmed">
               {search

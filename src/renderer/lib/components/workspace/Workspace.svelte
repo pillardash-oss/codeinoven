@@ -48,6 +48,7 @@
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import AiAccountSetupCard from '../threads/AiAccountSetupCard.svelte'
   import FolderRow from './FolderRow.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import PinnedSection from '../threads/PinnedSection.svelte'
@@ -102,6 +103,11 @@
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import {
+    FIRST_RUN_PROVIDER_SEARCH,
+    providerConnectFlow
+  } from '$lib/stores/provider-connect-flow.svelte'
+  import { harnessHasProvider, selectedModelExists } from '$lib/ai-account'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -420,6 +426,31 @@
   /** Effective chat settings   the chat's own model when one has been picked,
    *  else the last project model so a fresh chat starts on the model in use. */
   let chatComposerSettings = $derived(chatEffectiveSettings())
+
+  /** Harness display name for the chat setup card, straight from the registry. */
+  let chatHarnessName = $derived(
+    providerStore.providers.find((provider) => provider.id === chatComposerSettings.harnessId)
+      ?.name ?? chatComposerSettings.harnessId
+  )
+  /** True while the new-chat composer has a provider and a model to run on. */
+  let chatCanRunTurns = $derived(
+    harnessHasProvider(chatProviders, chatComposerSettings.harnessId) &&
+      selectedModelExists(chatProviders, chatComposerSettings)
+  )
+  /** Armed by the composer refusing a send the chat has no account for. */
+  let chatAiAccountPromptOpen = $state(false)
+  let chatAiAccountPromptVisible = $derived(chatAiAccountPromptOpen && !chatCanRunTurns)
+
+  /** Open the harness's provider list for the chat that has not been created
+   *  yet, then re-probe the inbox catalog so the connected models show up. */
+  function openChatAiAccountSetup(): void {
+    providerConnectFlow.open(chatComposerSettings.harnessId, {
+      search: FIRST_RUN_PROVIDER_SEARCH,
+      onConnected: () => {
+        if (chatInboxId) void providerCatalog.refresh(chatInboxId, true)
+      }
+    })
+  }
 
   /** Live account quota for the not-yet-created "Start a new chat" composer
    *  the exact same provider-level hover-fetch cache the thread battery uses. */
@@ -4566,6 +4597,27 @@
               </p>
             </div>
             <div class="w-full max-w-4xl">
+              {#if chatAiAccountPromptVisible}
+                <div class="mb-3">
+                  <AiAccountSetupCard
+                    harnessName={chatHarnessName}
+                    providers={chatProviders}
+                    settings={chatComposerSettings}
+                    projectId={chatInboxId ?? INBOX_PROJECT_ID}
+                    refreshing={chatInboxId ? providerCatalog.refreshing(chatInboxId) : false}
+                    favoriteModels={rendererRecovery.chatFavoriteModels}
+                    recentModels={rendererRecovery.chatRecentModels}
+                    onRemoveRecent={(key) => rendererRecovery.removeChatRecentModel(key)}
+                    onToggleFavorite={(providerId, modelId, harnessId) =>
+                      rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
+                    onReorderFavorite={(draggedKey, targetKey, position) =>
+                      rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
+                    onModelChange={(next) => chatSettings.commit(next)}
+                    onConnect={openChatAiAccountSetup}
+                    onDismiss={() => (chatAiAccountPromptOpen = false)}
+                  />
+                </div>
+              {/if}
               {#key chatsComposerRestoreKey}
                 <ChatComposer
                   bind:this={chatsComposer}
@@ -4615,6 +4667,7 @@
                       files
                     )}
                   onSend={(msg, files) => void createStandaloneChat(msg, files)}
+                  onNeedsAiAccount={() => (chatAiAccountPromptOpen = true)}
                   onRevealUsage={revealNewChatUsage}
                   onHideUsage={() => newChatUsage.markStale()}
                   usageRefreshing={newChatUsage.refreshing}

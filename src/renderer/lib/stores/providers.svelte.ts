@@ -146,6 +146,21 @@ class ProviderStore {
     )
   }
 
+  /** True when a harness can take provider credentials right now. */
+  canAddProvider(provider: ProviderConnectionInfo): boolean {
+    return provider.integration === 'ready' && provider.status === 'available'
+  }
+
+  /**
+   * Harnesses whose drivers consume custom base-URL providers, per their
+   * manifest. The custom provider list and its editor both scope to these.
+   */
+  get baseUrlHarnesses(): ProviderConnectionInfo[] {
+    return this.providers.filter(
+      (provider) => provider.supportsCustomProviders && provider.integration === 'ready'
+    )
+  }
+
   get checkingCount(): number {
     return this.providers.filter((p) => p.status === 'checking').length
   }

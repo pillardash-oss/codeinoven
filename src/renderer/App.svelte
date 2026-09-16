@@ -76,6 +76,7 @@
   import { clearDraftLabelCookie } from '$lib/stores/draft-label'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
@@ -2186,6 +2187,15 @@
          operations, nothing indexed). -->
     {#await import('$lib/components/files/StandaloneFileViewer.svelte') then { default: StandaloneFileViewer }}
       <StandaloneFileViewer />
+    {/await}
+  {/if}
+
+  {#if providerConnectFlow.request}
+    <!-- The provider connect flow floats above every view: a surface with no AI
+         account connected (the first-run setup card, the empty model picker)
+         opens the harness's provider list without navigating away. -->
+    {#await import('$lib/components/providers/ProviderConnectHost.svelte') then { default: ProviderConnectHost }}
+      <ProviderConnectHost />
     {/await}
   {/if}
 

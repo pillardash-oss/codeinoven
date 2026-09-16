@@ -79,6 +79,7 @@
   import PermissionRequestCard from './PermissionRequestCard.svelte'
   import ImageDescriptorErrorCard from './ImageDescriptorErrorCard.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
+  import AiAccountSetupCard from './AiAccountSetupCard.svelte'
   import RunChangesCard from './RunChangesCard.svelte'
   import SpecReadyCard from './SpecReadyCard.svelte'
   import BrainstormEntryChoiceCard from './BrainstormEntryChoiceCard.svelte'
@@ -146,6 +147,11 @@
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import {
+    FIRST_RUN_PROVIDER_SEARCH,
+    providerConnectFlow
+  } from '$lib/stores/provider-connect-flow.svelte'
+  import { harnessHasProvider, selectedModelExists } from '$lib/ai-account'
   import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
@@ -9799,6 +9805,26 @@
    *  allows it (sole untouched thread in project mode, always in chat mode). */
   let centeredComposer = $derived(emptyConversation && allowCenteredComposer)
 
+  /** True while this thread holds both a provider and a model it can run on. */
+  let threadCanRunTurns = $derived(
+    harnessHasProvider(providers, settings.harnessId) && selectedModelExists(providers, settings)
+  )
+  /** Armed by the composer refusing a send the thread has no account for. */
+  let aiAccountPromptOpen = $state(false)
+  /** The prompt also keeps showing while the user picks the model to run with. */
+  let aiAccountPromptVisible = $derived(aiAccountPromptOpen && !threadCanRunTurns)
+
+  /** Open the harness's provider list, then re-probe so the models it just
+   *  connected appear without the user having to open the picker first. */
+  function openAiAccountSetup(): void {
+    providerConnectFlow.open(settings.harnessId, {
+      search: FIRST_RUN_PROVIDER_SEARCH,
+      onConnected: () => {
+        void providerCatalog.refresh(thread.projectId, true)
+      }
+    })
+  }
+
   /** Provider catalog entry the message was answered through, when known. */
   function messageProvider(msg: AgentMessage): ProviderCatalog | undefined {
     if (msg.providerId) {
@@ -11781,6 +11807,40 @@
                 </p>
               </div>
             {/if}
+            {#if aiAccountPromptVisible}
+              <div class="mb-2">
+                <AiAccountSetupCard
+                  harnessName={harnessDisplayName(settings.harnessId)}
+                  {providers}
+                  {settings}
+                  projectId={thread.projectId}
+                  refreshing={providerCatalog.refreshing(thread.projectId)}
+                  favoriteModels={chatMode
+                    ? rendererRecovery.chatFavoriteModels
+                    : rendererRecovery.favoriteModels}
+                  recentModels={chatMode
+                    ? rendererRecovery.chatRecentModels
+                    : rendererRecovery.recentModels}
+                  onRemoveRecent={(key) =>
+                    chatMode
+                      ? rendererRecovery.removeChatRecentModel(key)
+                      : rendererRecovery.removeRecentModel(key)}
+                  onToggleFavorite={(providerId, modelId, harnessId) =>
+                    chatMode
+                      ? rendererRecovery.toggleChatFavorite(
+                          modelKey(harnessId, providerId, modelId)
+                        )
+                      : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                  onReorderFavorite={(draggedKey, targetKey, position) =>
+                    chatMode
+                      ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
+                      : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                  onModelChange={updateSettings}
+                  onConnect={openAiAccountSetup}
+                  onDismiss={() => (aiAccountPromptOpen = false)}
+                />
+              </div>
+            {/if}
             {#if pendingImageDescriptorError && !achievementAutonomous}
               {#key pendingImageDescriptorError.id}
                 <ImageDescriptorErrorCard
@@ -12277,6 +12337,7 @@
                     onRemoveAllReferences={clearComposerReferences}
                     onEditReference={controller ? undefined : editResponseReference}
                     onSend={sendComposerMessage}
+                    onNeedsAiAccount={() => (aiAccountPromptOpen = true)}
                     historyMessages={composerHistoryTexts}
                     onHistoryNavigateStart={() => void refreshUserMessageHistory()}
                     hidePermissionSelector={chatMode}
