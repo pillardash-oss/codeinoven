@@ -1,9 +1,11 @@
 import { BrowserWindow, nativeImage } from 'electron'
 import type {
+  ComputerUseActivity,
   ComputerUsePipCursor,
   ComputerUsePipFrame,
   ComputerUsePipState
 } from '../../lib/types'
+import type { CuaOperationEvent } from './utility-orchestration-service'
 import { CuaBridgeService } from './cua-bridge-service'
 import { StdioMcpClient, type McpClient } from '../agents/mcp-stdio-client'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -52,6 +54,12 @@ interface CursorPosition {
  * notifies this service whenever an agent drives an app through the Cua
  * driver; the service then latches onto that pid, polls its frontmost window,
  * and streams bounded JPEG frames to the renderer for an always-visible overlay.
+ *
+ * It also owns the per-thread computer-use activity mirror that thread rows
+ * consume. That mirror is deliberately independent of the overlay: the overlay
+ * needs a capturable window, while a desktop-scoped run (`get_desktop_state`,
+ * `escalate_session`, a desktop `hotkey`) has no pid at all and must still be
+ * visible in the thread list.
  */
 export class ComputerUsePipService {
   private readonly cuaBridge: CuaBridgeService
@@ -68,13 +76,58 @@ export class ComputerUsePipService {
   private cursor: ComputerUsePipCursor | null = null
   private dismissedThreadId: string | null = null
   private autoDismissTimer: ReturnType<typeof setTimeout> | null = null
+  /** Threads whose agent is currently driving the computer, keyed by thread id.
+   *  Bounded by the threads running computer use right now: an entry is dropped
+   *  as soon as that thread's turn ends. */
+  private readonly activityByThread = new Map<string, ComputerUseActivity>()
 
   constructor(private readonly storage: StorageEngine) {
     this.cuaBridge = new CuaBridgeService(storage)
   }
 
+  /**
+   * Called for every computer-use operation an agent performs. The activity
+   * mirror is updated unconditionally; window tracking only starts when the
+   * operation named a target process.
+   */
+  onActivity(event: CuaOperationEvent): void {
+    this.recordActivity(event)
+    if (event.pid !== null) void this.track(event.pid, event.threadId, event.sessionId)
+  }
+
+  /** Every thread whose agent is currently driving the computer. */
+  getActivitySnapshot(): ComputerUseActivity[] {
+    return [...this.activityByThread.values()]
+  }
+
+  private recordActivity(event: CuaOperationEvent): void {
+    const activity: ComputerUseActivity = {
+      threadId: event.threadId,
+      active: true,
+      at: Date.now(),
+      operation: event.operation,
+      ...(event.pid !== null ? { pid: event.pid } : {})
+    }
+    this.activityByThread.set(event.threadId, activity)
+    this.broadcast('computerUse:activity', activity)
+  }
+
+  /** Mark a thread's computer-use activity over and tell the renderer to drop
+   *  its row indicator. */
+  private clearActivity(threadId: string): void {
+    const existing = this.activityByThread.get(threadId)
+    if (!existing) return
+    this.activityByThread.delete(threadId)
+    this.broadcast('computerUse:activity', {
+      threadId,
+      active: false,
+      at: existing.at,
+      ...(existing.operation ? { operation: existing.operation } : {})
+    } satisfies ComputerUseActivity)
+  }
+
   /** Latch onto the app (pid) a thread's agent is currently driving. */
-  async track(pid: number, threadId: string, sessionId?: string): Promise<void> {
+  private async track(pid: number, threadId: string, sessionId?: string): Promise<void> {
     if (!Number.isInteger(pid) || pid <= 0) return
     this.clearAutoDismiss()
     // The user closed the overlay this turn   keep it hidden for the rest of
@@ -124,18 +177,22 @@ export class ComputerUsePipService {
   /**
    * Called when a thread's agent turn begins (a user message was accepted).
    * Clears the user's close so the next turn may show the PiP again if CUA is
-   * used, and cancels a pending auto-dismiss from a just-finished turn.
+   * used, cancels a pending auto-dismiss from a just-finished turn, and drops
+   * any computer-use activity a crashed previous turn never cleared.
    */
   notifyTurnStarted(threadId: string): void {
     if (this.dismissedThreadId === threadId) this.dismissedThreadId = null
     if (this.ownerThreadId === threadId) this.clearAutoDismiss()
+    this.clearActivity(threadId)
   }
 
   /**
-   * Called when a thread's utility turn ends. If that thread owns the PiP,
-   * hide the overlay shortly after so it never lingers past the run.
+   * Called when a thread's utility turn ends. The thread's computer-use
+   * activity ends with it, and if that thread owns the PiP the overlay is
+   * hidden shortly after so it never lingers past the run.
    */
   notifyTurnEnded(threadId: string): void {
+    this.clearActivity(threadId)
     if (!this.active || this.ownerThreadId !== threadId) return
     this.clearAutoDismiss()
     this.autoDismissTimer = setTimeout(() => {
@@ -227,19 +284,22 @@ export class ComputerUsePipService {
       const client = await this.ensureClient()
       const window = await this.frontmostWindow(client, pid)
       if (!window) {
-        this.misses += 1
-        if (this.misses >= MAX_MISSES) this.hide()
+        this.missFrame(`pid ${pid} has no capturable top-level window`)
         return
       }
-      this.misses = 0
       this.appName = window.app_name || this.appName || 'App'
       this.windowId = window.window_id
+      // The window capture deliberately runs WITHOUT the agent's session. The
+      // driver refuses window-scope tools on a session the agent escalated to
+      // desktop scope ("window-scope tool 'get_window_state' is disabled while
+      // session '<id>' is in desktop scope"), which silently killed every frame
+      // of a desktop-scope run. The agent cursor is still read from that session
+      // below, and `get_agent_cursor_state` works in either scope.
       const screenshotRequest = client.callTool('get_window_state', {
         pid,
         window_id: window.window_id,
         include_screenshot: true,
-        max_elements: 1,
-        ...(sessionId ? { session: sessionId } : {})
+        max_elements: 1
       })
       const cursorRequest = sessionId
         ? client.callTool('get_agent_cursor_state', { session: sessionId })
@@ -250,7 +310,18 @@ export class ComputerUsePipService {
       ])
       const image =
         screenshotResult.status === 'fulfilled' ? extractImage(screenshotResult.value) : null
-      if (!image) return
+      if (!image) {
+        // A refused capture resolves with `isError: true` instead of rejecting,
+        // so this has to be accounted for here   returning quietly left the
+        // overlay latched as active with no frame to show, and the UI is gated
+        // on having a frame.
+        this.missFrame(
+          `the driver returned no screenshot for window ${window.window_id}`,
+          screenshotResult
+        )
+        return
+      }
+      this.misses = 0
       const optimizedImage = optimizeImage(image)
       if (cursorResult.status === 'fulfilled') {
         const cursorPosition = extractCursorPosition(cursorResult.value)
@@ -287,6 +358,23 @@ export class ComputerUsePipService {
     }
   }
 
+  /**
+   * Account for one frame the monitor could not render. The overlay only mounts
+   * once it has a frame, so a capture that keeps failing must age out exactly
+   * like a missing window does   otherwise the service reports itself active
+   * with nothing to show and the user is left with no PiP and no explanation.
+   * The reason is logged once per run of failures, never per frame (the loop
+   * runs at 15 fps).
+   */
+  private missFrame(reason: string, failure?: PromiseSettledResult<unknown>): void {
+    this.misses += 1
+    if (this.misses === 1) {
+      const detail = failure ? settledFailureText(failure) : null
+      Logger.dev(`Computer-use PiP frame unavailable: ${reason}.${detail ? ` ${detail}` : ''}`)
+    }
+    if (this.misses >= MAX_MISSES) this.hide()
+  }
+
   private async frontmostWindow(client: McpClient, pid: number): Promise<WindowRecord | null> {
     const result = await client.callTool('list_windows', { pid })
     const windows = extractWindows(result)
@@ -307,7 +395,7 @@ export class ComputerUsePipService {
   }
 
   private broadcast(
-    channel: 'computerUse:pipFrame' | 'computerUse:pipState',
+    channel: 'computerUse:pipFrame' | 'computerUse:pipState' | 'computerUse:activity',
     payload: unknown
   ): void {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -395,6 +483,29 @@ function optimizeImage(image: { dataUrl: string; width: number; height: number }
     Logger.dev('Computer-use PiP frame optimization failed; using source image:', error)
     return image
   }
+}
+
+/**
+ * Human-readable reason a driver call produced no frame: the rejection
+ * message, or the driver's own explanation on a resolved `isError` result
+ * (refused window captures arrive that way rather than as a rejection).
+ * Bounded because an AX-tree text block can be very large.
+ */
+function settledFailureText(result: PromiseSettledResult<unknown>): string | null {
+  if (result.status === 'rejected') {
+    const reason = result.reason
+    return reason instanceof Error ? reason.message : String(reason)
+  }
+  const content = recordValue(result.value)['content']
+  if (!Array.isArray(content)) return null
+  for (const item of content) {
+    if (!isRecord(item) || item['type'] !== 'text') continue
+    const text = item['text']
+    if (typeof text === 'string' && text.length > 0) {
+      return text.length > 240 ? `${text.slice(0, 240)}...` : text
+    }
+  }
+  return null
 }
 
 function extractCursorPosition(result: unknown): CursorPosition | null {

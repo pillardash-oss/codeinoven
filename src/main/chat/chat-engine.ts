@@ -2243,9 +2243,8 @@ export class ChatEngine {
       this.executeImageDescriptor(request)
     )
     if (this.computerUsePip) {
-      this.utilityOrchestration.onCuaActivity((pid, threadId, sessionId) => {
-        void this.computerUsePip?.track(pid, threadId, sessionId)
-      })
+      const computerUsePip = this.computerUsePip
+      this.utilityOrchestration.onCuaActivity((event) => computerUsePip.onActivity(event))
     }
     this.specEngine = new SpecEngine(storage, database, {
       validateForApproval: validateEngineeringSpec

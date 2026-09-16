@@ -188,7 +188,8 @@ import type {
   SkillMarketView,
   CuaBridgeStatus,
   ComputerUsePipFrame,
-  ComputerUsePipState
+  ComputerUsePipState,
+  ComputerUseActivity
 } from './types'
 import type { WorkerNameSettings } from './assignment/worker-names'
 import type { CioPromptId, CioPromptSetting } from './cio-prompts'
@@ -2411,6 +2412,9 @@ export const IPC_INVOKE_CONTRACT = {
   'computerUse:getCuaStatus': {} as Contract<[], CuaBridgeStatus>,
   'computerUse:setCuaEnabled': {} as Contract<[enabled: boolean], CuaBridgeStatus>,
   'computerUse:pipGetState': {} as Contract<[], ComputerUsePipState>,
+  /** Every thread whose agent is currently driving the computer, so a renderer
+   *  that reloads mid-run re-seeds its row indicators. */
+  'computerUse:activityGet': {} as Contract<[], ComputerUseActivity[]>,
   'computerUse:pipBringToFront': {} as Contract<[], void>,
   'computerUse:pipDismiss': {} as Contract<[], void>,
   'pty:create': {} as Contract<
@@ -3145,6 +3149,13 @@ export const IPC_EVENT_CONTRACT = {
   'updater:waiting-for-threads': [] as unknown as [activeCount: number],
   'computerUse:pipFrame': [] as unknown as [frame: ComputerUsePipFrame],
   'computerUse:pipState': [] as unknown as [state: ComputerUsePipState],
+  /**
+   * Emitted for every computer-use operation an agent performs, and again with
+   * `active: false` when that thread's turn ends. Thread rows use this (not the
+   * PiP state) so a row still signals desktop-scoped computer use, which has no
+   * tracked window and therefore no PiP.
+   */
+  'computerUse:activity': [] as unknown as [activity: ComputerUseActivity],
   'browser:state': [] as unknown as [state: BrowserPageState],
   'gateway:state': [] as unknown as [status: import('./gateway-types').GatewayStatus],
   /** Live provider connection health/status snapshot. */

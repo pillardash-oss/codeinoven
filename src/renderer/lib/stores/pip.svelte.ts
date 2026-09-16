@@ -1,10 +1,16 @@
-import type { ComputerUsePipFrame, ComputerUsePipState } from '$shared/types'
+import type { ComputerUseActivity, ComputerUsePipFrame, ComputerUsePipState } from '$shared/types'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 
 /**
  * Live state for the floating computer-use PiP monitor. Main process streams
  * frames of the app an agent is driving; the overlay renders the latest frame
  * and can bring the app to the front.
+ *
+ * It also mirrors per-thread computer-use activity, which thread rows use for
+ * their cursor indicator. That mirror is intentionally not the same thing as
+ * `active`: the overlay needs a capturable window, while a desktop-scoped run
+ * has no pid at all. The mirror also outlives a dismissed overlay, so closing
+ * the preview no longer hides the fact that the agent is still driving.
  */
 class PipState {
   active = $state(false)
@@ -18,6 +24,8 @@ class PipState {
   cursorX = $state(0)
   cursorY = $state(0)
   timestamp = $state(0)
+  /** Threads whose agent is driving the computer right now, keyed by thread id. */
+  activity = $state<Record<string, ComputerUseActivity>>({})
 
   private cleanups: Array<() => void> = []
 
@@ -31,6 +39,11 @@ class PipState {
       this.applyState(state)
     })
     this.cleanups.push(unsubState)
+
+    const unsubActivity = subscribe('computerUse:activity', (activity: ComputerUseActivity) => {
+      this.applyActivity(activity)
+    })
+    this.cleanups.push(unsubActivity)
 
     void this.refresh()
   }
@@ -47,6 +60,22 @@ class PipState {
     } catch {
       // PiP service unavailable — keep the overlay hidden.
     }
+    try {
+      const activity = await invoke('computerUse:activityGet')
+      this.activity = Object.fromEntries(activity.map((entry) => [entry.threadId, entry]))
+    } catch {
+      // PiP service unavailable — no thread is marked as using the computer.
+    }
+  }
+
+  /** Whether this thread's agent is driving the computer right now. */
+  isThreadUsingComputerUse(threadId: string): boolean {
+    return this.activity[threadId]?.active === true
+  }
+
+  /** When this thread's most recent computer-use action ran, or 0 when none. */
+  threadActivityAt(threadId: string): number {
+    return this.activity[threadId]?.at ?? 0
   }
 
   async bringToFront(): Promise<void> {
@@ -64,6 +93,13 @@ class PipState {
       // Fall through — the overlay hides locally on the next state event anyway.
     }
     this.applyState({ active: false })
+  }
+
+  private applyActivity(activity: ComputerUseActivity): void {
+    const next = { ...this.activity }
+    if (activity.active) next[activity.threadId] = activity
+    else delete next[activity.threadId]
+    this.activity = next
   }
 
   private applyFrame(frame: ComputerUsePipFrame): void {
