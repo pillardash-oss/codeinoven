@@ -76,6 +76,8 @@
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
   import FindInBar from '../files/FindInBar.svelte'
+  import FullscreenPanelDialog from '../workspace/FullscreenPanelDialog.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
@@ -194,6 +196,70 @@
   let deleteCommitTarget = $state<GitCommitInfo | null>(null)
   let showGitHubSignIn = $state(false)
   let selectedPullRequest = $state<PullRequestSummary | null>(savedView.selectedPullRequest)
+
+  /**
+   * Full screen pull request reader. It mirrors the fullscreen terminal and
+   * browser: the reader owns its own tab list, opens from the pull request
+   * surfaces, and closes by clearing the active tab id. The list is a tab of
+   * its own, so the reader can both browse and read without leaving fullscreen.
+   */
+  const PR_READER_LIST_TAB = '__pullRequests__'
+  let fullscreenPullRequests = $state<PullRequestSummary[]>([])
+  let fullscreenPullRequestId = $state<string | null>(null)
+
+  const fullscreenPullRequestTabs = $derived([
+    { id: PR_READER_LIST_TAB, title: 'All pull requests' },
+    ...fullscreenPullRequests.map((pr) => ({
+      id: String(pr.number),
+      title: `#${pr.number} ${pr.title}`
+    }))
+  ])
+
+  const fullscreenActivePullRequest = $derived(
+    fullscreenPullRequestId && fullscreenPullRequestId !== PR_READER_LIST_TAB
+      ? (fullscreenPullRequests.find((pr) => String(pr.number) === fullscreenPullRequestId) ?? null)
+      : null
+  )
+
+  /** Opens the reader, adding the pull request as a tab when it is not one yet. */
+  function openPullRequestFullscreen(pr: PullRequestSummary | null): void {
+    if (!pr) {
+      fullscreenPullRequestId = PR_READER_LIST_TAB
+      return
+    }
+    if (!fullscreenPullRequests.some((open) => open.number === pr.number)) {
+      fullscreenPullRequests = [...fullscreenPullRequests, pr]
+    }
+    fullscreenPullRequestId = String(pr.number)
+  }
+
+  /**
+   * Closes one reader tab, falling back to the last tab still open. The list is
+   * the reader's home tab, so closing it closes the reader rather than leaving a
+   * close button that does nothing.
+   */
+  function closeFullscreenPullRequestTab(id: string): void {
+    if (id === PR_READER_LIST_TAB) {
+      fullscreenPullRequestId = null
+      return
+    }
+    const remaining = fullscreenPullRequests.filter((pr) => String(pr.number) !== id)
+    fullscreenPullRequests = remaining
+    if (fullscreenPullRequestId !== id) return
+    const fallback = remaining.at(-1)
+    fullscreenPullRequestId = fallback ? String(fallback.number) : PR_READER_LIST_TAB
+  }
+
+  // A full window DOM surface covers the workspace, so the browser's native view
+  // has to detach underneath it. This is the same contract the fullscreen
+  // terminal and the fullscreen file editor publish.
+  $effect(() =>
+    browserVisibility.hideWhile(
+      'git-pr-reader-fullscreen',
+      'fullscreen-surface',
+      fullscreenPullRequestId !== null
+    )
+  )
   let githubConnected = $state(false)
   let githubConfigured = $state(false)
   let githubUser = $state<GitHubUser | null>(null)
@@ -3290,6 +3356,7 @@
               identity={githubIdentity}
               summary={selectedPullRequest}
               onBack={() => (selectedPullRequest = null)}
+              onFullscreen={() => openPullRequestFullscreen(selectedPullRequest)}
               onAgentReview={(pr) => void startAgentReview(pr)}
               onOpenThread={(threadId) => void openReviewThread(threadId)}
               onOpenWorkflowRun={openWorkflowRunFromCheck}
@@ -3302,6 +3369,7 @@
               identity={githubIdentity}
               {githubConnected}
               onOpen={(pr) => (selectedPullRequest = pr)}
+              onFullscreen={() => openPullRequestFullscreen(null)}
               onSignIn={() => (showGitHubSignIn = true)}
               onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
               refreshSignal={prListRefresh}
@@ -4707,4 +4775,50 @@
       </AlertDialog.Content>
     </AlertDialog.Portal>
   </AlertDialog.Root>
+{/if}
+
+<!--
+  Full screen pull request reader. It is a sibling of the panel's own layout so
+  it can cover the whole window, and it is mounted only while a tab is active.
+-->
+{#if fullscreenPullRequestId}
+  <FullscreenPanelDialog
+    tabs={fullscreenPullRequestTabs}
+    activeTabId={fullscreenPullRequestId}
+    newLabel="Show all pull requests"
+    minimizeLabel="Close the full screen reader"
+    onSelect={(id) => (fullscreenPullRequestId = id)}
+    onCloseTab={closeFullscreenPullRequestTab}
+    onNew={() => (fullscreenPullRequestId = PR_READER_LIST_TAB)}
+    onMinimize={() => (fullscreenPullRequestId = null)}
+  >
+    {#snippet icon()}
+      <GitPullRequest size={12} class="shrink-0" aria-hidden="true" />
+    {/snippet}
+    <div class="flex min-h-0 flex-1 flex-col">
+      {#if fullscreenActivePullRequest && githubIdentity}
+        <GitPullRequestDetail
+          {projectId}
+          identity={githubIdentity}
+          summary={fullscreenActivePullRequest}
+          onBack={() => (fullscreenPullRequestId = PR_READER_LIST_TAB)}
+          onAgentReview={(pr) => void startAgentReview(pr)}
+          onOpenThread={(threadId) => void openReviewThread(threadId)}
+          onOpenWorkflowRun={openWorkflowRunFromCheck}
+          onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
+          onResolveWithAgent={(pr) => void startConflictResolution(pr)}
+        />
+      {:else}
+        <GitPullRequestList
+          {projectId}
+          identity={githubIdentity}
+          {githubConnected}
+          onOpen={(pr) => openPullRequestFullscreen(pr)}
+          onSignIn={() => (showGitHubSignIn = true)}
+          onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
+          refreshSignal={prListRefresh}
+        />
+      {/if}
+    </div>
+  </FullscreenPanelDialog>
 {/if}

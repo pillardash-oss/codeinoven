@@ -7,6 +7,7 @@
     GitPullRequestClosed,
     GitPullRequestDraft,
     Loader2,
+    Maximize2,
     MessageSquare,
     RefreshCw,
     TriangleAlert
@@ -27,6 +28,8 @@
     onCreate: () => void
     /** Bumped by the parent after a PR is created so the open list refreshes. */
     refreshSignal?: number
+    /** Open the list in the full screen reader, like the file editor. */
+    onFullscreen?: () => void
   }
 
   let {
@@ -36,7 +39,8 @@
     onOpen,
     onSignIn,
     onCreate,
-    refreshSignal = 0
+    refreshSignal = 0,
+    onFullscreen
   }: Props = $props()
 
   const states: Array<{ id: PrState; label: string }> = [
@@ -143,6 +147,17 @@
         </button>
       {/each}
       <span class="flex-1"></span>
+      {#if onFullscreen}
+        <button
+          type="button"
+          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          title="Open in full screen"
+          aria-label="Open in full screen"
+          onclick={onFullscreen}
+        >
+          <Maximize2 size={12} />
+        </button>
+      {/if}
       <button
         type="button"
         class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"

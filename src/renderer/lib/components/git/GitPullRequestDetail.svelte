@@ -10,6 +10,7 @@
     FileDiff,
     GitCommitHorizontal,
     Loader2,
+    Maximize2,
     MessageSquare,
     Merge,
     MessagesSquare,
@@ -53,6 +54,8 @@
     onResolveLocally?: (pr: PullRequestSummary) => void
     /** Hand a conflicting PR to an agent to resolve and push. */
     onResolveWithAgent?: (pr: PullRequestSummary) => void
+    /** Open this pull request in the full screen reader, like the file editor. */
+    onFullscreen?: () => void
   }
 
   let {
@@ -64,7 +67,8 @@
     onOpenThread,
     onOpenWorkflowRun,
     onResolveLocally,
-    onResolveWithAgent
+    onResolveWithAgent,
+    onFullscreen
   }: Props = $props()
 
   type DetailTab = 'conversation' | 'commits' | 'files' | 'checks' | 'agent'
@@ -518,6 +522,17 @@
         </button>
       {/if}
       <span class="flex-1"></span>
+      {#if onFullscreen}
+        <button
+          type="button"
+          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          title="Open in full screen"
+          aria-label="Open in full screen"
+          onclick={onFullscreen}
+        >
+          <Maximize2 size={13} />
+        </button>
+      {/if}
       <button
         type="button"
         class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
