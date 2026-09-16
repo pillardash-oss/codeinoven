@@ -133,6 +133,24 @@
     utilitiesRoute = nextRoute
   }
 
+  /**
+   * The marketplace view mounts when it is opened and then stays mounted behind
+   * a skill page, so Back returns to the exact results, query, and scroll the
+   * user left. It is mounted invisibly, never hidden, so its scroll survives.
+   */
+  let marketplaceBehindSkill = $derived(
+    utilitiesRoute.page === 'marketplace' ||
+      (utilitiesRoute.page === 'skill' &&
+        settingsHistory.at(-1)?.utilitiesRoute.page === 'marketplace')
+  )
+
+  /** Where the skill page's back control returns to, and what it is called. */
+  function skillDetailBackLabel(): string {
+    return settingsHistory.at(-1)?.utilitiesRoute.page === 'marketplace'
+      ? 'Back to results'
+      : 'Back to utilities'
+  }
+
   function goBack(): void {
     const previous = settingsHistory.at(-1)
     if (!previous) {
@@ -370,7 +388,7 @@
     const unsubscribePermissionStatus = subscribe('notification:permissionStatus', (status) => {
       notificationPermission = status
     })
-    // The user may have just toggled notifications in System Settings  
+    // The user may have just toggled notifications in System Settings
     // returning to the app must re-derive the state instead of showing a
     // stale warning.
     const onWindowFocus = (): void => {
@@ -938,17 +956,37 @@
     {:else if section === 'harnesses'}
       <ProvidersView />
     {:else if section === 'utilities'}
-      {#if utilitiesRoute.page === 'catalog'}
-        <UtilitiesView onOpenMarketplace={() => navigateUtilities({ page: 'marketplace' })} />
-      {:else if utilitiesRoute.page === 'marketplace'}
-        <SkillsMarketplaceView
-          onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
-        />
-      {:else}
-        {#key utilitiesRoute.entry.id}
-          <SkillMarketplaceDetail entry={utilitiesRoute.entry} />
-        {/key}
-      {/if}
+      <!--
+        The catalog and the marketplace stay mounted while a skill page is open, so
+        Back restores the exact results, query, and scroll position the user left.
+        Each page scrolls itself: the outer settings scroller never moves here.
+      -->
+      <div class="relative h-full min-h-0 overflow-hidden">
+        <div class={utilitiesRoute.page === 'catalog' ? 'h-full overflow-y-auto' : 'hidden'}>
+          <UtilitiesView
+            onOpenMarketplace={() => navigateUtilities({ page: 'marketplace' })}
+            onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
+          />
+        </div>
+        {#if marketplaceBehindSkill}
+          <div class={utilitiesRoute.page === 'marketplace' ? 'h-full' : 'invisible h-full'}>
+            <SkillsMarketplaceView
+              onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
+            />
+          </div>
+        {/if}
+        {#if utilitiesRoute.page === 'skill'}
+          <div class="absolute inset-0 overflow-y-auto bg-app">
+            {#key utilitiesRoute.entry.id}
+              <SkillMarketplaceDetail
+                entry={utilitiesRoute.entry}
+                backLabel={skillDetailBackLabel()}
+                onBack={goBack}
+              />
+            {/key}
+          </div>
+        {/if}
+      </div>
     {:else if section === 'computer-use'}
       <CuaBridgeSettings />
     {:else if section === 'sound'}

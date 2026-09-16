@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import {
+    ArrowLeft,
     CalendarDays,
     Download,
     ExternalLink,
@@ -23,11 +24,13 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { cachedSkillMarketDetail, loadSkillMarketDetail } from '$lib/skill-market-cache'
+  import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
+  import SkillBookmarkButton from './SkillBookmarkButton.svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
   import type {
     Project,
@@ -41,6 +44,9 @@
 
   interface Props {
     entry: SkillMarketEntry
+    /** Where the back control returns to; doubles as its accessible description. */
+    backLabel: string
+    onBack: () => void
   }
 
   type InstallManager = SkillMarketInstallRequest['manager']
@@ -57,7 +63,7 @@
     path: string
   }
 
-  let { entry }: Props = $props()
+  let { entry, backLabel, onBack }: Props = $props()
   let detail = $state<SkillMarketDetail | null>(null)
   let loading = $state(true)
   let installing = $state(false)
@@ -241,7 +247,25 @@
 </script>
 
 <div class="p-6 pb-24">
-  <header>
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <button
+      class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+      type="button"
+      title={backLabel}
+      onclick={onBack}
+    >
+      <ArrowLeft size={13} />
+      {backLabel}
+    </button>
+    <SkillBookmarkButton
+      {entry}
+      labelled
+      title={skillBookmarkTitle(entry.name, skillBookmarkState.isBookmarked(entry.id))}
+      class="border bg-elevated hover:bg-overlay"
+    />
+  </div>
+
+  <header class="mt-5">
     <p class="font-mono text-xs text-muted">{entry.source}</p>
     <h1 class="mt-1 break-words text-xl font-bold tracking-tight">{entry.name}</h1>
     <p class="mt-3 text-sm leading-relaxed text-muted">
@@ -331,7 +355,9 @@
 
         {#if manager === 'native'}
           <div class="mt-4 min-w-0 space-y-2">
-            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Skills path</p>
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
+              Skills path
+            </p>
             {#if skillPaths.length > 0}
               <div
                 class="grid max-h-[4.25rem] grid-flow-col grid-rows-2 justify-start gap-1.5 overflow-x-auto pb-1"
@@ -414,7 +440,9 @@
 
         {#if manager === 'cio'}
           <div class="mt-4 space-y-2">
-            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Availability</p>
+            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
+              Availability
+            </p>
             <button
               type="button"
               class="flex w-full items-start gap-2 rounded-lg border p-2.5 text-left transition-colors {activation ===
@@ -549,7 +577,9 @@
             <div class="mt-2 flex flex-wrap gap-1.5">
               {#each detail.audits as audit (audit.name)}
                 <span
-                  class="rounded-md px-1.5 py-1 text-[0.5625rem] font-semibold {auditClass(audit.status)}"
+                  class="rounded-md px-1.5 py-1 text-[0.5625rem] font-semibold {auditClass(
+                    audit.status
+                  )}"
                 >
                   {audit.name} · {audit.status}
                 </span>
