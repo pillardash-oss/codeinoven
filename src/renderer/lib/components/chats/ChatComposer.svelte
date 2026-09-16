@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick, onDestroy, onMount } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
   import {
     ArrowUp,
     AudioLines,
@@ -428,6 +429,19 @@
     }))
   ])
   let isDragging = $state(false)
+  /** Root element of the composer, used to find the conversation region it sits in. */
+  let composerRoot = $state<HTMLElement | null>(null)
+  const captureComposerRoot: Attachment<HTMLElement> = (element) => {
+    composerRoot = element
+    return () => {
+      if (composerRoot === element) composerRoot = null
+    }
+  }
+  /** Viewport geometry of the conversation region while files are in flight, so
+   *  the overlay covers exactly that region (never the sidebars). */
+  let dropRegion = $state<{ left: number; top: number; width: number; height: number } | null>(
+    null
+  )
   let previewFile = $state<PromptAttachment | null>(null)
   /** Object URLs for image/PDF/media/document downloads, keyed by attachment file:// URL. */
   let previewUrls = $state<Record<string, string>>({})
@@ -1587,14 +1601,71 @@
     focusComposerAtSavedCaret()
   }
 
-  // ─── Global file drop (full viewport) ─────────────────────────────────────
-  // Uses document-level event listeners so files dragged anywhere on the page
-  // are captured. A fixed-position overlay appears when files are in flight.
+  // ─── Conversation-scoped file drop ────────────────────────────────────────
+  // Document-level listeners keep the detection simple, but a drag is only
+  // captured while the pointer is inside the conversation region. The project
+  // sidebar (left) and the file tree (right) therefore keep their own drop
+  // targets: dragging right imports into the project, dragging left adds a
+  // project, and only the conversation attaches files to the message.
   function hasFiles(dt: DataTransfer | null): boolean {
     if (!dt) return false
     // `types` can be a DOMStringList (contains) or FrozenArray (includes).
     const types = Array.from(dt.types ?? [])
     return types.includes('Files')
+  }
+
+  /** The conversation region this composer belongs to, if it has one. */
+  function conversationRegion(): HTMLElement | null {
+    return composerRoot?.closest<HTMLElement>('[data-drop-region="conversation"]') ?? null
+  }
+
+  /** Geometry of the conversation region, or null when the composer is not
+   *  mounted inside one (e.g. a host that renders it standalone). */
+  function conversationRegionRect(): DOMRect | null {
+    const region = conversationRegion()
+    if (!region) return null
+    const rect = region.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return null
+    return rect
+  }
+
+  function insideRect(rect: DOMRect, e: { clientX: number; clientY: number }): boolean {
+    return (
+      e.clientX >= rect.left &&
+      e.clientX <= rect.right &&
+      e.clientY >= rect.top &&
+      e.clientY <= rect.bottom
+    )
+  }
+
+  /**
+   * Origin of the box a `position: fixed` child of this composer resolves
+   * against. The conversation column sets `container-type` for its composer
+   * container queries, and layout containment makes that element the containing
+   * block for fixed descendants   so the region's viewport coordinates must be
+   * rebased on it. Returns the viewport origin when nothing contains the
+   * overlay (the chat empty state, the remote conversation).
+   */
+  function fixedContainingBlockOrigin(start: HTMLElement): { x: number; y: number } {
+    let element: HTMLElement | null = start.parentElement
+    while (element) {
+      const style = getComputedStyle(element)
+      const containsLayout =
+        style.containerType !== 'normal' ||
+        style.contain.includes('layout') ||
+        style.contain.includes('paint') ||
+        style.transform !== 'none' ||
+        style.perspective !== 'none' ||
+        style.filter !== 'none' ||
+        style.backdropFilter !== 'none'
+      if (containsLayout) {
+        const rect = element.getBoundingClientRect()
+        // A fixed element is positioned against the ancestor's padding box.
+        return { x: rect.left + element.clientLeft, y: rect.top + element.clientTop }
+      }
+      element = element.parentElement
+    }
+    return { x: 0, y: 0 }
   }
 
   /** True when the pointer is inside any visible project file tree region. The
@@ -1603,15 +1674,7 @@
     const trees = document.querySelectorAll<HTMLElement>('[data-region="file-tree"]')
     for (const tree of trees) {
       if (tree.offsetParent === null) continue
-      const rect = tree.getBoundingClientRect()
-      if (
-        e.clientX >= rect.left &&
-        e.clientX <= rect.right &&
-        e.clientY >= rect.top &&
-        e.clientY <= rect.bottom
-      ) {
-        return true
-      }
+      if (insideRect(tree.getBoundingClientRect(), e)) return true
     }
     return false
   }
@@ -1648,14 +1711,26 @@
     function onDragOver(e: DragEvent): void {
       if (readOnlyMode && !allowAttachments) return
       if (selectedHarnessLacksAttachments) return
-      if (overFileTree(e)) {
-        // The file tree owns the drop in its region; hide the composer overlay.
-        if (isDragging) isDragging = false
+      if (!hasFiles(e.dataTransfer)) return
+      const rect = conversationRegionRect()
+      if (!rect || !insideRect(rect, e) || overFileTree(e)) {
+        // Outside the conversation (or over the file tree): leave the drop to
+        // whichever surface owns that region and hide the overlay.
+        if (isDragging) {
+          isDragging = false
+          dropRegion = null
+        }
         return
       }
-      if (!hasFiles(e.dataTransfer)) return
       e.preventDefault()
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+      const origin = composerRoot ? fixedContainingBlockOrigin(composerRoot) : { x: 0, y: 0 }
+      dropRegion = {
+        left: rect.left - origin.x,
+        top: rect.top - origin.y,
+        width: rect.width,
+        height: rect.height
+      }
       isDragging = true
     }
 
@@ -1669,6 +1744,7 @@
         e.clientY >= window.innerHeight
       ) {
         isDragging = false
+        dropRegion = null
       }
     }
 
@@ -1681,9 +1757,11 @@
         }
         return
       }
-      if (overFileTree(e)) return
+      const rect = conversationRegionRect()
+      if (!rect || !insideRect(rect, e) || overFileTree(e)) return
       e.preventDefault()
       isDragging = false
+      dropRegion = null
       void handleDropFiles(e.dataTransfer)
     }
 
@@ -1952,29 +2030,31 @@
   />
 {/if}
 
-{#if isDragging}
-  <!-- Rendered as a sibling of .chat-composer, not a descendant: that element sets
-       container-type for its responsive toolbar, which makes it a containing block
-       for position:fixed children and would confine this overlay to its bounds
-       instead of the viewport. -->
+{#if isDragging && dropRegion}
+  <!-- Sits over the conversation region only: the project sidebar (left) and
+       the file tree (right) keep their own drop targets, so a drag can be aimed
+       at any of the three surfaces. Rendered as a sibling of .chat-composer,
+       not a descendant: that element sets container-type for its responsive
+       toolbar, which makes it a containing block for position:fixed children
+       and would confine this overlay to its bounds. -->
   <div
     role="region"
     aria-label="Drop zone"
-    class="fixed inset-0 z-100 flex items-center justify-center border-2 border-dashed border-primary bg-primary/20 backdrop-blur-sm pointer-events-auto"
+    class="fixed z-100 flex items-center justify-center border-2 border-dashed border-primary bg-primary/20 backdrop-blur-sm pointer-events-auto"
+    style:left={`${dropRegion.left}px`}
+    style:top={`${dropRegion.top}px`}
+    style:width={`${dropRegion.width}px`}
+    style:height={`${dropRegion.height}px`}
     ondragover={(e: DragEvent) => {
-      if (overFileTree(e)) {
-        isDragging = false
-        return
-      }
       e.preventDefault()
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
     }}
     ondrop={(e: DragEvent) => {
-      if (overFileTree(e)) return
       e.preventDefault()
       e.stopPropagation()
       isDragging = false
-      handleDropFiles(e.dataTransfer)
+      dropRegion = null
+      void handleDropFiles(e.dataTransfer)
     }}
   >
     <div class="flex flex-col items-center gap-2 text-primary">
@@ -1988,6 +2068,7 @@
   class="chat-composer relative z-10 border bg-surface shadow-sm"
   data-onboarding="composer"
   data-voice-trigger-root
+  {@attach captureComposerRoot}
 >
   {#if imageDescriptorGateOpen}
     <div

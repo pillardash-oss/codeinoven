@@ -361,6 +361,17 @@ export class ProjectFilesService {
     return this.readResolvedText(target, relativePath)
   }
 
+  /**
+   * Read a text file at an absolute path that main has already authorized
+   * (a file the user opened through the operating system). Scope checks stay at
+   * the IPC boundary; this only enforces the shared text rules: a regular file,
+   * within the 2 MiB editing cap, and decodable UTF-8.
+   */
+  async readAbsoluteText(absolutePath: string): Promise<ProjectTextFile> {
+    const target = await realpath(absolutePath)
+    return this.readResolvedText(target, toPosixPath(target))
+  }
+
   async createFile(
     projectId: string,
     relativeDirectory: string,

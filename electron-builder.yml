@@ -52,6 +52,26 @@ mac:
   extendInfo:
     NSCameraUsageDescription: Allow browser pages you approve to use the camera for local app testing.
     NSMicrophoneUsageDescription: Record audio for local dictation and transcription in CodeInOven.
+    # "Open in CodeInOven" from Finder. Declaring folders and generic document
+    # data is what makes CodeInOven appear in the Finder context menu's
+    # "Open With" list (and lets a folder be dropped on the Dock icon).
+    # `LSHandlerRank: Alternate` deliberately keeps CodeInOven out of the
+    # default-handler role: it is available on demand, never the app that opens
+    # every folder or file on double click.
+    CFBundleDocumentTypes:
+      - CFBundleTypeName: Folder
+        CFBundleTypeRole: Editor
+        LSHandlerRank: Alternate
+        LSItemContentTypes:
+          - public.folder
+      - CFBundleTypeName: CodeInOven Document
+        CFBundleTypeRole: Editor
+        LSHandlerRank: Alternate
+        LSItemContentTypes:
+          - public.data
+          - public.text
+          - public.source-code
+          - public.content
   icon: src/renderer/static/macos/AppIcon.icns
   category: public.app-category.developer-tools
   target:
@@ -84,6 +104,11 @@ win:
   target:
     - nsis
   artifactName: ${name}-${version}-setup.${ext}
+# Windows keeps shell integration in the registry, so "Open in CodeInOven" is
+# added to the Explorer context menu for folders, folder backgrounds, and files
+# by the installer (and removed by the uninstaller)   build/installer.nsh.
+nsis:
+  include: build/installer.nsh
 linux:
   icon: src/renderer/static/icon.png
   target:
@@ -91,3 +116,24 @@ linux:
     - deb
   category: Development
   artifactName: ${name}-${version}.${ext}
+  # `%F` passes every selected path as its own argument, so "Open in CodeInOven"
+  # with a folder (or a multi-selection) is one launch with several paths, which
+  # main classifies exactly like the macOS Finder hand-off.
+  executableArgs:
+    - '%F'
+  # `inode/directory` puts CodeInOven in the folder "Open With" list; the text
+  # and code types cover opening a single file on its own.
+  mimeTypes:
+    - inode/directory
+    - text/plain
+    - text/markdown
+    - text/html
+    - text/css
+    - text/x-python
+    - text/x-csrc
+    - application/json
+    - application/xml
+    - application/javascript
+    - application/pdf
+    - image/png
+    - image/jpeg

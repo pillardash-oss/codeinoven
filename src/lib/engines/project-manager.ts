@@ -1,5 +1,5 @@
 import { join, extname, relative } from 'path'
-import { copyFile, mkdir, readFile, readdir, rm } from 'fs/promises'
+import { copyFile, mkdir, readFile, readdir, realpath, rm } from 'fs/promises'
 import type { Dirent } from 'fs'
 import { generateId, getConfigRoot } from '../utils'
 import type { Project, CreateProjectInput } from '../types'
@@ -215,6 +215,39 @@ export class ProjectManager {
 
   async findByPath(path: string): Promise<Project | null> {
     return this.projectRepo.findByPath(path)
+  }
+
+  /**
+   * Resolve a project whose folder is the same directory as `path`, compared by
+   * canonical (symlink-resolved) path so the same folder reached through a
+   * trailing slash, a relative segment, or a symlink never registers twice.
+   * Existing project paths are normalized on the fly; a path that cannot be
+   * resolved falls back to an exact string comparison.
+   */
+  async findByCanonicalPath(path: string): Promise<Project | null> {
+    const trimmed = typeof path === 'string' ? path.trim() : ''
+    if (!trimmed) return null
+    const exact = await this.findByPath(trimmed)
+    if (exact) return exact
+
+    let canonical: string
+    try {
+      canonical = await realpath(trimmed)
+    } catch {
+      // The folder does not exist (yet): only an exact match could apply.
+      return null
+    }
+
+    for (const project of await this.listProjects()) {
+      if (!project.path) continue
+      if (project.path === canonical) return project
+      try {
+        if ((await realpath(project.path)) === canonical) return project
+      } catch {
+        // A project whose folder is gone can never match a live folder.
+      }
+    }
+    return null
   }
 
   async ensureInboxProject(): Promise<Project> {

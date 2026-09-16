@@ -62,6 +62,9 @@
   }
 
   function handleDragOver(e: DragEvent): void {
+    // A folder/file dragged in from the OS is handled by the sidebar's own drop
+    // target, never as a reorder of this row.
+    if (e.dataTransfer?.types.includes('Files')) return
     e.preventDefault()
     if (!onMoveProject) return
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -69,6 +72,7 @@
   }
 
   function handleDrop(e: DragEvent): void {
+    if (e.dataTransfer?.types.includes('Files')) return
     e.preventDefault()
     const draggedId = e.dataTransfer!.getData('text/plain')
     if (draggedId && draggedId !== project.id && onMoveProject) {

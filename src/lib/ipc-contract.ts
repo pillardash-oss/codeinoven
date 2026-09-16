@@ -2091,6 +2091,18 @@ export const IPC_INVOKE_CONTRACT = {
   'plan:get': {} as Contract<[projectId: string, threadId: string], Plan | null>,
   'plan:save': {} as Contract<[projectId: string, threadId: string, content: string], Plan>,
   'project:create': {} as Contract<[input: CreateProjectInput], Project>,
+  /** Resolve an already-registered project by folder path (canonical match), so
+   *  an OS hand-off of a folder that is open as a project never adds it twice. */
+  'project:findByPath': {} as Contract<[path: string], Project | null>,
+  /** Drain the paths the OS handed to CodeInOven before the renderer mounted. */
+  'openWith:consumePending': {} as Contract<[], import('./types').OpenedPath[]>,
+  /** Hand in-app paths (folders/files dropped on the project sidebar) to the
+   *  same opener the OS hand-off uses, so both classify and route identically. */
+  'openWith:openPaths': {} as Contract<[paths: string[]], void>,
+  /** Read a text file by absolute path. The path must be scoped (an OS-opened
+   *  file or a user-selected path); standalone viewing uses this instead of the
+   *  project-relative `projectFiles:read`. */
+  'file:readText': {} as Contract<[filePath: string], ProjectTextFile | null>,
   'project:delete': {} as Contract<[projectId: string, options?: { deleteFolder?: boolean }], void>,
   'project:ensureInbox': {} as Contract<[], Project>,
   'project:get': {} as Contract<[projectId: string], Project | null>,
@@ -3071,6 +3083,13 @@ export const IPC_EVENT_CONTRACT = {
   /** Emitted before the main process begins its shutdown disposal chain.
    *  The renderer should unsubscribe from IPC events and release resources. */
   'window:beforeQuit': [] as [],
+  /**
+   * Folders/files the operating system asked CodeInOven to open while the app
+   * was already running (Finder/Explorer "Open in CodeInOven", a drop on the
+   * Dock/taskbar icon, or a relayed launch argument). The renderer adds folders
+   * as projects (deduplicated) and opens single files in the standalone viewer.
+   */
+  'openWith:paths': [] as unknown as [paths: import('./types').OpenedPath[]],
   /** Emitted when the app is asked to close while threads are still working or
    *  files have unsaved edits. The renderer populates `files` from its editor
    *  state and either confirms the close or shows the confirmation modal. */

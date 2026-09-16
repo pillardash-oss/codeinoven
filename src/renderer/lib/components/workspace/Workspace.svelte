@@ -2701,6 +2701,61 @@
 
   // ─── Project actions ─────────────────────────────────────────────────────
 
+  /** Whether an OS drag currently hovers the project sidebar, driving its drop
+   *  affordance. Only the sidebar sets this; the conversation overlay is a
+   *  separate, region-scoped surface. */
+  let sidebarDropActive = $state(false)
+
+  function carriesDroppedFiles(event: DragEvent): boolean {
+    return Array.from(event.dataTransfer?.types ?? []).includes('Files')
+  }
+
+  function handleSidebarDragOver(event: DragEvent): void {
+    if (!carriesDroppedFiles(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+    sidebarDropActive = true
+  }
+
+  function handleSidebarDragLeave(event: DragEvent): void {
+    const related = event.relatedTarget
+    const current = event.currentTarget
+    if (related instanceof Node && current instanceof Node && current.contains(related)) return
+    sidebarDropActive = false
+  }
+
+  /**
+   * Folders and files dropped on the project sidebar go through the same opener
+   * the OS hand-off uses (main classifies each path, the app adds folders as
+   * projects with de-duplication, and opens single files in the standalone
+   * viewer). Routing both entry points through one path keeps the behavior
+   * identical whether the folder arrived from Finder, Explorer, the taskbar, or
+   * a drag into the sidebar.
+   */
+  async function handleSidebarDrop(event: DragEvent): Promise<void> {
+    sidebarDropActive = false
+    const files = event.dataTransfer?.files
+    if (!files || files.length === 0) return
+    const paths: string[] = []
+    for (const file of Array.from(files)) {
+      try {
+        const path = window.api.getPathForFile(file)
+        if (path) paths.push(path)
+      } catch {
+        // Not a local file (e.g. a web page image); ignore it.
+      }
+    }
+    if (paths.length === 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    try {
+      await invoke('openWith:openPaths', paths)
+    } catch (error) {
+      reportError(error, 'The dropped items could not be opened')
+    }
+  }
+
   async function handleProjectCreated(project: Project): Promise<void> {
     projects = [project, ...projects]
     expandedFolders.add(project.id)
@@ -3569,6 +3624,21 @@
         {/if}
       {/snippet}
 
+      <!-- Drop target for folders and files dragged in from the operating
+           system. Scoped to the sidebar, so a drag aimed at the conversation or
+           the file tree is never captured here; folders open as projects
+           (de-duplicated) and single files open in the standalone viewer. -->
+      <div
+        class="flex min-h-full flex-col rounded-lg transition-shadow"
+        class:ring-2={sidebarDropActive}
+        class:ring-primary={sidebarDropActive}
+        class:ring-inset={sidebarDropActive}
+        role="region"
+        aria-label="Project sidebar"
+        ondragover={handleSidebarDragOver}
+        ondragleave={handleSidebarDragLeave}
+        ondrop={(event: DragEvent) => void handleSidebarDrop(event)}
+      >
       {#if workspaceState.specStudioOpen}
         <SpecConversationSidebar />
       {:else if mode === 'projects' && scopeState.sidebarContext}
@@ -4408,6 +4478,7 @@
           {/if}
         {/if}
       {/if}
+      </div>
     </CollapsibleSidebar>
   {/if}
 
@@ -4469,7 +4540,10 @@
           </div>
         {:else if mode === 'chats'}
           <!-- Empty state   greeting, composer, and suggested prompts centered -->
-          <div class="flex h-full flex-col items-center justify-center px-6">
+          <div
+            class="flex h-full flex-col items-center justify-center px-6"
+            data-drop-region="conversation"
+          >
             <div class="mb-6 text-center">
               <h1 class="text-[1.375rem] font-semibold tracking-tight">Start a new chat</h1>
               <p class="mt-1 text-[0.875rem] text-muted">

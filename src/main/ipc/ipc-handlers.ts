@@ -42,6 +42,8 @@ import { settleThreadBranch, type ThreadBranchDeps } from '../chat/thread-branch
 import { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { DiagnosticsService } from '../system/diagnostics-service'
 import { resolveFavicons } from '../editor/favicon-service'
+import { openWithService } from '../system/open-with-service'
+import type { OpenedPath } from '../../lib/types'
 import { isNetworkError } from '../util/network-error'
 import {
   MemoryService,
@@ -2202,9 +2204,16 @@ export interface RegisterIpcHandlersOptions {
   worktreeService?: ScopeWorktreeService
   /** Speech service for auto-evict of idle sound models. */
   speechService?: { updateUnloadOptions: (opts: Record<string, unknown>) => void }
+  /** Receives the privileged scoped-path resolver so other main-process
+   *  boundaries (the `appfile://` preview protocol) authorize paths exactly
+   *  like privileged IPC does. */
+  onScopedPathResolver?: (resolve: (value: unknown) => Promise<string>) => void
 }
 
 const HEARTBEAT_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
+
+/** Upper bound on one in-app "open these paths" request (a drag selection). */
+const MAX_OPEN_PATHS = 64
 
 function validateHeartbeatTimes(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0) {
@@ -2577,6 +2586,30 @@ export function registerIpcHandlers(
       isApprovedFile: (canonicalPath) => attachmentGrantRepo.isApproved(canonicalPath)
     }
   })
+
+  options.onScopedPathResolver?.((value) => privilegedIpc.resolveScopedPath(value))
+
+  /** Authorize a path the operating system handed to CodeInOven: the user's
+   *  own "Open in CodeInOven" gesture is exactly as explicit as a dialog pick,
+   *  so folders become user-selected roots and files user-selected files. */
+  function grantOpenedPaths(paths: readonly OpenedPath[]): void {
+    void (async () => {
+      for (const opened of paths) {
+        try {
+          if (opened.kind === 'directory') await privilegedIpc.registerUserSelectedRoot(opened.path)
+          else await privilegedIpc.registerUserSelectedFile(opened.path)
+        } catch (error) {
+          Logger.error('Opened-path scope grant failed:', error)
+        }
+      }
+    })()
+  }
+
+  // Paths can arrive before the post-paint service graph exists (a launch with
+  // paths, or a macOS `open-file` during startup), so grant what is already
+  // known and keep listening for later hand-offs.
+  grantOpenedPaths(openWithService.grantedPaths())
+  openWithService.onPaths(grantOpenedPaths)
 
   /** Register a privileged channel whose sender frame must be trusted. */
   function privileged<TArgs extends unknown[]>(
@@ -4685,6 +4718,17 @@ export function registerIpcHandlers(
     }
   })
 
+  privileged('file:readText', async (_event, filePath: unknown) => {
+    try {
+      const safePath = await privilegedIpc.resolveScopedPath(filePath)
+      return await projectFilesService.readAbsoluteText(safePath)
+    } catch (error) {
+      if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
+      Logger.error('file:readText rejected or failed:', error)
+      return null
+    }
+  })
+
   privileged('file:read', async (_event, filePath: unknown) => {
     try {
       const safePath = await privilegedIpc.resolveScopedPath(filePath)
@@ -4772,6 +4816,27 @@ export function registerIpcHandlers(
   })
 
   // ─── Projects ───────────────────────────────────────────────────────────
+  ipcMain.handle('project:findByPath', async (_, rawPath: unknown) => {
+    const path = validateBoundedString(rawPath, 'Project path', 1, 4096)
+    return projectManager.findByCanonicalPath(path)
+  })
+
+  // The renderer drains the queue on mount; later hand-offs arrive as the
+  // `openWith:paths` push (see main/index.ts).
+  ipcMain.handle('openWith:consumePending', () => openWithService.consumePending())
+
+  // In-app drops (the project sidebar) reuse the OS opener: main classifies the
+  // paths and pushes the result back through `openWith:paths`.
+  ipcMain.handle('openWith:openPaths', async (_, rawPaths: unknown) => {
+    if (!Array.isArray(rawPaths) || rawPaths.length === 0 || rawPaths.length > MAX_OPEN_PATHS) {
+      throw new TypeError(`Opened paths must be an array of 1 to ${MAX_OPEN_PATHS} paths`)
+    }
+    const paths = rawPaths.map((entry, index) =>
+      validateBoundedString(entry, `Opened path ${index + 1}`, 1, 4096)
+    )
+    await openWithService.ingest(paths)
+  })
+
   ipcMain.handle('project:create', async (_, rawInput: unknown) => {
     const input = validateCreateProjectInput(rawInput)
     const config = await storage.getConfig()

@@ -69,6 +69,7 @@
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { showOpenedFiles, standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { clearDraftLabelCookie } from '$lib/stores/draft-label'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
@@ -97,6 +98,7 @@
     isThreadWorking,
     type AppConfig,
     type AppConfigPatch,
+    type OpenedPath,
     type Project,
     type ThemePreference,
     type Thread,
@@ -1278,6 +1280,66 @@
     }
   }
 
+  /**
+   * OS "Open in CodeInOven" hand-off (Finder/Explorer "Open With", a drop on the
+   * Dock/taskbar icon, or a launch argument).
+   *
+   * Folders become projects, or focus the project that already owns that folder
+   * so the same folder is never registered twice. Single files open on their own
+   * in the standalone viewer.
+   */
+  async function handleOpenedPaths(paths: OpenedPath[]): Promise<void> {
+    if (!Array.isArray(paths) || paths.length === 0) return
+    const files = paths.filter((entry) => entry.kind === 'file')
+    if (files.length > 0) showOpenedFiles(files)
+    for (const directory of paths) {
+      if (directory.kind === 'directory') await openDirectoryAsProject(directory)
+    }
+  }
+
+  /** Focus the project that already covers an opened folder. */
+  function focusOpenedProject(project: Project): void {
+    navigate('projects')
+    const thread = scopeState.allScopeThreads
+      .filter((candidate) => candidate.projectId === project.id && !candidate.archived)
+      .sort((left, right) => right.lastActivity - left.lastActivity)[0]
+    if (thread) {
+      workspaceState.openThread(thread, project)
+    } else {
+      workspaceState.clearThread()
+      workspaceState.activeProject = project
+    }
+    toast.info(`${project.name} is already a project`, {
+      description: 'Opened the existing project instead of adding the folder twice.'
+    })
+  }
+
+  async function openDirectoryAsProject(directory: OpenedPath): Promise<void> {
+    try {
+      const existing = await invoke('project:findByPath', directory.path)
+      if (existing) {
+        focusOpenedProject(existing)
+        return
+      }
+      // A folder that is not a git repository is registered with manual change
+      // tracking instead of interrupting the OS hand-off with the
+      // tracking-setup dialog; the mode stays editable from Edit project.
+      const preflight = await invoke('repository:preflight', directory.path).catch(() => null)
+      const project = await invoke('project:create', {
+        name: directory.name,
+        path: directory.path,
+        source: 'local',
+        changeTrackingMode: preflight?.status === 'git' ? 'git' : 'manual'
+      })
+      navigate('projects')
+      await handleProjectCreated(project)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The folder could not be opened'
+      captureError(message)
+      showToastError(message)
+    }
+  }
+
   function updateOnboardingStep(step: number): void {
     if (step === 4) navigate('chats')
     onboardingStep = step
@@ -1530,6 +1592,14 @@
     const unsubscribeHistoryForward = subscribe('window:historyForward', () => {
       void goForward()
     })
+    // OS hand-offs that arrive after mount; the queue drain below covers the
+    // paths that were already waiting when the renderer started.
+    const unsubscribeOpenedPaths = subscribe('openWith:paths', (paths: OpenedPath[]) => {
+      void handleOpenedPaths(paths)
+    })
+    void invoke('openWith:consumePending')
+      .then((paths: OpenedPath[]) => handleOpenedPaths(paths))
+      .catch(() => undefined)
     updaterState.init()
     // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
     // initialise the store here so the overlay's dynamic import can be gated on
@@ -1548,6 +1618,7 @@
       unsubscribeNewTerminalShortcut()
       unsubscribeHistoryBack()
       unsubscribeHistoryForward()
+      unsubscribeOpenedPaths()
       updaterState.destroy()
     }
   }
@@ -2034,6 +2105,13 @@
   {#if pipState.active && pipState.frameDataUrl !== null}
     {#await import('$lib/components/pip/PipOverlay.svelte') then { default: PipOverlay }}
       <PipOverlay />
+    {/await}
+  {/if}
+  {#if standaloneFiles.open}
+    <!-- Files opened through the operating system: read-only, and deliberately
+         project-less (no file tree, no tree operations, nothing indexed). -->
+    {#await import('$lib/components/files/StandaloneFileViewer.svelte') then { default: StandaloneFileViewer }}
+      <StandaloneFileViewer />
     {/await}
   {/if}
 
